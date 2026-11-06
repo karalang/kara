@@ -7394,7 +7394,7 @@ Under `karac run` and `karac test` with `--output=json` or `--output=jsonl`, the
 ### Canonical formatting
 
 `karac fmt` produces deterministic output. It is **syntactically** canonical, in the scope of `gofmt` or `rustfmt`, not a semantic normalizer:
-- declarations are canonicalized: imports sorted; in each `impl` and `trait` body, functions without `self` (constructors such as `new`) come first, then methods, each group in alphabetical order, with doc comments and attributes travelling with their item;
+- declarations are canonicalized: imports sorted; in each `impl` and `trait` body, associated types come first, then functions without `self` (constructors such as `new`), then methods, each group in alphabetical order, with doc comments, comments and attributes travelling with their item;
 - whitespace, brace placement and ordering are normalized;
 - AI edits produce clean semantic diffs, not reordering noise.
 

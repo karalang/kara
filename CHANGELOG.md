@@ -82,6 +82,12 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Changed
 
+- **`karac fmt` puts each `impl` and `trait` body in canonical order**
+  (design.md § Canonical formatting): associated types first, then functions
+  without `self` (constructors such as `new`), then methods, each group
+  alphabetical. Doc comments, comments and attributes travel with their
+  item. A formatted program whose members were in another order changes at
+  its next `karac fmt` (B-2026-11-05-32).
 - **Build output paths follow the spec.** In a package, `karac build` writes
   `dist/native/<pkg>` and `karac build --target=wasm_wasi` writes
   `dist/wasm/<pkg>.wasm` (design.md § 16). They were `dist/<pkg>` and

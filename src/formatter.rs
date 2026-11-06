@@ -426,13 +426,6 @@ pub(super) fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
     crate::effect_render::verb_keyword(v).to_string()
 }
 
-pub(super) fn impl_item_name(item: &ImplItem) -> &str {
-    match item {
-        ImplItem::Method(m) => &m.name,
-        ImplItem::AssocType(a) => &a.name,
-    }
-}
-
 /// An integer literal as the source wrote it. An unsigned one past the
 /// signed carrier's top rides it as the wrapped bit pattern (`u128::MAX` is
 /// `-1`), so it is printed as the unsigned value, not the carrier.

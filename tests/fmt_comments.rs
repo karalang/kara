@@ -3,9 +3,10 @@
 //! between items, in a function body, among struct fields, enum variants,
 //! impl methods and match arms, and in an otherwise empty block. The AST
 //! carries none of them, so the formatter used to drop them all
-//! (B-2026-10-30-16). The output formats to itself, and an impl or import
-//! list holding a comment keeps its order rather than move code away from
-//! its comment.
+//! (B-2026-10-30-16). The output formats to itself. An import list holding a
+//! comment keeps its order rather than move code away from its comment; an
+//! impl's or trait's items are sorted with their comments travelling along
+//! (B-2026-11-05-32).
 
 use std::process::{Command, Stdio};
 
@@ -59,7 +60,7 @@ enum Shape {
 }
 
 impl P {
-    // zeta stays first
+    // zeta's note
     fn zeta(self) -> i64 { self.n }
     fn alpha(self) -> i64 { self.n } // alpha trailing
 }
@@ -95,8 +96,9 @@ fn main() {
         "/// Adds one.\nfn inc(x: i64) -> i64 {\n    x + 1 // trailing on the tail\n}\n",
         "/* block\n   comment */\nstruct P {\n    // field note\n    n: i64, // n trailing\n}\n",
         "    // the empty one\n    Dot,\n    Line(i64), // one payload\n",
-        "    // zeta stays first\n    fn zeta(self) -> i64 {",
-        "    fn alpha(self) -> i64 {\n        self.n\n    } // alpha trailing\n}\n",
+        // Methods are sorted, and each takes its comments along
+        // (B-2026-11-05-32).
+        "    fn alpha(self) -> i64 {\n        self.n\n    } // alpha trailing\n\n    // zeta's note\n    fn zeta(self) -> i64 {",
         "fn todo() {\n    // nothing yet\n}\n",
         "    // inside\n    let x = 1; // trailing\n    /* mid */\n    let y = 2;\n",
         "        // in if\n        println(x);\n",
@@ -106,7 +108,7 @@ fn main() {
         assert!(once.contains(want), "missing {want:?} in:\n{once}");
     }
     assert!(
-        once.find("fn zeta").unwrap() < once.find("fn alpha").unwrap(),
+        once.find("fn alpha").unwrap() < once.find("fn zeta").unwrap(),
         "{once}"
     );
     assert_eq!(fmt(&once, "again"), once);

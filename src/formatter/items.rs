@@ -5,7 +5,7 @@
 use crate::ast::*;
 use std::fmt::Write;
 
-use super::{format_effect_verb_kind, ident_str, impl_item_name, path_str};
+use super::{format_effect_verb_kind, ident_str, path_str};
 
 impl super::Formatter {
     // ── Items ───────────────────────────────────────────────────
@@ -654,35 +654,36 @@ impl super::Formatter {
         self.format_where_clause(&t.where_clause);
         self.write_str(" {\n");
         self.push_indent();
-        for item in &t.items {
-            self.flush_comments_before(match item {
-                TraitItem::Method(m) => m.span.offset,
-                TraitItem::AssocType(a) => a.span.offset,
-            });
-            match item {
-                TraitItem::Method(m) => self.format_trait_method(m),
-                TraitItem::AssocType(a) => {
-                    self.write_indent();
-                    self.write_str("type ");
-                    self.write_ident(&a.name);
-                    self.format_generic_params(&a.generic_params);
-                    if !a.bounds.is_empty() {
-                        self.write_str(": ");
-                        for (i, b) in a.bounds.iter().enumerate() {
-                            if i > 0 {
-                                self.write_str(" + ");
-                            }
-                            self.format_trait_bound(b);
-                        }
-                    }
-                    self.format_where_clause(&a.where_clause);
-                    self.write_str(";\n");
-                }
-            }
-        }
-        self.flush_comments_before(t.span.offset + t.span.length);
+        let members: Vec<Member> = t.items.iter().map(Member::Trait).collect();
+        let end = t.span.offset + t.span.length;
+        self.format_members(&members, end, false);
+        self.flush_comments_before(end);
         self.pop_indent();
         self.writeln("}");
+    }
+
+    /// One `trait` body item.
+    fn format_trait_item(&mut self, item: &TraitItem) {
+        match item {
+            TraitItem::Method(m) => self.format_trait_method(m),
+            TraitItem::AssocType(a) => {
+                self.write_indent();
+                self.write_str("type ");
+                self.write_ident(&a.name);
+                self.format_generic_params(&a.generic_params);
+                if !a.bounds.is_empty() {
+                    self.write_str(": ");
+                    for (i, b) in a.bounds.iter().enumerate() {
+                        if i > 0 {
+                            self.write_str(" + ");
+                        }
+                        self.format_trait_bound(b);
+                    }
+                }
+                self.format_where_clause(&a.where_clause);
+                self.write_str(";\n");
+            }
+        }
     }
 
     pub(super) fn format_trait_method(&mut self, m: &TraitMethod) {
@@ -732,47 +733,90 @@ impl super::Formatter {
         self.write_str(" {\n");
         self.push_indent();
 
-        // Sort methods alphabetically for canonical output, unless the impl
-        // holds a comment: it would stay where it is while the methods moved.
         let end = imp.span.offset + imp.span.length;
-        let mut methods: Vec<&ImplItem> = imp.items.iter().collect();
-        if !self.has_comment_in(imp.span.offset, end) {
-            methods.sort_by(|a, b| {
-                let name_a = impl_item_name(a);
-                let name_b = impl_item_name(b);
-                name_a.cmp(name_b)
-            });
-        }
-
-        let mut first = true;
-        for item in &methods {
-            let start = match item {
-                ImplItem::Method(m) => m.span.offset,
-                ImplItem::AssocType(a) => a.span.offset,
-            };
-            if !first {
-                self.flush_trailing_comments(start);
-                self.output.push('\n');
-            }
-            first = false;
-            self.flush_comments_before(start);
-            match item {
-                ImplItem::Method(m) => self.format_function_as(m, true),
-                ImplItem::AssocType(a) => {
-                    self.write_indent();
-                    self.write_str("type ");
-                    self.write_ident(&a.name);
-                    self.format_generic_params(&a.generic_params);
-                    self.write_str(" = ");
-                    self.format_type_expr(&a.ty);
-                    self.format_where_clause(&a.where_clause);
-                    self.write_str(";\n");
-                }
-            }
-        }
+        let members: Vec<Member> = imp.items.iter().map(Member::Impl).collect();
+        self.format_members(&members, end, true);
         self.flush_comments_before(end);
         self.pop_indent();
         self.writeln("}");
+    }
+
+    /// An `impl` or `trait` body in canonical order (design.md § Canonical
+    /// formatting): associated types, then functions without `self`
+    /// (constructors such as `new`), then methods, each group alphabetical.
+    /// Each item takes its comments with it: those between the previous item
+    /// (in source order) and its own end, and a comment that ends its last
+    /// line. `body_end` is the end of the body (its `}`): a comment after it
+    /// is not the body's. `blank_between` separates the items with a blank
+    /// line.
+    fn format_members(&mut self, members: &[Member], body_end: usize, blank_between: bool) {
+        // The unwritten comments inside the body, split by the item whose
+        // region holds them; those after the body are left as they were.
+        let mut unwritten = self.comments.split_off(self.next_comment);
+        let inside = unwritten.partition_point(|c| c.start < body_end);
+        let after = unwritten.split_off(inside);
+        let mut pending = unwritten.into_iter().peekable();
+        let mut groups: Vec<Vec<super::comments::Comment>> = Vec::new();
+        for m in members {
+            let end = m.end();
+            let mut group = Vec::new();
+            while let Some(c) = pending.next_if(|c| c.start < end) {
+                // A comment after the previous item's last code on its line,
+                // before this item begins, ends that item's line.
+                if !c.own_line && group.is_empty() && c.start < m.start() {
+                    if let Some(prev) = groups.last_mut() {
+                        prev.push(c);
+                        continue;
+                    }
+                }
+                group.push(c);
+            }
+            groups.push(group);
+        }
+        let mut rest: Vec<_> = pending.collect();
+        // A comment ending the last item's line is that item's: inside the
+        // body, the last item is the only code it can follow.
+        if let (Some(last), Some(c)) = (groups.last_mut(), rest.first()) {
+            if !c.own_line {
+                last.push(rest.remove(0));
+            }
+        }
+        let mut order: Vec<usize> = (0..members.len()).collect();
+        order.sort_by(|&a, &b| members[a].sort_key().cmp(&members[b].sort_key()));
+        for (n, &i) in order.iter().enumerate() {
+            self.comments = std::mem::take(&mut groups[i]);
+            self.next_comment = 0;
+            if n > 0 && blank_between {
+                self.output.push('\n');
+            }
+            self.flush_comments_before(members[i].start());
+            match members[i] {
+                Member::Impl(item) => self.format_impl_item(item),
+                Member::Trait(item) => self.format_trait_item(item),
+            }
+            self.flush_trailing_comments(usize::MAX);
+            self.flush_comments_before(usize::MAX);
+        }
+        rest.extend(after);
+        self.comments = rest;
+        self.next_comment = 0;
+    }
+
+    /// One `impl` body item.
+    fn format_impl_item(&mut self, item: &ImplItem) {
+        match item {
+            ImplItem::Method(m) => self.format_function_as(m, true),
+            ImplItem::AssocType(a) => {
+                self.write_indent();
+                self.write_str("type ");
+                self.write_ident(&a.name);
+                self.format_generic_params(&a.generic_params);
+                self.write_str(" = ");
+                self.format_type_expr(&a.ty);
+                self.format_where_clause(&a.where_clause);
+                self.write_str(";\n");
+            }
+        }
     }
 
     // ── Effect Declarations ─────────────────────────────────────
@@ -1060,6 +1104,44 @@ impl super::Formatter {
         if let Some(pred) = refinement {
             self.write_str(" where ");
             self.format_expr(pred);
+        }
+    }
+}
+
+/// An item of an `impl` or `trait` body, for [`super::Formatter::format_members`].
+#[derive(Clone, Copy)]
+enum Member<'a> {
+    Impl(&'a ImplItem),
+    Trait(&'a TraitItem),
+}
+
+impl Member<'_> {
+    fn span(&self) -> crate::token::Span {
+        match self {
+            Member::Impl(ImplItem::Method(m)) => m.span,
+            Member::Impl(ImplItem::AssocType(a)) => a.span,
+            Member::Trait(TraitItem::Method(m)) => m.span,
+            Member::Trait(TraitItem::AssocType(a)) => a.span,
+        }
+    }
+
+    fn start(&self) -> usize {
+        self.span().offset
+    }
+
+    fn end(&self) -> usize {
+        let s = self.span();
+        s.offset + s.length
+    }
+
+    /// Associated types, then functions without `self`, then methods; by
+    /// name within each group.
+    fn sort_key(&self) -> (u8, &str) {
+        match self {
+            Member::Impl(ImplItem::AssocType(a)) => (0, &a.name),
+            Member::Trait(TraitItem::AssocType(a)) => (0, &a.name),
+            Member::Impl(ImplItem::Method(m)) => (1 + m.self_param.is_some() as u8, &m.name),
+            Member::Trait(TraitItem::Method(m)) => (1 + m.self_param.is_some() as u8, &m.name),
         }
     }
 }
