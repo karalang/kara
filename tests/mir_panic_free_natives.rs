@@ -1,5 +1,6 @@
 //! `String.repeat`, integer parsing, `sort` and `i128` printing keep std's
-//! panic hook out of a MIR binary (B-2026-11-04-31). `str::repeat`'s
+//! panic hook out of a MIR binary (B-2026-11-04-31), and so do float
+//! printing and format specs (B-2026-11-06-2). `str::repeat`'s
 //! length `expect`, core's `from_str_radix` radix assert, the scratch
 //! `vec!` and `step_by` of the merge sort, `slice::sort_unstable`'s
 //! total-order check and `u128`'s `Display` each kept a Rust panic
@@ -97,6 +98,50 @@ fn mir_integer_and_comparator_sorts_link_no_panic_hook() {
         assert!(!hook, "std's panic hook is linked");
     }
 }
+
+/// Printing a float and formatting any hole with a spec: core's float
+/// formatting (Grisu, Dragon, and the `parse` the even-tie rule read back
+/// with), `format!`, `Vec<char>` in the spec parser and a `RefCell`
+/// borrow each kept a Rust panic reachable, and kata 346 was 336 KB on the
+/// M5 (B-2026-11-06-2). The expected output is a Python mirror's (`repr`,
+/// and `format` with an `f` type for a precision).
+#[test]
+fn mir_float_printing_and_format_specs_link_no_panic_hook() {
+    if let Some(hook) = check("floats", FLOATS, FLOATS_OUT) {
+        assert!(!hook, "std's panic hook is linked");
+    }
+}
+
+const FLOATS: &str = r#"
+fn main() {
+    let x = 7.0 / 3.0;
+    println(x);
+    println(f"{x:.3} {x:10.2}|{x:<8.1}|{x:+.0}|{x:08.3}");
+    let half = 0.5;
+    let neg = -half;
+    let two = 2.5;
+    let eighth = 0.125;
+    println(f"{neg:.0} {two:.0} {eighth:.2} {half:.1}");
+    let tiny = 5e-324;
+    println(tiny);
+    println(f"{tiny:.3}");
+    let big = 1e300;
+    println(big);
+    println(f"{big:.0}");
+    println(-75455689800034.625);
+    println(1e16);
+    println(0.00001);
+    let t: f32 = 0.1;
+    println(t);
+    let n = 42;
+    let s = "ab";
+    println(f"{n:>6}|{n:<5}|{n:^7}|{n:08b}|{n:+x}|{s:*^6}|{s:>4}");
+    let w: i128 = -12345678901234567890123;
+    println(f"{w:>30}|{w:x}");
+}
+"#;
+
+const FLOATS_OUT: &str = "2.3333333333333335\n2.333       2.33|2.3     |+2|0002.333\n-0 2 0.12 0.5\n5e-324\n0.000\n1e+300\n1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160\n-75455689800034.62\n1e+16\n1e-05\n0.1\n    42|42   |  42   |00101010|+2a|**ab**|  ab\n      -12345678901234567890123|fffffffffffffd62bd49b1898ebdbb35\n";
 
 const REPEAT: &str = r#"
 fn main() {

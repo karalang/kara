@@ -28,6 +28,11 @@
 //! ignored — a silently-dropped specifier is the exact surprise this feature
 //! removes.
 
+#[path = "float_text.rs"]
+pub mod float_text;
+
+use float_text::{Count, Out};
+
 /// Text alignment within the field `width`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -60,10 +65,72 @@ pub struct FormatSpec {
     pub radix: Radix,
 }
 
+/// Why a spec does not parse; byte offsets into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecError {
+    Debug,
+    NotUtf8,
+    Sign(usize),
+    Width(usize, usize),
+    MissingPrecision,
+    Precision(usize, usize),
+    Type(usize),
+    Trailing(usize),
+    PrecisionOnInt,
+}
+
+impl SpecError {
+    /// The diagnostic for `raw`, the spec that failed.
+    pub fn message(&self, raw: &str) -> String {
+        let span = |a: usize, b: usize| raw.get(a..b).unwrap_or_default();
+        let char_at = |a: usize| span(a, raw.len()).chars().next().unwrap_or('?');
+        match *self {
+            SpecError::Debug => format!(
+                "format spec `{raw}`: `?` is Debug formatting, which is reserved but not \
+                 implemented yet; write `{{x}}` for the value's Display form"
+            ),
+            SpecError::NotUtf8 => "format spec is not UTF-8".to_string(),
+            SpecError::Sign(i) => format!(
+                "format spec `{raw}`: sign flag `{}` is not supported (only `+` is)",
+                char_at(i)
+            ),
+            SpecError::Width(a, b) => {
+                format!("format spec width `{}` is out of range", span(a, b))
+            }
+            SpecError::MissingPrecision => {
+                format!("format spec `{raw}`: `.` must be followed by a precision (e.g. `.2`)")
+            }
+            SpecError::Precision(a, b) => {
+                format!("format spec precision `{}` is out of range", span(a, b))
+            }
+            SpecError::Type(i) => format!(
+                "format spec `{raw}`: unsupported type `{}` \
+                 (expected one of x, X, o, b, d)",
+                char_at(i)
+            ),
+            SpecError::Trailing(i) => format!(
+                "format spec `{raw}`: unexpected trailing `{}`",
+                span(i, raw.len())
+            ),
+            SpecError::PrecisionOnInt => {
+                format!("format spec `{raw}`: precision is not valid with an integer type")
+            }
+        }
+    }
+}
+
 impl FormatSpec {
     /// Parse a raw specifier string (the text after the hole's `:`). Returns a
     /// human-readable error for an unrecognized spec.
     pub fn parse(raw: &str) -> Result<FormatSpec, String> {
+        Self::parse_bytes(raw.as_bytes()).map_err(|e| e.message(raw))
+    }
+
+    /// [`Self::parse`] over the spec's bytes, with nothing in it that can
+    /// panic or allocate: the compiled runtime parses a hole's spec through
+    /// this, and a Rust panic reachable from a runtime native keeps std's
+    /// panic hook in every binary (B-2026-11-06-2).
+    pub fn parse_bytes(raw: &[u8]) -> Result<FormatSpec, SpecError> {
         let mut spec = FormatSpec {
             fill: None,
             align: None,
@@ -77,15 +144,10 @@ impl FormatSpec {
         // the Debug form design.md § Strings reserves and defers: name it as
         // such rather than letting the `?` reach the `[type]` slot and be
         // reported as an unknown radix (B-2026-10-05-48).
-        if raw.ends_with('?') {
-            return Err(format!(
-                "format spec `{raw}`: `?` is Debug formatting, which is reserved but not \
-                 implemented yet; write `{{x}}` for the value's Display form"
-            ));
+        if raw.last() == Some(&b'?') {
+            return Err(SpecError::Debug);
         }
-        let chars: Vec<char> = raw.chars().collect();
-        let mut i = 0;
-
+        let text = std::str::from_utf8(raw).map_err(|_| SpecError::NotUtf8)?;
         let align_of = |c: char| match c {
             '<' => Some(Align::Left),
             '>' => Some(Align::Right),
@@ -95,101 +157,89 @@ impl FormatSpec {
 
         // [[fill] align] — a fill char is only recognized when an align char
         // follows it, so `<`/`>`/`^` alone is align-with-default-fill and a
-        // leading `0` stays the zero-pad flag.
-        if chars.len() >= 2 {
-            if let Some(a) = align_of(chars[1]) {
-                spec.fill = Some(chars[0]);
-                spec.align = Some(a);
-                i = 2;
-            }
+        // leading `0` stays the zero-pad flag. Everything after them is
+        // ASCII, so from here `i` counts bytes.
+        let mut chars = text.chars();
+        let (first, second) = (chars.next(), chars.next());
+        let mut i = 0;
+        if let (Some(f), Some(a)) = (first, second.and_then(align_of)) {
+            spec.fill = Some(f);
+            spec.align = Some(a);
+            i = f.len_utf8() + 1;
+        } else if let Some(a) = first.and_then(align_of) {
+            spec.align = Some(a);
+            i = 1;
         }
-        if spec.align.is_none() {
-            if let Some(&c) = chars.first() {
-                if let Some(a) = align_of(c) {
-                    spec.align = Some(a);
-                    i = 1;
-                }
+        let at = |i: usize| raw.get(i).copied();
+        let digits_end = |mut i: usize| {
+            while at(i).is_some_and(|c| c.is_ascii_digit()) {
+                i += 1;
             }
-        }
+            i
+        };
+        // A run of digits as a `usize`, None when it overflows.
+        let number = |a: usize, b: usize| {
+            raw.get(a..b)?.iter().try_fold(0usize, |n, c| {
+                n.checked_mul(10)?.checked_add(usize::from(c - b'0'))
+            })
+        };
 
         // ['+'] sign flag. Rust also accepts `-` (and ignores it) and Python
         // a space; neither is supported, and both used to be reported as an
         // unsupported TYPE because the parser reached the `[type]` slot with
         // them (B-2026-10-02-42), so name them as sign flags instead.
-        if i < chars.len() && chars[i] == '+' {
-            spec.plus = true;
-            i += 1;
-        } else if i < chars.len() && (chars[i] == '-' || chars[i] == ' ') {
-            return Err(format!(
-                "format spec `{raw}`: sign flag `{}` is not supported (only `+` is)",
-                chars[i]
-            ));
+        match at(i) {
+            Some(b'+') => {
+                spec.plus = true;
+                i += 1;
+            }
+            Some(b'-' | b' ') => return Err(SpecError::Sign(i)),
+            _ => {}
         }
 
         // ['0'] zero-pad flag.
-        if i < chars.len() && chars[i] == '0' {
+        if at(i) == Some(b'0') {
             spec.zero_pad = true;
             i += 1;
         }
 
         // [width]
         let width_start = i;
-        while i < chars.len() && chars[i].is_ascii_digit() {
-            i += 1;
-        }
+        i = digits_end(i);
         if i > width_start {
-            let w: String = chars[width_start..i].iter().collect();
-            spec.width = Some(
-                w.parse()
-                    .map_err(|_| format!("format spec width `{w}` is out of range"))?,
-            );
+            spec.width = Some(number(width_start, i).ok_or(SpecError::Width(width_start, i))?);
         }
 
         // ['.' precision]
-        if i < chars.len() && chars[i] == '.' {
+        if at(i) == Some(b'.') {
             i += 1;
             let prec_start = i;
-            while i < chars.len() && chars[i].is_ascii_digit() {
-                i += 1;
-            }
+            i = digits_end(i);
             if i == prec_start {
-                return Err(format!(
-                    "format spec `{raw}`: `.` must be followed by a precision (e.g. `.2`)"
-                ));
+                return Err(SpecError::MissingPrecision);
             }
-            let p: String = chars[prec_start..i].iter().collect();
-            spec.precision = Some(
-                p.parse()
-                    .map_err(|_| format!("format spec precision `{p}` is out of range"))?,
-            );
+            spec.precision =
+                Some(number(prec_start, i).ok_or(SpecError::Precision(prec_start, i))?);
         }
 
         // [type]
-        if i < chars.len() {
-            spec.radix = match chars[i] {
-                'x' => Radix::Hex,
-                'X' => Radix::HexUpper,
-                'o' => Radix::Oct,
-                'b' => Radix::Bin,
-                'd' => Radix::Dec,
-                other => {
-                    return Err(format!(
-                        "format spec `{raw}`: unsupported type `{other}` \
-                         (expected one of x, X, o, b, d)"
-                    ));
-                }
+        if let Some(c) = at(i) {
+            spec.radix = match c {
+                b'x' => Radix::Hex,
+                b'X' => Radix::HexUpper,
+                b'o' => Radix::Oct,
+                b'b' => Radix::Bin,
+                b'd' => Radix::Dec,
+                _ => return Err(SpecError::Type(i)),
             };
             i += 1;
         }
 
-        if i != chars.len() {
-            let rest: String = chars[i..].iter().collect();
-            return Err(format!("format spec `{raw}`: unexpected trailing `{rest}`"));
+        if i != raw.len() {
+            return Err(SpecError::Trailing(i));
         }
         if spec.radix != Radix::Dec && spec.precision.is_some() {
-            return Err(format!(
-                "format spec `{raw}`: precision is not valid with an integer type"
-            ));
+            return Err(SpecError::PrecisionOnInt);
         }
         Ok(spec)
     }
@@ -219,29 +269,36 @@ impl FormatSpec {
     /// before this (it inserts zeros after the sign), so this only does
     /// space/fill padding.
     fn pad(&self, body: &str, default_left: bool) -> String {
-        let Some(width) = self.width else {
-            return body.to_string();
-        };
-        let len = body.chars().count();
-        if len >= width {
-            return body.to_string();
-        }
-        let pad = width - len;
-        let fill = self.fill.unwrap_or(' ');
+        let mut out = Vec::new();
+        let (left, right) = self.pad_amounts(body.chars().count(), default_left);
+        self.write_fill(&mut out, left);
+        out.put(body.as_bytes());
+        self.write_fill(&mut out, right);
+        String::from_utf8(out).unwrap_or_default()
+    }
+
+    /// The fill before and after a body `chars` wide, per [`Self::pad`].
+    fn pad_amounts(&self, chars: usize, default_left: bool) -> (usize, usize) {
+        let pad = self.width.map_or(0, |w| w.saturating_sub(chars));
         let align = self.align.unwrap_or(if default_left {
             Align::Left
         } else {
             Align::Right
         });
-        let fills = |n: usize| String::from(fill).repeat(n);
         match align {
-            Align::Left => format!("{body}{}", fills(pad)),
-            Align::Right => format!("{}{body}", fills(pad)),
-            Align::Center => {
-                let left = pad / 2;
-                format!("{}{body}{}", fills(left), fills(pad - left))
-            }
+            Align::Left => (0, pad),
+            Align::Right => (pad, 0),
+            Align::Center => (pad / 2, pad - pad / 2),
         }
+    }
+
+    /// `n` fill chars.
+    fn write_fill(&self, out: &mut impl Out, n: usize) {
+        let mut fill = [0u8; 4];
+        out.repeat(
+            self.fill.unwrap_or(' ').encode_utf8(&mut fill).as_bytes(),
+            n,
+        );
     }
 
     /// Render a sign plus an ALREADY-REINTERPRETED magnitude. Zero-pad inserts
@@ -264,7 +321,7 @@ impl FormatSpec {
     /// [`Self::apply_magnitude`], appending to `out` with no allocation of
     /// its own: the compiled runtime formats `{x:b}` through this into one
     /// reused buffer (B-2026-10-29-33).
-    pub fn write_magnitude(&self, neg: bool, mag: u128, out: &mut Vec<u8>) {
+    pub fn write_magnitude(&self, neg: bool, mag: u128, out: &mut impl Out) {
         let (base, upper) = match self.radix {
             Radix::Dec => (10, false),
             Radix::Hex => (16, false),
@@ -280,19 +337,25 @@ impl FormatSpec {
         let mut buf = [0u8; 128];
         let mut i = buf.len();
         match u64::try_from(mag) {
-            Ok(mut m) => loop {
-                i -= 1;
-                buf[i] = digit((m % base) as u8);
-                m /= base;
-                if m == 0 {
-                    break;
+            Ok(mut m) => {
+                while i > 0 {
+                    i -= 1;
+                    if let Some(slot) = buf.get_mut(i) {
+                        *slot = digit((m % base) as u8);
+                    }
+                    m /= base;
+                    if m == 0 {
+                        break;
+                    }
                 }
-            },
+            }
             Err(_) => {
                 let mut m = mag;
-                loop {
+                while i > 0 {
                     i -= 1;
-                    buf[i] = digit((m % u128::from(base)) as u8);
+                    if let Some(slot) = buf.get_mut(i) {
+                        *slot = digit((m % u128::from(base)) as u8);
+                    }
                     m /= u128::from(base);
                     if m == 0 {
                         break;
@@ -300,7 +363,7 @@ impl FormatSpec {
                 }
             }
         }
-        let digits = &buf[i..];
+        let digits = buf.get(i..).unwrap_or_default();
         let sign: &[u8] = if neg {
             b"-"
         } else if self.plus {
@@ -312,26 +375,16 @@ impl FormatSpec {
         let pad = self.width.map_or(0, |w| w.saturating_sub(have));
         // Zero-pad inserts zeros between the sign and the digits.
         if self.zero_pad && pad > 0 {
-            out.extend_from_slice(sign);
-            out.resize(out.len() + pad, b'0');
-            out.extend_from_slice(digits);
+            out.put(sign);
+            out.repeat(b"0", pad);
+            out.put(digits);
             return;
         }
-        let (left, right) = match self.align.unwrap_or(Align::Right) {
-            Align::Left => (0, pad),
-            Align::Right => (pad, 0),
-            Align::Center => (pad / 2, pad - pad / 2),
-        };
-        let mut fill = [0u8; 4];
-        let fill = self.fill.unwrap_or(' ').encode_utf8(&mut fill).as_bytes();
-        for _ in 0..left {
-            out.extend_from_slice(fill);
-        }
-        out.extend_from_slice(sign);
-        out.extend_from_slice(digits);
-        for _ in 0..right {
-            out.extend_from_slice(fill);
-        }
+        let (left, right) = self.pad_amounts(have, false);
+        self.write_fill(out, left);
+        out.put(sign);
+        out.put(digits);
+        self.write_fill(out, right);
     }
 
     /// Format a signed integer AT 64-BIT WIDTH. Only decimal takes the sign; a
@@ -354,7 +407,7 @@ impl FormatSpec {
 
     /// [`Self::apply_int`] (`signed`) or [`Self::apply_uint`] on the 64 bits
     /// `v`, appended to `out`.
-    pub fn write_int64(&self, v: u64, signed: bool, out: &mut Vec<u8>) {
+    pub fn write_int64(&self, v: u64, signed: bool, out: &mut impl Out) {
         let neg = signed && (v as i64) < 0 && self.radix == Radix::Dec;
         let mag = if neg { (v as i64).unsigned_abs() } else { v };
         self.write_magnitude(neg, u128::from(mag), out);
@@ -386,44 +439,69 @@ impl FormatSpec {
         self.apply_magnitude(false, v)
     }
 
+    /// [`Self::apply_int128`] (`signed`) or [`Self::apply_uint128`] on the
+    /// 128 bits `v`, appended to `out`.
+    pub fn write_int128(&self, v: u128, signed: bool, out: &mut impl Out) {
+        let neg = signed && (v as i128) < 0 && self.radix == Radix::Dec;
+        let mag = if neg { (v as i128).unsigned_abs() } else { v };
+        self.write_magnitude(neg, mag, out);
+    }
+
     /// Format a float. `precision` fixes the fractional digit count (default: the
     /// value's natural rendering). Zero-pad and width apply to the whole number.
     pub fn apply_float(&self, v: f64) -> String {
-        let body = match self.precision {
-            Some(p) => format!("{v:.*}", p),
-            None => {
-                // Match the interpreter/codegen bare-float rendering: an integral
-                // value still shows one fractional digit.
-                if v.fract() == 0.0 && v.is_finite() {
-                    format!("{v:.1}")
-                } else {
-                    format!("{v}")
-                }
-            }
-        };
+        let mut out = Vec::new();
+        self.write_float(v, &mut out);
+        String::from_utf8(out).unwrap_or_default()
+    }
+
+    /// [`Self::apply_float`], appended to `out`. The digits are Rust's
+    /// `{v:.p}` with a precision and its `{v}` without one, an integral
+    /// value showing one fractional digit to match the bare-float
+    /// rendering; written by `float_text`, which cannot panic.
+    pub fn write_float(&self, v: f64, out: &mut impl Out) {
         // `+` signs every non-negative value except a NaN, which Rust renders
-        // unsigned (`format!("{:+}", f64::NAN)` is `NaN`).
-        let body = if self.plus && !body.starts_with('-') && !v.is_nan() {
-            format!("+{body}")
+        // unsigned (`format!("{:+}", f64::NAN)` is `NaN`); so does `-`.
+        let sign: &[u8] = if v.is_nan() {
+            b""
+        } else if v.is_sign_negative() {
+            b"-"
+        } else if self.plus {
+            b"+"
         } else {
-            body
+            b""
+        };
+        let have = match self.width {
+            Some(_) => {
+                let mut count = Count(sign.len());
+                Self::float_digits(self.precision, v, &mut count);
+                count.0
+            }
+            None => 0,
         };
         if self.zero_pad {
             if let Some(width) = self.width {
-                let signed = body.starts_with('-') || body.starts_with('+');
-                let (sign, rest) = if signed {
-                    body.split_at(1)
-                } else {
-                    ("", body.as_str())
-                };
-                let have = sign.len() + rest.chars().count();
                 if have < width {
-                    let zeros = "0".repeat(width - have);
-                    return format!("{sign}{zeros}{rest}");
+                    out.put(sign);
+                    out.repeat(b"0", width - have);
+                    return Self::float_digits(self.precision, v, out);
                 }
             }
         }
-        self.pad(&body, false)
+        let (left, right) = self.pad_amounts(have, false);
+        self.write_fill(out, left);
+        out.put(sign);
+        Self::float_digits(self.precision, v, out);
+        self.write_fill(out, right);
+    }
+
+    /// `v`'s magnitude, as [`Self::write_float`] shows it.
+    fn float_digits(precision: Option<usize>, v: f64, out: &mut impl Out) {
+        match precision {
+            Some(p) if v.is_finite() => float_text::write_fixed(out, v, p),
+            None if v.is_finite() && v.fract() == 0.0 => float_text::write_fixed(out, v, 1),
+            _ => float_text::write_rust_plain(out, v),
+        }
     }
 
     /// Format a string: width padding + align. Precision (truncation) on a
@@ -433,6 +511,15 @@ impl FormatSpec {
     /// consistent default across all value kinds).
     pub fn apply_str(&self, s: &str) -> String {
         self.pad(s, false)
+    }
+
+    /// [`Self::apply_str`] on the UTF-8 `s`, appended to `out`.
+    pub fn write_str(&self, s: &[u8], out: &mut impl Out) {
+        let chars = s.iter().filter(|b| **b & 0xc0 != 0x80).count();
+        let (left, right) = self.pad_amounts(chars, false);
+        self.write_fill(out, left);
+        out.put(s);
+        self.write_fill(out, right);
     }
 
     /// The printf conversion char for the integer radix (`d`/`x`/`X`/`o`).
@@ -518,139 +605,16 @@ impl FormatSpec {
 /// Python's `repr` does: -75455689800034.625 prints -75455689800034.62
 /// (B-2026-10-23-4). Rust's shortest digits round that last digit up.
 pub fn display_f64(v: f64) -> String {
-    let sci = format!("{v:e}");
-    match even_tie(v, &sci, |t| t.parse::<f64>() == Ok(v)) {
-        Some((sci, plain)) => shown_float(v, sci, plain),
-        None => shown_float(v, sci, v.to_string()),
-    }
+    let mut out = Vec::new();
+    float_text::write_display_f64(&mut out, v);
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// [`display_f64`] with an `f32`'s own shortest digits.
 pub fn display_f32(v: f32) -> String {
-    let sci = format!("{v:e}");
-    match even_tie(f64::from(v), &sci, |t| t.parse::<f32>() == Ok(v)) {
-        Some((sci, plain)) => shown_float(f64::from(v), sci, plain),
-        None => shown_float(f64::from(v), sci, v.to_string()),
-    }
-}
-
-/// The `{:e}` and plain forms of the even-ending neighbour of `sci`'s
-/// shortest digits, when `v` lies exactly halfway between the two and the
-/// neighbour also `reads_back` as `v`; None otherwise. Only an odd last
-/// digit can lose such a tie, and its neighbours differ in that digit
-/// alone (a 9's upper neighbour would carry to a shorter decimal, which
-/// the shortest digits would already be).
-fn even_tie(v: f64, sci: &str, reads_back: impl Fn(&str) -> bool) -> Option<(String, String)> {
-    if !v.is_finite() || v == 0.0 {
-        return None;
-    }
-    // A cheap necessary condition, which nearly every value fails: `v` is
-    // M * 2^q with M odd, so when q < 0 it has exactly -q decimal places,
-    // and the midpoint after the n shortest digits has n - exp of them. It
-    // is first bounded from the bits alone (n is at most 17, and exp is at
-    // least the binary exponent's decimal floor less one), so a typical
-    // value is turned away before any text is read.
-    let bits = v.abs().to_bits();
-    let (m, q, e2) = match (bits >> 52) as i32 {
-        0 => (bits, -1074, -1075),
-        e => (bits & ((1 << 52) - 1) | 1 << 52, e - 1075, e - 1023),
-    };
-    let q = q + m.trailing_zeros() as i32;
-    if q < 0 && -q > 17 - ((e2 * 30103).div_euclid(100000) - 1) {
-        return None;
-    }
-    let (mantissa, exp) = sci.split_once('e')?;
-    let exp: i32 = exp.parse().ok()?;
-    let (neg, mantissa) = match mantissa.strip_prefix('-') {
-        Some(m) => (true, m),
-        None => (false, mantissa),
-    };
-    if mantissa
-        .bytes()
-        .last()
-        .is_none_or(|b| (b - b'0').is_multiple_of(2))
-    {
-        return None;
-    }
-    let n = mantissa.bytes().filter(u8::is_ascii_digit).count() as i32;
-    if q < 0 && -q != n - exp {
-        return None;
-    }
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let last = digits.bytes().last()? - b'0';
-    let stem = &digits[..digits.len() - 1];
-    let sign = if neg { "-" } else { "" };
-    let sci_of = |d: &str| match d.split_at(1) {
-        (lead, "") => format!("{sign}{lead}e{exp}"),
-        (lead, rest) => format!("{sign}{lead}.{rest}e{exp}"),
-    };
-    // `v` is exactly halfway when its exact decimal expansion (finite for a
-    // double; 1100 places hold the longest) is the midpoint. Reading the
-    // midpoint back as `v` is checked first: it is cheap, and a value that
-    // is nowhere near a tie never pays for the expansion.
-    for (neighbour, midpoint) in [
-        (last - 1, format!("{stem}{}5", last - 1)),
-        (last + 1, format!("{stem}{last}5")),
-    ] {
-        let alt = format!("{stem}{neighbour}");
-        if neighbour > 9
-            || sci_of(&midpoint).trim_start_matches('-').parse::<f64>() != Ok(v.abs())
-            || !reads_back(&sci_of(&alt))
-        {
-            continue;
-        }
-        let exact = format!("{:.1100e}", v.abs());
-        let (exact_digits, exact_exp) = exact.split_once('e')?;
-        let exact_digits: String = exact_digits.chars().filter(|c| *c != '.').collect();
-        let halfway = exact_exp.parse::<i32>() == Ok(exp)
-            && exact_digits
-                .strip_prefix(midpoint.as_str())
-                .is_some_and(|rest| rest.bytes().all(|b| b == b'0'));
-        if halfway {
-            return Some((sci_of(&alt), plain_of(sign, &alt, exp)));
-        }
-    }
-    None
-}
-
-/// `digits` (the first one before the point) times ten to `exp`, written
-/// out in decimal.
-fn plain_of(sign: &str, digits: &str, exp: i32) -> String {
-    let point = exp + 1;
-    if point <= 0 {
-        let zeros = "0".repeat(point.unsigned_abs() as usize);
-        return format!("{sign}0.{zeros}{digits}");
-    }
-    let point = point as usize;
-    if digits.len() <= point {
-        return format!("{sign}{digits}{}", "0".repeat(point - digits.len()));
-    }
-    format!("{sign}{}.{}", &digits[..point], &digits[point..])
-}
-
-/// `v` shown from its shortest digits in Rust's `{:e}` (`sci`: `1e16`,
-/// `-1.5e-5`) and `Display` (`plain`: always decimal, `-0` for -0.0) forms.
-fn shown_float(v: f64, sci: String, plain: String) -> String {
-    if v.is_nan() {
-        return "NaN".to_string();
-    }
-    if v.is_infinite() {
-        return if v > 0.0 { "inf" } else { "-inf" }.to_string();
-    }
-    if v != 0.0 {
-        if let Some((mantissa, exp)) = sci.split_once('e') {
-            let exp: i32 = exp.parse().unwrap_or(0);
-            if !(-4..16).contains(&exp) {
-                let sign = if exp < 0 { '-' } else { '+' };
-                return format!("{mantissa}e{sign}{:02}", exp.unsigned_abs());
-            }
-        }
-    }
-    if plain.contains('.') {
-        plain
-    } else {
-        plain + ".0"
-    }
+    let mut out = Vec::new();
+    float_text::write_display_f32(&mut out, v);
+    String::from_utf8(out).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -698,6 +662,518 @@ mod tests {
         assert_eq!(display_f32(0.1), "0.1");
         assert_eq!(display_f32(2.0), "2.0");
         assert_eq!(display_f32(1e20), "1e+20");
+    }
+
+    /// The previous `parse`, `display_f64`, `display_f32` and `apply_float`,
+    /// built on core's float formatting (Grisu, Dragon, and `parse` for the
+    /// even tie): the oracle `float_text` and `parse_bytes` are held to
+    /// (B-2026-11-06-2).
+    mod oracle {
+        use super::super::{Align, FormatSpec, Radix};
+
+        pub fn parse(raw: &str) -> Result<FormatSpec, String> {
+            let mut spec = FormatSpec {
+                fill: None,
+                align: None,
+                plus: false,
+                zero_pad: false,
+                width: None,
+                precision: None,
+                radix: Radix::Dec,
+            };
+            // `{x:?}` / `{x:#?}` (with or without width flags before the `?`) is
+            // the Debug form design.md § Strings reserves and defers: name it as
+            // such rather than letting the `?` reach the `[type]` slot and be
+            // reported as an unknown radix (B-2026-10-05-48).
+            if raw.ends_with('?') {
+                return Err(format!(
+                    "format spec `{raw}`: `?` is Debug formatting, which is reserved but not \
+                     implemented yet; write `{{x}}` for the value's Display form"
+                ));
+            }
+            let chars: Vec<char> = raw.chars().collect();
+            let mut i = 0;
+
+            let align_of = |c: char| match c {
+                '<' => Some(Align::Left),
+                '>' => Some(Align::Right),
+                '^' => Some(Align::Center),
+                _ => None,
+            };
+
+            // [[fill] align] — a fill char is only recognized when an align char
+            // follows it, so `<`/`>`/`^` alone is align-with-default-fill and a
+            // leading `0` stays the zero-pad flag.
+            if chars.len() >= 2 {
+                if let Some(a) = align_of(chars[1]) {
+                    spec.fill = Some(chars[0]);
+                    spec.align = Some(a);
+                    i = 2;
+                }
+            }
+            if spec.align.is_none() {
+                if let Some(&c) = chars.first() {
+                    if let Some(a) = align_of(c) {
+                        spec.align = Some(a);
+                        i = 1;
+                    }
+                }
+            }
+
+            // ['+'] sign flag. Rust also accepts `-` (and ignores it) and Python
+            // a space; neither is supported, and both used to be reported as an
+            // unsupported TYPE because the parser reached the `[type]` slot with
+            // them (B-2026-10-02-42), so name them as sign flags instead.
+            if i < chars.len() && chars[i] == '+' {
+                spec.plus = true;
+                i += 1;
+            } else if i < chars.len() && (chars[i] == '-' || chars[i] == ' ') {
+                return Err(format!(
+                    "format spec `{raw}`: sign flag `{}` is not supported (only `+` is)",
+                    chars[i]
+                ));
+            }
+
+            // ['0'] zero-pad flag.
+            if i < chars.len() && chars[i] == '0' {
+                spec.zero_pad = true;
+                i += 1;
+            }
+
+            // [width]
+            let width_start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i > width_start {
+                let w: String = chars[width_start..i].iter().collect();
+                spec.width = Some(
+                    w.parse()
+                        .map_err(|_| format!("format spec width `{w}` is out of range"))?,
+                );
+            }
+
+            // ['.' precision]
+            if i < chars.len() && chars[i] == '.' {
+                i += 1;
+                let prec_start = i;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i == prec_start {
+                    return Err(format!(
+                        "format spec `{raw}`: `.` must be followed by a precision (e.g. `.2`)"
+                    ));
+                }
+                let p: String = chars[prec_start..i].iter().collect();
+                spec.precision = Some(
+                    p.parse()
+                        .map_err(|_| format!("format spec precision `{p}` is out of range"))?,
+                );
+            }
+
+            // [type]
+            if i < chars.len() {
+                spec.radix = match chars[i] {
+                    'x' => Radix::Hex,
+                    'X' => Radix::HexUpper,
+                    'o' => Radix::Oct,
+                    'b' => Radix::Bin,
+                    'd' => Radix::Dec,
+                    other => {
+                        return Err(format!(
+                            "format spec `{raw}`: unsupported type `{other}` \
+                             (expected one of x, X, o, b, d)"
+                        ));
+                    }
+                };
+                i += 1;
+            }
+
+            if i != chars.len() {
+                let rest: String = chars[i..].iter().collect();
+                return Err(format!("format spec `{raw}`: unexpected trailing `{rest}`"));
+            }
+            if spec.radix != Radix::Dec && spec.precision.is_some() {
+                return Err(format!(
+                    "format spec `{raw}`: precision is not valid with an integer type"
+                ));
+            }
+            Ok(spec)
+        }
+
+        pub fn display_f64(v: f64) -> String {
+            let sci = format!("{v:e}");
+            match even_tie(v, &sci, |t| t.parse::<f64>() == Ok(v)) {
+                Some((sci, plain)) => shown_float(v, sci, plain),
+                None => shown_float(v, sci, v.to_string()),
+            }
+        }
+
+        /// [`display_f64`] with an `f32`'s own shortest digits.
+        pub fn display_f32(v: f32) -> String {
+            let sci = format!("{v:e}");
+            match even_tie(f64::from(v), &sci, |t| t.parse::<f32>() == Ok(v)) {
+                Some((sci, plain)) => shown_float(f64::from(v), sci, plain),
+                None => shown_float(f64::from(v), sci, v.to_string()),
+            }
+        }
+
+        /// The `{:e}` and plain forms of the even-ending neighbour of `sci`'s
+        /// shortest digits, when `v` lies exactly halfway between the two and the
+        /// neighbour also `reads_back` as `v`; None otherwise. Only an odd last
+        /// digit can lose such a tie, and its neighbours differ in that digit
+        /// alone (a 9's upper neighbour would carry to a shorter decimal, which
+        /// the shortest digits would already be).
+        fn even_tie(
+            v: f64,
+            sci: &str,
+            reads_back: impl Fn(&str) -> bool,
+        ) -> Option<(String, String)> {
+            if !v.is_finite() || v == 0.0 {
+                return None;
+            }
+            // A cheap necessary condition, which nearly every value fails: `v` is
+            // M * 2^q with M odd, so when q < 0 it has exactly -q decimal places,
+            // and the midpoint after the n shortest digits has n - exp of them. It
+            // is first bounded from the bits alone (n is at most 17, and exp is at
+            // least the binary exponent's decimal floor less one), so a typical
+            // value is turned away before any text is read.
+            let bits = v.abs().to_bits();
+            let (m, q, e2) = match (bits >> 52) as i32 {
+                0 => (bits, -1074, -1075),
+                e => (bits & ((1 << 52) - 1) | 1 << 52, e - 1075, e - 1023),
+            };
+            let q = q + m.trailing_zeros() as i32;
+            if q < 0 && -q > 17 - ((e2 * 30103).div_euclid(100000) - 1) {
+                return None;
+            }
+            let (mantissa, exp) = sci.split_once('e')?;
+            let exp: i32 = exp.parse().ok()?;
+            let (neg, mantissa) = match mantissa.strip_prefix('-') {
+                Some(m) => (true, m),
+                None => (false, mantissa),
+            };
+            if mantissa
+                .bytes()
+                .last()
+                .is_none_or(|b| (b - b'0').is_multiple_of(2))
+            {
+                return None;
+            }
+            let n = mantissa.bytes().filter(u8::is_ascii_digit).count() as i32;
+            if q < 0 && -q != n - exp {
+                return None;
+            }
+            let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+            let last = digits.bytes().last()? - b'0';
+            let stem = &digits[..digits.len() - 1];
+            let sign = if neg { "-" } else { "" };
+            let sci_of = |d: &str| match d.split_at(1) {
+                (lead, "") => format!("{sign}{lead}e{exp}"),
+                (lead, rest) => format!("{sign}{lead}.{rest}e{exp}"),
+            };
+            // `v` is exactly halfway when its exact decimal expansion (finite for a
+            // double; 1100 places hold the longest) is the midpoint. Reading the
+            // midpoint back as `v` is checked first: it is cheap, and a value that
+            // is nowhere near a tie never pays for the expansion.
+            for (neighbour, midpoint) in [
+                (last - 1, format!("{stem}{}5", last - 1)),
+                (last + 1, format!("{stem}{last}5")),
+            ] {
+                let alt = format!("{stem}{neighbour}");
+                if neighbour > 9
+                    || sci_of(&midpoint).trim_start_matches('-').parse::<f64>() != Ok(v.abs())
+                    || !reads_back(&sci_of(&alt))
+                {
+                    continue;
+                }
+                let exact = format!("{:.1100e}", v.abs());
+                let (exact_digits, exact_exp) = exact.split_once('e')?;
+                let exact_digits: String = exact_digits.chars().filter(|c| *c != '.').collect();
+                let halfway = exact_exp.parse::<i32>() == Ok(exp)
+                    && exact_digits
+                        .strip_prefix(midpoint.as_str())
+                        .is_some_and(|rest| rest.bytes().all(|b| b == b'0'));
+                if halfway {
+                    return Some((sci_of(&alt), plain_of(sign, &alt, exp)));
+                }
+            }
+            None
+        }
+
+        /// `digits` (the first one before the point) times ten to `exp`, written
+        /// out in decimal.
+        fn plain_of(sign: &str, digits: &str, exp: i32) -> String {
+            let point = exp + 1;
+            if point <= 0 {
+                let zeros = "0".repeat(point.unsigned_abs() as usize);
+                return format!("{sign}0.{zeros}{digits}");
+            }
+            let point = point as usize;
+            if digits.len() <= point {
+                return format!("{sign}{digits}{}", "0".repeat(point - digits.len()));
+            }
+            format!("{sign}{}.{}", &digits[..point], &digits[point..])
+        }
+
+        /// `v` shown from its shortest digits in Rust's `{:e}` (`sci`: `1e16`,
+        /// `-1.5e-5`) and `Display` (`plain`: always decimal, `-0` for -0.0) forms.
+        fn shown_float(v: f64, sci: String, plain: String) -> String {
+            if v.is_nan() {
+                return "NaN".to_string();
+            }
+            if v.is_infinite() {
+                return if v > 0.0 { "inf" } else { "-inf" }.to_string();
+            }
+            if v != 0.0 {
+                if let Some((mantissa, exp)) = sci.split_once('e') {
+                    let exp: i32 = exp.parse().unwrap_or(0);
+                    if !(-4..16).contains(&exp) {
+                        let sign = if exp < 0 { '-' } else { '+' };
+                        return format!("{mantissa}e{sign}{:02}", exp.unsigned_abs());
+                    }
+                }
+            }
+            if plain.contains('.') {
+                plain
+            } else {
+                plain + ".0"
+            }
+        }
+
+        pub fn apply_float(fs: &FormatSpec, v: f64) -> String {
+            let body = match fs.precision {
+                Some(p) => format!("{v:.*}", p),
+                None => {
+                    // Match the interpreter/codegen bare-float rendering: an integral
+                    // value still shows one fractional digit.
+                    if v.fract() == 0.0 && v.is_finite() {
+                        format!("{v:.1}")
+                    } else {
+                        format!("{v}")
+                    }
+                }
+            };
+            // `+` signs every non-negative value except a NaN, which Rust renders
+            // unsigned (`format!("{:+}", f64::NAN)` is `NaN`).
+            let body = if fs.plus && !body.starts_with('-') && !v.is_nan() {
+                format!("+{body}")
+            } else {
+                body
+            };
+            if fs.zero_pad {
+                if let Some(width) = fs.width {
+                    let signed = body.starts_with('-') || body.starts_with('+');
+                    let (sign, rest) = if signed {
+                        body.split_at(1)
+                    } else {
+                        ("", body.as_str())
+                    };
+                    let have = sign.len() + rest.chars().count();
+                    if have < width {
+                        let zeros = "0".repeat(width - have);
+                        return format!("{sign}{zeros}{rest}");
+                    }
+                }
+            }
+            fs.pad(&body, false)
+        }
+    }
+
+    /// A xorshift stream, for reproducible values.
+    fn stream(mut x: u64) -> impl Iterator<Item = u64> {
+        std::iter::repeat_with(move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        })
+    }
+
+    /// The floats the oracle tests run: the edges of every kind, short
+    /// decimals (where the ties and trailing zeros are), and random bits.
+    #[allow(clippy::excessive_precision)]
+    fn float_cases() -> Vec<f64> {
+        let mut v = vec![
+            0.0,
+            -0.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            f64::MIN,
+            f64::EPSILON,
+            5e-324,
+            1e-323,
+            0.5,
+            1.5,
+            2.5,
+            0.125,
+            0.375,
+            9.995,
+            -75455689800034.625,
+            75455689800034.125,
+            1e15,
+            1e16,
+            1e21,
+            1e22,
+            1e23,
+            9007199254740993.0,
+            4503599627370495.5,
+        ];
+        for e in -325..=310 {
+            for m in ["1", "5", "123456789", "9.999999999999999"] {
+                v.push(format!("{m}e{e}").parse().unwrap());
+            }
+            v.push(2f64.powi(e));
+        }
+        let mut r = stream(0x9e3779b97f4a7c15);
+        for _ in 0..20000 {
+            let n = r.next().unwrap() % 100_000_000;
+            let e = (r.next().unwrap() % 40) as i32 - 20;
+            v.push(n as f64 * 10f64.powi(e));
+            v.push(n as f64 / 1024.0);
+            v.push((n % 100_000) as f64 / 8.0 + 0.5);
+        }
+        for _ in 0..100_000 {
+            v.push(f64::from_bits(r.next().unwrap()));
+        }
+        v
+    }
+
+    #[test]
+    fn display_matches_the_core_formatting_oracle() {
+        for v in float_cases() {
+            assert_eq!(
+                display_f64(v),
+                oracle::display_f64(v),
+                "{v:?} ({:#x})",
+                v.to_bits()
+            );
+            let f = v as f32;
+            assert_eq!(
+                display_f32(f),
+                oracle::display_f32(f),
+                "{f:?} ({:#x})",
+                f.to_bits()
+            );
+        }
+        let mut r = stream(77);
+        for _ in 0..100_000 {
+            let f = f32::from_bits(r.next().unwrap() as u32);
+            assert_eq!(
+                display_f32(f),
+                oracle::display_f32(f),
+                "{f:?} ({:#x})",
+                f.to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn apply_float_matches_the_core_formatting_oracle() {
+        let specs = [
+            "", ".0", ".1", ".2", ".3", ".5", ".9", ".17", ".20", ".40", "10", "10.2", "+08.3",
+            "^12", "*<9", "+", "08", "+.0", "é>14.4", "030.1",
+        ];
+        let specs: Vec<FormatSpec> = specs.iter().map(|s| spec(s)).collect();
+        for (n, v) in float_cases().into_iter().enumerate() {
+            for fs in &specs {
+                assert_eq!(
+                    fs.apply_float(v),
+                    oracle::apply_float(fs, v),
+                    "{fs:?} {v:?}"
+                );
+            }
+            // The long expansions, on a sample.
+            if n % 97 == 0 {
+                for p in [330, 1074, 1100] {
+                    let fs = FormatSpec {
+                        precision: Some(p),
+                        ..spec("")
+                    };
+                    assert_eq!(fs.apply_float(v), oracle::apply_float(&fs, v), ".{p} {v:?}");
+                }
+            }
+        }
+    }
+
+    /// `parse` (now over `parse_bytes`) accepts what it did, and refuses
+    /// what it refused with the same message.
+    #[test]
+    fn parse_matches_the_previous_parser() {
+        let mut raws: Vec<String> = [
+            "",
+            "?",
+            ">5?",
+            "#?",
+            "-5",
+            " 5",
+            "-",
+            "5.",
+            ".",
+            "5.x",
+            "q",
+            "4z",
+            "5q",
+            "5xx",
+            "x.2",
+            ".2x",
+            "99999999999999999999999",
+            ".99999999999999999999999",
+            "18446744073709551615",
+            "18446744073709551616",
+            "é",
+            "é<",
+            "é<5",
+            "<<",
+            "<",
+            "0<5",
+            "00",
+            "0",
+            "+0",
+            "+08.3",
+            "*^+012.4",
+            "😀>9x",
+            "😀",
+            ">+5",
+            "<-5",
+            "5.2d",
+            "5.2b",
+            "x",
+            "X",
+            "o",
+            "b",
+            "d",
+            "08b",
+            "+x",
+            "+05",
+            ">8",
+            "<8",
+            "^9",
+            "*>7x",
+            "_<6",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let alphabet = [
+            '<', '>', '^', '+', '-', '0', '1', '9', '.', 'x', 'b', 'd', '*', 'é', '?',
+        ];
+        let mut r = stream(5);
+        for _ in 0..20000 {
+            let len = (r.next().unwrap() % 7) as usize;
+            raws.push(
+                (0..len)
+                    .map(|_| alphabet[(r.next().unwrap() % alphabet.len() as u64) as usize])
+                    .collect(),
+            );
+        }
+        for raw in raws {
+            assert_eq!(FormatSpec::parse(&raw), oracle::parse(&raw), "{raw:?}");
+        }
     }
 
     use super::*;

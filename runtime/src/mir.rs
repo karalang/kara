@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 
 use crate::alloc::karac_realloc_or_panic;
+use crate::fmt::format_spec::float_text;
 use crate::lean_vec::LeanVec;
 
 /// A `String` or `Vec[T]` as compiled code holds it.
@@ -442,14 +443,22 @@ pub extern "C" fn karac_mir_fmt_i128(lo: u64, hi: u64, signed: bool) {
     append_bytes(d.get(i..).unwrap_or_default());
 }
 
+// A float's `Display` is at most 24 bytes (`-1.2345678901234567e-308`).
+// It is written by `float_text`, which nothing in can panic: core's float
+// formatting kept std's panic hook in every binary that printed a float
+// (B-2026-11-06-2).
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_f64(v: f64) {
-    append(&crate::fmt::format_spec::display_f64(v));
+    let mut text = float_text::Stack::<32>::new();
+    float_text::write_display_f64(&mut text, v);
+    append_bytes(text.as_slice());
 }
 
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_f32(v: f32) {
-    append(&crate::fmt::format_spec::display_f32(v));
+    let mut text = float_text::Stack::<32>::new();
+    float_text::write_display_f32(&mut text, v);
+    append_bytes(text.as_slice());
 }
 
 #[no_mangle]
@@ -493,7 +502,9 @@ pub unsafe extern "C" fn karac_mir_fmt_end_string(out: *mut RawVec) {
 /// value, rendered by `kind` (0 a signed integer `lo`, 1 an unsigned one,
 /// 2 a 128-bit signed `hi:lo`, 3 an unsigned one, 4 the float `f`, 5 the
 /// text the innermost format buffer holds, which is popped) through the
-/// interpreter's own `FormatSpec`, as a `String` at `out`.
+/// interpreter's own `FormatSpec`, as a `String` at `out`. The spec is
+/// parsed on each call: `parse_bytes` reads a few bytes and allocates
+/// nothing. Nothing on this path can panic (B-2026-11-06-2).
 ///
 /// # Safety
 /// `spec` is readable for `spec_len` bytes; `out` is writable for a
@@ -508,114 +519,78 @@ pub unsafe extern "C" fn karac_mir_fmt_spec(
     hi: u64,
     f: f64,
 ) {
-    let spec_len = spec_len as usize;
     use crate::fmt::format_spec::FormatSpec;
     // SAFETY: the caller's contract.
-    let spec_bytes = unsafe { bytes(spec, spec_len) };
-    if kind == 0 || kind == 1 {
-        if let Some(text) = padded_int(spec_bytes, lo, kind == 0) {
-            // SAFETY: the caller's contract.
-            unsafe { string_of(out, &text) };
-            return;
+    let spec_bytes = unsafe { bytes(spec, spec_len as usize) };
+    let Ok(fs) = FormatSpec::parse_bytes(spec_bytes) else {
+        // The parser refuses a bad spec, so a compiled program never has
+        // one.
+        if kind == 5 {
+            fmt_pop(|_| ());
         }
-    }
-    let Some(fs) = parsed_spec(spec_bytes) else {
-        let raw = String::from_utf8_lossy(spec_bytes);
-        let text = match FormatSpec::parse(&raw) {
-            Err(e) => format!("<bad format spec: {e}>"),
-            Ok(_) => String::new(),
-        };
         // SAFETY: the caller's contract.
-        unsafe { string_of(out, text.as_bytes()) };
+        unsafe { string_of(out, b"<bad format spec>") };
         return;
     };
-    if kind == 0 || kind == 1 {
-        // An integer is written straight into a reused buffer.
-        SPEC_TEXT.with(|t| {
-            let mut t = t.borrow_mut();
-            t.clear();
-            fs.write_int64(lo, kind == 0, &mut t);
-            // SAFETY: the caller's contract.
-            unsafe { string_of(out, &t) };
-        });
-        return;
-    }
     let wide = (u128::from(hi) << 64) | u128::from(lo);
-    let text = match kind {
-        2 => fs.apply_int128(wide as i128),
-        3 => fs.apply_uint128(wide),
-        4 => fs.apply_float(f),
-        _ => {
-            let shown = fmt_pop(|t| String::from_utf8_lossy(t).into_owned());
-            fs.apply_str(&shown)
-        }
-    };
+    if kind == 5 {
+        let mut t = LeanVec::new();
+        fmt_pop(|text| fs.write_str(text, &mut t));
+        // SAFETY: the caller's contract.
+        unsafe { string_of(out, t.as_slice()) };
+        return;
+    }
+    let render = |t: &mut dyn float_text::Out| spec_number(&fs, kind, wide, f, t);
+    // A number's text nearly always fits on the stack; a wider one (a
+    // big width or precision) is written again into the heap. Not a
+    // thread-local buffer: one with a destructor brings in std's
+    // destructor list, whose growth can panic.
+    let mut text = float_text::Stack::<128>::new();
+    render(&mut text);
+    if !text.overflowed() {
+        // SAFETY: the caller's contract.
+        unsafe { string_of(out, text.as_slice()) };
+        return;
+    }
+    let mut t = LeanVec::new();
+    render(&mut t);
     // SAFETY: the caller's contract.
-    unsafe { string_of(out, text.as_bytes()) };
+    unsafe { string_of(out, t.as_slice()) };
 }
 
-thread_local! {
-    /// The specs `karac_mir_fmt_spec` has parsed, by their text: an
-    /// f-string's spec is a constant, so each is parsed once rather than on
-    /// every call (B-2026-10-29-33).
-    static SPECS: std::cell::RefCell<Vec<(Box<[u8]>, crate::fmt::format_spec::FormatSpec)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-    /// The buffer an integer's text is written into before it is copied out.
-    static SPEC_TEXT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// The parsed spec `spec`, from the cache when it has been parsed before.
-/// `None` for a spec that does not parse, which is not cached.
-fn parsed_spec(spec: &[u8]) -> Option<crate::fmt::format_spec::FormatSpec> {
-    SPECS.with(|c| {
-        let mut c = c.borrow_mut();
-        if let Some((_, fs)) = c.iter().find(|(k, _)| **k == *spec) {
-            return Some(fs.clone());
-        }
-        let fs =
-            crate::fmt::format_spec::FormatSpec::parse(std::str::from_utf8(spec).ok()?).ok()?;
-        // A program's specs are few; a runaway set starts over.
-        if c.len() >= 64 {
-            c.clear();
-        }
-        c.push((spec.into(), fs.clone()));
-        Some(fs)
-    })
-}
-
-/// `{v:N}` and `{v:0N}` for a 64-bit integer (`signed` says how to
-/// read `v`), without parsing a `FormatSpec`: right-aligned in `N`
-/// columns, padded with spaces, or with zeros after the sign. `None`
-/// for any other spec, which takes the general path.
-fn padded_int(spec: &[u8], v: u64, signed: bool) -> Option<Vec<u8>> {
-    if spec.is_empty() || spec.len() > 3 || !spec.iter().all(u8::is_ascii_digit) {
-        return None;
+/// The number `karac_mir_fmt_spec` was handed (`kind` 0 to 4; a 64-bit
+/// one in the low half of `wide`), written to `t`.
+fn spec_number(
+    fs: &crate::fmt::format_spec::FormatSpec,
+    kind: i32,
+    wide: u128,
+    f: f64,
+    t: &mut dyn float_text::Out,
+) {
+    let mut t = DynOut(t);
+    match kind {
+        0 | 1 => fs.write_int64(wide as u64, kind == 0, &mut t),
+        2 | 3 => fs.write_int128(wide, kind == 2, &mut t),
+        _ => fs.write_float(f, &mut t),
     }
-    let zero = spec.len() > 1 && spec[0] == b'0';
-    let width = spec
-        .iter()
-        .fold(0usize, |w, c| w * 10 + usize::from(c - b'0'));
-    let neg = signed && (v as i64) < 0;
-    let mag = if signed { (v as i64).unsigned_abs() } else { v };
-    let mut d = [0u8; 20];
-    let i = digits(mag, &mut d);
-    let body = &d[i..];
-    let len = body.len() + usize::from(neg);
-    let pad = width.saturating_sub(len);
-    let mut t = Vec::with_capacity(len + pad);
-    if zero {
-        if neg {
-            t.push(b'-');
-        }
-        t.resize(t.len() + pad, b'0');
-    } else {
-        t.resize(pad, b' ');
-        if neg {
-            t.push(b'-');
-        }
+}
+
+/// An `Out` behind a `dyn`, so one rendering serves both buffers.
+struct DynOut<'a>(&'a mut dyn float_text::Out);
+
+impl float_text::Out for DynOut<'_> {
+    fn put(&mut self, b: &[u8]) {
+        self.0.put(b);
     }
-    t.extend_from_slice(body);
-    Some(t)
+    fn repeat(&mut self, b: &[u8], n: usize) {
+        self.0.repeat(b, n);
+    }
+}
+
+impl float_text::Out for LeanVec<u8> {
+    fn put(&mut self, b: &[u8]) {
+        self.extend_from_slice(b);
+    }
 }
 
 /// Writes a fresh `String` holding `b` at `out`.
@@ -4745,29 +4720,6 @@ mod tests {
                     unsafe { super::free(q.ptr.cast()) };
                 }
             }
-        }
-    }
-
-    #[test]
-    fn padded_int_agrees_with_format_spec() {
-        use crate::fmt::format_spec::FormatSpec;
-        for spec in ["0", "1", "2", "02", "5", "05", "010", "20", "021"] {
-            for v in [0i64, 7, -7, 42, -42, 12345, -12345, i64::MIN, i64::MAX] {
-                let fast = super::padded_int(spec.as_bytes(), v as u64, true).unwrap();
-                let slow = FormatSpec::parse(spec).unwrap().apply_int(v);
-                assert_eq!(String::from_utf8(fast).unwrap(), slow, "{{{v}:{spec}}}");
-            }
-            for v in [0u64, 9, u64::MAX] {
-                let fast = super::padded_int(spec.as_bytes(), v, false).unwrap();
-                let slow = FormatSpec::parse(spec).unwrap().apply_uint(v);
-                assert_eq!(String::from_utf8(fast).unwrap(), slow, "{{{v}:{spec}}}");
-            }
-        }
-        for spec in ["", "x", "<5", "+5", "0005", ">05", ".2"] {
-            assert!(
-                super::padded_int(spec.as_bytes(), 1, true).is_none(),
-                "{spec}"
-            );
         }
     }
 
