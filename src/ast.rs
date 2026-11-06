@@ -871,6 +871,12 @@ pub struct Program {
     /// PARSER; the resolver reports it when nothing declares a `BinaryHeap`
     /// (B-2026-11-04-5).
     pub rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Rust's `std::cmp::Reverse` around a heap's item, `heap.push(Reverse(x))`
+    /// or `Some(Reverse(p))`, keyed by the offset of `Reverse`, with the edit
+    /// that writes `x` in its place. Set by the PARSER from the
+    /// tokens; the resolver attaches it when nothing declares `Reverse` and
+    /// the program builds a Rust heap (kata 1057).
+    pub rust_reverse_wraps: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and

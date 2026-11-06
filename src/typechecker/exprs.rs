@@ -5623,6 +5623,11 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     let only_borrowed = offered.iter().any(|a| unref(a) == unref(&want));
                     if decidable && !only_borrowed && !offered.contains(&want) {
+                        for a in &offered {
+                            for (x, y) in a.iter().zip(&want) {
+                                self.note_pointer_int_mix_within(x, y);
+                            }
+                        }
                         let render =
                             |v: &[Type]| v.iter().map(type_display).collect::<Vec<_>>().join(", ");
                         let have = offered
@@ -9105,6 +9110,7 @@ impl<'a> super::TypeChecker<'a> {
         if int_coercion_is_widening(&source, &target) {
             return;
         }
+        self.note_pointer_int_mix(&source, &target);
         if target == Type::Int(IntSize::I64) {
             if let Some(fix) = self.usize_cast_of_an_i64(expr) {
                 self.type_error_with_fix_it(

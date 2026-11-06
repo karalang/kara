@@ -330,6 +330,7 @@ impl<'a> super::TypeChecker<'a> {
         ) && Self::unsuffixed_num_literal(left_e, right).is_none()
             && Self::unsuffixed_num_literal(right_e, left).is_none();
         if mixed {
+            self.note_pointer_int_mix(left, right);
             self.type_error(
                 format!(
                     "cannot compare '{}' and '{}': mixing signed and unsigned integers \

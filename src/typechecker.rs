@@ -60,6 +60,7 @@ mod env_build;
 mod expr_call;
 mod expr_method_call;
 mod fn_env_cross_task;
+mod pointer_ints;
 mod provider_share;
 pub(crate) use expr_method_call::STRING_BUILTIN_METHODS;
 mod cross_task_params;
@@ -2904,6 +2905,13 @@ pub struct TypeChecker<'a> {
     pub(super) flatten_calls: FxHashMap<SpanKey, Span>,
     /// See [`TypeCheckResult::core_once_calls`].
     pub(super) core_once_calls: FxHashSet<SpanKey>,
+    /// Each `usize` or `isize` the program writes as a type, by offset
+    /// (B-2026-11-06-3). When the program mixes one with `i64`, each that is
+    /// not in an FFI item gets a fix to `i64` (design.md §5).
+    pub(super) written_pointer_ints: std::collections::BTreeMap<usize, Span>,
+    /// Whether an `i64` met a `usize` or `isize` in a coercion or comparison
+    /// error.
+    pub(super) pointer_int_mixed: bool,
     /// See [`TypeCheckResult::fn_item_spans`].
     pub(super) fn_item_spans: FxHashSet<SpanKey>,
     /// core §14.9: which functions can start a branch or a task, computed on
@@ -3983,6 +3991,8 @@ impl<'a> TypeChecker<'a> {
             flatten_hinted: false,
             flatten_calls: FxHashMap::default(),
             core_once_calls: FxHashSet::default(),
+            written_pointer_ints: Default::default(),
+            pointer_int_mixed: false,
             fn_item_spans: FxHashSet::default(),
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
@@ -4542,6 +4552,7 @@ impl<'a> TypeChecker<'a> {
                 Default::default()
             };
         self.parenthesize_suffix_fixes();
+        self.emit_written_pointer_int_fixes();
         // A library type kept private to its module reads by its path
         // (`std.time.Duration`, B-2026-10-19-10).
         for e in &mut self.errors {

@@ -884,6 +884,7 @@ impl Parser {
             vec_macro_literals: std::mem::take(&mut self.vec_macro_literals),
             rust_box_new: std::mem::take(&mut self.rust_box_new),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
+            rust_reverse_wraps: self.rust_reverse_wraps(),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
@@ -892,6 +893,67 @@ impl Parser {
             container_hashers: std::mem::take(&mut self.container_hashers),
             ..Program::default()
         }
+    }
+
+    /// Each `Reverse(` written as a heap's item: the argument of a `.push(`
+    /// or the payload of a `Some(` (kata 1057). See
+    /// [`crate::ast::Program::rust_reverse_wraps`].
+    fn rust_reverse_wraps(&self) -> rustc_hash::FxHashMap<usize, crate::resolver::TextEdit> {
+        let mut out = rustc_hash::FxHashMap::default();
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let ident = |i: usize, want: &str| matches!(tok(i), Some(Token::Identifier { name, .. }) if name == want);
+        for i in 2..self.tokens.len() {
+            if !ident(i, "Reverse") || !matches!(tok(i + 1), Some(Token::LeftParen)) {
+                continue;
+            }
+            if !matches!(tok(i - 1), Some(Token::LeftParen)) {
+                continue;
+            }
+            let pushed = ident(i - 2, "push") && i >= 3 && matches!(tok(i - 3), Some(Token::Dot));
+            if !pushed && !ident(i - 2, "Some") {
+                continue;
+            }
+            // The `)` that closes `Reverse(`; the edit writes what lies
+            // between the two in the call's place.
+            let mut depth = 0usize;
+            let mut close = None;
+            for (j, t) in self.tokens.iter().enumerate().skip(i + 1) {
+                match t.token {
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(j);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(close) = close else { continue };
+            let Some((source, base)) = self.source.as_ref() else {
+                continue;
+            };
+            let open = self.tokens[i + 1].span;
+            let (from, to) = (open.offset + open.length, self.tokens[close].span.offset);
+            let Some(inner) = from
+                .checked_sub(*base)
+                .zip(to.checked_sub(*base))
+                .and_then(|(a, b)| source.get(a..b))
+            else {
+                continue;
+            };
+            let start = self.tokens[i].span.offset;
+            out.insert(
+                start,
+                crate::resolver::TextEdit {
+                    offset: start,
+                    length: to + 1 - start,
+                    replacement: inner.trim().to_string(),
+                },
+            );
+        }
+        out
     }
 
     /// Script mode's implicit `main` signature and tail: the return type
@@ -2164,9 +2226,12 @@ impl Parser {
                     ident(at + 3).unwrap_or_default()
                 )
             });
+        // `Reverse` is not in the prelude: Kāra has no such wrapper, and the
+        // resolver's fix drops it around a heap's items (kata 1057).
+        let reverse = leaves.iter().any(|n| n == "Reverse");
         let kara: Vec<String> = leaves
             .iter()
-            .filter(|n| n.as_str() != "self")
+            .filter(|n| n.as_str() != "self" && n.as_str() != "Reverse")
             .map(|n| format!("`{}`", rust_collection_rename(n).unwrap_or(n)))
             .collect();
         let named = if kara.is_empty() {
@@ -2174,10 +2239,23 @@ impl Parser {
         } else {
             kara.join(", ")
         };
-        let message = format!(
-            "`{written}` is Rust's standard library -- Kāra has {named} in its prelude, with \
-             no import: delete the line"
-        );
+        let no_reverse = "no `Reverse`, since its `PriorityQueue` pops the smallest first \
+                          (each `Reverse(..)` is reported where it is used)";
+        let message = if reverse && kara.is_empty() {
+            format!(
+                "`{written}` is Rust's standard library -- Kāra has {no_reverse}: delete the line"
+            )
+        } else if reverse {
+            format!(
+                "`{written}` is Rust's standard library -- Kāra has {named} in its prelude, with \
+                 no import, and {no_reverse}: delete the line"
+            )
+        } else {
+            format!(
+                "`{written}` is Rust's standard library -- Kāra has {named} in its prelude, with \
+                 no import: delete the line"
+            )
+        };
         // The edit takes the line's newline too, so no blank line is left.
         let mut edit_length = whole.length;
         if self.source_at(whole.offset + whole.length, 1) == Some("\n") {

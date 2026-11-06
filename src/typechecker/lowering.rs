@@ -45,6 +45,14 @@ impl<'a> super::TypeChecker<'a> {
     ) -> Type {
         match &ty.kind {
             TypeKind::Path(path) => {
+                if let [name] = path.segments.as_slice() {
+                    if (name == "usize" || name == "isize")
+                        && path.generic_args.is_none()
+                        && ty.span.offset < self.program.library_start.unwrap_or(usize::MAX)
+                    {
+                        self.written_pointer_ints.insert(ty.span.offset, ty.span);
+                    }
+                }
                 // A trait in a type position is written `dyn Trait`
                 // (design.md § `dyn Trait`): a bare trait name is an error,
                 // with the `dyn` as its machine fix.

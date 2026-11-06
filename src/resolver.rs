@@ -1966,6 +1966,9 @@ impl<'a> Resolver<'a> {
         if self.report_rust_binary_heap(name, span) {
             return;
         }
+        if self.report_rust_reverse(name, span) {
+            return;
+        }
         let visible = self.suggestable_names();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
@@ -2079,6 +2082,9 @@ impl<'a> Resolver<'a> {
         if self.report_rust_binary_heap(name, span) {
             return;
         }
+        if self.report_rust_reverse(name, span) {
+            return;
+        }
         let visible = self.suggestable_names();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
@@ -2181,12 +2187,36 @@ impl<'a> Resolver<'a> {
         if name != "BinaryHeap" {
             return false;
         }
+        let smallest = self.rust_heaps_pop_smallest();
         let replacement = self
             .program
             .rust_heap_ctor
             .get(&span.offset)
             .cloned()
-            .map(Box::new);
+            .map(|mut e| {
+                if smallest {
+                    e.replacement = e
+                        .replacement
+                        .replace("max_first_from", "from")
+                        .replace("max_first", "new");
+                }
+                Box::new(e)
+            });
+        if smallest {
+            self.errors.push(ResolveError {
+                message: "`BinaryHeap` is Rust's heap, which pops the largest first, and this \
+                          program wraps its items in `Reverse` to pop the smallest; Kāra's \
+                          `PriorityQueue` pops the smallest first, so `BinaryHeap.new()` is \
+                          `PriorityQueue.new()` and the `Reverse` goes"
+                    .to_string(),
+                span,
+                kind: ResolveErrorKind::UndefinedName,
+                suggestion: Some("PriorityQueue".to_string()),
+                replacement,
+                stub_hint: None,
+            });
+            return true;
+        }
         self.errors.push(ResolveError {
             message: "`BinaryHeap` is Rust's heap, which pops the largest first; Kāra's is \
                       `PriorityQueue`, which pops the smallest first unless it is built with \
@@ -2201,6 +2231,53 @@ impl<'a> Resolver<'a> {
             stub_hint: None,
         });
         true
+    }
+
+    /// `Reverse`, Rust's `std::cmp::Reverse`, which makes a `BinaryHeap` pop
+    /// the smallest first. Kāra's `PriorityQueue` does that already, so
+    /// around a heap's item (`heap.push(Reverse(x))`, `Some(Reverse(p))`) in
+    /// a program that builds a Rust heap the fix drops the name, and the
+    /// heap's constructor fix becomes the smallest-first `PriorityQueue.new()`
+    /// ([`Self::rust_heaps_pop_smallest`]). Anywhere else, a sort key say,
+    /// there is no fix: dropping it would reverse the order. Never the
+    /// did-you-mean `Release` (kata 1057).
+    fn report_rust_reverse(&mut self, name: &str, span: Span) -> bool {
+        if name != "Reverse" {
+            return false;
+        }
+        let replacement = self
+            .program
+            .rust_reverse_wraps
+            .get(&span.offset)
+            .filter(|_| self.rust_heaps_pop_smallest())
+            .cloned()
+            .map(Box::new);
+        let message = if replacement.is_some() {
+            "`Reverse` is Rust's `std::cmp::Reverse`, which makes a `BinaryHeap` pop the \
+             smallest first; Kāra's `PriorityQueue` pops the smallest first already, so \
+             drop `Reverse` and build the queue with `PriorityQueue.new()`"
+        } else {
+            "`Reverse` is Rust's `std::cmp::Reverse`; Kāra has no such wrapper: a \
+             `PriorityQueue` pops the smallest first unless built with \
+             `PriorityQueue.max_first()`, and a descending sort is `sort_by(|a, b| \
+             b.cmp(a))`"
+        };
+        self.errors.push(ResolveError {
+            message: message.to_string(),
+            span,
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion: None,
+            replacement,
+            stub_hint: None,
+        });
+        true
+    }
+
+    /// Whether the program builds a Rust heap and wraps a heap's items in
+    /// `Reverse` where [`Self::report_rust_reverse`] drops it: the heap then
+    /// pops the smallest first, and its constructor is `PriorityQueue.new()`.
+    fn rust_heaps_pop_smallest(&self) -> bool {
+        !self.program.rust_reverse_wraps.is_empty() && !self.program.rust_heap_ctor.is_empty()
     }
 
     fn error_undefined_type(&mut self, name: &str, span: Span) {
