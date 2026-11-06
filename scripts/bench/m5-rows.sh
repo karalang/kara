@@ -21,7 +21,8 @@
 # getrusage's ru_maxrss elsewhere. Every pair's stdout is compared: a DIFF in
 # the sink column voids that row's verdict.
 #
-# The table also goes to target/m5-rows-<sha>.tsv; paste that file back.
+# The table is also appended to target/m5-rows-<sha>.tsv, one dated block per
+# run, so a loop over ONLY= values collects into one file; paste that file back.
 set -euo pipefail
 
 KARA="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -290,8 +291,12 @@ print(line(hdr))
 for r in rows_out:
     print(line(r))
 tsv = os.path.join(os.path.dirname(OUT), f"m5-rows-{SHA}.tsv")
-with open(tsv, "w") as f:
-    f.write(f"# m5-rows at kara {SHA}, kara-katas {KSHA}, on {platform.system()} {platform.machine()}, {REPS} runs each\n")
+# Append, so several ONLY= runs at one sha land in one file; each run opens
+# with its own dated header line.
+import datetime
+with open(tsv, "a") as f:
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    f.write(f"# m5-rows at kara {SHA}, kara-katas {KSHA}, on {platform.system()} {platform.machine()}, {REPS} runs each, {stamp}, ONLY={ONLY or '(all)'}\n")
     for r in [hdr] + rows_out:
         f.write("\t".join(str(c) for c in r) + "\n")
 print(f"\nwritten: {tsv}")
