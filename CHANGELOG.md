@@ -258,6 +258,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   the library and the core rules, and answer about the program's own
   functions only, so a bare parameter reads as the borrow it is and a loop
   over a borrowed `Vec` gets its layout query (B-2026-11-06-5).
+- `karac query queries`, `query cost-summary` and `query ownership` report
+  no RC fallback. Core semantics §6.4 removed it, and where it would have
+  fired `karac check` reports the move, so the `rc_fallback_decision`
+  (keep_rc / prefer_rc), the `rc_ops` count and the `rc_values` list it
+  showed described sharing no build performs (B-2026-11-06-9).
 - `#[allow(unfulfilled_lint_expectation)]` on a function or impl covers an
   `#[expect]` on a statement inside it; `-A` / `-W` / `-D` / `-F` naming no
   lint warns `unknown_lint`, as an attribute does; an unknown lint and an

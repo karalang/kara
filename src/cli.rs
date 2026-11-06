@@ -2281,6 +2281,13 @@ impl Pipeline {
                 .notes
                 .retain(|n| n.kind != crate::ownership::OwnershipErrorKind::RcFallbackNote);
             ownership.errors.extend(core);
+            // Nor does any later reader see an RC: the core never shares a
+            // value to make a program legal (§6.4), so `karac query` reports
+            // no RC fallback, decision or cost for a site that is the error
+            // above (B-2026-11-06-9).
+            ownership.rc_values.clear();
+            ownership.arc_values.clear();
+            ownership.suppressed_rc_fn_keys.clear();
             // §11.2/§11.3 (B-2026-10-22-3): two branches that use one place
             // conflict only as the MIR effect pass decides, and it names
             // both branches; a `shared` handle in a branch is the
