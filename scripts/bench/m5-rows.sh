@@ -138,6 +138,9 @@ ROWS = [
     ("B-2026-11-04-30", "301-400/394-decode-string", "decode_string.kara", "pair", "instructions", "x86 0.96x"),
     ("B-2026-11-04-37", "301-400/342-power-of-four", "power_of_four.kara", "pair", "cycles", "x86 instr 1.11x"),
     ("B-2026-11-04-33", "301-400/314-binary-tree-vertical-order-traversal", "vertical.kara", "pair", "cycles", "x86 instr 1.07x"),
+    # -1: an integer `cmp` lowered as one scmp (d70e6d474a); M5 filed 1.46x legacy's cycles, 2.05x rustc -O.
+    ("B-2026-11-06-1", "301-400/354-russian-doll-envelopes", "russian_doll.kara", "pair", "cycles", "x86 0.70s -> 0.53s; fixed d70e6d474a"),
+    ("B-2026-11-06-1", "301-400/354-russian-doll-envelopes", "russian_doll.kara", "rust:russian_doll.rs", "cycles", "x86 0.53s vs rustc -O 0.52s"),
     ("B-2026-11-04-33", "301-400/318-maximum-product-of-word-lengths", "max_product.kara", "pair", "instructions", "x86 1.19x: write_word not inlined"),
     ("B-2026-11-04-33", "1601-1700/1665-minimum-initial-energy-to-finish-tasks", "greedy.kara", "pair", "instructions", "x86 1.29x"),
     ("B-2026-11-05-10", "1-100/73-set-matrix-zeroes", "set_matrix_zeroes.kara", "par", "wall", "x86 8.7 s -> 0.44 s; par lane"),
