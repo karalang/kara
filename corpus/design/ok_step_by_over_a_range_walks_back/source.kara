@@ -1,0 +1,34 @@
+// A `step_by` over an integer range walks back from the last value the step
+// reaches, not from the range's end (docs/library/iterators.md
+// § DoubleEndedIterator; B-2026-11-05-35).
+fn main() {
+    let back: Vec[i64] = (0..7).step_by(2).rev().collect();
+    println(back);
+    let uneven: Vec[i64] = (0..8).step_by(3).rev().collect();
+    println(uneven);
+    let negative: Vec[i64] = (-7..7).step_by(3).rev().collect();
+    println(negative);
+    let inclusive: Vec[i64] = (0..=9).step_by(3).rev().collect();
+    println(inclusive);
+    let top: Vec[u8] = (0u8..=255u8).step_by(5).rev().take(3).collect();
+    println(top);
+    let wide: Vec[i128] = (-10i128..10i128).step_by(7).rev().collect();
+    println(wide);
+    let empty: Vec[i64] = (5..5).step_by(2).rev().collect();
+    println(empty);
+
+    // Both ends of one step meet in the middle.
+    let mut it = (0..10).step_by(3);
+    println(it.next());
+    println(it.next_back());
+    println(it.next());
+    println(it.next_back());
+    println(it.next());
+
+    // A step already started walks back over what is left.
+    let mut rest = (0..20).step_by(4);
+    let _ = rest.next();
+    let _ = rest.next();
+    let left: Vec[i64] = rest.rev().collect();
+    println(left);
+}

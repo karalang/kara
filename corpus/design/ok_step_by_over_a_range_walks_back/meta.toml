@@ -1,0 +1,9 @@
+source = "B-2026-11-05-35"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iter", "lib:iter"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/iterators.md: `step_by` gives the first item then every `step`-th; `rev` gives those back to front (§ DoubleEndedIterator, a step over an integer range). So (0..7) by 2 is 0 2 4 6 reversed; (0..8) by 3 is 0 3 6; (-7..7) by 3 is -7 -4 -1 2 5; (0..=9) by 3 is 0 3 6 9; (0..=255) by 5 ends 245 250 255; (-10..10) by 7 is -10 -3 4; (0..10) by 3 is 0 3 6 9 taken from alternate ends; (0..20) by 4 after two is 8 12 16. Rust's StepBy gives the same."

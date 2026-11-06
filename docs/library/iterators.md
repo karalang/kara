@@ -133,7 +133,7 @@ trait DoubleEndedIterator: Iterator {
 }
 ```
 
-The iterators over `Vec`, `Array`, `Slice` and `VecDeque`, integer ranges, and a `String`'s `chars()` implement it, which is what `rev` needs. (UTF-8 decodes backward as well as forward, so a string's chars cost nothing extra to walk from the end.)
+The iterators over `Vec`, `Array`, `Slice` and `VecDeque`, integer ranges, a `step_by` over an integer range, and a `String`'s `chars()` implement it, which is what `rev` needs. `(0..7).step_by(2).rev()` yields 6, 4, 2, 0: the values the step reaches, last first, so the back starts at the last value the step gives rather than at the range's end. (UTF-8 decodes backward as well as forward, so a string's chars cost nothing extra to walk from the end.)
 
 The iterators over a `Vec`, an `Array` and a `Slice` also know how many items are left, so they have `rposition`, as Rust's do:
 
