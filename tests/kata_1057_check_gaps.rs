@@ -7,9 +7,10 @@
 //!   draws nothing.
 //! - Rust's `std::cmp::Reverse` around a `BinaryHeap`'s items, which makes
 //!   the heap pop the smallest first, is dropped, and the heap is built as
-//!   `PriorityQueue.new()`, which pops the smallest first already. Anywhere
-//!   else, a sort key say, there is no fix, and never the did-you-mean
-//!   `Release` (kata 1057).
+//!   `PriorityQueue.new()`, which pops the smallest first already. As a
+//!   sort key's whole body it becomes the descending `sort_by` (kata 1058);
+//!   anywhere else there is no fix, and never the did-you-mean `Release`
+//!   (kata 1057).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -107,16 +108,18 @@ fn kata_1057_reverse_around_heap_items_is_dropped() {
 }
 
 #[test]
-fn kata_1057_reverse_in_a_sort_key_has_no_fix() {
+fn kata_1057_reverse_sort_key_takes_the_descending_sort_by() {
+    // Was `kata_1057_reverse_in_a_sort_key_has_no_fix`: kata 1058 gave the
+    // whole-body sort key its fix.
     let src = "use std::cmp::Reverse;\nfn main() {\n    let mut v = [3, 1, 2];\n    v.sort_by_key(|x| Reverse(*x));\n    println(f\"{v}\");\n}";
-    let (first, text, clean, _) = mend(&scratch("reverse-sort"), src);
-    assert!(
-        first.contains("a descending sort is `sort_by(|a, b| b.cmp(a))`"),
-        "{first}"
-    );
+    let (first, text, clean, out) = mend(&scratch("reverse-sort"), src);
     assert!(!first.contains("Release"), "{first}");
-    assert!(!clean, "a Reverse sort key must stay refused:\n{text}");
-    assert!(text.contains("Reverse("), "{text}");
+    assert!(clean, "still refused after fix:\n{text}");
+    assert!(
+        text.contains("v.sort_by(|a, b| b.cmp(a));") && !text.contains("Reverse"),
+        "{text}"
+    );
+    assert_eq!(out.trim_end(), "[3, 2, 1]", "{text}");
 }
 
 #[test]

@@ -5641,9 +5641,64 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `collect` into a written collection solves what its items left
+    /// open: `(w.parse().unwrap(), f.parse().unwrap())` items collected into
+    /// a `Vec[(i64, i64)]` take `(i64, i64)`, as Rust's `collect` drives a
+    /// closure's result. Only when the collection has the one
+    /// `FromIterator` impl and the items hold no type parameter (kata 1058).
+    fn solve_collected_item_vars(&mut self, concrete: &Type, want: &[Type]) {
+        if want.iter().any(contains_type_param) {
+            return;
+        }
+        let Some((ty_name, ty_args)) = impl_table_key(concrete) else {
+            return;
+        };
+        let mut offered: Vec<Vec<Type>> = Vec::new();
+        for imp in &self.env.impls {
+            if imp.target_type != ty_name
+                || imp.trait_name.as_deref() != Some("FromIterator")
+                || !impl_args_match(&imp.target_args, &ty_args)
+            {
+                continue;
+            }
+            let mut bound_params = HashMap::new();
+            super::env::bind_impl_params(&imp.target_generic_args, &ty_args, &mut bound_params);
+            let isubs: HashMap<String, SubstValue> = bound_params
+                .into_iter()
+                .map(|(k, v)| (k, SubstValue::Type(v)))
+                .collect();
+            offered.push(
+                imp.trait_args
+                    .iter()
+                    .map(|t| substitute_type_params(t, &isubs))
+                    .collect(),
+            );
+        }
+        let [offer] = offered.as_slice() else {
+            return;
+        };
+        if offer.len() != want.len()
+            || !offer
+                .iter()
+                .all(|t| type_is_fully_concrete(t) && !contains_type_param(t))
+        {
+            return;
+        }
+        for (w, o) in want.iter().zip(offer) {
+            unify_types(
+                w,
+                o,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
+        }
+    }
+
     pub(super) fn discharge_deferred_call_bounds(&mut self) {
         for d in std::mem::take(&mut self.deferred_call_bounds) {
             let mut solutions: HashMap<String, Type> = HashMap::new();
+            // A parameter the body solved only in part, `(?a, ?b)`.
+            let mut partial: HashMap<String, SubstValue> = HashMap::new();
             for (n, sv) in &d.receiver_subs {
                 if let SubstValue::Type(t) = sv {
                     solutions.insert(n.clone(), t.clone());
@@ -5668,6 +5723,8 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 if type_is_fully_concrete(&t) && !contains_type_param(&t) {
                     solutions.insert(n.clone(), t);
+                } else if !contains_type_param(&t) {
+                    partial.insert(n.clone(), SubstValue::Type(t));
                 }
             }
             let names: Vec<String> = d
@@ -5726,6 +5783,21 @@ impl<'a> super::TypeChecker<'a> {
                         .iter()
                         .any(|t| contains_type_param(t) || !type_is_fully_concrete(t))
                     {
+                        if trait_name == "FromIterator" {
+                            let mut all = subs.clone();
+                            all.extend(partial.clone());
+                            let want: Vec<Type> = arg_asts
+                                .iter()
+                                .filter_map(|a| match a {
+                                    GenericArg::Type(te) => {
+                                        let t = self.lower_type_expr(te, &names);
+                                        Some(substitute_type_params(&t, &all))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            self.solve_collected_item_vars(&concrete, &want);
+                        }
                         continue;
                     }
                     // An item is read as a value (`ItemValues`): a `ref` to a

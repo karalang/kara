@@ -331,6 +331,30 @@ impl<'a> super::TypeChecker<'a> {
             && Self::unsuffixed_num_literal(right_e, left).is_none();
         if mixed {
             self.note_pointer_int_mix(left, right);
+            // Rust's `n as usize > v.len()` over an `i64` `n`: Kāra's `len()`
+            // is already `i64`, so the cast goes (B-2026-10-25-10's fix).
+            let i64_ty = Type::Int(IntSize::I64);
+            let drop_cast = if *right == i64_ty {
+                self.usize_cast_of_an_i64(left_e)
+            } else if *left == i64_ty {
+                self.usize_cast_of_an_i64(right_e)
+            } else {
+                None
+            };
+            if let Some(fix) = drop_cast {
+                self.type_error_with_fix_it(
+                    format!(
+                        "cannot compare '{}' and '{}': sizes, lengths and indices are \
+                         `i64` in Kāra (`usize` is for FFI), so drop the `as usize`",
+                        type_display(left),
+                        type_display(right)
+                    ),
+                    *span,
+                    TypeErrorKind::InvalidBinaryOp,
+                    fix,
+                );
+                return mixed;
+            }
             self.type_error(
                 format!(
                     "cannot compare '{}' and '{}': mixing signed and unsigned integers \

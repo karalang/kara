@@ -9914,6 +9914,9 @@ impl<'a> super::TypeChecker<'a> {
                 ty,
                 value,
             } => {
+                if ty.is_none() && matches!(value.kind, ExprKind::Cast { .. }) {
+                    self.usize_cast_lets.push(value.clone());
+                }
                 // `let g = freeze root;` binds a `frozen` handle, which may
                 // enter a `par` branch (core §11.3; B-2026-10-19-46).
                 if self

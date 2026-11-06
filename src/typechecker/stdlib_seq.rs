@@ -985,15 +985,16 @@ impl<'a> super::TypeChecker<'a> {
             // names the target (`try_apply_parse_coercion` takes the
             // annotated forms): say how to name it (B-2026-10-12-5).
             "parse" if args.is_empty() => {
-                self.type_error(
-                    "`.parse()` on a string takes its target from an expected `Option[T]` \
-                     (`let n: Option[i64] = s.parse();`); with none here, name the type: \
-                     `i64.parse(s)`"
-                        .to_string(),
-                    *span,
-                    TypeErrorKind::NoMethodFound,
-                );
-                Type::Error
+                // A later use may still name the target (`let x: i64 =
+                // s.parse().unwrap();`): the error waits for the end of the
+                // check, which writes the call `i64.parse(s)` then
+                // (`report_untargeted_parses`, kata 1058).
+                let target = self.env.fresh_type_var();
+                self.untargeted_parses.push((*span, target.clone()));
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![target],
+                }
             }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name.

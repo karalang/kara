@@ -2912,6 +2912,14 @@ pub struct TypeChecker<'a> {
     /// Whether an `i64` met a `usize` or `isize` in a coercion or comparison
     /// error.
     pub(super) pointer_int_mixed: bool,
+    /// Initializers `x as usize` of unannotated `let`s, whose binding is a
+    /// `usize` that then meets `i64` (B-2026-11-06-3's remainder, kata 1058).
+    pub(super) usize_cast_lets: Vec<Expr>,
+    /// Each `s.parse()` no expected `Option[T]` named the target of, with
+    /// the variable that stands for it: reported once the program is
+    /// checked, with the fix `T.parse(s)` when a later use fixed `T` to a
+    /// number type (`report_untargeted_parses`, kata 1058).
+    pub(super) untargeted_parses: Vec<(Span, Type)>,
     /// See [`TypeCheckResult::fn_item_spans`].
     pub(super) fn_item_spans: FxHashSet<SpanKey>,
     /// core §14.9: which functions can start a branch or a task, computed on
@@ -4001,6 +4009,8 @@ impl<'a> TypeChecker<'a> {
             core_once_calls: FxHashSet::default(),
             written_pointer_ints: Default::default(),
             pointer_int_mixed: false,
+            usize_cast_lets: Vec::new(),
+            untargeted_parses: Vec::new(),
             fn_item_spans: FxHashSet::default(),
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
@@ -4564,6 +4574,7 @@ impl<'a> TypeChecker<'a> {
             };
         self.parenthesize_suffix_fixes();
         self.emit_written_pointer_int_fixes();
+        self.report_untargeted_parses();
         // A library type kept private to its module reads by its path
         // (`std.time.Duration`, B-2026-10-19-10).
         for e in &mut self.errors {

@@ -526,6 +526,9 @@ impl super::Parser {
                                 {
                                     self.note_rust_heap_ctor(lhs.span.offset, &method);
                                 }
+                                if method == "parse" && args.is_empty() && turbofish.is_none() {
+                                    self.note_untargeted_parse(&lhs, span);
+                                }
                                 lhs = if args.is_empty()
                                     && matches!(method.as_str(), "size_of" | "align_of")
                                     && Self::is_type_receiver(&lhs)

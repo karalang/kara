@@ -78,6 +78,23 @@ impl<'a> super::TypeChecker<'a> {
             .copied()
             .filter(|s| !inside(s))
             .collect();
+        // `let n = k as usize;` over an `i64` `k`: the cast goes, and `n`
+        // is the `i64` everything else gives. Not in a program that declares
+        // FFI items, where `n` may be what an `extern` function is given.
+        let lets = std::mem::take(&mut self.usize_cast_lets);
+        for e in lets.into_iter().filter(|_| ffi.is_empty()) {
+            if let Some(fix) = self.usize_cast_of_an_i64(&e) {
+                self.type_error_with_fix_it(
+                    "this `as usize` makes a `usize` that mixes with `i64`, and `usize` \
+                     is for FFI signatures: Kāra writes sizes, lengths, counts and \
+                     indices as `i64` (design.md §5), so drop the `as usize`"
+                        .to_string(),
+                    e.span,
+                    TypeErrorKind::TypeMismatch,
+                    fix,
+                );
+            }
+        }
         for span in spans {
             self.type_error_with_fix_it(
                 "this type mixes with `i64`, and `usize` and `isize` are for FFI \
@@ -91,6 +108,64 @@ impl<'a> super::TypeChecker<'a> {
                     replacement: "i64".to_string(),
                 },
             );
+        }
+    }
+
+    /// The error for each `s.parse()` nothing named the target of where it
+    /// was written: with the fix `T.parse(s)` when a later use fixed the
+    /// target to a number type `T.parse` reads, and as the plain "name the
+    /// type" error otherwise (B-2026-10-12-5, kata 1058).
+    pub(super) fn report_untargeted_parses(&mut self) {
+        let none: std::collections::HashMap<super::types::TypeVarId, String> = Default::default();
+        let no_consts: std::collections::HashMap<super::types::ConstVarId, String> =
+            Default::default();
+        for (span, target) in std::mem::take(&mut self.untargeted_parses) {
+            let target = super::inference::resolve_type_vars(
+                &target,
+                &self.env.substitutions,
+                &none,
+                &self.env.const_substitutions,
+                &no_consts,
+            );
+            let name = match &target {
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) => super::type_display(&target),
+                _ => String::new(),
+            };
+            let readable = matches!(
+                name.as_str(),
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "f64"
+            );
+            let edit = self
+                .program
+                .parse_target_edits
+                .get(&span.offset)
+                .filter(|e| readable && e.length == span.length);
+            match edit {
+                Some(edit) => {
+                    let call = format!("{name}.parse({})", edit.replacement);
+                    self.type_error_with_fix_it(
+                        format!(
+                            "`.parse()` on a string takes its target from an expected \
+                             `Option[T]`; here only a later use names it (`{name}`), so name \
+                             the type: `{call}`"
+                        ),
+                        span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span,
+                            replacement: call,
+                        },
+                    );
+                }
+                None => self.type_error(
+                    "`.parse()` on a string takes its target from an expected `Option[T]` \
+                     (`let n: Option[i64] = s.parse();`); with none here, name the type: \
+                     `i64.parse(s)`"
+                        .to_string(),
+                    span,
+                    TypeErrorKind::NoMethodFound,
+                ),
+            }
         }
     }
 }

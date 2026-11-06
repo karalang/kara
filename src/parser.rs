@@ -236,6 +236,8 @@ pub struct Parser {
     pub(crate) rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::rust_heap_ctor`].
     pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// See [`crate::ast::Program::parse_target_edits`].
+    pub(crate) parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::paren_return_types`].
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::mut_fn_types`].
@@ -520,6 +522,7 @@ impl Parser {
             vec_macro_literals: rustc_hash::FxHashMap::default(),
             rust_box_new: rustc_hash::FxHashMap::default(),
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
+            parse_target_edits: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
@@ -885,6 +888,8 @@ impl Parser {
             rust_box_new: std::mem::take(&mut self.rust_box_new),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             rust_reverse_wraps: self.rust_reverse_wraps(),
+            rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
+            parse_target_edits: std::mem::take(&mut self.parse_target_edits),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
@@ -950,6 +955,159 @@ impl Parser {
                     offset: start,
                     length: to + 1 - start,
                     replacement: inner.trim().to_string(),
+                },
+            );
+        }
+        out
+    }
+
+    /// `recv.parse()`: the receiver's text, keyed by the call's offset, so
+    /// the typechecker can write `T.parse(recv)` once a later use names `T`
+    /// ([`crate::ast::Program::parse_target_edits`], kata 1058).
+    fn note_untargeted_parse(&mut self, recv: &Expr, call: Span) {
+        let Some(text) = self.source_at(recv.span.offset, recv.span.length) else {
+            return;
+        };
+        let text = text.to_string();
+        self.parse_target_edits.insert(
+            call.offset,
+            crate::resolver::TextEdit {
+                offset: call.offset,
+                length: call.length,
+                replacement: text,
+            },
+        );
+    }
+
+    /// Each `Reverse(` that is the whole body of a sort key,
+    /// `v.sort_by_key(|x| Reverse(k))` (or `sort_unstable_by_key`, or the
+    /// parameter written `&x`): keyed by the offset of `Reverse`, the edit
+    /// that writes the call `sort_by(|a, b| k[b].cmp(k[a]))` from the method's
+    /// name to the call's `)` (kata 1058). A unary `*` on the parameter goes
+    /// with it, since a closure's parameter is no reference to undo.
+    fn rust_reverse_sort_keys(&self) -> rustc_hash::FxHashMap<usize, crate::resolver::TextEdit> {
+        let mut out = rustc_hash::FxHashMap::default();
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let name_at = |i: usize| match tok(i) {
+            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+        // The token that closes the group opened at `open`.
+        let close_of = |open: usize| {
+            let mut depth = 0usize;
+            for (j, t) in self.tokens.iter().enumerate().skip(open) {
+                match t.token {
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth = depth.checked_sub(1)?;
+                        if depth == 0 {
+                            return Some(j);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        };
+        for i in 6..self.tokens.len() {
+            if name_at(i) != Some("Reverse")
+                || !matches!(tok(i + 1), Some(Token::LeftParen))
+                || !matches!(tok(i - 1), Some(Token::Pipe))
+            {
+                continue;
+            }
+            let Some(param) = name_at(i - 2) else {
+                continue;
+            };
+            let open_pipe = if matches!(tok(i - 3), Some(Token::Amp)) {
+                i - 4
+            } else {
+                i - 3
+            };
+            if open_pipe < 3
+                || !matches!(tok(open_pipe), Some(Token::Pipe))
+                || !matches!(tok(open_pipe - 1), Some(Token::LeftParen))
+                || !matches!(tok(open_pipe - 3), Some(Token::Dot))
+                || !matches!(
+                    name_at(open_pipe - 2),
+                    Some("sort_by_key" | "sort_unstable_by_key")
+                )
+            {
+                continue;
+            }
+            let Some(close) = close_of(i + 1) else {
+                continue;
+            };
+            // `Reverse(k)` is the whole body: the call's `)` comes next.
+            if close_of(open_pipe - 1) != Some(close + 1) {
+                continue;
+            }
+            let key = &self.tokens[i + 2..close];
+            if key.is_empty() {
+                continue;
+            }
+            let names: Vec<&str> = key
+                .iter()
+                .filter_map(|t| match &t.token {
+                    Token::Identifier { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let Some((a, b)) = [("a", "b"), ("l", "r"), ("lhs", "rhs")]
+                .into_iter()
+                .find(|(a, b)| !names.contains(a) && !names.contains(b))
+            else {
+                continue;
+            };
+            // The key's text with the parameter named `with`, and whether
+            // it needs parentheses as the receiver of `.cmp`.
+            let write = |with: &str| -> Option<(String, bool)> {
+                let mut text = String::new();
+                // Only names, fields and numbers: no parentheses needed.
+                let mut plain = true;
+                let mut cursor = key[0].span.offset;
+                for (n, t) in key.iter().enumerate() {
+                    let after_dot = n > 0 && matches!(key[n - 1].token, Token::Dot);
+                    let is_param = !after_dot
+                        && matches!(&t.token, Token::Identifier { name, .. } if name == param);
+                    let unary = n == 0
+                        || matches!(
+                            key[n - 1].token,
+                            Token::LeftParen | Token::LeftBracket | Token::Comma
+                        );
+                    let deref = matches!(t.token, Token::Star)
+                        && unary
+                        && matches!(key.get(n + 1).map(|t| &t.token), Some(Token::Identifier { name, .. }) if name == param);
+                    text += self.source_at(cursor, t.span.offset.checked_sub(cursor)?)?;
+                    if is_param {
+                        text += with;
+                    } else if !deref {
+                        text += self.source_at(t.span.offset, t.span.length)?;
+                        plain &= matches!(
+                            t.token,
+                            Token::Identifier { .. } | Token::Dot | Token::Integer(..)
+                        );
+                    }
+                    cursor = t.span.offset + t.span.length;
+                }
+                // A key of more than a name, a field or a bracketed group
+                // goes in parentheses before `.cmp`.
+                let grouped = matches!(key[0].token, Token::LeftParen | Token::LeftBracket)
+                    && close_of(i + 2) == Some(close - 1);
+                Some((text, !plain && !grouped))
+            };
+            let (Some((ka, _)), Some((kb, wrap))) = (write(a), write(b)) else {
+                continue;
+            };
+            let kb = if wrap { format!("({kb})") } else { kb };
+            let start = self.tokens[open_pipe - 2].span.offset;
+            let end = self.tokens[close + 1].span.offset + 1;
+            out.insert(
+                self.tokens[i].span.offset,
+                crate::resolver::TextEdit {
+                    offset: start,
+                    length: end - start,
+                    replacement: format!("sort_by(|{a}, {b}| {kb}.cmp({ka}))"),
                 },
             );
         }

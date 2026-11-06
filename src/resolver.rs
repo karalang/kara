@@ -2238,9 +2238,11 @@ impl<'a> Resolver<'a> {
     /// around a heap's item (`heap.push(Reverse(x))`, `Some(Reverse(p))`) in
     /// a program that builds a Rust heap the fix drops the name, and the
     /// heap's constructor fix becomes the smallest-first `PriorityQueue.new()`
-    /// ([`Self::rust_heaps_pop_smallest`]). Anywhere else, a sort key say,
-    /// there is no fix: dropping it would reverse the order. Never the
-    /// did-you-mean `Release` (kata 1057).
+    /// ([`Self::rust_heaps_pop_smallest`]). As the whole body of a sort key,
+    /// the fix writes the descending `sort_by` (kata 1058,
+    /// [`crate::ast::Program::rust_reverse_sort_keys`]). Anywhere else there
+    /// is no fix: dropping it would reverse the order. Never the did-you-mean
+    /// `Release` (kata 1057).
     fn report_rust_reverse(&mut self, name: &str, span: Span) -> bool {
         if name != "Reverse" {
             return false;
@@ -2252,6 +2254,22 @@ impl<'a> Resolver<'a> {
             .filter(|_| self.rust_heaps_pop_smallest())
             .cloned()
             .map(Box::new);
+        if replacement.is_none() {
+            if let Some(edit) = self.program.rust_reverse_sort_keys.get(&span.offset) {
+                self.errors.push(ResolveError {
+                    message: "`Reverse` is Rust's `std::cmp::Reverse`; Kāra has no such \
+                              wrapper, and a descending sort compares the keys the other way \
+                              round: `sort_by(|a, b| b.cmp(a))`"
+                        .to_string(),
+                    span,
+                    kind: ResolveErrorKind::UndefinedName,
+                    suggestion: None,
+                    replacement: Some(Box::new(edit.clone())),
+                    stub_hint: None,
+                });
+                return true;
+            }
+        }
         let message = if replacement.is_some() {
             "`Reverse` is Rust's `std::cmp::Reverse`, which makes a `BinaryHeap` pop the \
              smallest first; Kāra's `PriorityQueue` pops the smallest first already, so \

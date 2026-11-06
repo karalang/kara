@@ -877,6 +877,18 @@ pub struct Program {
     /// tokens; the resolver attaches it when nothing declares `Reverse` and
     /// the program builds a Rust heap (kata 1057).
     pub rust_reverse_wraps: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Rust's `std::cmp::Reverse` as the whole body of a sort key,
+    /// `v.sort_by_key(|x| Reverse(k))`, keyed by the offset of `Reverse`, with
+    /// the edit that writes the call `sort_by(|a, b| k[b].cmp(k[a]))`. Set by
+    /// the PARSER from the tokens; the resolver attaches it when nothing
+    /// declares `Reverse` (kata 1058).
+    pub rust_reverse_sort_keys: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Every `recv.parse()` with no arguments, keyed by the call's offset:
+    /// the call's span, with the receiver's text as the replacement. Set by
+    /// the PARSER; when only a later use names the target (`let x: f64 =
+    /// s.parse().unwrap();`, a tuple collected into `Vec[(i64, i64)]`), the
+    /// typechecker's fix writes `f64.parse(s)` from it (kata 1058).
+    pub parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and
