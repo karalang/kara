@@ -113,7 +113,7 @@ ROWS = [
     ("B-2026-11-04-31", "301-400/332-reconstruct-itinerary", "reconstruct_itinerary.kara", "seqfix:319800", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/336-palindrome-pairs", "palindrome_pairs.kara", "seqfix:336320", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/394-decode-string", "decode_string.kara", "pair", "size", "fixed 5984ed3080"),
-    ("B-2026-11-06-2", "301-400/346-moving-average-from-data-stream", "moving_average.kara", "seqfix:336240", "size", "float_text fix"),
+    ("B-2026-11-06-2", "301-400/346-moving-average-from-data-stream", "moving_average.kara", "seqfix:336240", "size", "fixed 8f6325386f"),
     # -32's bar is the kata's own Rust mirror (`rust:<file>`, rustc -O), as
     # legacy dd86 refuses 297's source; at kara-katas d6d1a5e8e or later,
     # where the Kara arm borrows its tokens as the mirror does.
