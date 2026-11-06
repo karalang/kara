@@ -11704,6 +11704,9 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Cast { expr: inner, ty } => {
                 let from_ty = self.infer_expr(inner);
                 let to_ty = self.lower_type_expr(ty, &[]);
+                // A cast's `usize` has fixes of its own (drop `as usize`,
+                // B-2026-10-25-10), not the written-type one.
+                self.written_pointer_ints.remove(&ty.span.offset);
                 match (&inner.kind, &to_ty) {
                     // An ASCII char literal cast to `u8` is that byte exactly,
                     // which the byte literal spells (B-2026-10-26-16).
