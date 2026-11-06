@@ -20114,34 +20114,59 @@ impl<'l, 'a> Bx<'l, 'a> {
         let y = self.temp(t);
         let (o, _) = self.scalar_operand(&b.value)?;
         self.assign(y, Rvalue::Use(o));
-        let bool_t = self.tys().bool();
-        let join = self.b.new_block();
-        let pick = |me: &mut Self, op: BinOp, variant: usize| {
-            let c = me.temp(bool_t);
-            let (xo, yo) = (
-                Operand::Copy(Place::local(x)),
-                Operand::Copy(Place::local(y)),
-            );
-            me.assign(c, Rvalue::BinaryOp(op, xo, yo));
-            let yes = me.b.new_block();
-            let no = me.b.new_block();
-            me.goto_with(
-                TerminatorKind::SwitchInt {
-                    discr: Operand::Copy(Place::local(c)),
-                    targets: SwitchTargets::if_else(yes, no),
-                },
-                yes,
-            );
-            let kind = me.adt_aggregate(ord, variant as u32);
-            me.assign(dest.clone(), Rvalue::Aggregate(kind, Vec::new()));
-            me.goto(join);
-            me.cur = no;
+        // `(x > y) - (x < y)` as an `i8`, then one switch on it: -1 is
+        // less, 1 greater. LLVM reads the subtraction as `llvm.scmp`, with
+        // no branch, so a comparator that inlines this (a `sort_by`
+        // closure) folds to selects: a branch per comparison costs a
+        // mispredict per element in a sort's partition loop
+        // (B-2026-11-06-1).
+        let (bool_t, i8_t) = {
+            let tcx = self.tys().tcx();
+            (self.tys().bool(), tcx.intern(HK::Int(IntSize::I8)))
         };
-        pick(self, BinOp::Lt, less);
-        pick(self, BinOp::Gt, greater);
-        let kind = self.adt_aggregate(ord, equal as u32);
-        self.assign(dest, Rvalue::Aggregate(kind, Vec::new()));
-        self.goto(join);
+        let (xo, yo) = (
+            || Operand::Copy(Place::local(x)),
+            || Operand::Copy(Place::local(y)),
+        );
+        let bit = |me: &mut Self, op: BinOp| {
+            let c = me.temp(bool_t);
+            me.assign(c, Rvalue::BinaryOp(op, xo(), yo()));
+            let n = me.temp(i8_t);
+            me.assign(
+                n,
+                Rvalue::Cast(CastKind::BoolToInt, Operand::Move(Place::local(c)), i8_t),
+            );
+            n
+        };
+        let (gt, lt) = (bit(self, BinOp::Gt), bit(self, BinOp::Lt));
+        let t = self.temp(i8_t);
+        self.assign(
+            t,
+            Rvalue::BinaryOp(
+                BinOp::Sub,
+                Operand::Move(Place::local(gt)),
+                Operand::Move(Place::local(lt)),
+            ),
+        );
+        let join = self.b.new_block();
+        let (to_less, to_equal, to_greater) =
+            (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Move(Place::local(t)),
+                targets: SwitchTargets {
+                    values: vec![(0xff, to_less), (1, to_greater)],
+                    otherwise: to_equal,
+                },
+            },
+            to_less,
+        );
+        for (bb, variant) in [(to_less, less), (to_equal, equal), (to_greater, greater)] {
+            self.cur = bb;
+            let kind = self.adt_aggregate(ord, variant as u32);
+            self.assign(dest.clone(), Rvalue::Aggregate(kind, Vec::new()));
+            self.goto(join);
+        }
         self.cur = join;
         Ok(true)
     }
