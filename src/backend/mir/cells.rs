@@ -1300,21 +1300,51 @@ impl<'ctx> Cx<'ctx, '_> {
                 // for `Runtime.list_par_blocks` (design.md § Debugger
                 // contract, B-2026-11-05-34).
                 let par = match self.par_sites.get(&self.cur_block) {
-                    Some(&(span, workers)) if method == "new" => Some((span, workers)),
+                    Some(site) if method == "new" => Some((
+                        site.span,
+                        site.workers,
+                        site.branches
+                            .iter()
+                            .flatten()
+                            .filter_map(|&t| self.body_of_def(t).ok())
+                            .map(|b| self.body_start(b))
+                            .filter(|&s| self.in_user_source(s) && s.line > 0)
+                            .map(Self::site_text)
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )),
                     _ => None,
                 };
                 let g = match par {
-                    Some((span, workers)) => {
+                    Some((span, workers, branches)) => {
                         let (at, n) = self.meta_site(span)?;
+                        let (bat, bn) = self.str_const(&branches)?;
                         let i32t = self.llcx.i32_type();
                         let f = self.extern_fn(
                             "karac_mir_group_new_at",
-                            p.fn_type(&[i64t.into(), p.into(), i64t.into(), i32t.into()], false),
+                            p.fn_type(
+                                &[
+                                    i64t.into(),
+                                    p.into(),
+                                    i64t.into(),
+                                    i32t.into(),
+                                    p.into(),
+                                    i64t.into(),
+                                ],
+                                false,
+                            ),
                         );
                         let w = i32t.const_int(u64::from(workers), false);
                         self.builder.build_call(
                             f,
-                            &[limit.into(), at.into(), n.into(), w.into()],
+                            &[
+                                limit.into(),
+                                at.into(),
+                                n.into(),
+                                w.into(),
+                                bat.into(),
+                                bn.into(),
+                            ],
                             "group",
                         )
                     }

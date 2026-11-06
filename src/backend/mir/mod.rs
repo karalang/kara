@@ -66,7 +66,10 @@ use crate::mir::coroutine;
 use crate::mir::interp::{self, Program};
 use crate::mir::layout::{self, Layout};
 use crate::mir::ty::{FloatTy, TyKind};
-use crate::mir::{Body, Const, ConstKind, Operand, Place, TerminatorKind, Ty, TyInterner};
+use crate::mir::{
+    AggregateKind, Body, Const, ConstKind, Operand, Place, Rvalue, StatementKind, TerminatorKind,
+    Ty, TyInterner,
+};
 
 /// The largest body, in blocks and in statements, that is hinted for
 /// inlining ([`Cx::lower_body`]).
@@ -323,9 +326,9 @@ pub struct Cx<'ctx, 'p> {
     /// The index of the block being lowered.
     cur_block: usize,
     /// In the body being lowered, the blocks whose `TaskGroup.new` makes
-    /// a `par` block's group, with the block's place and branch count
-    /// ([`par_group_sites`]).
-    par_sites: HashMap<usize, (crate::token::Span, u32)>,
+    /// a `par` block's group, with the block's place, branch count and
+    /// branch starts ([`par_group_sites`]).
+    par_sites: HashMap<usize, ParSite>,
 }
 
 impl<'ctx, 'p> Cx<'ctx, 'p> {
@@ -1910,7 +1913,31 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
 /// group is made just before the first branch: the call's block leads to
 /// the first branch's entry through at most a few single-successor blocks
 /// (an auto-par group's `__hidden` call among them).
-fn par_group_sites(body: &Body) -> HashMap<usize, (crate::token::Span, u32)> {
+/// A `par` block's place, its branch count (0 for a `par for`), and the
+/// closure each branch runs (where the branch starts), for `Runtime.list_par_blocks` (design.md § Debugger
+/// contract).
+struct ParSite {
+    span: crate::token::Span,
+    workers: u32,
+    branches: Vec<Option<Ty>>,
+}
+
+/// The closure a `par` branch runs as its task: the first one its blocks
+/// build. Where it starts is where the branch starts.
+fn branch_closure(body: &Body, blocks: &[crate::mir::BasicBlock]) -> Option<Ty> {
+    blocks
+        .iter()
+        .filter_map(|b| body.blocks.get(b.0 as usize))
+        .flat_map(|b| &b.statements)
+        .find_map(|s| match &s.kind {
+            StatementKind::Assign(_, Rvalue::Aggregate(AggregateKind::Closure { ty }, _)) => {
+                Some(*ty)
+            }
+            _ => None,
+        })
+}
+
+fn par_group_sites(body: &Body) -> HashMap<usize, ParSite> {
     let mut sites = HashMap::new();
     if body.par_regions.is_empty() {
         return sites;
@@ -1946,7 +1973,22 @@ fn par_group_sites(body: &Body) -> HashMap<usize, (crate::token::Span, u32)> {
             } = &body.blocks[p].terminator.kind
             {
                 if i.name == "TaskGroup.new" {
-                    sites.insert(p, (region.span, workers));
+                    let branches = match region.kind {
+                        crate::mir::ParKind::Block => region
+                            .branches
+                            .iter()
+                            .map(|b| branch_closure(body, b))
+                            .collect(),
+                        crate::mir::ParKind::For { .. } => Vec::new(),
+                    };
+                    sites.insert(
+                        p,
+                        ParSite {
+                            span: region.span,
+                            workers,
+                            branches,
+                        },
+                    );
                     break;
                 }
             }

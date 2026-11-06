@@ -263,8 +263,10 @@ OPTIONS:
                             binary: contracts (requires / ensures / old /
                             invariant), the `?`-error-return trace and the
                             runtime debug metadata (std.runtime's task and
-                            par-block lists) — all kept in debug builds,
-                            stripped in release per design.md. Optimization is already -O2
+                            par-block lists; kara.toml's runtime_debug_metadata
+                            key in [profile.dev] / [profile.release] overrides
+                            it) — all kept in debug builds, stripped in
+                            release per design.md. Optimization is already -O2
                             by default (see KARAC_OPT_LEVEL), so --release
                             removes runtime cost rather than turning the
                             optimizer on. Works in both single-file and project

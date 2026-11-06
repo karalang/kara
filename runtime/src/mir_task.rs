@@ -207,11 +207,14 @@ impl Site {
     }
 }
 
-/// A `par` block's site and how many branches it runs.
+/// A `par` block's site, how many branches it runs, and where each branch
+/// starts: one `file:line:col` per line of `branches`, when the binary
+/// recorded them.
 #[derive(Clone, Copy)]
 struct ParSite {
     at: Site,
     workers: u32,
+    branches: Option<Site>,
 }
 
 /// A task of a hidden group, for `std.log` (B-2026-10-27-22): while it is
@@ -1047,19 +1050,28 @@ pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
 
 /// `TaskGroup.new` for a `par` block, in a binary with the runtime debug
 /// metadata (design.md § Debugger contract): the group remembers the
-/// block's `file:line:col` (`at[..len]`) and its `workers` branches, for
-/// `Runtime.list_par_blocks`.
+/// block's `file:line:col` (`at[..len]`), its `workers` branches and
+/// where each starts (`branches[..branches_len]`, one `file:line:col` a
+/// line, B-2026-11-05-36), for `Runtime.list_par_blocks`.
 ///
 /// # Safety
-/// `at` is null or a constant `len` bytes long.
+/// `at` is null or a constant `len` bytes long, and `branches` null or a
+/// constant `branches_len` bytes long.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_group_new_at(
     limit: i64,
     at: *const u8,
     len: u64,
     workers: u32,
+    branches: *const u8,
+    branches_len: u64,
 ) -> *mut u8 {
-    let site = Site::of(at, len).map(|at| ParSite { at, workers });
+    let branches = Site::of(branches, branches_len);
+    let site = Site::of(at, len).map(|at| ParSite {
+        at,
+        workers,
+        branches,
+    });
     group_new(limit, false, site)
 }
 
@@ -2975,6 +2987,7 @@ struct ParBlockRow {
     col: u32,
     worker_count: u32,
     parent_task_id: u64,
+    worker_locations: crate::mir::RawVec,
 }
 
 /// A `WaitTarget`: its variant's index, then `IoHandle`'s descriptor.
@@ -3019,7 +3032,8 @@ unsafe fn write_rows<R, T>(out: *mut crate::mir::RawVec, rows: &[R], fill: impl 
 /// `Runtime.list_par_blocks()` (design.md § Debugger contract, element 4,
 /// B-2026-11-05-34): every live group of a `par` block, oldest first, with
 /// its spawn-site id, `file:line:col`, branch count and the task that
-/// runs it (`parent_task_id`, element 2: `main` is 1). Groups made without
+/// runs it (`parent_task_id`, element 2: `main` is 1), and each branch's
+/// `file:line` (B-2026-11-05-36). Groups made without
 /// a site (a binary without the metadata, or a `TaskGroup` of the
 /// program's own) are not listed.
 ///
@@ -3051,6 +3065,23 @@ pub unsafe extern "C" fn karac_mir_list_par_blocks(out: *mut crate::mir::RawVec)
             std::ptr::addr_of_mut!((*p).col).write(col);
             std::ptr::addr_of_mut!((*p).worker_count).write(site.workers);
             std::ptr::addr_of_mut!((*p).parent_task_id).write(owner);
+            // Each branch's `file:line`.
+            let lines: Vec<String> = site
+                .branches
+                .map(|b| {
+                    b.text()
+                        .split(|&c| c == b'\n')
+                        .map(|t| {
+                            let (file, line, _) = Site(t.as_ptr(), t.len()).parts();
+                            format!("{}:{line}", String::from_utf8_lossy(file))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let w = std::ptr::addr_of_mut!((*p).worker_locations);
+            write_rows(w, &lines, |q: *mut crate::mir::RawVec, l: &String| {
+                crate::mir::string_of(q, l.as_bytes())
+            });
         })
     };
 }

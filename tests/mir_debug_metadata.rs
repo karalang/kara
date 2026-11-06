@@ -4,6 +4,7 @@
 //! element 2's parent task) and the suspended tasks (element 3's
 //! `WaitTarget`, the place of the spawn, the parent), and `--release`
 //! strips it: `has_debug_metadata()` is false and both lists are empty.
+//! kara.toml's `runtime_debug_metadata` key overrides either default.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -19,6 +20,10 @@ fn probe() -> i64 {
     let blocks = runtime.list_par_blocks();
     for b in blocks.iter() {
         println(f"block line {b.line} col {b.col} workers {b.worker_count} parent {b.parent_task_id} id {b.spawn_site_id != 0}");
+        for w in b.worker_locations.iter() {
+            let at: Vec[Str] = w.split(":").collect();
+            println(f"worker line {at[at.len() - 1]}");
+        }
     }
     blocks.len()
 }
@@ -101,9 +106,10 @@ fn run(dir: &Path, name: &str, src: &str, release: bool) -> Option<String> {
 fn mir_debug_metadata_lists_running_par_blocks() {
     let dir = scratch("par");
     if let Some(out) = run(&dir, "par", PAR, false) {
-        // The block is the `par` on line 13, two branches, run by `main`.
+        // The block is the `par` on line 17, two branches (lines 18 and
+        // 19), run by `main`.
         assert_eq!(
-            out, "true\nblock line 13 col 18 workers 2 parent 1 id true\n3\n0\n",
+            out, "true\nblock line 17 col 18 workers 2 parent 1 id true\nworker line 18\nworker line 19\n3\n0\n",
             "dev build"
         );
     }
@@ -126,6 +132,53 @@ fn mir_debug_metadata_lists_suspended_tasks() {
     }
     if let Some(out) = run(&dir, "tasks_release", TASKS, true) {
         assert_eq!(out, "12\n", "release build");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `runtime_debug_metadata` in kara.toml's profiles overrides the default
+/// both ways: off in a dev build, on in a release one (B-2026-11-05-36).
+#[test]
+fn mir_debug_metadata_follows_the_manifest_profiles() {
+    let dir = scratch("manifest");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"dm\"\nversion = \"0.1.0\"\n\n[profile.dev]\nruntime_debug_metadata = false\n\n[profile.release]\nruntime_debug_metadata = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import std.runtime;\n\nfn main() {\n    println(runtime.has_debug_metadata());\n}\n",
+    )
+    .unwrap();
+    for (release, want) in [(false, "false\n"), (true, "true\n")] {
+        let exe = dir.join(if release { "rel" } else { "dev" });
+        let mut args = vec!["build", "-o", exe.to_str().unwrap()];
+        if release {
+            args.push("--release");
+        }
+        let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&dir)
+            .args(&args)
+            .output()
+            .unwrap();
+        let why = String::from_utf8_lossy(&built.stderr).to_string();
+        if common::link_or_skip(if built.status.success() {
+            Ok(())
+        } else {
+            Err(why)
+        })
+        .is_none()
+        {
+            continue;
+        }
+        let out = Command::new(&exe).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "release {release}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

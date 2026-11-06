@@ -498,6 +498,12 @@ pub struct Manifest {
     /// the design's `v3` default is a separate, deploy-set-narrowing decision
     /// tracked in the checklist).
     pub release_cpu_baseline: Option<String>,
+    /// `[profile.dev] runtime_debug_metadata` and the same key in
+    /// `[profile.release]` (design.md § Debugger contract): whether a build
+    /// of that profile carries the runtime debug metadata. `None` when
+    /// absent: a dev build does, a release build does not (B-2026-11-05-36).
+    pub dev_runtime_debug_metadata: Option<bool>,
+    pub release_runtime_debug_metadata: Option<bool>,
     /// `[toolchain] wasm-tools = "<version>"` — exact-version pin for the
     /// external `wasm-tools` binary that `--bindings component` shells out
     /// to for embedded-WIT componentization (design.md § Component Model
@@ -1038,6 +1044,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let lints = parse_lints_table(path, &table, &mut warnings)?;
     let (release_target_cpu, release_target_features, release_cpu_baseline) =
         parse_release_table(path, &table, &mut warnings)?;
+    let (dev_runtime_debug_metadata, release_runtime_debug_metadata) =
+        parse_debug_metadata_keys(path, &table)?;
     let toolchain_wasm_tools = parse_toolchain_table(path, &table, &mut warnings)?;
     let (wasm_pool_size, wasm_fallback, wasm_max_memory_pages) =
         parse_wasm_table(path, &table, &mut warnings)?;
@@ -1076,6 +1084,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         release_target_cpu,
         release_target_features,
         release_cpu_baseline,
+        dev_runtime_debug_metadata,
+        release_runtime_debug_metadata,
         toolchain_wasm_tools,
         wasm_pool_size,
         wasm_fallback,
@@ -1177,11 +1187,12 @@ fn parse_profile_table(
             // `parse_release_table`.
             "release" => {}
             // `[profile.dev]`: the ordinary build profile (design.md § Build
-            // profiles). None of its keys is implemented yet; each one
-            // soft-warns under its own name.
+            // profiles). `runtime_debug_metadata` is read by
+            // `parse_debug_metadata_keys`; every other key soft-warns under
+            // its own name.
             "dev" => match val.as_table() {
                 Some(dev) => {
-                    for key in dev.keys() {
+                    for key in dev.keys().filter(|k| *k != "runtime_debug_metadata") {
                         warnings.push(ManifestWarning {
                             line: None,
                             message: format!(
@@ -1499,6 +1510,9 @@ fn parse_release_keys(
                     });
                 }
             },
+            // Read by `parse_debug_metadata_keys`, from `[profile.release]`
+            // only: the bare `[release]` spelling predates the key.
+            "runtime_debug_metadata" if prefix == "profile.release" => {}
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
@@ -1508,6 +1522,34 @@ fn parse_release_keys(
         }
     }
     Ok((target_cpu, target_features, cpu_baseline))
+}
+
+/// `runtime_debug_metadata = true|false` in `[profile.dev]` and in
+/// `[profile.release]` (design.md § Debugger contract, § Build profiles;
+/// B-2026-11-05-36): `None` where the key is absent. A value that is not a
+/// boolean is an error.
+fn parse_debug_metadata_keys(
+    path: &Path,
+    table: &toml::Table,
+) -> Result<(Option<bool>, Option<bool>), ManifestError> {
+    let read = |name: &str| -> Result<Option<bool>, ManifestError> {
+        let value = table
+            .get("profile")
+            .and_then(|p| p.as_table())
+            .and_then(|p| p.get(name))
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get("runtime_debug_metadata"));
+        match value {
+            None => Ok(None),
+            Some(toml::Value::Boolean(b)) => Ok(Some(*b)),
+            Some(_) => Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: format!("profile.{name}.runtime_debug_metadata"),
+                expected: "a boolean (true or false)",
+            }),
+        }
+    };
+    Ok((read("dev")?, read("release")?))
 }
 
 /// Map the arch-portable `cpu-baseline` level (`v1`..`v4`) to the concrete
@@ -4349,15 +4391,30 @@ target-cpu = "apple-m4"
 
     #[test]
     fn profile_dev_keys_soft_warn_by_name() {
-        let src = "[package]\nname = \"hello\"\n\n[profile.dev]\nruntime_debug_metadata = true\n";
+        let src = "[package]\nname = \"hello\"\n\n[profile.dev]\nopt-level = 1\n";
         let m = parse_manifest(&p(), src).unwrap();
         assert!(
-            m.warnings.iter().any(|w| w
-                .message
-                .contains("unknown key `[profile.dev].runtime_debug_metadata`")),
+            m.warnings
+                .iter()
+                .any(|w| w.message.contains("unknown key `[profile.dev].opt-level`")),
             "{:?}",
             m.warnings
         );
+    }
+
+    #[test]
+    fn runtime_debug_metadata_reads_from_both_profiles() {
+        let src = "[package]\nname = \"hello\"\n\n[profile.dev]\nruntime_debug_metadata = false\n\n[profile.release]\nruntime_debug_metadata = true\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.dev_runtime_debug_metadata, Some(false));
+        assert_eq!(m.release_runtime_debug_metadata, Some(true));
+        assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n").unwrap();
+        assert_eq!(m.dev_runtime_debug_metadata, None);
+        assert_eq!(m.release_runtime_debug_metadata, None);
+        let bad =
+            "[package]\nname = \"hello\"\n\n[profile.dev]\nruntime_debug_metadata = \"yes\"\n";
+        assert!(parse_manifest(&p(), bad).is_err());
     }
     #[test]
     fn toolchain_wasm_tools_parses() {

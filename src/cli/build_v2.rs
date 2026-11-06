@@ -571,12 +571,23 @@ fn build(
         process::exit(1);
     }
     if a.release {
-        // `dbg()`, contracts, the error return trace and the runtime debug
-        // metadata are stripped from release builds (design.md § `dbg()`,
-        // § Contracts, § Error return traces, § Debugger contract).
+        // `dbg()`, contracts and the error return trace are stripped from
+        // release builds (design.md § `dbg()`, § Contracts, § Error return
+        // traces).
         std::env::set_var("KARAC_STRIP_DBG", "1");
         std::env::set_var("KARAC_STRIP_CONTRACTS", "1");
         std::env::set_var("KARAC_STRIP_ERROR_TRACE", "1");
+    }
+    // The runtime debug metadata: the profile's `runtime_debug_metadata`
+    // key, else on in a dev build and off in a release one (design.md
+    // § Debugger contract; B-2026-11-05-36).
+    let debug_metadata = manifest
+        .and_then(|m| match a.release {
+            true => m.release_runtime_debug_metadata,
+            false => m.dev_runtime_debug_metadata,
+        })
+        .unwrap_or(!a.release);
+    if !debug_metadata {
         std::env::set_var("KARAC_STRIP_DEBUG_METADATA", "1");
     }
     let source = match &project {

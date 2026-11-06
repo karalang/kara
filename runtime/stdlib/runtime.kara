@@ -30,6 +30,8 @@
 // elements 1, 2 and 4; B-2026-11-05-34). `spawn_site_id` is the block's
 // id, the same in every run of the binary: a hash of its `file:line:col`.
 // `parent_task_id` is the task running the block (element 2): `main` is 1.
+// `worker_locations` is where each branch starts, as `file:line`, in
+// order (empty for a `par for`, whose workers share one body).
 // The runtime writes these rows (`karac_mir_list_par_blocks`), and the
 // backend refuses to compile a call to the list if this layout changes
 // under it: fields may only be added at the end, with the runtime's row.
@@ -40,6 +42,7 @@ pub struct ParBlockInfo {
     col: u32,
     worker_count: u32,
     parent_task_id: u64,
+    worker_locations: Vec[String],
 }
 
 // One row per suspended task (elements 2, 3 and 4): what it waits on, where

@@ -46,6 +46,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 ("col", 36),
                 ("worker_count", 40),
                 ("parent_task_id", 48),
+                ("worker_locations", 56),
             ],
             "TaskInfo" => &[
                 ("spawn_site_id", 0),
