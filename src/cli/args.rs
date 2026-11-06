@@ -2183,6 +2183,13 @@ fn parse_explain_command(args: &[String]) -> Command {
 /// a typo'd class name says "unknown diagnostic class" rather than
 /// falling through to a confusing concept-page error.
 fn classify_explain_name(name: &str) -> crate::cli::ExplainTarget {
+    // `a.kara.top`: an item of a source file.
+    if let Some((file, item)) = crate::cli::explain_item_target(name) {
+        return crate::cli::ExplainTarget::Item {
+            file: file.to_string(),
+            item: item.to_string(),
+        };
+    }
     let is_code = {
         // ANY uppercase letter followed by digits, not just `E` / `W`. The
         // ownership notes are `N05xx` and the FFI lint hint is `L0001`, and

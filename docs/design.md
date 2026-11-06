@@ -7346,7 +7346,7 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 - a redundant `.iter()` or `.to_string()` on a literal is removed;
 - a redundant `ref` on a parameter is removed: `x: ref T` means the same as `x: T` ([§7](#parameter-modes)).
 
-**`karac explain`** explains a diagnostic code from the code catalogue, and a [concept id](#concept-ids) by the sections that specify it. For an item, it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)).
+**`karac explain`** explains a diagnostic code from the code catalogue, and a [concept id](#concept-ids) by the sections that specify it. For an item (`karac explain src/order.kara.process`, a method as `<file>.Type.method`), it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)). A function with a `with` clause is trusted for what it declares, so its derivation ends at the clause.
 
 ### Debugger contract
 

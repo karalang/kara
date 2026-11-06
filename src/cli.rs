@@ -31,6 +31,7 @@ mod build_v2;
 mod diag_json;
 pub(crate) mod editor;
 pub mod explain;
+mod explain_item;
 mod fix_cmds;
 mod help;
 mod maintenance_cmds;
@@ -694,6 +695,11 @@ pub enum CacheSub {
 /// `cli::explain`, which is deliberately *not* a per-code prose
 /// catalogue — that remains the deferred surface this doc comment
 /// originally pointed at.
+/// `a.kara.top` as `("a.kara", "top")`, for `karac explain`.
+pub(crate) fn explain_item_target(name: &str) -> Option<(&str, &str)> {
+    explain_item::split_item_target(name)
+}
+
 #[derive(Debug, Clone)]
 pub enum ExplainTarget {
     /// `--concept=NAME` — concept-page surface (closures, …).
@@ -706,6 +712,9 @@ pub enum ExplainTarget {
     /// `--code=NAME` — the `E0NNN` / `W0NNN` token a structured
     /// diagnostic reports in its `code` field.
     Code(String),
+    /// `<file>.kara.<item>`: a function's effects with their derivation
+    /// and its parameters' would-be modes.
+    Item { file: String, item: String },
 }
 
 /// Output format selector for `karac explain`. Defaults to `Text`

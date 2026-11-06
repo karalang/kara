@@ -62,6 +62,15 @@ pub fn render(target: &ExplainTarget, format: ExplainFormat) {
         ExplainTarget::Concept(name) => render_concept(name, format),
         ExplainTarget::Class(name) => render_class(name, format),
         ExplainTarget::Code(name) => render_code(name, format),
+        ExplainTarget::Item { file, item } => {
+            match super::explain_item::render_to_string(file, item, format) {
+                Ok(text) => print!("{text}{}", if text.ends_with('\n') { "" } else { "\n" }),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                }
+            }
+        }
     }
 }
 
@@ -101,6 +110,9 @@ pub fn render_to_string(target: &ExplainTarget, format: ExplainFormat) -> Result
                 ExplainFormat::Text => render_class_text(class),
                 ExplainFormat::Json => render_class_json(class),
             })
+        }
+        ExplainTarget::Item { file, item } => {
+            super::explain_item::render_to_string(file, item, format)
         }
         ExplainTarget::Code(name) => {
             let entries = lookup_code(name);

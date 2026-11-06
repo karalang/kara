@@ -906,13 +906,21 @@ INSTALL ROOT:
         }
         "explain" => {
             "\
-karac explain - Explain a diagnostic code, a diagnostic class, or a concept
+karac explain - Explain a diagnostic code, class or concept, or an item
 
 USAGE:
     karac explain <NAME>                 (taxonomy detected from the name)
     karac explain --code=E0200
     karac explain --class=TYPE_MISMATCH
     karac explain --concept=closures
+    karac explain ownership/move-semantics   (a diagnostic's `concept` id)
+    karac explain src/order.kara.process     (an item: <file>.<function>)
+
+An item reports the function's effects, each with the chain of calls
+that gives it (the last step is where the effect happens, or the `with`
+clause that declares it), its `with` clause, and each parameter's
+declared mode beside the weakest mode its body needs. A method is
+`<file>.Type.method`.
 
 A bare NAME is classified by shape, so the token a diagnostic gives you
 can be pasted straight in:
@@ -922,6 +930,11 @@ can be pasted straight in:
     TYPE_MISMATCH      a diagnostic class — the `class` field of the
                        same record (UPPER_SNAKE)
     closures           a concept page (lower-case, may contain `-`)
+    ownership/move-semantics
+                       a concept id — the `concept` field of the same
+                       record: the spec sections and the codes that
+                       carry it
+    a.kara.top         an item of a source file
 
 CODES:
     Catalogued for the `resolve` and `typecheck` families (E01xx,

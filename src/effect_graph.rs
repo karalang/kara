@@ -985,6 +985,99 @@ pub(crate) fn with_auto_par(json: &str, src: &str, function: Option<&str>) -> St
     format!("{head},\"auto_par\":[{}]{err}}}", entries.join(","))
 }
 
+// ── Effect derivations (design.md §17 rule 5, B-2026-11-05-28) ───────────────
+
+/// One link of a derivation chain: where, and why the effect is there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivationStep {
+    pub file: String,
+    pub line: usize,
+    pub reason: String,
+}
+
+/// `verb(Resource)`, as a `with` clause writes the effect.
+pub fn effect_display(effect: &crate::effectchecker::Effect) -> String {
+    format!("{}({})", effect_verb_str(&effect.verb), effect.resource)
+}
+
+/// Why `function` has `effect`: the chain of calls from `function` to the
+/// function that performs it, each step at the line of its call, the last
+/// at the line where the effect happens. The chain follows the origin the
+/// effect checker recorded for the effect in each function's inferred set,
+/// so it is the path inference took. Every step is placed in `file`.
+/// Empty when `function` does not have `effect`.
+pub fn derivation(
+    effects: &EffectCheckResult,
+    function: &str,
+    effect: &crate::effectchecker::Effect,
+    file: &str,
+) -> Vec<DerivationStep> {
+    use crate::effectchecker::EffectOrigin;
+    let mut steps = Vec::new();
+    let mut at = function.to_string();
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(at.clone()) {
+        let Some(traced) = effects
+            .inferred_effects
+            .get(&at)
+            .and_then(|set| set.effects.iter().find(|te| te.effect == *effect))
+        else {
+            break;
+        };
+        match &traced.origin {
+            EffectOrigin::Callee { fn_name, span } => {
+                steps.push(DerivationStep {
+                    file: file.to_string(),
+                    line: span.line,
+                    reason: format!("{at} calls {fn_name}"),
+                });
+                at = fn_name.clone();
+            }
+            EffectOrigin::Direct(span) => {
+                // A function with a `with` clause is trusted for what it
+                // declares: its set is the clause, not its body's.
+                let declared = matches!(
+                    effects.declared_effects.get(&at),
+                    Some(DeclaredEffects::Explicit(set)) if set.effects.iter().any(|d| d.effect == *effect)
+                );
+                let verb = if declared { "declares" } else { "has" };
+                let what = format!("{verb} {}", effect_display(effect));
+                match steps.last_mut() {
+                    // A library function has no line of its own in `file`:
+                    // the call names it.
+                    Some(last) if span.line == 0 => {
+                        last.reason.push_str(&format!(", which {what}"));
+                    }
+                    _ => steps.push(DerivationStep {
+                        file: file.to_string(),
+                        line: span.line,
+                        reason: format!("{at} {what}"),
+                    }),
+                }
+                break;
+            }
+        }
+    }
+    steps
+}
+
+/// A derivation as the JSON array design.md §17 shows:
+/// `[{"file", "line", "reason"}, ...]`.
+pub fn derivation_json(steps: &[DerivationStep]) -> String {
+    let items: Vec<String> = steps
+        .iter()
+        .map(|s| {
+            format!(
+                "{{\"file\":{},\"line\":{},\"reason\":{}}}",
+                json_string(&s.file),
+                s.line,
+                json_string(&s.reason)
+            )
+        })
+        .collect();
+    format!("[{}]", items.join(","))
+}
+
 // ── Library / WASM entry point ────────────────────────────────────────────────
 
 /// One diagnostic for the Cartographer live editor — same shape as
