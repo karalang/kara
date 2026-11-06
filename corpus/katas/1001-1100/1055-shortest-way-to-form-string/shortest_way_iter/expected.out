@@ -1,0 +1,16 @@
+abc abcbc -> 2
+abc acdbc -> -1
+xyz xzyxz -> 3
+a aaaa -> 4
+abc cba -> 3
+aaa aaaa -> 2
+abcab bacab -> 2
+ab ba -> 2
+source source -> 1
+xy z -> -1
+3000 random pairs of 1 to 8 letters of 3: 1668 formed, total 3856, checksum 822815410
+300 random pairs of 1 to 1000 letters of 26: 264 formed, total 9117, checksum 592106636
+1000 letters, the source reversed: 25
+1000 letters, the source itself: 1
+1000 letters, 1000 y: 21
+1000 letters, a z at the end: -1

@@ -83,7 +83,7 @@ fn serialize(t: Option[TreeNode]) -> String {
 
 // One shared cursor for the whole recursion — the string is a transcript of the
 // call tree, and this is the read head replaying it.
-fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
+fn de_at(tokens: ref Vec[Str], i: mut ref i64) -> Option[TreeNode] {
     if i >= tokens.len() {
         return None;
     }
@@ -105,7 +105,7 @@ fn deserialize(s: ref String) -> Option[TreeNode] {
     if s.len() == 0 {
         return None;
     }
-    let tokens: Vec[String] = s.split(",").map(|p| p.to_string()).collect();
+    let tokens: Vec[Str] = s.split(",").collect();
     let mut i = 0;
     return de_at(tokens, mut i);
 }

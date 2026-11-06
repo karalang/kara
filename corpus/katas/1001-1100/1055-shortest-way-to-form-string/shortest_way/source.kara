@@ -1,0 +1,99 @@
+// LeetCode #1055: Shortest Way to Form String -- one pass over the source
+// per piece.
+//
+// Each piece is a subsequence of `source`, and taking as much of `target`
+// as one walk along `source` can match is never worse: whatever a shorter
+// piece leaves, the longer one has already matched. So walk `source` from
+// the start, matching the next letter of `target` wherever it comes, and
+// start a new piece when the walk ends. A walk that matches nothing means
+// a letter `source` lacks. O(n m) for a source of n and a target of m.
+
+fn shortest_way(source: ref String, target: ref String) -> i64 {
+    let s = source.bytes();
+    let t = target.bytes();
+    let mut pieces = 0;
+    let mut i = 0;
+    while i < t.len() {
+        let start = i;
+        for c in s {
+            if i < t.len() and t[i] == c {
+                i += 1;
+            }
+        }
+        if i == start {
+            return -1;
+        }
+        pieces += 1;
+    }
+    pieces
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` random letters from the first `letters` of the alphabet.
+fn random_word(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut word = String.new();
+    for _ in 0..n {
+        let c = (97 + next_random(mut seed) % letters) as u8 as char;
+        word.push(c);
+    }
+    word
+}
+
+// Random pairs of a source of 1 to `longest` letters and a target of 1 to
+// `longest` letters, both from the first `letters`: how many can be
+// formed, the total of their answers, and a checksum of every answer.
+fn trial(count: i64, longest: i64, letters: i64, seed: mut ref i64) -> (i64, i64, i64) {
+    let mut formed = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..count {
+        let source = random_word(next_random(mut seed) % longest + 1, letters, mut seed);
+        let target = random_word(next_random(mut seed) % longest + 1, letters, mut seed);
+        let answer = shortest_way(source, target);
+        if answer > 0 {
+            formed += 1;
+            total += answer;
+        }
+        check = (check * 131 + answer + 2) % 1000000007;
+    }
+    (formed, total, check)
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(String, String)] = [
+        ("abc".to_string(), "abcbc".to_string()),
+        ("abc".to_string(), "acdbc".to_string()),
+        ("xyz".to_string(), "xzyxz".to_string()),
+        ("a".to_string(), "aaaa".to_string()),
+        ("abc".to_string(), "cba".to_string()),
+        ("aaa".to_string(), "aaaa".to_string()),
+        ("abcab".to_string(), "bacab".to_string()),
+        ("ab".to_string(), "ba".to_string()),
+        ("source".to_string(), "source".to_string()),
+        ("xy".to_string(), "z".to_string()),
+    ];
+    for (source, target) in examples.iter() {
+        println(f"{source} {target} -> {shortest_way(source, target)}");
+    }
+    let mut seed = 1055;
+    let (formed, total, check) = trial(3000, 8, 3, mut seed);
+    println(f"3000 random pairs of 1 to 8 letters of 3: {formed} formed, total {total}, checksum {check}");
+    let (formed, total, check) = trial(300, 1000, 26, mut seed);
+    println(f"300 random pairs of 1 to 1000 letters of 26: {formed} formed, total {total}, checksum {check}");
+    // the largest: a source of 1000 letters, every letter but z, and
+    // targets of 1000
+    let source = random_word(1000, 25, mut seed);
+    let backwards: String = source.chars().rev().collect();
+    let repeated = "y".repeat(1000);
+    println(f"1000 letters, the source reversed: {shortest_way(source, backwards)}");
+    println(f"1000 letters, the source itself: {shortest_way(source, source)}");
+    println(f"1000 letters, 1000 y: {shortest_way(source, repeated)}");
+    println(f"1000 letters, a z at the end: {shortest_way(source, backwards + "z")}");
+}

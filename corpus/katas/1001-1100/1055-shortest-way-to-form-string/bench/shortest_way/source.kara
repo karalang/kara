@@ -1,0 +1,59 @@
+// LeetCode #1055: Shortest Way to Form String -- the benchmark: the ★ arm
+// on 100 sources of 1000 letters, each with a target of 10000, built once,
+// 10 rounds. The letters are random from the first 20 of the alphabet, so
+// every target can be formed and one walk along a source matches about
+// fifty letters of it.
+fn shortest_way(source: ref String, target: ref String) -> i64 {
+    let s = source.bytes();
+    let t = target.bytes();
+    let mut pieces = 0;
+    let mut i = 0;
+    while i < t.len() {
+        let start = i;
+        for c in s {
+            if i < t.len() and t[i] == c {
+                i += 1;
+            }
+        }
+        if i == start {
+            return -1;
+        }
+        pieces += 1;
+    }
+    pieces
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, seed: mut ref i64) -> String {
+    let mut word = String.new();
+    for _ in 0..n {
+        word.push((97 + next_random(mut seed) % 20) as u8 as char);
+    }
+    word
+}
+
+fn main() {
+    let count = 100;
+    let rounds = 10;
+    let mut seed = 1055;
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    for _ in 0..count {
+        let source = random_word(1000, mut seed);
+        let target = random_word(10000, mut seed);
+        pairs.push((source, target));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for (source, target) in pairs.iter() {
+            let answer = shortest_way(source, target);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+    }
+    println(f"{count} pairs of 1000 and 10000 letters, {rounds} rounds: total {total}, checksum {check}");
+}
