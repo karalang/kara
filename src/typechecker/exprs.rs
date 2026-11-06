@@ -27,7 +27,8 @@ use super::types::{
     contains_type_param, float_width_rank, impl_args_match, impl_table_key,
     int_coercion_is_widening, int_signed_width, is_integer, lub_block_type, type_display,
     type_is_fully_concrete, type_to_concrete_or_param_name, type_to_mono_mangle_token,
-    types_compatible, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
+    types_compatible, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type, TypeVarId,
+    UIntSize,
 };
 use super::BreakFrame;
 use super::TypeErrorKind;
@@ -245,6 +246,24 @@ pub(super) fn contains_type_var(t: &Type) -> bool {
             args.iter().any(contains_type_var) || assoc.iter().any(|(_, t)| contains_type_var(t))
         }
         _ => false,
+    }
+}
+
+/// The inference variables a generic call's result holds as a type argument
+/// a later use can fix (B-2026-11-06-7): inside a struct, a collection, a
+/// tuple or a reference. `Option` / `Result` keep the path that reads an
+/// unbound `E` of `Ok(5)` off the call's type, and a pointer's pointee is
+/// judged at its use (`E_RAW_POINTER_UNRESOLVED_POINTEE`).
+fn late_var_ids(t: &Type, out: &mut Vec<TypeVarId>) {
+    match t {
+        Type::TypeVar(id) => out.push(*id),
+        Type::Named { name, args } if name != "Option" && name != "Result" => {
+            args.iter().for_each(|a| late_var_ids(a, out))
+        }
+        Type::Ref(i) | Type::MutRef(i) => late_var_ids(i, out),
+        Type::Tuple(ts) => ts.iter().for_each(|a| late_var_ids(a, out)),
+        Type::Array { element, .. } | Type::Slice { element, .. } => late_var_ids(element, out),
+        _ => {}
     }
 }
 
@@ -5185,14 +5204,69 @@ impl<'a> super::TypeChecker<'a> {
                 .collect();
             substitute_type_params(&template, &solutions_as_subs)
         };
+        // B-2026-11-06-7: design.md § Type inference — a generic call
+        // introduces a type variable, a later use in the body solves it, and
+        // one still unsolved at the end of the body is an error. A parameter
+        // nothing at the call fixes (`T` of `PriorityQueue.new()`, of
+        // `fn empty[T]() -> Vec[T]`) stays a variable in the call's type, so
+        // `heap.push(x)` can fix it, and is judged once the whole program has
+        // been checked (`report_unsolved_call_vars`). A rigid parameter is the
+        // caller's own and is not this call's to solve, and one spelled as a
+        // parameter in scope keeps that name, as before: a library default
+        // body copied into `impl[K, V] Iterator for MapValues[K, V]` reads
+        // `self.next()`'s unsolved `V` as the impl's own.
+        // A parameter that is the whole result (`collect`'s `C`) keeps the
+        // context-recorded path it has (`record_declared_type_for_polymorphic_rhs`).
+        let bare_return = matches!(sub_ret, Type::TypeVar(_));
+        let candidates: Vec<(TypeVarId, String)> = id_to_name
+            .iter()
+            .filter(|(id, name)| {
+                !bare_return
+                    && !self.env.substitutions.contains_key(*id)
+                    && name_to_id.get(*name) == Some(*id)
+                    && !rigid.contains(*name)
+                    && !self.enclosing_bounds.contains_key(*name)
+                    // An `impl Trait` receiver's `Self` is spelled as the
+                    // trait (`IterMap[Iterator, F, U]`); it is not unsolved.
+                    && !self.env.traits.contains_key(*name)
+            })
+            .map(|(id, name)| (*id, name.clone()))
+            .collect();
+        let without = |ids: &[(TypeVarId, String)]| -> HashMap<TypeVarId, String> {
+            id_to_name
+                .iter()
+                .filter(|(id, _)| !ids.iter().any(|(l, _)| l == *id))
+                .map(|(id, name)| (*id, name.clone()))
+                .collect()
+        };
+        let mut late: Vec<(TypeVarId, String)> = Vec::new();
+        if !candidates.is_empty() {
+            let probe = resolve_type_vars(
+                &template,
+                &self.env.substitutions,
+                &without(&candidates),
+                &self.env.const_substitutions,
+                &const_id_to_name,
+            );
+            let mut in_ret = Vec::new();
+            late_var_ids(&probe, &mut in_ret);
+            late = candidates
+                .into_iter()
+                .filter(|(id, _)| in_ret.contains(id))
+                .collect();
+            late.sort_by(|a, b| a.1.cmp(&b.1));
+        }
         let ret = resolve_type_vars(
             &template,
             &self.env.substitutions,
-            &id_to_name,
+            &without(&late),
             &self.env.const_substitutions,
             &const_id_to_name,
         );
         let ret = self.resolve_assoc_projections(&ret);
+        if !late.is_empty() {
+            self.unsolved_call_vars.push((*record_subs_for_span, late));
+        }
 
         // Const generics slice 3c: discharge `WhereConstraint::ConstPredicate`
         // entries against the resolved const-args. The substitution
@@ -5469,6 +5543,104 @@ impl<'a> super::TypeChecker<'a> {
     /// context has solved it. Only a concrete answer is checked, and a
     /// parameterized bound (`FromIterator[V]`) holds when ANY impl of the
     /// trait for the type takes those arguments (B-2026-10-15-2).
+    /// B-2026-11-06-7: design.md § Type inference, "An unsolved variable is
+    /// an error at the end of the body". A generic call's parameter that
+    /// nothing at the call fixed is reported here, once the whole program has
+    /// been checked, only if no later use solved it either.
+    pub(super) fn report_unsolved_call_vars(&mut self) {
+        self.report_deferred_receiver_bounds();
+        let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
+        for (span, vars) in std::mem::take(&mut self.unsolved_call_vars) {
+            let names: HashMap<TypeVarId, String> = vars.iter().cloned().collect();
+            let unsolved = vars.iter().find(|(id, _)| {
+                matches!(
+                    resolve_type_vars(
+                        &Type::TypeVar(*id),
+                        &self.env.substitutions,
+                        &HashMap::new(),
+                        &self.env.const_substitutions,
+                        &no_consts,
+                    ),
+                    Type::TypeVar(_)
+                )
+            });
+            let Some((_, name)) = unsolved else { continue };
+            let ty = self
+                .expr_types
+                .get(&SpanKey::from_span(&span))
+                .map(|t| {
+                    resolve_type_vars(
+                        t,
+                        &self.env.substitutions,
+                        &names,
+                        &self.env.const_substitutions,
+                        &no_consts,
+                    )
+                })
+                .filter(|t| !matches!(t, Type::TypeParam(_)));
+            let of = ty
+                .map(|t| format!(" of `{}`", type_display(&t)))
+                .unwrap_or_default();
+            self.type_error(
+                format!(
+                    "cannot infer type parameter '{name}'{of}, this call's result: nothing \
+                     in the body fixes it (design.md § Type inference); add a type \
+                     annotation to the binding"
+                ),
+                span,
+                TypeErrorKind::CannotInferTypeParam,
+            );
+        }
+    }
+
+    /// B-2026-11-06-7: the bounds of an impl a method call resolved to while
+    /// its receiver's type argument was still a variable, now that the body
+    /// has fixed it.
+    fn report_deferred_receiver_bounds(&mut self) {
+        let no_names: HashMap<TypeVarId, String> = HashMap::new();
+        let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
+        for (span, imp, args, method) in std::mem::take(&mut self.deferred_receiver_bounds) {
+            let args: Vec<Type> = args
+                .iter()
+                .map(|a| {
+                    resolve_type_vars(
+                        a,
+                        &self.env.substitutions,
+                        &no_names,
+                        &self.env.const_substitutions,
+                        &no_consts,
+                    )
+                })
+                .collect();
+            if args.iter().any(contains_type_var) {
+                continue;
+            }
+            let Some((param_name, bound, concrete)) = self.env.first_unsatisfied_bound(&imp, &args)
+            else {
+                continue;
+            };
+            if matches!(concrete, Type::Error) {
+                continue;
+            }
+            let bound_trait = bound.path.last().cloned().unwrap_or_default();
+            let detail =
+                self.render_unsatisfied_bound_message(&param_name, &bound_trait, &concrete, &bound);
+            let via = imp
+                .trait_name
+                .as_ref()
+                .map(|t| format!(" (via `impl {} for {}`)", t, imp.target_type))
+                .unwrap_or_default();
+            self.type_error(
+                format!(
+                    "method '{}' is not callable on this `{}`{}: {}",
+                    method, imp.target_type, via, detail
+                ),
+                span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        }
+    }
+
     pub(super) fn discharge_deferred_call_bounds(&mut self) {
         for d in std::mem::take(&mut self.deferred_call_bounds) {
             let mut solutions: HashMap<String, Type> = HashMap::new();

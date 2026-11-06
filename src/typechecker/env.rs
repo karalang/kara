@@ -1022,7 +1022,7 @@ impl TypeEnv {
             // a generic call site `fn f[T: Sub](p: ref Pair[T]) { p.g() }`) is
             // equally undecidable — the enclosing scope's bound, or the eventual
             // monomorphization, discharges it. Same permissive treatment.
-            if matches!(subst_ty, Type::TypeParam(_)) {
+            if matches!(subst_ty, Type::TypeParam(_) | Type::TypeVar(_)) {
                 continue;
             }
             for bound in &param.bounds {
@@ -1067,7 +1067,7 @@ impl TypeEnv {
                 };
                 // Undecidable against an unresolved type variable — be permissive
                 // (see the inline-bounds arm above; B-2026-07-03-20).
-                if matches!(target_ty, Type::TypeParam(_)) {
+                if matches!(target_ty, Type::TypeParam(_) | Type::TypeVar(_)) {
                     continue;
                 }
                 for bound in bounds {
@@ -1105,7 +1105,7 @@ impl TypeEnv {
             let Some(subst_ty) = subs.get(param.name.as_str()) else {
                 continue;
             };
-            if matches!(subst_ty, Type::TypeParam(_)) {
+            if matches!(subst_ty, Type::TypeParam(_) | Type::TypeVar(_)) {
                 continue;
             }
             for bound in &param.bounds {

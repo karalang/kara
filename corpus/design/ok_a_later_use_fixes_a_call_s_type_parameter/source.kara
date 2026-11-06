@@ -1,0 +1,61 @@
+struct Bag[T] {
+    items: Vec[T],
+}
+
+impl[T] Bag[T] {
+    fn new() -> Bag[T] {
+        Bag { items: Vec.new() }
+    }
+
+    fn push(mut ref self, x: own T) {
+        self.items.push(x);
+    }
+
+    fn len(ref self) -> i64 {
+        self.items.len()
+    }
+
+    fn first(ref self) -> ref T {
+        ref self.items[0]
+    }
+}
+
+fn empty[T]() -> Vec[T] {
+    Vec.new()
+}
+
+fn pair_of[A, B]() -> (Vec[A], Vec[B]) {
+    (Vec.new(), Vec.new())
+}
+
+fn main() {
+    let mut heap = PriorityQueue.new();
+    heap.push((3, 1));
+    heap.push((1, 2));
+    heap.push((2, 0));
+    println(heap.pop());
+    let mut top = PriorityQueue.max_first();
+    top.push("b");
+    top.push("c");
+    top.push("a");
+    println(top.pop());
+    let mut b = Bag.new();
+    b.push((3, "x"));
+    b.push((4, "y"));
+    println(f"{b.len()} {b.first()}");
+    let mut v = empty();
+    v.push(3);
+    v.push(4);
+    println(v);
+    let mut names = empty();
+    names.push(String.from("ann"));
+    println(names);
+    let mut (xs, ys) = pair_of();
+    xs.push(1.5);
+    ys.push(true);
+    println(f"{xs} {ys}");
+    let mut bags = Vec.new();
+    bags.push(Bag.new());
+    bags[0].push(7);
+    println(bags[0].len());
+}

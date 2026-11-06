@@ -168,6 +168,13 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Wrong behaviour fixed
 
+- A type parameter that only a call's result names is solved by a later use
+  in the body: `let mut h = PriorityQueue.new(); h.push((3, 1))`, a
+  `Bag.new()` from `impl[T] Bag[T]` followed by `b.push(x)`, and
+  `fn empty[T]() -> Vec[T]` followed by `v.push(3)` were refused at the `let`
+  with "cannot infer type parameter 'T'". One nothing in the body solves is
+  still refused, at the call, and the impl's bounds are checked against the
+  type the later use fixed (design.md § Type inference, B-2026-11-06-7).
 - A `for` over an open range `lo..` now overflows when it steps past the
   type's largest value. It used to wrap: `for b in 254u8..` went 254, 255,
   0, 1, and the interpreter refused the loop. `RangeFrom` now gives out the

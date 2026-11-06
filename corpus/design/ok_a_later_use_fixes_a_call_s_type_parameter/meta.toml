@@ -1,0 +1,9 @@
+source = "B-2026-11-06-7"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "generics", "lib:priority_queue"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: a generic call introduces a type variable for each parameter, a later use in the body solves it, and only one still unsolved at the end of the body is an error. So `PriorityQueue.new()`, `Bag.new()`, `empty()` and `pair_of()` take their element types from the pushes that follow. docs/library: `PriorityQueue.new()` pops the smallest first ((1, 2) of (3, 1) (1, 2) (2, 0)) and `max_first()` the largest (c of b c a); the Bag holds 2 with first (3, x); v is [3, 4]; names [ann]; xs [1.5] and ys [true]; a Bag pushed into a Vec and then given 7 has length 1."

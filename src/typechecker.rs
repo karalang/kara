@@ -3435,6 +3435,14 @@ pub struct TypeChecker<'a> {
     /// instantiation keeps them as they are rather than minting a variable
     /// for each (B-2026-10-21-60).
     pub(super) call_rigid_params: Vec<String>,
+    /// B-2026-11-06-7: each generic call whose type kept a parameter
+    /// nothing at the call fixed, with those variables, judged at the end of
+    /// `check` (`report_unsolved_call_vars`).
+    pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
+    /// B-2026-11-06-7: a method call whose receiver's type argument was
+    /// still a variable, with the impl it resolved to, so the impl's bounds
+    /// are checked once a later use has fixed it.
+    pub(super) deferred_receiver_bounds: Vec<(Span, ImplInfo, Vec<Type>, String)>,
     /// The next call's [`Self::d5_borrowed_fn_params`], set just before
     /// `check_call_args_with_substitution_full` and taken at its entry.
     pub(super) call_borrowed_fn_params: Vec<bool>,
@@ -4104,6 +4112,8 @@ impl<'a> TypeChecker<'a> {
             as_str_calls: FxHashMap::default(),
             call_bound_receiver_subs: None,
             call_rigid_params: Vec::new(),
+            unsolved_call_vars: Vec::new(),
+            deferred_receiver_bounds: Vec::new(),
             call_borrowed_fn_params: Vec::new(),
             deferred_call_bounds: Vec::new(),
             dbg_arg_types: FxHashMap::default(),
@@ -4505,6 +4515,7 @@ impl<'a> TypeChecker<'a> {
         // offenders gathered during body inference. Must run before `errors`
         // moves into the result below.
         self.emit_nested_enum_inst_errors();
+        self.report_unsolved_call_vars();
         self.discharge_deferred_call_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();

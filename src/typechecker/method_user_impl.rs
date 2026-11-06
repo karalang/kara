@@ -1090,6 +1090,20 @@ impl<'a> super::TypeChecker<'a> {
 
         match method_pick {
             Some((imp, sig)) => {
+                // B-2026-11-06-7: a receiver whose type argument a later use
+                // will fix (`heap.push(x)` on `PriorityQueue.new()`) cannot
+                // have the impl's bounds checked yet; they are checked once
+                // the program has been (`report_unsolved_call_vars`).
+                if type_args.iter().any(super::exprs::contains_type_var)
+                    && imp.generic_params.is_some()
+                {
+                    self.deferred_receiver_bounds.push((
+                        *span,
+                        imp.clone_without_methods(),
+                        type_args.clone(),
+                        method.to_string(),
+                    ));
+                }
                 // B-2026-08-13-8 — name the WINNER for the backends. This is
                 // the one point in the compiler that knows which of several
                 // same-head impls a call resolved to: `find_methods_with_args`
