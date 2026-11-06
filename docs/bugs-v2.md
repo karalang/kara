@@ -98,8 +98,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
-| B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
-| B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
 | B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch; ATTRIBUTED: arm64 loop branched twice (ctpop over SimplifyCFG's phi-fold threshold), a723c25762 raises it 4 -> 6, M5 awaits a Mac re-run | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Katas 333 (1.19x) and 338 (1.17x) still execute over legacy's instructions on the M5 at eb17818b45 (LLVM 22), where 321, 337, 339 and 343 are within; both gaps are larger than x86's (1.05x, 1.10x); 338's inclusive-range piece is Thread B's | — |
@@ -649,6 +647,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-28 | effect | medium | `#[no_effect(allocates(Heap))]` (design.md §12's real-time guarantee) misses most allocations: `[1, 2].to_vec()`, `"a".to_string()`, an f-string, a `… | 98ef92e24b |
 | B-2026-11-04-29 | effect | medium | Integer `/` and `%` and checked-mode overflow arithmetic are not `panics` atoms: `#[no_effect(panics)] fn f(a: i64, b: i64) -> i64 { a % b }` (and `a… | 98ef92e24b |
 | B-2026-11-04-31 | mir-llvm | low | Seq binaries of katas 297, 315, 330, 331, 332, 336 and 394 are still 319-336 KB on gd33cb285d and gf0017054a, after ad984ef96b took katas 38, 282 and… | 5984ed3080 |
+| B-2026-11-04-32 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | 76e7c027a5 |
 | B-2026-11-04-34 | ownership | medium | A closure or task made in each arm of an `if`, each moving the same value in, is refused as "moved into a closure, used again here" (or "moved into a… | f575bce6f0 |
 | B-2026-11-04-35 | ownership | medium | `match p.c { C.At(s) => . | f575bce6f0 |
 | B-2026-11-04-36 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also… | e5ccf4fc0c |
