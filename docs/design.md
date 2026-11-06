@@ -2156,7 +2156,7 @@ Each iteration is its own scope: what it creates drops at the end of the iterati
 | `..=hi` | `RangeToInclusive[T]` | inclusive end only, `(-∞, hi]` | No |
 | `..` | `RangeFull` | no ends | No |
 
-Only the forms with a start can be iterated. `RangeTo`, `RangeToInclusive` and `RangeFull` appear mostly as slice indices (`items[..n]`, `items[..=n]`, `items[..]`) and as [range patterns](#range-patterns). All six implement a common `SliceIndex[T]` contract, so any sequence that supports `items[Range]` supports the half-open forms with no extra surface.
+Only the forms with a start can be iterated. `RangeTo`, `RangeToInclusive` and `RangeFull` appear mostly as slice indices (`items[..n]`, `items[..=n]`, `items[..]`) and as [range patterns](#range-patterns). Every sequence that can be indexed by a `Range` can be indexed by all six forms, with no extra surface. This is a guarantee about the built-in sequences, not a trait: there is no nameable `SliceIndex` in v1.
 
 ```kara
 for i in 0..10 { print(i); }       // 0, 1, …, 9
