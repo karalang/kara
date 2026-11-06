@@ -4519,7 +4519,7 @@ Errors are values. A recoverable failure is a `Result`, and a bug or an unrecove
 - **Panics are for unrecoverable conditions** ([Panics](#panics)): assertion failures, an index out of bounds, `unwrap()` on `None` or `Err`. The alternatives are `?`, `??`, `unwrap_or(default)` and `match`.
 - **`try { ... }` blocks** are deferred ([deferred.md](deferred.md#unscheduled-language-extensions)). `try` is reserved.
 
-**Panics report the caller's location: `#[track_caller]`.** Every standard-library function that panics on invalid input carries `#[track_caller]`: `Option.unwrap`, `Option.expect`, `Result.unwrap`, `Result.expect`, `Result.unwrap_err`, the panicking indexing helpers and their `.first()`/`.last()` relatives, the trapping arithmetic methods (`i64.unchecked_div`, `i64.unchecked_rem`), `assert`, `assert_eq`, `assert_ne`, `todo()`, `unreachable()` and `panic()`.
+**Panics report the caller's location: `#[track_caller]`.** Every standard-library function that panics on invalid input carries `#[track_caller]`: `Option.unwrap`, `Option.expect`, `Result.unwrap`, `Result.expect`, `Result.unwrap_err`, the panicking indexing helpers and their `.first()`/`.last()` relatives, `assert`, `assert_eq`, `assert_ne`, `todo()`, `unreachable()` and `panic()`.
 - The attribute makes the panic location, on stderr and in the runner's panic record ([§17 Panic record](#panic-record)), the caller's location, not a line inside the library. `users.get(99).unwrap()` reports the user's `unwrap()`.
 - It adds a hidden caller-location parameter that the panic path reads. It has no other effect on type checking, effects, the ABI, monomorphization or code generation.
 - It is transitive: a `#[track_caller]` function calling another reports its own caller.
