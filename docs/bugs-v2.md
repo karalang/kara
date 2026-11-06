@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 143 |
-| false-positive | 121 |
+| false-positive | 122 |
 | perf | 104 |
 | missing-feature | 91 |
 | soundness | 50 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 215 |
+| typecheck | 216 |
 | mir-llvm | 125 |
 | mir | 121 |
 | cli | 70 |
@@ -111,6 +111,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-7 | 2026-11-06 | typecheck | medium | A type parameter that only a call's return type names is refused at the `let` (`let mut heap = PriorityQueue.new()`, a user `Bag.new()`, `fn empty[T]() -> Vec[T]`) with 'cannot infer type parameter T', though a later use in the body (`heap.push(x)`) fixes it; design.md §8 solves type variables by unification within the body | — |
 | B-2026-11-06-8 | 2026-11-06 | mir-llvm | low | Kata 354 on arm64 still runs 1.36x rustc -O's cycles after d70e6d474a, though 0.954x legacy's and level with Rust on x86 | — |
 | B-2026-11-06-9 | 2026-11-06 | cli | low | `karac query queries` and `query cost-summary` still report RC fallbacks (`rc_fallback_decision` with keep_rc / prefer_rc, `rc_ops`), which core semantics §6.4 removed: they now appear only on programs `karac check` refuses with E0500 | — |
+| B-2026-11-06-10 | 2026-11-06 | typecheck | medium | `let H { xs, n } = h` on a `shared struct H` is refused with `struct pattern `H` used but type is `H``, though core semantics §4.6 lets a shared scrutinee bind its parts as `ref`s and the same pattern in `match` / `if let` checks clean | — |
 
 ### Relocated
 
