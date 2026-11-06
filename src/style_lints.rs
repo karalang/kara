@@ -58,6 +58,12 @@ pub fn style_hits(program: &Program, typed: &TypeCheckResult, src: &str) -> Vec<
         src,
         out: Vec::new(),
         fn_values: functions_used_as_values(items),
+        ref_bindings: program
+            .ref_binding_spans
+            .iter()
+            .chain(program.mut_ref_binding_spans.iter())
+            .map(|k| k.0)
+            .collect(),
     };
     for item in items {
         match item {
@@ -107,6 +113,8 @@ struct Cx<'a> {
     /// Names written as a value rather than called (`list_repr(v, int_repr)`,
     /// `xs.map(Item.size)`): a path's last segment, or a bare name.
     fn_values: std::collections::HashSet<String>,
+    /// Where an explicit `ref name` / `mut ref name` pattern binding starts.
+    ref_bindings: Vec<usize>,
 }
 
 /// The names `items` use other than as the callee of a call.
@@ -223,13 +231,10 @@ impl Cx<'_> {
         let PatternKind::Binding(name) = &p.pattern.kind else {
             return;
         };
-        // A bare parameter of a function type is checked as taken, not
-        // borrowed (B-2026-11-05-39); and a pattern over a bare parameter binds its
-        // parts as a pattern over a `ref` one does not (B-2026-11-05-40), so a
-        // parameter something destructures keeps its `ref`.
-        if matches!(inner.kind, TypeKind::FnType { .. })
-            || derefs_name(body, name)
-            || destructures_name(body, name)
+        // An explicit `ref name` binding over a bare parameter cannot go into
+        // a tuple as it can over a `ref` one (B-2026-11-06-4), so a parameter
+        // a pattern with such a binding takes apart keeps its `ref`.
+        if derefs_name(body, name) || destructures_with_ref_binding(body, name, &self.ref_bindings)
         {
             return;
         }
@@ -649,26 +654,33 @@ fn derefs_name(body: &Block, name: &str) -> bool {
 /// Whether a pattern in `body` takes apart a place rooted at `name`: a
 /// `match`, `if let`, `while let` or `let`-`else` scrutinee, or the value of
 /// a destructuring `let`.
-fn destructures_name(body: &Block, name: &str) -> bool {
+fn destructures_with_ref_binding(body: &Block, name: &str, ref_bindings: &[usize]) -> bool {
     let rooted = |e: &Expr| {
         let mut roots = Vec::new();
         place_roots(e, &mut roots);
         roots.iter().any(|r| r == name)
     };
+    let has_ref = |p: &Pattern| {
+        let (start, end) = (p.span.offset, p.span.offset + p.span.length);
+        ref_bindings.iter().any(|&o| start <= o && o < end)
+    };
     let mut found = false;
     crate::span_visitor::for_each_expr_in_block(body, &mut |e| match &e.kind {
-        ExprKind::Match { scrutinee, .. } if rooted(scrutinee) => found = true,
-        ExprKind::IfLet { value, .. } | ExprKind::WhileLet { value, .. } if rooted(value) => {
-            found = true
+        ExprKind::Match { scrutinee, arms } if rooted(scrutinee) => {
+            found |= arms.iter().any(|a| has_ref(&a.pattern));
+        }
+        ExprKind::IfLet { pattern, value, .. } | ExprKind::WhileLet { pattern, value, .. }
+            if rooted(value) =>
+        {
+            found |= has_ref(pattern);
         }
         _ => {}
     });
     crate::span_visitor::for_each_stmt_in_block(body, &mut |s| match &s.kind {
-        StmtKind::LetElse { value, .. } if rooted(value) => found = true,
-        StmtKind::Let { pattern, value, .. }
-            if !matches!(pattern.kind, PatternKind::Binding(_)) && rooted(value) =>
+        StmtKind::LetElse { pattern, value, .. } | StmtKind::Let { pattern, value, .. }
+            if rooted(value) =>
         {
-            found = true
+            found |= has_ref(pattern);
         }
         _ => {}
     });

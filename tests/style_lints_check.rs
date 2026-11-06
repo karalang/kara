@@ -134,6 +134,28 @@ fn style_lint_redundant_ref_param_is_removed() {
     );
 }
 
+/// A function-typed parameter (B-2026-11-05-39) and one a pattern takes apart
+/// (B-2026-11-05-40) lose their `ref` too, now that a bare parameter lends
+/// them as a `ref` one does.
+#[test]
+fn style_lint_redundant_ref_param_covers_fn_and_destructured_params() {
+    let src = "struct F {\n    f: Fn(i64) -> i64,\n}\n\n\
+enum E {\n    R { xs: Vec[i64], ms: i64 },\n    N,\n}\n\n\
+fn apply(f: ref Fn(i64) -> i64, x: i64) -> i64 {\n    f(x)\n}\n\n\
+fn get(e: ref E) -> i64 {\n    let (xs, ms) = match e {\n        E.R { xs, ms } => (xs, ms),\n        _ => return 0,\n    };\n    xs.len() + ms\n}\n\n\
+fn main() {\n    let s = F { f: |x| x + 1 };\n    println(apply(s.f, 1));\n    println(get(E.R { xs: [1, 2], ms: 3 }));\n}\n";
+    let r = fix("ref-fn-destructure", "redundant_ref_param", src);
+    assert!(
+        r.after.contains("fn apply(f: Fn(i64) -> i64, x: i64)"),
+        "{}",
+        r.after
+    );
+    assert!(r.after.contains("fn get(e: E) -> i64"), "{}", r.after);
+    assert_eq!(r.before_out, r.after_out);
+    assert_eq!(r.after_out, "2\n5\n");
+    assert!(!r.recheck.contains("redundant_ref_param"), "{}", r.recheck);
+}
+
 /// Shapes where the rewrite would change the program, or not compile, stay
 /// silent.
 #[test]
@@ -142,7 +164,8 @@ fn style_lints_stay_silent_where_the_rewrite_would_not_hold() {
 fn early(n: i64) -> i64 {\n    if n > 0 {\n        return n;\n    }\n    0\n}\n\
 fn pick(a: Option[i64]) -> i64 {\n    return match a { Some(x) => x, None => 0 } + 1;\n}\n\
 fn is_a(c: ref char) -> bool {\n    *c == 'a'\n}\n\
-fn apply(f: ref Fn(i64) -> i64, x: i64) -> i64 {\n    f(x)\n}\n\
+enum Pr {\n    R { xs: Vec[i64], m: i64 },\n    N,\n}\n\
+fn parts(p: ref Pr) -> i64 {\n    let (xs, m) = match p {\n        Pr.R { ref xs, m } => (xs, m),\n        _ => return 0,\n    };\n    xs.len() + m\n}\n\
 fn main() {\n\
     let mut i = 0;\n    while i < 3 {\n        i += 1;\n    }\n    println(i);\n\
     let mut k = 0;\n    while k < 5 {\n        if k == 2 {\n            k += 2;\n            continue;\n        }\n        k += 1;\n    }\n\
@@ -150,7 +173,7 @@ fn main() {\n\
     let mut s = \"a\";\n    s = \"b\" + s;\n    println(s);\n\
     let mut y = 1;\n    y = 2 + y;\n    println(y);\n\
     let n = 5.to_string();\n    println(n);\n\
-    println(early(3));\n    println(pick(Some(1)));\n    println(is_a('a'));\n    println(apply(|x| x + 1, 1));\n\
+    println(early(3));\n    println(pick(Some(1)));\n    println(is_a('a'));\n    println(parts(Pr.R { xs: [1], m: 2 }));\n\
     for p in [\"a\", \"b\"].iter() {\n        println(*p);\n    }\n\
 }\n";
     let f = scratch("silent", src);
