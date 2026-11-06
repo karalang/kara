@@ -4,9 +4,62 @@
 
 use super::*;
 
+/// The program's own items, without the library `with_library` appended
+/// after them (`library_start` is the byte offset it starts at): what every
+/// answer reports on (B-2026-11-06-5).
+fn own_program(pipeline: &Pipeline) -> std::borrow::Cow<'_, crate::ast::Program> {
+    let program = &pipeline.parsed.program;
+    let Some(start) = program.library_start else {
+        return std::borrow::Cow::Borrowed(program);
+    };
+    let own = program.items.partition_point(|i| i.span().offset < start);
+    let mut p = program.clone();
+    p.items.truncate(own);
+    std::borrow::Cow::Owned(p)
+}
+
+/// The keys the analyses give `program`'s functions: `name` for a free
+/// function, `Type.method` for a method.
+fn own_function_names(program: &crate::ast::Program) -> std::collections::HashSet<String> {
+    use crate::ast::{ImplItem, Item, TraitItem, TypeKind};
+    let mut out = std::collections::HashSet::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => {
+                out.insert(f.name.clone());
+            }
+            Item::ImplBlock(b) => {
+                if let TypeKind::Path(path) = &b.target_type.kind {
+                    if let Some(ty) = path.segments.last() {
+                        for it in &b.items {
+                            if let ImplItem::Method(f) = it {
+                                out.insert(format!("{ty}.{}", f.name));
+                            }
+                        }
+                    }
+                }
+            }
+            Item::TraitDef(t) => {
+                for it in &t.items {
+                    if let TraitItem::Method(f) = it {
+                        out.insert(format!("{}.{}", t.name, f.name));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 pub(super) fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
     let source = read_source(filename);
-    let mut pipeline = Pipeline::new(filename, &source);
+    // The program `karac check` sees: the library appended, the core rules
+    // on (B-2026-11-06-5). Every answer below is about the program's own
+    // functions; the library's are left out.
+    let mut pipeline = Pipeline::new(filename, &source)
+        .strict_core()
+        .with_library();
     pipeline.resolve();
 
     if pipeline.has_fatal_errors() {
@@ -104,7 +157,7 @@ pub(super) fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             // test-file flag from the filename suffix per the same
             // `*_test.kara` heuristic the resolver uses.
             let is_test_file = filename.ends_with("_test.kara");
-            let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
+            let graph = crate::call_graph::build(&own_program(&pipeline), filename, is_test_file);
             query_affected_by(&graph, &target, tests_only, direction, filename);
         }
     }
@@ -270,7 +323,7 @@ pub(super) fn query_queries(pipeline: &Pipeline) {
     // P1.3 codegen queries — plain-data analyzer over the parsed AST.
     // Runs unconditionally; cheap (single AST walk) and doesn't
     // require any later-phase side-tables.
-    all.extend(crate::codegen_queries::analyze(&pipeline.parsed.program));
+    all.extend(crate::codegen_queries::analyze(&own_program(pipeline)));
 
     // P1.2 specialization queries — reads the monomorphization counter,
     // so it needs the typecheck result (the type tuples). Skips silently
@@ -278,7 +331,7 @@ pub(super) fn query_queries(pipeline: &Pipeline) {
     // threaded for a uniform analyzer signature.
     if let Some(t) = pipeline.typed.as_ref() {
         all.extend(crate::specialization_queries::analyze(
-            &pipeline.parsed.program,
+            &own_program(pipeline),
             t,
             pipeline.effects.as_ref(),
         ));
@@ -289,7 +342,7 @@ pub(super) fn query_queries(pipeline: &Pipeline) {
     // run.
     if let Some(o) = pipeline.ownership.as_ref() {
         all.extend(crate::rc_fallback_queries::analyze(
-            &pipeline.parsed.program,
+            &own_program(pipeline),
             o,
         ));
     }
@@ -299,7 +352,7 @@ pub(super) fn query_queries(pipeline: &Pipeline) {
     // when the concurrency pass didn't run.
     if let Some(c) = pipeline.concurrency.as_ref() {
         all.extend(crate::fork_threshold_queries::analyze(
-            &pipeline.parsed.program,
+            &own_program(pipeline),
             c,
         ));
     }
@@ -308,7 +361,7 @@ pub(super) fn query_queries(pipeline: &Pipeline) {
     // the typechecker's `expr_types` + `struct_info`. Skips silently when
     // typecheck didn't run.
     if let Some(t) = pipeline.typed.as_ref() {
-        all.extend(crate::layout_queries::analyze(&pipeline.parsed.program, t));
+        all.extend(crate::layout_queries::analyze(&own_program(pipeline), t));
     }
 
     println!("{}", render_queries_envelope(&all, &pipeline.filename));
@@ -410,7 +463,7 @@ pub(super) fn query_attributes(pipeline: &Pipeline, tool_prefix: Option<String>)
     let filter = crate::query_attributes::AttributeQueryFilter {
         tool_prefix: tool_prefix.clone(),
     };
-    let records = crate::query_attributes::collect_attributes(&pipeline.parsed.program, &filter);
+    let records = crate::query_attributes::collect_attributes(&own_program(pipeline), &filter);
     println!(
         "{}",
         render_attribute_query_json(&records, &pipeline.filename, tool_prefix.as_deref())
@@ -506,7 +559,7 @@ pub(super) fn query_monomorphization(pipeline: &Pipeline) {
         }
     };
     let table =
-        crate::monomorphization::analyze(&pipeline.parsed.program, tc, pipeline.effects.as_ref());
+        crate::monomorphization::analyze(&own_program(pipeline), tc, pipeline.effects.as_ref());
     println!(
         "{}",
         render_monomorphization_json(&table, &pipeline.filename),
@@ -564,8 +617,7 @@ pub(super) fn query_cost_summary(pipeline: &Pipeline) {
         eprintln!("error: ownership pass did not run (earlier phase failed)");
         process::exit(1);
     };
-    let summary =
-        crate::cost_summary::build(&pipeline.filename, &pipeline.parsed.program, ownership);
+    let summary = crate::cost_summary::build(&pipeline.filename, &own_program(pipeline), ownership);
     println!("{}", render_cost_summary_json(&summary, &pipeline.filename));
 }
 
@@ -690,7 +742,7 @@ pub(super) fn query_effects_whole_program(
     filename: &str,
 ) {
     let is_test_file = filename.ends_with("_test.kara");
-    let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
+    let graph = crate::call_graph::build(&own_program(pipeline), filename, is_test_file);
     println!(
         "{}",
         crate::effect_graph::build_effect_graph_json(effects, &graph, filename)
@@ -704,7 +756,12 @@ pub(super) fn query_ownership(pipeline: &Pipeline, function: &str, filename: &st
     // emits every function's entry, in name order, as the effects and
     // concurrency kinds do (B-2026-10-30-17).
     if function.is_empty() {
-        let mut names: Vec<&String> = ownership.param_modes.keys().collect();
+        let own = own_function_names(&own_program(pipeline));
+        let mut names: Vec<&String> = ownership
+            .param_modes
+            .keys()
+            .filter(|n| own.contains(*n))
+            .collect();
         names.sort();
         let entries: Vec<String> = names
             .into_iter()
@@ -912,20 +969,20 @@ pub(super) fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &
                 crate::effect_graph::loop_reductions_json(
                     fc,
                     crate::effect_graph::function_by_decision_key(
-                        &pipeline.parsed.program,
+                        &own_program(pipeline),
                         function,
                     ),
-                    Some(&pipeline.parsed.program),
+                    Some(&own_program(pipeline)),
                     function,
                 ),
                 crate::effect_graph::declined_par_loops_json(fc),
                 crate::effect_graph::disjoint_write_loops_json(
                     fc,
                     crate::effect_graph::function_by_decision_key(
-                        &pipeline.parsed.program,
+                        &own_program(pipeline),
                         function,
                     ),
-                    Some(&pipeline.parsed.program),
+                    Some(&own_program(pipeline)),
                     function,
                 ),
                 crate::effect_graph::serialization_points_json(fc),
@@ -951,12 +1008,12 @@ pub(super) fn query_concurrency_whole_program(
     filename: &str,
 ) {
     let is_test_file = filename.ends_with("_test.kara");
-    let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
+    let graph = crate::call_graph::build(&own_program(pipeline), filename, is_test_file);
     let json = crate::effect_graph::build_concurrency_graph_json(
         analysis,
         &graph,
         filename,
-        Some(&pipeline.parsed.program),
+        Some(&own_program(pipeline)),
     );
     println!("{}", with_auto_par(&json, filename, None));
 }

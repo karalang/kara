@@ -1,7 +1,7 @@
-// Cost-summary fixture: triggers an RC fallback for binding `d` in
-// `process` (consumed in the match arm, then re-used afterward) so the
-// `karac query cost-summary` driver tests can assert a non-zero rc_ops
-// count with a derivation entry.
+// Cost-summary fixture. It used to trigger an RC fallback for `d` in
+// `process`; under the core rules `consume` and `use_d` borrow, so the
+// `karac query cost-summary` driver tests assert it has none (core
+// semantics §6.4, B-2026-11-06-5).
 struct Data { value: i64 }
 fn consume(d: Data) {}
 fn use_d(d: Data) {}

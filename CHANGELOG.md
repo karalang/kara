@@ -240,6 +240,12 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   one arm per run. `karac query effects` and `query ownership` answer with
   a `derivation`, and `karac query queries` with no target reports the
   package in the current directory (B-2026-11-05-29).
+- **`karac query` and `karac explain <file>.<item>` see the program `karac
+  check` sees.** A program naming a library type (`WsMessage`, as the `karac
+  new` scaffold does) was refused with `undefined type`. Both now run with
+  the library and the core rules, and answer about the program's own
+  functions only, so a bare parameter reads as the borrow it is and a loop
+  over a borrowed `Vec` gets its layout query (B-2026-11-06-5).
 - `#[allow(unfulfilled_lint_expectation)]` on a function or impl covers an
   `#[expect]` on a statement inside it; `-A` / `-W` / `-D` / `-F` naming no
   lint warns `unknown_lint`, as an attribute does; an unknown lint and an

@@ -35,7 +35,9 @@ pub(super) fn split_item_target(name: &str) -> Option<(&str, &str)> {
 
 fn report(file: &str, item: &str) -> Result<ItemReport, String> {
     let source = std::fs::read_to_string(file).map_err(|e| format!("cannot read `{file}`: {e}"))?;
-    let mut pipeline = Pipeline::new(file, &source);
+    // The program `karac check` sees: the library appended, the core rules
+    // on (B-2026-11-06-5).
+    let mut pipeline = Pipeline::new(file, &source).strict_core().with_library();
     pipeline.resolve();
     if pipeline.has_fatal_errors() {
         return Err(format!(

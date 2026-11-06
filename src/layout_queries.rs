@@ -237,8 +237,12 @@ fn layout_query_for_loop(
 }
 
 /// Recover the element struct name of a sequence collection type:
-/// `Vec[S]` / `Array[S]` / `Slice[S]` where `S` is a known struct.
+/// `Vec[S]` / `Array[S]` / `Slice[S]` where `S` is a known struct, owned
+/// or borrowed (a bare parameter borrows, core semantics §4).
 fn element_struct_name(ty: &Type, tc: &TypeCheckResult) -> Option<String> {
+    if let Type::Ref(inner) | Type::MutRef(inner) = ty {
+        return element_struct_name(inner, tc);
+    }
     let elem = match ty {
         Type::Named { name, args } if name == "Vec" && args.len() == 1 => &args[0],
         Type::Array { element, .. } | Type::Slice { element, .. } => element,

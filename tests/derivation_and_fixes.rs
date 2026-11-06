@@ -266,3 +266,46 @@ fn query_queries_with_no_target_reports_the_package_here() {
         String::from_utf8_lossy(&none.stderr)
     );
 }
+
+/// B-2026-11-06-5: `karac query` and `karac explain` see the program `karac
+/// check` sees, library included, and answer about its own functions only.
+#[test]
+fn query_and_explain_see_the_library_check_sees() {
+    let dir = scratch("library");
+    let src = "fn f(m: WsMessage) -> i64 {
+    match m {
+        WsMessage.Close(_) => 1,
+        _ => 0,
+    }
+}
+fn main() { println(2); }
+";
+    std::fs::write(dir.join("ws.kara"), src).unwrap();
+    assert!(karac(&dir, &["check", "ws.kara"]).status.success());
+    let effects = karac(&dir, &["query", "effects", "ws.kara"]);
+    assert!(
+        effects.status.success(),
+        "{}",
+        String::from_utf8_lossy(&effects.stderr)
+    );
+    let names: Vec<String> = json(&effects)["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["function"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, vec!["f", "main"]);
+    let ownership = karac(&dir, &["query", "ownership", "ws.kara"]);
+    assert!(
+        ownership.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ownership.stderr)
+    );
+    assert_eq!(json(&ownership)["functions"].as_array().unwrap().len(), 2);
+    let explain = karac(&dir, &["explain", "ws.kara.f"]);
+    assert!(
+        explain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explain.stderr)
+    );
+}

@@ -611,12 +611,14 @@ fn main() {
 }
 
 #[test]
-fn test_query_queries_populated_envelope_has_rc_fallback_query() {
-    // Phase-8 (P1.1 RC-fallback queries) — the ownership pass RC-promotes
-    // `o` (captured by-value into a closure, used again after), and the
-    // rc-fallback-queries analyzer surfaces one query for it. The CLI must
-    // serialize it into the `{"queries":[…]}` envelope with the
-    // `rc_fallback_decision` kind and the `no_rc`/`prefer_rc` surface.
+fn test_query_queries_no_rc_fallback_query_under_the_core_rules() {
+    // `take` borrows its bare parameter (core semantics §4.1), so the
+    // closure captures `o` by `ref` and nothing is moved: the query sees
+    // the program `karac check` sees (B-2026-11-06-5) and has no RC
+    // fallback to ask about. Core §6.4 removed the RC fallback; where it
+    // would have fired (`fn take(o: own Owned)`), the program is an E0500.
+    // This pinned an `rc_fallback_decision` before the query ran the core
+    // rules.
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-query-rc-{}-{}",
         std::process::id(),
@@ -649,16 +651,8 @@ fn main() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"kind\":\"rc_fallback_decision\""),
-        "expected an rc_fallback_decision entry; got stdout={stdout}",
-    );
-    assert!(
-        stdout.contains("\"no_rc\"") && stdout.contains("\"prefer_rc\""),
-        "expected the no_rc/prefer_rc resolution surface; got stdout={stdout}",
-    );
-    assert!(
-        stdout.contains("\"cross_phase_origin\":\"ownership\""),
-        "expected ownership-origin tag; got stdout={stdout}",
+        !stdout.contains("rc_fallback_decision"),
+        "a borrowed capture is not an RC fallback; got stdout={stdout}",
     );
 
     let _ = std::fs::remove_dir_all(&tmp);
@@ -2998,7 +2992,7 @@ fn test_query_ownership_surfaces_closures() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("\"function\":\"main\""));
-    // First closure: |x: Data| take(x) — consume-param, no capture.
+    // First closure: |x: own Data| take(x) — consume-param, no capture.
     assert!(
         stdout.contains("\"name\":\"x\",\"mode\":\"own\""),
         "expected consume-param entry; got: {stdout}"
@@ -9939,11 +9933,13 @@ fn test_query_cost_summary_clean_program_zeroes() {
 }
 
 #[test]
-fn test_query_cost_summary_rc_fallback_attributed_to_function() {
-    // The fixture's `process` function consumes `d` in a match arm and
-    // re-uses it afterward — a textbook RC fallback. The aggregator must
-    // surface one rc_op against `process`, with a derivation entry that
-    // names the binding and the trigger.
+fn test_query_cost_summary_no_rc_fallback_under_the_core_rules() {
+    // The fixture's `process` passes `d` to `consume` in a match arm and
+    // to `use_d` afterwards. Both borrow their bare parameter (core
+    // semantics §4.1), so nothing moves and there is no RC fallback (core
+    // §6.4 removed it): cost-summary reports none, as `karac check` sees
+    // the program (B-2026-11-06-5). This pinned one RC fallback against
+    // `process` before the query ran the core rules.
     let out = karac_bin()
         .args([
             "query",
@@ -9955,30 +9951,23 @@ fn test_query_cost_summary_rc_fallback_attributed_to_function() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let json = stdout.trim();
-    assert!(json.contains("\"rc_ops\":{\"count\":1,\"rc\":1,\"arc\":0,\"suppressed\":0}"));
-    assert!(json.contains("\"function\":\"process\""));
-    assert!(json.contains("\"rc_ops\":1"));
-    // Phase-7-codegen.md line 27 — G12 monitoring surface. Without
-    // `#[allow(rc_fallback)]`, the row is not flagged suppressed.
-    assert!(json.contains("\"rc_ops_suppressed\":false"));
     assert!(
-        json.contains("Rc fallback for `d`"),
-        "expected derivation reason naming binding `d`, got: {json}"
+        json.contains("\"rc_ops\":{\"count\":0,\"rc\":0,\"arc\":0,\"suppressed\":0}"),
+        "{json}"
     );
-    assert!(json.contains("direct re-use after consume"));
-    // Other categories must remain at zero — the fixture has no shared
-    // struct and no `with_provider` calls.
+    assert!(json.contains("\"by_function\":[]"), "{json}");
+    assert!(!json.contains("Rc fallback"), "{json}");
     assert!(json.contains("\"arc_provider_wraps\":0"));
     assert!(json.contains("\"borrow_flag_fields\":0"));
 }
 
 #[test]
-fn test_query_cost_summary_rc_fallback_suppressed_via_allow_is_surfaced() {
-    // Phase-7-codegen.md line 27 — G12 monitoring surface. When the
-    // function carries `#[allow(rc_fallback)]`, the user-facing perf
-    // note is silenced but the RC entry still flows into cost-summary
-    // — and the entry must now be visible as suppressed so PR review
-    // tooling can spot AI-agent over-use of `#[allow]`.
+fn test_query_cost_summary_allow_rc_fallback_has_nothing_to_suppress() {
+    // `#[allow(rc_fallback)]` on `process`: under the core rules `consume`
+    // and `use_d` borrow (core semantics §4.1) and there is no RC fallback
+    // (core §6.4), so cost-summary has no RC entry to mark suppressed
+    // (B-2026-11-06-5). This pinned `suppressed: 1` before the query ran
+    // the core rules.
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-cost-summary-suppressed-{}-{}",
         std::process::id(),
@@ -10016,24 +10005,11 @@ fn test_query_cost_summary_rc_fallback_suppressed_via_allow_is_surfaced() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let json = stdout.trim();
-    // Totals expose the suppression count alongside the existing rc/arc
-    // breakdown — `count` and `suppressed` both equal 1 because every
-    // RC entry under the `#[allow]`-bearing function contributes to
-    // both. PR-level alerts can compare these numbers to spot the
-    // "100% suppression" anti-pattern.
     assert!(
-        json.contains("\"rc_ops\":{\"count\":1,\"rc\":1,\"arc\":0,\"suppressed\":1}"),
-        "expected suppressed:1 in totals; got {json}",
+        json.contains("\"rc_ops\":{\"count\":0,\"rc\":0,\"arc\":0,\"suppressed\":0}"),
+        "{json}",
     );
-    // Per-row flag identifies which function carries the allow.
-    assert!(
-        json.contains("\"function\":\"process\""),
-        "expected `process` row; got {json}",
-    );
-    assert!(
-        json.contains("\"rc_ops_suppressed\":true"),
-        "expected rc_ops_suppressed:true for process; got {json}",
-    );
+    assert!(json.contains("\"by_function\":[]"), "{json}");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

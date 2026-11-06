@@ -51,8 +51,13 @@ pub struct StyleHit {
 /// Every style-lint site in the program's own items (those before
 /// `library_start`), in source order.
 pub fn style_hits(program: &Program, typed: &TypeCheckResult, src: &str) -> Vec<StyleHit> {
-    let own = program.library_start.unwrap_or(program.items.len());
-    let items = &program.items[..own.min(program.items.len())];
+    // `library_start` is the byte offset the appended library starts at;
+    // the program's own items come before it.
+    let own = match program.library_start {
+        Some(start) => program.items.partition_point(|i| i.span().offset < start),
+        None => program.items.len(),
+    };
+    let items = &program.items[..own];
     let mut cx = Cx {
         typed,
         src,
