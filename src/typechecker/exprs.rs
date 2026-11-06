@@ -4519,12 +4519,16 @@ impl<'a> super::TypeChecker<'a> {
             .is_some_and(|(key, _)| *key == SpanKey::from_span(record_subs_for_span))
         {
             let (_, expected_ret) = self.pending_expected_method_return.take().expect("checked");
-            // A return that is a bare parameter of the method (`try_fold`'s
-            // `R`, which only its function argument's result fixes) is the
-            // expectation too, as a free function's is: the closure is then
-            // checked against `Result[i64, String]`, not left with an
-            // unsolved error type.
-            let same_shape = matches!(sub_ret, Type::TypeVar(_))
+            // A return that is a bare parameter of the method and the result
+            // of its function argument (`try_fold`'s `R`) is the expectation
+            // too, as a free function's is: the closure is then checked
+            // against `Result[i64, String]`, not left with an unsolved error
+            // type. `collect`'s bare `C` is not: it is solved from the items.
+            let closure_result = matches!(sub_ret, Type::TypeVar(_))
+                && sub_params.iter().any(
+                    |p| matches!(p, Type::Function { return_type, .. } if **return_type == sub_ret),
+                );
+            let same_shape = closure_result
                 || matches!(
                     (&sub_ret, &expected_ret),
                     (Type::Named { name, args }, Type::Named { name: n2, args: a2 })
