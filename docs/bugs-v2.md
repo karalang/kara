@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 151 |
-| false-positive | 130 |
+| false-positive | 131 |
 | perf | 107 |
 | missing-feature | 99 |
 | soundness | 51 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 244 |
+| typecheck | 245 |
 | mir-llvm | 130 |
 | mir | 130 |
 | cli | 71 |
@@ -109,13 +109,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-17 | 2026-11-06 | mir+mir-llvm | medium | Const-generic functions pass `karac check` but do not compile: the instance is named `first[i64, ()]` (N instantiated as `()`), so `a.len()` / `a[0]` on `Array[T, N]` fail with `Array[i64, N] has no layout` (llvm) or `index into non-array Array[i64, N]` (MIR), and `for x in a` is `a for loop over a collection is not lowered yet` | — |
 | B-2026-11-06-18 | 2026-11-06 | parser+typecheck | low | §3 roll-up: the value-class naming rule is enforced only on parameters (`let Count`, `let COUNT`, `for Ix in`, `Some(Val)` bindings are accepted), `struct _Hidden` / `const _MAX` are accepted, `requires`/`ensures`/`invariant` are reserved though §3 says they are not v1 keywords, a nested f-string is accepted, and doc-comment misuse is a parse error or silent instead of a warning | — |
 | B-2026-11-06-21 | 2026-11-06 | typecheck+ownership+parser | medium | A constant is treated as a place, not a fresh value: a second use of a non-Copy constant is `value 'ORIGIN' moved`, `ORIGIN.x` on a struct constant is `this name is not lowered yet`, `T_THREE.1` is a parse error, while `XX = 5;` and `TABLE[0] = 3;` on constants are accepted and do nothing | — |
-| B-2026-11-06-24 | 2026-11-06 | typecheck | medium | `Copy` and `Drop` on one type are accepted, and the drop body then runs once per copy: `#[derive(Copy, Clone)] struct Pt` with `impl Drop for Pt` prints `drop 1` four times for a value copied once and passed twice | — |
-| B-2026-11-06-25 | 2026-11-06 | typecheck | medium | Three standard trait shapes from §9 are refused: `#[derive(Default)]` on a generic struct (`Pair[T]`) is E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT instead of `impl[T: Default]`, `impl PartialEq[i64] for Meters` is refused because the impl's `Rhs` is ignored, and a manual `Hash` impl cannot feed a field to its hasher (`self.s.hash(hasher)` is `hash takes a Hasher, but H is not one`) | — |
 | B-2026-11-06-27 | 2026-11-06 | typecheck | low | §9 roll-up of accepted-invalid programs: derive chains (`Eq` without `PartialEq`, `Ord` without `PartialOrd`, `Copy` without `Clone`), a derive plus a manual impl of one trait, `#[derive(Drop)]`, `impl X for dyn Shape`, an unknown associated binding in a bound, a Map key without `Eq`, `dbg` and derived `Debug` without `Debug` on the element, derived `Clone` without its bound, `clone(own self)`, a run-time `#[serde(default: ..)]`; plus missing std conversions | — |
-| B-2026-11-06-29 | 2026-11-06 | effect | medium | Trait-method effect ceilings count default-permitted effects: §12's own `ReadOnlyView.save` (`with writes(Data) { panic("read-only view"); }`) is refused `performs panics() but trait 'Storage.save' ceiling is [writes(Data)]`, and so is any impl method that allocates; and a `pub` generic fn whose only effect comes through a bound's ceiling is not checked until it is instantiated | — |
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
 | B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
 | B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
+| B-2026-11-07-8 | 2026-11-07 | typecheck | medium | Since 5f1222f497 (B-2026-11-06-11) a method call on a part of a tuple element of a generic `Vec[(K, K)]` walked by `for` is left unsolved: `for (k, v) in d.iter() { s = s + k.show(); }` under `K: Show` is refused by `karac check` with `a type that failed to check is not lowered yet`; corpus apps/cli/mini_collections (e-spec) regressed with it | — |
 
 ### Relocated
 
@@ -761,8 +759,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-20 | typecheck+mir | medium | Constant initializers are not evaluated at compile time: `const SH: i32 = 1 << 40` silently reads as 0 (the same shift in a function panics `shift am… | 609dbaa6da |
 | B-2026-11-06-22 | resolver+typecheck+mir | medium | `#[target]` is not honoured on impl members, struct fields or enum variants: with `#[target(native)] fn f(self) -> i64 { 1 }` and `#[target(wasm_wasi… | e963bf0239 |
 | B-2026-11-06-23 | cli+typecheck | low | §4 roll-up: the spec's own `[build].target = "x86_64-linux"` makes `karac build` demand a runtime archive for that triple, `main_linux.kara` is ignor… | e963bf0239 |
+| B-2026-11-06-24 | typecheck | medium | `Copy` and `Drop` on one type are accepted, and the drop body then runs once per copy: `#[derive(Copy, Clone)] struct Pt` with `impl Drop for Pt` pri… | bd8600adec |
+| B-2026-11-06-25 | typecheck | medium | Three standard trait shapes from §9 are refused: `#[derive(Default)]` on a generic struct (`Pair[T]`) is E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT inste… | bd8600adec |
 | B-2026-11-06-26 | typecheck+mir | medium | A generic function returning `impl Iterator[Item = T]` cannot be consumed: `fn evs[T](xs: own Vec[T]) -> impl Iterator[Item = T] { xs.into_iter() }`… | e0abbf681d |
 | B-2026-11-06-28 | typecheck+ownership | low | §10: a `defer` block that moves a binding (`defer { eat(a); }`) is accepted though §10 says cleanup blocks never capture by move (the unchecked_div/u… | ec6e0f84cc |
+| B-2026-11-06-29 | effect | medium | Trait-method effect ceilings count default-permitted effects: §12's own `ReadOnlyView.save` (`with writes(Data) { panic("read-only view"); }`) is ref… | bd8600adec |
 | B-2026-11-06-30 | typecheck | low | collections.md roll-up: `Vec.from_iter(dq)`, which collections.md and the compiler's own VecDeque diagnostic both recommend, is refused (`VecDeque[i6… | 69889deae9 |
 | B-2026-11-06-31 | typecheck+mir | medium | check accepts String-only building methods (push_str, push, clear, truncate, pop, reserve) on a Str, even a borrowed parameter; every backend then re… | e0abbf681d |
 | B-2026-11-06-32 | typecheck | low | CString lacks the CStr reading surface (to_str, to_string) and has no constructor from Slice[u8], which strings.md says exists | 69889deae9 |
