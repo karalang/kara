@@ -2703,6 +2703,8 @@ mod tests {
         use crate::cli::ExplainTarget as T;
         assert!(matches!(classify_explain_name("E"), T::Class(_)));
         assert!(matches!(classify_explain_name("E02A0"), T::Class(_)));
-        assert!(matches!(classify_explain_name("e0200"), T::Concept(_)));
+        // A catalogued code in lower case is the code (B-2026-11-07-47).
+        assert!(matches!(classify_explain_name("e0200"), T::Code(c) if c == "E0200"));
+        assert!(matches!(classify_explain_name("e02a0"), T::Concept(_)));
     }
 }

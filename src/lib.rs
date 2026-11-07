@@ -2093,7 +2093,19 @@ mod playground_tests {
         // diagnostics — they share `run_static_checks`, and this pins that
         // they stay in sync.
         let src = "fn main() { let x: i32 = \"nope\"; let _ = undefined(); }";
-        let check = check_source(src);
+        // The catalogue code and help lines come from `karac check`'s JSON,
+        // which the editor path reads and the playground does not build, so
+        // they are compared apart from the rest (B-2026-11-07-46): the
+        // editor's carry the codes, and the playground's carry none.
+        let check: Vec<_> = check_source(src)
+            .into_iter()
+            .map(|mut d| {
+                assert!(d.code.is_some(), "no code on {d:?}");
+                d.code = None;
+                d.help.clear();
+                d
+            })
+            .collect();
         let play = run_playground(src);
         let play_static: Vec<_> = play
             .diagnostics
