@@ -116,10 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
 | B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
 | B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
-| B-2026-11-07-4 | 2026-11-07 | ownership | medium | `karac check` refuses moving a binding after an iterator chain's closure that reads it when the chain's root holds user records (`if ps.iter().any(|p| p.name == name) { .. } Ok(P { name })` over a `Vec[P]`), when the chain is an `if` condition, or when the move is in another `match` arm ("moved inside a loop", no loop in the program) | — |
-| B-2026-11-07-5 | 2026-11-07 | mir | medium | A `let`-bound closure stored in an enum payload (`let c = |d| seen.n + d; let l = L.F(c);`) captures by `ref` and is refused with E0509 "a view of a temporary value is stored in an escaping closure"; inline in the constructor, or stored in a struct field, it is accepted | — |
-| B-2026-11-07-6 | 2026-11-07 | typecheck | medium | A program whose private type reuses a library type's name (`trait Receiver`, `struct Sender`) passes `karac check` but every `karac run` and `karac build` stops at "private type 'Receiver' leaks through return type of 'channel'", a line of library source | — |
-| B-2026-11-07-7 | 2026-11-07 | typecheck | medium | A `weak T` reached through a `ref weak T` binding (a loop over a `Vec[weak T]`'s `iter()`, a `weak` payload bound by a `match`) cannot be read or upgraded: the binding types as an error with no message and run/build stop at "a type that failed to check is not lowered yet" | — |
 
 ### Relocated
 
@@ -777,6 +773,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-38 | typecheck | medium | A `TaskGroup.spawn` closure whose `Result` error type only a later annotation fixes is refused at lowering when its handles are kept in a `Vec`: `let… | b07a360a6d |
 | B-2026-11-06-39 | typecheck | low | A let-chain (`if let Some(s) = v and kind == "group" { . | b07a360a6d |
 | B-2026-11-07-2 | typecheck+mir+mir-llvm | high | A generic function passed as an `Fn` value is instanced with its type arguments unsolved: `apply(shout, [7], 1)` with `fn apply[U](g: Fn(own U, i64)… | 957a835c43 |
+| B-2026-11-07-4 | ownership | medium | `karac check` refuses moving a binding after an iterator chain's closure that reads it when the chain's root holds user records (`if ps.iter().any(\|p… | f50642eaba |
+| B-2026-11-07-5 | mir | medium | A `let`-bound closure stored in an enum payload (`let c = \|d\| seen.n + d; let l = L.F(c);`) captures by `ref` and is refused with E0509 "a view of a… | f50642eaba |
+| B-2026-11-07-6 | typecheck | medium | A program whose private type reuses a library type's name (`trait Receiver`, `struct Sender`) passes `karac check` but every `karac run` and `karac b… | f50642eaba |
+| B-2026-11-07-7 | typecheck | medium | A `weak T` reached through a `ref weak T` binding (a loop over a `Vec[weak T]`'s `iter()`, a `weak` payload bound by a `match`) cannot be read or upg… | f50642eaba |
 
 </details>
 
