@@ -116,8 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-25 | 2026-11-07 | runtime+mir-llvm | high | A compiled TLS server (Server.serve_tls, TlsListener) is killed by SIGPIPE (exit -13) when a client disconnects without close_notify: one client that sends a request and drops the TCP connection takes the whole HTTPS server down | — |
 | B-2026-11-07-26 | 2026-11-07 | runtime | medium | For an absolute-form request target (`GET http://example.com/z?k=v HTTP/1.1`) the server's Request.path() returns `http://example.com/z` and for `GET http://example.com` returns `http://example.com`, not `/z` and `/` | — |
 | B-2026-11-07-27 | 2026-11-07 | effect | low | Socket methods with no declared effects (local_addr, set_read_timeout, try_clone on TcpListener/TcpStream/UdpSocket) carry an `unknown (native ..)` effect, so a par branch calling one conflicts with any branch that prints, reads the clock or uses another socket | — |
-| B-2026-11-07-28 | 2026-11-07 | runtime+mir-llvm | medium | A compiled HTTP client sends a plain HTTP request for any URL scheme (`ftp://127.0.0.1:P/x` and `gopher://..` get `OK 200` from an HTTP server), while the interpreter refuses them with `Unknown Scheme`; io.md allows only http:// and https:// | — |
-| B-2026-11-07-29 | 2026-11-07 | interp | low | Through a CONNECT tunnel (`https_proxy` set, https:// URL) the interpreter's client sends the request in absolute form (`GET https://proxied.invalid:P/tunnel`), where compiled code sends origin form (`GET /tunnel`); a Kara server then reads the wrong path (B-2026-11-07-26) | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 
 ### Relocated
@@ -800,6 +798,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-17 | typecheck | medium | i128.MIN, i128.MAX and u128.MAX are refused with the internal `a type that failed to check is not lowered yet`; the other widths' MIN/MAX work | a44db5f5ac |
 | B-2026-11-07-19 | mir-llvm+runtime | high | BufReader.read_line / read_to_string and ChildStdout.read_to_string append into a `mut ref String` whose buffer is still a string literal's static da… | a17505d129 |
 | B-2026-11-07-22 | typecheck | medium | A struct literal of another package's struct is refused even when every field is `pub` (`Opts { port: 1 }` -> E0111 field 'port' is not `pub`); the l… | b92f71fe7d |
+| B-2026-11-07-28 | runtime+mir-llvm | medium | A compiled HTTP client sends a plain HTTP request for any URL scheme (`ftp://127.0.0.1:P/x` and `gopher://..` get `OK 200` from an HTTP server), whil… | a3e88251f4 |
+| B-2026-11-07-29 | interp | low | Through a CONNECT tunnel (`https_proxy` set, https:// URL) the interpreter's client sends the request in absolute form (`GET https://proxied.invalid:… | a3e88251f4 |
 | B-2026-11-07-30 | ownership | low | A bare `for a in args` over an owned `Vec` (an `own` parameter not used after the loop) whose element's payload is moved out (`Value.List(items) => l… | ec6e5415ba |
 | B-2026-11-07-31 | typecheck | low | An unannotated list literal of a `ref` to a `Copy` value (`let chain = [k];` with `k` from `order.iter()`) is typed `Vec[ref i64]`, and its later use… | ec6e5415ba |
 
