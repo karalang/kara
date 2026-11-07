@@ -238,6 +238,42 @@ impl<'a> super::EffectChecker<'a> {
         self.dyn_impl_methods = impl_methods;
         self.dyn_supertraits = supertraits;
         self.seed_dyn_clause_keys();
+        self.seed_bound_ceiling_keys();
+    }
+
+    /// One seeded key per trait method that writes its clause, holding the
+    /// clause: what a call through a bound is charged (design.md §12 Trait
+    /// methods and generic calls, B-2026-11-06-29).
+    fn seed_bound_ceiling_keys(&mut self) {
+        let mut seeds: Vec<(Symbol, EffectSet)> = Vec::new();
+        for item in &self.program.items {
+            let Item::TraitDef(t) = item else {
+                continue;
+            };
+            for it in &t.items {
+                let TraitItem::Method(m) = it else {
+                    continue;
+                };
+                if m.effects.is_none() {
+                    continue;
+                }
+                let method_key = self.interner.dotted_str(&t.name, &m.name);
+                if let Some(DeclaredEffects::Explicit(set)) = self.declared_effects.get(&method_key)
+                {
+                    let mut seeded = EffectSet::new();
+                    for e in set.effect_set() {
+                        seeded.add(e.clone(), EffectOrigin::Direct(m.span));
+                    }
+                    seeds.push((method_key, seeded));
+                }
+            }
+        }
+        for (method_key, set) in seeds {
+            let name = format!("__bound_ceiling.{}", self.interner.resolve(method_key));
+            let key = self.interner.intern(&name);
+            self.inferred_effects.insert(key, set);
+            self.bound_ceiling_keys.insert(method_key, key);
+        }
     }
 
     /// One seeded key per clause written on a `dyn` value's type and method

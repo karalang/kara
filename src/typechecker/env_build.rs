@@ -3017,6 +3017,36 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 return;
             }
+            // design.md §9: `Drop` and `Copy` are exclusive. A destructor
+            // that runs on every bitwise copy releases its resource once
+            // per copy (B-2026-11-06-24). A manual `impl Copy` is refused
+            // by the resolver; the derive is the way `Copy` arrives here.
+            let derives_copy = self
+                .env
+                .structs
+                .get(&type_name)
+                .map(|s| s.derived_traits.contains("Copy"))
+                .or_else(|| {
+                    self.env
+                        .enums
+                        .get(&type_name)
+                        .map(|e| e.derived_traits.contains("Copy"))
+                })
+                .unwrap_or(false);
+            if derives_copy {
+                self.type_error(
+                    format!(
+                        "`{type_name}` derives `Copy` and implements `Drop`, and a type \
+                         cannot be both: every copy would run `drop`, so the cleanup \
+                         would happen once per copy. Remove `Copy` from the \
+                         `#[derive(...)]` on `{type_name}` (a value is then moved, and \
+                         dropped once), or remove this `impl Drop`"
+                    ),
+                    imp.span,
+                    TypeErrorKind::ConflictingImpl,
+                );
+                return;
+            }
             let method_items: Vec<&Function> = imp
                 .items
                 .iter()

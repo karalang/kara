@@ -1312,10 +1312,14 @@ fn synthesize_default_impls(program: &mut Program) {
     let mut defaultable: HashSet<String> = HashSet::new();
     for item in &program.items {
         match item {
-            Item::StructDef(s) if s.generic_params.is_none() && derives_default(&s.attributes) => {
+            Item::StructDef(s)
+                if derivable_params(&s.generic_params) && derives_default(&s.attributes) =>
+            {
                 defaultable.insert(s.name.clone());
             }
-            Item::EnumDef(e) if e.generic_params.is_none() && derives_default(&e.attributes) => {
+            Item::EnumDef(e)
+                if derivable_params(&e.generic_params) && derives_default(&e.attributes) =>
+            {
                 defaultable.insert(e.name.clone());
             }
             Item::ImplBlock(imp) => {
@@ -1324,7 +1328,7 @@ fn synthesize_default_impls(program: &mut Program) {
                     .iter()
                     .any(|it| matches!(it, ImplItem::Method(m) if m.name == "default"));
                 if provides_default {
-                    if let Some(name) = type_leaf_name(&imp.target_type) {
+                    if let Some(name) = type_head_name(&imp.target_type) {
                         defaultable.insert(name);
                     }
                 }
@@ -1344,7 +1348,7 @@ fn synthesize_default_impls(program: &mut Program) {
                 .iter()
                 .any(|it| matches!(it, ImplItem::Method(m) if m.name == "default"));
             if provides_default {
-                if let Some(name) = type_leaf_name(&imp.target_type) {
+                if let Some(name) = type_head_name(&imp.target_type) {
                     has_user_default.insert(name);
                 }
             }
@@ -1355,27 +1359,63 @@ fn synthesize_default_impls(program: &mut Program) {
     for item in &program.items {
         match item {
             Item::StructDef(s)
-                if s.generic_params.is_none()
+                if derivable_params(&s.generic_params)
                     && derives_default(&s.attributes)
                     && !has_user_default.contains(&s.name) =>
             {
-                if let Some(body) = struct_default_body(s, &defaultable) {
-                    synthesized.push(make_default_impl(&s.name, body, s.span));
+                // A type parameter is `Default` under the bound the impl
+                // gives it (`impl[T: Default] Pair[T]`, design.md §9).
+                let mut in_scope = defaultable.clone();
+                in_scope.extend(
+                    s.generic_params
+                        .iter()
+                        .flat_map(|g| &g.params)
+                        .map(|p| p.name.clone()),
+                );
+                if let Some(body) = struct_default_body(s, &in_scope) {
+                    synthesized.push(make_default_impl(
+                        &s.name,
+                        s.generic_params.as_ref(),
+                        body,
+                        s.span,
+                    ));
                 }
             }
             Item::EnumDef(e)
-                if e.generic_params.is_none()
+                if derivable_params(&e.generic_params)
                     && derives_default(&e.attributes)
                     && !has_user_default.contains(&e.name) =>
             {
                 if let Some(body) = enum_default_body(e) {
-                    synthesized.push(make_default_impl(&e.name, body, e.span));
+                    synthesized.push(make_default_impl(
+                        &e.name,
+                        e.generic_params.as_ref(),
+                        body,
+                        e.span,
+                    ));
                 }
             }
             _ => {}
         }
     }
     program.items.extend(synthesized);
+}
+
+/// Generic parameters a derived `default` can carry: none, or plain type
+/// parameters (a const or shape parameter has no `default()` to bound).
+fn derivable_params(gp: &Option<GenericParams>) -> bool {
+    gp.as_ref().is_none_or(|g| {
+        g.effect_params.is_empty() && g.params.iter().all(|p| !p.is_const && !p.is_variadic_shape)
+    })
+}
+
+/// Head name of a single-segment path type, with or without arguments:
+/// `Pair` of `Pair[T]`.
+fn type_head_name(ty: &TypeExpr) -> Option<String> {
+    match &ty.kind {
+        TypeKind::Path(p) if p.segments.len() == 1 => Some(p.segments[0].clone()),
+        _ => None,
+    }
 }
 
 fn derives_default(attributes: &[Attribute]) -> bool {
@@ -1431,6 +1471,17 @@ fn default_field_expr(
                     }));
                 }
                 "Option" => return Some(dummy(ExprKind::Identifier("None".to_string()))),
+                // `Wrap[T]` of a derive-Default `Wrap` is `Wrap.default()`.
+                other if p.generic_args.is_some() && defaultable.contains(other) => {
+                    let callee = dummy(ExprKind::Path {
+                        segments: vec![other.to_string(), "default".to_string()],
+                        generic_args: None,
+                    });
+                    return Some(dummy(ExprKind::Call {
+                        callee: Box::new(callee),
+                        args: Vec::new(),
+                    }));
+                }
                 _ => {}
             }
         }
@@ -1528,16 +1579,49 @@ fn enum_default_body(e: &EnumDef) -> Option<Expr> {
 /// effects are *inferred* (a `pub` fn would have to declare them, and a
 /// `String`-field default touches the allocator); this matches the
 /// single-program v1 scope where `Name.default()` is called in-crate.
-fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
-    let ret_ty = TypeExpr {
+fn make_default_impl(
+    type_name: &str,
+    generics: Option<&GenericParams>,
+    body: Expr,
+    span: Span,
+) -> Item {
+    let path_ty = |name: &str, generic_args| TypeExpr {
         kind: TypeKind::Path(PathExpr {
-            segments: vec![type_name.to_string()],
-            generic_args: None,
+            segments: vec![name.to_string()],
+            generic_args,
             effect_args: None,
             span,
         }),
         span,
     };
+    // `impl[T: Default] Pair[T]`: each type parameter gains `Default`
+    // (design.md §9 Derive), and drops a declared default argument and
+    // variance marker, which an impl's parameters do not carry.
+    let impl_generics = generics.map(|g| {
+        let mut g = g.clone();
+        for p in &mut g.params {
+            p.default = None;
+            p.variance = Variance::Invariant;
+            p.variance_span = None;
+            p.bounds.push(TraitBound {
+                path: vec!["Default".to_string()],
+                generic_args: None,
+                assoc_bindings: Vec::new(),
+                fn_sig: None,
+                span,
+            });
+        }
+        g
+    });
+    let ret_ty = path_ty(
+        type_name,
+        generics.map(|g| {
+            g.params
+                .iter()
+                .map(|p| GenericArg::Type(path_ty(&p.name, None)))
+                .collect()
+        }),
+    );
     let func = Function {
         span,
         attributes: Vec::new(),
@@ -1578,7 +1662,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
     Item::ImplBlock(ImplBlock {
         span,
         attributes: Vec::new(),
-        generic_params: None,
+        generic_params: impl_generics,
         trait_name: None,
         target_type: ret_ty,
         where_clause: None,

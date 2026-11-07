@@ -9870,13 +9870,39 @@ impl<'l, 'a> Bx<'l, 'a> {
         let lp = self.expr_place(left, false)?;
         let rp = self.expr_place(right, false)?;
         let (lp, lt) = self.strip_refs(lp);
-        let (rp, _) = self.strip_refs(rp);
-        if !negate {
-            return self.eq_places(left.span, lp, rp, lt, dest);
-        }
+        let (rp, rt) = self.strip_refs(rp);
         let bool_t = self.tys().bool();
         let t = self.temp(bool_t);
-        self.eq_places(left.span, lp, rp, lt, Place::local(t))?;
+        let out = if negate {
+            Place::local(t)
+        } else {
+            dest.clone()
+        };
+        // `meters == 3`: the `impl PartialEq[i64] for Meters` the checker
+        // accepted (B-2026-11-06-25).
+        match self.partial_eq_with_rhs(lt, rt)? {
+            Some((d, args)) if lt != rt => {
+                let lo = self.ref_to(lp, lt);
+                let ro = self.ref_to(rp, rt);
+                let name = self.lcx.instance(d, args.clone());
+                let func = self.fn_operand(&name, d, args);
+                let next = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::Call {
+                        func,
+                        args: vec![lo, ro],
+                        destination: out,
+                        target: Some(next),
+                        unwind: UnwindAction::Abort,
+                    },
+                    next,
+                );
+            }
+            _ => self.eq_places(left.span, lp, rp, lt, out)?,
+        }
+        if !negate {
+            return Ok(());
+        }
         self.assign(
             dest,
             Rvalue::UnaryOp(UnOp::Not, Operand::Move(Place::local(t))),
@@ -10985,7 +11011,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let sref = self.ref_to(p, t);
                 let bytes = self.temp(bytes_t);
                 self.call_native("String.bytes", vec![sref], Place::local(bytes));
-                self.hasher_call(span, hp, ht, "write", Operand::Move(Place::local(bytes)))?;
+                // A `write` that borrows its bytes (`bytes: ref Slice[u8]`)
+                // takes the view by reference; a bare `Slice[u8]` takes the
+                // view itself (B-2026-11-06-25).
+                let bref = if self.hasher_write_borrows(ht) {
+                    self.ref_to(Place::local(bytes), bytes_t)
+                } else {
+                    Operand::Move(Place::local(bytes))
+                };
+                self.hasher_call(span, hp, ht, "write", bref)?;
                 let end = Operand::Const(Const {
                     ty: u8_t,
                     kind: ConstKind::Scalar(0xff),
@@ -11223,6 +11257,23 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.unit_call(func, vec![ho, value])
     }
 
+    /// Whether the user `Hasher` `ht`'s `write` takes its bytes by reference.
+    fn hasher_write_borrows(&mut self, ht: Ty) -> bool {
+        let Some((d, args)) = self.user_impl_method(ht, "Hasher", "write") else {
+            return false;
+        };
+        let Some(f) = self.lcx.fns.get(&d).map(|e| e.f) else {
+            return false;
+        };
+        let Some(p) = f.params.first() else {
+            return false;
+        };
+        match self.callee_param_ty(p, &args) {
+            Ok(pt) => self.ref_depth(pt) > 0,
+            Err(_) => false,
+        }
+    }
+
     /// A call of `func` whose `()` result is dropped.
     fn unit_call(&mut self, func: Operand, args: Vec<Operand>) -> R<()> {
         let unit = self.unit();
@@ -11241,8 +11292,41 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
-    fn user_eq(&self, t: Ty) -> Option<(DefId, Vec<Ty>)> {
-        self.user_impl_method(t, "PartialEq", "eq")
+    /// `t`'s own equality: of its `impl PartialEq`s, the one whose `Rhs` is
+    /// `t` (an `impl PartialEq[i64] for Meters` is not `Meters == Meters`,
+    /// B-2026-11-06-25).
+    fn user_eq(&mut self, t: Ty) -> Option<(DefId, Vec<Ty>)> {
+        if self.nth_impl_method(t, "PartialEq", "eq", 1).is_none() {
+            let first = self.user_impl_method(t, "PartialEq", "eq")?;
+            let own = self.eq_rhs(first.0, &first.1).is_none_or(|r| r == t);
+            return own.then_some(first);
+        }
+        self.partial_eq_with_rhs(t, t).ok().flatten()
+    }
+
+    /// The `Rhs` an `eq` instance compares against, its second parameter's
+    /// type with references stripped.
+    fn eq_rhs(&mut self, d: DefId, args: &[Ty]) -> Option<Ty> {
+        let f = self.lcx.fns.get(&d)?.f;
+        let p = f.params.first()?;
+        let pt = self.callee_param_ty(p, args).ok()?;
+        Some(self.strip_ty_full(pt).1)
+    }
+
+    /// Of `t`'s `impl PartialEq`s, the one whose `Rhs` is `rhs`.
+    fn partial_eq_with_rhs(&mut self, t: Ty, rhs: Ty) -> R<Option<(DefId, Vec<Ty>)>> {
+        if !matches!(self.tys().tcx().kind(t), HK::Adt { .. } | HK::Shared { .. }) {
+            return Ok(None);
+        }
+        let (_, rhs) = self.strip_ty_full(rhs);
+        let mut n = 0;
+        while let Some((d, args)) = self.nth_impl_method(t, "PartialEq", "eq", n) {
+            if self.eq_rhs(d, &args) == Some(rhs) {
+                return Ok(Some((d, args)));
+            }
+            n += 1;
+        }
+        Ok(None)
     }
 
     /// Method `method` of the user's `impl <tr> for t`, with the impl's

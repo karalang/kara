@@ -2556,7 +2556,11 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
                     other => other.clone(),
                 };
-                if !matches!(base, Type::Error) && !self.type_satisfies_bound(&base, "Hasher") {
+                // A manual impl's `H: Hasher` is one (B-2026-11-06-25).
+                if !matches!(base, Type::Error)
+                    && !self.type_satisfies_bound(&base, "Hasher")
+                    && !self.type_param_has_trait_bound(&base, "Hasher")
+                {
                     self.type_error(
                         format!(
                             "`hash` takes a `Hasher`, but `{}` is not one",

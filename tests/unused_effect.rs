@@ -131,18 +131,23 @@ pub fn via_value() -> i64 with writes(Db) {
     assert!(lint_lines(&out).is_empty(), "{out}");
 }
 
-/// A call through a function-typed parameter, or through a generic bound,
-/// is charged to each caller at the value or type it passes (design.md §
-/// Effects), so the function itself performs nothing there, and a clause
-/// naming that effect is reported like any other.
+/// A call through a function-typed parameter, or through a generic bound
+/// whose trait method writes no clause, is charged to each caller at the
+/// value or type it passes (design.md § Effects), so the function itself
+/// performs nothing there, and a clause naming that effect is reported like
+/// any other. A bound whose method writes a clause has the clause's effects
+/// (§12 Trait methods and generic calls, B-2026-11-06-29), so declaring
+/// them is not reported.
 #[test]
 fn unused_effect_reports_what_only_a_parameter_brings() {
     let (_, out) = check(
         "param",
         &["-W", "unused_effect"],
         "pub fn apply(f: Fn() -> i64 with writes(Db)) -> i64 with writes(Db) { f() }
-pub trait Act { fn act(self) with writes(Db); }
-pub fn via_bound[T: Act](t: T) with writes(Db) { t.act(); }",
+pub trait Act { fn act(self); }
+pub fn via_bound[T: Act](t: T) with writes(Db) { t.act(); }
+pub trait Capped { fn act(self) with writes(Db); }
+pub fn via_ceiling[T: Capped](t: T) with writes(Db) { t.act(); }",
     );
     let lines = lint_lines(&out);
     assert_eq!(lines.len(), 2, "{out}");

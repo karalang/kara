@@ -39,9 +39,22 @@ impl<'a> super::TypeChecker<'a> {
             }) else {
                 continue;
             };
+            // A parameter defaulting to `Self` is `Self` in a bare
+            // supertrait (`trait T: PartialEq` compares two `Self`s).
+            let self_like: Vec<&str> = def
+                .generic_params
+                .iter()
+                .flat_map(|g| &g.params)
+                .filter(|p| {
+                    p.default.as_ref().is_some_and(|d| {
+                        matches!(&d.kind, TypeKind::Path(q) if q.segments.len() == 1 && q.segments[0] == "Self")
+                    })
+                })
+                .map(|p| p.name.as_str())
+                .collect();
             for it in &def.items {
                 let TraitItem::Method(m) = it else { continue };
-                if m.body.is_some() || m.is_dyn_dispatchable() {
+                if m.body.is_some() || m.is_dyn_dispatchable_in(&self_like) {
                     continue;
                 }
                 let why = if m.self_param.is_none() {

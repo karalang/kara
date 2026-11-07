@@ -1105,6 +1105,11 @@ pub struct EffectChecker<'a> {
     /// The seeded key a call through a `dyn` value with a clause is charged:
     /// by the clause as written and the trait method's key.
     pub(crate) dyn_clause_keys: FxHashMap<(String, Symbol), Symbol>,
+    /// Per trait method whose written clause is a ceiling (`Trait.method`),
+    /// a seeded key holding that ceiling: a call through a bound has the
+    /// clause's effects whatever the instance (design.md §12 Trait methods
+    /// and generic calls, B-2026-11-06-29).
+    pub(crate) bound_ceiling_keys: FxHashMap<Symbol, Symbol>,
     /// The coercions to a `dyn` type with a clause already checked against
     /// it, so each is reported once.
     pub(crate) dyn_clause_checked: FxHashSet<crate::ids::NodeId>,
@@ -1340,6 +1345,7 @@ impl<'a> EffectChecker<'a> {
             dyn_coercions: FxHashMap::default(),
             dyn_clauses: FxHashMap::default(),
             dyn_clause_keys: FxHashMap::default(),
+            bound_ceiling_keys: FxHashMap::default(),
             dyn_clause_checked: FxHashSet::default(),
             dyn_params: FxHashMap::default(),
             dyn_param_uses: FxHashSet::default(),

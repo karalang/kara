@@ -4732,6 +4732,15 @@ impl<'a> super::TypeChecker<'a> {
                 // ref String`); the comparison only reads through the borrow.
                 let cmp_left = strip_refs_for_compare(&left_ty);
                 let cmp_right = strip_refs_for_compare(&right_ty);
+                // `meters == 3` under `impl PartialEq[i64] for Meters`
+                // (B-2026-11-06-25).
+                if let Type::Named { name, .. } | Type::Shared(name) = cmp_left {
+                    if !types_compatible(cmp_left, cmp_right)
+                        && self.env.cross_partial_eq_impl(name, cmp_right)
+                    {
+                        return Type::Bool;
+                    }
+                }
                 if !types_compatible(cmp_left, cmp_right)
                     && !self.core_text_compare(cmp_left, cmp_right)
                 {

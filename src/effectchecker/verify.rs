@@ -876,7 +876,13 @@ impl<'a> super::EffectChecker<'a> {
                 };
 
                 for te in &inferred.effects {
-                    if self.is_transparent_verb(&te.effect.verb) {
+                    // `allocates(Heap)` and `panics` never have to be
+                    // declared, a ceiling's no more than a signature's
+                    // (design.md §12 Default-permitted effects,
+                    // B-2026-11-06-29).
+                    if self.is_transparent_verb(&te.effect.verb)
+                        || self.is_default_permitted_effect(&te.effect)
+                    {
                         continue;
                     }
                     if !declared_admits(&ceiling_set, &te.effect) {
@@ -1043,7 +1049,13 @@ impl<'a> super::EffectChecker<'a> {
                 };
 
                 for te in &inferred.effects {
-                    if self.is_transparent_verb(&te.effect.verb) {
+                    // `allocates(Heap)` and `panics` never have to be
+                    // declared, a ceiling's no more than a signature's
+                    // (design.md §12 Default-permitted effects,
+                    // B-2026-11-06-29).
+                    if self.is_transparent_verb(&te.effect.verb)
+                        || self.is_default_permitted_effect(&te.effect)
+                    {
                         continue;
                     }
                     if !declared_admits(&ceiling_set, &te.effect) {

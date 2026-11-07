@@ -1243,7 +1243,7 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             };
             for (field_name, field_ty, _) in &info.fields {
-                if !self.type_supports_default(field_ty) {
+                if !self.derived_default_field_ok(field_ty) {
                     self.type_error(
                         format!(
                             "error[E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT]: cannot \
@@ -1322,6 +1322,17 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
             }
+        }
+    }
+
+    /// A field a `#[derive(Default)]` can build: a `Default` type, or one of
+    /// the struct's own type parameters, which the derived impl bounds by
+    /// `Default` (`impl[T: Default] Pair[T]`, design.md §9; B-2026-11-06-25).
+    fn derived_default_field_ok(&self, ty: &Type) -> bool {
+        match ty {
+            Type::TypeParam(_) => true,
+            Type::Tuple(parts) => parts.iter().all(|t| self.derived_default_field_ok(t)),
+            _ => self.type_supports_default(ty),
         }
     }
 

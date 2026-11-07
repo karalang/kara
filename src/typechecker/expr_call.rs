@@ -14,9 +14,13 @@ use crate::cross_task_safe::is_cross_task_safe_with;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
-use super::inference::{expr_as_type_expr, is_literal_const_arg_expr, resolve_type_var_top};
-use super::types::{type_display, ConstArg, DimArg, IntSize, Type, UIntSize};
+use super::inference::{
+    expr_as_type_expr, is_literal_const_arg_expr, resolve_type_var_top, resolve_type_vars,
+    substitute_type_params,
+};
+use super::types::{type_display, ConstArg, DimArg, IntSize, SubstValue, Type, UIntSize};
 use super::{FixIt, TypeErrorKind};
+use std::collections::HashMap;
 
 impl<'a> super::TypeChecker<'a> {
     /// `Array.from_fn(n, f)` against `expected`, an `Array[T, N]` when the
@@ -848,6 +852,7 @@ impl<'a> super::TypeChecker<'a> {
         &mut self,
         target: Option<&(String, String)>,
         args: &[CallArg],
+        ret: &Type,
         span: &Span,
     ) {
         let Some((type_name, method)) = target else {
@@ -862,10 +867,63 @@ impl<'a> super::TypeChecker<'a> {
                     .unwrap_or(Type::Error)
             })
             .collect();
-        let Some((param_name, bound, concrete)) = self
+        let found = self
             .env
-            .assoc_call_unsatisfied_impl_bound(type_name, method, &arg_types)
-        else {
+            .assoc_call_unsatisfied_impl_bound(type_name, method, &arg_types, None);
+        if found.is_none() {
+            // The context may yet solve a parameter only the result names
+            // (`let q: Pair[Foo] = Pair.default()`): checked again once it
+            // has (B-2026-11-06-25).
+            let node = self
+                .current_call_node
+                .filter(|(n, k)| *k == SpanKey::from_span(span) && !n.is_dummy())
+                .map(|(n, _)| n);
+            self.deferred_assoc_impl_bounds.push((
+                type_name.clone(),
+                method.clone(),
+                arg_types,
+                ret.clone(),
+                node,
+                *span,
+            ));
+            return;
+        }
+        self.report_assoc_impl_bound(found, span);
+    }
+
+    /// [`Self::discharge_assoc_impl_bounds`] for the calls whose result the
+    /// context had not yet solved, once it has.
+    pub(super) fn discharge_deferred_assoc_impl_bounds(&mut self) {
+        for (type_name, method, arg_types, ret, node, span) in
+            std::mem::take(&mut self.deferred_assoc_impl_bounds)
+        {
+            let mut ret = resolve_type_vars(
+                &ret,
+                &self.env.substitutions,
+                &HashMap::new(),
+                &self.env.const_substitutions,
+                &HashMap::new(),
+            );
+            // What the context bound the call's parameters to.
+            if let Some(frame) = node.and_then(|n| self.node_call_subs.get(&n)) {
+                let subs: HashMap<String, SubstValue> = frame
+                    .iter()
+                    .map(|(n, t)| (n.clone(), SubstValue::Type(t.clone())))
+                    .collect();
+                ret = substitute_type_params(&ret, &subs);
+            }
+            let found = self.env.assoc_call_unsatisfied_impl_bound(
+                &type_name,
+                &method,
+                &arg_types,
+                Some(&ret),
+            );
+            self.report_assoc_impl_bound(found, &span);
+        }
+    }
+
+    fn report_assoc_impl_bound(&mut self, found: Option<(String, TraitBound, Type)>, span: &Span) {
+        let Some((param_name, bound, concrete)) = found else {
             return;
         };
         let Some(trait_name) = bound.path.last().cloned() else {
@@ -3028,7 +3086,7 @@ impl<'a> super::TypeChecker<'a> {
                 // AFTER the line above, because that is what types the
                 // arguments, and the impl's type arguments are recoverable
                 // only from them.
-                self.discharge_assoc_impl_bounds(assoc_impl_call.as_ref(), args, span);
+                self.discharge_assoc_impl_bounds(assoc_impl_call.as_ref(), args, &ret, span);
                 ret
             }
             Type::Error => {

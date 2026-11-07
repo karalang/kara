@@ -12,6 +12,9 @@
 // can carry it as a real `impl PartialEq for ...` block in user code,
 // matching how `Eq` already works.
 
-trait PartialEq {
-    fn eq(ref self, other: ref Self) -> bool;
+// `Rhs` names the right-hand type of a cross-type comparison (`impl
+// PartialEq[i64] for Meters`, design.md § Operator traits); omitted, it is
+// `Self` (B-2026-11-06-25).
+trait PartialEq[Rhs = Self] {
+    fn eq(ref self, other: ref Rhs) -> bool;
 }

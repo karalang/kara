@@ -691,8 +691,24 @@ impl TypeEnv {
             .iter()
             .map(|&i| &self.impls[i])
             .find(|imp| {
-                imp.target_type == target_type && impl_args_match(&imp.target_args, target_args)
+                imp.target_type == target_type
+                    && impl_args_match(&imp.target_args, target_args)
+                    && (trait_name != "PartialEq" || partial_eq_rhs_is_self(imp))
             })
+    }
+
+    /// An `impl PartialEq[R] for L` whose `R` is `right`: what `l == r`
+    /// calls when the two sides' types differ (design.md § Operator traits,
+    /// B-2026-11-06-25). Such an impl is not `l`'s own equality, which
+    /// [`Self::find_impl`] answers.
+    pub fn cross_partial_eq_impl(&self, left: &str, right: &Type) -> bool {
+        self.impls_by_trait.get("PartialEq").is_some_and(|ix| {
+            ix.iter().map(|&i| &self.impls[i]).any(|imp| {
+                imp.target_type == left
+                    && !partial_eq_rhs_is_self(imp)
+                    && imp.trait_args.first() == Some(right)
+            })
+        })
     }
 
     pub fn has_impl(&self, trait_name: &str, target_type: &str, target_args: &[Type]) -> bool {
@@ -1153,6 +1169,7 @@ impl TypeEnv {
         target_type: &str,
         method: &str,
         arg_types: &[Type],
+        ret: Option<&Type>,
     ) -> Option<(String, TraitBound, Type)> {
         // Mirror `find_method`'s inherent-beats-trait priority, so the impl
         // whose bounds are checked is the impl whose method the call resolved
@@ -1186,6 +1203,12 @@ impl TypeEnv {
         let mut subst: HashMap<String, Type> = HashMap::new();
         for (decl, actual) in sig.params.iter().zip(arg_types.iter()) {
             bind_impl_param_one(decl, actual, &mut subst);
+        }
+        // A parameter only the result names (`let q: Pair[Foo] =
+        // Pair.default()`) binds from the type the context gave the call
+        // (B-2026-11-06-25).
+        if let Some(ret) = ret {
+            bind_impl_param_one(&sig.return_type, ret, &mut subst);
         }
 
         for param in &gp.params {
@@ -1686,5 +1709,16 @@ fn display_builtin(ty: &Type) -> bool {
         Type::Ref(inner) | Type::MutRef(inner) => display_builtin(inner),
         Type::Named { name, args } => name == "StringSlice" && args.is_empty(),
         _ => false,
+    }
+}
+
+/// Whether an `impl PartialEq` compares its type with itself: `Rhs`
+/// omitted, or written as the impl's own type.
+fn partial_eq_rhs_is_self(imp: &ImplInfo) -> bool {
+    match imp.trait_args.first() {
+        None => true,
+        Some(Type::Named { name, .. } | Type::Shared(name)) => *name == imp.target_type,
+        Some(Type::TypeParam(p)) => p == "Self",
+        Some(_) => false,
     }
 }

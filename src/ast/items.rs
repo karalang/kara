@@ -870,6 +870,13 @@ impl TraitMethod {
     /// receiver or in an associated type (`Self.Item`), and returns no
     /// `impl Trait`.
     pub fn is_dyn_dispatchable(&self) -> bool {
+        self.is_dyn_dispatchable_in(&[])
+    }
+
+    /// `is_dyn_dispatchable`, with `self_like` the trait's type parameters
+    /// that stand for `Self` when omitted (`PartialEq[Rhs = Self]`, whose
+    /// bare use compares a `Self` with a `Self`).
+    pub fn is_dyn_dispatchable_in(&self, self_like: &[&str]) -> bool {
         if self.self_param.is_none()
             || self
                 .generic_params
@@ -880,7 +887,12 @@ impl TraitMethod {
         }
         let mut ok = true;
         let mut check = |t: &TypeExpr| match &t.kind {
-            TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Self" => ok = false,
+            TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && (p.segments[0] == "Self" || self_like.contains(&p.segments[0].as_str())) =>
+            {
+                ok = false
+            }
             TypeKind::ImplTrait { .. } => ok = false,
             _ => {}
         };

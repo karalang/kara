@@ -988,6 +988,32 @@ impl<'a> super::EffectChecker<'a> {
         true
     }
 
+    /// The seeded ceilings a method call on a value of a type parameter is
+    /// charged: each bound's trait method that writes its clause
+    /// (`bound_ceiling_keys`, B-2026-11-06-29). The instance's method is
+    /// charged besides, as before; it cannot exceed the ceiling.
+    fn bound_ceiling_charges(
+        &self,
+        receiver: &Expr,
+        method: Symbol,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
+    ) -> Vec<Symbol> {
+        let Some(param) = self.typeparam_nodes.get(&receiver.id) else {
+            return Vec::new();
+        };
+        let Some(bs) = bounds.get(param) else {
+            return Vec::new();
+        };
+        let method_str = self.interner.resolve(method).to_string();
+        bs.iter()
+            .filter_map(|b| b.path.last())
+            .filter_map(|t| {
+                let key = self.interner.get(&format!("{t}.{method_str}"))?;
+                self.bound_ceiling_keys.get(&key).copied()
+            })
+            .collect()
+    }
+
     fn note_bound_event(&self, event: BoundEvent) {
         if let Some(events) = self.bound_events.borrow_mut().as_mut() {
             events.push(event);
@@ -1381,6 +1407,11 @@ impl<'a> super::EffectChecker<'a> {
                 // recursion group".
                 let deferred = through_dyn
                     || method_sym.is_some_and(|m| self.defer_bound_method_call(object, m, bounds));
+                if let Some(m) = method_sym {
+                    for key in self.bound_ceiling_charges(object, m, bounds) {
+                        calls.push((key, expr.span));
+                    }
+                }
                 if !deferred {
                     if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {
                         for &key in keys {

@@ -3461,6 +3461,18 @@ pub struct TypeChecker<'a> {
     /// Call bounds whose parameter only the context solves, checked at the
     /// end of `check` ([`Self::discharge_deferred_call_bounds`]).
     pub(super) deferred_call_bounds: Vec<DeferredCallBounds>,
+    /// Associated calls `Type.f()` whose impl's bounds wait on a parameter
+    /// only the call's result names: the type, the method, the argument
+    /// types, the result, the call's node and its span (B-2026-11-06-25).
+    #[allow(clippy::type_complexity)]
+    pub(super) deferred_assoc_impl_bounds: Vec<(
+        String,
+        String,
+        Vec<Type>,
+        Type,
+        Option<crate::ids::NodeId>,
+        Span,
+    )>,
     pub(super) dbg_arg_types: FxHashMap<SpanKey, Type>,
     /// Per-existential capture sets, keyed by the SpanKey of the
     /// `TypeKind::ImplTrait` AST node. See the public copy on
@@ -4136,6 +4148,7 @@ impl<'a> TypeChecker<'a> {
             deferred_receiver_bounds: Vec::new(),
             call_borrowed_fn_params: Vec::new(),
             deferred_call_bounds: Vec::new(),
+            deferred_assoc_impl_bounds: Vec::new(),
             dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),
             method_unwrap_inner_types: FxHashMap::default(),
@@ -4538,6 +4551,7 @@ impl<'a> TypeChecker<'a> {
         self.emit_nested_enum_inst_errors();
         self.report_unsolved_call_vars();
         self.discharge_deferred_call_bounds();
+        self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();
         let impl_trait_assoc_types = self.impl_trait_assoc_types();
