@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 151 |
+| diagnostics | 153 |
 | false-positive | 131 |
 | perf | 107 |
 | missing-feature | 100 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 246 |
+| typecheck | 248 |
 | mir-llvm | 130 |
 | mir | 130 |
 | cli | 71 |
@@ -107,12 +107,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-15 | 2026-11-06 | typecheck | low | §8 roll-up: a `where` bound on a struct is never checked and an inline struct bound is not checked on an unannotated literal; `if c { 1i32 } else { 2i64 }` joins to i64 though §8's LUB has no rule for it; an unsolved `Vec.new()` used only for `.len()` and a never-called `|x| x` are accepted | — |
 | B-2026-11-06-18 | 2026-11-06 | parser+typecheck | low | §3 roll-up: the value-class naming rule is enforced only on parameters (`let Count`, `let COUNT`, `for Ix in`, `Some(Val)` bindings are accepted), `struct _Hidden` / `const _MAX` are accepted, `requires`/`ensures`/`invariant` are reserved though §3 says they are not v1 keywords, a nested f-string is accepted, and doc-comment misuse is a parse error or silent instead of a warning | — |
 | B-2026-11-06-21 | 2026-11-06 | typecheck+ownership+parser | medium | A constant is treated as a place, not a fresh value: a second use of a non-Copy constant is `value 'ORIGIN' moved`, `ORIGIN.x` on a struct constant is `this name is not lowered yet`, `T_THREE.1` is a parse error, while `XX = 5;` and `TABLE[0] = 3;` on constants are accepted and do nothing | — |
-| B-2026-11-06-27 | 2026-11-06 | typecheck | low | §9 roll-up of accepted-invalid programs: derive chains (`Eq` without `PartialEq`, `Ord` without `PartialOrd`, `Copy` without `Clone`), a derive plus a manual impl of one trait, `#[derive(Drop)]`, `impl X for dyn Shape`, an unknown associated binding in a bound, a Map key without `Eq`, `dbg` and derived `Debug` without `Debug` on the element, derived `Clone` without its bound, `clone(own self)`, a run-time `#[serde(default: ..)]`; plus missing std conversions | — |
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
 | B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
 | B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
 | B-2026-11-07-8 | 2026-11-07 | typecheck | medium | Since 5f1222f497 (B-2026-11-06-11) a method call on a part of a tuple element of a generic `Vec[(K, K)]` walked by `for` is left unsolved: `for (k, v) in d.iter() { s = s + k.show(); }` under `K: Show` is refused by `karac check` with `a type that failed to check is not lowered yet`; corpus apps/cli/mini_collections (e-spec) regressed with it | — |
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
+| B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
+| B-2026-11-07-11 | 2026-11-07 | typecheck | low | §9 remainder of B-2026-11-06-27: `dbg` on a Display-only type and derived `Debug`/`Clone` on a generic type ignore the bound (items 8, 9); `Option.from`, `Result.from` and `i64.try_into` are missing, and an ambiguous `into()` reports `no method 'into'` instead of asking for an annotation (items 12, 13) | — |
 
 ### Relocated
 
@@ -763,6 +764,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-24 | typecheck | medium | `Copy` and `Drop` on one type are accepted, and the drop body then runs once per copy: `#[derive(Copy, Clone)] struct Pt` with `impl Drop for Pt` pri… | bd8600adec |
 | B-2026-11-06-25 | typecheck | medium | Three standard trait shapes from §9 are refused: `#[derive(Default)]` on a generic struct (`Pair[T]`) is E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT inste… | bd8600adec |
 | B-2026-11-06-26 | typecheck+mir | medium | A generic function returning `impl Iterator[Item = T]` cannot be consumed: `fn evs[T](xs: own Vec[T]) -> impl Iterator[Item = T] { xs.into_iter() }`… | e0abbf681d |
+| B-2026-11-06-27 | typecheck | low | §9 roll-up of accepted-invalid programs: derive chains (`Eq` without `PartialEq`, `Ord` without `PartialOrd`, `Copy` without `Clone`), a derive plus… | bb8531c2c4 |
 | B-2026-11-06-28 | typecheck+ownership | low | §10: a `defer` block that moves a binding (`defer { eat(a); }`) is accepted though §10 says cleanup blocks never capture by move (the unchecked_div/u… | ec6e0f84cc |
 | B-2026-11-06-29 | effect | medium | Trait-method effect ceilings count default-permitted effects: §12's own `ReadOnlyView.save` (`with writes(Data) { panic("read-only view"); }`) is ref… | bd8600adec |
 | B-2026-11-06-30 | typecheck | low | collections.md roll-up: `Vec.from_iter(dq)`, which collections.md and the compiler's own VecDeque diagnostic both recommend, is refused (`VecDeque[i6… | 69889deae9 |
