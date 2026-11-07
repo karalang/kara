@@ -34,7 +34,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   (library/concurrency.md § Atomics). `Atomic[i8]`, `u8`, `i16`, `u16`,
   `usize`, `isize`, a 128-bit integer and a raw pointer were accepted, and
   `Atomic[i128]` failed to link under AddressSanitizer
-  (B-2026-11-07-21).
+  (B-2026-11-07-21). A generic body that puts its parameter in an `Atomic` is
+  judged at each call that instantiates it (`wrap(1i8)` over
+  `fn wrap[T](x: own T) -> Atomic[T]`; B-2026-11-07-35).
 - **A match on another package's `#[non_exhaustive]` enum needs a wildcard
   arm,** even when it names every variant, and wherever the enum sits in
   the scrutinee (`Err(DecodeError.InvalidLength)`); `karac fix` adds it. A

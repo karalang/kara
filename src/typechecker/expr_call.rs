@@ -2225,8 +2225,20 @@ impl<'a> super::TypeChecker<'a> {
                         // A literal's variable is fixed later, by an
                         // annotation or a use (`let a: Atomic[i8] =
                         // Atomic.new(1)`); judged at the end (B-2026-11-07-21).
-                        self.pending_atomic_inners
-                            .push((args[0].value.span, inner_ty.clone()));
+                        self.pending_atomic_inners.push((
+                            args[0].value.span,
+                            inner_ty.clone(),
+                            self.current_fn_core_key.clone(),
+                        ));
+                    } else if let Type::TypeParam(p) = &resolved {
+                        // Judged at each call that instantiates the body
+                        // (B-2026-11-07-35).
+                        if let Some(key) = self.current_fn_core_key.clone() {
+                            self.atomic_generic_params
+                                .entry(key)
+                                .or_default()
+                                .push((p.clone(), args[0].value.span));
+                        }
                     } else {
                         self.report_atomic_inner(&resolved, args[0].value.span);
                     }

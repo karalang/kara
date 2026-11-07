@@ -1,0 +1,9 @@
+source = "B-2026-11-07-35"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-07-35: `wrap(1i8)` over `fn wrap[T](x: own T) -> Atomic[T]` passed check and ran; the element is now judged at each instantiating call, through a generic caller (`twice`) and a generic impl's method (`Cell.atom`). The i64 and u32 instances stay accepted. The expected.out wording of an error pin is guidance, not a byte oracle."

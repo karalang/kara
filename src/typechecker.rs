@@ -3481,7 +3481,14 @@ pub struct TypeChecker<'a> {
     pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
     /// `Atomic.new(v)` arguments still a variable at the call, judged at the
     /// end against library/concurrency.md's five (B-2026-11-07-21).
-    pub(super) pending_atomic_inners: Vec<(Span, Type)>,
+    pub(super) pending_atomic_inners: Vec<(Span, Type, Option<String>)>,
+    /// Inside a generic body, each `Atomic.new(x)` whose element is a bare
+    /// type parameter, keyed by the body's callee key: the element is judged
+    /// at each call that instantiates it ([`Self::emit_atomic_instance_errors`];
+    /// B-2026-11-07-35).
+    pub(super) atomic_generic_params: FxHashMap<String, Vec<(String, Span)>>,
+    /// The callee key of the body each strict-mode call sits in, by call node.
+    pub(super) call_site_callers: FxHashMap<crate::ids::NodeId, String>,
     /// B-2026-11-06-11: a generic call's unfixed parameters spelled like a
     /// parameter in scope at the call; one still unsolved at the end names
     /// that parameter.
@@ -4190,6 +4197,8 @@ impl<'a> TypeChecker<'a> {
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
             pending_atomic_inners: Vec::new(),
+            atomic_generic_params: FxHashMap::default(),
+            call_site_callers: FxHashMap::default(),
             aliased_call_vars: Vec::new(),
             deferred_receiver_bounds: Vec::new(),
             call_borrowed_fn_params: Vec::new(),
@@ -4639,6 +4648,7 @@ impl<'a> TypeChecker<'a> {
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
+        self.emit_atomic_instance_errors(&node_call_subs);
         self.emit_core_generic_move_errors(&node_call_subs);
         if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
             self.fn_env_cross_task_pass(&node_types, &node_call_subs);

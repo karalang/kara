@@ -1,0 +1,17 @@
+// library/concurrency.md § Atomics: Atomic[T] exists for bool, i32, i64, u32
+// and u64. A generic body that puts its parameter in an Atomic is judged at
+// each call that instantiates it, through generic callers and methods too.
+fn wrap[T](x: own T) -> Atomic[T] { Atomic.new(x) }
+fn twice[U](x: own U) -> Atomic[U] { wrap(x) }
+struct Cell[T] { v: T }
+impl[T] Cell[T] {
+    fn atom(own self) -> Atomic[T] { Atomic.new(self.v) }
+}
+fn main() {
+    let a = wrap(1i8);
+    let b = twice(2u16);
+    let c = Cell { v: 3usize }.atom();
+    let ok = wrap(4i64);
+    let ok2 = twice(5u32);
+    println(f"{a.load()} {b.load()} {c.load()} {ok.load()} {ok2.load()}");
+}

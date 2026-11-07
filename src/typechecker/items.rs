@@ -2923,6 +2923,107 @@ impl<'a> super::TypeChecker<'a> {
     /// a generic body that moves a `T` out of a borrowed place moves only
     /// when `T` is not `Copy`. Report it at each call that instantiates `T`
     /// with a non-`Copy` type, naming the body's line.
+    /// B-2026-11-07-35: an `Atomic[T]` a generic body builds is judged at each
+    /// call that instantiates `T`, against library/concurrency.md's five. A
+    /// call from another generic body that passes its own parameter on makes
+    /// that body's parameter atomic too, so the judgement reaches the call
+    /// that names a type.
+    pub(super) fn emit_atomic_instance_errors(
+        &mut self,
+        node_call_subs: &rustc_hash::FxHashMap<
+            crate::ids::NodeId,
+            rustc_hash::FxHashMap<String, Type>,
+        >,
+    ) {
+        if self.atomic_generic_params.is_empty() {
+            return;
+        }
+        let sites = self.core_call_sites.clone();
+        let callee_of = |this: &Self, node: &crate::ids::NodeId, free: &Option<String>| {
+            free.clone()
+                .filter(|n| this.atomic_generic_params.contains_key(n))
+                .or_else(|| this.node_method_callees.get(node).cloned())
+        };
+        // Carry a parameter through generic callers until nothing changes.
+        loop {
+            let mut added: Vec<(String, String, Span)> = Vec::new();
+            for (node, span, free) in &sites {
+                let Some(key) = callee_of(self, node, free) else {
+                    continue;
+                };
+                let (Some(params), Some(subs), Some(caller)) = (
+                    self.atomic_generic_params.get(&key),
+                    node_call_subs.get(node),
+                    self.call_site_callers.get(node),
+                ) else {
+                    continue;
+                };
+                for (param, _) in params {
+                    if let Some(Type::TypeParam(q)) = subs.get(param) {
+                        let known = self
+                            .atomic_generic_params
+                            .get(caller)
+                            .is_some_and(|v| v.iter().any(|(p, _)| p == q));
+                        if !known && !added.iter().any(|(c, p, _)| c == caller && p == q) {
+                            added.push((caller.clone(), q.clone(), *span));
+                        }
+                    }
+                }
+            }
+            if added.is_empty() {
+                break;
+            }
+            for (caller, q, span) in added {
+                self.atomic_generic_params
+                    .entry(caller)
+                    .or_default()
+                    .push((q, span));
+            }
+        }
+        let mut seen: HashSet<SpanKey> = HashSet::new();
+        for (node, span, free) in &sites {
+            let Some(key) = callee_of(self, node, free) else {
+                continue;
+            };
+            let (Some(params), Some(subs)) = (
+                self.atomic_generic_params.get(&key),
+                node_call_subs.get(node),
+            ) else {
+                continue;
+            };
+            let found: Vec<(String, Type, Span)> = params
+                .iter()
+                .filter_map(|(p, body)| {
+                    let arg = subs.get(p)?;
+                    (!matches!(arg, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error)
+                        && super::expr_call::atomic_ineligible_inner_kind(arg).is_some())
+                    .then(|| (p.clone(), arg.clone(), *body))
+                })
+                .collect();
+            if let Some((param, arg, body)) = found.into_iter().next() {
+                if !seen.insert(SpanKey::from_span(span)) {
+                    continue;
+                }
+                let kind = super::expr_call::atomic_ineligible_inner_kind(&arg).unwrap_or("");
+                self.type_error(
+                    format!(
+                        "Atomic[{arg}] is not a valid atomic type: this call instantiates \
+                         `{param}` with `{arg}`, and `{key}` puts a `{param}` in an `Atomic` at line \
+                         {}:{}; {kind} cannot be operated on atomically. An atomic holds `bool` \
+                         or one of the integers `i32`, `i64`, `u32` and `u64` \
+                         (library/concurrency.md § Atomics); to share other data across tasks \
+                         use `Mutex[T]`, which can guard any type",
+                        body.line,
+                        body.column,
+                        arg = super::types::type_display(&arg),
+                    ),
+                    *span,
+                    TypeErrorKind::AtomicInvalidInnerType,
+                );
+            }
+        }
+    }
+
     pub(super) fn emit_core_generic_move_errors(
         &mut self,
         node_call_subs: &rustc_hash::FxHashMap<

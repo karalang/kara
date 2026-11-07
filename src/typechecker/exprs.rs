@@ -5814,7 +5814,7 @@ impl<'a> super::TypeChecker<'a> {
     /// at the call is judged once the body has fixed it. One left open
     /// defaults to `i64`, which an atomic holds.
     pub(super) fn report_pending_atomic_inners(&mut self) {
-        for (span, ty) in std::mem::take(&mut self.pending_atomic_inners) {
+        for (span, ty, key) in std::mem::take(&mut self.pending_atomic_inners) {
             let resolved = resolve_type_vars(
                 &ty,
                 &self.env.substitutions,
@@ -5822,8 +5822,17 @@ impl<'a> super::TypeChecker<'a> {
                 &self.env.const_substitutions,
                 &HashMap::new(),
             );
-            if !matches!(resolved, Type::TypeVar(_)) {
-                self.report_atomic_inner(&resolved, span);
+            match resolved {
+                Type::TypeVar(_) => {}
+                Type::TypeParam(p) => {
+                    if let Some(key) = key {
+                        self.atomic_generic_params
+                            .entry(key)
+                            .or_default()
+                            .push((p, span));
+                    }
+                }
+                _ => self.report_atomic_inner(&resolved, span),
             }
         }
     }
@@ -9276,6 +9285,9 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 };
                 self.core_call_sites.push((expr.id, expr.span, free));
+                if let Some(caller) = self.current_fn_core_key.clone() {
+                    self.call_site_callers.insert(expr.id, caller);
+                }
             }
         }
         if let ExprKind::Call { callee, .. } = &expr.kind {
