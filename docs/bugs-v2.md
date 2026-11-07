@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 107 |
 | missing-feature | 97 |
 | soundness | 51 |
-| miscompile | 39 |
+| miscompile | 40 |
 | run-vs-build | 24 |
 | codegen-gap | 22 |
 | other | 19 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 240 |
-| mir-llvm | 129 |
-| mir | 128 |
+| typecheck | 241 |
+| mir-llvm | 130 |
+| mir | 129 |
 | cli | 71 |
 | ownership | 56 |
 | parser | 42 |
@@ -125,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-38 | 2026-11-06 | typecheck | medium | A `TaskGroup.spawn` closure whose `Result` error type only a later annotation fixes is refused at lowering when its handles are kept in a `Vec`: `let r: Result[i64, String] = h.join();`, the annotation `?`'s own diagnostic asks for, leaves `let mut hs = Vec.new()` as "an expression whose type does not lower (Type(UnknownParam(\"E\"))) is not lowered yet" | — |
 | B-2026-11-06-39 | 2026-11-06 | typecheck | low | A let-chain (`if let Some(s) = v and kind == "group" { .. }`, Rust's `if let .. && ..`) gets two unrelated errors ("logical operator requires 'bool', found 'Option[String]'" and a pattern-against-`bool` mismatch) and no word that Kāra has no let-chains or how to nest the `if` | — |
 | B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
+| B-2026-11-07-2 | 2026-11-07 | typecheck+mir+mir-llvm | high | A generic function passed as an `Fn` value is instanced with its type arguments unsolved: `apply(shout, [7], 1)` with `fn apply[U](g: Fn(own U, i64) -> i64, u: own U, n: i64)` builds `apply[()]` and `shout[()]`, which print a `Vec` as garbage under llvm; inside a generic body the item's `T` is taken for the caller's | — |
 
 ### Relocated
 
