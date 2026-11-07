@@ -38,6 +38,14 @@ pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
                 phase: phase_of(v["phase"].as_str().unwrap_or("")),
                 severity: severity_of(v["severity"].as_str().unwrap_or("")),
                 message: v["message"].as_str().unwrap_or("").to_string(),
+                code: v["code"].as_str().map(str::to_string),
+                help: v["hints"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|h| h["description"].as_str())
+                    .map(str::to_string)
+                    .collect(),
                 line: span.line,
                 column: span.column,
                 offset: span.offset,

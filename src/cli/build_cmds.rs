@@ -1534,6 +1534,8 @@ impl PackageCheck {
             phase,
             severity,
             message: message.to_string(),
+            code: None,
+            help: Vec::new(),
             line: span.line,
             column: span.column,
             offset: span.offset,
@@ -1586,20 +1588,22 @@ impl PackageCheck {
                 out.push(diag("resolve", "error", &e.message, &e.span, fixes));
             }
         }
+        // A type error's catalogue code, as the single-file check gives it
+        // (B-2026-11-07-46).
+        let coded = |mut d: crate::PlaygroundDiagnostic, kind| {
+            d.code = Some(type_error_code(kind).to_string());
+            d
+        };
         for m in &self.type_warnings {
             for e in &m.errors {
-                out.push(diag(
-                    "typecheck",
-                    "warning",
-                    &e.message,
-                    &e.span,
-                    Vec::new(),
-                ));
+                let d = diag("typecheck", "warning", &e.message, &e.span, Vec::new());
+                out.push(coded(d, &e.kind));
             }
         }
         for m in &self.type_errors {
             for e in &m.errors {
-                out.push(diag("typecheck", "error", &e.message, &e.span, Vec::new()));
+                let d = diag("typecheck", "error", &e.message, &e.span, Vec::new());
+                out.push(coded(d, &e.kind));
             }
         }
         out

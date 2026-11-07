@@ -354,13 +354,18 @@ fn analyze(
                     "note" => DiagnosticSeverity::INFORMATION,
                     _ => DiagnosticSeverity::ERROR,
                 }),
-                // Carry the producing phase (parse/resolve/typecheck/effect/
-                // ownership) as the diagnostic code so an editor can
-                // group/filter by it; `source` names the producer for the
-                // "Problems" panel.
-                code: Some(NumberOrString::String(d.phase.to_string())),
+                // The catalogue code `karac explain` takes (`E0500`), as
+                // `karac check --output=json` gives it; the producing phase
+                // only where the diagnostic has none. The `help:` lines
+                // `karac check` prints follow the message (B-2026-11-07-46).
+                code: Some(NumberOrString::String(
+                    d.code.clone().unwrap_or_else(|| d.phase.to_string()),
+                )),
                 source: Some("kara".to_string()),
-                message: d.message,
+                message: std::iter::once(d.message)
+                    .chain(d.help.iter().map(|h| format!("help: {h}")))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
                 ..Default::default()
             };
             (diag, d.fixes)
@@ -693,7 +698,9 @@ mod tests {
         let d = &diags[0];
         assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR));
         assert_eq!(d.source.as_deref(), Some("kara"));
-        assert_eq!(d.code, Some(NumberOrString::String("resolve".to_string())));
+        // The catalogue code `karac explain` takes, not the phase name
+        // (B-2026-11-07-46).
+        assert_eq!(d.code, Some(NumberOrString::String("E0100".to_string())));
         // A non-empty, well-ordered range on line 0.
         assert_eq!(d.range.start.line, 0);
         assert!(d.range.end >= d.range.start);
@@ -706,7 +713,26 @@ mod tests {
         assert!(!diags.is_empty());
         assert!(diags
             .iter()
-            .all(|d| d.code == Some(NumberOrString::String("parse".to_string()))));
+            .all(|d| d.code == Some(NumberOrString::String("E0002".to_string()))));
+    }
+
+    /// An ownership diagnostic carries its catalogue code and the `help:`
+    /// line `karac check` prints under it (B-2026-11-07-46).
+    #[test]
+    fn diagnostics_carry_the_catalogue_code_and_help_line() {
+        let src = "struct U { name: String }\nfn main() {\n    let u = U { name: \"a\" };\n    let w = u;\n    println(u.name);\n}\n";
+        let diags = diagnostics(src);
+        let d = diags
+            .iter()
+            .find(|d| d.code == Some(NumberOrString::String("E0500".to_string())))
+            .unwrap_or_else(|| panic!("no E0500 diagnostic: {diags:?}"));
+        let mut lines = d.message.lines();
+        assert!(lines.next().is_some_and(|l| !l.starts_with("help:")));
+        assert!(
+            lines.any(|l| l.starts_with("help: add `#[derive(Clone)]` to 'U'")),
+            "help line missing: {:?}",
+            d.message
+        );
     }
 
     #[test]

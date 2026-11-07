@@ -844,6 +844,13 @@ pub struct PlaygroundDiagnostic {
     /// `error`, `warning` or `note`, as `karac check --output=json` labels it.
     pub severity: &'static str,
     pub message: String,
+    /// The catalogue code (`E0500`), as `karac check --output=json` gives it
+    /// and `karac explain` takes it; `None` where the producing path carries
+    /// none (B-2026-11-07-46).
+    pub code: Option<String>,
+    /// The `help:` lines `karac check` prints under the message, the JSON's
+    /// `hints[].description`, in order.
+    pub help: Vec<String>,
     pub line: usize,
     pub column: usize,
     pub offset: usize,
@@ -913,6 +920,8 @@ fn push_diag_fixed(
         phase,
         severity: "error",
         message,
+        code: None,
+        help: Vec::new(),
         line: span.line,
         column: span.column,
         offset: span.offset,

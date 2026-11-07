@@ -104,7 +104,7 @@ fn server_publishes_diagnostics_and_shuts_down_cleanly() {
     did_open(&client, uri, "fn main() { let x: i32 = \"nope\"; }");
     let diags = next_diagnostics(&client);
     assert_eq!(diags.len(), 1, "expected one diagnostic, got {diags:?}");
-    assert_eq!(diags[0]["code"], json!("typecheck"));
+    assert_eq!(diags[0]["code"], json!("E0200"));
     assert_eq!(diags[0]["source"], json!("kara"));
     assert_eq!(diags[0]["severity"], json!(1)); // ERROR
     assert_eq!(diags[0]["range"]["start"]["line"], json!(0));
