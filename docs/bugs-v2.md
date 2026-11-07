@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 169 |
-| false-positive | 143 |
+| false-positive | 144 |
 | perf | 109 |
 | missing-feature | 104 |
 | soundness | 52 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 267 |
+| typecheck | 268 |
 | mir-llvm | 137 |
 | mir | 132 |
 | cli | 78 |
@@ -116,6 +116,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
 | B-2026-11-07-55 | 2026-11-07 | mir-llvm | medium | Katas 100, 101 and 113 (recursive `shared` tree code) run about 1.5x slower on the M5 at karac 97681763d than at 6697158fa while checked Rust held steady: 100 98.0 -> 153.5 ms, 101 131.3 -> 205.3, 113 200.3 -> 300.0; the window includes the LLVM 22 move (6dcdc1a604); x86 not yet measured | — |
 | B-2026-11-07-56 | 2026-11-07 | interp+mir-llvm | medium | A method called straight on a wide constant reads it truncated to 64 bits: `BIG.to_string()` with `const BIG: i128 = 10**38` prints 687399551400673280, and `DEC_SIGN.to_string()` with `const DEC_SIGN: u64 = 0x8000000000000000` prints -9223372036854775808 | — |
+| B-2026-11-07-57 | 2026-11-07 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3): `let mut b = 0; b = y; b` and `b += y` with `y: i32` in a fn returning `i32`, and `let b = 0; max(b, y)`, are refused 'implicit coercion from i64 to i32 would narrow' | — |
 
 ### Relocated
 
