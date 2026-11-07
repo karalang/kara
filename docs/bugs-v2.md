@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 169 |
 | false-positive | 143 |
-| perf | 108 |
+| perf | 109 |
 | missing-feature | 104 |
 | soundness | 52 |
 | miscompile | 41 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 267 |
-| mir-llvm | 135 |
+| mir-llvm | 136 |
 | mir | 132 |
 | cli | 78 |
 | ownership | 62 |
@@ -129,6 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-49 | 2026-11-07 | cli | low | README.md's Install section still says prebuilt binaries "arrive with the 0.8.0 beta. Until then, build from source" although v0.8.0 shipped tarballs on 11-01; it gives no download, sha256 or PATH steps and no link to the release page | — |
 | B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
 | B-2026-11-07-54 | 2026-11-07 | typecheck | low | `opt == Some("")` with `opt: Option[Str]` is refused ("cannot compare 'Option[Str]' and 'Option[String]'") though `let a: Option[Str] = Some("")` is accepted; `lines.last() == Some("")` over a `Vec[Str]` (and `v.last() == Some("x")` over a `Vec[String]`) is refused with no hint, and the forms the i64 hint names do not compile for a literal | — |
+| B-2026-11-07-55 | 2026-11-07 | mir-llvm | medium | Katas 100, 101 and 113 (recursive `shared` tree code) run about 1.5x slower on the M5 at karac 97681763d than at 6697158fa while checked Rust held steady: 100 98.0 -> 153.5 ms, 101 131.3 -> 205.3, 113 200.3 -> 300.0; the window includes the LLVM 22 move (6dcdc1a604); x86 not yet measured | — |
 
 ### Relocated
 
