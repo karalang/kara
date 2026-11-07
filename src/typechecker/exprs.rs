@@ -9950,6 +9950,22 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(sfx, Some(crate::token::IntSuffix::I64)) {
                     self.warn_redundant_suffix("i64", expr.span);
                 }
+                // `0usize`: a suffix `karac fix` deletes once the program
+                // mixes `usize` with `i64` (pointer_ints.rs).
+                if matches!(
+                    sfx,
+                    Some(crate::token::IntSuffix::Usize | crate::token::IntSuffix::Isize)
+                ) && expr.span.length > 5
+                {
+                    self.written_pointer_int_suffixes.insert(
+                        expr.span.offset,
+                        Span {
+                            offset: expr.span.offset + expr.span.length - 5,
+                            length: 5,
+                            ..expr.span
+                        },
+                    );
+                }
                 // B-2026-07-02-7: a SUFFIXED literal's own suffix defines its
                 // range — `300u8` was admitted and silently diverged (interp
                 // printed 300, codegen truncated to 44). Unsuffixed literals

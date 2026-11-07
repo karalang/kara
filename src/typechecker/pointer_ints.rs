@@ -95,6 +95,26 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+        let suffixes: Vec<Span> = self
+            .written_pointer_int_suffixes
+            .values()
+            .copied()
+            .filter(|s| !inside(s))
+            .collect();
+        for span in suffixes {
+            self.type_error_with_fix_it(
+                "this `usize` or `isize` suffix makes a pointer-sized integer that mixes \
+                 with `i64`, and those are for FFI signatures: Kāra writes sizes, lengths, \
+                 counts and indices as `i64` (design.md §5), so drop the suffix"
+                    .to_string(),
+                span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span,
+                    replacement: String::new(),
+                },
+            );
+        }
         for span in spans {
             self.type_error_with_fix_it(
                 "this type mixes with `i64`, and `usize` and `isize` are for FFI \

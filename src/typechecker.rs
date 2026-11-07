@@ -2902,6 +2902,10 @@ pub struct TypeChecker<'a> {
     /// (B-2026-11-06-3). When the program mixes one with `i64`, each that is
     /// not in an FFI item gets a fix to `i64` (design.md §5).
     pub(super) written_pointer_ints: std::collections::BTreeMap<usize, Span>,
+    /// Each `usize` / `isize` suffix on an integer literal (`0usize`), by
+    /// the literal's offset, with the suffix's own span: the fix deletes it
+    /// when the program mixes the pointer-sized integers with `i64`.
+    pub(super) written_pointer_int_suffixes: std::collections::BTreeMap<usize, Span>,
     /// Whether an `i64` met a `usize` or `isize` in a coercion or comparison
     /// error.
     pub(super) pointer_int_mixed: bool,
@@ -4035,6 +4039,7 @@ impl<'a> TypeChecker<'a> {
             flatten_calls: FxHashMap::default(),
             core_once_calls: FxHashSet::default(),
             written_pointer_ints: Default::default(),
+            written_pointer_int_suffixes: Default::default(),
             pointer_int_mixed: false,
             usize_cast_lets: Vec::new(),
             untargeted_parses: Vec::new(),
