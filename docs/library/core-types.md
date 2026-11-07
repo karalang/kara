@@ -114,7 +114,7 @@ What the plain operators do on overflow, and the other numeric rules, are in [de
 - `f as iN` saturates: an out-of-range value gives the nearest end of the range, and NaN gives 0.
 - `iN.checked_from(f: f64) -> Option[iN]` returns `None` for NaN or an out-of-range value, and otherwise `Some` of the value truncated toward zero. It exists on every integer type; an `f32` argument widens to `f64` losslessly.
 
-**`total_cmp`.** `f32` and `f64` have `fn total_cmp(self, other: Self) -> Ordering`, the IEEE 754 `totalOrder` comparison, called as `x.total_cmp(y)` or passed as `f64.total_cmp`. It orders every value, NaN included, so it can sort floats directly:
+**`total_cmp`.** `f32` and `f64` have `fn total_cmp(self, other: Self) -> Ordering`, called as `x.total_cmp(y)` or passed as `f64.total_cmp`. It is IEEE 754 `totalOrder` with NaN canonicalized as `F64` does it ([design.md §5](../design.md#5-types)): every NaN equals every other NaN and sorts after every other value, whatever its sign and payload, so `(-NaN).total_cmp(-inf)` is `Greater`. Raw `totalOrder` would let a NaN's sign decide the order, and that sign differs between a runtime and a constant-folded `z / z`. It orders every value, NaN included, so it can sort floats directly:
 
 ```kara
 let mut w: Vec[f64] = [2.5, -1.0, 0.25];
