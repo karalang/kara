@@ -316,11 +316,12 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         // The argument is the same float type as the receiver. A
                         // suffix-free float literal promotes to it (Q4 rule, like
-                        // `wrapping_*`); otherwise it must match exactly.
+                        // `wrapping_*`), negated too (`h.copysign(-1.0)`,
+                        // B-2026-11-07-18); otherwise it must match exactly.
                         let arg = &args[0].value;
                         let arg_ty = self.infer_expr(arg);
-                        if matches!(&arg.kind, ExprKind::Float(_, None)) {
-                            self.record_expr_type(&arg.span, receiver_for_lookup);
+                        if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(true) {
+                            self.record_promoted_literal(arg, receiver_for_lookup);
                             return Some(receiver_for_lookup.clone());
                         }
                         if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {

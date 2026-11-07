@@ -1,0 +1,9 @@
+source = "B-2026-11-07-18"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "numerics", "literals", "float"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/core-types.md: copysign, pow, hypot and atan2 take `y: Self`, so `-1.0` beside an f32 receiver is an f32 (it was refused as an f64). f32 1.5: copysign(-1) -1.5, pow(-1) 0.6666667 (f32 shortest), hypot(-2) 2.5, atan2(-1) about 2.16 > 2; f64 2.0: copysign(-1) -2.0, pow(-1) 0.5 (checked against numpy float32)."

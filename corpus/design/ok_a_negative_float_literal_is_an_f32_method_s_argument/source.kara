@@ -1,0 +1,13 @@
+// docs/library/core-types.md: a float method's argument is `y: Self`, and a
+// suffix-free literal, negated or not, takes the receiver's type
+// (B-2026-11-07-18).
+fn main() {
+    let h: f32 = 1.5;
+    println(h.copysign(-1.0));
+    println(h.pow(-1.0));
+    println(h.hypot(-2.0));
+    println(h.atan2(-1.0) > 2.0);
+    let g: f64 = 2.0;
+    println(g.copysign(-1.0));
+    println(g.pow(-1.0));
+}
