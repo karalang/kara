@@ -1,0 +1,81 @@
+// LeetCode #1061: Lexicographically Smallest Equivalent String -- the
+// benchmark, the ★ arm of lexi.kara.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut y = x;
+    while parent[y] != root {
+        let next = parent[y];
+        parent[y] = root;
+        y = next;
+    }
+    root
+}
+
+fn smallest_equivalent(s1: String, s2: String, base: String) -> String {
+    let mut parent: Vec[i64] = (0..26).collect();
+    for (a, b) in s1.bytes().iter().zip(s2.bytes().iter()) {
+        let ra = find(mut parent, a - b'a');
+        let rb = find(mut parent, b - b'a');
+        if ra < rb {
+            parent[rb] = ra;
+        } else {
+            parent[ra] = rb;
+        }
+    }
+    let mut out = String.new();
+    for c in base.bytes() {
+        let root = find(mut parent, c - b'a');
+        out.push((b'a' + root as u8) as char);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // 100 pairs of strings of 1000 letters over 2 to 26 of them, and 100
+    // bases of 20000 letters, built once; every pair with every base
+    let mut seed = 1061;
+    let mut s1s: Vec[String] = Vec.new();
+    let mut s2s: Vec[String] = Vec.new();
+    for p in 0..100 {
+        let k = 2 + p % 25;
+        s1s.push(random_word(1000, k, mut seed));
+        s2s.push(random_word(1000, k, mut seed));
+    }
+    let mut bases: Vec[String] = Vec.new();
+    for _ in 0..100 {
+        bases.push(random_word(20000, 26, mut seed));
+    }
+    let mut calls = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for p in 0..100 {
+        for b in 0..100 {
+            let answer = smallest_equivalent(s1s[p], s2s[p], bases[b]);
+            let mut sum = 0;
+            for c in answer.bytes() {
+                sum += c;
+            }
+            total += sum;
+            check = (check * 31 + sum % 1000003) % 1000000007;
+            calls += 1;
+        }
+    }
+    println(f"{calls} calls: letters sum {total}, checksum {check}");
+}

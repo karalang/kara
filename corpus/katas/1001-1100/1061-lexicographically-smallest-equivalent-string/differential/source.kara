@@ -1,0 +1,329 @@
+// LeetCode #1061: Lexicographically Smallest Equivalent String -- the
+// differential.
+//
+// The six arms against the statement read literally, on 2000 problems, with
+// six properties:
+//
+// P1  the answer is the statement read literally: each letter of the base
+//     grows a set from itself through the pairs until no pair adds a letter,
+//     and is answered by the smallest letter in it
+// P2  the answer is as long as the base, and no letter of it lies above the
+//     base's letter in the same place
+// P3  the answer, taken as the base, is answered by itself
+// P4  the pairs swapped (s1 for s2) or taken in reverse order leave the
+//     answer
+// P5  the base cut in two is answered by the two answers joined, and a pair
+//     of a base letter and its answer added to the pairs leaves the answer
+// P6  each arm agrees with at least three of the other five
+
+// ---- lexi.kara: the ★ arm: a union-find whose root is the smallest letter
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut y = x;
+    while parent[y] != root {
+        let next = parent[y];
+        parent[y] = root;
+        y = next;
+    }
+    root
+}
+
+fn star_arm(s1: String, s2: String, base: String) -> String {
+    let mut parent: Vec[i64] = (0..26).collect();
+    for (a, b) in s1.bytes().iter().zip(s2.bytes().iter()) {
+        let ra = find(mut parent, a - b'a');
+        let rb = find(mut parent, b - b'a');
+        if ra < rb {
+            parent[rb] = ra;
+        } else {
+            parent[ra] = rb;
+        }
+    }
+    let mut out = String.new();
+    for c in base.bytes() {
+        let root = find(mut parent, c - b'a');
+        out.push((b'a' + root as u8) as char);
+    }
+    out
+}
+
+// ---- lexi_recursive.kara: a recursive find
+fn find_rec(parent: mut ref Vec[i64], x: i64) -> i64 {
+    if parent[x] != x {
+        let root = find_rec(mut parent, parent[x]);
+        parent[x] = root;
+    }
+    parent[x]
+}
+
+fn recursive_arm(s1: String, s2: String, base: String) -> String {
+    let mut parent: Vec[i64] = (0..26).collect();
+    let (b1, b2) = (s1.bytes(), s2.bytes());
+    for i in 0..b1.len() {
+        let ra = find_rec(mut parent, b1[i] - b'a');
+        let rb = find_rec(mut parent, b2[i] - b'a');
+        parent[ra.max(rb)] = ra.min(rb);
+    }
+    base.bytes().iter().map(|c| (b'a' + find_rec(mut parent, c - b'a') as u8) as char).collect()
+}
+
+// ---- lexi_graph.kara: a depth-first walk over the letter graph
+fn graph_arm(s1: String, s2: String, base: String) -> String {
+    let mut edges: Vec[Vec[i64]] = Vec.filled(26, Vec.new());
+    for (a, b) in s1.bytes().iter().zip(s2.bytes().iter()) {
+        let (a, b) = (a - b'a', b - b'a');
+        edges[a].push(b);
+        edges[b].push(a);
+    }
+    let mut smallest: Vec[i64] = Vec.filled(26, -1);
+    for start in 0..26 {
+        if smallest[start] >= 0 {
+            continue;
+        }
+        // letters are taken in order, so `start` is the smallest of a class
+        // no earlier letter reached
+        smallest[start] = start;
+        let mut stack = [start];
+        while let Some(x) = stack.pop() {
+            for y in edges[x].iter() {
+                if smallest[y] < 0 {
+                    smallest[y] = start;
+                    stack.push(y);
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    for c in base.bytes() {
+        out.push((b'a' + smallest[c - b'a'] as u8) as char);
+    }
+    out
+}
+
+// ---- lexi_closure.kara: the transitive closure on a 26 by 26 table
+fn closure_arm(s1: String, s2: String, base: String) -> String {
+    let mut same: Vec[Vec[bool]] = Vec.filled(26, Vec.filled(26, false));
+    for i in 0..26 {
+        same[i][i] = true;
+    }
+    for (a, b) in s1.bytes().iter().zip(s2.bytes().iter()) {
+        same[a - b'a'][b - b'a'] = true;
+        same[b - b'a'][a - b'a'] = true;
+    }
+    for k in 0..26 {
+        for i in 0..26 {
+            if same[i][k] {
+                for j in 0..26 {
+                    if same[k][j] {
+                        same[i][j] = true;
+                    }
+                }
+            }
+        }
+    }
+    let smallest: Vec[u8] = (0..26).map(|i| (0..26).find(|j| same[i][j]).unwrap() as u8).collect();
+    base.bytes().iter().map(|c| (b'a' + smallest[c - b'a']) as char).collect()
+}
+
+// ---- lexi_map.kara: a union-find in a Map[char, char]
+fn root_of(parent: mut ref Map[char, char], c: char) -> char {
+    let mut root = c;
+    while let Some(p) = parent.get(root) {
+        if p == root {
+            break;
+        }
+        root = p;
+    }
+    let mut x = c;
+    while x != root {
+        let next = parent[x];
+        parent[x] = root;
+        x = next;
+    }
+    root
+}
+
+fn map_arm(s1: String, s2: String, base: String) -> String {
+    let mut parent: Map[char, char] = Map.new();
+    for (a, b) in s1.chars().zip(s2.chars()) {
+        let ra = root_of(mut parent, a);
+        let rb = root_of(mut parent, b);
+        if ra < rb {
+            parent[rb] = ra;
+        } else if rb < ra {
+            parent[ra] = rb;
+        }
+    }
+    base.chars().map(|c| root_of(mut parent, c)).collect()
+}
+
+// ---- lexi_solution.kara: LeetCode's Rust template, carried by karac fix
+struct Solution {}
+
+fn solution_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    if parent[x] != x {
+        parent[x] = solution_find(mut parent, parent[x]);
+    }
+    parent[x]
+}
+
+impl Solution {
+    pub fn smallest_equivalent_string(s1: String, s2: String, base_str: String) -> String {
+        let mut parent: Vec[i64] = (0..26).collect();
+        let (b1, b2) = (s1.bytes(), s2.bytes());
+        for i in 0..b1.len() {
+            let a = solution_find(mut parent, (b1[i] - b'a'));
+            let b = solution_find(mut parent, (b2[i] - b'a'));
+            if a < b {
+                parent[b] = a;
+            } else if b < a {
+                parent[a] = b;
+            }
+        }
+        base_str
+            .bytes().iter()
+            .map(|c| (solution_find(mut parent, (c - b'a')) as u8 + b'a') as char)
+            .collect()
+    }
+}
+
+fn solution_arm(s1: String, s2: String, base: String) -> String {
+    Solution.smallest_equivalent_string(s1, s2, base)
+}
+// ---- the differential
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn arm(a: i64, s1: String, s2: String, base: String) -> String {
+    match a {
+        0 => star_arm(s1, s2, base),
+        1 => recursive_arm(s1, s2, base),
+        2 => graph_arm(s1, s2, base),
+        3 => closure_arm(s1, s2, base),
+        4 => map_arm(s1, s2, base),
+        _ => solution_arm(s1, s2, base),
+    }
+}
+
+// Each letter of the base grows a set from itself: a pair with one letter in
+// the set and the other not adds the other, until a pass over the pairs adds
+// nothing; the smallest letter in the set answers it.
+fn read_literally(s1: String, s2: String, base: String) -> String {
+    let pairs: Vec[(char, char)] = s1.chars().zip(s2.chars()).collect();
+    let mut out = String.new();
+    for c in base.chars() {
+        let mut class: SortedSet[char] = SortedSet.new();
+        class.insert(c);
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for (a, b) in pairs.iter() {
+                if class.contains(a) != class.contains(b) {
+                    class.insert(a);
+                    class.insert(b);
+                    grew = true;
+                }
+            }
+        }
+        out.push(class.min().unwrap());
+    }
+    out
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn reversed(s: String) -> String {
+    s.chars().rev().collect()
+}
+
+fn check_case(t: mut ref Tally, s1: String, s2: String, base: String, seed: mut ref i64) {
+    // every random choice drawn before any arm answers, so the problems
+    // are the same whatever an arm gets wrong
+    let cut = next_random(mut seed) % (base.len() + 1);
+    let at = next_random(mut seed) % base.len();
+    let want = read_literally(s1, s2, base);
+    let answers: Vec[String] = (0..6).map(|a| arm(a, s1, s2, base)).collect();
+    let (front, back) = (base.substring(0, cut), base.substring(cut, base.len()));
+    for a in 0..6 {
+        let answer = ref answers[a];
+        let what = f"arm {a}, {s1} {s2} {base} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let mut shaped = answer.len() == base.len();
+        for (x, y) in base.chars().zip(answer.chars()) {
+            shaped = shaped and y <= x;
+        }
+        expect(mut t, 2, shaped, f"P2 {what}");
+        let again = arm(a, s1, s2, answer);
+        expect(mut t, 3, again == answer, f"P3 {what}: the answer as base -> {again}");
+        let swapped = arm(a, s2, s1, base);
+        expect(mut t, 4, swapped == answer, f"P4 {what}: swapped -> {swapped}");
+        let backward = arm(a, reversed(s1), reversed(s2), base);
+        expect(mut t, 4, backward == answer, f"P4 {what}: reversed -> {backward}");
+        let joined = arm(a, s1, s2, front) + arm(a, s1, s2, back);
+        expect(mut t, 5, joined == answer, f"P5 {what}: cut at {cut} -> {joined}");
+        if answer.len() == base.len() {
+            let more1 = s1 + base.substring(at, at + 1);
+            let more2 = s2 + answer.substring(at, at + 1);
+            let more = arm(a, more1, more2, base);
+            expect(mut t, 5, more == answer, f"P5 {what}: with {more1} {more2} -> {more}");
+        }
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    for b in want.bytes() {
+        t.check = (t.check * 31 + b) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems: 1000 of 1 to 8 pairs over 6 letters with a base of 1 to
+    // 10 over 8, and 1000 of 1 to 30 pairs over 26 with a base of 1 to 40
+    let mut seed = 10611;
+    for i in 0..2000 {
+        let (n, k, m, j) = if i < 1000 { (8, 6, 10, 8) } else { (30, 26, 40, 26) };
+        let pairs = next_random(mut seed) % n + 1;
+        let s1 = random_word(pairs, k, mut seed);
+        let s2 = random_word(pairs, k, mut seed);
+        let base = random_word(next_random(mut seed) % m + 1, j, mut seed);
+        check_case(mut t, s1, s2, base, mut seed);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,15 @@
+parker morris parser -> makkek
+hello world hold -> hdld
+leetcode programs sourcecode -> aauaaaaada
+a b b -> a
+abc abc xyz -> xyz
+abc bcd dcba -> aaaa
+z a zoo -> aoo
+aabbcc bcdefa fed -> aaa
+zyx wvu uvwxyz -> uvwuvw
+abcdefghijklmnopqrstuvwxy bcdefghijklmnopqrstuvwxyz thequickbrownfoxjumpsoverthelazydog -> aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+3000 pairs of 1 to 8 letters over 6: 6108 letters moved, checksum 325073661
+3000 pairs of 1 to 4 letters over 26: 4205 letters moved, checksum 154265447
+100 bases of 1000 letters: 37232 letters moved, checksum 312402883
+1000 pairs over 26, a base of 1000: 958 letters moved, checksum 291176886
+zyxwvutsrqponmlkjihgfedcb yxwvutsrqponmlkjihgfedcba zebra -> aaaaa
