@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 157 |
+| diagnostics | 158 |
 | false-positive | 138 |
 | perf | 107 |
 | missing-feature | 102 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 131 |
 | cli | 71 |
 | ownership | 60 |
-| parser | 42 |
+| parser | 43 |
 | interp | 31 |
 | runtime | 28 |
 | effect | 27 |
@@ -120,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-29 | 2026-11-07 | interp | low | Through a CONNECT tunnel (`https_proxy` set, https:// URL) the interpreter's client sends the request in absolute form (`GET https://proxied.invalid:P/tunnel`), where compiled code sends origin form (`GET /tunnel`); a Kara server then reads the wrong path (B-2026-11-07-26) | — |
 | B-2026-11-07-30 | 2026-11-07 | ownership | low | A bare `for a in args` over an owned `Vec` (an `own` parameter not used after the loop) whose element's payload is moved out (`Value.List(items) => ls.push(items)`) gets the fix `items.clone()`, though the message itself names the repair that takes no copy, `for a in args.into_iter()` | — |
 | B-2026-11-07-31 | 2026-11-07 | typecheck | low | An unannotated list literal of a `ref` to a `Copy` value (`let chain = [k];` with `k` from `order.iter()`) is typed `Vec[ref i64]`, and its later use where a `Vec[i64]` is wanted is refused "expected 'Vec[i64]', found 'Vec[ref i64]'" with no fix, though annotating the `let` (`let chain: Vec[i64] = [k];`) checks and runs | — |
+| B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 
 ### Relocated
 
