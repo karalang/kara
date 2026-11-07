@@ -74,6 +74,8 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `[]=` | `v[i] = x` | Index assignment through `IndexMut` ([design.md §9](../design.md#index-and-indexmut)). Panics if out of bounds |
 | `[a..b]=` | `v[a..b] = other` | Copies the elements of `other` into the range. Requires `T: Copy`; panics if the lengths differ. For other `T`, use `clone_from_slice` |
 
+The sorts guarantee their result (sorted, and stable where the table says so), not how they get there: the number and order of calls to `cmp` or `key` are unspecified and may change between releases. A comparator that is not a total order leaves the elements in some unspecified permutation, and never panics or loses an element.
+
 ## `Vec[T]`
 
 A growable array. It has every [`Slice[T]`](#slicet) method, plus:
