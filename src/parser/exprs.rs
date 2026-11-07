@@ -1814,6 +1814,32 @@ impl super::Parser {
             }
             Token::SelfType => {
                 self.advance();
+                // Rust's `Self { x }` constructor. Kāra writes a struct
+                // literal with the type's name; in an `impl` the name is
+                // known, so say so and offer it as the fix, then parse the
+                // literal as the fixed text would (B-2026-11-07-42).
+                let impl_name = self
+                    .impl_self_name
+                    .clone()
+                    .filter(|_| self.looks_like_struct_literal_at(self.pos));
+                if let Some(name) = impl_name {
+                    self.error_at(
+                        &format!(
+                            "`Self {{ .. }}` is Rust's struct literal: Kāra writes the type's \
+                             name, `{name} {{ .. }}`"
+                        ),
+                        start,
+                    );
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&start),
+                        crate::resolver::TextEdit {
+                            offset: start.offset,
+                            length: start.length,
+                            replacement: name.clone(),
+                        },
+                    );
+                    return self.parse_struct_literal_body(vec![name], &start);
+                }
                 Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),

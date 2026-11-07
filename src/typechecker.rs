@@ -3476,6 +3476,9 @@ pub struct TypeChecker<'a> {
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// The `?`s in a `fn main()` that returns `()`, which `check_function`
+    /// fixes by declaring `-> Result[(), AnyError]` (B-2026-11-07-43).
+    pub(super) unit_main_questions: Vec<Span>,
     /// Spans of the expressions that bind looser than a postfix `.`
     /// (`*r`, `-x`, `a + b`, `x as T`, a range, a closure): a fix that
     /// appends `.to_string()` / `.clone()` to one of these must wrap it in
@@ -4224,6 +4227,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
+            unit_main_questions: Vec::new(),
             loose_expr_spans: FxHashSet::default(),
             as_str_calls: FxHashMap::default(),
             call_bound_receiver_subs: None,

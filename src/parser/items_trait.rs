@@ -544,7 +544,9 @@ impl super::Parser {
     /// the block's parse ends.
     pub(super) fn parse_impl_block(&mut self, attributes: Vec<Attribute>) -> Option<ImplBlock> {
         let depth = self.effect_var_stack.len();
+        let saved_self = self.impl_self_name.take();
         let block = self.parse_impl_block_scoped(attributes);
+        self.impl_self_name = saved_self;
         self.effect_var_stack.truncate(depth);
         block
     }
@@ -576,6 +578,9 @@ impl super::Parser {
         } else {
             (None, first_type)
         };
+        if let TypeKind::Path(p) = &target_type.kind {
+            self.impl_self_name = p.segments.last().cloned();
+        }
 
         let where_clause = self.parse_optional_where_clause();
         // `impl T for U with <effects> { … }` — recognized, then rejected.

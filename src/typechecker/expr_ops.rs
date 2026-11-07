@@ -6233,9 +6233,26 @@ impl<'a> super::TypeChecker<'a> {
         let (ret_name, ret_args) = match &return_ty {
             Type::Named { name, args } => (name.clone(), args.clone()),
             _ => {
+                // A `?` in a function returning `()`: say how to make it
+                // one that can pass the error up; for `main`,
+                // `check_function` attaches that edit (B-2026-11-07-43).
+                let remedy = if return_ty != Type::Unit {
+                    String::new()
+                } else if self.current_fn_core_key.as_deref() == Some("main") {
+                    self.unit_main_questions.push(*span);
+                    ": `main` returns `()`; to use `?` here, declare \
+                     `fn main() -> Result[(), AnyError]` and end it with `Ok(())`"
+                        .to_string()
+                } else {
+                    ": to pass the error up, declare the function's return type as \
+                     `Result[T, E]` (or `Option[T]`) and return its value in `Ok(..)`; \
+                     or handle it here with `match`"
+                        .to_string()
+                };
                 self.type_error(
                     format!(
-                        "'?' requires the enclosing function to return `Result` or `Option`, found '{}'",
+                        "'?' requires the enclosing function to return `Result` or `Option`, \
+                         found '{}'{remedy}",
                         type_display(&return_ty)
                     ),
                     *span,

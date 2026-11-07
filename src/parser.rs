@@ -236,6 +236,8 @@ pub struct Parser {
     pub(crate) rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::foreign_calls`].
     pub(crate) foreign_calls: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// See [`crate::ast::Program::expr_stmt_semis`].
+    pub(crate) expr_stmt_semis: rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::token::Span>,
     /// See [`crate::ast::Program::rust_heap_ctor`].
     pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::parse_target_edits`].
@@ -414,6 +416,11 @@ pub struct Parser {
     /// scrutinee (`match P { x: 1 } { … }`), which the restriction would break.
     /// See `looks_like_struct_literal`.
     pub(crate) no_struct_literal: bool,
+    /// The type name an `impl` block's methods are for (`P` in `impl P`,
+    /// `Stack` in `impl[T] Stack[T]`), while its body parses: a Rust-style
+    /// `Self { .. }` struct literal is named and rewritten to it
+    /// (B-2026-11-07-42).
+    pub(crate) impl_self_name: Option<String>,
     /// When set, `seq {` and `par {` at the current position read as the
     /// NAME `seq` / `par` followed by the body block, not as a `seq {}` /
     /// `par {}` block: the words are contextual, so `let seq = true; if seq {
@@ -549,6 +556,7 @@ impl Parser {
             vec_macro_literals: rustc_hash::FxHashMap::default(),
             rust_box_new: rustc_hash::FxHashMap::default(),
             foreign_calls: rustc_hash::FxHashMap::default(),
+            expr_stmt_semis: rustc_hash::FxHashMap::default(),
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
             parse_target_edits: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
@@ -584,6 +592,7 @@ impl Parser {
             impl_trait_block_stack: Vec::new(),
             allow_type_class_param_name: false,
             no_struct_literal: false,
+            impl_self_name: None,
             keyword_block_is_name: false,
             fix_edits: FxHashMap::default(),
             fix_diffs: FxHashMap::default(),
@@ -978,6 +987,7 @@ impl Parser {
             nested_fstrings: std::mem::take(&mut self.nested_fstrings),
             rust_box_new: std::mem::take(&mut self.rust_box_new),
             foreign_calls: std::mem::take(&mut self.foreign_calls),
+            expr_stmt_semis: std::mem::take(&mut self.expr_stmt_semis),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             rust_reverse_wraps: self.rust_reverse_wraps(),
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
@@ -2366,6 +2376,26 @@ impl Parser {
                 length: colons.length,
                 replacement: ".".to_string(),
             });
+        }
+        // `std::thread::spawn` / `thread::spawn` / `tokio::spawn`: deleting
+        // the module path would leave a free `spawn`, which Kāra does not
+        // have (core-semantics §9.3, §11.1), so the fix would lead straight
+        // into a second error. Name the spawning forms instead, with no
+        // machine fix: the rewrite needs a group the program does not yet
+        // have (B-2026-11-07-41).
+        let n = names.len();
+        if names[n - 1] == "spawn" && matches!(names[n - 2].as_str(), "thread" | "task" | "tokio") {
+            let message = format!(
+                "`{written}` is Rust: Kāra has no free `spawn` (core-semantics §11.1); start a \
+                 task in a group, `let g = TaskGroup.new(); let h = g.spawn(|| ..);` (joined \
+                 when `g` drops, its value read with `h.join()`), or run branches with \
+                 `par {{ .. }}`"
+            );
+            self.error_at(&message, whole);
+            for &seg in &segments[..segments.len() - 1] {
+                self.tokens[seg + 1].token = Token::Dot;
+            }
+            return;
         }
         let message = if dropped > 0 {
             format!(

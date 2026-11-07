@@ -62,8 +62,11 @@ impl super::Parser {
                 // Try to parse an expression
                 match self.parse_expression_stmt() {
                     Some(expr) => {
+                        let semi = self.current_span();
                         if self.eat(&Token::Semicolon) {
                             // Expression statement
+                            self.expr_stmt_semis
+                                .insert(crate::resolver::SpanKey::from_span(&expr.span), semi);
                             stmts.push(Stmt {
                                 id: crate::ids::NodeId::DUMMY,
                                 span: expr.span,
@@ -647,7 +650,10 @@ impl super::Parser {
                         },
                     })
                 } else {
+                    let semi = self.current_span();
                     self.expect(&Token::Semicolon)?;
+                    self.expr_stmt_semis
+                        .insert(crate::resolver::SpanKey::from_span(&expr.span), semi);
                     Some(Stmt {
                         id: crate::ids::NodeId::DUMMY,
                         span: expr.span,

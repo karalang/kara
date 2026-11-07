@@ -2833,23 +2833,39 @@ impl<'a> super::TypeChecker<'a> {
             let body_ty = self.infer_block(&f.body);
             if body_ty == Type::Unit && !matches!(return_type, Type::Unit | Type::Error) {
                 let span = f.return_type.as_ref().map(|rt| rt.span).unwrap_or(f.span);
-                self.type_error(
-                    format!(
-                        "function '{}' declares return type '{}' but its body can complete \
-                         without producing a value — end it with a tail expression, `return` \
-                         on every path, or declare no return type",
-                        f.name,
-                        type_display(&return_type)
-                    ),
-                    span,
-                    TypeErrorKind::ReturnTypeMismatch,
+                let message = format!(
+                    "function '{}' declares return type '{}' but its body can complete \
+                     without producing a value — end it with a tail expression, `return` \
+                     on every path, or declare no return type",
+                    f.name,
+                    type_display(&return_type)
                 );
+                // `{ a + b; }` under `-> i64`: the last statement is an
+                // expression of exactly the return type, so the one repair
+                // is deleting its `;` (B-2026-11-07-43).
+                match self.semicolon_ending_tail_of(f, &return_type) {
+                    Some((semi, shown)) => self.type_error_with_fix_it(
+                        format!(
+                            "{message}. Here the last statement `{shown};` has type '{}': \
+                             remove the `;` to return it",
+                            type_display(&return_type)
+                        ),
+                        semi,
+                        TypeErrorKind::ReturnTypeMismatch,
+                        FixIt {
+                            span: semi,
+                            replacement: String::new(),
+                        },
+                    ),
+                    None => self.type_error(message, span, TypeErrorKind::ReturnTypeMismatch),
+                }
             }
         }
         self.default_literal_vars(literal_mark);
         if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
             self.check_unsolved_call_results(&f.body, &gp, errors_before_body);
         }
+        self.offer_unit_main_result_fix(f, self_type.is_none());
         self.offer_iter_let_fixes();
         self.offer_for_into_iter_fixes(f);
         self.offer_ref_list_annotations(f, errors_before_body);
@@ -2896,6 +2912,79 @@ impl<'a> super::TypeChecker<'a> {
         self.current_generic_frame = saved_generic_frame;
         self.current_fn_core_key = saved_core_key;
         self.lint_override_stack.pop();
+    }
+
+    /// A `?` in `fn main()` returning `()`: the fix declares
+    /// `-> Result[(), AnyError]` (design.md §10: an `Err` exits 1 printing
+    /// it) and ends the body with `Ok(())`, attached to the first such `?`
+    /// (B-2026-11-07-43).
+    fn offer_unit_main_result_fix(&mut self, f: &Function, top_level: bool) {
+        let questions = std::mem::take(&mut self.unit_main_questions);
+        let Some(first) = questions.first() else {
+            return;
+        };
+        if f.name != "main" || !top_level || f.return_type.is_some() {
+            return;
+        }
+        let body = &f.body.span;
+        let mut edits = vec![crate::resolver::TextEdit {
+            offset: body.offset,
+            length: 0,
+            replacement: "-> Result[(), AnyError] ".to_string(),
+        }];
+        match &f.body.final_expr {
+            Some(tail) => {
+                let sep = if tail.span.line == body.line {
+                    " ".to_string()
+                } else {
+                    format!("\n{}", " ".repeat(tail.span.column.saturating_sub(1)))
+                };
+                edits.push(crate::resolver::TextEdit {
+                    offset: tail.span.offset + tail.span.length,
+                    length: 0,
+                    replacement: format!(";{sep}Ok(())"),
+                });
+            }
+            None => {
+                let one_line = f.body.stmts.last().is_none_or(|s| s.span.line == body.line);
+                let indent = f.span.column.saturating_sub(1);
+                let replacement = if one_line {
+                    "Ok(()) ".to_string()
+                } else {
+                    format!("    Ok(())\n{}", " ".repeat(indent))
+                };
+                edits.push(crate::resolver::TextEdit {
+                    offset: body.offset + body.length.saturating_sub(1),
+                    length: 0,
+                    replacement,
+                });
+            }
+        }
+        self.error_fix_diffs
+            .insert(SpanKey::from_span(first), edits);
+    }
+
+    /// For a tail-less body: the `;` of its last statement, with the
+    /// statement's text, when that statement is an expression of exactly
+    /// `return_type`, so deleting the `;` returns it (B-2026-11-07-43).
+    fn semicolon_ending_tail_of(&self, f: &Function, return_type: &Type) -> Option<(Span, String)> {
+        let last = f.body.stmts.last()?;
+        let StmtKind::Expr(e) = &last.kind else {
+            return None;
+        };
+        let key = SpanKey::from_span(&e.span);
+        let semi = *self.program.expr_stmt_semis.get(&key)?;
+        let ty = self.resolved_now(self.expr_types.get(&key)?);
+        if ty != *return_type || matches!(ty, Type::Error | Type::Never) {
+            return None;
+        }
+        let text = crate::formatter::render_expr(e);
+        let shown = if text.len() <= 40 && !text.contains('\n') {
+            text
+        } else {
+            "..".to_string()
+        };
+        Some((semi, shown))
     }
 
     /// Whether `object` is a builtin `Vec` / `VecDeque` / `Set` / `Map` (or

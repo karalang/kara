@@ -884,6 +884,11 @@ pub struct Program {
     /// the resolver attaches it when the name turns out undeclared
     /// (B-2026-11-07-40).
     pub foreign_calls: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// The `;` that ends each expression statement, keyed by the
+    /// expression's span (a statement's span stops at its expression). Set
+    /// by the PARSER; the typechecker's fix for `a + b;` as a function's
+    /// last statement deletes it (B-2026-11-07-43).
+    pub expr_stmt_semis: rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::token::Span>,
     /// Rust's `BinaryHeap.new()` / `BinaryHeap.from(v)`, keyed by the offset
     /// of `BinaryHeap`, with the edit that writes `PriorityQueue.max_first` /
     /// `max_first_from`: Kāra's queue pops the smallest first unless built

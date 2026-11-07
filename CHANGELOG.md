@@ -74,6 +74,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   for a value name and, for a name of five letters or fewer, only a
   one-edit neighbour, so `karac fix` no longer rewrites `null` to `Mul` or
   `func main()` to `func; main();` (B-2026-11-07-40).
+- **Rust's day-one shapes get the Kāra form, and a fix only where it is the
+  one repair.** `std::thread::spawn(..)` names `TaskGroup.spawn` and `par`
+  with no fix (the fix used to write a free `spawn`, which the next check
+  refused) (B-2026-11-07-41). `Self { x }` in an impl is fixed to the
+  type's name, `P { x }`, where `karac fix` used to insert a `;`
+  (B-2026-11-07-42). A body whose last statement is `a + b;` of the return
+  type is fixed by removing the `;`, and `?` in a `fn main()` returning
+  `()` is fixed to `fn main() -> Result[(), AnyError]` ending in `Ok(())`
+  (B-2026-11-07-43).
 
 ---
 
