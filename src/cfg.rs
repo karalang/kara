@@ -962,6 +962,23 @@ impl<'a> CfgBuilder<'a> {
                         self.note_local_introduced(name);
                     }
                 }
+                // A `Define` marker for each binding, as `Let` records: a
+                // `let .. else` in a loop binds afresh each iteration, so
+                // moving what it bound is not a move of the previous
+                // iteration's value (B-2026-11-07-14).
+                for name in names {
+                    self.record_use(
+                        after,
+                        UseSite {
+                            binding: name,
+                            kind: UseKind::Define,
+                            span: pattern.span,
+                            consume_origin: ConsumeOrigin::Direct,
+                            place: PlacePath::new(),
+                            capture_scope: None,
+                        },
+                    );
+                }
                 after
             }
             StmtKind::Defer { body } => {

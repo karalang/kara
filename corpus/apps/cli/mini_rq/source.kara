@@ -1,0 +1,887 @@
+// mini_rq: a job queue in the shape of rq. Jobs wait on named queues,
+// listed by priority, and a pool of worker tasks runs them: the workers
+// share one channel of runs behind a mutex, count what they do in atomics
+// and a locked table, and send each outcome back. The queue itself stays
+// on the main task, where it follows dependencies, retries a failure at
+// once or after a backoff, times out a slow job, schedules a job for
+// later, cancels and requeues, and expires old results on a fake clock.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+import std.sync.{channel, Sender, Receiver, Mutex, Atomic};
+
+const WORKERS: i64 = 3;
+const DEFAULT_TIMEOUT: i64 = 180;
+const DEFAULT_TTL: i64 = 500;
+const FIB_MAX: i64 = 90;
+const PRIMES_MAX: i64 = 1000000;
+const CAPACITY: i64 = 64;
+
+// ------------------------------------------------------------ tokens
+
+fn is_name(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 32 and b[0] >= b'a' and b[0] <= b'z'
+        and b.iter().all(|c| (c >= b'a' and c <= b'z') or (c >= b'0' and c <= b'9') or c == b'_')
+}
+
+// An i64 written as an optional `-` and 1 to 9 digits.
+fn number(s: Str) -> Option[i64] {
+    let d = s.strip_prefix("-") ?? s;
+    if d.len() == 0 or d.len() > 9 or not d.bytes().iter().all(|c| c >= b'0' and c <= b'9') {
+        return None;
+    }
+    i64.parse(s).ok()
+}
+
+// A number from `lo` to `hi`, written without a sign.
+fn count(s: Str, lo: i64, hi: i64) -> Option[i64] {
+    if s.starts_with("-") {
+        return None;
+    }
+    let n = number(s)?;
+    if n < lo or n > hi { None } else { Some(n) }
+}
+
+fn words(line: Str) -> Vec[String] {
+    let body = match line.split_once("#") {
+        Some((before, _)) => before,
+        None => line,
+    };
+    body.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+fn joined(parts: Slice[String], sep: Str) -> String {
+    let mut out = String.new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+    }
+    out
+}
+
+fn or_none(parts: Slice[String], none: Str) -> String {
+    if parts.is_empty() { none.to_string() } else { joined(parts, ", ") }
+}
+
+// ------------------------------------------------------------ functions
+
+#[derive(Copy, Clone)]
+enum Func { Add, Fib, Words, Echo, Flaky, Slow, Primes, Boom }
+
+fn func_of(name: Str) -> Option[Func] {
+    match name {
+        "add" => Some(Func.Add),
+        "fib" => Some(Func.Fib),
+        "words" => Some(Func.Words),
+        "echo" => Some(Func.Echo),
+        "flaky" => Some(Func.Flaky),
+        "slow" => Some(Func.Slow),
+        "primes" => Some(Func.Primes),
+        "boom" => Some(Func.Boom),
+        _ => None,
+    }
+}
+
+fn func_name(f: Func) -> Str {
+    match f {
+        Func.Add => "add",
+        Func.Fib => "fib",
+        Func.Words => "words",
+        Func.Echo => "echo",
+        Func.Flaky => "flaky",
+        Func.Slow => "slow",
+        Func.Primes => "primes",
+        Func.Boom => "boom",
+    }
+}
+
+fn usage_of(f: Func) -> Str {
+    match f {
+        Func.Add => "add <a> <b>",
+        Func.Fib => "fib <n>",
+        Func.Words => "words <word>...",
+        Func.Echo => "echo <word>...",
+        Func.Flaky => "flaky <n>",
+        Func.Slow => "slow <seconds>",
+        Func.Primes => "primes <n>",
+        Func.Boom => "boom",
+    }
+}
+
+fn args_ok(f: Func, args: Slice[String]) -> bool {
+    match f {
+        Func.Add => args.len() == 2 and args.iter().all(|a| number(a).is_some()),
+        Func.Fib | Func.Flaky | Func.Slow | Func.Primes => {
+            args.len() == 1 and count(args[0], 0, 999999999).is_some()
+        }
+        Func.Words | Func.Echo => args.len() >= 1,
+        Func.Boom => args.is_empty(),
+    }
+}
+
+// ------------------------------------------------------------ the workers
+
+// A run handed to a worker: everything it needs, and nothing it shares.
+struct Run {
+    slot: i64,
+    func: Func,
+    args: Vec[String],
+    attempt: i64,
+    timeout: i64,
+}
+
+struct Done {
+    slot: i64,
+    outcome: Result[String, String],
+}
+
+fn arg(args: Slice[String], i: i64) -> i64 {
+    number(args[i]) ?? 0
+}
+
+fn fib(n: i64) -> i64 {
+    let mut a = 0;
+    let mut b = 1;
+    for _ in 0..n {
+        let next = a + b;
+        a = b;
+        b = next;
+    }
+    a
+}
+
+fn primes_below(n: i64) -> i64 {
+    let mut sieve = Vec.filled(n, true);
+    let mut found = 0;
+    for i in 2..n {
+        if sieve[i] {
+            found += 1;
+            let mut k = i * i;
+            while k < n {
+                sieve[k] = false;
+                k += i;
+            }
+        }
+    }
+    found
+}
+
+fn perform(run: Run) -> Result[String, String] {
+    let a = ref run.args;
+    match run.func {
+        Func.Add => Ok(f"{arg(a, 0) + arg(a, 1)}"),
+        Func.Fib => {
+            let n = arg(a, 0);
+            if n > FIB_MAX {
+                return Err(f"ValueError: fib({n}) does not fit in 64 bits");
+            }
+            Ok(f"{fib(n)}")
+        }
+        Func.Words => Ok(f"{a.len()} words"),
+        Func.Echo => Ok(joined(a, " ")),
+        Func.Flaky => {
+            let k = arg(a, 0);
+            if run.attempt < k {
+                Err(f"FlakyError: attempt {run.attempt} of {k}")
+            } else {
+                Ok(f"ok on attempt {run.attempt}")
+            }
+        }
+        Func.Slow => {
+            let t = arg(a, 0);
+            if t > run.timeout {
+                Err(f"JobTimeoutException: Task exceeded maximum timeout value ({run.timeout} seconds)")
+            } else {
+                Ok(f"slept {t}s")
+            }
+        }
+        Func.Primes => {
+            let n = arg(a, 0);
+            if n > PRIMES_MAX {
+                return Err(f"ValueError: primes below {n} is too many");
+            }
+            Ok(f"{primes_below(n)} primes below {n}")
+        }
+        Func.Boom => Err("ZeroDivisionError: division by zero"),
+    }
+}
+
+// What the workers share: the channel they take runs from, and what they
+// have done.
+sync struct Pool {
+    inbox: Mutex[Receiver[Run]],
+    runs: Atomic[i64],
+    failures: Atomic[i64],
+    by_func: Mutex[SortedMap[String, i64]],
+}
+
+fn worker(pool: Pool, out: own Sender[Done]) {
+    loop {
+        let next = {
+            let g = pool.inbox.lock();
+            g.value.recv()
+        };
+        let Some(run) = next else {
+            return;
+        };
+        let slot = run.slot;
+        let name = func_name(run.func);
+        let outcome = perform(run);
+        pool.runs.fetch_add(1);
+        if outcome.is_err() {
+            pool.failures.fetch_add(1);
+        }
+        {
+            let g = pool.by_func.lock();
+            let n = g.value.get(name) ?? 0;
+            g.value.insert(name.to_string(), n + 1);
+        }
+        if out.send(Done { slot: slot, outcome: outcome }).is_err() {
+            return;
+        }
+    }
+}
+
+// ------------------------------------------------------------ the queue
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Status { Queued, Deferred, Scheduled, Finished, Failed, Canceled, Expired }
+
+fn status_name(s: Status) -> Str {
+    match s {
+        Status.Queued => "queued",
+        Status.Deferred => "deferred",
+        Status.Scheduled => "scheduled",
+        Status.Finished => "finished",
+        Status.Failed => "failed",
+        Status.Canceled => "canceled",
+        Status.Expired => "expired",
+    }
+}
+
+const OPTIONS: Array[Str, 5] = ["depends_on", "retry", "backoff", "timeout", "ttl"];
+
+const REGISTRIES: Array[Status, 6] = [
+    Status.Deferred, Status.Scheduled, Status.Finished, Status.Failed, Status.Canceled, Status.Expired,
+];
+
+struct Job {
+    id: String,
+    queue: i64,
+    func: Func,
+    args: Vec[String],
+    depends: Vec[String],
+    retry: i64,
+    retries_left: i64,
+    backoff: Vec[i64],
+    timeout: i64,
+    ttl: i64,
+    status: Status,
+    attempt: i64,
+    result: Option[String],
+    error: Option[String],
+    due: i64,
+    expires: i64,
+}
+
+impl Job {
+    fn new(id: Str, queue: i64, func: Func, args: own Vec[String]) -> Job {
+        Job {
+            id: id.to_string(),
+            queue: queue,
+            func: func,
+            args: args,
+            depends: Vec.new(),
+            retry: 0,
+            retries_left: 0,
+            backoff: Vec.new(),
+            timeout: DEFAULT_TIMEOUT,
+            ttl: DEFAULT_TTL,
+            status: Status.Queued,
+            attempt: 1,
+            result: None,
+            error: None,
+            due: 0,
+            expires: 0,
+        }
+    }
+}
+
+struct Scheduled {
+    due: i64,
+    seq: i64,
+    job: i64,
+}
+
+struct Rq {
+    names: Vec[String],
+    queues: Vec[VecDeque[i64]],
+    jobs: Vec[Job],
+    index: Map[String, i64],
+    scheduled: Vec[Scheduled],
+    seq: i64,
+    clock: i64,
+    to_workers: Sender[Run],
+    from_workers: Receiver[Done],
+}
+
+impl Rq {
+    fn new(to_workers: own Sender[Run], from_workers: own Receiver[Done]) -> Rq {
+        Rq {
+            names: Vec.new(),
+            queues: Vec.new(),
+            jobs: Vec.new(),
+            index: Map.new(),
+            scheduled: Vec.new(),
+            seq: 0,
+            clock: 0,
+            to_workers: to_workers,
+            from_workers: from_workers,
+        }
+    }
+
+    fn queue_of(self, name: Str) -> Option[i64] {
+        self.names.iter().position(|n| n == name)
+    }
+
+    fn job(self, id: Str) -> Result[i64, String] {
+        match self.index.get(id) {
+            Some(i) => Ok(i),
+            None => Err(f"no job '{id}'"),
+        }
+    }
+
+    fn done(self, id: Str) -> bool {
+        let i = self.index.get(id) ?? -1;
+        i >= 0 and (self.jobs[i].status == Status.Finished or self.jobs[i].status == Status.Expired)
+    }
+
+    fn waiting_on(self, j: i64) -> Vec[String] {
+        self.jobs[j].depends.iter().filter(|d| not self.done(d)).cloned().collect()
+    }
+
+    fn schedule(mut ref self, j: i64, due: i64) {
+        self.jobs[j].status = Status.Scheduled;
+        self.jobs[j].due = due;
+        self.scheduled.push(Scheduled { due: due, seq: self.seq, job: j });
+        self.seq += 1;
+    }
+
+    fn put(mut ref self, j: i64, front: bool) {
+        self.jobs[j].status = Status.Queued;
+        let q = self.jobs[j].queue;
+        if front {
+            self.queues[q].push_front(j);
+        } else {
+            self.queues[q].push_back(j);
+        }
+    }
+
+    // ---------------------------------------------- script commands
+
+    fn add_queue(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 2 {
+            return Err("usage: queue <name>");
+        }
+        if not is_name(w[1]) {
+            return Err(f"bad queue name '{w[1]}'");
+        }
+        if self.queue_of(w[1]).is_some() {
+            return Err(f"queue {w[1]} already exists");
+        }
+        self.names.push(w[1].clone());
+        self.queues.push(VecDeque.new());
+        Ok(())
+    }
+
+    // A job from `<queue> <id> <func> [args] [options]`, and whether it
+    // goes to the front of its queue.
+    fn build(self, w: Slice[String], scheduled: bool) -> Result[(Job, bool), String] {
+        if w.len() < 3 {
+            return Err("usage: enqueue <queue> <id> <func> [args] [options]");
+        }
+        let Some(q) = self.queue_of(w[0]) else {
+            return Err(f"no queue '{w[0]}'");
+        };
+        let id = ref w[1];
+        if not is_name(id) {
+            return Err(f"bad job id '{id}'");
+        }
+        if self.index.contains_key(id) {
+            return Err(f"job {id} already exists");
+        }
+        let Some(func) = func_of(w[2]) else {
+            return Err(f"unknown function '{w[2]}'");
+        };
+        let mut args: Vec[String] = Vec.new();
+        let mut opts: SortedMap[String, String] = SortedMap.new();
+        let mut front = false;
+        for t in w[3..].iter() {
+            if t == "at_front" {
+                front = true;
+            } else if let Some((k, v)) = t.split_once("=") {
+                if not OPTIONS.contains(k) {
+                    return Err(f"unknown option '{k}'");
+                }
+                if opts.contains_key(k) {
+                    return Err(f"duplicate option {k}");
+                }
+                opts.insert(k.to_string(), v.to_string());
+            } else {
+                args.push(t.clone());
+            }
+        }
+        if not args_ok(func, args) {
+            return Err(f"bad arguments for {func_name(func)}: {usage_of(func)}");
+        }
+        let mut job = Job.new(id, q, func, args);
+        if let Some(v) = opts.get("retry") {
+            let Some(n) = count(v, 0, 9) else {
+                return Err(f"bad retry '{v}'");
+            };
+            job.retry = n;
+            job.retries_left = n;
+        }
+        if let Some(v) = opts.get("backoff") {
+            for p in v.split(",") {
+                let Some(n) = count(p, 1, 9999) else {
+                    return Err(f"bad backoff '{v}'");
+                };
+                job.backoff.push(n);
+            }
+            if not opts.contains_key("retry") {
+                return Err("backoff needs retry");
+            }
+        }
+        if let Some(v) = opts.get("timeout") {
+            job.timeout = count(v, 1, 9999).ok_or(f"bad timeout '{v}'")?;
+        }
+        if let Some(v) = opts.get("ttl") {
+            job.ttl = count(v, 1, 9999).ok_or(f"bad ttl '{v}'")?;
+        }
+        if let Some(v) = opts.get("depends_on") {
+            if scheduled {
+                return Err("depends_on is not allowed with enqueue_in");
+            }
+            for d in v.split(",") {
+                if not self.index.contains_key(d) {
+                    return Err(f"no job '{d}'");
+                }
+                if job.depends.contains(d.to_string()) {
+                    return Err(f"duplicate dependency {d}");
+                }
+                job.depends.push(d.to_string());
+            }
+        }
+        Ok((job, front))
+    }
+
+    fn add(mut ref self, job: own Job) -> i64 {
+        let j = self.jobs.len();
+        self.index.insert(job.id.clone(), j);
+        self.jobs.push(job);
+        j
+    }
+
+    fn enqueue(mut ref self, w: Slice[String]) -> Result[(), String] {
+        let (job, front) = self.build(w[1..], false)?;
+        let j = self.add(job);
+        let waiting = self.waiting_on(j);
+        let id = self.jobs[j].id.clone();
+        let q = self.names[self.jobs[j].queue].clone();
+        if not waiting.is_empty() {
+            self.jobs[j].status = Status.Deferred;
+            println(f"  {id}: deferred on {q} until {joined(waiting, ", ")} finish");
+            return Ok(());
+        }
+        self.put(j, front);
+        let at = if front { " at the front" } else { "" };
+        println(f"  {id}: queued on {q}{at}");
+        Ok(())
+    }
+
+    fn enqueue_in(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() < 2 {
+            return Err("usage: enqueue_in <seconds> <queue> <id> <func> [args] [options]");
+        }
+        let Some(delay) = count(w[1], 1, 99999) else {
+            return Err(f"bad delay '{w[1]}'");
+        };
+        let (job, _) = self.build(w[2..], true)?;
+        let j = self.add(job);
+        self.schedule(j, self.clock + delay);
+        let job = ref self.jobs[j];
+        println(f"  {job.id}: scheduled on {self.names[job.queue]} for {job.due}");
+        Ok(())
+    }
+
+    fn cancel(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 2 {
+            return Err("usage: cancel <id>");
+        }
+        let j = self.job(w[1])?;
+        let q = self.jobs[j].queue;
+        match self.jobs[j].status {
+            Status.Queued => self.queues[q].retain(|k| k != j),
+            Status.Scheduled => self.scheduled.retain(|s| s.job != j),
+            Status.Deferred => {}
+            s => return Err(f"job {w[1]} is {status_name(s)}"),
+        }
+        self.jobs[j].status = Status.Canceled;
+        println(f"  canceled {w[1]}");
+        Ok(())
+    }
+
+    fn requeue(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 2 {
+            return Err("usage: requeue <id>");
+        }
+        let j = self.job(w[1])?;
+        if self.jobs[j].status != Status.Failed {
+            return Err(f"job {w[1]} is not failed");
+        }
+        self.jobs[j].attempt += 1;
+        self.jobs[j].error = None;
+        self.put(j, false);
+        println(f"  requeued {w[1]} on {self.names[self.jobs[j].queue]}");
+        Ok(())
+    }
+
+    fn tick(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 2 {
+            return Err("usage: tick <seconds>");
+        }
+        let Some(n) = count(w[1], 1, 99999) else {
+            return Err(f"bad seconds '{w[1]}'");
+        };
+        self.clock += n;
+        println(f"  clock {self.clock}");
+        let now = self.clock;
+        let mut due: Vec[Scheduled] = Vec.new();
+        let mut later: Vec[Scheduled] = Vec.new();
+        for s in self.scheduled.drain(0..self.scheduled.len()) {
+            if s.due <= now {
+                due.push(s);
+            } else {
+                later.push(s);
+            }
+        }
+        self.scheduled = later;
+        due.sort_by_key(|s| (s.due, s.seq));
+        for s in due.iter() {
+            self.put(s.job, false);
+            let job = ref self.jobs[s.job];
+            println(f"  {job.id}: due, queued on {self.names[job.queue]}");
+        }
+        for job in self.jobs.iter_mut() {
+            if job.status == Status.Finished and job.expires <= now {
+                job.status = Status.Expired;
+                job.result = None;
+                println(f"  {job.id}: result expired");
+            }
+        }
+        Ok(())
+    }
+
+    // Runs rounds until every queue is empty. A round takes every queued
+    // job, highest queue first, hands them all to the workers, and then
+    // settles the outcomes in the order the jobs were taken, whichever
+    // worker finished first.
+    fn work(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 1 {
+            return Err("usage: work");
+        }
+        let mut rounds = 0;
+        while self.queues.iter().any(|q| not q.is_empty()) {
+            rounds += 1;
+            let mut batch: Vec[i64] = Vec.new();
+            for q in self.queues.iter_mut() {
+                while let Some(j) = q.pop_front() {
+                    batch.push(j);
+                }
+            }
+            let ids: Vec[String] = batch.iter().map(|j| self.jobs[j].id.clone()).collect();
+            println(f"  round {rounds}: {joined(ids, ", ")}");
+            for (slot, j) in batch.iter().enumerate() {
+                let job = ref self.jobs[j];
+                let run = Run {
+                    slot: slot,
+                    func: job.func,
+                    args: job.args.clone(),
+                    attempt: job.attempt,
+                    timeout: job.timeout,
+                };
+                self.to_workers.send(run).map_err(|_| "the workers are gone")?;
+            }
+            let mut outcomes: Vec[Option[Result[String, String]]] = Vec.filled(batch.len(), None);
+            for _ in 0..batch.len() {
+                let Some(done) = self.from_workers.recv() else {
+                    return Err("the workers are gone");
+                };
+                outcomes[done.slot] = Some(done.outcome);
+            }
+            for (slot, j) in batch.iter().enumerate() {
+                let outcome = outcomes[slot].take() ?? Err("lost");
+                self.settle(j, outcome);
+            }
+            self.release();
+        }
+        if rounds == 0 {
+            println("  nothing to do");
+        } else {
+            let s = if rounds == 1 { "" } else { "s" };
+            println(f"  idle after {rounds} round{s}");
+        }
+        Ok(())
+    }
+
+    fn settle(mut ref self, j: i64, outcome: own Result[String, String]) {
+        let id = self.jobs[j].id.clone();
+        match outcome {
+            Ok(text) => {
+                println(f"  {id}: finished -> {text}");
+                let job = mut ref self.jobs[j];
+                job.status = Status.Finished;
+                job.result = Some(text);
+                job.expires = self.clock + job.ttl;
+            }
+            Err(e) => {
+                let job = mut ref self.jobs[j];
+                if job.retries_left == 0 {
+                    println(f"  {id}: failed ({e})");
+                    job.status = Status.Failed;
+                    job.error = Some(e);
+                    return;
+                }
+                job.retries_left -= 1;
+                job.attempt += 1;
+                let n = job.retry - job.retries_left;
+                if job.backoff.is_empty() {
+                    println(f"  {id}: failed ({e}), retry {n} of {job.retry} now");
+                    self.put(j, false);
+                } else {
+                    let delay = job.backoff[n.min(job.backoff.len()) - 1];
+                    println(f"  {id}: failed ({e}), retry {n} of {job.retry} in {delay}s");
+                    self.schedule(j, self.clock + delay);
+                }
+            }
+        }
+    }
+
+    // Queues every deferred job whose dependencies have all finished, in
+    // the order the jobs were made.
+    fn release(mut ref self) {
+        for j in 0..self.jobs.len() {
+            if self.jobs[j].status == Status.Deferred and self.waiting_on(j).is_empty() {
+                self.put(j, false);
+                let job = ref self.jobs[j];
+                println(f"  {job.id}: dependencies met, queued on {self.names[job.queue]}");
+            }
+        }
+    }
+
+    // ---------------------------------------------- inspection
+
+    fn inspect(self, w: Slice[String]) -> Result[(), String] {
+        if w.is_empty() {
+            return Err("missing command");
+        }
+        match w[0].as_str() {
+            "status" => {
+                if w.len() != 1 {
+                    return Err("usage: @ status");
+                }
+                println(f"  clock {self.clock}");
+                for (q, name) in self.names.iter().enumerate() {
+                    let ids: Vec[String] = self.queues[q].iter().map(|j| self.jobs[j].id.clone()).collect();
+                    println(f"  {name}: {or_none(ids, "empty")}");
+                }
+            }
+            "registries" => {
+                if w.len() != 1 {
+                    return Err("usage: @ registries");
+                }
+                self.registries();
+            }
+            "job" => {
+                if w.len() != 2 {
+                    return Err("usage: @ job <id>");
+                }
+                let j = self.job(w[1])?;
+                let job = ref self.jobs[j];
+                let mut s = f"  {job.id}: {status_name(job.status)} on {self.names[job.queue]}, {func_name(job.func)}({joined(job.args, ", ")}), attempt {job.attempt}";
+                if job.retry > 0 {
+                    s.push_str(f", {job.retries_left} of {job.retry} retries left");
+                }
+                match job.status {
+                    Status.Finished => {
+                        let r = job.result.clone() ?? String.new();
+                        s.push_str(f", result {r}, expires at {job.expires}");
+                    }
+                    Status.Failed => {
+                        let e = job.error.clone() ?? String.new();
+                        s.push_str(f", error {e}");
+                    }
+                    Status.Scheduled => s.push_str(f", due at {job.due}"),
+                    Status.Deferred => {
+                        let waiting = self.waiting_on(j);
+                        s.push_str(f", waiting on {joined(waiting, ", ")}");
+                    }
+                    _ => {}
+                }
+                println(s);
+            }
+            other => return Err(f"unknown command '@ {other}'"),
+        }
+        Ok(())
+    }
+
+    fn registries(self) {
+        for status in REGISTRIES.iter() {
+            let mut ids: Vec[String] = self.jobs.iter().filter(|j| j.status == status).map(|j| j.id.clone()).collect();
+            ids.sort();
+            if status == Status.Scheduled {
+                ids = ids.iter().map(|id| f"{id}@{self.jobs[self.index[id]].due}").collect();
+            }
+            println(f"  {status_name(status)}: {or_none(ids, "none")}");
+        }
+    }
+
+    fn command(mut ref self, w: Slice[String]) -> Result[(), String] {
+        match w[0].as_str() {
+            "@" => self.inspect(w[1..]),
+            "queue" => self.add_queue(w),
+            "enqueue" => self.enqueue(w),
+            "enqueue_in" => self.enqueue_in(w),
+            "cancel" => self.cancel(w),
+            "requeue" => self.requeue(w),
+            "tick" => self.tick(w),
+            "work" => self.work(w),
+            other => Err(f"unknown command '{other}'"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn read(path: Str) -> Result[String, String] {
+    fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")
+}
+
+fn play(text: Str, to_workers: own Sender[Run], from_workers: own Receiver[Done]) {
+    let mut rq = Rq.new(to_workers, from_workers);
+    println(f"== script ({WORKERS} workers)");
+    for (i, line) in text.split("\n").enumerate() {
+        let w = words(line);
+        if w.is_empty() {
+            continue;
+        }
+        println(f"> {joined(w, " ")}");
+        if let Err(e) = rq.command(w) {
+            println(f"  error: script.txt:{i + 1}: {e}");
+        }
+    }
+    println("== end");
+    println(f"  clock {rq.clock}");
+    rq.registries();
+}   // rq drops here, which closes the workers' channel
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data").map_err(|e| f"cannot create data: {e}")?;
+    write_data()?;
+    let text = read("data/script.txt")?;
+    let (to_workers, inbox): (Sender[Run], Receiver[Run]) = channel(CAPACITY);
+    let (outbox, from_workers): (Sender[Done], Receiver[Done]) = channel(CAPACITY);
+    let pool = Pool {
+        inbox: Mutex.new(inbox),
+        runs: Atomic.new(0),
+        failures: Atomic.new(0),
+        by_func: Mutex.new(SortedMap.new()),
+    };
+    {
+        let workers = TaskGroup.new();
+        for _ in 0..WORKERS {
+            let out = outbox.clone();
+            workers.spawn(|| worker(pool, out));
+        }
+        play(text, to_workers, from_workers);
+    }   // every worker has seen the channel close; the group joins them
+    let tally = {
+        let g = pool.by_func.lock();
+        let parts: Vec[String] = g.value.iter().map(|(f, n)| f"{f} {n}").collect();
+        joined(parts, ", ")
+    };
+    println(f"  {WORKERS} workers: {pool.runs.load()} runs, {pool.failures.load()} failed");
+    println(f"  by function: {tally}");
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/script.txt", file_0())?;
+    Ok(())
+}
+
+// data/script.txt
+fn file_0() -> String {
+    """
+232051756575657320617265206c6973746564206279207072696f726974793a206120726f756e642074616b65732074
+68652068696768206a6f62732066697273742e0a717565756520686967680a71756575652064656661756c740a717565
+7565206c6f770a0a656e71756575652064656661756c74206164643120616464203220330a656e717565756520646566
+61756c74206669623330206669622033300a656e7175657565206c6f7720636f756e7420776f72647320746865207175
+69636b2062726f776e20666f78206a756d70732074746c3d35300a656e71756575652068696768207061676520656368
+6f2077616b6520757020746865206f6e63616c6c0a656e71756575652064656661756c74207265706f7274206563686f
+207265706f727420726561647920646570656e64735f6f6e3d616464312c66696233300a656e71756575652064656661
+756c7420666c616b793120666c616b7920332072657472793d330a656e71756575652064656661756c7420666c616b79
+3220666c616b7920342072657472793d32206261636b6f66663d31302c33300a656e71756575652064656661756c7420
+736c6f773120736c6f77203230302074696d656f75743d3132300a656e71756575652064656661756c7420736c6f7732
+20736c6f772036300a656e7175657565206c6f7720636c65616e7570206563686f20636c65616e757020646f6e652064
+6570656e64735f6f6e3d736c6f77312c7265706f72740a656e71756575652064656661756c7420666972737420656368
+6f206a756d7020746865206c696e652061745f66726f6e740a656e7175657565206c6f77207369657665207072696d65
+73203230303030300a656e7175657565206c6f7720626967207072696d657320323030303030300a656e717565756520
+64656661756c7420626967666962206669622039312072657472793d310a656e71756575652064656661756c74206f6f
+707320626f6f6d0a40207374617475730a40206a6f62207265706f72740a776f726b0a4020726567697374726965730a
+40206a6f6220666c616b79320a7469636b2031300a776f726b0a40206a6f6220666c616b79320a7469636b2033300a77
+6f726b0a40206a6f6220636c65616e75700a7265717565756520736c6f77310a63616e63656c20736c6f77310a656e71
+756575652064656661756c7420736c6f773320736c6f77203130302074696d656f75743d3135300a656e71756575655f
+696e2036302064656661756c74206c61746572206563686f2066726f6d20746865206675747572650a656e7175657565
+5f696e203330206869676820736f6f6e2061646420343020320a4020726567697374726965730a7469636b2032390a40
+207374617475730a7469636b20310a776f726b0a7469636b2033300a776f726b0a726571756575652066696233300a72
+657175657565206269670a776f726b0a40206a6f62206269670a7469636b203430300a40206a6f6220616464310a4020
+6a6f62206f6f70730a63616e63656c20636c65616e75700a4020726567697374726965730a0a23204d697374616b6573
+2c2065616368207265706f7274656420616e6420736b69707065642e0a717565756520686967680a7175657565204261
+642d4e616d650a71756575650a656e7175657565206e6f7768657265206a31206563686f2068690a656e717565756520
+64656661756c742061646431206563686f20616761696e0a656e71756575652064656661756c74206a2d32206563686f
+2068690a656e71756575652064656661756c74206a332073696e67206c61206c610a656e71756575652064656661756c
+74206a342061646420310a656e71756575652064656661756c74206a352061646420312074776f0a656e717565756520
+64656661756c74206a36206669620a656e71756575652064656661756c74206a3720626f6f6d2065787472610a656e71
+756575652064656661756c74206a38206563686f2068692072657472793d31300a656e71756575652064656661756c74
+206a39206563686f206869206261636b6f66663d350a656e71756575652064656661756c74206a3130206563686f2068
+692072657472793d31206261636b6f66663d352c780a656e71756575652064656661756c74206a3131206563686f2068
+6920646570656e64735f6f6e3d67686f73740a656e71756575652064656661756c74206a3132206563686f2068692064
+6570656e64735f6f6e3d616464312c616464310a656e71756575652064656661756c74206a3133206563686f20686920
+636f6c6f75723d7265640a656e71756575652064656661756c74206a3134206563686f2068692072657472793d312072
+657472793d320a656e71756575652064656661756c74206a3135206563686f2068692074696d656f75743d300a656e71
+756575652064656661756c740a656e71756575655f696e20736f6f6e2064656661756c74206a3136206563686f206869
+0a656e71756575655f696e20352064656661756c74206a3137206563686f20686920646570656e64735f6f6e3d616464
+310a63616e63656c2067686f73740a63616e63656c20616464310a7265717565756520706167650a7469636b0a746963
+6b202d350a66726f626e69636174650a400a40206a6f620a40206a6f622067686f73740a402066726f620a776f726b0a
+"""
+}

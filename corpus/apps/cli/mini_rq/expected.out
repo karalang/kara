@@ -1,0 +1,240 @@
+== script (3 workers)
+> queue high
+> queue default
+> queue low
+> enqueue default add1 add 2 3
+  add1: queued on default
+> enqueue default fib30 fib 30
+  fib30: queued on default
+> enqueue low count words the quick brown fox jumps ttl=50
+  count: queued on low
+> enqueue high page echo wake up the oncall
+  page: queued on high
+> enqueue default report echo report ready depends_on=add1,fib30
+  report: deferred on default until add1, fib30 finish
+> enqueue default flaky1 flaky 3 retry=3
+  flaky1: queued on default
+> enqueue default flaky2 flaky 4 retry=2 backoff=10,30
+  flaky2: queued on default
+> enqueue default slow1 slow 200 timeout=120
+  slow1: queued on default
+> enqueue default slow2 slow 60
+  slow2: queued on default
+> enqueue low cleanup echo cleanup done depends_on=slow1,report
+  cleanup: deferred on low until slow1, report finish
+> enqueue default first echo jump the line at_front
+  first: queued on default at the front
+> enqueue low sieve primes 200000
+  sieve: queued on low
+> enqueue low big primes 2000000
+  big: queued on low
+> enqueue default bigfib fib 91 retry=1
+  bigfib: queued on default
+> enqueue default oops boom
+  oops: queued on default
+> @ status
+  clock 0
+  high: page
+  default: first, add1, fib30, flaky1, flaky2, slow1, slow2, bigfib, oops
+  low: count, sieve, big
+> @ job report
+  report: deferred on default, echo(report, ready), attempt 1, waiting on add1, fib30
+> work
+  round 1: page, first, add1, fib30, flaky1, flaky2, slow1, slow2, bigfib, oops, count, sieve, big
+  page: finished -> wake up the oncall
+  first: finished -> jump the line
+  add1: finished -> 5
+  fib30: finished -> 832040
+  flaky1: failed (FlakyError: attempt 1 of 3), retry 1 of 3 now
+  flaky2: failed (FlakyError: attempt 1 of 4), retry 1 of 2 in 10s
+  slow1: failed (JobTimeoutException: Task exceeded maximum timeout value (120 seconds))
+  slow2: finished -> slept 60s
+  bigfib: failed (ValueError: fib(91) does not fit in 64 bits), retry 1 of 1 now
+  oops: failed (ZeroDivisionError: division by zero)
+  count: finished -> 5 words
+  sieve: finished -> 17984 primes below 200000
+  big: failed (ValueError: primes below 2000000 is too many)
+  report: dependencies met, queued on default
+  round 2: flaky1, bigfib, report
+  flaky1: failed (FlakyError: attempt 2 of 3), retry 2 of 3 now
+  bigfib: failed (ValueError: fib(91) does not fit in 64 bits)
+  report: finished -> report ready
+  round 3: flaky1
+  flaky1: finished -> ok on attempt 3
+  idle after 3 rounds
+> @ registries
+  deferred: cleanup
+  scheduled: flaky2@10
+  finished: add1, count, fib30, first, flaky1, page, report, sieve, slow2
+  failed: big, bigfib, oops, slow1
+  canceled: none
+  expired: none
+> @ job flaky2
+  flaky2: scheduled on default, flaky(4), attempt 2, 1 of 2 retries left, due at 10
+> tick 10
+  clock 10
+  flaky2: due, queued on default
+> work
+  round 1: flaky2
+  flaky2: failed (FlakyError: attempt 2 of 4), retry 2 of 2 in 30s
+  idle after 1 round
+> @ job flaky2
+  flaky2: scheduled on default, flaky(4), attempt 3, 0 of 2 retries left, due at 40
+> tick 30
+  clock 40
+  flaky2: due, queued on default
+> work
+  round 1: flaky2
+  flaky2: failed (FlakyError: attempt 3 of 4)
+  idle after 1 round
+> @ job cleanup
+  cleanup: deferred on low, echo(cleanup, done), attempt 1, waiting on slow1
+> requeue slow1
+  requeued slow1 on default
+> cancel slow1
+  canceled slow1
+> enqueue default slow3 slow 100 timeout=150
+  slow3: queued on default
+> enqueue_in 60 default later echo from the future
+  later: scheduled on default for 100
+> enqueue_in 30 high soon add 40 2
+  soon: scheduled on high for 70
+> @ registries
+  deferred: cleanup
+  scheduled: later@100, soon@70
+  finished: add1, count, fib30, first, flaky1, page, report, sieve, slow2
+  failed: big, bigfib, flaky2, oops
+  canceled: slow1
+  expired: none
+> tick 29
+  clock 69
+  count: result expired
+> @ status
+  clock 69
+  high: empty
+  default: slow3
+  low: empty
+> tick 1
+  clock 70
+  soon: due, queued on high
+> work
+  round 1: soon, slow3
+  soon: finished -> 42
+  slow3: finished -> slept 100s
+  idle after 1 round
+> tick 30
+  clock 100
+  later: due, queued on default
+> work
+  round 1: later
+  later: finished -> from the future
+  idle after 1 round
+> requeue fib30
+  error: script.txt:44: job fib30 is not failed
+> requeue big
+  requeued big on low
+> work
+  round 1: big
+  big: failed (ValueError: primes below 2000000 is too many)
+  idle after 1 round
+> @ job big
+  big: failed on low, primes(2000000), attempt 2, error ValueError: primes below 2000000 is too many
+> tick 400
+  clock 500
+  add1: result expired
+  fib30: result expired
+  page: result expired
+  report: result expired
+  flaky1: result expired
+  slow2: result expired
+  first: result expired
+  sieve: result expired
+> @ job add1
+  add1: expired on default, add(2, 3), attempt 1
+> @ job oops
+  oops: failed on default, boom(), attempt 1, error ZeroDivisionError: division by zero
+> cancel cleanup
+  canceled cleanup
+> @ registries
+  deferred: none
+  scheduled: none
+  finished: later, slow3, soon
+  failed: big, bigfib, flaky2, oops
+  canceled: cleanup, slow1
+  expired: add1, count, fib30, first, flaky1, page, report, sieve, slow2
+> queue high
+  error: script.txt:55: queue high already exists
+> queue Bad-Name
+  error: script.txt:56: bad queue name 'Bad-Name'
+> queue
+  error: script.txt:57: usage: queue <name>
+> enqueue nowhere j1 echo hi
+  error: script.txt:58: no queue 'nowhere'
+> enqueue default add1 echo again
+  error: script.txt:59: job add1 already exists
+> enqueue default j-2 echo hi
+  error: script.txt:60: bad job id 'j-2'
+> enqueue default j3 sing la la
+  error: script.txt:61: unknown function 'sing'
+> enqueue default j4 add 1
+  error: script.txt:62: bad arguments for add: add <a> <b>
+> enqueue default j5 add 1 two
+  error: script.txt:63: bad arguments for add: add <a> <b>
+> enqueue default j6 fib
+  error: script.txt:64: bad arguments for fib: fib <n>
+> enqueue default j7 boom extra
+  error: script.txt:65: bad arguments for boom: boom
+> enqueue default j8 echo hi retry=10
+  error: script.txt:66: bad retry '10'
+> enqueue default j9 echo hi backoff=5
+  error: script.txt:67: backoff needs retry
+> enqueue default j10 echo hi retry=1 backoff=5,x
+  error: script.txt:68: bad backoff '5,x'
+> enqueue default j11 echo hi depends_on=ghost
+  error: script.txt:69: no job 'ghost'
+> enqueue default j12 echo hi depends_on=add1,add1
+  error: script.txt:70: duplicate dependency add1
+> enqueue default j13 echo hi colour=red
+  error: script.txt:71: unknown option 'colour'
+> enqueue default j14 echo hi retry=1 retry=2
+  error: script.txt:72: duplicate option retry
+> enqueue default j15 echo hi timeout=0
+  error: script.txt:73: bad timeout '0'
+> enqueue default
+  error: script.txt:74: usage: enqueue <queue> <id> <func> [args] [options]
+> enqueue_in soon default j16 echo hi
+  error: script.txt:75: bad delay 'soon'
+> enqueue_in 5 default j17 echo hi depends_on=add1
+  error: script.txt:76: depends_on is not allowed with enqueue_in
+> cancel ghost
+  error: script.txt:77: no job 'ghost'
+> cancel add1
+  error: script.txt:78: job add1 is expired
+> requeue page
+  error: script.txt:79: job page is not failed
+> tick
+  error: script.txt:80: usage: tick <seconds>
+> tick -5
+  error: script.txt:81: bad seconds '-5'
+> frobnicate
+  error: script.txt:82: unknown command 'frobnicate'
+> @
+  error: script.txt:83: missing command
+> @ job
+  error: script.txt:84: usage: @ job <id>
+> @ job ghost
+  error: script.txt:85: no job 'ghost'
+> @ frob
+  error: script.txt:86: unknown command '@ frob'
+> work
+  nothing to do
+== end
+  clock 500
+  deferred: none
+  scheduled: none
+  finished: later, slow3, soon
+  failed: big, bigfib, flaky2, oops
+  canceled: cleanup, slow1
+  expired: add1, count, fib30, first, flaky1, page, report, sieve, slow2
+  3 workers: 23 runs, 11 failed
+  by function: add 2, boom 1, echo 4, fib 3, flaky 6, primes 3, slow 3, words 1
