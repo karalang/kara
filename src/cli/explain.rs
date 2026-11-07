@@ -933,11 +933,17 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // under `check`; MIR borrowck uses the same codes.
     (
         "E0516",
-        ty("BorrowConflict", Some(DiagnosticClass::TypeMismatch)),
+        ty(
+            "BorrowConflict",
+            Some(DiagnosticClass::OwnershipBorrowConflict),
+        ),
     ),
     (
         "E0517",
-        ty("WriteThroughSharedRef", Some(DiagnosticClass::TypeMismatch)),
+        ty(
+            "WriteThroughSharedRef",
+            Some(DiagnosticClass::OwnershipBorrowConflict),
+        ),
     ),
     // v2 core §9.6: function kinds and the removed capture prefixes.
     (
@@ -1103,6 +1109,134 @@ const fn res(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
     }
 }
 
+/// What a code means and how it is fixed, for the codes a newcomer meets
+/// whose class page alone says too little (B-2026-11-07-47). Each entry
+/// restates the rule from `docs/design.md` or `docs/core-semantics.md`
+/// and names the section, so the prose has a source to be checked against.
+const CODE_PROSE: &[(&str, &str)] = &[
+    (
+        "E0001",
+        "The parser could not read this part of the file as Kāra. The message \
+         says what went wrong at the marked position. Common causes are an \
+         unclosed bracket or string, a missing `;` or `,`, or syntax from \
+         another language (Kāra writes generic arguments as `[T]`, not `<T>`). \
+         Fix the first syntax error and check again: later ones in the same \
+         region often follow from it.",
+    ),
+    (
+        "E0002",
+        "The parser found a token the grammar does not allow at this point; \
+         the message names what it expected and what it found (for example \
+         \"Expected expression, found `;`\"). The mistake is often just before the marked \
+         token: a missing operand, an unclosed `(` or `{`, or a missing `=` or \
+         `=>`. Fix the first syntax error and check again: later ones in the \
+         same region often follow from it.",
+    ),
+    (
+        "E0205",
+        "A `match` must be exhaustive: every value of the scrutinee's type must \
+         be matched by some arm (design.md § Pattern exhaustiveness). The \
+         message lists what is missing. A guarded arm (`P if cond => ...`) does \
+         not count toward exhaustiveness, and a match over integers, `char` or \
+         strings needs a wildcard arm, since the compiler does not check \
+         whether a set of literals or ranges covers the whole type. Add an arm \
+         for each missing case, or a `_ => ...` arm when the rest share one \
+         behaviour; on an enum, explicit arms keep a variant added later \
+         reported here.",
+    ),
+    ("E0254", CROSS_TASK_PROSE),
+    ("E_NOT_CROSS_TASK", CROSS_TASK_PROSE),
+    (
+        "E0506",
+        "A binding declared with `let`, without `mut`, is assigned again. Only \
+         a `let mut` binding may be reassigned: change the declaration to \
+         `let mut name` (`karac fix` applies this). In a `match`, `if let` or \
+         `while let` arm there is no `mut name` pattern; rebind with \
+         `let mut x = x;` inside the arm (design.md § Variable binding rules).",
+    ),
+    (
+        "E0509",
+        "A reference or view would outlive the place it borrows. Two shapes \
+         report it. (1) A function returns a reference or view that does not \
+         borrow from a place its signature allows. By the signature rule \
+         (core-semantics §5.4), a method's result borrows from `self` only, and \
+         any other function's result borrows from its borrowed parameters of a \
+         non-`Copy` type, its `mut ref` parameters and its view parameters; a \
+         borrow of a local the function owns, or of an `own` parameter, would \
+         dangle once it returns. (2) A view is stored in an escaping closure, a \
+         `shared` value or a channel (§5.7, §9.3), where its borrow is not \
+         kept. Return or store an owned value instead (drop `ref` from the \
+         return type, or `.clone()` / `.to_string()` the view), or take the \
+         source as a parameter so the result can borrow from it.",
+    ),
+    (
+        "E0510",
+        "A value held in a binding declared without `mut` is modified: a field \
+         is assigned (`p.x = 2`), or a method that takes `mut ref self` is \
+         called on it (`v.push(1)`). A plain struct's fields can be written \
+         only when the value is held in a `let mut` binding or reached through \
+         `mut ref` (design.md § Structs). Declare the binding `let mut p` \
+         (`karac fix` applies this). When the binding is a reference rather \
+         than an owner, the rule is E0517.",
+    ),
+    (
+        "E0516",
+        "A borrow is used while another access conflicts with it \
+         (core-semantics §5.6). While a `mut ref` borrow of a place is live, \
+         nothing else may use that place; while a `ref` borrow of it is live, \
+         it may not be written, moved, mutably borrowed or dropped. A borrow is \
+         live from where it is created to its last use, distinct fields do not \
+         overlap, and any index overlaps the whole collection. Finish with one \
+         borrow before starting the other, borrow distinct fields, or copy the \
+         value you need out first.",
+    ),
+    (
+        "E0517",
+        "Nothing is written through a `ref` (core-semantics §5.9). Parameters \
+         borrow by default: a bare parameter `u: U` and a `self` receiver are \
+         read-only, and so are a `ref` pattern binding, the item of \
+         `for x in c`, a `ref` returned by a call, and a local bound to any of \
+         these. Such a place may not be assigned or compound-assigned, mutably \
+         borrowed (a `mut ref self` method, an argument marked `mut`, \
+         `mut ref name`, `mut ref place`), or moved out of. The exception is a \
+         `mut` field of a `shared` value. To change the caller's value, declare \
+         the parameter `u: mut ref U` and mark each call site `mut` \
+         (`bump(mut u)`); iterate with `c.iter_mut()`; or bind with \
+         `mut ref name` from a mutable owner. To change a copy of its own \
+         instead, take it `own U` or `.clone()` it.",
+    ),
+];
+
+/// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
+/// second, `karac check --output=json` reports the first.
+const CROSS_TASK_PROSE: &str =
+    "A value that is not `CrossTask` would cross a task boundary. Only a \
+     `CrossTask` value may be captured by a `par` branch, a `par for` \
+     iteration or a `TaskGroup.spawn` closure, be a task's result, be sent \
+     on a channel, or be stored in a `sync` field (design.md § CrossTask, \
+     core-semantics §6.3). The compiler computes `CrossTask`: a type is \
+     `CrossTask` unless it holds, at any depth, a `shared` handle or another \
+     task-local type, and the `note:` line shows where. A function value is \
+     `CrossTask` only when everything its environment reaches is, and an \
+     erased function type (`Fn(A) -> R`) or a `dyn Trait` is not `CrossTask` \
+     unless marked `+ CrossTask`. The rule is about the task boundary, not \
+     the thread count, so it holds on one worker too. Share state between \
+     tasks through a `sync` type holding `Mutex[T]` or `Atomic[T]`, move an \
+     owned copy into the task, or mark the function or `dyn` type \
+     `+ CrossTask`. `E_NOT_CROSS_TASK` in a message and `E0254` in \
+     `--output=json` are the same rule.";
+
+/// The prose for `code`, if it has any.
+fn code_prose(code: &str) -> Option<&'static str> {
+    CODE_PROSE.iter().find(|(c, _)| *c == code).map(|(_, p)| *p)
+}
+
+/// `code` is catalogued: `karac explain` reads `e0500` as `E0500`
+/// (B-2026-11-07-47).
+pub fn is_catalogued_code(code: &str) -> bool {
+    !lookup_code(code).is_empty()
+}
+
 /// All catalogue rows for `code`, in table order. Returns more than
 /// one row only for the cross-phase collisions documented on
 /// [`CODE_TABLE`].
@@ -1171,13 +1305,19 @@ fn render_code_text(code: &str, entries: Vec<CodeEntry>) -> String {
             entry.kind,
             concept_for(entry.phase, code, None, None)
         ));
-        match entry.class {
-            Some(class) => out.push_str(&format!(
-                "class: {}\n\n{}\n",
-                class.as_str(),
-                class_description(class)
-            )),
-            None => out.push_str(
+        match (entry.class, code_prose(code)) {
+            (Some(class), prose) => {
+                out.push_str(&format!(
+                    "class: {}\n\n{}\n",
+                    class.as_str(),
+                    class_description(class)
+                ));
+                if let Some(prose) = prose {
+                    out.push_str(&format!("\n{prose}\n"));
+                }
+            }
+            (None, Some(prose)) => out.push_str(&format!("class: OTHER\n\n{prose}\n")),
+            (None, None) => out.push_str(
                 "class: OTHER — this diagnostic has no class page yet. Its JSON \
                  record reports `\"class\": \"OTHER\"`; the message text is the \
                  authoritative description.\n",
@@ -1192,17 +1332,21 @@ fn render_code_json(code: &str, entries: Vec<CodeEntry>) -> String {
         .iter()
         .map(|e| {
             let class = e.class.map(|c| c.as_str()).unwrap_or("OTHER");
-            let description = e
-                .class
-                .map(class_description)
-                .unwrap_or("No class page yet; the diagnostic message is authoritative.");
+            let description = match (e.class, code_prose(code)) {
+                (Some(class), Some(prose)) => format!("{} {prose}", class_description(class)),
+                (Some(class), None) => class_description(class).to_string(),
+                (None, Some(prose)) => prose.to_string(),
+                (None, None) => {
+                    "No class page yet; the diagnostic message is authoritative.".to_string()
+                }
+            };
             format!(
                 "{{\"phase\":\"{}\",\"kind\":\"{}\",\"class\":\"{}\",\"concept\":\"{}\",\"description\":\"{}\"}}",
                 e.phase,
                 e.kind,
                 class,
                 concept_for(e.phase, code, None, None),
-                escape_json_string(description),
+                escape_json_string(&description),
             )
         })
         .collect::<Vec<_>>()
@@ -1414,9 +1558,11 @@ fn class_description(class: DiagnosticClass) -> &'static str {
              borrows), or restructure to avoid the second use."
         }
         DiagnosticClass::OwnershipBorrowConflict => {
-            "A live borrow conflicts with a later operation. Includes ref-vs-mut-ref \
-             overlap, slice-vs-ref overlap, drop-of-borrowed-source, and call-site \
-             mut-marker requirements that aren't met."
+            "A live borrow conflicts with a later operation, or a place reached \
+             through a `ref` is written. Includes ref-vs-mut-ref overlap, \
+             slice-vs-ref overlap, drop-of-borrowed-source, call-site mut-marker \
+             requirements that aren't met, and an assignment or `mut` borrow \
+             through a borrowed parameter (core-semantics §5.6, §5.9)."
         }
         DiagnosticClass::OwnershipUseOfUninitialized => {
             "A binding was read before it was initialised. The let-uninit DFA tracks \
@@ -3406,6 +3552,8 @@ mod tests {
             ("E0272", K::AtomicInvalidInnerType),
             ("E0273", K::PatternScrutineeMismatch),
             ("E0801", K::GpuNotSafe),
+            ("E0516", K::BorrowConflict),
+            ("E0517", K::WriteThroughSharedRef),
         ];
         for (code, kind) in pairs {
             let row = lookup_code(code)
@@ -3606,5 +3754,39 @@ mod tests {
         for phase in ["no-such-phase", "build", "test"] {
             assert!(concept_id(concept_for(phase, "", None, None)).is_some());
         }
+    }
+
+    /// The codes a newcomer meets explain themselves: none falls back to the
+    /// "no class page yet" stub, and E0517 is explained as the borrow rule it
+    /// is, not as a type mismatch (B-2026-11-07-47).
+    #[test]
+    fn newcomer_codes_have_prose() {
+        for code in [
+            "E0001",
+            "E0002",
+            "E0205",
+            "E0254",
+            "E0506",
+            "E0509",
+            "E0510",
+            "E_NOT_CROSS_TASK",
+            "E0516",
+            "E0517",
+        ] {
+            let entries = lookup_code(code);
+            assert!(!entries.is_empty(), "{code} is not catalogued");
+            let text = render_code_text(code, entries.clone());
+            assert!(
+                !text.contains("no class page yet"),
+                "{code} prints the stub: {text}"
+            );
+            assert!(text.contains(code_prose(code).unwrap()), "{code}: {text}");
+            let json = render_code_json(code, entries);
+            assert!(!json.contains("No class page yet"), "{code}: {json}");
+        }
+        let text = render_code_text("E0517", lookup_code("E0517"));
+        assert!(text.contains("class: OWNERSHIP_BORROW_CONFLICT"), "{text}");
+        assert!(!text.contains("TYPE_MISMATCH"), "{text}");
+        assert!(text.contains("mut ref"), "{text}");
     }
 }

@@ -1677,8 +1677,6 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::NonContiguousLabels
         | TypeErrorKind::PatternScrutineeMismatch
         | TypeErrorKind::OnceFnIntoFnSlot
-        | TypeErrorKind::BorrowConflict
-        | TypeErrorKind::WriteThroughSharedRef
         | TypeErrorKind::FnKindMismatch
         | TypeErrorKind::CapturePrefixRemoved
         | TypeErrorKind::RemovedInCore
@@ -1686,6 +1684,12 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ArchivedWithLegacy
         | TypeErrorKind::DeferredToLaterTrack => Some(DC::TypeMismatch),
 
+        // E0516 / E0517 are borrow rules (core-semantics §5.6, §5.9), not
+        // type mismatches: `karac explain` describes them by this class
+        // (B-2026-11-07-47).
+        TypeErrorKind::BorrowConflict | TypeErrorKind::WriteThroughSharedRef => {
+            Some(DC::OwnershipBorrowConflict)
+        }
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)
         }

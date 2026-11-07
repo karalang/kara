@@ -2212,6 +2212,13 @@ fn classify_explain_name(name: &str) -> crate::cli::ExplainTarget {
     if is_code || crate::cli::explain::is_symbolic_code(name) {
         return crate::cli::ExplainTarget::Code(name.to_string());
     }
+    // `e0500` / `e_not_cross_task`: a catalogued code typed in lower case
+    // (B-2026-11-07-47). Only a code the catalogue holds is read this way, so
+    // a concept name is never taken for one.
+    let upper = name.to_ascii_uppercase();
+    if upper != name && crate::cli::explain::is_catalogued_code(&upper) {
+        return crate::cli::ExplainTarget::Code(upper);
+    }
     let is_class = !name.is_empty()
         && name
             .chars()
@@ -2670,6 +2677,20 @@ mod tests {
         // widening the code arm cannot swallow one.
         assert!(matches!(classify_explain_name("LINT_WARNING"), T::Class(_)));
         assert!(matches!(classify_explain_name("OTHER"), T::Class(_)));
+    }
+
+    /// A catalogued code typed in lower case is the code, not an unknown
+    /// concept; a concept name is never taken for one (B-2026-11-07-47).
+    #[test]
+    fn lowercase_explain_code_is_the_code() {
+        use crate::cli::ExplainTarget as T;
+        assert!(matches!(classify_explain_name("e0500"), T::Code(c) if c == "E0500"));
+        assert!(matches!(
+            classify_explain_name("e_not_cross_task"),
+            T::Code(c) if c == "E_NOT_CROSS_TASK"
+        ));
+        assert!(matches!(classify_explain_name("e9999"), T::Concept(_)));
+        assert!(matches!(classify_explain_name("closures"), T::Concept(_)));
     }
 
     /// Shapes that are *nearly* a code must not be swallowed by the
