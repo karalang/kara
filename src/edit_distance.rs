@@ -48,17 +48,32 @@ pub fn levenshtein_distance(a: &str, b: &str) -> usize {
 /// machine-applicable `TextEdit` that `karac fix` applies. Each producer now
 /// sorts its own contribution, so the full rule is "nearest scope, then
 /// alphabetical".
+/// Whether `b` is `a` with two adjacent characters swapped.
+fn is_one_adjacent_swap(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+    matches!(diff.as_slice(), [i, j] if *j == i + 1 && a[*i] == b[*j] && a[*j] == b[*i])
+}
+
 pub fn suggest_similar(name: &str, visible: &[&str]) -> Option<String> {
     if name.len() < 3 {
         return None;
     }
+    // A similarity floor (B-2026-11-07-40): two edits to a word of five
+    // letters or fewer is a different word (`null` -> `Mul`, `func` ->
+    // `fence`), so a short name is offered only a one-edit neighbour, a
+    // swap of two adjacent letters counting as one (`cuont` -> `count`).
+    let short = name.chars().count() <= 5;
     let mut best: Option<(&str, usize)> = None;
     for &candidate in visible {
         if candidate == name {
             continue;
         }
         let dist = levenshtein_distance(name, candidate);
-        if dist <= 2 {
+        if dist <= 2 && (!short || dist <= 1 || is_one_adjacent_swap(name, candidate)) {
             match best {
                 None => best = Some((candidate, dist)),
                 Some((_, best_dist)) if dist < best_dist => best = Some((candidate, dist)),

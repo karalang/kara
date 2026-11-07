@@ -3867,11 +3867,20 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 } else if *ty != Type::Error && !self.after_into_iter_hint(ty) {
-                    self.type_error(
-                        format!("tuple pattern used but type is `{}`", type_display(ty)),
-                        pattern.span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    // Go's `v, err := f()` (B-2026-11-07-40).
+                    let go_pair = patterns.len() == 2
+                        && matches!(ty, Type::Named { name, .. } if name == "Result");
+                    let message = if go_pair {
+                        format!(
+                            "a tuple `(v, err)` is Go's two-value return: this value is a \
+                             `{}`, so `match` it on `Ok(v)` / `Err(e)`, pass the error up with \
+                             `?`, or write `let Ok(v) = .. else {{ .. }}`",
+                            type_display(ty)
+                        )
+                    } else {
+                        format!("tuple pattern used but type is `{}`", type_display(ty))
+                    };
+                    self.type_error(message, pattern.span, TypeErrorKind::TypeMismatch);
                     for pat in patterns {
                         self.bind_pattern_types(pat, &Type::Error);
                     }

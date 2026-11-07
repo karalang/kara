@@ -1979,7 +1979,17 @@ impl<'a> Resolver<'a> {
         if self.report_rust_reverse(name, span) {
             return;
         }
-        let visible = self.suggestable_names();
+        if self.report_foreign_name(name, span) {
+            return;
+        }
+        // A value name is suggested a value name: `range` is not `Range`,
+        // nor `null` `Mul` (B-2026-11-07-40).
+        let upper = |s: &str| s.starts_with(|c: char| c.is_ascii_uppercase());
+        let visible: Vec<&str> = self
+            .suggestable_names()
+            .into_iter()
+            .filter(|c| upper(c) == upper(name))
+            .collect();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
         let suggestion = Self::renamed_stdlib_type(name)
@@ -2095,7 +2105,17 @@ impl<'a> Resolver<'a> {
         if self.report_rust_reverse(name, span) {
             return;
         }
-        let visible = self.suggestable_names();
+        if self.report_foreign_name(name, span) {
+            return;
+        }
+        // A value name is suggested a value name: `range` is not `Range`,
+        // nor `null` `Mul` (B-2026-11-07-40).
+        let upper = |s: &str| s.starts_with(|c: char| c.is_ascii_uppercase());
+        let visible: Vec<&str> = self
+            .suggestable_names()
+            .into_iter()
+            .filter(|c| upper(c) == upper(name))
+            .collect();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
         let suggestion = Self::renamed_stdlib_type(name)
@@ -2144,6 +2164,58 @@ impl<'a> Resolver<'a> {
     /// spans STARTS at the name, so clamping the edit to the name's length is
     /// correct in all three cases and strictly safer than the alternative.
     /// B-2026-08-17-38.
+    /// A value word from another language a newcomer writes on the first day
+    /// (`null`, `nil`, `True`, Python's `range(n)`, Go's `fmt.Println(x)`),
+    /// undeclared here: name Kāra's spelling instead of an edit-distance
+    /// guess, with a fix where the rewrite is certain (B-2026-11-07-40).
+    fn report_foreign_name(&mut self, name: &str, span: Span) -> bool {
+        let call = self
+            .program
+            .foreign_calls
+            .get(&span.offset)
+            .cloned()
+            .map(Box::new);
+        let (message, replacement): (&str, Option<Box<TextEdit>>) = match name {
+            "null" | "NULL" | "nullptr" | "undefined" => (
+                "Kāra has no null: an absent value is `None`, of type `Option[T]`",
+                Some(Self::name_only_replacement(name, &span, "None")),
+            ),
+            "nil" => (
+                "Kāra has no `nil`: an absent value is `None`, and a failure is a `Result`: \
+                 `match` on `Ok` / `Err`, or use `?`",
+                None,
+            ),
+            "True" => (
+                "`True` is Python: Kāra's booleans are `true` and `false`",
+                Some(Self::name_only_replacement(name, &span, "true")),
+            ),
+            "False" => (
+                "`False` is Python: Kāra's booleans are `true` and `false`",
+                Some(Self::name_only_replacement(name, &span, "false")),
+            ),
+            "range" => (
+                "`range(n)` is Python: Kāra writes the range `0..n` (`a..b` for \
+                 `range(a, b)`), and `(a..b).step_by(s)` for a step",
+                call,
+            ),
+            "fmt" => (
+                "`fmt` is Go's: Kāra prints with `println(x)` and `print(x)`, and formats \
+                 with an f-string `f\"{x}\"`",
+                call,
+            ),
+            _ => return false,
+        };
+        self.errors.push(ResolveError {
+            message: message.to_string(),
+            span,
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion: None,
+            replacement,
+            stub_hint: None,
+        });
+        true
+    }
+
     fn name_only_replacement(name: &str, span: &Span, to: &str) -> Box<TextEdit> {
         Box::new(TextEdit {
             offset: span.offset,

@@ -1631,14 +1631,22 @@ fn test_json_multiple_errors_snapshot() {
 
 #[test]
 fn test_json_suggestion_in_hints() {
+    // A one-edit typo of a name in scope. `foo` / `bar` / `baz` of the
+    // snapshot above are no longer offered a two-edit guess at a short
+    // name (B-2026-11-07-40).
+    let dir = std::env::temp_dir().join(format!("karac-json-hints-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.kara");
+    std::fs::write(
+        &file,
+        "fn main() {\n    let counter = 1;\n    println(countr);\n}\n",
+    )
+    .unwrap();
     let out = karac_bin()
-        .args([
-            "check",
-            "tests/snapshots/multiple_errors.kara",
-            "--output=json",
-        ])
+        .args(["check", file.to_str().unwrap(), "--output=json"])
         .output()
         .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Suggestions should be present as hints
     assert!(stdout.contains("\"hints\":[{\"description\":"));

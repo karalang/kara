@@ -565,6 +565,9 @@ impl super::Parser {
                                 {
                                     self.note_rust_box_new(lhs.span.offset, &args, &span);
                                 }
+                                if matches!(&lhs.kind, ExprKind::Identifier(n) if n == "fmt") {
+                                    self.note_foreign_call(lhs.span.offset, &method, &args, &span);
+                                }
                                 if matches!(&lhs.kind, ExprKind::Identifier(n) if n == "BinaryHeap")
                                 {
                                     self.note_rust_heap_ctor(lhs.span.offset, &method);
@@ -668,6 +671,19 @@ impl super::Parser {
                         if segments.len() == 2 && segments[0] == "Box" && segments[1] == "new")
                     {
                         self.note_rust_box_new(lhs.span.offset, &args, &call_span);
+                    }
+                    match &lhs.kind {
+                        ExprKind::Identifier(n) if n == "range" => {
+                            self.note_foreign_call(lhs.span.offset, "range", &args, &call_span);
+                        }
+                        ExprKind::Path {
+                            segments,
+                            generic_args: None,
+                        } if segments.len() == 2 && segments[0] == "fmt" => {
+                            let method = segments[1].clone();
+                            self.note_foreign_call(lhs.span.offset, &method, &args, &call_span);
+                        }
+                        _ => {}
                     }
                     if let ExprKind::Path {
                         segments,
@@ -3287,6 +3303,45 @@ impl super::Parser {
     /// Rust's `Box.new(e)`, whose `Box` starts at `box_at`: record the edit
     /// that writes `e` in the call's place, for the resolver to attach if
     /// `Box` turns out undeclared ([`crate::ast::Program::rust_box_new`]).
+    /// Python's `range(a)` / `range(a, b)` and Go's `fmt.Println(x)` /
+    /// `fmt.Print(x)`, whose name starts at `at`: record the edit that writes
+    /// Kāra's spelling, for the resolver to attach if the name turns out
+    /// undeclared ([`crate::ast::Program::foreign_calls`]; B-2026-11-07-40).
+    fn note_foreign_call(&mut self, at: usize, what: &str, args: &[CallArg], call: &Span) {
+        if args.iter().any(|a| a.label.is_some() || a.mut_marker) {
+            return;
+        }
+        let Some((source, base)) = self.source.as_ref() else {
+            return;
+        };
+        let text = |e: &Expr| {
+            e.span
+                .offset
+                .checked_sub(*base)
+                .and_then(|s| source.get(s..s + e.span.length))
+                .map(str::to_string)
+        };
+        let replacement = match (what, args) {
+            ("range", [n]) => text(&n.value).map(|n| format!("0..{n}")),
+            ("range", [a, b]) => text(&a.value)
+                .zip(text(&b.value))
+                .map(|(a, b)| format!("{a}..{b}")),
+            ("Println", [x]) => text(&x.value).map(|x| format!("println({x})")),
+            ("Print", [x]) => text(&x.value).map(|x| format!("print({x})")),
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            self.foreign_calls.insert(
+                at,
+                crate::resolver::TextEdit {
+                    offset: call.offset,
+                    length: call.length,
+                    replacement,
+                },
+            );
+        }
+    }
+
     fn note_rust_box_new(&mut self, box_at: usize, args: &[CallArg], call: &Span) {
         let [arg] = args else { return };
         if arg.label.is_some() || arg.mut_marker {

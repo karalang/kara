@@ -878,6 +878,12 @@ pub struct Program {
     /// Set by the PARSER; the resolver reports it when nothing declares a
     /// `Box` (B-2026-11-04-43).
     pub rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Python's `range(a)` / `range(a, b)` and Go's `fmt.Println(x)` /
+    /// `fmt.Print(x)`, keyed by the offset of `range` / `fmt`, with the edit
+    /// that writes Kāra's spelling (`0..a`, `println(x)`). Set by the PARSER;
+    /// the resolver attaches it when the name turns out undeclared
+    /// (B-2026-11-07-40).
+    pub foreign_calls: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Rust's `BinaryHeap.new()` / `BinaryHeap.from(v)`, keyed by the offset
     /// of `BinaryHeap`, with the edit that writes `PriorityQueue.max_first` /
     /// `max_first_from`: Kāra's queue pops the smallest first unless built

@@ -234,6 +234,8 @@ pub struct Parser {
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
     /// See [`crate::ast::Program::rust_box_new`].
     pub(crate) rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// See [`crate::ast::Program::foreign_calls`].
+    pub(crate) foreign_calls: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::rust_heap_ctor`].
     pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::parse_target_edits`].
@@ -546,6 +548,7 @@ impl Parser {
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             vec_macro_literals: rustc_hash::FxHashMap::default(),
             rust_box_new: rustc_hash::FxHashMap::default(),
+            foreign_calls: rustc_hash::FxHashMap::default(),
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
             parse_target_edits: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
@@ -974,6 +977,7 @@ impl Parser {
             discarded_doc_comments: std::mem::take(&mut self.discarded_doc_comments),
             nested_fstrings: std::mem::take(&mut self.nested_fstrings),
             rust_box_new: std::mem::take(&mut self.rust_box_new),
+            foreign_calls: std::mem::take(&mut self.foreign_calls),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             rust_reverse_wraps: self.rust_reverse_wraps(),
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),

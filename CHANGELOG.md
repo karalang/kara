@@ -66,6 +66,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - Comparing an `Option[ref T]` with an `Option[T]` whose `T` is not `Copy`
   now offers `.cloned()` as the fix, after the view and `as_slice` fixes
   (B-2026-11-07-54).
+- **Another language's first-day words are named, not guessed at.**
+  `null` (fixed to `None`), `nil`, `True` / `False` (fixed), Python's
+  `range(n)` (fixed to `0..n`) and `def`, Go's `func` (fixed to `fn`),
+  `fmt.Println(x)` (fixed to `println(x)`) and `(v, err)` over a `Result`
+  each get a message in Kāra's terms. A did-you-mean suggests a value name
+  for a value name and, for a name of five letters or fewer, only a
+  one-edit neighbour, so `karac fix` no longer rewrites `null` to `Mul` or
+  `func main()` to `func; main();` (B-2026-11-07-40).
 
 ---
 

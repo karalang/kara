@@ -31,6 +31,63 @@ use super::{render_type_for_diagnostic, FnContext, ParseError};
 impl super::Parser {
     // ── Items ────────────────────────────────────────────────────
 
+    /// Another language's function keyword at an item head (`func main() {`,
+    /// `def main():`, `function f(`): one diagnostic naming Kāra's `fn`
+    /// instead of an `expected ;` per word (B-2026-11-07-40). Go's and
+    /// JavaScript's are fixed to `fn` and parsed as a function; Python's
+    /// body is indentation, not braces, so `def` gets no fix and its
+    /// indented lines are skipped. `false` when the item was consumed.
+    fn foreign_fn_keyword(&mut self) -> bool {
+        let Token::Identifier { name, .. } = self.peek_token_ref() else {
+            return true;
+        };
+        let word = name.clone();
+        if !matches!(word.as_str(), "func" | "def" | "function" | "fun")
+            || !matches!(self.peek_token_at(1), Token::Identifier { .. })
+            || self.peek_token_at(2) != Token::LeftParen
+        {
+            return true;
+        }
+        let span = self.current_span();
+        if word == "def" {
+            self.error_at(
+                "`def` is Python: Kāra declares a function with `fn name(x: T) -> R { .. }`, \
+                 its body in braces, not indented after a `:`",
+                span,
+            );
+            // Skip the definition: its head line and its indented body.
+            let line = span.line;
+            self.advance();
+            while !self.is_at_end() {
+                let at = self.current_span();
+                if at.line != line && at.column == 1 {
+                    break;
+                }
+                self.advance();
+            }
+            return false;
+        }
+        let lang = if word == "func" {
+            "Go"
+        } else {
+            "JavaScript or Kotlin"
+        };
+        self.error_at(
+            &format!("`{word}` is {lang}: Kāra declares a function with `fn`"),
+            span,
+        );
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&span),
+            crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: "fn".to_string(),
+            },
+        );
+        self.tokens[self.pos].token = Token::Fn;
+        true
+    }
+
     pub(crate) fn parse_item(&mut self) -> Option<Item> {
         // Collect any leading `///` doc-comment tokens. The text gets
         // attached to the next item via `take_pending_doc` at the
@@ -52,6 +109,9 @@ impl super::Parser {
         if is_private && self.check(&Token::Pub) {
             self.error("cannot combine `private` and `pub` on the same item");
             self.advance();
+        }
+        if !self.foreign_fn_keyword() {
+            return None;
         }
 
         match self.peek_token_ref() {
