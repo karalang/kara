@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 158 |
-| false-positive | 138 |
+| false-positive | 139 |
 | perf | 108 |
 | missing-feature | 102 |
 | soundness | 52 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 257 |
+| typecheck | 258 |
 | mir-llvm | 134 |
 | mir | 131 |
 | cli | 71 |
@@ -116,6 +116,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-26 | 2026-11-07 | runtime | medium | For an absolute-form request target (`GET http://example.com/z?k=v HTTP/1.1`) the server's Request.path() returns `http://example.com/z` and for `GET http://example.com` returns `http://example.com`, not `/z` and `/` | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
+| B-2026-11-07-34 | 2026-11-07 | typecheck | medium | A `collect` into a written collection whose items hold a call's unsolved parameter (`let mut cells: Vec[Vec[String]] = tops.iter().map(|_| Vec.new()).collect();`) is refused with "cannot infer type parameter 'T' of `Vec[T]`": the end-of-check unsolved-variable report runs before the deferred `FromIterator` bound that would solve it | — |
 
 ### Relocated
 
