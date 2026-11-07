@@ -5192,7 +5192,8 @@ fn process_custom(res: ref Res, custom: ref Option[Vec[(String, String)]]) -> Re
                 return Err(f"SelectorSyntaxError: The name '{name}' is not a valid custom pseudo-class name");
             }
             if out.get(name.clone()).is_some() {
-                return Err(f"KeyError: {py_repr(f"The custom selector '{name}' has already been registered")}");
+                let msg = f"The custom selector '{name}' has already been registered";
+                return Err(f"KeyError: {py_repr(msg)}");
             }
             out.insert(css_unescape(res, name)?, CustomVal.Src(value.clone()));
         }

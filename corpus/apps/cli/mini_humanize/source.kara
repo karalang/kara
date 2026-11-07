@@ -3132,7 +3132,8 @@ fn ordinal(h: ref H, v: ref Val, gender: ref String) -> Result[Val, String] {
     let g = if *gender == "male" { "male" } else { "female" };
     let m = py_mod128(n, 100);
     let digit = if m == 11 or m == 12 or m == 13 { 0 } else { py_mod128(n, 10) };
-    ok_str(f"{n}{ptr(h, f"{digit} ({g})", ordinal_suffix(digit))}")
+    let key = f"{digit} ({g})";
+    ok_str(f"{n}{ptr(h, key, ordinal_suffix(digit))}")
 }
 
 fn intcomma(h: ref H, v: ref Val, ndigits: ref Val) -> Result[Val, String] {

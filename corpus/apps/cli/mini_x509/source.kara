@@ -1795,7 +1795,7 @@ fn tag_name(t: i64) -> String {
 fn asn1_lines(d: ref Vec[u8], n: ref Node, depth: i64, out: mut ref String) {
     let name = if n.tag & 0xC0 == 0x80 { f"cont [ {n.tag & 0x1F} ]" } else { tag_name(n.tag & 0x1F) };
     let kind = if n.tag & 0x20 != 0 { "cons" } else { "prim" };
-    out.push_str(f"{n.start:5}:d={ljust(f"{depth}", 2)} hl={n.hl} l={n.len:4} {kind}: {rjust("", depth)}{ljust(name, 18)}");
+    out.push_str(f"{n.start:5}:d={ljust(depth.to_string(), 2)} hl={n.hl} l={n.len:4} {kind}: {rjust("", depth)}{ljust(name, 18)}");
     let b = body(n, d);
     let t = n.tag;
     if t == 2 {

@@ -4094,7 +4094,8 @@ fn style_for_token(s: ref Style, t: Str) -> Sft {
 // get_style_by_name
 fn get_style(name: Str, std: ref Std) -> Result[Style, PgErr] {
     if not has(style_names(), name) {
-        return Err(class_not_found(f"Could not find style module {py_repr(f"pygments.styles.{name}")}."));
+        let module = f"pygments.styles.{name}";
+        return Err(class_not_found(f"Could not find style module {py_repr(module)}."));
     }
     for d in style_defs().iter() {
         if d.name == name {
@@ -4874,7 +4875,7 @@ fn format_terminal(f: ref Term, toks: ref Vec[Tk]) -> String {
     let mut lineno = 0;
     if f.linenos {
         lineno += 1;
-        out.push_str(f"{pad_left(f"{lineno}", 4, "0")}: ");
+        out.push_str(f"{pad_left(lineno.to_string(), 4, "0")}: ");
     }
     for tk in toks.iter() {
         let color = term_color(scheme, tk.t, f.darkbg);
@@ -4888,7 +4889,7 @@ fn format_terminal(f: ref Term, toks: ref Vec[Tk]) -> String {
             if ends_with_nl(line) {
                 if f.linenos {
                     lineno += 1;
-                    out.push_str(f"\n{pad_left(f"{lineno}", 4, "0")}: ");
+                    out.push_str(f"\n{pad_left(lineno.to_string(), 4, "0")}: ");
                 } else {
                     out.push('\n');
                 }

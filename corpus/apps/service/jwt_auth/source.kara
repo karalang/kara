@@ -641,7 +641,8 @@ fn handle(a: ref Auth, r: ref Request) -> String {
         if not admin {
             return error(403, "needs role admin", "");
         }
-        return response(200, f"{{\"ok\":{jq(f"welcome, admin {sub}")}}}", "");
+        let welcome = f"welcome, admin {sub}";
+        return response(200, f"{{\"ok\":{jq(welcome)}}}", "");
     }
     error(404, f"no route {r.path}", "")
 }

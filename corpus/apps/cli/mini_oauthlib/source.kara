@@ -4016,7 +4016,7 @@ fn audit(j: ref Val) -> Result[(), String] {
         let body = if f[3] == "-" { Body.Absent } else { Body.Text(f[3].clone()) };
         let path = parse_url(f[1])?.path;
         let (verdict, who) = check(f[0], f[1], f[2], body, accounts, mut seen, now, window)?;
-        println(f"   {rjust(f"{n}", 2)} {ljust(f[0], 6)} {ljust(path, 22)} {ljust(who, 11)} {verdict}");
+        println(f"   {rjust(n.to_string(), 2)} {ljust(f[0], 6)} {ljust(path, 22)} {ljust(who, 11)} {verdict}");
         if verdict == "ok" {
             bump(mut ok, who);
         } else {
@@ -4037,10 +4037,10 @@ fn audit(j: ref Val) -> Result[(), String] {
         }
     }
     for w in sort_strings(who_all).iter() {
-        println(f"   {ljust(w, 11)} {rjust(f"{count_of(ok, w)}", 2)} accepted {rjust(f"{count_of(bad, w)}", 2)} rejected");
+        println(f"   {ljust(w, 11)} {rjust(count_of(ok, w).to_string(), 2)} accepted {rjust(count_of(bad, w).to_string(), 2)} rejected");
     }
     for r in sort_strings(reasons.names.clone()).iter() {
-        println(f"   {ljust(r, 26)} {rjust(f"{count_of(reasons, r)}", 2)}");
+        println(f"   {ljust(r, 26)} {rjust(count_of(reasons, r).to_string(), 2)}");
     }
     Ok(())
 }

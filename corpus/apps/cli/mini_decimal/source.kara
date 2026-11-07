@@ -4254,7 +4254,7 @@ fn loans(path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
             paid_interest = dec_add(paid_interest, interest, mut ctx)?;
             if m <= 3 or m == n {
                 let princ = dec_sub(pay, interest, mut ctx)?;
-                println(f"    {pad_left(f"{m}", 3)} interest {fmt(interest, ">9,.2f", ctx)?} principal {fmt(princ, ">10,.2f", ctx)?} balance {fmt(balance, ">12,.2f", ctx)?}");
+                println(f"    {pad_left(m.to_string(), 3)} interest {fmt(interest, ">9,.2f", ctx)?} principal {fmt(princ, ">10,.2f", ctx)?} balance {fmt(balance, ">12,.2f", ctx)?}");
             }
         }
         println(f"    total interest {fmt(paid_interest, ",.2f", ctx)?}, last payment {fmt(pay, ",.2f", ctx)?}");

@@ -1674,11 +1674,11 @@ fn hist_rows(out: mut ref String, lengths: ref Vec[i64]) {
         counts[*len] += 1;
     }
     out.push_str(" Length  Number     % of total  Coverage\n");
-    out.push_str(f"      0  {ljust(f"{counts[0]}", 10)} ({pct(counts[0], n)}%)\n");
+    out.push_str(f"      0  {ljust(counts[0].to_string(), 10)} ({pct(counts[0], n)}%)\n");
     let mut cov: i64 = 0;
     for i in 1..top + 1 {
         cov += counts[i] * i;
-        out.push_str(f"{i:7}  {ljust(f"{counts[i]}", 10)} ({pct(counts[i], n)}%)    {pct(cov, total)}%\n");
+        out.push_str(f"{i:7}  {ljust(counts[i].to_string(), 10)} ({pct(counts[i], n)}%)    {pct(cov, total)}%\n");
     }
 }
 

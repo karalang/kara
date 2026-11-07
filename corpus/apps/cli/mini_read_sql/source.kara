@@ -8739,7 +8739,8 @@ fn create_statements(name: Str, names: ref Vec[String], cols: ref Vec[Col], nidx
             ix.push(names[k].clone());
             ixq.push(sqlite_name(names[k]));
         }
-        out.push(f"CREATE INDEX {sqlite_name(f"ix_{name}_{join(ix, "_")}")}ON {sqlite_name(name)} ({join(ixq, ",")})");
+        let ix_name = f"ix_{name}_{join(ix, "_")}";
+        out.push(f"CREATE INDEX {sqlite_name(ix_name)}ON {sqlite_name(name)} ({join(ixq, ",")})");
     }
     out
 }

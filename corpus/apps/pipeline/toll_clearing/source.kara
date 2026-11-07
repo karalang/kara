@@ -375,7 +375,7 @@ fn build_accounts() -> Vec[Account] {
     let mut out: Vec[Account] = Vec.new();
     for i in 0..ACCOUNTS {
         let base9 = 100000000 + i * 2999999 + mix(7, i, 2) % 2999999;
-        let tag = f"{base9}{luhn_digit(f"{base9}")}";
+        let tag = f"{base9}{luhn_digit(base9.to_string())}";
         let plate = f"{STATES[mix(7, i, 3) % 4]}{letters3(mix(7, i, 4))}{1000 + i * 7919 % 9000:04}";
         let r = mix(7, i, 5) % 100;
         let class = if r < 85 { 2 } else if r < 92 { 3 } else if r < 96 { 4 } else if r < 99 { 5 } else { 6 };

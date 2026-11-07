@@ -767,7 +767,7 @@ fn list_chain(t: ref Table, ch: ref Chain, numbers: bool) {
         cells.push(if r.out_if.is_empty() { "*".to_string() } else { r.out_if.clone() });
         cells.push(side_str(r.src, r.src_neg));
         cells.push(side_str(r.dst, r.dst_neg));
-        let line = f"{row(numbers, f"{k + 1}".as_str(), cells)} {extras(r)}";
+        let line = f"{row(numbers, (k + 1).to_string().as_str(), cells)} {extras(r)}";
         println(rstrip(line.as_str()));
     }
 }

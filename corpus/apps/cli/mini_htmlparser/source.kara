@@ -1195,7 +1195,10 @@ fn link_starttag(tag: ref String, attrs: ref Vec[Attr], out: mut ref String, tit
     for a in attrs.iter() {
         if a.name == want {
             match a.value {
-                Some(v) => out.push_str(f"  {esc(f"{tag} {a.name} {v}")}\n"),
+                Some(v) => {
+                    let line = f"{tag} {a.name} {v}";
+                    out.push_str(f"  {esc(line)}\n");
+                }
                 None => {}
             }
         }

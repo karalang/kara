@@ -1993,7 +1993,8 @@ fn od_char(c: u8, named: bool) -> String {
     } else if c >= 32 and c < 127 {
         from_bytes(vec![c])
     } else {
-        f"{repeat_byte(b'0', 3 - f"{c:o}".len())}{c:o}"
+        let oct = f"{c:o}";
+        f"{repeat_byte(b'0', 3 - oct.len())}{oct}"
     }
 }
 

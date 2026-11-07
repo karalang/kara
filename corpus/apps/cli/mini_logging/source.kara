@@ -2027,7 +2027,8 @@ impl St {
                 }
             }
             if taken {
-                return Err(f"KeyError: {py_repr(f"Attempt to overwrite {py_repr(k)} in LogRecord")}");
+                let msg = f"Attempt to overwrite {py_repr(k)} in LogRecord";
+                return Err(f"KeyError: {py_repr(msg)}");
             }
         }
         let r = Rec {

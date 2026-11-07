@@ -5048,7 +5048,8 @@ struct Box {
 }
 
 fn no_key(k: ref String) -> String {
-    f"KeyError: {repr_str(f"No message with key: {k}")}"
+    let msg = f"No message with key: {k}";
+    f"KeyError: {repr_str(msg)}"
 }
 
 fn no_such_mailbox(p: ref String) -> String {

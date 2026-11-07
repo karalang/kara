@@ -2478,10 +2478,10 @@ fn s3report(path: ref String) -> Result[(), String] {
         }
     }
     for k in by_dir.sorted() {
-        println(f"     {ljust(by_dir.keys[k], 16)} {rjust(f"{by_dir.counts[k]}", 2)} objects {rjust(f"{by_dir.totals[k]}", 9)} bytes");
+        println(f"     {ljust(by_dir.keys[k], 16)} {rjust(by_dir.counts[k].to_string(), 2)} objects {rjust(by_dir.totals[k].to_string(), 9)} bytes");
     }
     for k in by_class.sorted() {
-        println(f"     {ljust(by_class.keys[k], 12)} {rjust(f"{by_class.totals[k]}", 9)} bytes");
+        println(f"     {ljust(by_class.keys[k], 12)} {rjust(by_class.totals[k].to_string(), 9)} bytes");
     }
     println(f"   largest {largest_key} ({largest} bytes)");
     for p in as_list(get(r, "CommonPrefixes")) {

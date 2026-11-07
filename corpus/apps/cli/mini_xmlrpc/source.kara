@@ -1034,7 +1034,8 @@ fn um_start(u: mut ref Um, raw: ref String) -> Result[(), Exc] {
     }
     u.data = String.new();
     if u.value and not handled(tag) {
-        return Err(py_exc("xmlrpc.client.ResponseError", f"ResponseError({pr(f"unknown tag {pr(tag)}")})"));
+        let msg = f"unknown tag {pr(tag)}";
+        return Err(py_exc("xmlrpc.client.ResponseError", f"ResponseError({pr(msg)})"));
     }
     u.value = tag == "value";
     Ok(())

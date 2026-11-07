@@ -2805,7 +2805,7 @@ fn daemon(w: mut ref World, op: ref J) -> Result[(), Exc] {
     names.sort();
     for name in names.iter() {
         let s = ref w.stats[stat_index(w, name)];
-        println(f"    {ljust(s.name, 14)} runs={ljust(f"{s.runs}", 4)} failed={ljust(f"{s.failed}", 2)} last={s.last}");
+        println(f"    {ljust(s.name, 14)} runs={ljust(s.runs.to_string(), 4)} failed={ljust(s.failed.to_string(), 2)} last={s.last}");
     }
     println("  still scheduled:");
     for id in w.sched.iter() {

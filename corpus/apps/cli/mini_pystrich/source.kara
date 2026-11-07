@@ -2345,7 +2345,7 @@ fn prog_capacity() {
                 Ok(a) => f"{kind_name(a.sz.compact)} L{a.sz.layers} {a.sz.size}x{a.sz.size}",
                 Err(e) => e,
             };
-            let row = f"  {pad_right(name, 7)} {pad_left(f"{*n}", 5)}  {pad_right(sq, 9)} {pad_right(rect, 9)} {az}";
+            let row = f"  {pad_right(name, 7)} {pad_left((*n).to_string(), 5)}  {pad_right(sq, 9)} {pad_right(rect, 9)} {az}";
             println(rstrip(row));
         }
     }

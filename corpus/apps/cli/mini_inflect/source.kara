@@ -6315,7 +6315,7 @@ fn prog_leaderboard(e: mut ref Eng, t: ref Tab, file: ref String) -> Result[(), 
         }
         let o = e.ordinal(t, V.I(rank))?;
         let pl = e.plural(t, "point".to_string(), V.I(pts))?;
-        println(f"{pad_right(o, 5)} {pad_left(rows[k].0, 12)} {pad_right(f"{pts}", 6)} {pl}");
+        println(f"{pad_right(o, 5)} {pad_left(rows[k].0, 12)} {pad_right(pts.to_string(), 6)} {pl}");
     }
     let mut winners: Vec[String] = Vec.new();
     for r in rows.iter() {

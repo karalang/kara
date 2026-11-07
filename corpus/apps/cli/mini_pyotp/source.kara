@@ -2685,7 +2685,7 @@ fn authenticator_job(args: ref Vec[String], out: mut ref String) {
             Ok(code) => {
                 let left = otp.interval - py_mod(stamp, otp.interval);
                 let next = otp.at_time(w, 1).unwrap_or(String.new());
-                emit(mut out, f"{pad_right(label, 40)} {code}  {pad_left(f"{left}", 2)}s left, next {next}");
+                emit(mut out, f"{pad_right(label, 40)} {code}  {pad_left(left.to_string(), 2)}s left, next {next}");
             }
             Err(e) => emit(mut out, f"{pad_right(label, 40)} {err_line(e)}"),
         }

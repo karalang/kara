@@ -3756,7 +3756,7 @@ fn show_header(kind: Str, value: Str, extra: Str) {
     } else if kind == "age" {
         match parse_age(value) {
             None => println("  None"),
-            Some(n) => println(f"  {n} -> {py_repr(f"{n}")}"),
+            Some(n) => println(f"  {n} -> {py_repr(n.to_string())}"),
         }
     } else if kind == "cookie" {
         println(f"  {multidict_repr(parse_cookie(opt(value)))}");

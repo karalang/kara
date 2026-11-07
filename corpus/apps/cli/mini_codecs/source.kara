@@ -495,7 +495,10 @@ struct Tables {
 fn read_text(rel: ref String) -> Result[String, Exc] {
     match fs.read_to_string(f"data/{rel}") {
         Ok(s) => Ok(s),
-        Err(_) => Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: {pr(f"data/{rel}")}")),
+        Err(_) => {
+            let path = f"data/{rel}";
+            Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: {pr(path)}"))
+        }
     }
 }
 

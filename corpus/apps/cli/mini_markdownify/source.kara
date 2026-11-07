@@ -5317,7 +5317,10 @@ fn run() -> Result[(), String] {
             let r = convert(field(w[2]), sets, w[1], ents);
             match r {
                 Ok(s) => println(f"   {py_repr(s)}"),
-                Err(e) => println(f"   {py_repr(f"raised {e}")}"),
+                Err(e) => {
+                    let raised = f"raised {e}";
+                    println(f"   {py_repr(raised)}");
+                }
             }
         }
     }

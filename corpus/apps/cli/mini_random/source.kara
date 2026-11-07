@@ -2689,7 +2689,7 @@ fn loadgen(path: ref String) -> Result[(), String] {
             continue;
         }
         let mean = sum_f(xs) / (xs.len() as f64);
-        println(f"  {pad_right(names[k], 22)} {pad_left(f"{xs.len()}", 5)} {pad_left(f"{errs[k]}", 6)} {mean:8.1} {rank(xs, 0.5):8.1} {rank(xs, 0.95):8.1} {rank(xs, 0.99):8.1} {xs[xs.len() - 1]:8.1}");
+        println(f"  {pad_right(names[k], 22)} {pad_left(xs.len().to_string(), 5)} {pad_left(errs[k].to_string(), 6)} {mean:8.1} {rank(xs, 0.5):8.1} {rank(xs, 0.95):8.1} {rank(xs, 0.99):8.1} {xs[xs.len() - 1]:8.1}");
     }
     println(f"  ran {t:.2}s, {(n as f64) / t:.2} requests/s, {total_err} errors");
     Ok(())
@@ -2807,7 +2807,7 @@ fn backoff(path: ref String) -> Result[(), String] {
         for k in 0..clients {
             cells.push(f"{full[k][a]:6.3}");
         }
-        println(f"  {pad_left(f"{a}", 7)}   {min_f(cap, base * pow2(a)):9.3}  {join(cells, "  ")}");
+        println(f"  {pad_left(a.to_string(), 7)}   {min_f(cap, base * pow2(a)):9.3}  {join(cells, "  ")}");
     }
     let mut eq: Vec[Vec[f64]] = Vec.new();
     for _ in 0..clients {
@@ -2883,7 +2883,7 @@ fn reservoir(path: ref String) -> Result[(), String] {
         }
     }
     for i in order.iter() {
-        println(f"  {pad_left(f"{res_no[*i]}", 4)}  {res[*i]}");
+        println(f"  {pad_left(res_no[*i].to_string(), 4)}  {res[*i]}");
     }
     let mut errors: Vec[String] = Vec.new();
     for l in lines.iter() {

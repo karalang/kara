@@ -6531,7 +6531,7 @@ fn run_billing(ctx: mut ref Ctx) {
             let fs = whole_seconds(sub_us(hi, lo));
             let cents = floor_div(plan * us, fs);
             total += cents;
-            println(f"  {format_en(mut ctx, lo, "YYYY-MM")}  {rjust(f"{us}", 8)} of {rjust(f"{fs}", 8)} s  {rjust(money(cents), 6)}");
+            println(f"  {format_en(mut ctx, lo, "YYYY-MM")}  {rjust(us.to_string(), 8)} of {rjust(fs.to_string(), 8)} s  {rjust(money(cents), 6)}");
         }
         println(f"  total {money(total)}");
         let (renewals, _) = arrow_range(mut ctx, "month".to_string(), s, None, None, Some(5));

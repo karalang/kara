@@ -1995,11 +1995,11 @@ fn report(src: ref String, dest: ref String) -> Result[(), Exc] {
     let mut grand = (0, 0);
     let mut count = 0;
     for a in rows {
-        lines.push(f"{pad_right(a.name, 16)} {pad_left(f"{a.orders}", 6)} {pad_left(dstr(a.revenue), 10)} {pad_left(dstr(a.refunded), 10)} {pad_left(f"{a.open}", 4)}");
+        lines.push(f"{pad_right(a.name, 16)} {pad_left(a.orders.to_string(), 6)} {pad_left(dstr(a.revenue), 10)} {pad_left(dstr(a.refunded), 10)} {pad_left(a.open.to_string(), 4)}");
         grand = dadd(grand, a.revenue);
         count += a.orders;
     }
-    lines.push(f"{pad_right("all", 16)} {pad_left(f"{count}", 6)} {pad_left(dstr(grand), 10)}");
+    lines.push(f"{pad_right("all", 16)} {pad_left(count.to_string(), 6)} {pad_left(dstr(grand), 10)}");
     for n in notes {
         lines.push(n.clone());
     }

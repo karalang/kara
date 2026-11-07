@@ -1569,7 +1569,8 @@ fn prog_nginx() {
             let b = type_of(sysdb, f"x.{e}", true).0;
             if a != b {
                 n += 1;
-                println(f"  {pad_right(f".{e}", 7)} nginx {opt_or(a, "None")}, mime.types {opt_or(b, "None")}");
+                let ext = f".{e}";
+                println(f"  {pad_right(ext, 7)} nginx {opt_or(a, "None")}, mime.types {opt_or(b, "None")}");
             }
         }
     }

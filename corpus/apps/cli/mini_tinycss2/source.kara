@@ -3626,7 +3626,7 @@ fn audit(listing: ref String) -> Result[(), String] {
         i += 1;
     }
     for (text, n) in palette.iter() {
-        println(f"  {pad_left(f"{n}", 3)} {text}");
+        println(f"  {pad_left(n.to_string(), 3)} {text}");
     }
     Ok(())
 }

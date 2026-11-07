@@ -5213,13 +5213,13 @@ fn show_pages(db: ref Db, schema: ref Vec[Obj]) -> Result[(), String] {
     for p in 1..db.pages + 1 {
         let pi = info[p].clone();
         if pi.kind.len() > 0 {
-            println(f"{rjust(f"{p}", 4)} {ljust(pi.kind, 8)} {pi.name} {pi.path} cells {pi.cells}, payload {pi.payload}, unused {pi.unused}, max {pi.max}");
+            println(f"{rjust(p.to_string(), 4)} {ljust(pi.kind, 8)} {pi.name} {pi.path} cells {pi.cells}, payload {pi.payload}, unused {pi.unused}, max {pi.max}");
         } else if is_ptrmap(db, p) {
-            println(f"{rjust(f"{p}", 4)} ptrmap");
+            println(f"{rjust(p.to_string(), 4)} ptrmap");
         } else if free.contains(p) {
-            println(f"{rjust(f"{p}", 4)} free");
+            println(f"{rjust(p.to_string(), 4)} free");
         } else {
-            println(f"{rjust(f"{p}", 4)} lost");
+            println(f"{rjust(p.to_string(), 4)} lost");
         }
     }
     if auto_vacuum(db) {

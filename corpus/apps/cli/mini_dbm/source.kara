@@ -1388,7 +1388,8 @@ fn prog_shortener() {
     for c in codes.iter() {
         let h = f"hits:{c}";
         let hits = if has(db, h) { i64.parse(get_text(db, h)).unwrap_or(0) } else { 0 };
-        println(f"  {c} {hits} {show_str(get_text(db, f"code:{c}"))}");
+        let code = f"code:{c}";
+        println(f"  {c} {hits} {show_str(get_text(db, code))}");
     }
     db.close();
     println(f"  {stats("short")}");

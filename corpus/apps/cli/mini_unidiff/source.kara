@@ -1131,7 +1131,7 @@ fn stat_job(rel: ref String, out: mut ref String) -> Result[(), Exc] {
             plus = if f.added() > 0 { (f.added() * width + most - 1) / most } else { 0 };
             minus = if f.removed() > 0 { (f.removed() * width + most - 1) / most } else { 0 };
         }
-        emit(mut out, f" {name} | {pad_left(f"{n}", 4)} {repeat('+', plus)}{repeat('-', minus)}");
+        emit(mut out, f" {name} | {pad_left(n.to_string(), 4)} {repeat('+', plus)}{repeat('-', minus)}");
     }
     let files = ps.files.len();
     let a = ps.added();

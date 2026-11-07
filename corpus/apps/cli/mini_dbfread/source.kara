@@ -2317,9 +2317,9 @@ fn ledger(path: ref String, dest: ref String) -> Result[(), Exc] {
             Val.Dt(y, mo, d, h, mi, _, _) => f"{date_str(y, mo, d)} {zpad(h, 2)}:{zpad(mi, 2)}",
             _ => String.new(),
         };
-        lines.push(f"{pad_right(a.name, 12)} {pad_left(f"{a.orders}", 6)} {pad_left(val_str(a.total), 16)} {pad_left(val_str(a.unpaid), 14)}  {last}");
+        lines.push(f"{pad_right(a.name, 12)} {pad_left(a.orders.to_string(), 6)} {pad_left(val_str(a.total), 16)} {pad_left(val_str(a.unpaid), 14)}  {last}");
     }
-    lines.push(f"{pad_right("all", 12)} {pad_left(f"{count}", 6)} {pad_left(val_str(grand), 16)}");
+    lines.push(f"{pad_right("all", 12)} {pad_left(count.to_string(), 6)} {pad_left(val_str(grand), 16)}");
     let mut text = join_strs(lines, "\n");
     text.push('\n');
     write_text(dest, text)?;
