@@ -68,7 +68,8 @@ struct User {
 
 - `Clone` on `Secret[T]`.
 - The `#[derive(Serialize)]` error: `karac check` accepts a derive over a type that contains a `Secret`, and the MIR backends then refuse it for lack of `Secret.serialize`.
-- The library's `Zeroize` impls for `String`, `Vec[u8]`, `Array[u8, N]` and the integers. A user `impl Zeroize` works.
+- `Zeroize` and `ConstantTimeEq` as importable, nameable items: `std.secret` exports only `Secret`, so a user `impl Zeroize` cannot be written yet, and the library's `Zeroize` impls for `String`, `Vec[u8]`, `Array[u8, N]` and the integers do not exist (B-2026-11-07-24).
+- The refusal of `impl Debug for Secret[T]` and the other trait impls this page forbids: `karac check` accepts them (B-2026-11-07-24).
 - `serialize_expose` and `deserialize_wrap`.
 
 These are tracked as the `std.secret` items of [phase-11-stdlib-longtail.md](../implementation_checklist/phase-11-stdlib-longtail.md).
