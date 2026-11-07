@@ -87,6 +87,12 @@ fn run_ir(ir: &str) -> Option<(i32, String)> {
 
 /// A `main` that starts a thread writing `@x`, runs `before` and joins it,
 /// then runs `after`.
+///
+/// `@bump` writes `@x` 100000 times, not once. With one write each, TSan
+/// missed the race once in a loaded `--features llvm` leg (exit 0, no
+/// report; why one pair went unreported is not established). Long loops on
+/// both sides overlap in time and give it many racing pairs, so the report
+/// does not hang on one.
 fn program(before: &str, after: &str) -> String {
     format!(
         "@x = global i64 0\n\
@@ -94,9 +100,16 @@ fn program(before: &str, after: &str) -> String {
          declare i32 @pthread_join(i64, ptr)\n\
          define ptr @bump(ptr %a) {{\n\
          entry:\n\
+         \x20 br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %n, %loop ]\n\
          \x20 %v = load i64, ptr @x\n\
          \x20 %w = add i64 %v, 1\n\
          \x20 store i64 %w, ptr @x\n\
+         \x20 %n = add i64 %i, 1\n\
+         \x20 %c = icmp ult i64 %n, 100000\n\
+         \x20 br i1 %c, label %loop, label %done\n\
+         done:\n\
          \x20 ret ptr null\n\
          }}\n\
          define i32 @main() {{\n\
