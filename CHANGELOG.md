@@ -25,6 +25,22 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   Atomic[T]` is refused with E0272, as `Atomic[i8]` written directly is
   (B-2026-11-07-35).
 
+### Wrong behaviour fixed
+
+- **Parsing or splitting a borrowed string inside a `par {}` branch is
+  accepted.** The effect checker did not know the text library's natives
+  (`str` methods), read them as an unknown effect, and refused the branches
+  as conflicting (B-2026-11-07-36).
+- **A string literal inside `Some(..)`, `Ok(..)`, `Err(..)` or a tuple
+  compares with an `Option[Str]`** (or a `Result` or tuple of `Str`):
+  `name == Some("bob")` was refused with a type mismatch (B-2026-11-07-54).
+
+### Diagnostics
+
+- Comparing an `Option[ref T]` with an `Option[T]` whose `T` is not `Copy`
+  now offers `.cloned()` as the fix, after the view and `as_slice` fixes
+  (B-2026-11-07-54).
+
 ---
 
 ## 0.8.1 (beta) — 2026-11-07
