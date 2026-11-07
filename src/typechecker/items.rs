@@ -7034,6 +7034,60 @@ impl<'a> super::TypeChecker<'a> {
         opened
     }
 
+    /// `v[a..b] = other` copies elements in, so it needs `T: Copy`
+    /// (collections.md, `[a..b]=`); for any other `T` the spelling is
+    /// `v[a..b].clone_from_slice(other)`, which `karac fix` writes
+    /// (B-2026-11-06-30). The lowering's refusal was the only word.
+    fn reject_range_assign_non_copy(&mut self, target: &Expr, value: &Expr, target_ty: &Type) {
+        let ExprKind::Index { index, .. } = &target.kind else {
+            return;
+        };
+        if !matches!(index.kind, ExprKind::Range { .. }) {
+            return;
+        }
+        let elem = match target_ty {
+            Type::Slice { element, .. } => element.as_ref(),
+            _ => return,
+        };
+        if matches!(elem, Type::Error | Type::TypeVar(_)) || self.is_copy_type_during_check(elem) {
+            return;
+        }
+        let target_end = target.span.offset + target.span.length;
+        let value_end = value.span.offset + value.span.length;
+        let span = Span {
+            line: target.span.line,
+            column: target.span.column,
+            offset: target.span.offset,
+            length: value_end.saturating_sub(target.span.offset),
+        };
+        self.type_error(
+            format!(
+                "assigning to a range copies elements in, which needs `{}: Copy`; \
+                 clone them in with `clone_from_slice` instead (collections.md, `[a..b]=`)",
+                type_display(elem)
+            ),
+            span,
+            TypeErrorKind::TypeMismatch,
+        );
+        if value.span.offset > target_end {
+            self.error_fix_diffs.insert(
+                SpanKey::from_span(&span),
+                vec![
+                    crate::resolver::TextEdit {
+                        offset: target_end,
+                        length: value.span.offset - target_end,
+                        replacement: ".clone_from_slice(".to_string(),
+                    },
+                    crate::resolver::TextEdit {
+                        offset: value_end,
+                        length: 0,
+                        replacement: ")".to_string(),
+                    },
+                ],
+            );
+        }
+    }
+
     pub(super) fn open_unsolved_let_params(&mut self, inferred: Type, value: &Expr) -> Type {
         if matches!(inferred, Type::Error | Type::Pointer { .. }) {
             return inferred;
@@ -10775,6 +10829,7 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 let slot_ty = self.solve_open_slot_from(value, slot_ty);
                 self.check_expr(value, &slot_ty);
+                self.reject_range_assign_non_copy(target, value, &target_ty);
                 // `v[1..] = [5, 6]` writes elements through the range; it
                 // rebinds no slice (B-2026-10-21-36).
                 if !matches!(target.kind, ExprKind::Index { .. }) {

@@ -8046,15 +8046,31 @@ impl<'a> Interp<'a> {
         let Some(recv) = args.first() else {
             return err(format!("{name} needs a receiver"));
         };
-        if base == "String" {
+        if base == "String" || (base, method) == ("CString", "from_bytes") {
             // `to_cstring`: the text's bytes, unless C would cut it short
-            // at an interior NUL.
-            let text = self.string_at(recv)?;
-            if text.as_bytes().contains(&0) {
+            // at an interior NUL. `CString.from_bytes` borrows its bytes
+            // (B-2026-11-06-32).
+            let text = if base == "String" {
+                self.string_at(recv)?.into_bytes()
+            } else {
+                let (b, lo, len) = self.view_of(recv)?;
+                let mut out = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    match self.slot(&b.child(lo + i))? {
+                        Value::Int(x) => out.push(x as u8),
+                        other => return err(format!("{name}: byte {other:?}")),
+                    }
+                }
+                out
+            };
+            if text.contains(&0) {
                 let e = self.variant_named(ret, Some("Err"), "InteriorNul", Vec::new())?;
                 return self.variant_named(ret, None, "Err", vec![e]);
             }
-            let bytes = text.bytes().map(|b| Value::Int(i128::from(b))).collect();
+            let bytes = text
+                .into_iter()
+                .map(|b| Value::Int(i128::from(b)))
+                .collect();
             return self.variant_named(ret, None, "Ok", vec![Value::Agg(bytes)]);
         }
         // The receiver is borrowed: find the place holding the bytes.
@@ -8095,22 +8111,20 @@ impl<'a> Interp<'a> {
             // UTF-8-validated into a `String` (a `StringSlice` is held as
             // one): a cut-off final sequence is `IncompleteSequence`, any
             // other bad byte `InvalidByte`, as `String.from_utf8`.
-            "to_string" | "to_str" | "to_string_slice" if base == "CStr" => {
-                match String::from_utf8(bytes) {
-                    Ok(text) => {
-                        let s = self.alloc_box("String", Value::Str(text));
-                        self.variant_named(ret, None, "Ok", vec![s])
-                    }
-                    Err(e) => {
-                        let which = match e.utf8_error().error_len() {
-                            None => "IncompleteSequence",
-                            Some(_) => "InvalidByte",
-                        };
-                        let e = self.variant_named(ret, Some("Err"), which, Vec::new())?;
-                        self.variant_named(ret, None, "Err", vec![e])
-                    }
+            "to_string" | "to_str" | "to_string_slice" => match String::from_utf8(bytes) {
+                Ok(text) => {
+                    let s = self.alloc_box("String", Value::Str(text));
+                    self.variant_named(ret, None, "Ok", vec![s])
                 }
-            }
+                Err(e) => {
+                    let which = match e.utf8_error().error_len() {
+                        None => "IncompleteSequence",
+                        Some(_) => "InvalidByte",
+                    };
+                    let e = self.variant_named(ret, Some("Err"), which, Vec::new())?;
+                    self.variant_named(ret, None, "Err", vec![e])
+                }
+            },
             _ => err(format!("call of unknown function {name}")),
         }
     }

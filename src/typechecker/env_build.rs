@@ -1552,6 +1552,34 @@ impl<'a> super::TypeChecker<'a> {
         self.env
             .functions
             .insert("String.from_utf8".to_string(), from_utf8_sig);
+        // `CString.from_bytes(bytes: Slice[u8]) -> Result[CString, NulError]`
+        // (strings.md, C strings): `to_cstring` over bytes that need not be
+        // UTF-8, refused at an interior NUL (B-2026-11-06-32).
+        self.env.functions.insert(
+            "CString.from_bytes".to_string(),
+            FunctionSig {
+                generic_params: vec![],
+                param_names: vec![Some("bytes".to_string())],
+                params: vec![Type::Slice {
+                    element: Box::new(Type::UInt(UIntSize::U8)),
+                    mutable: false,
+                }],
+                return_type: Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Named {
+                            name: "CString".to_string(),
+                            args: vec![],
+                        },
+                        Type::Named {
+                            name: "NulError".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                },
+                where_clause: None,
+            },
+        );
 
         // Register process.exit in the function table
         self.env.functions.insert(

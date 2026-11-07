@@ -136,6 +136,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_moved(args)?;
                 return Ok(Some(()));
             }
+            // `CString.from_bytes(bytes: Slice[u8])`: `to_cstring` over a
+            // byte view, which stays its holder's (B-2026-11-06-32).
+            ("CString", "from_bytes") => {
+                let (p, n, _) = self.view_parts(&args[0])?;
+                let d = self.place_ptr(dest)?;
+                let ok = self.variant_of(dty, "Ok")?;
+                let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+                let made = self.rt_flag("to_cstring", &[q.into(), p.into(), n.into()])?;
+                self.store_result_flag(d, dty, made, Some("InteriorNul"))?;
+                self.drop_moved(args)?;
+                return Ok(Some(()));
+            }
             ("CStr" | "CString", _) => {}
             _ => return Ok(None),
         }
@@ -164,7 +176,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, h.into())?;
                 self.store(self.offset(d, 8)?, n.into())?;
             }
-            "to_string" | "to_str" | "to_string_slice" if base == "CStr" => {
+            "to_string" | "to_str" | "to_string_slice" => {
                 let d = self.place_ptr(dest)?;
                 let ok = self.variant_of(dty, "Ok")?;
                 let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;

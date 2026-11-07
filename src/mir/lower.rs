@@ -20715,7 +20715,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A library function that builds something else
                     // (`String.from_utf8` returns a `Result`): named by
                     // its owner alone.
-                    if !matches!(owner, "String" | "char" | "CStr") {
+                    if !matches!(owner, "String" | "char" | "CStr" | "CString") {
                         return self.unsupported(e.span, &format!("the builtin `{name}`"));
                     }
                     ty_name = owner.to_string();
@@ -20741,7 +20741,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // `String.from_utf8(bytes: Slice[u8])` borrows its
                     // bytes (strings.md; B-2026-11-03-13): a `Vec[u8]` is
                     // lent, and stays its holder's to use and drop.
-                    if owner == "String" && m == "from_utf8" {
+                    if (owner, m) == ("String", "from_utf8")
+                        || (owner, m) == ("CString", "from_bytes")
+                    {
                         let t = self.expr_ty(&a.value)?;
                         if !self.is_copy(t) {
                             self.note_eval_order(&a.value);

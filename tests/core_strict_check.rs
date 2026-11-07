@@ -15343,7 +15343,7 @@ fn collections_md_library_borrows_hold_in_check() {
 /// not `Vec`'s. The page's `contains`, `remove`, `swap`, `retain`,
 /// `truncate` and `extend` run (written in the library, over the native
 /// ends); `push` / `pop` / `first` / `last` are fixed to the deque's names,
-/// and a method that needs one slice points at `Vec.from_iter(dq)`.
+/// and a method that needs one slice points at `Vec.from_iter(dq.into_iter())`.
 #[test]
 fn a_vecdeque_has_the_page_surface_not_vecs() {
     accepted_and_runs(
@@ -15408,7 +15408,7 @@ fn a_vecdeque_has_the_page_surface_not_vecs() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains("no method 'sort' on type 'VecDeque'")
-            && err.contains("`Vec.from_iter(dq)`")
+            && err.contains("`Vec.from_iter(dq.into_iter())`")
             && err.contains("`dq.iter().max()`"),
         "deque-slice-methods: {err}"
     );

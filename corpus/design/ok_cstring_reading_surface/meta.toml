@@ -1,0 +1,9 @@
+source = "B-2026-11-06-32"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "strings", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/strings.md, C strings: a CString has CStr's reading surface (to_string, to_str), and CString.from_bytes(bytes: Slice[u8]) builds one from bytes that need not be UTF-8, borrowing them, refused at an interior NUL. Expected output worked by hand from the spec."

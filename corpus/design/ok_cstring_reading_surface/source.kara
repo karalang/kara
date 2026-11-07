@@ -1,0 +1,27 @@
+fn main() {
+    let s = "héllo".to_string();
+    let cs = s.to_cstring().unwrap();
+    match cs.to_string() {
+        Ok(t) => println(t),
+        Err(_) => println("bad"),
+    }
+    match cs.to_str() {
+        Ok(t) => println(t.len()),
+        Err(_) => println("bad"),
+    }
+    let raw: Vec[u8] = [104u8, 105u8, 255u8];
+    let c2 = CString.from_bytes(raw).unwrap();
+    println(c2.len());
+    match c2.to_string() {
+        Ok(_) => println("utf8"),
+        Err(_) => println("not utf8"),
+    }
+    println(raw.len());
+    let nul: Vec[u8] = [1u8, 0u8, 2u8];
+    match CString.from_bytes(nul.as_slice()) {
+        Ok(_) => println("ok"),
+        Err(_) => println("interior nul"),
+    }
+    let ok = CString.from_bytes("abc".bytes()).unwrap();
+    println(ok.to_str().unwrap());
+}

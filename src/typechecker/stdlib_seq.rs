@@ -1161,10 +1161,15 @@ impl<'a> super::TypeChecker<'a> {
                     mutable: false,
                 }
             }
+            // `CString` owns what `ref CStr` borrows, with the same reading
+            // surface (strings.md; B-2026-11-06-32).
+            "to_str" | "to_string" | "to_string_slice" => {
+                self.infer_cstr_method(method, args, span)
+            }
             _ => self.require_known_method(
                 "CString",
                 method,
-                &["as_ptr", "bytes", "is_empty", "len"],
+                &["as_ptr", "bytes", "is_empty", "len", "to_str", "to_string"],
                 args,
                 span,
             ),

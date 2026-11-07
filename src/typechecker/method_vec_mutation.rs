@@ -963,7 +963,7 @@ impl<'a> super::TypeChecker<'a> {
     /// `VecDeque[T]` (B-2026-10-26-18, the page's surface at 857e45825).
     /// Refused by name on v2: `push` / `pop` / `first` / `last` are fixed to
     /// the deque's own `push_back` / `pop_back` / `front` / `back`, and the
-    /// methods that need one contiguous slice point at `Vec.from_iter(dq)`.
+    /// methods that need one contiguous slice point at `Vec.from_iter(dq.into_iter())`.
     pub(super) fn reject_vec_method_on_deque(
         &mut self,
         object: &Expr,
@@ -1060,7 +1060,7 @@ impl<'a> super::TypeChecker<'a> {
         let text = if contiguous {
             format!(
                 "{msg}: a `VecDeque` is not one contiguous slice; collect it into a `Vec` \
-                 first (`Vec.from_iter(dq)`)"
+                 first (`Vec.from_iter(dq.into_iter())`)"
             )
         } else if matches!(
             method,

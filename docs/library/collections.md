@@ -280,7 +280,7 @@ A ring buffer with O(1) push and pop at both ends.
 | `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from index `len` to the back. Does nothing if `len >= self.len()` |
 | `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Pushes every item onto the back, in order |
 
-These are the whole surface, with iteration and the traits below. A `VecDeque` is not contiguous, so the methods that need one slice (`sort`, `dedup`, `binary_search`, `reverse`, ranges and `as_slice`) are refused with a diagnostic; collect into a `Vec` for them (`Vec.from_iter(dq)`), as Rust's `make_contiguous` would (review-thread ruling 2026-10-26, from the ADR-3 collections audit).
+These are the whole surface, with iteration and the traits below. A `VecDeque` is not contiguous, so the methods that need one slice (`sort`, `dedup`, `binary_search`, `reverse`, ranges and `as_slice`) are refused with a diagnostic; collect into a `Vec` for them (`Vec.from_iter(dq.into_iter())`), as Rust's `make_contiguous` would (review-thread ruling 2026-10-26, from the ADR-3 collections audit).
 
 ## `PriorityQueue[T]`
 

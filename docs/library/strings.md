@@ -125,4 +125,4 @@ These types exist for FFI. `CStr` is a run of bytes ending in a NUL that its sur
 
 A `CStr` never converts implicitly, even when its bytes are valid UTF-8.
 
-`String.to_cstring(self) -> Result[CString, NulError]` copies the text into a new buffer with a NUL appended, and fails if the text contains a NUL. A `CString` can also be built from a `Slice[u8]`. It drops normally, and its `as_ptr()` returns the `*const u8` to pass to C.
+`String.to_cstring(self) -> Result[CString, NulError]` copies the text into a new buffer with a NUL appended, and fails if the text contains a NUL. A `CString` can also be built from a `Slice[u8]` that need not be UTF-8: `CString.from_bytes(bytes: Slice[u8]) -> Result[CString, NulError]` borrows the bytes, copies them and fails the same way. A `CString` has the reading surface of the table above. It drops normally, and its `as_ptr()` returns the `*const u8` to pass to C.

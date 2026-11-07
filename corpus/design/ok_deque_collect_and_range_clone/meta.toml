@@ -1,0 +1,9 @@
+source = "B-2026-11-06-30"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/collections.md: a VecDeque is collected into a Vec for the slice methods with Vec.from_iter(dq.into_iter()) (FromIterator takes an Iterator, iterators.md), and a range of non-Copy elements is overwritten with clone_from_slice. Expected output worked by hand from the spec."
