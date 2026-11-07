@@ -476,6 +476,45 @@ impl super::Parser {
                         "ref ",
                     )
                 };
+                // `&str`: Rust's borrowed text, which is exactly `Str` (a
+                // `Str` is already a view). The `&` edit alone made it
+                // `ref Str`, which a `String` argument does not pass as, so
+                // every call site failed with no fix (kata 2002). One
+                // diagnostic, one edit over `&str`.
+                if !is_mut
+                    && matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "str")
+                    && !matches!(self.peek_token_ref_at(1), Token::LeftBracket | Token::Dot)
+                {
+                    let word = self.current_span();
+                    self.advance();
+                    let whole = Span {
+                        length: word.offset + word.length - start.offset,
+                        ..start
+                    };
+                    self.error_at(
+                        "`&str` is Rust's borrowed string -- in Kāra a view of text is `Str` \
+                         (a `String` argument passes as `Str`)",
+                        whole,
+                    );
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&whole),
+                        crate::resolver::TextEdit {
+                            offset: whole.offset,
+                            length: whole.length,
+                            replacement: "Str".to_string(),
+                        },
+                    );
+                    let span = self.span_from(&start);
+                    return Some(TypeExpr {
+                        kind: TypeKind::Path(PathExpr {
+                            segments: vec!["Str".to_string()],
+                            generic_args: None,
+                            effect_args: None,
+                            span,
+                        }),
+                        span,
+                    });
+                }
                 // `&[T]` / `&mut [T]`: a borrowed run of elements, which is
                 // exactly `Slice[T]` / `mut Slice[T]` (a slice is already a
                 // view). One diagnostic and one edit, in place of the `&`
