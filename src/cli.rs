@@ -2330,7 +2330,41 @@ impl Pipeline {
             });
             // A `let t = v[i];` whose `t` is only read afterwards is repaired
             // by borrowing the element, not by copying it (B-2026-10-24-18).
-            let read_only = &ownership.core_read_only_index_lets;
+            //
+            // A use the ownership pass refuses as a write to a binding without
+            // `mut` (`t.items.push(x)`) makes such a `let` a written one
+            // (B-2026-11-07-15).
+            let refused: std::collections::HashSet<usize> = ownership
+                .errors
+                .iter()
+                .filter(|e| {
+                    e.replacement
+                        .as_ref()
+                        .is_some_and(|r| r.replacement == " mut")
+                })
+                .map(|e| e.span.offset)
+                .collect();
+            let mut read_only = ownership.core_read_only_index_lets.clone();
+            let mut written = ownership.core_written_index_lets.clone();
+            for (k, w) in &ownership.core_only_read_index_lets {
+                let writes: Vec<usize> = w
+                    .writes
+                    .iter()
+                    .copied()
+                    .filter(|u| refused.contains(u))
+                    .collect();
+                if !writes.is_empty() {
+                    read_only.remove(k);
+                    written.insert(
+                        *k,
+                        crate::ownership::WrittenIndexLet {
+                            borrowable: w.borrowable,
+                            writes,
+                        },
+                    );
+                }
+            }
+            let read_only = &read_only;
             for e in self.typed.as_mut().unwrap().errors.iter_mut() {
                 if e.kind != crate::typechecker::TypeErrorKind::IndexMoveNonCopy
                     || !read_only.contains(&crate::resolver::SpanKey::from_span(&e.span))
@@ -2366,6 +2400,86 @@ impl Pipeline {
                     replacement: "ref ".to_string(),
                 }));
             }
+            // A `let t = v[i];` whose `t` has its fields written afterwards
+            // is repaired by borrowing the element mutably: a copy would take
+            // the writes away from it (B-2026-11-07-15). The refusal of each
+            // write to `t` for want of `let mut` goes with it, since the
+            // `mut ref` binding allows them.
+            let written = &written;
+            // The lets whose move out of the collection is refused: only a
+            // `let` with that repair takes the `let mut` refusals with it.
+            let mut repaired = std::collections::HashSet::new();
+            const WRITTEN: &str =
+                "binding's fields are written, so a copy would take the writes away from the element";
+            const HELD: &str = "; borrow it with `mut ref` instead, where the collection is not used while the binding still is";
+            for e in self.typed.as_mut().unwrap().errors.iter_mut() {
+                if e.kind != crate::typechecker::TypeErrorKind::IndexMoveNonCopy {
+                    continue;
+                }
+                let key = crate::resolver::SpanKey::from_span(&e.span);
+                let Some(w) = written.get(&key) else {
+                    continue;
+                };
+                repaired.insert(key);
+                if let Some(i) = e.message.find(" Borrow it (") {
+                    e.message.truncate(i);
+                } else if let Some(i) = e.message.find("`swap`") {
+                    e.message.truncate(i + "`swap`".len());
+                    e.message.push('.');
+                }
+                e.message += " The ";
+                e.message += WRITTEN;
+                if w.borrowable {
+                    e.message += ": the fix borrows it with `mut ref`";
+                    e.fix_it = Some(crate::typechecker::FixIt {
+                        span: crate::token::Span {
+                            length: 0,
+                            ..e.span
+                        },
+                        replacement: "mut ref ".to_string(),
+                    });
+                } else {
+                    e.message += HELD;
+                    e.fix_it = None;
+                }
+            }
+            for e in ownership.errors.iter_mut() {
+                if e.kind != crate::ownership::OwnershipErrorKind::MoveOutOfPlace {
+                    continue;
+                }
+                let key = crate::resolver::SpanKey::from_span(&e.span);
+                let Some(w) = written.get(&key) else {
+                    continue;
+                };
+                repaired.insert(key);
+                e.message += "; the ";
+                e.message += WRITTEN;
+                if w.borrowable {
+                    e.message += ": the fix borrows the field with `mut ref`";
+                    e.suggestion =
+                        Some("write `mut ref` before it to borrow it in place".to_string());
+                    e.replacement = Some(Box::new(crate::resolver::TextEdit {
+                        offset: e.span.offset,
+                        length: 0,
+                        replacement: "mut ref ".to_string(),
+                    }));
+                } else {
+                    e.message += HELD;
+                    e.suggestion = None;
+                    e.replacement = None;
+                }
+            }
+            let writes: std::collections::HashSet<usize> = written
+                .iter()
+                .filter(|(k, _)| repaired.contains(*k))
+                .flat_map(|(_, w)| w.writes.iter().copied())
+                .collect();
+            ownership.errors.retain(|e| {
+                !(writes.contains(&e.span.offset)
+                    && e.replacement
+                        .as_ref()
+                        .is_some_and(|r| r.replacement == " mut"))
+            });
             // §4.6: when the move is a pattern binding taking a part out of
             // the scrutinee, the repair is `ref` on that binding.
             let pattern_moves = &self.typed.as_ref().unwrap().core_moving_scrutinees;

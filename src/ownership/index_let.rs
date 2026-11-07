@@ -8,6 +8,12 @@
 //! to the collection (or a move of it) in that stretch rules the borrow out
 //! (§5.6). The stretch is measured in whole statements of the `let`'s block:
 //! a loop that holds a use of `t` is held whole.
+//!
+//! When `t`'s fields are written afterwards (`t.status = 2;`), a copy would
+//! take the writes away from the element, so on a writable collection the
+//! repair is `let t = mut ref v[i];` (B-2026-11-07-15). That borrow is
+//! exclusive: any use of the collection while `t` is still to be used rules
+//! it out.
 
 /// Methods that only read their receiver, so calling one on the collection
 /// does not conflict with a borrow of its element. Any other method is taken
@@ -29,15 +35,95 @@ const READING_METHODS: &[&str] = &[
     "as_slice",
 ];
 
-use crate::ast::{Block, Expr, ExprKind, Pattern, PatternKind, StmtKind, UnaryOp};
+use crate::ast::{
+    Block, Expr, ExprKind, Function, Pattern, PatternKind, SelfParam, StmtKind, TypeKind, UnaryOp,
+};
 use crate::cfg::{Classification, UseKind};
 use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
 use crate::resolver::SpanKey;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// A `let t = v[i];` on a writable collection whose binding's fields are
+/// written afterwards (B-2026-11-07-15).
+#[derive(Debug, Clone, Default)]
+pub struct WrittenIndexLet {
+    /// Whether `mut ref v[i]` is a borrow the rest of the block allows: the
+    /// collection is not used again while `t` is still to be used.
+    pub borrowable: bool,
+    /// The offset of `t` in each write through it, where the refusal of a
+    /// write to a binding without `mut` is reported.
+    pub writes: Vec<usize>,
+}
+
+/// What [`index_lets`] finds in one function.
+pub(super) struct IndexLets<'a> {
+    /// The roots the function may write: a `mut ref` parameter, `self` in a
+    /// `mut ref self` method, and every `let mut` binding.
+    writable: HashSet<String>,
+    pub read_only: &'a mut HashSet<SpanKey>,
+    pub written: &'a mut HashMap<SpanKey, WrittenIndexLet>,
+    /// The `read_only` lets on a writable collection, with every later use
+    /// of the binding in `writes`: one the ownership pass finds writing
+    /// (`t.items.push(x)` with `t` not `mut`) makes the let a written one.
+    pub only_read: &'a mut HashMap<SpanKey, WrittenIndexLet>,
+}
+
+impl<'a> IndexLets<'a> {
+    pub(super) fn new(
+        f: &Function,
+        read_only: &'a mut HashSet<SpanKey>,
+        written: &'a mut HashMap<SpanKey, WrittenIndexLet>,
+        only_read: &'a mut HashMap<SpanKey, WrittenIndexLet>,
+    ) -> Self {
+        let mut writable = HashSet::new();
+        if matches!(f.self_param, Some(SelfParam::MutRef)) {
+            writable.insert("self".to_string());
+        }
+        for p in &f.params {
+            if let (TypeKind::MutRef(_), PatternKind::Binding(n)) = (&p.ty.kind, &p.pattern.kind) {
+                writable.insert(n.clone());
+            }
+        }
+        mut_lets(&f.body, &mut writable);
+        IndexLets {
+            writable,
+            read_only,
+            written,
+            only_read,
+        }
+    }
+
+    fn writable(&self, root: &str) -> bool {
+        self.writable
+            .contains(root.split('.').next().unwrap_or(root))
+    }
+}
+
+fn mut_lets(b: &Block, out: &mut HashSet<String>) {
+    for stmt in &b.stmts {
+        if let StmtKind::Let {
+            is_mut: true,
+            pattern,
+            ..
+        } = &stmt.kind
+        {
+            out.extend(pattern.binding_name_spans().into_iter().map(|(n, _)| n));
+        }
+    }
+    for_each_block_child(b, &mut |ch| mut_lets_in(ch, out));
+}
+
+fn mut_lets_in(ch: Child<'_>, out: &mut HashSet<String>) {
+    match ch {
+        Child::Block(b) => mut_lets(b, out),
+        Child::Expr(e) => for_each_child_public(e, &mut |ch| mut_lets_in(ch, out)),
+    }
+}
 
 /// The initializer of each un-annotated, non-`mut` `let name = <index>` in
-/// `body` whose binding the classifier saw only read.
-pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut HashSet<SpanKey>) {
+/// `body` whose binding the classifier saw only read (into `read_only`), or
+/// only read and written through (into `written`).
+pub(super) fn index_lets(body: &Block, c: &Classification, out: &mut IndexLets<'_>) {
     for stmt in &body.stmts {
         let StmtKind::Let {
             is_mut: false,
@@ -66,12 +152,21 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
             uses_in_block(body, name, &mut uses);
         }
         uses.retain(|k| k.0 >= end);
-        if !uses
-            .iter()
-            .all(|k| matches!(c.kinds.get(k), Some(UseKind::Read)))
-        {
+        // The writes through a binding (`t.f = x`, `t.n += 1`, `mut t.v`):
+        // the classifier sees a field store as a `Reassign` of `t.f`, and a
+        // compound one as a read.
+        let mut writes = HashSet::new();
+        for name in &names {
+            writes_through_block(body, name, &mut writes);
+        }
+        if !uses.iter().all(|k| match c.kinds.get(k) {
+            Some(UseKind::Read) => true,
+            Some(UseKind::Reassign) => writes.contains(&k.0),
+            _ => false,
+        }) {
             continue;
         }
+        let written = uses.iter().any(|k| writes.contains(&k.0));
         let ExprKind::Index { object, .. } = &indexed.kind else {
             continue;
         };
@@ -97,14 +192,211 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
         let Some(root) = place_root(object) else {
             continue;
         };
+        let key = SpanKey::from_span(&value.span);
+        let uses: Vec<usize> = uses.iter().map(|k| k.0).collect();
+        // A collection the function may not write keeps the copy when the
+        // binding is written: the writes can only be meant for it.
+        let mutable = pattern_is_binding(pattern) && out.writable(&root);
+        if written {
+            if !mutable {
+                continue;
+            }
+            let borrowable = !used_while_held(body, &root, end, &uses);
+            let mut writes: Vec<usize> = uses
+                .iter()
+                .copied()
+                .filter(|u| writes.contains(u))
+                .collect();
+            writes.sort_unstable();
+            out.written
+                .insert(key, WrittenIndexLet { borrowable, writes });
+            continue;
+        }
         let mut written = false;
         writes_in_block(body, &root, window, c, &mut written);
         if written {
             continue;
         }
-        out.insert(SpanKey::from_span(&value.span));
+        out.read_only.insert(key);
+        if mutable {
+            let borrowable = !used_while_held(body, &root, end, &uses);
+            out.only_read.insert(
+                key,
+                WrittenIndexLet {
+                    borrowable,
+                    writes: uses,
+                },
+            );
+        }
     }
     for_each_block_child(body, &mut |ch| nested(ch, c, out));
+}
+
+fn pattern_is_binding(p: &Pattern) -> bool {
+    matches!(p.kind, PatternKind::Binding(_))
+}
+
+/// The offset of `name` at the root of each place written in `b`: an
+/// assignment's target (`name.f = x`, `name.n += 1`, not `name = x`), and a
+/// `mut` argument or `mut ref` operand rooted at it.
+fn writes_through_block(b: &Block, name: &str, out: &mut HashSet<usize>) {
+    for stmt in &b.stmts {
+        let targets: Vec<&Expr> = match &stmt.kind {
+            StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+                vec![target]
+            }
+            StmtKind::MultiAssign { targets, .. } => targets.iter().collect(),
+            _ => Vec::new(),
+        };
+        for t in targets {
+            if !matches!(t.kind, ExprKind::Identifier(_)) {
+                root_ident(t, name, out);
+            }
+        }
+    }
+    for_each_block_child(b, &mut |ch| writes_through(ch, name, out));
+}
+
+fn writes_through(ch: Child<'_>, name: &str, out: &mut HashSet<usize>) {
+    match ch {
+        Child::Block(b) => writes_through_block(b, name, out),
+        Child::Expr(e) => {
+            match &e.kind {
+                ExprKind::Unary {
+                    op: UnaryOp::MutRef,
+                    operand,
+                } => root_ident(operand, name, out),
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                    for a in args.iter().filter(|a| a.mut_marker) {
+                        root_ident(&a.value, name, out);
+                    }
+                }
+                _ => {}
+            }
+            for_each_child_public(e, &mut |ch| writes_through(ch, name, out));
+        }
+    }
+}
+
+/// Records the offset of the identifier a place hangs off, when it is `name`.
+fn root_ident(e: &Expr, name: &str, out: &mut HashSet<usize>) {
+    match &e.kind {
+        ExprKind::Identifier(n) if n == name => {
+            out.insert(e.span.offset);
+        }
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } => root_ident(object, name, out),
+        _ => {}
+    }
+}
+
+/// Whether `root` is used, after `from`, at a point a later use in `uses`
+/// can follow: a `mut ref` borrow of an element of `root` held by those uses
+/// would conflict with it (§5.6). A use in one branch of an `if` or `match`
+/// is not followed by one in another branch of it, unless a loop that
+/// starts after `from` holds both.
+fn used_while_held(b: &Block, root: &str, from: usize, uses: &[usize]) -> bool {
+    let mut mentions = Vec::new();
+    mentions_in_block(b, root, &mut mentions);
+    let mut shape = Shape::default();
+    shape_of_block(b, &mut shape);
+    mentions.into_iter().filter(|&m| m >= from).any(|m| {
+        uses.iter().any(|&u| {
+            let looped = shape
+                .loops
+                .iter()
+                .any(|&(s, e)| s >= from && (s..e).contains(&m) && (s..e).contains(&u));
+            looped || (u > m && !shape.apart(m, u))
+        })
+    })
+}
+
+/// The branch and loop extents of a block.
+#[derive(Default)]
+struct Shape {
+    /// Each `if` / `match`, as the extents of its branches.
+    branches: Vec<Vec<(usize, usize)>>,
+    loops: Vec<(usize, usize)>,
+}
+
+impl Shape {
+    /// Whether `a` and `b` lie in different branches of one `if` or `match`.
+    fn apart(&self, a: usize, b: usize) -> bool {
+        self.branches.iter().any(|arms| {
+            let arm_of = |x: usize| arms.iter().position(|&(s, e)| (s..e).contains(&x));
+            matches!((arm_of(a), arm_of(b)), (Some(i), Some(j)) if i != j)
+        })
+    }
+}
+
+fn extent(s: &crate::token::Span) -> (usize, usize) {
+    (s.offset, s.offset + s.length)
+}
+
+fn shape_of_block(b: &Block, out: &mut Shape) {
+    for_each_block_child(b, &mut |ch| shape_of(ch, out));
+}
+
+fn shape_of(ch: Child<'_>, out: &mut Shape) {
+    let e = match ch {
+        Child::Block(b) => return shape_of_block(b, out),
+        Child::Expr(e) => e,
+    };
+    match &e.kind {
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            let mut arms = vec![extent(&then_block.span)];
+            arms.extend(else_branch.iter().map(|e| extent(&e.span)));
+            out.branches.push(arms);
+        }
+        ExprKind::Match { arms, .. } => {
+            out.branches
+                .push(arms.iter().map(|a| extent(&a.span)).collect());
+        }
+        ExprKind::While { .. }
+        | ExprKind::WhileLet { .. }
+        | ExprKind::For { .. }
+        | ExprKind::Loop { .. } => out.loops.push(extent(&e.span)),
+        _ => {}
+    }
+    for_each_child_public(e, &mut |ch| shape_of(ch, out));
+}
+
+/// The offset of each use of a place that can overlap `root`: a variable,
+/// `self`, or `self.f`.
+fn mentions_in_block(b: &Block, root: &str, out: &mut Vec<usize>) {
+    for_each_block_child(b, &mut |ch| mentions_in(ch, root, out));
+}
+
+fn mentions_in(ch: Child<'_>, root: &str, out: &mut Vec<usize>) {
+    let e = match ch {
+        Child::Block(b) => return mentions_in_block(b, root, out),
+        Child::Expr(e) => e,
+    };
+    let at = match &e.kind {
+        ExprKind::FieldAccess { object, field } if matches!(object.kind, ExprKind::SelfValue) => {
+            if overlaps(Some(format!("self.{field}")), root) {
+                out.push(e.span.offset);
+            }
+            return;
+        }
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::SelfValue => Some("self".to_string()),
+        _ => None,
+    };
+    if overlaps(at, root) {
+        out.push(e.span.offset);
+    }
+    for_each_child_public(e, &mut |ch| mentions_in(ch, root, out));
 }
 
 /// The element access a `let` initializer reads: the `v[i]` of `v[i]`,
@@ -133,9 +425,9 @@ fn simple_bindings<'p>(p: &'p Pattern, out: &mut Vec<&'p str>) -> bool {
     }
 }
 
-fn nested(ch: Child<'_>, c: &Classification, out: &mut HashSet<SpanKey>) {
+fn nested(ch: Child<'_>, c: &Classification, out: &mut IndexLets<'_>) {
     match ch {
-        Child::Block(b) => read_only_index_lets(b, c, out),
+        Child::Block(b) => index_lets(b, c, out),
         Child::Expr(e) => for_each_child_public(e, &mut |ch| nested(ch, c, out)),
     }
 }

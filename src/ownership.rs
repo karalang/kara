@@ -26,6 +26,7 @@ mod expr_check;
 mod frozen_escape;
 mod frozen_freeze_site;
 mod index_let;
+pub use index_let::WrittenIndexLet;
 mod par_capture_classify;
 mod par_helpers;
 mod rc_promote;
@@ -1152,6 +1153,16 @@ pub struct OwnershipCheckResult {
     /// afterwards: the E_INDEX_MOVE_NON_COPY repair there is `ref v[i]`, not
     /// a copy (B-2026-10-24-18). Strict commands only.
     pub core_read_only_index_lets: HashSet<SpanKey>,
+    /// The initializer of each `let t = v[i];` on a writable collection
+    /// whose binding's fields are written afterwards: the repair there is
+    /// `mut ref v[i]`, since a copy would take the writes away from the
+    /// element (B-2026-11-07-15). Strict commands only.
+    pub core_written_index_lets: HashMap<SpanKey, index_let::WrittenIndexLet>,
+    /// Each of [`Self::core_read_only_index_lets`] on a writable collection,
+    /// with every later use of its binding: a use the pass refuses as a
+    /// write to a binding without `mut` makes it one of
+    /// [`Self::core_written_index_lets`].
+    pub core_only_read_index_lets: HashMap<SpanKey, index_let::WrittenIndexLet>,
     /// Representation for each binding/parameter: "owned (stack)", "ref (borrow)",
     /// "shared (Rc)", "shared (Arc)". Key: "function_name.binding_name".
     pub representations: HashMap<String, String>,
@@ -1740,6 +1751,10 @@ pub struct OwnershipChecker<'a> {
     pub(crate) core_copy_index_moves: Vec<Span>,
     /// See [`OwnershipCheckResult::core_read_only_index_lets`].
     pub(crate) core_read_only_index_lets: HashSet<SpanKey>,
+    /// See [`OwnershipCheckResult::core_written_index_lets`].
+    pub(crate) core_written_index_lets: HashMap<SpanKey, index_let::WrittenIndexLet>,
+    /// See [`OwnershipCheckResult::core_only_read_index_lets`].
+    pub(crate) core_only_read_index_lets: HashMap<SpanKey, index_let::WrittenIndexLet>,
     /// The key of each `m[k] = v` on a map, which moves into the map before
     /// `v` runs (core semantics §8.2): the value's span, and the statement's
     /// span and hoisted spelling for a use of the key inside `v`
@@ -2252,6 +2267,8 @@ impl<'a> OwnershipChecker<'a> {
             core_copy_non_moves: HashMap::new(),
             core_copy_index_moves: Vec::new(),
             core_read_only_index_lets: HashSet::new(),
+            core_written_index_lets: HashMap::new(),
+            core_only_read_index_lets: HashMap::new(),
             map_assign_keys: HashMap::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
@@ -2533,6 +2550,8 @@ impl<'a> OwnershipChecker<'a> {
             core_errors,
             core_non_move_sources: self.core_non_move_sources,
             core_read_only_index_lets: self.core_read_only_index_lets,
+            core_written_index_lets: self.core_written_index_lets,
+            core_only_read_index_lets: self.core_only_read_index_lets,
             representations,
             rc_values: self.rc_values,
             arc_values: self.arc_values,
@@ -3278,11 +3297,13 @@ impl<'a> OwnershipChecker<'a> {
         self.fn_non_move_sources
             .extend(classification.core_borrowed_spans.iter().copied());
         if core_rules() {
-            index_let::read_only_index_lets(
-                &f.body,
-                &classification,
+            let mut found = index_let::IndexLets::new(
+                f,
                 &mut self.core_read_only_index_lets,
+                &mut self.core_written_index_lets,
+                &mut self.core_only_read_index_lets,
             );
+            index_let::index_lets(&f.body, &classification, &mut found);
         }
         // v2 core §5.4: a function that returns a reference returns a borrow
         // of the place its result names, so an element there is lent, not
