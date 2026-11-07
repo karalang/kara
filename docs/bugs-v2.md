@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 151 |
 | false-positive | 131 |
 | perf | 107 |
-| missing-feature | 99 |
+| missing-feature | 100 |
 | soundness | 51 |
 | miscompile | 40 |
 | run-vs-build | 24 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 245 |
+| typecheck | 246 |
 | mir-llvm | 130 |
 | mir | 130 |
 | cli | 71 |
@@ -104,9 +104,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-27 | 2026-11-05 | mir-llvm | medium | x86 only, within on the M5: two kata benches run about 2x slower on LLVM 22 than on LLVM 18 on x86, min_stack (155) 951 ms vs 444 and hsearch (275) 1074 vs 526; Gowtham's M5 run at 7c63217740 reads 0.904x and 1.056x legacy's cycles; teemo, the third of B-2026-11-05-4, is fixed | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-06-8 | 2026-11-06 | mir-llvm | low | Kata 354 on arm64 still runs 1.36x rustc -O's cycles after d70e6d474a, though 0.954x legacy's and level with Rust on x86 | — |
-| B-2026-11-06-14 | 2026-11-06 | typecheck | medium | Const generic parameters cannot be used as values or solved from the expected type: `N` in a body is `a type that failed to check is not lowered yet`, `[0; N]` is refused as a non-literal count, and `fn zeros[const N: i64]() -> Array[i64, N]` with `let a: Array[i64, 8] = zeros();` finds `Array[i64, N]` | — |
 | B-2026-11-06-15 | 2026-11-06 | typecheck | low | §8 roll-up: a `where` bound on a struct is never checked and an inline struct bound is not checked on an unannotated literal; `if c { 1i32 } else { 2i64 }` joins to i64 though §8's LUB has no rule for it; an unsolved `Vec.new()` used only for `.len()` and a never-called `|x| x` are accepted | — |
-| B-2026-11-06-17 | 2026-11-06 | mir+mir-llvm | medium | Const-generic functions pass `karac check` but do not compile: the instance is named `first[i64, ()]` (N instantiated as `()`), so `a.len()` / `a[0]` on `Array[T, N]` fail with `Array[i64, N] has no layout` (llvm) or `index into non-array Array[i64, N]` (MIR), and `for x in a` is `a for loop over a collection is not lowered yet` | — |
 | B-2026-11-06-18 | 2026-11-06 | parser+typecheck | low | §3 roll-up: the value-class naming rule is enforced only on parameters (`let Count`, `let COUNT`, `for Ix in`, `Some(Val)` bindings are accepted), `struct _Hidden` / `const _MAX` are accepted, `requires`/`ensures`/`invariant` are reserved though §3 says they are not v1 keywords, a nested f-string is accepted, and doc-comment misuse is a parse error or silent instead of a warning | — |
 | B-2026-11-06-21 | 2026-11-06 | typecheck+ownership+parser | medium | A constant is treated as a place, not a fresh value: a second use of a non-Copy constant is `value 'ORIGIN' moved`, `ORIGIN.x` on a struct constant is `this name is not lowered yet`, `T_THREE.1` is a parse error, while `XX = 5;` and `TABLE[0] = 3;` on constants are accepted and do nothing | — |
 | B-2026-11-06-27 | 2026-11-06 | typecheck | low | §9 roll-up of accepted-invalid programs: derive chains (`Eq` without `PartialEq`, `Ord` without `PartialOrd`, `Copy` without `Clone`), a derive plus a manual impl of one trait, `#[derive(Drop)]`, `impl X for dyn Shape`, an unknown associated binding in a bound, a Map key without `Eq`, `dbg` and derived `Debug` without `Debug` on the element, derived `Clone` without its bound, `clone(own self)`, a run-time `#[serde(default: ..)]`; plus missing std conversions | — |
@@ -114,6 +112,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
 | B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
 | B-2026-11-07-8 | 2026-11-07 | typecheck | medium | Since 5f1222f497 (B-2026-11-06-11) a method call on a part of a tuple element of a generic `Vec[(K, K)]` walked by `for` is left unsolved: `for (k, v) in d.iter() { s = s + k.show(); }` under `K: Show` is refused by `karac check` with `a type that failed to check is not lowered yet`; corpus apps/cli/mini_collections (e-spec) regressed with it | — |
+| B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 
 ### Relocated
 
@@ -754,7 +753,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-11 | typecheck | low | Remainder of B-2026-11-06-7: a later use still does not fix a call's return-only type parameter when the result is an `Option`/`Result` (`let mut bes… | 5f1222f497 |
 | B-2026-11-06-12 | typecheck+mir | high | Polymorphic recursion hangs the compiler: `fn deep[T: Display](x: own T, n: i64) -> i64 { . | d4c94d8b4b |
 | B-2026-11-06-13 | typecheck | medium | [Literal half split to B-2026-11-07-3; this row closed on shapes 5-6] Numeric literals do not default last: a literal bound by `let` (directly or pus… | 9bee6df335 |
+| B-2026-11-06-14 | typecheck | medium | Const generic parameters cannot be used as values or solved from the expected type: `N` in a body is `a type that failed to check is not lowered yet`… | c79be19373 |
 | B-2026-11-06-16 | typecheck+mir | high | A `const` in a pattern binds a fresh name instead of comparing against the constant: with `const LIMIT: i64 = 3`, `match x { LIMIT => .., _ => . | 473651262e |
+| B-2026-11-06-17 | mir+mir-llvm | medium | Const-generic functions pass `karac check` but do not compile: the instance is named `first[i64, ()]` (N instantiated as `()`), so `a.len()` / `a[0]`… | c79be19373 |
 | B-2026-11-06-19 | typecheck | high | A cycle between constants crashes the compiler: `const AA: i64 = BB; const BB: i64 = AA;` (or `const AA: i64 = AA + 1;`) aborts `karac check` and `ka… | 609dbaa6da |
 | B-2026-11-06-20 | typecheck+mir | medium | Constant initializers are not evaluated at compile time: `const SH: i32 = 1 << 40` silently reads as 0 (the same shift in a function panics `shift am… | 609dbaa6da |
 | B-2026-11-06-22 | resolver+typecheck+mir | medium | `#[target]` is not honoured on impl members, struct fields or enum variants: with `#[target(native)] fn f(self) -> i64 { 1 }` and `#[target(wasm_wasi… | e963bf0239 |
