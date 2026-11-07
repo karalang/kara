@@ -4,8 +4,8 @@
 //! out, so `karac fix` makes it (B-2026-11-01-10): on either side of `==`
 //! and `!=`, after a `Map.get` and a `Vec.get`, and on an ordering. A
 //! non-`Copy` item compared with `Some(place)` gets `Some(ref place)`
-//! (B-2026-11-04-61); any other non-`Copy` shape keeps the message with no
-//! edit.
+//! (B-2026-11-04-61); any other non-`Copy` shape gets `.cloned()` too
+//! (B-2026-11-07-54).
 
 use std::process::{Command, Stdio};
 
@@ -126,21 +126,44 @@ fn main() {
 }
 
 #[test]
-fn a_non_copy_item_compare_with_a_temporary_keeps_the_message_without_an_edit() {
+fn a_non_copy_item_compare_with_a_temporary_gets_cloned() {
+    // B-2026-11-07-54 (design.md § `*` and `ref` in expressions): the
+    // look-through is per operand, so `Option[ref T] == Option[T]` stays
+    // refused for any `T`, with `.cloned()` on the viewing side as the
+    // repair where no `Some(ref e)` view reaches the other side.
     let src = "fn main() {
-    let ms: Map[i64, String] = Map.new();
+    let mut ms: Map[i64, String] = Map.new();
+    ms.insert(1, \"x\".to_string());
     println(f\"{ms.get(1) == Some(\"x\".to_string())}\");
 }
 ";
     let path = temp("non-copy", src);
     let file = path.to_str().unwrap();
     let check = karac(&["check", "--output=json", file]);
-    let _ = std::fs::remove_file(&path);
     let json = String::from_utf8_lossy(&check.stdout);
     assert!(
         json.contains("cannot compare 'Option[ref String]' and 'Option[String]'"),
         "{json}"
     );
-    assert!(!json.contains(".cloned()"), "{json}");
+    assert_eq!(json.matches("\"text\":\".cloned()\"").count(), 1, "{json}");
     assert!(!json.contains("\"text\":\"ref \""), "{json}");
+    let fix = karac(&["fix", file]);
+    assert!(
+        fix.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fix.stderr)
+    );
+    let out = std::fs::read_to_string(&path).unwrap();
+    assert!(out.contains("ms.get(1).cloned() == Some("), "{out}");
+    let run = karac(&["__mir-run", file]);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        (
+            run.status.code(),
+            String::from_utf8_lossy(&run.stdout).as_ref()
+        ),
+        (Some(0), "true\n"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 }

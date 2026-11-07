@@ -1,0 +1,12 @@
+source = "core-semantics.md §11.2"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par"]
+class = "a"
+expected_from = "spec"
+rules = ["11.2"]
+backends = []
+env = {}
+note = "Parsing, splitting and trimming borrowed strings in `par {}` branches or `par for` iterations touches no resource, so the branches do not conflict; the library's `str` natives were `unknown` effects and conflicted (B-2026-11-07-36)."
+bucket = "a"

@@ -1,0 +1,31 @@
+// Parsing borrowed strings in parallel branches touches no shared resource
+// (core-semantics §11.2): neither a `par {}` block nor a `par for` that
+// parses, splits or trims its own text conflicts.
+
+fn p(s: Str) -> Result[i64, ParseError] {
+    i64.parse(s)
+}
+
+fn both(a: Str, b: Str) -> Result[i64, ParseError] {
+    let (x, y) = par { p(a)?, p(b)? };
+    Ok(x + y)
+}
+
+fn main() {
+    let a = "1";
+    let b = "2";
+    let (x, y) = par { i64.parse(a), i64.parse(b) };
+    println(x.unwrap() + y.unwrap());
+
+    let v = vec!["3", "x", "5"];
+    let parsed = par for s in v.iter() { i64.parse(s).unwrap_or(0) };
+    println(parsed);
+
+    let (f, n) = par { f64.parse("1.5"), "a,b".split(",").count() };
+    println(f"{f.unwrap()} {n}");
+
+    match both("4", "6") {
+        Ok(v) => println(v),
+        Err(_) => println("parse error"),
+    }
+}

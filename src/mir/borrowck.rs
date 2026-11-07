@@ -2655,6 +2655,10 @@ fn main() -> () {
             // (B-2026-11-06-12).
             "err_poly_recursion_through_dispatch",
             "ok_recursion_through_dispatch_peels",
+            // `i64.parse` and `ParseError`, and `split(..).collect()`, are
+            // the library's (B-2026-11-07-36, -54).
+            "ok_par_parse_branches",
+            "ok_compare_literal_in_some",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

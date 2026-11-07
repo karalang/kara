@@ -1573,9 +1573,14 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // allocate, and an out-of-range index or a missing key panics.
         // `Option`/`Result` combinators are here too; a closure they take is
         // charged below, with every native's closure arguments.
+        // `str` is a borrowed string's natives (`str.char_at_byte`, `str.len`,
+        // ...), which the library's Kāra parsers, splitters and trimmers
+        // call: they read the text they are handed and nothing else
+        // (B-2026-11-07-36: they were `unknown`, so two branches that
+        // parsed a number conflicted).
         (
-            "String" | "Vec" | "VecDeque" | "Map" | "Set" | "SortedMap" | "SortedSet" | "Entry"
-            | "Slice" | "Array" | "Option" | "Result",
+            "String" | "str" | "Vec" | "VecDeque" | "Map" | "Set" | "SortedMap" | "SortedSet"
+            | "Entry" | "Slice" | "Array" | "Option" | "Result",
             _,
         ) => vec![HEAP, PANICS],
         (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut") => vec![PANICS],
@@ -4296,6 +4301,55 @@ fn io(_1: ref Vec[i64], _2: ref Vec[i64], _3: ref Vec[i64]) -> () {
     /// B-2026-11-07-27: the socket methods io.md gives no effect clause
     /// have a known, empty-of-resources effect set, so they conflict with
     /// nothing in a `par`.
+    #[test]
+    fn effects_every_str_native_the_text_library_reaches_is_known() {
+        // B-2026-11-07-36: the `str.*` natives the library's parsers,
+        // splitters and trimmers call were `unknown`, so two `par` branches
+        // that each parsed a number conflicted.
+        let src = concat!(
+            "fn main() {\n",
+            "    let t: Str = \" 1,b\\n c \";\n",
+            "    println(i64.parse(t.trim()).unwrap_or(0));\n",
+            "    println(u8.parse(t).unwrap_or(0));\n",
+            "    println(f64.parse(t).unwrap_or(0.0));\n",
+            "    println(t.split(\",\").count() + t.lines().count());\n",
+            "    println(t.split_whitespace().count() + t.chars().count());\n",
+            "    println(t.trim_start().len() + t.trim_end().len());\n",
+            "    println(t.contains(\"b\") or t.starts_with(\"a\") or t.ends_with(\"c\"));\n",
+            "    println(t.replace(\",\", \";\").to_uppercase().repeat(2));\n",
+            "}\n",
+        );
+        let l = crate::mir::lower::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let mut reached = 0;
+        for b in l.program.bodies.values() {
+            for bb in &b.blocks {
+                let TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(i),
+                            ..
+                        }),
+                    ..
+                } = &bb.terminator.kind
+                else {
+                    continue;
+                };
+                if i.def != DefId(u32::MAX) || !i.name.starts_with("str.") {
+                    continue;
+                }
+                reached += 1;
+                let (base, method) = split_native(&i.name);
+                assert!(
+                    native_effects(base, method).is_some(),
+                    "{} in {}",
+                    i.name,
+                    b.instance.name
+                );
+            }
+        }
+        assert!(reached > 0, "no `str` native reached");
+    }
+
     #[test]
     fn effects_socket_address_clone_and_timeout_are_known() {
         for (base, method) in [

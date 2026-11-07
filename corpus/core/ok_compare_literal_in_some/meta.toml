@@ -1,0 +1,12 @@
+source = "design.md § `*` and `ref` in expressions (d9a74163ea)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["control-flow"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "A string literal inside a constructor compared with an `Option[Str]`, `Option[ref Str]`, `Option[ref String]` or `Result[Str, Str]` takes the other side's element type; it was typed `String` and refused (B-2026-11-07-54)."
+bucket = "a"

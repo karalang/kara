@@ -3380,8 +3380,8 @@ impl<'a> super::TypeChecker<'a> {
             type_display(right_ty)
         );
         let fix = self
-            .option_ref_compare_fix(left, left_ty, right_ty)
-            .or_else(|| self.option_ref_compare_fix(right, right_ty, left_ty));
+            .option_ref_compare_fix(left, left_ty, right_ty, false)
+            .or_else(|| self.option_ref_compare_fix(right, right_ty, left_ty, false));
         let view = if fix.is_some() {
             None
         } else {
@@ -3431,6 +3431,13 @@ impl<'a> super::TypeChecker<'a> {
             );
             return;
         }
+        // A non-`Copy` item that no view reaches: `.cloned()` on the
+        // viewing side is still the repair (design.md § `*` and `ref` in
+        // expressions: the look-through is per operand; B-2026-11-07-54).
+        let fix = fix.or_else(|| {
+            self.option_ref_compare_fix(left, left_ty, right_ty, true)
+                .or_else(|| self.option_ref_compare_fix(right, right_ty, left_ty, true))
+        });
         match fix {
             Some(fix) => self.type_error_with_fix_it(
                 format!(
@@ -3487,13 +3494,14 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// The edit inserting `.cloned()` after `side`, when `side_ty` is
-    /// `Option[ref T]` with `T` `Copy`, `other_ty` is `Option[T]`, and the
-    /// end of `side` is known.
+    /// `Option[ref T]` with `T` `Copy` (any `T` when `any_item`),
+    /// `other_ty` is `Option[T]`, and the end of `side` is known.
     fn option_ref_compare_fix(
         &self,
         side: &Expr,
         side_ty: &Type,
         other_ty: &Type,
+        any_item: bool,
     ) -> Option<FixIt> {
         let item = |t: &Type| -> Option<Type> {
             match strip_refs_for_compare(t) {
@@ -3511,7 +3519,7 @@ impl<'a> super::TypeChecker<'a> {
         };
         if matches!(owned, Type::Ref(_) | Type::MutRef(_))
             || !types_compatible(inner, &owned)
-            || !self.is_copy_type_during_check(inner)
+            || !(any_item || self.is_copy_type_during_check(inner))
         {
             return None;
         }
@@ -3893,6 +3901,53 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether `e`, a string literal or a `Some` / `Ok` / `Err` / tuple
+    /// built of string literals, can take `want`, the other comparison
+    /// operand's type: each literal sits where `want` has a `Str`, a
+    /// `ref Str` or a `ref String`, which a literal is promoted to
+    /// (design.md § `*` and `ref` in expressions; core-semantics §5.3;
+    /// B-2026-11-07-54). An owned `String` slot is what the literal already
+    /// types as, so it fits too, but at least one literal must not.
+    fn text_literal_takes(e: &Expr, want: &Type) -> bool {
+        fn fits(e: &Expr, want: &Type, retyped: &mut bool) -> bool {
+            match (&e.kind, want) {
+                (ExprKind::StringLit(_), Type::Str) => true,
+                (ExprKind::StringLit(_), w) if is_str_view(w) => {
+                    *retyped = true;
+                    true
+                }
+                (ExprKind::StringLit(_), Type::Ref(inner)) if **inner == Type::Str => {
+                    *retyped = true;
+                    true
+                }
+                (ExprKind::Tuple(es), Type::Tuple(ws))
+                    if es.len() == ws.len() && !es.is_empty() =>
+                {
+                    es.iter().zip(ws).all(|(e, w)| fits(e, w, retyped))
+                }
+                (ExprKind::Call { callee, args }, Type::Named { name, args: wa }) => {
+                    let ctor = match &callee.kind {
+                        ExprKind::Identifier(n) => n.as_str(),
+                        ExprKind::Path { segments, .. } if segments.len() == 1 => {
+                            segments[0].as_str()
+                        }
+                        _ => return false,
+                    };
+                    let slot = match (ctor, name.as_str(), wa.as_slice()) {
+                        ("Some", "Option", [t]) => t,
+                        ("Ok", "Result", [t, _]) => t,
+                        ("Err", "Result", [_, t]) => t,
+                        _ => return false,
+                    };
+                    matches!(args.as_slice(), [a] if fits(&a.value, slot, retyped))
+                }
+                _ => false,
+            }
+        }
+        let mut retyped = false;
+        fits(e, want, &mut retyped) && retyped
+    }
+
     /// Whether comparison operand `side`, a constructor or tuple literal of
     /// places and literals typed `side_ty`, is `other` but for `ref`s to
     /// `Copy` values inside it, so it can be checked against `other`.
@@ -4071,6 +4126,29 @@ impl<'a> super::TypeChecker<'a> {
         // item of `v.iter()` reads `n` as the `i64` it is (core-semantics
         // §5.10), as `let w: Option[i64] = Some(n)` does.
         if compares {
+            // A string literal inside a constructor takes the element type
+            // the other operand fixes: `opt == Some("")` with `opt:
+            // Option[Str]`, `lines.last() == Some("")` over a `Vec[Str]`
+            // (design.md § `*` and `ref` in expressions; B-2026-11-07-54).
+            for (lit, other_ty, is_right) in [
+                (right, left_ty.clone(), true),
+                (left, right_ty.clone(), false),
+            ] {
+                let want = strip_refs_for_compare(&other_ty).clone();
+                if Self::text_literal_takes(lit, &want) {
+                    let t = self.check_expr(lit, &want);
+                    if t != Type::Error {
+                        self.record_expr_type(&lit.span, &want);
+                        self.record_node_type(lit.id, &want);
+                        if is_right {
+                            right_ty = want;
+                        } else {
+                            left_ty = want;
+                        }
+                    }
+                    break;
+                }
+            }
             if self.compare_reads_as_other(right, &right_ty, &left_ty) {
                 self.check_expr(right, &left_ty);
                 self.record_expr_type(&right.span, &left_ty);

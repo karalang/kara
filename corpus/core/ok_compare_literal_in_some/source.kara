@@ -1,0 +1,34 @@
+// A string literal inside `Some` / `Ok` / `Err` takes the element type the
+// other operand of a comparison fixes: a `Str`, or a `ref Str` / `ref
+// String` the literal is promoted to (design.md § `*` and `ref` in
+// expressions; core-semantics §5.3).
+
+fn first(v: ref Vec[Str]) -> Option[Str] {
+    v.first().cloned()
+}
+
+fn main() {
+    let v: Vec[Str] = ["", "x"];
+    if first(v) == Some("") {
+        println("empty first");
+    }
+    if Some("x") != first(v) {
+        println("first is not x");
+    }
+    let text = "a\nb\n";
+    let lines: Vec[Str] = text.split("\n").collect();
+    if lines.last() == Some("") {
+        println("trailing newline");
+    }
+    let w = ["a".to_string(), "x".to_string()];
+    if w.last() == Some("x") {
+        println("ends with x");
+    }
+    if w.first() == Some("x") {
+        println("starts with x");
+    }
+    let r: Result[Str, Str] = Err("bad");
+    if r == Err("bad") {
+        println("err bad");
+    }
+}
