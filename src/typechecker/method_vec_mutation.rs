@@ -188,7 +188,14 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_expr(&args[0].value, &elem);
                     elem.clone()
                 } else {
-                    self.infer_element_arg(&args[0].value, &elem)
+                    let ty = self.infer_element_arg(&args[0].value, &elem);
+                    // A pushed value whose type leaves a parameter unbound
+                    // (a spawned closure's `Ok(..)`, whose `E` only the later
+                    // `join` fixes) opens it as a variable a later use
+                    // solves, as a `let` does (B-2026-11-06-11), rather than
+                    // storing the bare parameter in the element type
+                    // (B-2026-11-06-38).
+                    self.open_unsolved_let_params(ty, &args[0].value)
                 };
                 // B-2026-08-08-2 — a `frozen` parameter reads as `ref T`; the
                 // ownership pass decides whether this store is legal.

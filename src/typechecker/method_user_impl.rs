@@ -1946,6 +1946,19 @@ impl<'a> super::TypeChecker<'a> {
                                     "other arguments"
                                 }
                             ));
+                        } else if type_name == "Vec" && matches!(method, "last_mut" | "first_mut") {
+                            // B-2026-11-06-39: Rust's `last_mut`/`first_mut`
+                            // are not in the library; a write goes through
+                            // an index.
+                            let at = if method == "last_mut" {
+                                "v[v.len() - 1]"
+                            } else {
+                                "v[0]"
+                            };
+                            msg.push_str(&format!(
+                                ": write through an index instead (`{at} = ..`, or \
+                                 `{at}.field = ..`), after checking the vector is not empty"
+                            ));
                         } else if let Some(suggestion) =
                             crate::edit_distance::suggest_method(method, &candidate_refs)
                         {

@@ -551,13 +551,13 @@ fn load(topics: Slice[Topic]) -> Result[Loaded, String] {
             for p in 0..t.partitions {
                 got.push(load_part(t.clone(), p)?);
             }
-            let done: Result[Vec[(Part, Option[String])], String] = Ok(got);
-            done
+            Ok(got)
         }));
     }
     let mut out = Loaded { parts: SortedMap.new(), count: 0, notes: Vec.new() };
     for h in handles.into_iter() {
-        let got = h.join()?;
+        let r: Result[Vec[(Part, Option[String])], String] = h.join();
+        let got = r?;
         for (part, note) in got.into_iter() {
             if let Some(n) = note {
                 out.notes.push(n);

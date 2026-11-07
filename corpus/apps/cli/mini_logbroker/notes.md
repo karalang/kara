@@ -141,10 +141,12 @@ against memory, unless the broker is down.
   each closure.
 - B-2026-11-06-37 (fixed): `Slice[T]` had no `iter_mut`. Compaction's
   `part.segs[0..n - 1].iter_mut()` was `part.segs.iter_mut().take(n - 1)`.
-- B-2026-11-06-38 (open): the per-topic load task's `Result` error type
-  is fixed only by an annotation inside the closure
+- B-2026-11-06-38 (fixed): the per-topic load task's `Result` error type
+  was fixed only by an annotation inside the closure
   (`let done: Result[..., String] = Ok(got); done`). Annotating the
-  join result instead, as `?`'s own diagnostic suggests, fails lowering.
-- B-2026-11-06-39 (open, diagnostics): a let-chain
-  (`if let Some(v) = v and ..`) gets two unrelated errors. The app nests
-  the `if`, which is how Kāra writes it.
+  join result instead, as `?`'s own diagnostic suggests, failed lowering.
+  The closure now ends in plain `Ok(got)` and the join is annotated.
+- B-2026-11-06-39 (fixed, diagnostics): a let-chain
+  (`if let Some(v) = v and ..`) got two unrelated errors. It is now one
+  error naming the shape, and `karac fix` nests the `if`, which is how
+  Kāra writes it and what the app does.

@@ -2203,6 +2203,55 @@ impl super::Parser {
         }
     }
 
+    /// `if let P = v and c { .. }` is Rust's let-chain, which Kāra does not
+    /// have: the scrutinee parses as `v and c`, and the checker then reported
+    /// a `bool` operand error and a pattern-against-`bool` mismatch with no
+    /// word about the shape (B-2026-11-06-39). Say what it is, and with no
+    /// `else` (where nesting keeps the meaning) offer the nested `if`.
+    fn refuse_let_chain(&mut self, value: &Expr, then_block: &Block, fixable: bool) {
+        let mut e = value;
+        let (scrutinee, rest_start) = loop {
+            match &e.kind {
+                ExprKind::Binary {
+                    op: BinOp::And,
+                    left,
+                    right,
+                } => match &left.kind {
+                    ExprKind::Binary { op: BinOp::And, .. } => e = left,
+                    _ => break (left.as_ref(), right.span.offset),
+                },
+                _ => return,
+            }
+        };
+        let at = value.span;
+        self.error_at(
+            "`if let` cannot be joined with `and`: Kāra has no let-chains, so the \
+             pattern is matched against the whole `.. and ..` condition; nest the \
+             test instead: `if let P = v { if cond { .. } }`",
+            at,
+        );
+        if !fixable {
+            return;
+        }
+        let end = scrutinee.span.offset + scrutinee.span.length;
+        let block_end = then_block.span.offset + then_block.span.length;
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&at),
+            vec![
+                crate::resolver::TextEdit {
+                    offset: end,
+                    length: rest_start - end,
+                    replacement: " { if ".to_string(),
+                },
+                crate::resolver::TextEdit {
+                    offset: block_end,
+                    length: 0,
+                    replacement: " }".to_string(),
+                },
+            ],
+        );
+    }
+
     fn parse_if_expr(&mut self) -> Option<Expr> {
         let start = self.current_span();
         self.expect(&Token::If)?;
@@ -2217,6 +2266,15 @@ impl super::Parser {
             let value = self.parse_condition_expr()?;
             let then_block = self.parse_block()?;
             self.fix_pattern_muts(muts, then_block.span, true);
+            // A literal or binding pattern can match a `bool` (`if let true
+            // = a and b`), so only the other shapes are a let-chain.
+            if !matches!(
+                pattern.kind,
+                PatternKind::Literal(_) | PatternKind::Binding(_) | PatternKind::Wildcard
+            ) {
+                let has_else = self.check(&Token::Else);
+                self.refuse_let_chain(&value, &then_block, !has_else);
+            }
             let else_branch = if self.eat(&Token::Else) {
                 if self.check(&Token::If) {
                     Some(Box::new(self.parse_if_expr()?))

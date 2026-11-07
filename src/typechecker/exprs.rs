@@ -3493,6 +3493,8 @@ impl<'a> super::TypeChecker<'a> {
                     ..Default::default()
                 });
                 let mut body_ty = self.check_expr(body, expected_ret);
+                let body_ty_opened = self.open_unsolved_closure_tail(expected_ret, body_ty, body);
+                body_ty = body_ty_opened;
                 // An expression body is the closure's tail: `|p: S| p.t` moves
                 // out of `p` as a fn's tail does. A block body's tail is
                 // checked where blocks are.

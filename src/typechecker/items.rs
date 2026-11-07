@@ -6990,19 +6990,75 @@ impl<'a> super::TypeChecker<'a> {
     /// type, judged once the program has been checked
     /// (`report_unsolved_call_vars`). A pointer's pointee keeps its own
     /// use-site check.
-    fn open_unsolved_let_params(&mut self, inferred: Type, value: &Expr) -> Type {
+    /// A closure checked against a return type its call leaves open
+    /// (`group.spawn(|| { .. Ok(x) })`, `spawn[T]`'s `T`) whose body leaves a
+    /// parameter unbound (`Ok`'s `E`) opens it as a variable a later use
+    /// solves (`let r: Result[i64, String] = h.join()`), as a `let` does
+    /// (B-2026-11-06-11): the body's tail, the call's variable and the
+    /// closure's own type all take it (B-2026-11-06-38).
+    pub(super) fn open_unsolved_closure_tail(
+        &mut self,
+        expected_ret: &Type,
+        body_ty: Type,
+        body: &Expr,
+    ) -> Type {
+        // The variable the call's parameter was bound to, if the body bound
+        // it.
+        let mut root = None;
+        let mut cur = expected_ret.clone();
+        while let Type::TypeVar(id) = cur {
+            match self.env.substitutions.get(&id) {
+                Some(next) => {
+                    root = Some(id);
+                    cur = next.clone();
+                }
+                None => break,
+            }
+        }
+        // A return type the callee leaves to its own parameter (`spawn[T]`'s
+        // `T`), or a variable the body bound.
+        if root.is_none() && !matches!(cur, Type::TypeParam(_) | Type::TypeVar(_)) {
+            return body_ty;
+        }
+        let mut tail = body;
+        while let ExprKind::Block(b) = &tail.kind {
+            match &b.final_expr {
+                Some(e) => tail = e,
+                None => break,
+            }
+        }
+        let opened = self.open_unsolved_let_params(body_ty.clone(), tail);
+        if let (Some(root), true) = (root, opened != body_ty) {
+            self.env.substitutions.insert(root, opened.clone());
+        }
+        opened
+    }
+
+    pub(super) fn open_unsolved_let_params(&mut self, inferred: Type, value: &Expr) -> Type {
         if matches!(inferred, Type::Error | Type::Pointer { .. }) {
             return inferred;
         }
         let (ty, mut vars) = self.open_unbound_params(inferred);
         if !vars.is_empty() {
             vars.sort_by(|a, b| a.1.cmp(&b.1));
-            self.unsolved_call_vars.push((value.span, vars));
+            self.unsolved_call_vars.push((value.span, vars.clone()));
             // The initializer's own node takes the opened type, so the type
             // the body solves is what the call's arguments are read off
             // (`resolved_node_tables`) and what `None` is built at.
             if let Some((_, frame)) = self.node_types.get(&value.id).cloned() {
                 self.node_types.insert(value.id, (ty.clone(), frame));
+            }
+            // The call's own type arguments name the same parameter
+            // (`spawn`'s `T = Result[i64, E]`): they take the variables too,
+            // so the monomorph is the solved one (B-2026-11-06-38).
+            let subs: HashMap<String, SubstValue> = vars
+                .iter()
+                .map(|(id, n)| (n.clone(), SubstValue::Type(Type::TypeVar(*id))))
+                .collect();
+            if let Some(frame) = self.node_call_subs.get_mut(&value.id) {
+                for t in frame.values_mut() {
+                    *t = substitute_type_params(t, &subs);
+                }
             }
         }
         ty
