@@ -1,0 +1,275 @@
+// LeetCode #1060: Missing Element in Sorted Array -- the differential.
+//
+// The six arms against the statement read literally, on 3000 problems, with
+// six properties:
+//
+// P1  the answer is the statement read literally: count the numbers from
+//     nums[0] upward that are not in nums, and stop at the k-th
+// P2  every value moved up by the same amount moves the answer by it
+// P3  the answer added to nums makes the (k+1)-th missing number of nums
+//     the k-th
+// P4  a value above the answer removed from nums, or one added past the
+//     largest, leaves the answer
+// P5  the answer grows with k: the (k+1)-th lies above the k-th, and the
+//     two are one apart exactly when no value of nums lies between them
+// P6  each arm agrees with at least three of the other five
+
+// ---- missing.kara: the ★ arm: a binary search on the count missing
+fn star_arm(nums: Vec[i64], k: i64) -> i64 {
+    let missing = |i: i64| nums[i] - nums[0] - i;
+    let last = nums.len() - 1;
+    if missing(last) < k {
+        return nums[last] + k - missing(last);
+    }
+    // missing(lo) < k <= missing(hi)
+    let mut lo = 0;
+    let mut hi = last;
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if missing(mid) < k {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    nums[lo] + k - missing(lo)
+}
+
+// ---- missing_linear.kara: a walk over the gaps
+fn linear_arm(nums: Vec[i64], k: i64) -> i64 {
+    let mut left = k;
+    for pair in nums.windows(2) {
+        let gap = pair[1] - pair[0] - 1;
+        if left <= gap {
+            return pair[0] + left;
+        }
+        left -= gap;
+    }
+    nums[nums.len() - 1] + left
+}
+
+// ---- missing_values.kara: a binary search on the answer
+fn values_arm(nums: Vec[i64], k: i64) -> i64 {
+    let first = nums[0];
+    let missing_to = |x: i64| x - first + 1 - nums.partition_point(|v| v <= x);
+    // missing_to(lo) < k <= missing_to(hi)
+    let mut lo = first;
+    let mut hi = first + k + nums.len();
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if missing_to(mid) < k {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
+}
+
+// ---- missing_recursive.kara: the bisection as recursion
+fn missing(nums: Vec[i64], i: i64) -> i64 {
+    nums[i] - nums[0] - i
+}
+
+fn search(nums: Vec[i64], k: i64, lo: i64, hi: i64) -> i64 {
+    if hi - lo == 1 {
+        return nums[lo] + k - missing(nums, lo);
+    }
+    let mid = (lo + hi) / 2;
+    if missing(nums, mid) < k {
+        search(nums, k, mid, hi)
+    } else {
+        search(nums, k, lo, mid)
+    }
+}
+
+fn recursive_arm(nums: Vec[i64], k: i64) -> i64 {
+    let last = nums.len() - 1;
+    if missing(nums, last) < k {
+        nums[last] + k - missing(nums, last)
+    } else {
+        search(nums, k, 0, last)
+    }
+}
+
+// ---- missing_iter.kara: an iterator chain
+fn iter_arm(nums: Vec[i64], k: i64) -> i64 {
+    let first = nums[0];
+    let (i, v) = nums
+        .iter()
+        .enumerate()
+        .take_while(|(i, v)| v - first - i < k)
+        .last()
+        .unwrap();
+    v + k - (v - first - i)
+}
+
+// ---- missing_solution.kara: LeetCode's Rust template, as Rust writes it
+struct Solution {}
+
+impl Solution {
+    pub fn missing_element(nums: Vec[i32], k: i32) -> i32 {
+        let n = nums.len();
+        let missing = |i: i64| { nums[i] - nums[0] - i as i32 };
+        if k > missing(n - 1) {
+            return nums[n - 1] + k - missing(n - 1);
+        }
+        let mut (lo, hi) = (0, n - 1);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if missing(mid) < k {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        nums[lo - 1] + k - missing(lo - 1)
+    }
+}
+
+fn solution_arm(nums: Vec[i64], k: i64) -> i64 {
+    let nums: Vec[i32] = nums.iter().map(|x| x as i32).collect();
+    Solution.missing_element(nums, k as i32) as i64
+}
+
+// ---- the differential
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(a: i64, nums: Vec[i64], k: i64) -> i64 {
+    match a {
+        0 => star_arm(nums, k),
+        1 => linear_arm(nums, k),
+        2 => values_arm(nums, k),
+        3 => recursive_arm(nums, k),
+        4 => iter_arm(nums, k),
+        _ => solution_arm(nums, k),
+    }
+}
+
+// The numbers from nums[0] upward, one at a time: those not in nums are
+// counted, and the k-th is the answer.
+fn read_literally(nums: Vec[i64], k: i64) -> i64 {
+    let present: Set[i64] = nums.iter().collect();
+    let mut x = nums[0];
+    let mut count = 0;
+    loop {
+        x += 1;
+        if not present.contains(x) {
+            count += 1;
+            if count == k {
+                return x;
+            }
+        }
+    }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// `n` increasing values from `first`, each gap 1 to `widest`.
+fn sorted_values(n: i64, first: i64, widest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums = [first];
+    for _ in 1..n {
+        let gap = 1 + next_random(mut seed) % widest;
+        nums.push(nums[nums.len() - 1] + gap);
+    }
+    nums
+}
+
+fn check_case(t: mut ref Tally, nums: Vec[i64], k: i64, seed: mut ref i64) {
+    let last = nums[nums.len() - 1];
+    let answers: Vec[i64] = (0..6).map(|a| arm(a, nums, k)).collect();
+    let literal = last - nums[0] + k <= 3000;
+    let want = if literal { read_literally(nums, k) } else { answers[0] };
+    // every random choice drawn before any arm answers, so the problems
+    // are the same whatever an arm gets wrong
+    let d = 1 + next_random(mut seed) % 1000;
+    let drop_at = next_random(mut seed);
+    let past = 1 + next_random(mut seed) % 5;
+    let shifted: Vec[i64] = nums.iter().map(|v| v + d).collect();
+    for a in 0..6 {
+        let answer = answers[a];
+        let what = f"arm {a}, {nums} {k} -> {answer}";
+        if literal {
+            expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        }
+        let moved = arm(a, shifted, k);
+        expect(mut t, 2, moved == answer + d, f"P2 {what}: moved up {d} -> {moved}");
+        let next = arm(a, nums, k + 1);
+        let mut with = nums.clone();
+        with.push(answer);
+        with.sort();
+        with.dedup();
+        let now = arm(a, with, k);
+        expect(mut t, 3, now == next, f"P3 {what}: with {answer} -> {now}, k + 1 alone -> {next}");
+        let above: Vec[i64] = (0..nums.len()).filter(|i| nums[i] > answer).collect();
+        if not above.is_empty() and nums.len() > 1 {
+            let mut fewer = nums.clone();
+            fewer.remove(above[drop_at % above.len()]);
+            let still = arm(a, fewer, k);
+            expect(mut t, 4, still == answer, f"P4 {what}: without one above -> {still}");
+        }
+        let mut longer = nums.clone();
+        longer.push(last.max(answer) + past);
+        let same = arm(a, longer, k);
+        expect(mut t, 4, same == answer, f"P4 {what}: {longer[longer.len() - 1]} added -> {same}");
+        let between = nums.iter().filter(|v| v > answer and v < next).count();
+        expect(
+            mut t,
+            5,
+            next > answer and next - answer - 1 == between,
+            f"P5 {what}: k + 1 -> {next}, {between} values between",
+        );
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want % 1000003) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 3000 problems: 1500 of 1 to 10 values with gaps to 5 and k to 30, and
+    // 1500 of 1 to 300 values, dense or sparse, with k to 40 past the span
+    let mut seed = 10601;
+    for i in 0..3000 {
+        let (nums, k) = if i < 1500 {
+            let n = next_random(mut seed) % 10 + 1;
+            let nums = sorted_values(n, next_random(mut seed) % 20 + 1, 5, mut seed);
+            (nums, next_random(mut seed) % 30 + 1)
+        } else {
+            let n = next_random(mut seed) % 300 + 1;
+            let widest = if i % 2 == 0 { 2 } else { 60 };
+            let nums = sorted_values(n, next_random(mut seed) % 100 + 1, widest, mut seed);
+            let span = nums[n - 1] - nums[0] - (n - 1);
+            (nums, next_random(mut seed) % (span + 40) + 1)
+        };
+        check_case(mut t, nums, k, mut seed);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
