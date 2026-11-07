@@ -43,7 +43,11 @@ pub fn elide_borrowed_retains(program: &mut Program, tys: &TyInterner, skip: &BT
         .map(|b| b.instance.name.clone())
         .collect();
     for body in program.bodies.values_mut() {
-        lend_fields_to_safe_calls(body, tys, &defined, &lendable);
+        // Again until nothing changes: a call lent two fields copies the
+        // second between the first copy and the call, so the first is
+        // seen only once the second's copy is gone (`is_same(pn.left,
+        // qn.left)`, kata 100, B-2026-11-07-55).
+        while lend_fields_to_safe_calls(body, tys, &defined, &lendable) {}
     }
     for body in program.bodies.values_mut() {
         if !safe.get(&body.instance.name).copied().unwrap_or(false) {
@@ -69,13 +73,13 @@ pub fn elide_borrowed_retains(program: &mut Program, tys: &TyInterner, skip: &BT
 /// (core semantics §6.2, B-2026-11-01-12). When `g` is count-safe with
 /// no `mut` parameter, nothing it runs can overwrite the field, so `b`
 /// borrows `P` itself and the count `t` takes, and its drop, go: a tree
-/// walk `walk(node.left)` counts nothing per node.
+/// walk `walk(node.left)` counts nothing per node. Whether it lent any.
 fn lend_fields_to_safe_calls(
     body: &mut Body,
     tys: &TyInterner,
     defined: &BTreeSet<String>,
     lendable: &BTreeSet<String>,
-) {
+) -> bool {
     // Where each local is defined, and how often it is mentioned.
     let mut mentions: BTreeMap<Local, (usize, usize, usize, usize)> = BTreeMap::new();
     visit_places(body, &mut |p, role| {
@@ -131,6 +135,7 @@ fn lend_fields_to_safe_calls(
             }
         }
     }
+    let lent = !found.is_empty();
     for (_, _, (b, t, field, def)) in found {
         match def {
             CopyDef::Retain(bi, si) => body.blocks[bi].statements[si].kind = StatementKind::Nop,
@@ -169,6 +174,7 @@ fn lend_fields_to_safe_calls(
             }
         }
     }
+    lent
 }
 
 enum CopyDef {
@@ -1217,5 +1223,18 @@ fn main() {\n    let h = N { val: 1, left: Some(N { val: 7, left: Some(N { val: 
     #[test]
     fn a_body_with_a_mut_ref_parameter_is_left_alone() {
         assert_eq!(retains("bump"), 1);
+    }
+
+    // Two `mut` fields lent to one reading call: the first is copied
+    // before the second, so it is lent only once the second's copy is gone
+    // (kata 100's `is_same(pn.left, qn.left)`, B-2026-11-07-55).
+    const PAIR: &str = "shared struct N { val: i64, mut left: Option[N], mut right: Option[N] }\n\
+fn same(p: Option[N], q: Option[N]) -> bool {\n    match p {\n        None => q.is_none(),\n        Some(a) => match q {\n            None => false,\n            Some(b) => a.val == b.val and same(a.left, b.left) and same(a.right, b.right)\n        }\n    }\n}\n\
+fn main() {\n    let x = Some(N { val: 1, left: Some(N { val: 2, left: None, right: None }), right: None });\n    let y = Some(N { val: 1, left: Some(N { val: 2, left: None, right: None }), right: None });\n    let z = Some(N { val: 1, left: None, right: None });\n    println(same(x, y));\n    println(same(x, z));\n}\n";
+
+    #[test]
+    fn two_fields_lent_to_one_reading_call_are_not_copied() {
+        assert_eq!(clones(PAIR, "same"), 0);
+        assert_eq!(run_source(PAIR).expect("runs").0, "true\nfalse\n");
     }
 }
