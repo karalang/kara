@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 109 |
 | missing-feature | 104 |
 | soundness | 52 |
-| miscompile | 41 |
+| miscompile | 42 |
 | run-vs-build | 27 |
 | other | 22 |
 | codegen-gap | 22 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 267 |
-| mir-llvm | 136 |
+| mir-llvm | 137 |
 | mir | 132 |
 | cli | 78 |
 | ownership | 62 |
 | parser | 46 |
-| interp | 32 |
+| interp | 33 |
 | runtime | 28 |
 | effect | 28 |
 | codegen | 22 |
@@ -104,10 +104,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-27 | 2026-11-05 | mir-llvm | medium | x86 only, within on the M5: two kata benches run about 2x slower on LLVM 22 than on LLVM 18 on x86, min_stack (155) 951 ms vs 444 and hsearch (275) 1074 vs 526; Gowtham's M5 run at 7c63217740 reads 0.904x and 1.056x legacy's cycles; teemo, the third of B-2026-11-05-4, is fixed | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
-| B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
-| B-2026-11-07-18 | 2026-11-07 | typecheck | low | f32 copysign / pow / hypot / atan2 refuse a negative float literal argument (`h.copysign(-1.0)`: expects f32, got f64); a positive literal, and min / max / clamp / total_cmp with a negative one, are accepted | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
 | B-2026-11-07-40 | 2026-11-07 | resolver+parser+cli | medium | `karac fix` applies did-you-mean edits to foreign keywords and builtins that produce nonsense: `null` -> `Mul`, `nil` -> `n` (or `Div`), `range(3)` -> `Range(3)`, `fmt` -> `Not`, `func` -> `fence`; `func main() {` and `def main():` get `expected ;` with a fix inserting `;` (`func; main(); {`) | — |
@@ -117,6 +115,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-44 | 2026-11-07 | cli | low | `karac fmt` moves comments off the item they annotate: a `// first` after a parameter lands after the fn's `{` (where it reads as a comment on the body), a `/* second */` after a parameter moves into the body, and a `// one` after a call argument goes to the end of the statement; design.md § Canonical formatting says comments travel with their item | — |
 | B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
 | B-2026-11-07-55 | 2026-11-07 | mir-llvm | medium | Katas 100, 101 and 113 (recursive `shared` tree code) run about 1.5x slower on the M5 at karac 97681763d than at 6697158fa while checked Rust held steady: 100 98.0 -> 153.5 ms, 101 131.3 -> 205.3, 113 200.3 -> 300.0; the window includes the LLVM 22 move (6dcdc1a604); x86 not yet measured | — |
+| B-2026-11-07-56 | 2026-11-07 | interp+mir-llvm | medium | A method called straight on a wide constant reads it truncated to 64 bits: `BIG.to_string()` with `const BIG: i128 = 10**38` prints 687399551400673280, and `DEC_SIGN.to_string()` with `const DEC_SIGN: u64 = 0x8000000000000000` prints -9223372036854775808 | — |
 
 ### Relocated
 
@@ -786,6 +785,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-39 | typecheck | low | A let-chain (`if let Some(s) = v and kind == "group" { . | b07a360a6d |
 | B-2026-11-07-1 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard… | 5e869cb573 |
 | B-2026-11-07-2 | typecheck+mir+mir-llvm | high | A generic function passed as an `Fn` value is instanced with its type arguments unsolved: `apply(shout, [7], 1)` with `fn apply[U](g: Fn(own U, i64)… | 957a835c43 |
+| B-2026-11-07-3 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it… | 87e598fee9 |
 | B-2026-11-07-4 | ownership | medium | `karac check` refuses moving a binding after an iterator chain's closure that reads it when the chain's root holds user records (`if ps.iter().any(\|p… | f50642eaba |
 | B-2026-11-07-5 | mir | medium | A `let`-bound closure stored in an enum payload (`let c = \|d\| seen.n + d; let l = L.F(c);`) captures by `ref` and is refused with E0509 "a view of a… | f50642eaba |
 | B-2026-11-07-6 | typecheck | medium | A program whose private type reuses a library type's name (`trait Receiver`, `struct Sender`) passes `karac check` but every `karac run` and `karac b… | f50642eaba |
@@ -798,6 +798,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-15 | typecheck | low | For `let job = jobs[j];` whose fields are then written (`job.status = 2`), `karac fix` derives `Clone` on the element type and adds `mut`, steering t… | 849eb1f1b9 |
 | B-2026-11-07-16 | ownership | high | Option.take / replace / get_or_insert / get_or_insert_with (all `mut ref self`) are accepted through a bare borrowed parameter, a field of one, an in… | 44258c543c |
 | B-2026-11-07-17 | typecheck | medium | i128.MIN, i128.MAX and u128.MAX are refused with the internal `a type that failed to check is not lowered yet`; the other widths' MIN/MAX work | a44db5f5ac |
+| B-2026-11-07-18 | typecheck | low | f32 copysign / pow / hypot / atan2 refuse a negative float literal argument (`h.copysign(-1.0)`: expects f32, got f64); a positive literal, and min /… | d411135900 |
 | B-2026-11-07-19 | mir-llvm+runtime | high | BufReader.read_line / read_to_string and ChildStdout.read_to_string append into a `mut ref String` whose buffer is still a string literal's static da… | a17505d129 |
 | B-2026-11-07-20 | effect | low | par branches writing two different Files conflict when both pass the same read-only buffer (`par { f.write(b.as_slice()), g.write(b.as_slice()) }`),… | 39dbc078da |
 | B-2026-11-07-21 | typecheck | low | check accepts Atomic[T] for T outside the documented set (i8, u8, i16, u16, i128, usize all pass); Atomic[i128] then fails to link under ASan (undefi… | 3f39b2aafd |

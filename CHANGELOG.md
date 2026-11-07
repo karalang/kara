@@ -25,8 +25,23 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   Atomic[T]` is refused with E0272, as `Atomic[i8]` written directly is
   (B-2026-11-07-35).
 
+### Changed
+
+- **A number literal takes the type a later use gives it** (design.md § Type
+  inference). `let x = 5; take_i32(x);` makes `x` an `i32`, the literals
+  pushed onto a `Vec.new()` take the element type of the parameter it is
+  later handed to, and `let a = 255; let b: u8 = a;` is a `u8` literal. A
+  literal nothing fixes still defaults to `i64` / `f64` at the end of its
+  body. Programs 0.8.1 refused as a narrowing now run; a literal that does
+  not fit the type it is fixed to is now refused at the literal
+  (`let a = 300; let b: u8 = a;`), and arithmetic in the narrower type traps
+  on overflow there (B-2026-11-07-3).
+
 ### Wrong behaviour fixed
 
+- **A negated float literal is an `f32` method's argument.**
+  `h.copysign(-1.0)`, `pow`, `hypot` and `atan2` on an `f32` refused the
+  `-1.0` as an `f64`; a bare `1.0` was accepted (B-2026-11-07-18).
 - **Parsing or splitting a borrowed string inside a `par {}` branch is
   accepted.** The effect checker did not know the text library's natives
   (`str` methods), read them as an unknown effect, and refused the branches
@@ -201,15 +216,6 @@ Each still compiles in 0.8.x with a `deprecated` warning and a
 
 ### Changed
 
-- **A number literal takes the type a later use gives it** (design.md § Type
-  inference). `let x = 5; take_i32(x);` makes `x` an `i32`, the literals
-  pushed onto a `Vec.new()` take the element type of the parameter it is
-  later handed to, and `let a = 255; let b: u8 = a;` is a `u8` literal. A
-  literal nothing fixes still defaults to `i64` / `f64` at the end of its
-  body. Programs 0.8.0 refused as a narrowing now run; a literal that does
-  not fit the type it is fixed to is now refused at the literal
-  (`let a = 300; let b: u8 = a;`), and arithmetic in the narrower type traps
-  on overflow there (B-2026-11-07-3).
 - **`karac fmt` puts each `impl` and `trait` body in canonical order**
   (design.md § Canonical formatting): associated types first, then functions
   without `self` (constructors such as `new`), then methods, each group
