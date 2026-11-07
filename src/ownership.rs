@@ -4900,6 +4900,14 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         // these in v1; the receiver-side push fires regardless because
         // mut Slice has its own slice-form borrow tracking.
         "Slice.swap" => MutRef,
+        // core-types.md: `take`, `replace`, `get_or_insert` and
+        // `get_or_insert_with` take `mut ref self`. `take` and `replace` are
+        // compiler builtins with no Kāra body to read the mode from, so a
+        // non-`mut` local was rewritten in place (B-2026-11-07-16).
+        "Option.take"
+        | "Option.replace"
+        | "Option.get_or_insert"
+        | "Option.get_or_insert_with" => MutRef,
         // An array's in-place `Slice[T]` methods write it, so they need
         // `let mut` as `Vec.sort` does (B-2026-10-21-30).
         "Array.sort"

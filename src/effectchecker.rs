@@ -1633,6 +1633,8 @@ impl<'a> EffectChecker<'a> {
             // must be seeded or the auto-par gate silently races it).
             "Option.take",
             "Option.get_or_insert",
+            // `replace` writes its receiver the same way (B-2026-11-07-16).
+            "Option.replace",
             // `VecDeque[T]`'s mutating method surface — seeded as
             // `allocates(Heap)` so the auto-parallelizer's
             // `method_effects_imply_receiver_mutation` lookup

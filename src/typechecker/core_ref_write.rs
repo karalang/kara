@@ -1990,6 +1990,18 @@ impl Walk<'_, '_> {
             if name == "Atomic" {
                 return Some(false);
             }
+            // core-types.md's `mut ref self` methods of `Option`. `take` and
+            // `replace` are builtins with no Kāra body, so nothing above
+            // finds their mode, and a bare parameter's `o.take()` emptied the
+            // caller's value (B-2026-11-07-16).
+            if name == "Option"
+                && matches!(
+                    method,
+                    "take" | "replace" | "get_or_insert" | "get_or_insert_with"
+                )
+            {
+                return Some(true);
+            }
             // A baked stdlib impl is in the env only: its receiver is the
             // method signature's first parameter.
             self.tc.env.impls.iter().find_map(|imp| {
