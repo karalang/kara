@@ -1,5 +1,5 @@
 
-#[derive(Hash, Eq)]
+#[derive(Hash, Eq, PartialEq)]
 struct Point {
     x: i64,
     y: i64,

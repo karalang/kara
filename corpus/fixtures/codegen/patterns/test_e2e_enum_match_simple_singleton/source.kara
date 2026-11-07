@@ -1,5 +1,5 @@
 
-#[derive(Hash, Eq)]
+#[derive(Hash, Eq, PartialEq)]
 enum Color { Red, Green, Blue }
 
 fn main() {

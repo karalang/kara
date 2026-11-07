@@ -3,7 +3,7 @@
 
 enum Category { Grocery, Clothing, Electronics, Books, Services }
 enum Region { NorthEast, West, South, Export }
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 enum Currency { Usd, Eur, Jpy }
 enum Discount { NoDiscount, Percent(i64), BuyNGetOne(i64) }
 

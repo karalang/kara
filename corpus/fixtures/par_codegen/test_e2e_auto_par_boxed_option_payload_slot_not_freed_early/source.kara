@@ -1,5 +1,5 @@
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
 fn get(v: ref Vec[W], k: i64) -> Option[W] {
     let mut i = 0;

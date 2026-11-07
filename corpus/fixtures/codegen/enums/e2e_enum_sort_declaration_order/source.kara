@@ -1,4 +1,4 @@
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 enum Shape { Circle(i64), Rect(i64, i64), Unit }
 fn stag(s: ref Shape) -> i64 {
     match s {

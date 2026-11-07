@@ -163,7 +163,7 @@ fn solve_b(n: i64, primes: ref Vec[i64]) -> i64 {
     return ugly[n - 1];
 }
 
-#[derive(Ord, Eq)]
+#[derive(Ord, Eq, PartialOrd, PartialEq)]
 struct Cand {
     val: i64,
     pi: i64,

@@ -345,7 +345,12 @@ impl<'a> super::TypeChecker<'a> {
     /// Silent when the trait is not found in `program.items` — a baked stdlib
     /// trait has no AST here, and failing closed would reject every correct
     /// binding on one. Same fail-open rule as `trait_first_rpitit_method`.
-    fn check_trait_declares_assoc_type(&mut self, trait_name: &str, assoc: &str, span: Span) {
+    pub(super) fn check_trait_declares_assoc_type(
+        &mut self,
+        trait_name: &str,
+        assoc: &str,
+        span: Span,
+    ) {
         let Some(t) = self.program.items.iter().find_map(|item| match item {
             Item::TraitDef(t) if t.name == trait_name => Some(t),
             _ => None,

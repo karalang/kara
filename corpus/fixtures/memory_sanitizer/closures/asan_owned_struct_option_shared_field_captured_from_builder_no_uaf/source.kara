@@ -1,7 +1,7 @@
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Span { line: i64, column: i64, offset: i64, length: i64 }
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 enum Stmt { Empty }
 shared enum Expr { Str(String), Blk(Block), Error }
 #[derive(Clone)]

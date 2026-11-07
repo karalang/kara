@@ -1,9 +1,9 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct I { v: Vec[i64] }
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct S { v: Vec[String] }
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct P { name: String, n: i64 }
 fn one(a: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v }
 fn two(a: i64, b: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v.push(b); v }

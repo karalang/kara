@@ -1,7 +1,7 @@
 
-#[derive(Eq, Ord, Clone)]
+#[derive(Eq, Ord, Clone, PartialEq, PartialOrd)]
 struct Rect { width: i64, height: i64 }
-#[derive(Eq, Ord, Clone)]
+#[derive(Eq, Ord, Clone, PartialEq, PartialOrd)]
 enum Shape { Circle(i64), Rect(i64, i64), Unit }
 fn stag(s: own Shape) -> i64 {
     match s { Shape.Circle(r) => 100 + r, Shape.Rect(w, h) => 200 + w * 10 + h, Shape.Unit => 300 }

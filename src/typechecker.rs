@@ -221,31 +221,24 @@ pub(crate) fn extract_derived_traits(attributes: &[Attribute]) -> HashSet<String
 
 /// Close a derive set under its dependencies, in place (B-2026-08-17-33).
 ///
-/// design.md § Derive states this unconditionally: "The compiler resolves
-/// derive dependencies automatically regardless of the order items appear in
-/// `#[derive(...)]` … Listing dependencies explicitly is valid and idiomatic;
-/// omitting them is also allowed. `#[derive(Copy)]` auto-derives `Clone` if
-/// not already present — **`Copy` without `Clone` is NEVER a compile error,
-/// because the compiler fills in the missing dependency.**"
-///
-/// It was true only for the `Ord` chain, which the comparison checks accept
-/// directly. `#[derive(Copy)]` alone produced exactly the error the spec says
-/// can never happen, and `#[derive(Hash)]` alone left the type unusable as a
-/// `Map` key — in both cases the diagnostic named the dependency the compiler
-/// was supposed to fill in and prescribed the spelling the spec calls
-/// optional.
+/// This is a 0.8.x transition, not the language. design.md §9 Derive says "a
+/// derive never adds another": `#[derive(Copy)]` without `Clone`, `Eq` or
+/// `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd` / `Eq` are
+/// errors whose fix adds the derive, and `derive(Hash)` does not add `Eq`.
+/// The fill-in was written against an older sentence of the spec ("omitting
+/// them is also allowed") and the corpus came to rely on it, so by the
+/// B-2026-11-04-79 precedent 0.8.x keeps filling the derive in and
+/// `warn_implied_derives` reports each fill-in as `deprecated` with the
+/// machine-applicable fix; the next minor release removes this and makes it
+/// the error (B-2026-11-06-27).
 ///
 /// Closing the set HERE, at the single point every consumer reads derives
-/// through, is what makes the fill uniform: the `Copy`-requires-`Clone`
-/// validator, the `Map`-key `Eq`/`Hash` gate, and the per-backend derive
-/// lowering all see the same closed set, so none of them can disagree about
-/// what a type derives. `Copy` / `Clone` / `Eq` / `Hash` are NATIVE derives —
-/// `expand_derives` deliberately skips them — so filling the name in is the
-/// whole implementation; there is no impl to synthesize.
-///
-/// Deliberately NOT extended to `Ord` → `PartialOrd` / `Eq`: that chain
-/// already resolves through the comparison checks, and adding names to a
-/// working path buys nothing while risking behaviour nobody asked to change.
+/// through, keeps the fill uniform: the `Copy`-requires-`Clone` validator,
+/// the `Map`-key `Eq`/`Hash` gate, and the per-backend derive lowering all
+/// see the same closed set. `Copy` / `Clone` / `Eq` / `Hash` are NATIVE
+/// derives (`expand_derives` skips them), so filling the name in is the whole
+/// implementation; there is no impl to synthesize. The `Ord` chain is not
+/// filled here: the comparison checks accept it directly.
 pub(super) fn add_implied_derives(traits: &mut HashSet<String>) {
     // `Copy` requires `Clone` (spec, stated as a rule).
     if traits.contains("Copy") {
@@ -3234,6 +3227,10 @@ pub struct TypeChecker<'a> {
     /// The strict walk is checking an `effect resource R: T = e;` default
     /// (core-semantics.md §14.14), which names the resource in its refusal.
     pub(super) const_init_resource_default: bool,
+    /// Set while `check_module_binding_init` judges a field's
+    /// `#[serde(default: expr)]`, which design.md §9 holds to the constant
+    /// expressions a `const` initializer accepts (B-2026-11-06-27 item 11).
+    pub(super) const_init_serde_default: bool,
     /// This function's BORROWED parameter names — every `ref T` / `mut ref T`
     /// parameter, plus `self` under `ref self` / `mut ref self`. B-2026-09-01-4.
     ///
@@ -4089,6 +4086,7 @@ impl<'a> TypeChecker<'a> {
             local_ident_uses: FxHashMap::default(),
             const_init_strict: false,
             const_init_resource_default: false,
+            const_init_serde_default: false,
             current_fn_ref_params: FxHashSet::default(),
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,
@@ -4349,6 +4347,10 @@ impl<'a> TypeChecker<'a> {
         // (phase-8-stdlib-floor item 5). No-op in the default mode.
         self.validate_derive_clone_allocates();
         self.validate_derived_traits_recursive();
+        self.validate_derive_lists();
+        self.validate_bound_assoc_bindings();
+        self.validate_serde_default_constants();
+        self.warn_implied_derives();
         self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
         self.check_signature_visibility();

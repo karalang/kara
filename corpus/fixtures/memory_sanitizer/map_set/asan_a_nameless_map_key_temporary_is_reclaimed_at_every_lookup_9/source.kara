@@ -1,4 +1,4 @@
-#[derive(Hash, Eq)]
+#[derive(Hash, Eq, PartialEq)]
 struct K20 { a: String, b: String }
 fn mks20(n: i64) -> K20 { return K20 { a: f"aaaaaaaaaaaa{n}", b: f"bbbbbbbbbbbb{n}" }; }
 fn main() {

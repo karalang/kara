@@ -1,4 +1,4 @@
-#[derive(Hash, Eq, Ord)]
+#[derive(Hash, Eq, Ord, PartialEq, PartialOrd)]
 struct K6e { a: i64, s: String }
 fn main() {
     let mut ks: Vec[K6e] = Vec.new();

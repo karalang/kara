@@ -1,7 +1,7 @@
 
-#[derive(Hash, Eq, Ord)]
+#[derive(Hash, Eq, Ord, PartialEq, PartialOrd)]
 struct P { a: i64, s: String }
-#[derive(Hash, Eq, Ord)]
+#[derive(Hash, Eq, Ord, PartialEq, PartialOrd)]
 struct Res { id: i64, name: String }
 impl Drop for Res {
     fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }

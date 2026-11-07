@@ -1,5 +1,5 @@
 
-#[derive(Hash, Eq)]
+#[derive(Hash, Eq, PartialEq)]
 struct Tag {
     name: String,
     n: i64,

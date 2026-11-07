@@ -1,5 +1,5 @@
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct City { a: i64, b: i64, c: i64, d: i64 }
 struct Holder { city: Option[City] }
 struct Bag { items: Vec[Holder] }

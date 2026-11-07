@@ -1,8 +1,8 @@
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct C { a: i64 }
 
-#[derive(Hash)]
+#[derive(Hash, PartialEq, Eq)]
 struct K { a: i64, b: i64 }
 
 fn main() {

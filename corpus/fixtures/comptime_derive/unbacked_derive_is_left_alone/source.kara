@@ -3,7 +3,7 @@ comptime fn derive_tag(comptime T: Type) -> Vec[Item] {
     [ast.item("impl " + T.name() + " { fn tag(self) -> i64 { 0 } }")]
 }
 
-#[derive(Eq, Tag)]
+#[derive(Eq, Tag, PartialEq)]
 struct P { x: i64 }
 
 fn main() {

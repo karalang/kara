@@ -11,7 +11,7 @@ const MAX_FLOOR: i64 = 10;
 
 // Three-valued direction: Idle is the initial / quiescent state.
 // Falls into the Up sweep in next_stop so the first request biases upward.
-#[derive(Eq, Clone)]
+#[derive(Eq, Clone, PartialEq)]
 shared enum Direction {
     Up,
     Down,

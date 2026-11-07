@@ -10,7 +10,7 @@
 // previously shared this name, which made `Ord.cmp(a, b) ==
 // Ordering.Less` fail to typecheck.
 
-#[derive(Eq, Copy)]
+#[derive(Eq, Copy, PartialEq, Clone)]
 enum Ordering {
     Less,
     Equal,

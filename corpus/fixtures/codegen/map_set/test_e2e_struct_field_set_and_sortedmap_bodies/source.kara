@@ -1,5 +1,5 @@
 
-#[derive(Hash, Eq)]
+#[derive(Hash, Eq, PartialEq)]
 struct Res { id: i64, name: String }
 impl Drop for Res {
     fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }

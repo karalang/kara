@@ -1,6 +1,6 @@
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 struct P { a: i64, b: i64 }
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 enum E { Lo, Mid, Hi }
 fn main() {
 let mut ss: SortedSet[P] = SortedSet.new();

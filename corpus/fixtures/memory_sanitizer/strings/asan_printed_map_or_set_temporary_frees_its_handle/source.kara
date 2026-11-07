@@ -1,5 +1,5 @@
 
-#[derive(Hash, Eq, Display)]
+#[derive(Hash, Eq, Display, PartialEq)]
 struct P { name: String }
 fn mk() -> Map[String, i64] {
     let mut m: Map[String, i64] = Map.new();

@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct P { x: i64 }
 comptime fn is_eq(comptime T: Type) -> bool { T.derives("Eq") }
 fn main() { println(comptime { is_eq(P) }); }

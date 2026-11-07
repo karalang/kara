@@ -8,7 +8,7 @@
 // rest of that module is still in scope and must not be declared twice.
 // The two copies become one file when the legacy pipeline is deleted (M3).
 
-#[derive(Eq, Copy)]
+#[derive(Eq, Copy, PartialEq, Clone)]
 enum Ordering {
     Less,
     Equal,

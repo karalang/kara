@@ -1,4 +1,4 @@
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Data { value: i64 }
 fn consume(d: own Data) { }
 fn use_d(d: Data) -> i64 { d.value }

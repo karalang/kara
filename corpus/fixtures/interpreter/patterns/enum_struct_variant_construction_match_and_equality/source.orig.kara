@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 enum Shape { Circle { r: i64 }, Square { side: i64 }, Unknown }
 
 fn area(s: own Shape) -> i64 {

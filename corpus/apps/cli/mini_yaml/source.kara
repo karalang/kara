@@ -319,7 +319,7 @@ fn py_str_repr(s: Str) -> String {
 
 // ------------------------------------------------------------ marks and errors
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Mark {
     index: i64,
     line: i64,

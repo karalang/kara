@@ -8,7 +8,7 @@
 // (IEEE-754 NaN breaks reflexivity/antisymmetry). Method dispatch
 // (`F16.from`, total-order compare/hash) stays in the hardcoded path.
 
-#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]
+#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy, Clone)]
 struct F16 {
     value: f16,
 }

@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct P { x: i64 }
 struct Q { y: i64 }
 fn main() {

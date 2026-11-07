@@ -1,6 +1,6 @@
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 struct Rect { width: i64, height: i64 }
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 struct Named { name: String, age: i64 }
 fn main() {
     let mut v: Vec[Rect] = Vec.new();

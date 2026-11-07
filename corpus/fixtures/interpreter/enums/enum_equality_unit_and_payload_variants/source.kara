@@ -1,8 +1,8 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 enum Color { Red, Green, Blue }
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 enum Tagged { N(i64), Z }
 
 fn main() {

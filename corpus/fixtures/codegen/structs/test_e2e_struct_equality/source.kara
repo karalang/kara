@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct Point { x: i64, y: i64 }
 fn main() {
     let a = Point { x: 1, y: 2 };

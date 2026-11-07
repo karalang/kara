@@ -1,4 +1,4 @@
-#[derive(Hash, Eq)]
+#[derive(Hash, Eq, PartialEq)]
 struct K6 { a: String, b: String }
 fn mk() -> K6 { return K6 { a: f"aaaaaaaaaaaa0", b: f"bbbbbbbbbbbb0" }; }
 fn main() {

@@ -1,6 +1,6 @@
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 struct P { a: i64, b: i64 }
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 enum Pri { Low, Med, High }
 fn main() {
     let x = P { a: 1, b: 2 };

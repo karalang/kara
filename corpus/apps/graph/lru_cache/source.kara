@@ -10,7 +10,7 @@ shared struct Node {
     mut next: Option[Node],
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 enum EvictReason {
     Capacity,
     Deleted,
@@ -57,7 +57,7 @@ struct Listener {
     on_evict: Fn(String, i64, EvictReason) -> Option[String],
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Stats {
     hits: i64,
     misses: i64,

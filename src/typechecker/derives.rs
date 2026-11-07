@@ -1205,6 +1205,321 @@ impl<'a> super::TypeChecker<'a> {
         self.validate_derive_display_on_enums();
     }
 
+    /// design.md §9 Derive, two list rules (B-2026-11-06-27 items 3-5):
+    /// - `Drop` is not derivable (§9 Drop: no impl means "do nothing", and
+    ///   field drops are what the compiler runs after any `drop` body);
+    /// - a derive and a manual impl of the same trait on one type is the
+    ///   ordinary duplicate-impl error;
+    /// - an impl whose `Self` is `dyn Trait` is refused: a trait object's
+    ///   methods are its trait's, so user code cannot add impls to one.
+    pub(super) fn validate_derive_lists(&mut self) {
+        const DERIVABLE: &[&str] = &[
+            "PartialEq",
+            "Eq",
+            "PartialOrd",
+            "Ord",
+            "Hash",
+            "Clone",
+            "Copy",
+            "Default",
+            "Display",
+            "Debug",
+            "Serialize",
+            "Deserialize",
+            "Arithmetic",
+        ];
+        let mut derived: FxHashMap<String, (std::collections::HashSet<String>, Span)> =
+            FxHashMap::default();
+        let mut problems: Vec<(String, Span, TypeErrorKind)> = Vec::new();
+        for item in &self.program.items {
+            let (name, attrs, span) = match item {
+                Item::StructDef(d) => (&d.name, &d.attributes, d.span),
+                Item::EnumDef(d) => (&d.name, &d.attributes, d.span),
+                _ => continue,
+            };
+            let traits = extract_derived_traits(attrs);
+            if traits.contains("Drop") {
+                problems.push((
+                    format!(
+                        "`Drop` is not derivable: `{name}` with no `impl Drop` already does \
+                         nothing of its own when dropped, and its fields are dropped after any \
+                         `drop` body; remove `Drop` from the derive, or write \
+                         `impl Drop for {name} {{ fn drop(mut ref self) {{ ... }} }}` (design.md §9)"
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                ));
+            }
+            derived.insert(name.clone(), (traits, span));
+        }
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            let Some(trait_name) = imp.trait_name.as_ref().and_then(|p| p.segments.last()) else {
+                continue;
+            };
+            match &imp.target_type.kind {
+                TypeKind::Dyn { .. } => problems.push((
+                    format!(
+                        "`impl {trait_name} for dyn ...` is not allowed: a trait object's \
+                         methods are those of its trait, and an impl cannot have a `dyn` type \
+                         as `Self`; add the method to the trait (with a default body) or write \
+                         a function that takes the trait object (design.md §9)"
+                    ),
+                    imp.span,
+                    TypeErrorKind::ConflictingImpl,
+                )),
+                TypeKind::Path(path) if path.segments.len() == 1 => {
+                    let target = &path.segments[0];
+                    let Some((traits, def_span)) = derived.get(target) else {
+                        continue;
+                    };
+                    if !DERIVABLE.contains(&trait_name.as_str()) || !traits.contains(trait_name) {
+                        continue;
+                    }
+                    // A derive a library `comptime fn derive_*` expands
+                    // (`Serialize`) becomes an impl spliced in after the first
+                    // check, spanned over the type's definition: a clash is a
+                    // second impl, seen at the re-check after expansion.
+                    let conflicting = if self.comptime_derives(target, trait_name) {
+                        imp.span != *def_span
+                            && self.program.items.iter().any(|it| {
+                                matches!(it, Item::ImplBlock(other)
+                                    if other.span == *def_span
+                                        && other.trait_name.as_ref().and_then(|p| p.segments.last())
+                                            == Some(trait_name))
+                            })
+                    } else {
+                        true
+                    };
+                    if conflicting {
+                        problems.push((
+                            format!(
+                                "conflicting impl: `{target}` derives `{trait_name}` and also \
+                                 implements it here; a type implements a trait once, so remove \
+                                 the derive or this impl (design.md §9 Derive)"
+                            ),
+                            imp.span,
+                            TypeErrorKind::ConflictingImpl,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (message, span, kind) in problems {
+            self.type_error(message, span, kind);
+        }
+    }
+
+    /// design.md §9 "A derive never adds another" (B-2026-11-06-27 items 1,
+    /// 2 and 7). `add_implied_derives` still fills a missing supertrait
+    /// derive in for 0.8.x; this is the deprecation warning that goes with
+    /// it, carrying the machine-applicable fix that writes the derive into
+    /// the same `#[derive(..)]` list. It becomes the error at the next minor
+    /// release, the B-2026-11-04-79 transition. The standard library and the
+    /// library compiled from source are exempt; `#[allow(deprecated)]` on the
+    /// type suppresses it.
+    pub(super) fn warn_implied_derives(&mut self) {
+        // §9's chains: the derives each derive needs. 0.8.x's fill-in also
+        // makes a `Hash` type comparable, so `Hash` is reported as needing
+        // what it is given.
+        fn needs(t: &str) -> &'static [&'static str] {
+            match t {
+                "Copy" => &["Clone"],
+                "Eq" | "PartialOrd" => &["PartialEq"],
+                "Ord" => &["PartialOrd", "Eq"],
+                "Hash" => &["PartialEq", "Eq"],
+                _ => &[],
+            }
+        }
+        if self.compiling_stdlib {
+            return;
+        }
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let mut found = Vec::new();
+        for item in &self.program.items {
+            let (name, attrs, stdlib_origin, lints) = match item {
+                Item::StructDef(d) => (&d.name, &d.attributes, d.stdlib_origin, &d.lint_overrides),
+                Item::EnumDef(d) => (&d.name, &d.attributes, d.stdlib_origin, &d.lint_overrides),
+                _ => continue,
+            };
+            if stdlib_origin {
+                continue;
+            }
+            let derive_attrs: Vec<&Attribute> =
+                attrs.iter().filter(|a| a.is_bare("derive")).collect();
+            let mut written: Vec<&str> = Vec::new();
+            for a in &derive_attrs {
+                for arg in &a.args {
+                    match arg.value.as_ref().map(|v| &v.kind) {
+                        Some(ExprKind::Identifier(n)) => written.push(n),
+                        Some(ExprKind::Call { callee, .. }) => {
+                            if let ExprKind::Identifier(n) = &callee.kind {
+                                written.push(n);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Close the written set under §9's chains; what the closure adds
+            // is what the compiler is filling in.
+            let mut needed: Vec<&str> = written.clone();
+            let mut i = 0;
+            while i < needed.len() {
+                for w in needs(needed[i]) {
+                    if !needed.contains(w) {
+                        needed.push(w);
+                    }
+                }
+                i += 1;
+            }
+            let missing: Vec<&str> = needed[written.len()..].to_vec();
+            if missing.is_empty() {
+                continue;
+            }
+            // The list to extend: the `#[derive(..)]` with the last argument.
+            let Some((attr, last)) = derive_attrs
+                .iter()
+                .rev()
+                .find_map(|a| a.args.last().map(|l| (*a, l)))
+            else {
+                continue;
+            };
+            if attr.span.offset >= library || last.span.length == 0 {
+                continue;
+            }
+            let at = Span {
+                offset: last.span.offset + last.span.length,
+                length: 0,
+                line: last.span.line,
+                column: last.span.column + last.span.length,
+            };
+            let why: Vec<String> = written
+                .iter()
+                .filter_map(|w| {
+                    let lacking: Vec<&str> = needs(w)
+                        .iter()
+                        .copied()
+                        .filter(|r| !written.contains(r))
+                        .collect();
+                    (!lacking.is_empty())
+                        .then(|| format!("`{w}` needs `{}`", lacking.join("` and `")))
+                })
+                .collect();
+            let message = format!(
+                "implied derive on `{name}` is deprecated: {} (design.md §9 Derive: a derive \
+                 never adds another). 0.8.x still fills it in; it becomes an error in the next \
+                 minor release, and `karac fix` adds `{}` to the derive list",
+                why.join("; "),
+                missing.join(", "),
+            );
+            let fix = super::FixIt {
+                span: at,
+                replacement: missing.iter().map(|m| format!(", {m}")).collect(),
+            };
+            found.push((message, attr.span, fix, lints.clone()));
+        }
+        for (message, span, fix, lints) in found {
+            self.lint_override_stack.push(lints);
+            self.type_lint_warning_with_fix(
+                message,
+                span,
+                TypeErrorKind::Deprecated,
+                "deprecated",
+                Some(fix),
+            );
+            self.lint_override_stack.pop();
+        }
+    }
+
+    /// A bound's inline `Assoc = T` binding (`I: Iterator[Elem = i64]`) must
+    /// name an associated type of the bound's trait (B-2026-11-06-27 item 6).
+    /// The desugar pass hoisted each binding onto its item's `where` clause as
+    /// an `AssocTypeEq` that remembers the trait, so this walks every `where`
+    /// clause for those and applies the return-position check
+    /// (`check_trait_declares_assoc_type`, E_UNKNOWN_ASSOC_TYPE_BINDING).
+    pub(super) fn validate_bound_assoc_bindings(&mut self) {
+        fn collect(wc: &Option<WhereClause>, out: &mut Vec<(String, String, Span)>) {
+            let Some(wc) = wc else { return };
+            for c in &wc.constraints {
+                if let WhereConstraint::AssocTypeEq {
+                    assoc_name,
+                    span,
+                    trait_name: Some(t),
+                    ..
+                } = c
+                {
+                    out.push((t.clone(), assoc_name.clone(), *span));
+                }
+            }
+        }
+        let mut found = Vec::new();
+        for item in &self.program.items {
+            match item {
+                Item::Function(f) => collect(&f.where_clause, &mut found),
+                Item::ImplBlock(imp) => {
+                    collect(&imp.where_clause, &mut found);
+                    for it in &imp.items {
+                        if let ImplItem::Method(m) = it {
+                            collect(&m.where_clause, &mut found);
+                        }
+                    }
+                }
+                Item::TraitDef(t) => {
+                    collect(&t.where_clause, &mut found);
+                    for it in &t.items {
+                        if let TraitItem::Method(m) = it {
+                            collect(&m.where_clause, &mut found);
+                        }
+                    }
+                }
+                Item::StructDef(d) => collect(&d.where_clause, &mut found),
+                Item::EnumDef(d) => collect(&d.where_clause, &mut found),
+                _ => {}
+            }
+        }
+        for (t, assoc, span) in found {
+            self.check_trait_declares_assoc_type(&t, &assoc, span);
+        }
+    }
+
+    /// `#[serde(default: expr)]` takes a constant expression, the class a
+    /// `const` initializer accepts (design.md §9; B-2026-11-06-27 item 11): a
+    /// run-time expression such as `Vec.new()` is refused here, with the
+    /// strict constant-initializer walk that judges `const` items.
+    pub(super) fn validate_serde_default_constants(&mut self) {
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let mut found: Vec<(String, Expr)> = Vec::new();
+        for item in &self.program.items {
+            let Item::StructDef(d) = item else { continue };
+            if d.span.offset >= library {
+                continue;
+            }
+            for field in &d.fields {
+                for attr in &field.attributes {
+                    if !attr.is_bare("serde") {
+                        continue;
+                    }
+                    for arg in &attr.args {
+                        if let (Some("default"), Some(value)) = (arg.name.as_deref(), &arg.value) {
+                            found.push((field.name.clone(), value.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        for (field, value) in found {
+            self.const_init_strict = true;
+            self.const_init_serde_default = true;
+            self.check_module_binding_init(&value, &field);
+            self.const_init_strict = false;
+            self.const_init_serde_default = false;
+        }
+    }
+
     /// `#[derive(Default)]` validation. Unlike the structural derives
     /// (`Eq` / `Ord` / …), Default's *enum* rule is not a field-shape
     /// walk: the derived `default()` constructs exactly one

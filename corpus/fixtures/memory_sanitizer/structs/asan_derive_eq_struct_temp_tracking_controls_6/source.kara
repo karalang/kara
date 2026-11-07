@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct P { name: String }
 fn mk(s: ref String, i: i64) -> P { P { name: s.substring(i, i + 4) } }
 fn f(hay: ref String, other: ref P) -> i64 {

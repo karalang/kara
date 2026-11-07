@@ -117,7 +117,7 @@ struct Load {
 }
 
 // a farm's week: what it was paid for, and how its pay was made up
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Account {
     fid: i64,
     pickups: i64,

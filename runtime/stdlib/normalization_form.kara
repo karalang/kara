@@ -37,7 +37,7 @@
 // constants in `runtime/src/unicode.rs` and the mapping in
 // `src/interpreter/method_call_seq.rs` must stay in step with this order.
 
-#[derive(Eq, Copy)]
+#[derive(Eq, Copy, PartialEq, Clone)]
 enum NormalizationForm {
     Nfc,
     Nfd,

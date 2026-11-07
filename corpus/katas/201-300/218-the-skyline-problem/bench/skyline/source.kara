@@ -15,7 +15,7 @@ struct Building {
     height: i64,
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Point {
     x: i64,
     h: i64,

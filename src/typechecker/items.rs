@@ -4309,7 +4309,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         fn self_rank(sp: &SelfParam) -> (u8, &'static str) {
             match sp {
-                SelfParam::Owned => (0, "self"),
+                SelfParam::Owned => (0, "own self"),
                 SelfParam::MutRef => (1, "mut ref self"),
                 // A bare `self` borrows (D5) and reads `ref self` here.
                 SelfParam::Ref => (2, "self"),
@@ -4333,10 +4333,16 @@ impl<'a> super::TypeChecker<'a> {
             let ImplItem::Method(method) = item else {
                 continue;
             };
-            let Some(tm) = self.find_trait_method(trait_name, &method.name) else {
-                continue;
+            let tm = self.find_trait_method(trait_name, &method.name);
+            // `Clone` is built in, with no trait declaration to read: its one
+            // method is `clone(self)` (design.md §9; B-2026-11-06-27 item 10).
+            let builtin_clone = SelfParam::Ref;
+            let trait_self = match tm {
+                Some(tm) => tm.self_param.as_ref(),
+                None if trait_name == "Clone" && method.name == "clone" => Some(&builtin_clone),
+                None => continue,
             };
-            if let (Some(t), Some(i)) = (&tm.self_param, &method.self_param) {
+            if let (Some(t), Some(i)) = (trait_self, &method.self_param) {
                 let (tr, tw) = self_rank(t);
                 let (ir, iw) = self_rank(i);
                 if ir < tr {
@@ -4358,6 +4364,9 @@ impl<'a> super::TypeChecker<'a> {
                     ));
                 }
             }
+            let Some(tm) = tm else {
+                continue;
+            };
             for (tp, ip) in tm.params.iter().zip(&method.params) {
                 let (tr, tw) = param_rank(&tp.ty);
                 let (ir, iw) = param_rank(&ip.ty);
@@ -6489,7 +6498,7 @@ impl<'a> super::TypeChecker<'a> {
     /// — the resolver already validated the reference resolves), and
     /// composite forms built from permitted sub-expressions; rejects
     /// every shape requiring runtime evaluation.
-    fn check_module_binding_init(&mut self, e: &Expr, binding_name: &str) {
+    pub(super) fn check_module_binding_init(&mut self, e: &Expr, binding_name: &str) {
         match &e.kind {
             // ── Always-permitted scalar literals ────────────────────
             ExprKind::Integer(_, _)
@@ -6789,7 +6798,15 @@ impl<'a> super::TypeChecker<'a> {
         if self.const_init_strict {
             // §14.14: a resource's default is evaluated into a static, so it
             // is a constant expression too; run-time setup is an override.
-            let (subject, help) = if self.const_init_resource_default {
+            let (subject, help) = if self.const_init_serde_default {
+                (
+                    format!("`#[serde(default: ..)]` of field `{binding_name}`"),
+                    "use `#[serde(default)]`, which takes the field type's `default()`, \
+                     or a constant: a literal, a named constant, or a literal built from them \
+                     (design.md §9)"
+                        .to_string(),
+                )
+            } else if self.const_init_resource_default {
                 (
                     format!("the default provider of `effect resource {binding_name}`"),
                     format!(

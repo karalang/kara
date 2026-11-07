@@ -1,6 +1,6 @@
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 struct Rect { width: i64, height: i64 }
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 enum Priority { Low, Med, High }
 fn rank(p: Priority) -> i64 {
 match p { Priority.Low => 0, Priority.Med => 1, Priority.High => 2 }

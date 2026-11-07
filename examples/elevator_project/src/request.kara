@@ -3,7 +3,7 @@
 pub const MIN_FLOOR: i64 = 1;
 pub const MAX_FLOOR: i64 = 10;
 
-#[derive(Eq, Clone)]
+#[derive(Eq, Clone, PartialEq)]
 pub shared enum Direction {
     Up,
     Down,

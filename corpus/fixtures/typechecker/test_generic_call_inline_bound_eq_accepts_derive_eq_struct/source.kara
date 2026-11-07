@@ -1,4 +1,4 @@
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
            struct P { x: i64 }
            fn use_eq[T: Eq](_x: own T) {}
            fn main() {

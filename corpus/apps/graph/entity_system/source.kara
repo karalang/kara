@@ -6,7 +6,7 @@ const ARENA_MAX: i64 = 16;
 const SIGHT: i64 = 14;
 const TICKS: i64 = 10;
 
-#[derive(Copy, Clone, Eq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 struct EntityRef { index: i64, generation: i64 }
 impl EntityRef {
     fn label(ref self) -> String {
@@ -14,7 +14,7 @@ impl EntityRef {
     }
 }
 
-#[derive(Copy, Clone, Eq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum Team { Red, Blue }
 impl Team {
     fn name(ref self) -> String {

@@ -15,7 +15,7 @@
 // survives because its single leading alpha char takes the CN-7
 // single-letter Type escape hatch; `bf16`'s two leading letters do not.
 
-#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]
+#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy, Clone)]
 struct Bf16 {
     value: bf16,
 }

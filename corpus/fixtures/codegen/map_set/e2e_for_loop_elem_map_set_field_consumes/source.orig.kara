@@ -1,4 +1,4 @@
-#[derive(Hash, Eq, Ord)]
+#[derive(Hash, Eq, Ord, PartialEq, PartialOrd)]
 struct P { a: i64, s: String }
 struct Header { name: String, value: String }
 fn main() {

@@ -1,4 +1,4 @@
-#[derive(Ord, Eq)]
+#[derive(Ord, Eq, PartialOrd, PartialEq)]
              enum E { A, B }
              fn tag(o: Ordering) -> i64 {
                  if o.is_lt() { return 0; }

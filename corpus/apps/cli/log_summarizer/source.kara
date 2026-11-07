@@ -5,7 +5,7 @@
 // Log line format (pipe-delimited):
 //   <seq>|<LEVEL>|<component>|<latency_ms>|<message>
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 enum Level {
     Debug,
     Info,

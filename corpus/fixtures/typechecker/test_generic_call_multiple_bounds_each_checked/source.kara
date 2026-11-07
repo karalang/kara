@@ -1,4 +1,4 @@
-#[derive(Hash)]
+#[derive(Hash, PartialEq, Eq)]
            struct P { x: i64 }
            fn use_both[T: Hash + Ord](_x: own T) {}
            fn main() {

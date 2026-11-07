@@ -32,7 +32,7 @@
 // was either just appended, or it duplicates the element already there). So
 // ugly[ui] is strictly before the end and ui + 1 is a valid index.
 
-#[derive(Ord, Eq)]
+#[derive(Ord, Eq, PartialOrd, PartialEq)]
 struct Cand {
     val: i64,
     pi: i64,

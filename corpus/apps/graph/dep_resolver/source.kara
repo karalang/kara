@@ -2,7 +2,7 @@
 // root requirements to concrete versions, detects cycles, and prints an
 // install plan (dependencies first) or the error for each scenario.
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Version {
     major: i64,
     minor: i64,
@@ -43,7 +43,7 @@ impl Version {
     }
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 enum Constraint {
     Any,
     Exact(Version),

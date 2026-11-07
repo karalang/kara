@@ -1,5 +1,5 @@
 
-#[derive(Hash, Eq, PartialEq, Ord)]
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
 struct Item { id: i64, name: String }
 fn main() {
     let mut m: SortedMap[Item, i64] = SortedMap.new();

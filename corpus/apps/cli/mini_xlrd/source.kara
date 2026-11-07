@@ -1168,7 +1168,7 @@ fn is_ws_byte(x: i64) -> bool {
     x == 32 or (x >= 9 and x <= 13)
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Run {
     pos: i64,
     font: i64,
@@ -2185,7 +2185,7 @@ enum Val {
     Int(i64),
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Colinfo {
     width: i64,
     xf_index: i64,
@@ -2194,7 +2194,7 @@ struct Colinfo {
     collapsed: i64,
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Rowinfo {
     height: i64,
     has_default_height: i64,

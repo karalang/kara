@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct Pt { x: i64, y: i64 }
 fn mk(a: i64) -> Pt { Pt { x: a, y: a + 1 } }
 fn f(other: ref Pt) -> bool { mk(1) == other }

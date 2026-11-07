@@ -1,5 +1,5 @@
 
-#[derive(Hash, Eq)]
+#[derive(Hash, Eq, PartialEq)]
 shared struct K { id: i64 }
 fn main() {
     let mut m: Map[K, i64] = Map.new();

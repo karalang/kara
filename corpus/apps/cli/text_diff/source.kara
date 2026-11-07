@@ -5,7 +5,7 @@
 const CONTEXT: i64 = 2;
 const MAX_LINES: i64 = 500;
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 enum EditKind {
     Keep,
     Insert,

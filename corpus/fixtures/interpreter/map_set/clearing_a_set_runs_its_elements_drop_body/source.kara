@@ -1,4 +1,4 @@
-#[derive(Hash, Eq, PartialEq, Ord)]
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
         struct E { n: i64 }
         impl Drop for E { fn drop(mut ref self) { println(f"dropE {self.n}"); } }
         fn main() {

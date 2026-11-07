@@ -1,5 +1,5 @@
 
-#[derive(Ord, Eq)]
+#[derive(Ord, Eq, PartialOrd, PartialEq)]
 enum E { A, B }
 
 enum Color { Red, Green }

@@ -6,7 +6,7 @@
 // what the legacy hardcoded `register_builtin_types` arm inserted
 // directly. Method dispatch stays in the hardcoded path.
 
-#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]
+#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy, Clone)]
 struct F32 {
     value: f32,
 }

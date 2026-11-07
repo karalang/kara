@@ -866,7 +866,7 @@ fn dm_high_level(p: ref Vec[i64], eci: i64) -> Vec[i64] {
 
 // ------------------------------------------------------------ symbol sizes
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct DmSpec {
     dw: i64,
     ew: i64,

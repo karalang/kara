@@ -1,5 +1,5 @@
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct Owned { x: i64 }
 fn take(o: Owned) { }
 fn main() {

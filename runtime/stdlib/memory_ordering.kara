@@ -8,7 +8,7 @@
 // name and the design intent (per design.md § Comparison Traits) was
 // always for `Ord.cmp` to return `{Less, Equal, Greater}`.
 
-#[derive(Eq, Copy)]
+#[derive(Eq, Copy, PartialEq, Clone)]
 enum MemoryOrdering {
     Relaxed,
     Acquire,

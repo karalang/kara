@@ -13,7 +13,7 @@
 // attempted. Both variants are pure-`Copy` (the only payload is a `usize`),
 // so the type derives `Eq` + `Copy` like `Ordering`.
 
-#[derive(Debug, Eq, Copy)]
+#[derive(Debug, Eq, Copy, PartialEq, Clone)]
 enum AllocError {
     OutOfMemory { requested_bytes: usize },
     CapacityOverflow,

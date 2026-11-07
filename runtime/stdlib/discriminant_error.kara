@@ -16,7 +16,7 @@
 // whose payload is likewise a single integer, so an out-of-range value is
 // printable and comparable in a test without a hand-written `impl`.
 
-#[derive(Debug, Display, Eq, Copy)]
+#[derive(Debug, Display, Eq, Copy, PartialEq, Clone)]
 enum DiscriminantError[=D] {
     OutOfRange { value: D },
 }

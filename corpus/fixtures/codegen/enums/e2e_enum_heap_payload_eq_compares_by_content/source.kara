@@ -1,4 +1,4 @@
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 enum Msg { Text(String), Code(i64), Empty }
 fn main() {
 let a = Msg.Text("a" + "b");

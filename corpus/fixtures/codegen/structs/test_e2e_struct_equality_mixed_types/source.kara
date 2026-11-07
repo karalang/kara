@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct Pair { name: String, value: i64 }
 fn main() {
     let a = Pair { name: "hello", value: 42 };

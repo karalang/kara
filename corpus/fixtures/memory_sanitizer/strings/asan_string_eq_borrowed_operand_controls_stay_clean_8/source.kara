@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct P { name: String }
 fn mk() -> P { P { name: "abcd" } }
 fn f(other: ref P) -> bool { mk() == other }

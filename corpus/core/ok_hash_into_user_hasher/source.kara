@@ -38,13 +38,13 @@ fn fed[T: Hash](x: T) -> Record {
     h
 }
 
-#[derive(Hash)]
+#[derive(Hash, PartialEq, Eq)]
 struct P {
     x: i16,
     y: u8,
 }
 
-#[derive(Hash)]
+#[derive(Hash, PartialEq, Eq)]
 enum Shape {
     Dot,
     Line(u8),
@@ -62,7 +62,7 @@ impl Hash for Id {
     }
 }
 
-#[derive(Hash)]
+#[derive(Hash, PartialEq, Eq)]
 enum Tree {
     Leaf,
     Node(Vec[Tree]),

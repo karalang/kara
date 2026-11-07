@@ -1,4 +1,4 @@
-#[derive(Hash, Eq, PartialEq, Ord)]
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
         enum Ue { A { n: i64 }, B }
         impl Display for Ue {
             fn to_string(ref self) -> String {

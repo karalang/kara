@@ -18,7 +18,7 @@ fn fpick(r: own R, flag: bool) -> R {
     if flag { return r }
     return R { name: f"z", id: eat(r) }
 }
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct P {}
 impl P {
     fn pick(r: own R, flag: bool) -> R {

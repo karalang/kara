@@ -5,7 +5,7 @@ enum Ho { O(Option[String]), E }
 #[derive(Clone)]
 enum Hr { R(Result[String, i64]), E }
 enum Hv { V(Option[Vec[i64]]), E }
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 enum Hi { I(Option[i64]), E }
 enum Hn { N(Option[Nd]), E }
 enum H2 { T(Option[String], i64), E }

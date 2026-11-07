@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct B { items: Vec[String] }
 fn mk(s: ref String) -> B {
     let mut v: Vec[String] = Vec.new();

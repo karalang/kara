@@ -1,5 +1,5 @@
 
-#[derive(Ord, Eq)]
+#[derive(Ord, Eq, PartialOrd, PartialEq)]
 struct P { a: i64, b: i64 }
 
 struct Rev { v: i64 }

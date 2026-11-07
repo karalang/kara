@@ -1,8 +1,8 @@
 
-#[derive(Ord, Eq)]
+#[derive(Ord, Eq, PartialOrd, PartialEq)]
 struct P { a: i64, b: i64 }
 
-#[derive(Ord, Eq)]
+#[derive(Ord, Eq, PartialOrd, PartialEq)]
 enum Suit { Clubs, Hearts, Spades }
 
 struct Rev { v: i64 }

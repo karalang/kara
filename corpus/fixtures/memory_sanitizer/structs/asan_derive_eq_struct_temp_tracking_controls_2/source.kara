@@ -1,5 +1,5 @@
 
-#[derive(Eq)]
+#[derive(Eq, PartialEq)]
 struct P { name: String }
 struct Holder { inner: P }
 fn f(h: ref Holder, other: ref P) -> bool { h.inner == other }
