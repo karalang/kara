@@ -1,0 +1,321 @@
+// LeetCode #1062: Longest Repeating Substring -- the differential.
+//
+// The six arms against the statement read literally, on 2000 strings, with
+// six properties:
+//
+// P1  the answer is the statement read literally: the longest length, from
+//     the string's own length less one down to 1, at which two different
+//     starts hold the same substring, or 0 when no length does
+// P2  the answer lies between 0 and the length less one, and when it is not
+//     0 two different starts hold the same substring of that length
+// P3  the string reversed, and its letters renamed one for one, leave the
+//     answer
+// P4  the string written twice is answered by at least its own length
+// P5  a letter added at the end leaves the answer or raises it by one, and
+//     the string cut in two answers each half with no more than the whole
+// P6  each arm agrees with at least three of the other five
+
+// ---- lrs.kara: the ★ arm: a binary search on the length, a rolling hash per step
+const MOD: i64 = 1000000007;
+const BASE: i64 = 131;
+
+// Whether two starts in `s` hold the same `len` bytes.
+fn star_twice(s: Slice[u8], len: i64) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let mut top = 1;
+    for _ in 1..len {
+        top = top * BASE % MOD;
+    }
+    let mut hash = 0;
+    let mut seen: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..s.len() {
+        if i >= len {
+            hash = (hash - s[i - len] * top % MOD + MOD) % MOD;
+        }
+        hash = (hash * BASE + s[i]) % MOD;
+        if i + 1 >= len {
+            let start = i + 1 - len;
+            let starts = seen.entry(hash).or_insert(Vec.new());
+            for other in starts.iter() {
+                if s[other..other + len] == s[start..start + len] {
+                    return true;
+                }
+            }
+            starts.push(start);
+        }
+    }
+    false
+}
+
+fn star_arm(s: String) -> i64 {
+    let bytes = s.bytes();
+    // star_twice(lo) and not star_twice(hi)
+    let mut lo = 0;
+    let mut hi = bytes.len();
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if star_twice(bytes, mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- lrs_dp.kara: one row of the table of common runs
+fn dp_arm(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    // prev[j]: the run ending at i - 1 and j
+    let mut prev: Vec[i64] = Vec.filled(n, 0);
+    let mut best = 0;
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.filled(n, 0);
+        for j in i + 1..n {
+            if b[i] == b[j] {
+                row[j] = if i > 0 { prev[j - 1] + 1 } else { 1 };
+                best = best.max(row[j]);
+            }
+        }
+        prev = row;
+    }
+    best
+}
+
+// ---- lrs_set.kara: a binary search on the length, a Set[String] per step
+fn set_repeats(s: String, len: i64) -> bool {
+    let mut seen: Set[String] = Set.new();
+    for i in 0..s.len() - len + 1 {
+        if not seen.insert(s.substring(i, i + len)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn set_arm(s: String) -> i64 {
+    // set_repeats(lo) and not set_repeats(hi)
+    let mut (lo, hi) = (0, s.len());
+    while lo + 1 < hi {
+        let mid = (lo + hi) / 2;
+        if set_repeats(s, mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- lrs_z.kara: the Z-function of every suffix
+fn z_function(t: Slice[u8]) -> Vec[i64] {
+    let n = t.len();
+    let mut z: Vec[i64] = Vec.filled(n, 0);
+    let mut (l, r) = (0, 0);
+    for k in 1..n {
+        if k < r {
+            z[k] = (r - k).min(z[k - l]);
+        }
+        while k + z[k] < n and t[z[k]] == t[k + z[k]] {
+            z[k] += 1;
+        }
+        if k + z[k] > r {
+            l = k;
+            r = k + z[k];
+        }
+    }
+    z
+}
+
+fn z_arm(s: String) -> i64 {
+    let b = s.bytes();
+    let mut best = 0;
+    for i in 0..b.len() {
+        let z = z_function(b[i..]);
+        best = best.max(z.iter().max().unwrap_or(0));
+    }
+    best
+}
+
+// ---- lrs_suffix.kara: a suffix array and its neighbours' common prefixes
+fn common_prefix(a: Slice[u8], b: Slice[u8]) -> i64 {
+    let mut k = 0;
+    while k < a.len() and k < b.len() and a[k] == b[k] {
+        k += 1;
+    }
+    k
+}
+
+fn suffix_arm(s: String) -> i64 {
+    let b = s.bytes();
+    let mut starts: Vec[i64] = (0..b.len()).collect();
+    starts.sort_by(|x, y| b[x..].cmp(b[y..]));
+    starts.windows(2).iter().map(|w| common_prefix(b[w[0]..], b[w[1]..])).max().unwrap_or(0)
+}
+
+// ---- lrs_solution.kara: LeetCode's Rust template, carried by karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn longest_repeating_substring(s: String) -> i32 {
+        let bytes = s.bytes();
+        let n = bytes.len();
+        let mut dp = Vec.filled(n + 1, Vec.filled(n + 1, 0i32));
+        // Rust infers `best: i32` from the return; Kāra's literal does not
+        // yet default last (kara B-2026-11-07-3), so the type is written.
+        let mut best: i32 = 0;
+        for i in 1..=n {
+            for j in (i + 1)..=n {
+                if bytes[i - 1] == bytes[j - 1] {
+                    dp[i][j] = dp[i - 1][j - 1] + 1;
+                    best = max(best, dp[i][j]);
+                }
+            }
+        }
+        best
+    }
+}
+
+fn solution_arm(s: String) -> i64 {
+    Solution.longest_repeating_substring(s)
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn arm(a: i64, s: String) -> i64 {
+    match a {
+        0 => star_arm(s),
+        1 => dp_arm(s),
+        2 => set_arm(s),
+        3 => z_arm(s),
+        4 => suffix_arm(s),
+        _ => solution_arm(s),
+    }
+}
+
+// Whether two different starts hold the same substring of length `len`.
+fn occurs_twice(s: String, len: i64) -> bool {
+    for i in 0..s.len() - len + 1 {
+        for j in i + 1..s.len() - len + 1 {
+            if s.substring(i, i + len) == s.substring(j, j + len) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// The longest length, from the length less one down, at which two
+// different starts hold the same substring.
+fn read_literally(s: String) -> i64 {
+    let mut len = s.len() - 1;
+    while len > 0 {
+        if occurs_twice(s, len) {
+            return len;
+        }
+        len -= 1;
+    }
+    0
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn reversed(s: String) -> String {
+    s.chars().rev().collect()
+}
+
+// Each letter renamed by `names`, a permutation of the alphabet.
+fn renamed(s: String, names: Slice[u8]) -> String {
+    let mut out = String.new();
+    for c in s.bytes() {
+        out.push(names[c - b'a'] as char);
+    }
+    out
+}
+
+fn check_case(t: mut ref Tally, s: String, seed: mut ref i64) {
+    // every random choice drawn before any arm answers, so the problems
+    // are the same whatever an arm gets wrong
+    let mut names: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+    for i in 0..26 {
+        names.swap(i, i + next_random(mut seed) % (26 - i));
+    }
+    let extra = (b'a' + (next_random(mut seed) % 26) as u8) as char;
+    let cut = next_random(mut seed) % (s.len() + 1);
+    let want = read_literally(s);
+    let answers: Vec[i64] = (0..6).map(|a| arm(a, s)).collect();
+    let mut longer = s.clone();
+    longer.push(extra);
+    for a in 0..6 {
+        let answer = answers[a];
+        let what = f"arm {a}, {s} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let shaped = answer >= 0 and answer < s.len().max(1) and (answer == 0 or occurs_twice(s, answer));
+        expect(mut t, 2, shaped, f"P2 {what}");
+        let back = arm(a, reversed(s));
+        expect(mut t, 3, back == answer, f"P3 {what}: reversed -> {back}");
+        let other = arm(a, renamed(s, names));
+        expect(mut t, 3, other == answer, f"P3 {what}: renamed -> {other}");
+        let twice = arm(a, s + s);
+        expect(mut t, 4, twice >= s.len(), f"P4 {what}: written twice -> {twice}");
+        let grown = arm(a, longer);
+        expect(mut t, 5, grown == answer or grown == answer + 1, f"P5 {what}: with {extra} -> {grown}");
+        let (front, rest) = (arm(a, s.substring(0, cut)), arm(a, s.substring(cut, s.len())));
+        expect(mut t, 5, front <= answer and rest <= answer, f"P5 {what}: cut at {cut} -> {front} {rest}");
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 strings: 1000 of 1 to 12 letters over 1 to 3, and 1000 of 1 to
+    // 30 over 2 to 26
+    let mut seed = 10621;
+    for i in 0..2000 {
+        let (n, k) = if i < 1000 { (12, next_random(mut seed) % 3 + 1) } else { (30, next_random(mut seed) % 25 + 2) };
+        let s = random_word(next_random(mut seed) % n + 1, k, mut seed);
+        check_case(mut t, s, mut seed);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

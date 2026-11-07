@@ -49,7 +49,7 @@ fn word_pattern(pattern: ref String, s: ref String) -> bool {
     let mut i = 0;
     while i < pb.len() {
         let c = pb[i] as i64;
-        let w = words[i].clone();
+        let w = ref words[i];
 
         match p2w.get(c) {
             Some(prev) => {
@@ -68,7 +68,7 @@ fn word_pattern(pattern: ref String, s: ref String) -> bool {
                 }
             }
             None => {
-                let _ = w2p.insert(w, c);
+                let _ = w2p.insert(w.clone(), c);
             }
         }
         i = i + 1;

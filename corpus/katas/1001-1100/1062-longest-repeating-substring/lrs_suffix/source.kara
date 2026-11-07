@@ -1,0 +1,82 @@
+// LeetCode #1062: Longest Repeating Substring -- a suffix array: the
+// suffixes' starts sorted by the suffixes themselves, so that the longest
+// common prefix of any two suffixes is found between two neighbours. The
+// answer is the longest prefix two neighbours share. O(n^2 log n) worst
+// case, from comparing suffixes.
+
+fn common_prefix(a: Slice[u8], b: Slice[u8]) -> i64 {
+    let mut k = 0;
+    while k < a.len() and k < b.len() and a[k] == b[k] {
+        k += 1;
+    }
+    k
+}
+
+fn longest_repeating(s: String) -> i64 {
+    let b = s.bytes();
+    let mut starts: Vec[i64] = (0..b.len()).collect();
+    starts.sort_by(|x, y| b[x..].cmp(b[y..]));
+    starts.windows(2).iter().map(|w| common_prefix(b[w[0]..], b[w[1]..])).max().unwrap_or(0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` letters drawn from the first `k` of the alphabet.
+fn random_word(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    for s in ["abcd", "abbaba", "aabcaabdaab", "aaaaa", "a", "ab", "aa", "abab", "abcabcabc", "mississippi"] {
+        println(f"{s} -> {longest_repeating(s)}");
+    }
+    let mut seed = 1062;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let k = next_random(mut seed) % 3 + 1;
+        let answer = longest_repeating(random_word(n, k, mut seed));
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"3000 strings of 1 to 12 letters over 1 to 3: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for i in 0..300 {
+        let n = next_random(mut seed) % 251 + 50;
+        let answer = longest_repeating(random_word(n, 2 + i % 25, mut seed));
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"300 strings of 50 to 300 letters over 2 to 26: sum {sum}, checksum {check}");
+    // the longest strings: 2000 letters, over 2, 4 and 26
+    for k in [2, 4, 26] {
+        println(f"2000 letters over {k}: {longest_repeating(random_word(2000, k, mut seed))}");
+    }
+    // a Fibonacci word, rich in long repeats, and one letter 2000 times
+    let mut a = "a".to_string();
+    let mut b = "ab".to_string();
+    while b.len() < 2000 {
+        let next = b.clone() + a;
+        a = b;
+        b = next;
+    }
+    let fib = b.substring(0, 2000);
+    println(f"Fibonacci word of 2000: {longest_repeating(fib)}");
+    let mut same = String.new();
+    for _ in 0..2000 {
+        same.push('z');
+    }
+    println(f"2000 z's: {longest_repeating(same)}");
+}

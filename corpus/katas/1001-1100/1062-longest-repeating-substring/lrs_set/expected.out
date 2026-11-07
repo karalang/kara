@@ -1,0 +1,17 @@
+abcd -> 0
+abbaba -> 2
+aabcaabdaab -> 3
+aaaaa -> 4
+a -> 0
+ab -> 0
+aa -> 1
+abab -> 2
+abcabcabc -> 6
+mississippi -> 4
+3000 strings of 1 to 12 letters over 1 to 3: sum 9762, checksum 520613853
+300 strings of 50 to 300 letters over 2 to 26: sum 1228, checksum 236102072
+2000 letters over 2: 19
+2000 letters over 4: 11
+2000 letters over 26: 4
+Fibonacci word of 2000: 1013
+2000 z's: 1999

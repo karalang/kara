@@ -15,16 +15,12 @@ enum Bucket {
 }
 
 fn abbrev(w: ref String) -> String {
-    let cs: Vec[char] = w.chars().collect();
-    let n = cs.len();
+    let n = w.len();
     if n <= 2 {
         return w.clone();
     }
-    let mut out = String.new();
-    out.push(cs[0]);
-    out.push_str(f"{n - 2}");
-    out.push(cs[n - 1]);
-    return out;
+    let b = w.bytes();
+    f"{b[0] as char}{n - 2}{b[n - 1] as char}"
 }
 
 // The corpus's 31-bit LCG, mirrored bit-for-bit in the C/Rust/Go/Python twins.

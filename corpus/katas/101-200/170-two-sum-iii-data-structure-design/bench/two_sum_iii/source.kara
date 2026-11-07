@@ -30,22 +30,19 @@ fn add(ds: mut ref TwoSum, number: i64) {
 }
 
 fn find(ds: ref TwoSum, value: i64) -> bool {
-    let mut found = false;
     for k in ds.counts.keys() {
         let complement = value - k;
         if complement == k {
-            match ds.counts.get(k) {
-                Some(c) => { if c >= 2 { found = true; } }
-                None => {}
+            if let Some(c) = ds.counts.get(k) {
+                if c >= 2 {
+                    return true;
+                }
             }
-        } else {
-            match ds.counts.get(complement) {
-                Some(_) => { found = true; }
-                None => {}
-            }
+        } else if ds.counts.get(complement).is_some() {
+            return true;
         }
     }
-    return found;
+    false
 }
 
 fn main() {
