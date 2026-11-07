@@ -1,0 +1,20 @@
+// design.md §3 and §5: every integer type has MIN and MAX as type paths,
+// the 128-bit widths included (B-2026-11-07-17: `i128.MAX` was refused with
+// `a type that failed to check is not lowered yet`).
+const BIG: i128 = i128.MAX;
+const HALF: u128 = u128.MAX / 2;
+fn main() {
+    println(i128.MAX);
+    println(i128.MIN);
+    println(u128.MAX);
+    println(u128.MIN);
+    let x: i128 = 5;
+    println(x == i128.MAX);
+    println(BIG == i128.MAX);
+    println(HALF);
+    println(i128.MIN.checked_neg().is_none());
+    match x {
+        i128.MIN => println("min"),
+        _ => println("other"),
+    }
+}

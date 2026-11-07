@@ -770,6 +770,11 @@ pub static PRIMITIVE_CONSTS: &[(&str, &str, ConstValue)] = &[
     ("u32", "MIN", ConstValue::U32(0)),
     ("u64", "MAX", ConstValue::U64(u64::MAX)),
     ("u64", "MIN", ConstValue::U64(0)),
+    // The 128-bit widths' limits (B-2026-11-07-17).
+    ("i128", "MAX", ConstValue::I128(i128::MAX)),
+    ("i128", "MIN", ConstValue::I128(i128::MIN)),
+    ("u128", "MAX", ConstValue::U128(u128::MAX)),
+    ("u128", "MIN", ConstValue::U128(0)),
     ("usize", "MAX", ConstValue::Usize(u64::MAX)),
     ("usize", "MIN", ConstValue::Usize(0)),
     ("isize", "MAX", ConstValue::Isize(i64::MAX)),
