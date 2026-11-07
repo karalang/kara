@@ -221,11 +221,16 @@ impl super::Formatter {
         }
         self.format_generic_params(&f.generic_params);
         self.write_str("(");
-        self.format_fn_params_with_receiver(
+        // The `)`: no later than the return type or the body.
+        let close = f.return_type.as_ref().map_or(f.body.span.offset, |rt| {
+            rt.span.offset.min(f.body.span.offset)
+        });
+        self.format_fn_params_in(
             &f.self_param,
             f.self_is_frozen,
             f.self_is_own,
             &f.params,
+            Some(close),
         );
         self.write_str(")");
         if let Some(ref rt) = f.return_type {
@@ -250,6 +255,53 @@ impl super::Formatter {
         params: &[Param],
     ) {
         self.format_fn_params_with_receiver(self_param, false, self_is_own, params)
+    }
+
+    /// [`Self::format_fn_params_with_receiver`], laid out one parameter per
+    /// line when a comment sits between two parameters or after the last
+    /// one, before `close` (the source offset of the `)` or later), so each
+    /// comment stays beside the parameter it follows (B-2026-11-07-44).
+    pub(super) fn format_fn_params_in(
+        &mut self,
+        self_param: &Option<SelfParam>,
+        self_is_frozen: bool,
+        self_is_own: bool,
+        params: &[Param],
+        close: Option<usize>,
+    ) {
+        let spans: Vec<(usize, usize)> = params
+            .iter()
+            .map(|p| (p.span.offset, p.span.offset + p.span.length))
+            .collect();
+        let Some(close) = close.filter(|&c| self.comment_between(&spans, c)) else {
+            self.format_fn_params_with_receiver(self_param, self_is_frozen, self_is_own, params);
+            return;
+        };
+        self.output.push('\n');
+        self.push_indent();
+        if self_param.is_some() {
+            self.write_indent();
+            self.format_fn_params_with_receiver(self_param, self_is_frozen, self_is_own, &[]);
+            self.output
+                .push_str(if params.first().is_some_and(|p| p.is_named) {
+                    ";\n"
+                } else {
+                    ",\n"
+                });
+        }
+        for (i, p) in params.iter().enumerate() {
+            self.write_indent();
+            // A lone parameter prints without its `;`; the separator after
+            // it says whether the next one opens the named parameters.
+            let mut lone = p.clone();
+            lone.is_named = false;
+            self.format_fn_params_with_receiver(&None, false, false, std::slice::from_ref(&lone));
+            let next_named = params.get(i + 1).is_some_and(|n| n.is_named && !p.is_named);
+            self.output.push_str(if next_named { ";\n" } else { ",\n" });
+            self.flush_comments_before(spans.get(i + 1).map_or(close, |s| s.0));
+        }
+        self.pop_indent();
+        self.write_indent();
     }
 
     /// `self_is_frozen` carries `frozen self` (B-2026-08-01-33 stage 2.7),

@@ -248,13 +248,15 @@ impl<'a> super::OwnershipChecker<'a> {
                     )
                 }
                 BorrowReturnShape::DanglingSource => (
-                    "returned borrow does not originate from a `ref` parameter; its source is \
-                     dropped when the function returns, leaving a dangling reference"
+                    "returned borrow does not originate from a borrowed parameter; its source \
+                     is dropped when the function returns, leaving a dangling reference"
                         .to_string(),
                     Some(
-                        "a borrow return must trace to a `ref` parameter — e.g. \
-                         `fn f(x: ref T) -> ref T { x }` or `fn f(u: ref U) -> ref F { u.field }`. \
-                         To return an owned value instead, drop `ref` from the return type."
+                        "a borrow return must borrow from a parameter that is itself borrowed: a \
+                         bare one (core-semantics §4.1), a `mut ref` one or a view, e.g. \
+                         `fn f(x: T) -> ref T { x }` or `fn f(u: U) -> ref F { ref u.field }` \
+                         (§5.4). To return an owned value instead, drop `ref` from the return \
+                         type."
                             .to_string(),
                     ),
                 ),

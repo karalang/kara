@@ -83,6 +83,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   type is fixed by removing the `;`, and `?` in a `fn main()` returning
   `()` is fixed to `fn main() -> Result[(), AnyError]` ending in `Ok(())`
   (B-2026-11-07-43).
+- A dangling borrow return's help (E0509) teaches the borrow-by-default
+  spelling, `fn f(x: T) -> ref T { x }`, instead of the `ref T` parameter
+  `karac fix` removes.
+- A known variant such as `None` in a `match` over a scrutinee that is
+  already an error is no longer also reported as a Type-class binding.
+
+### Tooling
+
+- `karac fmt` keeps a comment beside the parameter or call argument it
+  follows: such a list is laid out one element per line, where the comment
+  used to move into the body or to the end of the statement
+  (B-2026-11-07-44).
 
 ---
 

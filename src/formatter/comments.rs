@@ -116,6 +116,18 @@ fn push_comment(source: &str, s: usize, e: usize, is_line: bool, out: &mut Vec<C
 }
 
 impl super::Formatter {
+    /// True when a comment not yet written sits between two elements of a
+    /// list, or after its last one before `close` (the closing delimiter's
+    /// offset): `spans` are the elements' `(start, end)`. Such a list is laid
+    /// out one element per line, so each comment stays beside the element it
+    /// follows (design.md § Canonical formatting; B-2026-11-07-44).
+    pub(super) fn comment_between(&self, spans: &[(usize, usize)], close: usize) -> bool {
+        spans.iter().enumerate().any(|(i, &(_, end))| {
+            let next = spans.get(i + 1).map_or(close, |&(start, _)| start);
+            end < next && self.has_comment_in(end, next)
+        })
+    }
+
     /// True when a comment not yet written starts in `lo..hi`.
     pub(super) fn has_comment_in(&self, lo: usize, hi: usize) -> bool {
         self.comments[self.next_comment..]

@@ -330,7 +330,7 @@ impl super::Formatter {
                 self.write_ident(field_or_method);
                 if let Some(ref a) = args {
                     self.write_str("(");
-                    self.format_call_args(a);
+                    self.format_call_args(a, None);
                     self.write_str(")");
                 }
             }
@@ -363,7 +363,7 @@ impl super::Formatter {
                     self.write_str(")");
                 }
                 self.write_str("(");
-                self.format_call_args(args);
+                self.format_call_args(args, Some(expr.span.offset + expr.span.length));
                 self.write_str(")");
             }
             ExprKind::MethodCall {
@@ -389,7 +389,7 @@ impl super::Formatter {
                     self.write_str("]");
                 }
                 self.write_str("(");
-                self.format_call_args(args);
+                self.format_call_args(args, Some(expr.span.offset + expr.span.length));
                 self.write_str(")");
             }
             ExprKind::FieldAccess { object, field } => {
@@ -864,8 +864,39 @@ impl super::Formatter {
         }
     }
 
-    pub(super) fn format_call_args(&mut self, args: &[CallArg]) {
-        self.delimited(|f| f.format_call_args_inner(args));
+    /// `close`: the source offset just past the call's `)`, when the call
+    /// came from source. A comment between two arguments lays them out one
+    /// per line, each comment after the argument it follows
+    /// (B-2026-11-07-44).
+    pub(super) fn format_call_args(&mut self, args: &[CallArg], close: Option<usize>) {
+        let spans: Vec<(usize, usize)> = args
+            .iter()
+            .map(|a| (a.span.offset, a.span.offset + a.span.length))
+            .collect();
+        match close {
+            Some(close) if self.comment_between(&spans, close) => {
+                self.delimited(|f| f.format_call_args_vertical(args, &spans, close))
+            }
+            _ => self.delimited(|f| f.format_call_args_inner(args)),
+        }
+    }
+
+    fn format_call_args_vertical(
+        &mut self,
+        args: &[CallArg],
+        spans: &[(usize, usize)],
+        close: usize,
+    ) {
+        self.output.push('\n');
+        self.push_indent();
+        for (i, arg) in args.iter().enumerate() {
+            self.write_indent();
+            self.format_call_args_inner(std::slice::from_ref(arg));
+            self.output.push_str(",\n");
+            self.flush_comments_before(spans.get(i + 1).map_or(close, |s| s.0));
+        }
+        self.pop_indent();
+        self.write_indent();
     }
 
     /// Print `e` as the head of an `if`, `while`, `if let`, `while let` or

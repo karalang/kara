@@ -1383,11 +1383,14 @@ impl<'a> super::TypeChecker<'a> {
                 // v2 core: a binding is Value class (design.md CN-2), so a
                 // bare Type-class name over an enum that does not declare it
                 // is a misspelt or foreign variant, not a catch-all binding
-                // (B-2026-10-22-31).
+                // (B-2026-10-22-31). Not over a scrutinee whose type is
+                // already an error, where a known variant (`None`) cannot be
+                // checked against it and is no binding either.
                 if self.cli_lint_overrides.strict_core
                     && !name.contains('.')
                     && crate::lexer::classify_ident(name) == crate::lexer::IdentClass::Type
                     && !self.variant_patterns.contains_key(&pattern.id)
+                    && !(is_variant_pattern && *peeled == Type::Error)
                 {
                     if let Type::Named {
                         name: enum_name, ..

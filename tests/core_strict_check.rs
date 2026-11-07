@@ -2422,7 +2422,7 @@ fn for_item_of_borrowed_param_may_be_returned() {
              ref xs[0]\n\
          }\n\
          fn main() { }\n",
-        "returned borrow does not originate from a `ref` parameter",
+        "returned borrow does not originate from a borrowed parameter",
     );
     rejected_with(
         "for-item-into-owned-option",
@@ -7598,7 +7598,7 @@ fn a_borrow_of_an_owned_place_is_not_returned() {
         rejected(
             tag,
             src,
-            "returned borrow does not originate from a `ref` parameter",
+            "returned borrow does not originate from a borrowed parameter",
         );
     }
 }
@@ -12186,7 +12186,7 @@ fn a_provider_need_be_cross_task_only_when_a_task_shares_it() {
 /// extension (B-2026-10-22-29).
 #[test]
 fn a_reference_to_a_returned_temporary_is_refused() {
-    let dangling = "returned borrow does not originate from a `ref` parameter";
+    let dangling = "returned borrow does not originate from a borrowed parameter";
     rejected(
         "ref-return-call",
         "fn make() -> String { String.from(\"temp\") }\nfn bad() -> ref String { make() }\nfn main() { println(bad()); }\n",
