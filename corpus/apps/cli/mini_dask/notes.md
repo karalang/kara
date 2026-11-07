@@ -124,10 +124,12 @@ in name order, or `by function: none`.
 
 ## Compiler gaps found
 
-- B-2026-11-07-30, open: `for a in args`, with `args` an owned `Vec` not
-  used after the loop, refuses moving a payload out of `a`, and `karac fix`
-  copies it with `.clone()` where the message itself names
-  `args.into_iter()`. The program writes `.into_iter()`.
-- B-2026-11-07-31, open: `let mut chain = [k];` with `k` from
-  `order.iter()` is a `Vec[ref i64]`, refused with no fix where a
-  `Vec[i64]` is wanted. The program annotates the `let`.
+- B-2026-11-07-30, fixed in kara ec6e5415ba: `for a in args`, with `args`
+  an owned `Vec` not used after the loop, refuses moving a payload out of
+  `a`, and `karac fix` copied it with `.clone()` where the message itself
+  names `args.into_iter()`. The fix now writes `.into_iter()`.
+- B-2026-11-07-31, fixed in kara ec6e5415ba: `let mut chain = [k];` with
+  `k` from `order.iter()` is a `Vec[ref i64]`, refused with no fix where a
+  `Vec[i64]` is wanted. The fix now annotates the `let`.
+
+With both, `karac fix` turns the program's first draft into this one.
