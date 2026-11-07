@@ -195,6 +195,16 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - A struct literal of another package's struct may name its `pub` fields
   again: `Opts { port: 1 }` with `pub port` was refused with E0111 since the
   literal check for B-2026-11-04-46 (B-2026-11-07-22).
+- **A client that drops its connection never ends a server.** A compiled
+  program now ignores `SIGPIPE` from the start, as the interpreter does, so
+  an HTTPS client that disconnects without `close_notify` fails only its own
+  connection; the server died with signal 13 and refused the next client
+  (B-2026-11-07-25).
+- **A server reads an absolute-form target as its path.** `GET
+  http://example.com/z?k=v` gives `path()` `/z`, and `/` with no path, as
+  `Request.new` does (B-2026-11-07-26). A request line or header that does not
+  parse is answered `400 Bad Request` without calling the handler, and the
+  connection closes (docs/library/io.md).
 - **A generic function's `impl Iterator` collects.** `fn evs[T](xs: own
   Vec[T]) -> impl Iterator[Item = T]` then `evs(v).collect()` failed with
   "the method call `.collect` with no resolved callee is not lowered yet"

@@ -1423,8 +1423,8 @@ pub unsafe extern "C" fn karac_mir_http_request_set(
 /// `Server.__install(buf, eof)` for the servers in
 /// runtime/stdlib/source/http_server.kara: makes the request at the start
 /// of the `n` bytes at `p` the current one, and returns the bytes it took;
-/// 0 when they hold no whole request yet and `eof` is 0, or -1 when the
-/// connection holds no request.
+/// 0 when they hold no whole request yet and `eof` is 0, -1 when the
+/// connection holds no request, or -2 when it holds one that does not parse.
 ///
 /// # Safety
 ///
@@ -1440,7 +1440,8 @@ pub unsafe extern "C" fn karac_mir_http_install(p: *const u8, n: i64, eof: i32) 
             used as i64
         }
         http1::Parse::More => 0,
-        http1::Parse::Closed | http1::Parse::Bad(_) => -1,
+        http1::Parse::Closed => -1,
+        http1::Parse::Bad(_) => -2,
     }
 }
 

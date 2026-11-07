@@ -15949,7 +15949,8 @@ impl<'a> Interp<'a> {
                         used as i128
                     }
                     crate::http1::Parse::More => 0,
-                    crate::http1::Parse::Closed | crate::http1::Parse::Bad(_) => -1,
+                    crate::http1::Parse::Closed => -1,
+                    crate::http1::Parse::Bad(_) => -2,
                 };
                 Ok(Value::Int(used))
             }

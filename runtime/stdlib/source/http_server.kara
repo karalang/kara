@@ -220,6 +220,15 @@ impl Server {
                 Err(_) => return -1,
             }
         }
+        // A request it cannot parse is answered 400 without the handler,
+        // and its connection closes (docs/library/io.md).
+        if used == -2 {
+            let _ = conn.write_all(
+                "HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".bytes(),
+            );
+            let _ = conn.shutdown_write();
+            return -1;
+        }
         used
     }
 
@@ -260,8 +269,9 @@ impl Server {
 
     // Makes the request at the start of `buf` the running task's current
     // one, which `Request`'s methods read: the bytes it took, 0 when `buf`
-    // holds no whole request yet (and `eof` says more may come), or -1 when
-    // the connection holds no request.
+    // holds no whole request yet (and `eof` says more may come), -1 when
+    // the connection holds no request, or -2 when it holds one that does
+    // not parse.
     #[compiler_builtin]
     fn __install(buf: Slice[u8], eof: bool) -> i64 {
         -1

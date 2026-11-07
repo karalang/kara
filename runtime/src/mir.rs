@@ -1515,8 +1515,15 @@ pub unsafe extern "C" fn karac_mir_str_replacen(
 /// and `free` lock their arena on every call, which made an allocating
 /// program (a linked-list merge) 1.7x slower than on the process's own
 /// thread. The stack-overflow guard covers the new stack.
+///
+/// It first ignores `SIGPIPE`, as the interpreter's Rust start up does: a
+/// write to a peer that has gone (a client that drops its connection
+/// without `close_notify`, a closed pipe) then fails that write with an
+/// `IoError` rather than killing the program (docs/library/io.md,
+/// B-2026-11-07-25).
 #[no_mangle]
 pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
+    crate::fatal::ignore_sigpipe();
     #[cfg(all(
         unix,
         feature = "net",

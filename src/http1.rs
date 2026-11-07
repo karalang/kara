@@ -17,6 +17,21 @@
 pub type Headers = Vec<(String, String)>;
 
 /// One request, as read off the wire.
+/// A request target in origin form: an absolute URL's path and query, `/`
+/// when it has neither, and any other target itself. A server reads an
+/// absolute-form target (`GET http://example.com/z?k=v`, RFC 9112 §3.2.2)
+/// this way too, so `path()` is `/z` (docs/library/io.md, B-2026-11-07-26).
+fn origin_target(url: &str) -> String {
+    match url.split_once("://") {
+        Some((_, rest)) => match rest.find(['/', '?']) {
+            Some(i) if rest[i..].starts_with('/') => rest[i..].to_string(),
+            Some(i) => format!("/{}", &rest[i..]),
+            None => "/".to_string(),
+        },
+        None => url.to_string(),
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct Request {
     pub method: String,
@@ -33,17 +48,9 @@ impl Request {
     /// semantics §14.12): an absolute URL's target is its path and query,
     /// `/` when it has neither, and any other URL is the target itself.
     pub fn built(method: String, url: &str) -> Request {
-        let target = match url.split_once("://") {
-            Some((_, rest)) => match rest.find(['/', '?']) {
-                Some(i) if rest[i..].starts_with('/') => rest[i..].to_string(),
-                Some(i) => format!("/{}", &rest[i..]),
-                None => "/".to_string(),
-            },
-            None => url.to_string(),
-        };
         Request {
             method,
-            target,
+            target: origin_target(url),
             ..Request::default()
         }
     }
@@ -169,14 +176,21 @@ pub fn parse_request(buf: &[u8], eof: bool) -> Parse {
             Some(Ok(l)) => break l,
         }
     };
+    // `method SP target SP HTTP/x.y` (RFC 9112 §3); anything else is
+    // answered 400 without reaching the handler (docs/library/io.md).
     let mut words = first.split_whitespace();
-    let (Some(method), Some(target), version) = (words.next(), words.next(), words.next()) else {
+    let (Some(method), Some(target), Some(version), None) =
+        (words.next(), words.next(), words.next(), words.next())
+    else {
         return Parse::Bad("a malformed request line");
     };
-    let http10 = version == Some("HTTP/1.0");
+    if !version.starts_with("HTTP/") {
+        return Parse::Bad("a malformed request line");
+    }
+    let http10 = version == "HTTP/1.0";
     let mut req = Request {
         method: method.to_string(),
-        target: target.to_string(),
+        target: origin_target(target),
         ..Request::default()
     };
     loop {

@@ -56,16 +56,66 @@ pub fn write_all(fd: i32, mut bytes: &[u8]) {
         let n = unsafe { _write(fd, bytes.as_ptr(), bytes.len().min(1 << 30) as u32) } as isize;
         if n > 0 {
             bytes = bytes.get(n as usize..).unwrap_or_default();
-        } else if n == 0 || !interrupted() {
+        } else if n == 0 {
             return;
+        } else {
+            match errno() {
+                Some(4) => {} // EINTR: again.
+                // EPIPE: the reader has gone (`prog | head`). A compiled
+                // program ignores `SIGPIPE` so that a gone network peer fails
+                // only its own write (B-2026-11-07-25), but its console still
+                // ends the program as the default disposition did: quietly,
+                // by the signal, status 141 to a shell.
+                Some(32) => die_of_sigpipe(),
+                _ => return,
+            }
         }
     }
 }
 
-/// Whether the call that just failed was interrupted (`EINTR`). Read
-/// straight from `errno`: `std::io::Error`'s table of OS functions reaches
-/// its message formatting, and with it a panic.
-fn interrupted() -> bool {
+/// Ignores `SIGPIPE`, at a compiled `main`'s start
+/// ([`crate::mir::karac_mir_run_main`]): a write to a peer that has gone
+/// then fails that write rather than killing the program (B-2026-11-07-25).
+/// A plain `signal` call, idempotent, with no `Once`, whose poisoning would
+/// link std's panic hook into every program.
+pub fn ignore_sigpipe() {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+        }
+        const SIGPIPE: i32 = 13;
+        const SIG_IGN: usize = 1;
+        // SAFETY: setting a disposition, with no handler to run.
+        unsafe {
+            signal(SIGPIPE, SIG_IGN);
+        }
+    }
+}
+
+/// Ends the process by `SIGPIPE` with its default disposition restored.
+fn die_of_sigpipe() {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+            fn raise(sig: i32) -> i32;
+        }
+        const SIGPIPE: i32 = 13;
+        const SIG_DFL: usize = 0;
+        // SAFETY: restoring a default disposition, then raising the signal
+        // it terminates on.
+        unsafe {
+            signal(SIGPIPE, SIG_DFL);
+            raise(SIGPIPE);
+        }
+    }
+}
+
+/// The calling thread's `errno`, where it can be read. Read straight from
+/// `errno`: `std::io::Error`'s table of OS functions reaches its message
+/// formatting, and with it a panic.
+fn errno() -> Option<i32> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     extern "C" {
         #[link_name = "__errno_location"]
@@ -83,9 +133,9 @@ fn interrupted() -> bool {
         target_os = "macos",
         target_os = "ios"
     ))]
-    return unsafe { *errno_location() } == 4;
+    return Some(unsafe { *errno_location() });
     #[allow(unreachable_code)]
-    false
+    None
 }
 
 /// The value of the environment variable `name`, read through libc's
