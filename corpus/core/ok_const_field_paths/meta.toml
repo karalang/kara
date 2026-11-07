@@ -1,0 +1,9 @@
+source = "B-2026-11-06-21"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["const"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-21: design.md § Constants, each use of a constant is a fresh value, read through its fields as the parser reads them."

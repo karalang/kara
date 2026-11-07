@@ -7404,6 +7404,47 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(p)
     }
 
+    /// `ORIGIN.x.y` with a constant `ORIGIN`, which the parser reads as a
+    /// path: the constant's value built in a temporary, then each field in
+    /// turn (design.md § Constants, each use a fresh value;
+    /// B-2026-11-06-21). `None` when the path's head is no constant.
+    fn const_path_place(&mut self, e: &'a Expr) -> R<Option<Place>> {
+        let ExprKind::Path { segments, .. } = &e.kind else {
+            return Ok(None);
+        };
+        if segments.len() < 2
+            || matches!(
+                self.lcx.res.get(&e.id),
+                Some(Res::Def(_) | Res::LocalPath(_))
+            )
+        {
+            return Ok(None);
+        }
+        self.const_segments_place(e.span, segments)
+    }
+
+    /// The constant `segments[0]` built in a temporary, then each field of
+    /// `segments[1..]` in turn; `None` when the head is no constant.
+    fn const_segments_place(&mut self, span: Span, segments: &[String]) -> R<Option<Place>> {
+        let Some(value) = segments
+            .first()
+            .and_then(|c| self.lcx.defs.lookup(0, c))
+            .and_then(|d| self.lcx.consts.get(&d).copied())
+        else {
+            return Ok(None);
+        };
+        let t = self.expr_ty(value)?;
+        let mut p = Place::local(self.temp_of(value, t)?);
+        for field in &segments[1..] {
+            let (base, bt) = self.strip_refs(p);
+            let Some((idx, ft)) = self.field_of(bt, None, field) else {
+                return self.unsupported(span, &format!("the field `{field}`"));
+            };
+            p = base.field(idx, ft);
+        }
+        Ok(Some(p))
+    }
+
     fn expr_place_of(&mut self, e: &'a Expr, mutable: bool) -> R<Place> {
         if let Some(p) = self.pinned.get(&e.id) {
             return Ok(p.clone());
@@ -7424,6 +7465,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             // reads as a path: the local, then each field in turn.
             ExprKind::Path { segments, .. } => {
                 let Some(&Res::LocalPath(sym)) = self.lcx.res.get(&e.id) else {
+                    if let Some(p) = self.const_path_place(e)? {
+                        return Ok(p);
+                    }
                     return self.temp_place(e);
                 };
                 self.local_path_place(e.span, sym, segments)
@@ -9321,6 +9365,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(dest, Rvalue::Use(op));
                 return Ok(());
             }
+        }
+        if let Some(p) = self.const_path_place(e)? {
+            let t = self.place_type(&p);
+            let op = if self.is_copy(t) {
+                Operand::Copy(p)
+            } else {
+                Operand::Move(p)
+            };
+            self.assign(dest, Rvalue::Use(op));
+            return Ok(());
         }
         // `ExitCode.SUCCESS`, `ExitCode.FAILURE`: the library's codes.
         if let ExprKind::Path { segments, .. } = &e.kind {
@@ -18095,9 +18149,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         // `LOG_PATH.clone()` parses as a path: a library method of the
         // constant's value, which is computed here.
         if let ExprKind::Path { segments, .. } = &callee.kind {
-            if let [c, m] = segments.as_slice() {
+            if let [c, fields @ .., m] = segments.as_slice() {
                 // A binding in a static is the receiver itself, borrowed.
-                let st = self.lcx.defs.lookup(0, c);
+                let st = self.lcx.defs.lookup(0, c).filter(|_| fields.is_empty());
                 if let Some(d) = st.filter(|d| self.lcx.statics.contains_key(d)) {
                     let (_, vt, mutable) = self.lcx.statics[&d];
                     let p = self.static_place(d);
@@ -18122,14 +18176,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.call_native(&name, ops, dest);
                     return Ok(());
                 }
-                let value = self
-                    .lcx
-                    .defs
-                    .lookup(0, c)
-                    .and_then(|d| self.lcx.consts.get(&d).copied());
-                if let Some(value) = value {
-                    let vt = self.expr_ty(value)?;
-                    let tmp = self.temp_of(value, vt)?;
+                // `ORIGIN.n.abs()`: the receiver is a field of the computed
+                // value (B-2026-11-06-21).
+                let head = &segments[..segments.len() - 1];
+                // `F.s.len()` with an uppercase local `F`: a library method of
+                // the local's field (a method the program defines was taken
+                // above).
+                let recv_place = match self.lcx.res.get(&callee.id) {
+                    Some(&Res::LocalPath(sym)) => {
+                        Some(self.local_path_place(callee.span, sym, head)?)
+                    }
+                    _ => self.const_segments_place(callee.span, head)?,
+                };
+                if let Some(rp) = recv_place {
+                    let vt = self.place_type(&rp);
                     // A method the program (or its library) defines takes
                     // the computed value as its receiver.
                     let def = match callee_kind {
@@ -18147,17 +18207,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                             if let (true, Some(&elem)) = (as_slice, inst_args.first()) {
                                 let mutable = matches!(mode, SelfParam::MutRef);
                                 let slice_t = self.tys().tcx().intern(HK::Slice { elem, mutable });
-                                let s = self.slice_view_of(Place::local(tmp), vt, slice_t, mutable);
+                                let s = self.slice_view_of(rp.clone(), vt, slice_t, mutable);
                                 let recv = self.slice_receiver(s, slice_t, &mode);
                                 return self.def_call(e, d, f, inst_args, Some(recv), args, dest);
                             }
                             let recv = match mode {
-                                SelfParam::Owned => Operand::Move(Place::local(tmp)),
-                                SelfParam::Ref => self.ref_to(Place::local(tmp), vt),
+                                SelfParam::Owned => Operand::Move(rp.clone()),
+                                SelfParam::Ref => self.ref_to(rp.clone(), vt),
                                 SelfParam::MutRef => {
                                     let rt = self.tys().tcx().reference(vt, true);
                                     let r = self.temp(rt);
-                                    self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(tmp)));
+                                    self.assign(r, Rvalue::Ref(BorrowKind::Mut, rp.clone()));
                                     Operand::Move(Place::local(r))
                                 }
                             };
@@ -18167,8 +18227,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A number's library methods take it by value, as a
                     // local's do (`TOL0.sqrt()`; B-2026-10-23-3).
                     let recv = match self.is_number(vt) {
-                        true => Operand::Move(Place::local(tmp)),
-                        false => self.ref_to(Place::local(tmp), vt),
+                        true => Operand::Copy(rp.clone()),
+                        false => self.ref_to(rp.clone(), vt),
                     };
                     let mut ops = vec![recv];
                     for a in args {

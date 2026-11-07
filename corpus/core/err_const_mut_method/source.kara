@@ -1,0 +1,9 @@
+// design.md § Constants: a `mut ref self` method on a constant would write
+// a fresh copy no one reads, so it is refused (B-2026-11-06-21: `TABLE.sort()`
+// was accepted and `TABLE[0]` still printed 3).
+const TABLE: Array[i64, 3] = [3, 1, 2];
+
+fn main() {
+    TABLE.sort();
+    println(TABLE[0]);
+}

@@ -68,6 +68,9 @@ pub struct ClassifierPrelude {
     trait_static_methods: FxHashMap<String, Vec<String>>,
     method_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: HashSet<String>,
+    /// The program's constants: each use builds a fresh value, so a use
+    /// moves nothing (design.md § Constants, B-2026-11-06-21).
+    const_names: HashSet<String>,
     /// `ref name` / `mut ref name` pattern bindings, which move nothing
     /// under the v2 core (§4.6).
     ref_bindings: FxHashSet<SpanKey>,
@@ -102,6 +105,14 @@ impl ClassifierPrelude {
             trait_static_methods: collect_trait_static_methods(program),
             method_param_modes: collect_method_param_modes(program),
             unit_variant_names: collect_unit_variant_names(tc),
+            const_names: program
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::ConstDecl(c) => Some(c.name.clone()),
+                    _ => None,
+                })
+                .collect(),
             ref_bindings: program.ref_binding_spans.iter().copied().collect(),
             imported_names: collect_imported_names(program),
             copy_bounded_type_params: collect_copy_bounded_type_params_by_body(program),
@@ -294,6 +305,7 @@ pub fn classify_function_body_with(
         trait_static_methods: &prelude.trait_static_methods,
         method_param_modes: &prelude.method_param_modes,
         unit_variant_names: &prelude.unit_variant_names,
+        const_names: &prelude.const_names,
         ref_bindings: &prelude.ref_bindings,
         imported_names: &prelude.imported_names,
         copy_bounded_type_params: prelude
@@ -339,6 +351,7 @@ struct UseClassifier<'a> {
     trait_static_methods: &'a FxHashMap<String, Vec<String>>,
     method_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: &'a HashSet<String>,
+    const_names: &'a HashSet<String>,
     ref_bindings: &'a FxHashSet<SpanKey>,
     imported_names: &'a HashSet<String>,
     param_types: HashMap<String, Type>,
@@ -2110,6 +2123,15 @@ impl<'a> UseClassifier<'a> {
         // two uses of the same `binding: "None"` in the CFG and the UAM
         // predicate fires "value 'None' moved here, used again here".
         if self.unit_variant_names.contains(name) {
+            return UseKind::Read;
+        }
+        // A constant is no place: each use builds its own value, which the
+        // user owns and may move (design.md § Constants, "Each use is a
+        // fresh value"), so naming it twice moves nothing (B-2026-11-06-21).
+        if self.const_names.contains(name)
+            && !self.param_types.contains_key(name)
+            && !self.local_types.contains_key(name)
+        {
             return UseKind::Read;
         }
         // Mode is Consuming: only non-Copy types are actually consumed.

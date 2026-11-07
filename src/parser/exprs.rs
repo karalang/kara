@@ -3035,13 +3035,13 @@ impl super::Parser {
             };
         if self.check(&Token::Dot) && (starts_upper(&name) || module_qualified_struct_lit) {
             let mut path = vec![name];
-            while self.eat(&Token::Dot) {
-                match self.peek_token_ref() {
-                    Token::Identifier { .. } => {
-                        path.push(self.expect_identifier()?);
-                    }
-                    _ => break,
-                }
+            // A dot before anything but a name is left to the postfix loop:
+            // `T_THREE.1` indexes the constant's tuple (B-2026-11-06-21).
+            while self.check(&Token::Dot)
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+            {
+                self.advance();
+                path.push(self.expect_identifier()?);
             }
 
             // Check for struct literal: Path { field: value }

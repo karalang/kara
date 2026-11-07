@@ -1,0 +1,33 @@
+// A field of a constant read through the name, as the parser reads
+// `ORIGIN.x` (a path): the constant's value, then each field in turn, then a
+// library method of that field; a tuple constant's element by index; and the
+// same paths through an uppercase local (design.md § Constants,
+// B-2026-11-06-21: `ORIGIN.x` was `this name is not lowered yet`, `T_THREE.1`
+// a parse error).
+struct Inner { s: Str, n: i64 }
+
+struct Outer { i: Inner, k: i64 }
+
+const ORIGIN: Inner = Inner { s: "origin", n: -7 };
+const NESTED: Outer = Outer { i: Inner { s: "hello", n: 4 }, k: 2 };
+const T_THREE: (i64, (i64, Str), i64) = (1, (2, "two"), 3);
+
+fn main() {
+    println(ORIGIN.n);
+    println(ORIGIN.s);
+    println(ORIGIN.n.abs());
+    println(NESTED.i.n * NESTED.k);
+    println(NESTED.i.s.len());
+    let s = NESTED.i.s;
+    println(s);
+    println(T_THREE.1.1);
+    println(T_THREE.0 + T_THREE.2);
+    let mut t = T_THREE;
+    t.0 = 9;
+    println(t.0);
+    println(T_THREE.0);
+    let Wv = Outer { i: Inner { s: "abc", n: -5 }, k: 9 };
+    println(Wv.i.s.len());
+    println(Wv.i.n.abs());
+    println(Wv.k);
+}

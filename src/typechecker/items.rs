@@ -6322,6 +6322,53 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// An assignment whose place is rooted at a constant (`XX = 5`,
+    /// `TABLE[0] = 3`, `ORIGIN.x += 1`): a constant is a value, each use a
+    /// fresh one (design.md § Constants), so the write could change nothing
+    /// (B-2026-11-06-21).
+    pub(super) fn check_const_assignment(&mut self, target: &Expr) {
+        let mut root = target;
+        let name = loop {
+            match &root.kind {
+                ExprKind::Identifier(n) => break n,
+                ExprKind::Path { segments, .. } => break &segments[0],
+                ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. }
+                | ExprKind::Index { object, .. } => root = object,
+                _ => return,
+            }
+        };
+        if self.local_scope.lookup(name).is_some() {
+            return;
+        }
+        let is_const = self
+            .program
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::ConstDecl(c) if c.name == *name));
+        if !is_const {
+            return;
+        }
+        let whole = std::ptr::eq(root, target)
+            && !matches!(&root.kind, ExprKind::Path { segments, .. } if segments.len() > 1);
+        let what = if whole {
+            format!("constant `{name}`")
+        } else {
+            format!("a part of constant `{name}`")
+        };
+        self.type_error(
+            format!(
+                "error[E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING]: cannot assign to {what}: a \
+                 constant is a value, not a place, and each use builds a fresh one, so the \
+                 write would change nothing (design.md § Constants); to change a copy, bind it \
+                 first (`let mut v = {name};`), and build state that changes in `main` and pass \
+                 it down"
+            ),
+            target.span,
+            TypeErrorKind::ReassignToImmutableModuleBinding,
+        );
+    }
+
     /// B-2026-10-15-61 — an element of a read-only `Slice[T]` is not a
     /// writable place. `s.bytes()`, an unmarked range subscript `v[a..b]` and
     /// a `Slice[T]` parameter are views of another value's elements, and
@@ -10973,6 +11020,7 @@ impl<'a> super::TypeChecker<'a> {
                 // typechecker layer so the error surfaces even if the
                 // pipeline never reaches the ownership pass.
                 self.check_module_binding_assignment(target);
+                self.check_const_assignment(target);
                 // Flag the immediate LHS as a place expression so the
                 // union field-read gate (line 549 slice 2a) doesn't fire
                 // on `u.field = ...`. `infer_field_access` captures this
@@ -11021,6 +11069,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.drop_repeated_errors(errors_before_rhs, errors_before_check);
             }
             StmtKind::CompoundAssign { target, value, op } => {
+                self.check_const_assignment(target);
                 // B-2026-08-14-29 — check the implied binary operation, not
                 // just the two operands in isolation. This arm used to infer
                 // each side and stop, so `s += 1i64` on a `String`, `n += "a"`

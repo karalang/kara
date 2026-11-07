@@ -1,0 +1,13 @@
+// design.md § Constants: a write to an element or field of a constant is
+// refused too, since each use builds a fresh copy (B-2026-11-06-21:
+// `TABLE[0] = 3` was accepted and `TABLE[0]` still printed 1).
+struct Point { x: i64, y: i64 }
+
+const TABLE: Array[i64, 2] = [1, 2];
+const ORIGIN: Point = Point { x: 0, y: 0 };
+
+fn main() {
+    TABLE[0] = 3;
+    ORIGIN.x += 1;
+    println(TABLE[0] + ORIGIN.x);
+}

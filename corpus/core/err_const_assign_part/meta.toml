@@ -1,0 +1,9 @@
+source = "B-2026-11-06-21"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["const"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-21: design.md § Constants, a constant is a value, not a place, so a write to it is refused. The expected.out wording of an error pin is guidance, not a byte oracle."

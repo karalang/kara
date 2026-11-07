@@ -2068,6 +2068,47 @@ impl<'a> OwnershipChecker<'a> {
         });
     }
 
+    /// A `mut ref self` method called on a constant (`TABLE.sort()`,
+    /// `CC.bump()`): a constant is a value, each use a fresh one (design.md
+    /// § Constants), so the write could change nothing (B-2026-11-06-21).
+    /// `name` is the receiver's root; a local or parameter of that name
+    /// shadows the constant. True when reported.
+    pub(crate) fn report_write_to_constant(
+        &mut self,
+        name: &str,
+        write_span: &Span,
+        method: &str,
+        states: &HashMap<String, ValueState>,
+        param_types: &HashMap<String, Type>,
+    ) -> bool {
+        if states.contains_key(name)
+            || param_types.contains_key(name)
+            || self.binding_scope_depth.contains_key(name)
+            || !self
+                .program
+                .items
+                .iter()
+                .any(|i| matches!(i, crate::ast::Item::ConstDecl(c) if c.name == name))
+        {
+            return false;
+        }
+        self.errors.push(OwnershipError {
+            message: format!(
+                "cannot call `{method}` on constant `{name}`: `{method}` takes `mut ref self`, and a \
+                 constant is a value, not a place; each use builds a fresh one, so the write would \
+                 change nothing (design.md § Constants)"
+            ),
+            span: *write_span,
+            kind: OwnershipErrorKind::MutateImmutableBinding,
+            suggestion: Some(format!(
+                "bind a copy first (`let mut v = {name};`) and call `{method}` on it"
+            )),
+            replacement: None,
+            consume_span: None,
+        });
+        true
+    }
+
     /// B-2026-08-21-7 — a call-site `mut` marker is a WRITE to the marked
     /// binding, and obeys the same `let mut` rule as every other write.
     ///

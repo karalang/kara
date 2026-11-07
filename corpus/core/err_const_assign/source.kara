@@ -1,0 +1,9 @@
+// design.md § Constants: a constant is a value, not a variable, so
+// assigning to one is refused rather than writing a copy no one reads
+// (B-2026-11-06-21: accepted, and `XX` still printed 1).
+const XX: i64 = 1;
+
+fn main() {
+    XX = 5;
+    println(XX);
+}

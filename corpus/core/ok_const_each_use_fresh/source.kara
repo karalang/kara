@@ -1,0 +1,24 @@
+// design.md § Constants, "Each use is a fresh value": every use of a
+// non-Copy constant builds its own value, which the user owns and may move,
+// so two moves of `ORIGIN`, and one per loop round, are three separate values
+// (B-2026-11-06-21: the second use read as `value 'ORIGIN' moved`).
+struct Point { x: i64, y: i64 }
+
+const ORIGIN: Point = Point { x: 0, y: 0 };
+
+fn eat(p: own Point) -> i64 {
+    p.x + p.y
+}
+
+fn main() {
+    let a = ORIGIN;
+    let b = ORIGIN;
+    println(eat(a));
+    println(eat(b));
+    for i in 0..3 {
+        let mut p = ORIGIN;
+        p.x = i;
+        println(p.x);
+    }
+    println(eat(ORIGIN) + ORIGIN.y);
+}

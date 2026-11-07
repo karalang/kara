@@ -2603,6 +2603,8 @@ fn main() -> () {
             "err_compound_assign_narrows",
             "err_compound_assign_float_narrows",
             "err_let_does_not_convert_to_slice",
+            // A `mut ref self` method on a constant (B-2026-11-06-21).
+            "err_const_mut_method",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

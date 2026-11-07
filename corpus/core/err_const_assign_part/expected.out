@@ -1,0 +1,1 @@
+ERROR at line 10: cannot assign to a part of constant `TABLE`: a constant is a value, not a place, and each use builds a fresh one, so the write would change nothing

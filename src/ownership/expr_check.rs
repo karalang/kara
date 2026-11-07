@@ -847,12 +847,20 @@ impl<'a> super::OwnershipChecker<'a> {
                     && !self.receiver_is_shared_handle(object)
                 {
                     if let Some(root_name) = Self::root_identifier(object) {
-                        self.report_write_to_immutable_binding(
+                        if !self.report_write_to_constant(
                             &root_name,
                             &object.span,
-                            OwnershipErrorKind::MutateImmutableBinding,
-                            format!("cannot call `{}` on `{}`", method, root_name),
-                        );
+                            method,
+                            states,
+                            param_types,
+                        ) {
+                            self.report_write_to_immutable_binding(
+                                &root_name,
+                                &object.span,
+                                OwnershipErrorKind::MutateImmutableBinding,
+                                format!("cannot call `{}` on `{}`", method, root_name),
+                            );
+                        }
                     }
                 }
                 // Slice 1: `.as_slice()` / `.as_slice_mut()` are slice
