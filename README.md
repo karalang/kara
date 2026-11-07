@@ -225,6 +225,7 @@ curl -LO https://github.com/karalang/kara/releases/download/v$V/karac-$V-$P.tar.
 curl -LO https://github.com/karalang/kara/releases/download/v$V/karac-$V-$P.tar.gz.sha256
 sha256sum -c karac-$V-$P.tar.gz.sha256     # macOS: shasum -a 256 -c
 tar xzf karac-$V-$P.tar.gz
+xattr -dr com.apple.quarantine karac-$V-$P     # macOS only: clear Gatekeeper's quarantine
 export PATH="$PWD/karac-$V-$P/bin:$PATH"
 karac --version
 ```
