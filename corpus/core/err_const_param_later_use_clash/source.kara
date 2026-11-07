@@ -1,0 +1,10 @@
+// design.md § Const generic parameters, Inference: the first later use fixes
+// `N`; a second use that disagrees is a mismatch.
+fn zeros[const N: i64]() -> Array[i64, N] { [0; N] }
+
+fn main() {
+    let b = zeros();
+    let c: Array[i64, 4] = b;
+    let d: Array[i64, 5] = b;
+    println(f"{c.len()} {d.len()}");
+}

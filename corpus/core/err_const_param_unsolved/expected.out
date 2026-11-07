@@ -1,1 +1,1 @@
-ERROR at line 6: cannot infer const parameter 'N': nothing at the call fixes it (design.md § Type inference); add a type annotation to this binding
+ERROR at line 6: cannot infer const parameter 'N': nothing in the body fixes it (design.md § Type inference); add a type annotation to the binding

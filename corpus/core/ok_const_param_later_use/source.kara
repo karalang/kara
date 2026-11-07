@@ -1,0 +1,42 @@
+// design.md § Const generic parameters, Inference: `let b = zeros(); // error
+// unless a later use fixes N`. A const parameter only the return type names
+// stays open at the call, and a later use fixes it: an annotated binding, an
+// argument, a struct field, or the caller's own const parameter.
+fn zeros[const N: i64]() -> Array[i64, N] { [0; N] }
+
+fn filled[const N: i64](v: i64) -> Array[i64, N] { [v; N] }
+
+fn total(a: Array[i64, 3]) -> i64 {
+    let mut s = 0;
+    for x in a {
+        s += x;
+    }
+    s
+}
+
+fn pad[const M: i64]() -> Array[i64, M] {
+    let b = zeros();
+    let c: Array[i64, M] = b;
+    c
+}
+
+struct Grid {
+    cells: Array[i64, 5],
+}
+
+fn main() {
+    let b = zeros();
+    let c: Array[i64, 4] = b;
+    println(f"{c.len()}");
+    let f = filled(7);
+    println(f"{total(f)}");
+    let g = filled(2);
+    let grid = Grid { cells: g };
+    println(f"{grid.cells[4]} {grid.cells.len()}");
+    let p: Array[i64, 6] = pad();
+    println(f"{p.len()}");
+    let mut h = zeros();
+    h[1] = 9;
+    let k: Array[i64, 2] = h;
+    println(f"{k[0]} {k[1]}");
+}

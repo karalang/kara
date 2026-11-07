@@ -3502,6 +3502,9 @@ pub struct TypeChecker<'a> {
     /// nothing at the call fixed, with those variables, judged at the end of
     /// `check` (`report_unsolved_call_vars`).
     pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
+    /// B-2026-11-07-9: the same for a call's `const` parameters only its
+    /// result names, judged with them.
+    pub(super) unsolved_call_consts: Vec<(Span, Vec<(types::ConstVarId, String)>)>,
     /// `Atomic.new(v)` arguments still a variable at the call, judged at the
     /// end against library/concurrency.md's five (B-2026-11-07-21).
     pub(super) pending_atomic_inners: Vec<(Span, Type, Option<String>)>,
@@ -4226,6 +4229,7 @@ impl<'a> TypeChecker<'a> {
             call_bound_receiver_subs: None,
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
+            unsolved_call_consts: Vec::new(),
             pending_atomic_inners: Vec::new(),
             atomic_generic_params: FxHashMap::default(),
             call_site_callers: FxHashMap::default(),
@@ -7695,6 +7699,34 @@ impl<'a> TypeChecker<'a> {
         // pinned by the declared slot it flows into, as a `push` pins it.
         // Unify on copies so a failed attempt leaves nothing half-bound,
         // then re-check the resolved type.
+        // So is an array length a call left open (`let b = zeros();` before
+        // `let c: Array[i64, 4] = b;`), including by a generic body's own
+        // `Array[i64, M]` (B-2026-11-07-9). Only the length is taken from it.
+        if exprs::contains_const_var(found)
+            && !exprs::contains_const_var(expected)
+            && !exprs::contains_type_var(expected)
+        {
+            // A borrowed parameter's slot is a `ref` to the array.
+            let peel = |t: &Type| match t {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref().clone(),
+                t => t.clone(),
+            };
+            let mut subs = self.env.substitutions.clone();
+            let mut const_subs = self.env.const_substitutions.clone();
+            if inference::unify_types(&peel(expected), &peel(found), &mut subs, &mut const_subs) {
+                self.env.const_substitutions = const_subs;
+                let resolved = inference::resolve_type_vars(
+                    found,
+                    &self.env.substitutions,
+                    &std::collections::HashMap::new(),
+                    &self.env.const_substitutions,
+                    &std::collections::HashMap::new(),
+                );
+                if resolved != *found {
+                    return self.check_assignable(expected, &resolved, span);
+                }
+            }
+        }
         if exprs::contains_type_var(found)
             && !exprs::contains_type_var(expected)
             && !types::contains_type_param(expected)

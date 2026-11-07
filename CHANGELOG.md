@@ -54,6 +54,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   count) and a `u64` or `i128` constant past `i64` printed through
   `to_string()` as a negative number; `let v = CC;` and `println(CC)` were
   already right (B-2026-11-07-56).
+- **A later use fixes a const parameter only the result names** (design.md
+  § Const generic parameters). `let b = zeros(); let c: Array[i64, 4] = b;`
+  over `fn zeros[const N: i64]() -> Array[i64, N]` was refused at the first
+  `let`; an argument, a struct field or the caller's own `Array[i64, M]`
+  fixes it too. One nothing fixes is refused at the call once the body has
+  been checked (B-2026-11-07-9).
 
 ### Diagnostics
 

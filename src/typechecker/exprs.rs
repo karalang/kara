@@ -29,8 +29,8 @@ use super::types::{
     contains_type_param, float_width_rank, impl_args_match, impl_table_key,
     int_coercion_is_widening, int_signed_width, is_integer, lub_block_type, type_display,
     type_is_fully_concrete, type_to_concrete_or_param_name, type_to_mono_mangle_token,
-    types_compatible, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type, TypeVarId,
-    UIntSize,
+    types_compatible, ConstArg, ConstVarId, DimArg, IntSize, ScrutineeMode, SubstValue, Type,
+    TypeVarId, UIntSize,
 };
 use super::BreakFrame;
 use super::TypeErrorKind;
@@ -298,7 +298,7 @@ pub(super) fn visible_var_ids(t: &Type, out: &mut Vec<TypeVarId>) {
 /// Does this type hold an unsolved const metavar as an array length?
 /// `fn zeros[const N: i64]() -> Array[i64, N]` returns `Array[i64, ?N]`, which
 /// an expectation `Array[i64, 8]` solves (B-2026-11-06-14).
-fn contains_const_var(t: &Type) -> bool {
+pub(super) fn contains_const_var(t: &Type) -> bool {
     match t {
         Type::Array { element, size } => {
             matches!(size, ConstArg::ConstVar(_)) || contains_const_var(element)
@@ -324,6 +324,27 @@ fn late_var_ids(t: &Type, out: &mut Vec<TypeVarId>) {
         Type::Ref(i) | Type::MutRef(i) => late_var_ids(i, out),
         Type::Tuple(ts) => ts.iter().for_each(|a| late_var_ids(a, out)),
         Type::Array { element, .. } | Type::Slice { element, .. } => late_var_ids(element, out),
+        _ => {}
+    }
+}
+
+/// The const variables a call's result names as an array length, where a
+/// later use can fix them (B-2026-11-07-9). An `Option` or `Result` keeps its
+/// constructor path, as in [`late_var_ids`].
+fn late_const_var_ids(t: &Type, out: &mut Vec<ConstVarId>) {
+    match t {
+        Type::Array { element, size } => {
+            if let ConstArg::ConstVar(id) = size {
+                out.push(*id);
+            }
+            late_const_var_ids(element, out)
+        }
+        Type::Named { name, args } if name != "Option" && name != "Result" => {
+            args.iter().for_each(|a| late_const_var_ids(a, out))
+        }
+        Type::Ref(i) | Type::MutRef(i) => late_const_var_ids(i, out),
+        Type::Tuple(ts) => ts.iter().for_each(|a| late_const_var_ids(a, out)),
+        Type::Slice { element, .. } => late_const_var_ids(element, out),
         _ => {}
     }
 }
@@ -5476,13 +5497,49 @@ impl<'a> super::TypeChecker<'a> {
                 .collect();
             late.sort_by(|a, b| a.1.cmp(&b.1));
         }
+        // B-2026-11-07-9: the same for a `const` parameter only the result
+        // names (`N` of `fn zeros[const N: i64]() -> Array[i64, N]`): it stays
+        // a variable in the call's type, so `let c: Array[i64, 4] = b` fixes
+        // it, and one nothing fixes is judged at the end. A `D: Dim` shape
+        // parameter and a rigid one keep the paths they had.
+        let late_consts: Vec<(ConstVarId, String)> = {
+            let mut in_ret = Vec::new();
+            late_const_var_ids(&template, &mut in_ret);
+            let mut v: Vec<(ConstVarId, String)> = const_id_to_name
+                .iter()
+                .filter(|(id, name)| {
+                    in_ret.contains(*id)
+                        && !self.env.const_substitutions.contains_key(*id)
+                        && name_to_const_id.get(*name) == Some(*id)
+                        && !rigid.contains(*name)
+                        && !self.enclosing_bounds.contains_key(*name)
+                        && !where_clause.is_some_and(|wc| {
+                            wc.constraints.iter().any(|c| {
+                                matches!(c, WhereConstraint::TypeBound { type_name, .. } if type_name == *name)
+                            })
+                        })
+                })
+                .map(|(id, name)| (*id, name.clone()))
+                .collect();
+            v.sort_by(|a, b| a.1.cmp(&b.1));
+            v
+        };
+        let consts_named: HashMap<ConstVarId, String> = const_id_to_name
+            .iter()
+            .filter(|(id, _)| !late_consts.iter().any(|(l, _)| l == *id))
+            .map(|(id, name)| (*id, name.clone()))
+            .collect();
         let ret = resolve_type_vars(
             &template,
             &self.env.substitutions,
             &without(&late),
             &self.env.const_substitutions,
-            &const_id_to_name,
+            &consts_named,
         );
+        if !late_consts.is_empty() {
+            self.unsolved_call_consts
+                .push((*record_subs_for_span, late_consts));
+        }
         let ret = self.resolve_assoc_projections(&ret);
         // One spelled like a parameter in scope and still unsolved at the end
         // names that parameter, as it did before.
@@ -5915,6 +5972,28 @@ impl<'a> super::TypeChecker<'a> {
     /// `Vec[Vec[String]]` fixes the inner `Vec`'s parameter.
     pub(super) fn report_unsolved_call_vars(&mut self) {
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
+        // B-2026-11-07-9: a `const` parameter no later use fixed.
+        for (span, vars) in std::mem::take(&mut self.unsolved_call_consts) {
+            let unsolved = vars.iter().find(|(id, _)| {
+                matches!(
+                    resolve_const_arg(
+                        &ConstArg::ConstVar(*id),
+                        &self.env.const_substitutions,
+                        &no_consts,
+                    ),
+                    ConstArg::ConstVar(_)
+                )
+            });
+            let Some((_, name)) = unsolved else { continue };
+            self.type_error(
+                format!(
+                    "cannot infer const parameter '{name}': nothing in the body fixes it \
+                     (design.md § Type inference); add a type annotation to the binding"
+                ),
+                span,
+                TypeErrorKind::CannotInferTypeParam,
+            );
+        }
         for (span, vars) in std::mem::take(&mut self.unsolved_call_vars) {
             let names: HashMap<TypeVarId, String> = vars.iter().cloned().collect();
             let unsolved = vars.iter().find(|(id, _)| {

@@ -1,0 +1,11 @@
+source = "design.md § Const generic parameters, Inference"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["generics", "const"]
+class = "a"
+expected_from = "spec"
+backends = []
+env = {}
+note = "A const parameter only the call's result names is fixed by a later use: an annotated binding, a call argument, a struct field, an index write followed by an annotated binding, or the caller's own const parameter. Each was refused at the first `let` with `cannot infer const parameter 'N'` (B-2026-11-07-9)."
+bucket = "a"
