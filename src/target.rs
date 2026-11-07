@@ -26,7 +26,7 @@
 //! tombstone diagnostics, and the effect checker's target gate — read
 //! [`active_target`], so this stays the single source of truth.
 
-use crate::ast::{Attribute, Expr, ExprKind, Item, Program};
+use crate::ast::{Attribute, Expr, ExprKind, ImplItem, Item, Program};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -598,7 +598,52 @@ pub fn filter_inactive_items_in(
         }
         false
     });
+    for item in items.iter_mut() {
+        filter_inactive_members(item, current_target);
+    }
     tombstones
+}
+
+/// Whether a member's own `#[target(...)]` admits `target` (an ungated
+/// member always does).
+fn member_active(attrs: &[Attribute], target: &str) -> bool {
+    target_spec_of(attrs).is_none_or(|spec| spec.is_active_on(target))
+}
+
+/// The `#[target(...)]` specs on an item's members: an impl's methods, a
+/// struct's fields, an enum's variants.
+fn member_specs(item: &Item) -> Vec<TargetSpec> {
+    let attrs: Vec<&[Attribute]> = match item {
+        Item::ImplBlock(i) => i
+            .items
+            .iter()
+            .filter_map(|m| match m {
+                ImplItem::Method(f) => Some(f.attributes.as_slice()),
+                ImplItem::AssocType(_) => None,
+            })
+            .collect(),
+        Item::StructDef(s) => s.fields.iter().map(|f| f.attributes.as_slice()).collect(),
+        Item::EnumDef(e) => e.variants.iter().map(|v| v.attributes.as_slice()).collect(),
+        _ => Vec::new(),
+    };
+    attrs.into_iter().filter_map(target_spec_of).collect()
+}
+
+/// design.md §4 Conditional compilation: a gate on an impl member, a struct
+/// field or an enum variant removes that member on a target its condition
+/// does not hold for, as one on an item removes the item (B-2026-11-06-22).
+/// Twin methods (`#[target(native)] fn f` and `#[target(wasm_wasi)] fn f`)
+/// leave one `f` on each target.
+fn filter_inactive_members(item: &mut Item, target: &str) {
+    match item {
+        Item::ImplBlock(i) => i.items.retain(|m| match m {
+            ImplItem::Method(f) => member_active(&f.attributes, target),
+            ImplItem::AssocType(_) => true,
+        }),
+        Item::StructDef(s) => s.fields.retain(|f| member_active(&f.attributes, target)),
+        Item::EnumDef(e) => e.variants.retain(|v| member_active(&v.attributes, target)),
+        _ => {}
+    }
 }
 
 /// Which targets must be checked IN ADDITION to `base` for every
@@ -627,15 +672,16 @@ pub fn extra_check_targets_for(items: &[Item], base: &str) -> Vec<&'static str> 
         let Some((attrs, _)) = item_attrs_and_name(item) else {
             continue;
         };
-        let Some(spec) = target_spec_of(attrs) else {
-            continue;
-        };
-        if spec.is_active_on(base) {
-            continue;
-        }
-        for target in V1_TARGETS {
-            if *target != base && spec.is_active_on(target) && !out.contains(target) {
-                out.push(target);
+        let mut specs = member_specs(item);
+        specs.extend(target_spec_of(attrs));
+        for spec in specs {
+            if spec.is_active_on(base) {
+                continue;
+            }
+            for target in V1_TARGETS {
+                if *target != base && spec.is_active_on(target) && !out.contains(target) {
+                    out.push(target);
+                }
             }
         }
     }

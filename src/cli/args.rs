@@ -475,7 +475,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         }
         let cwd = std::env::current_dir().ok()?;
         let root = crate::manifest::discover_project_root(&cwd)?;
-        let entry = root.join("src").join("main.kara");
+        let entry = crate::walker::bin_entry_path(&root, crate::walker::Platform::host());
         if !entry.is_file() {
             if root.join("src").join("lib.kara").is_file() {
                 library = Some(cwd);
@@ -1738,11 +1738,15 @@ fn parse_init_command(args: &[String]) -> Command {
     let mut bin = false;
     let mut lib = false;
     let mut backend = false;
+    let mut cli = false;
     let mut force = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--bin" => bin = true,
             "--lib" => lib = true,
+            // design.md §4 (7ac213a162): `karac init` takes `karac new`'s
+            // scaffolds too, `--cli` among them (B-2026-11-06-23).
+            "--cli" => cli = true,
             // Phase-8 line 63 — `--backend` extends `karac init`'s
             // template menu so users who prefer the bare-cwd init
             // form can opt into the std.http server skeleton too.
@@ -1765,9 +1769,9 @@ fn parse_init_command(args: &[String]) -> Command {
     // Mutual-exclusion check across all three template flags. The
     // legacy two-flag pair (`--bin` / `--lib`) used a simple bool
     // pair; now that there are three, count how many were passed.
-    let flag_count = (bin as u8) + (lib as u8) + (backend as u8);
+    let flag_count = (bin as u8) + (lib as u8) + (backend as u8) + (cli as u8);
     if flag_count > 1 {
-        eprintln!("error: --bin, --lib, and --backend are mutually exclusive");
+        eprintln!("error: --bin, --lib, --backend and --cli are mutually exclusive");
         process::exit(1);
     }
     // `--bin` is the default for `karac init` per CR-36 T1 (back-compat
@@ -1778,6 +1782,8 @@ fn parse_init_command(args: &[String]) -> Command {
         Template::Lib
     } else if backend {
         Template::Backend
+    } else if cli {
+        Template::Cli
     } else {
         Template::Bin
     };

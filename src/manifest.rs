@@ -782,10 +782,11 @@ impl std::fmt::Display for ManifestError {
             ),
             ManifestError::UnknownEdition { path, value } => write!(
                 f,
-                "`{}`: unknown `[package].edition = \"{}\"`. Supported editions: {}.",
+                // design.md §4's wording (B-2026-11-06-23).
+                "`{}`: unknown edition \"{}\"; this compiler supports editions up to \"{}\"",
                 path.display(),
                 value,
-                KNOWN_EDITIONS.join(", "),
+                KNOWN_EDITIONS.last().copied().unwrap_or("2026"),
             ),
             ManifestError::InvalidTestResource {
                 path,

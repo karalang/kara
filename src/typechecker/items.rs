@@ -5470,13 +5470,78 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     self.type_error(message, c.ty.span, TypeErrorKind::ModuleBindingHeapType);
                 }
+            } else if let Some((owner, field)) = self.const_struct_field_string(&declared_ty) {
+                // A struct whose field holds a `String` allocates as surely
+                // as the `String` would (B-2026-11-06-23). No edit is
+                // offered: the struct's own field type is what changes.
+                if self.errors.len() == before {
+                    self.type_error(
+                        format!(
+                            "error[E_MODULE_BINDING_HEAP_TYPE]: constant '{}' is declared \
+                             with type '{}', whose field '{owner}.{field}' holds a \
+                             heap-allocated 'String'; a constant lives in the binary as \
+                             data (design.md § Constants) — give the field type 'Str', or \
+                             build the value in a function",
+                            c.name,
+                            super::types::type_display(&declared_ty),
+                        ),
+                        c.ty.span,
+                        TypeErrorKind::ModuleBindingHeapType,
+                    );
+                }
             }
         }
     }
 
+    /// The first `(struct, field)` of a struct in `ty` (directly, or
+    /// inside an `Array`, tuple or `Option`) whose field holds a `String`,
+    /// through nested structs and the struct's type arguments.
+    fn const_struct_field_string(&self, ty: &Type) -> Option<(String, String)> {
+        fn walk(
+            tc: &super::TypeChecker<'_>,
+            ty: &Type,
+            seen: &mut HashSet<String>,
+        ) -> Option<Option<(String, String)>> {
+            match ty {
+                Type::Str => Some(None),
+                Type::Array { element, .. } => walk(tc, element, seen),
+                Type::Tuple(ts) => ts.iter().find_map(|t| walk(tc, t, seen)),
+                Type::Named { name, args } if name == "Option" => {
+                    args.iter().find_map(|t| walk(tc, t, seen))
+                }
+                Type::Named { name, args } => {
+                    let info = tc.env.structs.get(name)?;
+                    if !seen.insert(name.clone()) {
+                        return None;
+                    }
+                    for (field, fty, _) in &info.fields {
+                        let fty = match fty {
+                            Type::TypeParam(p) => info
+                                .generic_params
+                                .iter()
+                                .position(|g| g == p)
+                                .and_then(|i| args.get(i))
+                                .unwrap_or(fty),
+                            other => other,
+                        };
+                        if let Some(inner) = walk(tc, fty, seen) {
+                            return Some(Some(
+                                inner.unwrap_or_else(|| (name.clone(), field.clone())),
+                            ));
+                        }
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+        walk(self, ty, &mut HashSet::new()).flatten()
+    }
+
     /// True when `ty` holds a `String` inside an `Array`, tuple or `Option`
     /// (B-2026-10-22-19). A bare `String` is reported by
-    /// `refuse_heap_typed_binding`; a struct's fields are not walked.
+    /// `refuse_heap_typed_binding`; a struct's fields are walked by
+    /// `const_struct_field_string`.
     fn const_type_nests_string(ty: &Type) -> bool {
         fn holds(ty: &Type) -> bool {
             match ty {

@@ -1340,7 +1340,11 @@ impl PackageCheck {
         if modules.next().is_some() {
             return None;
         }
-        let entry = std::fs::canonicalize(root.join("src").join("main.kara")).ok()?;
+        let entry = std::fs::canonicalize(crate::walker::bin_entry_path(
+            root,
+            crate::walker::Platform::host(),
+        ))
+        .ok()?;
         (std::fs::canonicalize(&only.file).ok()? == entry).then(|| only.file.clone())
     }
 

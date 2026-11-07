@@ -668,7 +668,7 @@ EXAMPLES:
 karac init - Scaffold a new Kara project
 
 USAGE:
-    karac init [<name>] [--bin | --lib | --backend] [--force]
+    karac init [<name>] [--bin | --lib | --backend | --cli] [--force]
 
 ARGS:
     <name>    When provided, creates `./<name>/` and scaffolds there.
@@ -686,6 +686,10 @@ FLAGS:
                        with a `std.http` server on 127.0.0.1:8080, a
                        `/health` endpoint, and manual path-dispatch.
                        Equivalent to `karac new <name> --backend`.
+    --cli              Command-line tool skeleton: writes `src/main.kara`
+                       counting a file's lines, words and bytes, with a test
+                       against an in-memory `FileSystem` provider.
+                       Equivalent to `karac new <name> --cli`.
     --force            In the current-directory form, overwrite an existing
                        `kara.toml`, `src/main.kara`, or `src/lib.kara`.
                        `.gitignore` is never overwritten. Has no effect

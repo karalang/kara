@@ -170,7 +170,10 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     // artifact (`--crate-type` is the exported C ABI, deferred.md), so its
     // build is its check: the packages that depend on it compile it into
     // themselves (B-2026-10-31-22).
-    let entry = root.join("src").join("main.kara");
+    let entry = walked
+        .entry_file()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| root.join("src").join("main.kara"));
     if walked.entry != walker::EntryKind::Bin {
         super::run_check_cmds::cmd_check_project(
             output,

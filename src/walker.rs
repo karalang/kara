@@ -315,6 +315,12 @@ pub fn walk_project(project_root: &Path, opts: WalkerOpts) -> Result<WalkResult,
             Err(_) => continue,
         };
         let c = classify_file(&rel, file.clone())?;
+        // Another platform's entry file is not this target's entry.
+        let other_platform = c.platform.is_some_and(|p| p != opts.target);
+        if other_platform {
+            classified.push(c);
+            continue;
+        }
         if let ClassifiedKind::EntryMain = c.kind {
             if main_path.is_none() {
                 main_path = Some(file.clone());
@@ -372,6 +378,32 @@ pub fn walk_project(project_root: &Path, opts: WalkerOpts) -> Result<WalkResult,
         modules,
         entry,
     })
+}
+
+impl WalkResult {
+    /// The entry module's file: `src/main.kara`, `src/lib.kara`, or the
+    /// platform file that replaces one on the walked platform
+    /// (`src/main_linux.kara`, B-2026-11-06-23).
+    pub fn entry_file(&self) -> Option<&Path> {
+        self.modules
+            .iter()
+            .find(|m| m.role == ModuleRole::Entry)
+            .map(|m| m.file.as_path())
+    }
+}
+
+/// The binary entry of the package at `project_root` on `platform`:
+/// `src/main_<platform>.kara` when it exists, which replaces
+/// `src/main.kara` there as any platform file replaces its shared file
+/// (design.md §4; B-2026-11-06-23), else `src/main.kara`.
+pub fn bin_entry_path(project_root: &Path, platform: Platform) -> PathBuf {
+    let src = project_root.join(SRC_DIRNAME);
+    let own = src.join(format!("{MAIN_STEM}_{}.kara", platform.as_suffix()));
+    if own.is_file() {
+        own
+    } else {
+        src.join(format!("{MAIN_STEM}.kara"))
+    }
 }
 
 /// Discover example names under `<project_root>/examples/`. Returns a sorted
@@ -479,15 +511,17 @@ fn classify_file(rel: &Path, file: PathBuf) -> Result<Classified, WalkerError> {
     // level only. `src/foo/main.kara` is an ordinary module named
     // `foo.main`, not an entry file — entry semantics require the file to
     // sit directly in `src/`.
+    // A platform entry file (`src/main_linux.kara`) is the entry on its
+    // platform and replaces `src/main.kara` there, as any platform file
+    // replaces its shared file (design.md §4; B-2026-11-06-23).
     let at_top_level = parent_segments.is_empty();
-    let is_platform = platform.is_some();
 
-    if at_top_level && !is_test && !is_platform {
+    if at_top_level && !is_test {
         if base_stem == MAIN_STEM {
             return Ok(Classified {
                 file,
                 module_path: Vec::new(),
-                platform: None,
+                platform,
                 kind: ClassifiedKind::EntryMain,
             });
         }
@@ -495,7 +529,7 @@ fn classify_file(rel: &Path, file: PathBuf) -> Result<Classified, WalkerError> {
             return Ok(Classified {
                 file,
                 module_path: Vec::new(),
-                platform: None,
+                platform,
                 kind: ClassifiedKind::EntryLib,
             });
         }
