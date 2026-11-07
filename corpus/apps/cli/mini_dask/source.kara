@@ -1,0 +1,898 @@
+// mini_dask: a task graph in the shape of dask's. Keys name values or
+// calls on numbers and other keys. `compute` culls the graph to what the
+// requested keys need, fuses linear chains of calls into one run, orders
+// the runs, and hands each to a pool of worker tasks as soon as its inputs
+// are ready: the workers share one channel of runs behind a mutex, count
+// what they do in atomics and a locked table, and send each result back.
+// A failed run fails what lies downstream of it, and the rest still runs.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+import std.sync.{channel, Sender, Receiver, Mutex, Atomic};
+
+const WORKERS: i64 = 4;
+const RANGE_MAX: i64 = 100000;
+const PRIMES_MAX: i64 = 2000000;
+const CAPACITY: i64 = 64;
+
+// ------------------------------------------------------------ tokens
+
+fn is_name(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 32 and b[0] >= b'a' and b[0] <= b'z'
+        and b.iter().all(|c| (c >= b'a' and c <= b'z') or (c >= b'0' and c <= b'9') or c == b'_')
+}
+
+// An i64 written as an optional `-` and 1 to 9 digits.
+fn number(s: Str) -> Option[i64] {
+    let d = s.strip_prefix("-") ?? s;
+    if d.len() == 0 or d.len() > 9 or not d.bytes().iter().all(|c| c >= b'0' and c <= b'9') {
+        return None;
+    }
+    i64.parse(s).ok()
+}
+
+fn words(line: Str) -> Vec[String] {
+    let body = match line.split_once("#") {
+        Some((before, _)) => before,
+        None => line,
+    };
+    body.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+fn joined(parts: Slice[String], sep: Str) -> String {
+    let mut out = String.new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+    }
+    out
+}
+
+fn or_word(parts: Slice[String], none: Str) -> String {
+    if parts.is_empty() { none.to_string() } else { joined(parts, ", ") }
+}
+
+// ------------------------------------------------------------ values
+
+#[derive(Clone)]
+enum Value {
+    Int(i64),
+    List(Vec[i64]),
+}
+
+fn show(v: Value) -> String {
+    match v {
+        Value.Int(n) => f"{n}",
+        Value.List(items) => {
+            let n = items.len();
+            if n <= 8 {
+                let parts: Vec[String] = items.iter().map(|x| f"{x}").collect();
+                return f"[{joined(parts, ", ")}]";
+            }
+            f"[{items[0]}, {items[1]}, {items[2]}, ..., {items[n - 2]}, {items[n - 1]}] ({n} items)"
+        }
+    }
+}
+
+// ------------------------------------------------------------ functions
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Func { Inc, Neg, Add, Mul, Div, Range, Sum, Len, Concat, Primes, Boom }
+
+fn func_of(name: Str) -> Option[Func] {
+    match name {
+        "inc" => Some(Func.Inc),
+        "neg" => Some(Func.Neg),
+        "add" => Some(Func.Add),
+        "mul" => Some(Func.Mul),
+        "div" => Some(Func.Div),
+        "range" => Some(Func.Range),
+        "sum" => Some(Func.Sum),
+        "len" => Some(Func.Len),
+        "concat" => Some(Func.Concat),
+        "primes" => Some(Func.Primes),
+        "boom" => Some(Func.Boom),
+        _ => None,
+    }
+}
+
+fn func_name(f: Func) -> Str {
+    match f {
+        Func.Inc => "inc",
+        Func.Neg => "neg",
+        Func.Add => "add",
+        Func.Mul => "mul",
+        Func.Div => "div",
+        Func.Range => "range",
+        Func.Sum => "sum",
+        Func.Len => "len",
+        Func.Concat => "concat",
+        Func.Primes => "primes",
+        Func.Boom => "boom",
+    }
+}
+
+fn usage_of(f: Func) -> Str {
+    match f {
+        Func.Inc => "inc <x>",
+        Func.Neg => "neg <x>",
+        Func.Add => "add <x> <y>...",
+        Func.Mul => "mul <x> <y>",
+        Func.Div => "div <x> <y>",
+        Func.Range => "range <n>",
+        Func.Sum => "sum <list>",
+        Func.Len => "len <list>",
+        Func.Concat => "concat <list>...",
+        Func.Primes => "primes <n>",
+        Func.Boom => "boom",
+    }
+}
+
+fn arity_ok(f: Func, n: i64) -> bool {
+    match f {
+        Func.Inc | Func.Neg | Func.Range | Func.Sum | Func.Len | Func.Primes => n == 1,
+        Func.Mul | Func.Div => n == 2,
+        Func.Add => n >= 2,
+        Func.Concat => n >= 1,
+        Func.Boom => n == 0,
+    }
+}
+
+// Whether a function takes lists rather than ints.
+fn takes_lists(f: Func) -> bool {
+    match f {
+        Func.Sum | Func.Len | Func.Concat => true,
+        _ => false,
+    }
+}
+
+fn fits(f: Func, n: Option[i64]) -> Result[i64, String] {
+    n.ok_or(f"OverflowError: {func_name(f)} result does not fit in 64 bits")
+}
+
+fn primes_below(n: i64) -> i64 {
+    if n < 3 {
+        return 0;
+    }
+    let mut sieve = Vec.filled(n, true);
+    let mut found = 0;
+    for i in 2..n {
+        if sieve[i] {
+            found += 1;
+            let mut k = i * i;
+            while k < n {
+                sieve[k] = false;
+                k += i;
+            }
+        }
+    }
+    found
+}
+
+// Applies `f`: the kinds of the arguments are checked first, in order.
+fn apply(f: Func, args: own Vec[Value]) -> Result[Value, String] {
+    let name = func_name(f);
+    if takes_lists(f) {
+        let mut ls: Vec[Vec[i64]] = Vec.new();
+        for a in args.into_iter() {
+            match a {
+                Value.List(items) => ls.push(items),
+                Value.Int(_) => return Err(f"TypeError: {name} expects a list, got an int"),
+            }
+        }
+        return match f {
+            Func.Sum => {
+                let mut t = 0;
+                for x in ls[0].iter() {
+                    t = fits(f, t.checked_add(x))?;
+                }
+                Ok(Value.Int(t))
+            }
+            Func.Len => Ok(Value.Int(ls[0].len())),
+            _ => {
+                let mut out: Vec[i64] = Vec.new();
+                for l in ls.iter() {
+                    out.extend_from_slice(l);
+                }
+                Ok(Value.List(out))
+            }
+        };
+    }
+    let mut xs: Vec[i64] = Vec.new();
+    for a in args.into_iter() {
+        match a {
+            Value.Int(n) => xs.push(n),
+            Value.List(_) => return Err(f"TypeError: {name} expects an int, got a list"),
+        }
+    }
+    match f {
+        Func.Inc => Ok(Value.Int(fits(f, xs[0].checked_add(1))?)),
+        Func.Neg => Ok(Value.Int(fits(f, 0.checked_sub(xs[0]))?)),
+        Func.Add => {
+            let mut t = xs[0];
+            for x in xs[1..].iter() {
+                t = fits(f, t.checked_add(x))?;
+            }
+            Ok(Value.Int(t))
+        }
+        Func.Mul => Ok(Value.Int(fits(f, xs[0].checked_mul(xs[1]))?)),
+        Func.Div => {
+            let (a, b) = (xs[0], xs[1]);
+            if b == 0 {
+                return Err("ZeroDivisionError: integer division or modulo by zero");
+            }
+            let q = fits(f, a.checked_div(b))?;
+            // Rounded down, as Python's `//` rounds.
+            if a % b != 0 and (a < 0) != (b < 0) { Ok(Value.Int(q - 1)) } else { Ok(Value.Int(q)) }
+        }
+        Func.Range => {
+            let n = xs[0];
+            if n > RANGE_MAX {
+                return Err(f"ValueError: range({n}) is too long");
+            }
+            Ok(Value.List((0..n.max(0)).collect()))
+        }
+        Func.Primes => {
+            let n = xs[0];
+            if n > PRIMES_MAX {
+                return Err(f"ValueError: primes below {n} is too many");
+            }
+            Ok(Value.Int(primes_below(n)))
+        }
+        _ => Err("ZeroDivisionError: division by zero"),
+    }
+}
+
+// ------------------------------------------------------------ the workers
+
+// An argument a worker is handed: a value, or the result of the step
+// before it in a fused run.
+enum Input {
+    Given(Value),
+    Prev,
+}
+
+struct Step {
+    func: Func,
+    inputs: Vec[Input],
+}
+
+// A run handed to a worker: everything it needs, and nothing it shares.
+struct Run {
+    slot: i64,
+    steps: Vec[Step],
+}
+
+struct Done {
+    slot: i64,
+    outcome: Result[Value, String],
+}
+
+// What the workers share: the channel they take runs from, and what they
+// have done.
+sync struct Pool {
+    inbox: Mutex[Receiver[Run]],
+    runs: Atomic[i64],
+    tasks: Atomic[i64],
+    failures: Atomic[i64],
+    by_func: Mutex[SortedMap[String, i64]],
+}
+
+// Applies each step of a run in turn, stopping at the first failure.
+fn perform(pool: Pool, run: own Run) -> Result[Value, String] {
+    let mut prev = Value.Int(0);
+    for step in run.steps.into_iter() {
+        let mut args: Vec[Value] = Vec.new();
+        for input in step.inputs.into_iter() {
+            match input {
+                Input.Given(v) => args.push(v),
+                Input.Prev => args.push(prev.clone()),
+            }
+        }
+        pool.tasks.fetch_add(1);
+        {
+            let g = pool.by_func.lock();
+            let name = func_name(step.func);
+            let n = g.value.get(name) ?? 0;
+            g.value.insert(name.to_string(), n + 1);
+        }
+        prev = apply(step.func, args)?;
+    }
+    Ok(prev)
+}
+
+fn worker(pool: Pool, out: own Sender[Done]) {
+    loop {
+        let next = {
+            let g = pool.inbox.lock();
+            g.value.recv()
+        };
+        let Some(run) = next else {
+            return;
+        };
+        let slot = run.slot;
+        let outcome = perform(pool, run);
+        pool.runs.fetch_add(1);
+        if outcome.is_err() {
+            pool.failures.fetch_add(1);
+        }
+        if out.send(Done { slot: slot, outcome: outcome }).is_err() {
+            return;
+        }
+    }
+}
+
+// ------------------------------------------------------------ the graph
+
+#[derive(Clone)]
+enum Term {
+    Num(i64),
+    Key(String),
+}
+
+#[derive(Clone)]
+enum Def {
+    Val(Value),
+    Call(Func, Vec[Term]),
+}
+
+struct Node {
+    name: String,
+    def: Def,
+}
+
+// How a key came out of a compute.
+enum Outcome {
+    Worked(Value),
+    Failed(String),
+    // The error of a failed input, and the key it came from.
+    Skipped(String, String),
+}
+
+fn worked(r: Option[Outcome]) -> bool {
+    match r {
+        Some(Outcome.Worked(_)) => true,
+        _ => false,
+    }
+}
+
+// The calls a run applies, first to last, and the keys its first call
+// takes.
+struct Unit {
+    chain: Vec[i64],
+    inputs: Vec[i64],
+}
+
+struct Dask {
+    keys: Vec[Node],
+    to_workers: Sender[Run],
+    from_workers: Receiver[Done],
+}
+
+impl Dask {
+    fn new(to_workers: own Sender[Run], from_workers: own Receiver[Done]) -> Dask {
+        Dask { keys: Vec.new(), to_workers: to_workers, from_workers: from_workers }
+    }
+
+    fn find(self, name: Str) -> Option[i64] {
+        self.keys.iter().position(|e| e.name == name)
+    }
+
+    fn key(self, name: Str) -> Result[i64, String] {
+        self.find(name).ok_or(f"no key '{name}'")
+    }
+
+    // The keys a call takes, each once, in argument order.
+    fn deps(self, k: i64) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        if let Def.Call(_, args) = ref self.keys[k].def {
+            for a in args.iter() {
+                if let Term.Key(d) = a {
+                    if not out.contains(d) {
+                        out.push(d.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn is_call(self, k: i64) -> bool {
+        match self.keys[k].def {
+            Def.Call(_, _) => true,
+            Def.Val(_) => false,
+        }
+    }
+
+    fn fresh(self, name: Str) -> Result[(), String] {
+        if not is_name(name) {
+            return Err(f"bad key '{name}'");
+        }
+        if self.find(name).is_some() {
+            return Err(f"key {name} already exists");
+        }
+        Ok(())
+    }
+
+    fn value(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 3 {
+            return Err("usage: value <key> <number>");
+        }
+        self.fresh(w[1])?;
+        let Some(n) = number(w[2]) else {
+            return Err(f"bad number '{w[2]}'");
+        };
+        self.keys.push(Node { name: w[1].clone(), def: Def.Val(Value.Int(n)) });
+        Ok(())
+    }
+
+    fn task(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() < 3 {
+            return Err("usage: task <key> <func> [args]");
+        }
+        self.fresh(w[1])?;
+        let Some(f) = func_of(w[2]) else {
+            return Err(f"unknown function '{w[2]}'");
+        };
+        let mut args: Vec[Term] = Vec.new();
+        for a in w[3..].iter() {
+            if let Some(n) = number(a) {
+                args.push(Term.Num(n));
+            } else if is_name(a) {
+                args.push(Term.Key(a.clone()));
+            } else {
+                return Err(f"bad argument '{a}'");
+            }
+        }
+        if not arity_ok(f, args.len()) {
+            return Err(f"bad arguments for {func_name(f)}: {usage_of(f)}");
+        }
+        self.keys.push(Node { name: w[1].clone(), def: Def.Call(f, args) });
+        Ok(())
+    }
+
+    fn drop_key(mut ref self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 2 {
+            return Err("usage: drop <key>");
+        }
+        let k = self.key(w[1])?;
+        self.keys.remove(k);
+        println(f"  dropped {w[1]}");
+        Ok(())
+    }
+
+    // Walks the graph depth first from `k`, listing each key after the keys
+    // it takes. `state` is 1 for a key being walked and 2 for one done.
+    fn walk(self, k: i64, state: mut ref Vec[i64], stack: mut ref Vec[i64], order: mut ref Vec[i64]) -> Result[(), String] {
+        state[k] = 1;
+        stack.push(k);
+        for d in self.deps(k).iter() {
+            let Some(j) = self.find(d) else {
+                return Err(f"missing dependency {d} of {self.keys[k].name}");
+            };
+            if state[j] == 1 {
+                let from = stack.iter().position(|s| s == j) ?? 0;
+                let mut path: Vec[String] = stack[from..].iter().map(|s| self.keys[s].name.clone()).collect();
+                path.push(d.clone());
+                return Err(f"cycle {joined(path, " -> ")}");
+            }
+            if state[j] == 0 {
+                self.walk(j, mut state, mut stack, mut order)?;
+            }
+        }
+        stack.pop();
+        state[k] = 2;
+        order.push(k);
+        Ok(())
+    }
+
+    fn compute(mut ref self, w: Slice[String], persist: bool) -> Result[(), String] {
+        let cmd = if persist { "persist" } else { "compute" };
+        let mut fuse = true;
+        let mut want: Vec[i64] = Vec.new();
+        let mut names: Vec[String] = Vec.new();
+        for x in w[1..].iter() {
+            if x == "--nofuse" {
+                fuse = false;
+            } else if x.starts_with("--") {
+                return Err(f"unknown option '{x}'");
+            } else {
+                names.push(x.clone());
+            }
+        }
+        if names.is_empty() {
+            return Err(f"usage: {cmd} [--nofuse] <key>...");
+        }
+        for (i, name) in names.iter().enumerate() {
+            let k = self.key(name)?;
+            if names[..i].contains(name) {
+                return Err(f"duplicate key {name}");
+            }
+            want.push(k);
+        }
+
+        // 1. Cull, and the order.
+        let total = self.keys.len();
+        let mut state = Vec.filled(total, 0);
+        let mut stack: Vec[i64] = Vec.new();
+        let mut order: Vec[i64] = Vec.new();
+        for k in want.iter() {
+            if state[k] == 0 {
+                self.walk(k, mut state, mut stack, mut order)?;
+            }
+        }
+        println(f"  cull: {order.len()} of {total} keys");
+        let mut users: Vec[Vec[i64]] = Vec.filled(total, Vec.new());
+        let mut takes: Vec[Vec[i64]] = Vec.filled(total, Vec.new());
+        for k in order.iter() {
+            for d in self.deps(k).iter() {
+                let j = self.find(d) ?? 0;
+                users[j].push(k);
+                takes[k].push(j);
+            }
+        }
+
+        // 2. Fuse: `into[k]` is the call `k` is folded into, or -1.
+        let mut into = Vec.filled(total, -1);
+        if fuse {
+            for k in order.iter() {
+                if not self.is_call(k) or want.contains(k) or users[k].len() != 1 {
+                    continue;
+                }
+                let p = users[k][0];
+                if self.is_call(p) and takes[p].len() == 1 {
+                    into[k] = p;
+                }
+            }
+        }
+        let mut units: Vec[Unit] = Vec.new();
+        let mut unit_of = Vec.filled(total, -1);
+        for k in order.iter() {
+            if not self.is_call(k) or into[k] >= 0 {
+                continue;
+            }
+            let mut chain: Vec[i64] = [k];
+            loop {
+                let head = chain[0];
+                let Some(prev) = takes[head].iter().find(|d| into[d] == head) else {
+                    break;
+                };
+                chain.insert(0, prev);
+            }
+            if chain.len() > 1 {
+                let members: Vec[String] = chain.iter().map(|m| self.keys[m].name.clone()).collect();
+                println(f"  fuse: {joined(members, " + ")}");
+            }
+            unit_of[k] = units.len();
+            let inputs = takes[chain[0]].clone();
+            units.push(Unit { chain: chain, inputs: inputs });
+        }
+        let tails: Vec[String] = units.iter().map(|u| self.keys[u.chain[u.chain.len() - 1]].name.clone()).collect();
+        println(f"  order: {or_word(tails, "none")}");
+
+        // 4. Run: each run goes to the workers once its inputs have worked
+        // out, the waiting ones by order while the workers are all busy.
+        let mut results: Vec[Option[Outcome]] = Vec.new();
+        for k in 0..total {
+            results.push(match self.keys[k].def {
+                Def.Val(v) => Some(Outcome.Worked(v.clone())),
+                Def.Call(_, _) => None,
+            });
+        }
+        let mut waiting = Vec.filled(units.len(), true);
+        let mut left = units.len();
+        let mut busy = 0;
+        let mut failed = 0;
+        let mut skipped = 0;
+        while left > 0 {
+            for u in 0..units.len() {
+                if not waiting[u] {
+                    continue;
+                }
+                let unit = ref units[u];
+                if unit.inputs.iter().any(|d| results[d].is_none()) {
+                    continue;
+                }
+                let first_bad = unit.inputs.iter().find(|d| not worked(results[d]));
+                let tail = unit.chain[unit.chain.len() - 1];
+                if let Some(d) = first_bad {
+                    let (error, origin) = match results[d] {
+                        Some(Outcome.Failed(e)) => (e.clone(), self.keys[d].name.clone()),
+                        Some(Outcome.Skipped(e, o)) => (e.clone(), o.clone()),
+                        _ => (String.new(), String.new()),
+                    };
+                    results[tail] = Some(Outcome.Skipped(error, origin));
+                    waiting[u] = false;
+                    left -= 1;
+                    skipped += 1;
+                    continue;
+                }
+                if busy == WORKERS {
+                    continue;
+                }
+                let run = self.run_of(u, unit, results);
+                self.to_workers.send(run).map_err(|_| "the workers are gone")?;
+                waiting[u] = false;
+                busy += 1;
+            }
+            if busy == 0 {
+                // Everything left was settled by the pass above.
+                continue;
+            }
+            let Some(done) = self.from_workers.recv() else {
+                return Err("the workers are gone");
+            };
+            busy -= 1;
+            left -= 1;
+            let tail = units[done.slot].chain[units[done.slot].chain.len() - 1];
+            results[tail] = Some(match done.outcome {
+                Ok(v) => Outcome.Worked(v),
+                Err(e) => {
+                    failed += 1;
+                    Outcome.Failed(e)
+                }
+            });
+        }
+
+        // 5. Report.
+        for k in want.iter() {
+            let name = ref self.keys[k].name;
+            match results[k] {
+                Some(Outcome.Worked(v)) => println(f"  {name} = {show(v)}"),
+                Some(Outcome.Failed(e)) => println(f"  {name} ! {e}"),
+                Some(Outcome.Skipped(e, o)) => println(f"  {name} ! {e} (from {o})"),
+                None => println(f"  {name} ! lost"),
+            }
+        }
+        println(f"  runs {units.len() - skipped}, failed {failed}, skipped {skipped}");
+        if persist {
+            let mut n = 0;
+            for k in want.iter() {
+                if not self.is_call(k) {
+                    continue;
+                }
+                if let Some(Outcome.Worked(v)) = results[k].take() {
+                    self.keys[k].def = Def.Val(v);
+                    n += 1;
+                }
+            }
+            println(f"  persisted {n}");
+        }
+        Ok(())
+    }
+
+    // What a worker needs for unit `u`: each call's function, with its key
+    // arguments replaced by their values, or by the step before.
+    fn run_of(self, u: i64, unit: Unit, results: Slice[Option[Outcome]]) -> Run {
+        let mut steps: Vec[Step] = Vec.new();
+        for (i, m) in unit.chain.iter().enumerate() {
+            let Def.Call(f, args) = ref self.keys[m].def else {
+                continue;
+            };
+            let mut inputs: Vec[Input] = Vec.new();
+            for a in args.iter() {
+                inputs.push(match a {
+                    Term.Num(n) => Input.Given(Value.Int(n)),
+                    Term.Key(d) => {
+                        if i > 0 and d == self.keys[unit.chain[i - 1]].name {
+                            Input.Prev
+                        } else {
+                            let j = self.find(d) ?? 0;
+                            match results[j] {
+                                Some(Outcome.Worked(v)) => Input.Given(v.clone()),
+                                _ => Input.Given(Value.Int(0)),
+                            }
+                        }
+                    }
+                });
+            }
+            steps.push(Step { func: f, inputs: inputs });
+        }
+        Run { slot: u, steps: steps }
+    }
+
+    // ---------------------------------------------- inspection
+
+    fn inspect(self, w: Slice[String]) -> Result[(), String] {
+        if w.is_empty() {
+            return Err("missing command");
+        }
+        match w[0].as_str() {
+            "graph" => {
+                if w.len() != 1 {
+                    return Err("usage: @ graph");
+                }
+                if self.keys.is_empty() {
+                    println("  empty");
+                }
+                for e in self.keys.iter() {
+                    match e.def {
+                        Def.Val(v) => println(f"  {e.name}: {show(v)}"),
+                        Def.Call(f, args) => {
+                            let parts: Vec[String] = args.iter().map(|a| match a {
+                                Term.Num(n) => f"{n}",
+                                Term.Key(d) => d.clone(),
+                            }).collect();
+                            println(f"  {e.name}: {func_name(f)}({joined(parts, ", ")})");
+                        }
+                    }
+                }
+            }
+            "deps" => {
+                if w.len() != 2 {
+                    return Err("usage: @ deps <key>");
+                }
+                let k = self.key(w[1])?;
+                let mut found: SortedMap[String, String] = SortedMap.new();
+                let mut seen = Vec.filled(self.keys.len(), false);
+                self.reach(k, mut seen, mut found);
+                let labels: Vec[String] = found.values().map(|l| l.clone()).collect();
+                println(f"  {w[1]} needs {or_word(labels, "nothing")}");
+            }
+            "dependents" => {
+                if w.len() != 2 {
+                    return Err("usage: @ dependents <key>");
+                }
+                self.key(w[1])?;
+                let mut users: Vec[String] = Vec.new();
+                for u in 0..self.keys.len() {
+                    if self.deps(u).contains(w[1]) {
+                        users.push(self.keys[u].name.clone());
+                    }
+                }
+                println(f"  {w[1]} is used by {or_word(users, "nothing")}");
+            }
+            other => return Err(f"unknown command '@ {other}'"),
+        }
+        Ok(())
+    }
+
+    // Every key `k` reaches through call arguments, by name, with a missing
+    // one marked.
+    fn reach(self, k: i64, seen: mut ref Vec[bool], found: mut ref SortedMap[String, String]) {
+        for d in self.deps(k).iter() {
+            match self.find(d) {
+                None => {
+                    found.insert(d.clone(), f"{d} (missing)");
+                }
+                Some(j) => {
+                    if not seen[j] {
+                        seen[j] = true;
+                        found.insert(d.clone(), d.clone());
+                        self.reach(j, mut seen, mut found);
+                    }
+                }
+            }
+        }
+    }
+
+    fn command(mut ref self, w: Slice[String]) -> Result[(), String] {
+        match w[0].as_str() {
+            "@" => self.inspect(w[1..]),
+            "value" => self.value(w),
+            "task" => self.task(w),
+            "drop" => self.drop_key(w),
+            "compute" => self.compute(w, false),
+            "persist" => self.compute(w, true),
+            other => Err(f"unknown command '{other}'"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn read(path: Str) -> Result[String, String] {
+    fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")
+}
+
+fn play(text: Str, to_workers: own Sender[Run], from_workers: own Receiver[Done]) {
+    let mut dask = Dask.new(to_workers, from_workers);
+    println(f"== script ({WORKERS} workers)");
+    for (i, line) in text.split("\n").enumerate() {
+        let w = words(line);
+        if w.is_empty() {
+            continue;
+        }
+        println(f"> {joined(w, " ")}");
+        if let Err(e) = dask.command(w) {
+            println(f"  error: script.txt:{i + 1}: {e}");
+        }
+    }
+    println("== end");
+    println(f"  {dask.keys.len()} keys");
+}   // dask drops here, which closes the workers' channel
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data").map_err(|e| f"cannot create data: {e}")?;
+    write_data()?;
+    let text = read("data/script.txt")?;
+    let (to_workers, inbox): (Sender[Run], Receiver[Run]) = channel(CAPACITY);
+    let (outbox, from_workers): (Sender[Done], Receiver[Done]) = channel(CAPACITY);
+    let pool = Pool {
+        inbox: Mutex.new(inbox),
+        runs: Atomic.new(0),
+        tasks: Atomic.new(0),
+        failures: Atomic.new(0),
+        by_func: Mutex.new(SortedMap.new()),
+    };
+    {
+        let workers = TaskGroup.new();
+        for _ in 0..WORKERS {
+            let out = outbox.clone();
+            workers.spawn(|| worker(pool, out));
+        }
+        play(text, to_workers, from_workers);
+    }   // every worker has seen the channel close; the group joins them
+    let tally = {
+        let g = pool.by_func.lock();
+        let parts: Vec[String] = g.value.iter().map(|(f, n)| f"{f} {n}").collect();
+        or_word(parts, "none")
+    };
+    println(f"  {WORKERS} workers: {pool.runs.load()} runs, {pool.tasks.load()} tasks, {pool.failures.load()} failed");
+    println(f"  by function: {tally}");
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/script.txt", file_0())?;
+    Ok(())
+}
+
+// data/script.txt
+fn file_0() -> String {
+    """
+232054776f20696e707574732c206120636861696e206f662063616c6c73206f6e206f6e65206f66207468656d2c2061
+6e6420612066616e2d696e2e0a76616c756520782031300a76616c7565207920330a7461736b206120696e6320780a74
+61736b2062206d756c206120320a7461736b2063206e656720620a7461736b20642061646420632079203130300a7461
+736b206520646976206420790a7461736b206261636b20646976202d3720320a0a23204c697374732c20616e64207477
+6f204350552d68656176792063616c6c732074686520776f726b6572732063616e2073686172652e0a7461736b207220
+72616e67652032300a7461736b206269672072616e676520353030300a7461736b20732073756d20720a7461736b206c
+206c656e206269670a7461736b20626f746820636f6e63617420722072206269670a7461736b206e206c656e20626f74
+680a7461736b207031207072696d6573203135303030300a7461736b207032207072696d6573203235303030300a7461
+736b207033207072696d6573203130303030300a7461736b2070746f74206164642070312070322070330a0a23204661
+696c757265732c20616e642077686174206c69657320646f776e73747265616d206f66207468656d2e0a7461736b207a
+65726f20646976207820300a7461736b20616674657220696e63207a65726f0a7461736b206c61746572206164642061
+6674657220730a7461736b2077726f6e672073756d20780a7461736b206d31206d756c20393939393939393939203939
+393939393939390a7461736b206d32206d756c206d312031300a7461736b206d3320696e63206d320a7461736b207461
+696c20616464206d332077726f6e670a402067726170680a0a636f6d7075746520640a636f6d70757465202d2d6e6f66
+75736520640a636f6d707574652065206261636b2073206c206e0a636f6d707574652070746f7420640a636f6d707574
+65206c6174657220650a636f6d70757465207461696c206d3120720a636f6d707574652062696720626f74680a746173
+6b206f64646c7920696e6320720a7461736b206b61626f6f6d20626f6f6d0a7461736b20687567652072616e67652031
+30303030310a7461736b206c6f7473207072696d657320323030303030310a76616c7565206d696e7573202d350a7461
+736b20666c6970206e6567206d696e75730a636f6d70757465206f64646c79206b61626f6f6d2068756765206c6f7473
+20666c69700a402064657073206c617465720a4020646570656e64656e747320730a0a70657273697374206520730a40
+2067726170680a636f6d70757465206c61746572206420650a64726f7020730a636f6d70757465206c617465720a4020
+64657073206c617465720a7461736b20732072616e676520340a636f6d70757465206c617465720a7065727369737420
+6269670a636f6d70757465206e0a0a232041206379636c6520616e642061206d697373696e6720696e7075742e0a7461
+736b2063793120696e63206379320a7461736b2063793220696e63206379330a7461736b2063793320696e6320637931
+0a7461736b20746f70206164642078206379310a636f6d7075746520746f700a7461736b2073656c6620696e63207365
+6c660a636f6d707574652073656c660a7461736b206e65656473206164642067686f737420310a636f6d70757465206e
+656564730a636f6d7075746520780a70657273697374207820790a636f6d707574652072202d2d6e6f6675736520720a
+0a23204d697374616b65732c2065616368207265706f7274656420616e6420736b69707065642e0a76616c7565207820
+350a76616c75652042616420310a76616c7565207a20313233343536373839300a76616c7565207a0a7461736b20710a
+7461736b2071207371727420780a7461736b207120696e63207820790a7461736b20712061646420310a7461736b2071
+20626f6f6d20310a7461736b207120696e63204261642d4172670a7461736b2071206d756c2031203132333435363738
+3930310a7461736b20397120696e6320310a636f6d707574650a636f6d70757465202d2d6661737420780a636f6d7075
+7465206e6f77686572650a636f6d70757465207820780a706572736973740a64726f700a64726f702067686f73740a66
+726f626e69636174650a400a4020677261706820780a4020646570730a4020646570656e64656e74732067686f73740a
+402066726f620a
+"""
+}

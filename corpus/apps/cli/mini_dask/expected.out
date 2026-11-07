@@ -1,0 +1,282 @@
+== script (4 workers)
+> value x 10
+> value y 3
+> task a inc x
+> task b mul a 2
+> task c neg b
+> task d add c y 100
+> task e div d y
+> task back div -7 2
+> task r range 20
+> task big range 5000
+> task s sum r
+> task l len big
+> task both concat r r big
+> task n len both
+> task p1 primes 150000
+> task p2 primes 250000
+> task p3 primes 100000
+> task ptot add p1 p2 p3
+> task zero div x 0
+> task after inc zero
+> task later add after s
+> task wrong sum x
+> task m1 mul 999999999 999999999
+> task m2 mul m1 10
+> task m3 inc m2
+> task tail add m3 wrong
+> @ graph
+  x: 10
+  y: 3
+  a: inc(x)
+  b: mul(a, 2)
+  c: neg(b)
+  d: add(c, y, 100)
+  e: div(d, y)
+  back: div(-7, 2)
+  r: range(20)
+  big: range(5000)
+  s: sum(r)
+  l: len(big)
+  both: concat(r, r, big)
+  n: len(both)
+  p1: primes(150000)
+  p2: primes(250000)
+  p3: primes(100000)
+  ptot: add(p1, p2, p3)
+  zero: div(x, 0)
+  after: inc(zero)
+  later: add(after, s)
+  wrong: sum(x)
+  m1: mul(999999999, 999999999)
+  m2: mul(m1, 10)
+  m3: inc(m2)
+  tail: add(m3, wrong)
+> compute d
+  cull: 6 of 26 keys
+  fuse: a + b + c
+  order: c, d
+  d = 81
+  runs 2, failed 0, skipped 0
+> compute --nofuse d
+  cull: 6 of 26 keys
+  order: a, b, c, d
+  d = 81
+  runs 4, failed 0, skipped 0
+> compute e back s l n
+  cull: 14 of 26 keys
+  fuse: a + b + c
+  fuse: both + n
+  order: c, d, e, back, r, s, big, l, n
+  e = 27
+  back = -4
+  s = 190
+  l = 5000
+  n = 5040
+  runs 9, failed 0, skipped 0
+> compute ptot d
+  cull: 10 of 26 keys
+  fuse: a + b + c
+  order: p1, p2, p3, ptot, c, d
+  ptot = 45484
+  d = 81
+  runs 6, failed 0, skipped 0
+> compute later e
+  cull: 12 of 26 keys
+  fuse: zero + after
+  fuse: r + s
+  fuse: a + b + c
+  order: after, s, later, c, d, e
+  later ! ZeroDivisionError: integer division or modulo by zero (from after)
+  e = 27
+  runs 5, failed 1, skipped 1
+> compute tail m1 r
+  cull: 7 of 26 keys
+  fuse: m2 + m3
+  order: m1, m3, wrong, tail, r
+  tail ! OverflowError: mul result does not fit in 64 bits (from m3)
+  m1 = 999999998000000001
+  r = [0, 1, 2, ..., 18, 19] (20 items)
+  runs 4, failed 2, skipped 1
+> compute big both
+  cull: 3 of 26 keys
+  order: big, r, both
+  big = [0, 1, 2, ..., 4998, 4999] (5000 items)
+  both = [0, 1, 2, ..., 4998, 4999] (5040 items)
+  runs 3, failed 0, skipped 0
+> task oddly inc r
+> task kaboom boom
+> task huge range 100001
+> task lots primes 2000001
+> value minus -5
+> task flip neg minus
+> compute oddly kaboom huge lots flip
+  cull: 7 of 32 keys
+  fuse: r + oddly
+  order: oddly, kaboom, huge, lots, flip
+  oddly ! TypeError: inc expects an int, got a list
+  kaboom ! ZeroDivisionError: division by zero
+  huge ! ValueError: range(100001) is too long
+  lots ! ValueError: primes below 2000001 is too many
+  flip = 5
+  runs 5, failed 4, skipped 0
+> @ deps later
+  later needs after, r, s, x, zero
+> @ dependents s
+  s is used by later
+> persist e s
+  cull: 9 of 32 keys
+  fuse: a + b + c
+  fuse: r + s
+  order: c, d, e, s
+  e = 27
+  s = 190
+  runs 4, failed 0, skipped 0
+  persisted 2
+> @ graph
+  x: 10
+  y: 3
+  a: inc(x)
+  b: mul(a, 2)
+  c: neg(b)
+  d: add(c, y, 100)
+  e: 27
+  back: div(-7, 2)
+  r: range(20)
+  big: range(5000)
+  s: 190
+  l: len(big)
+  both: concat(r, r, big)
+  n: len(both)
+  p1: primes(150000)
+  p2: primes(250000)
+  p3: primes(100000)
+  ptot: add(p1, p2, p3)
+  zero: div(x, 0)
+  after: inc(zero)
+  later: add(after, s)
+  wrong: sum(x)
+  m1: mul(999999999, 999999999)
+  m2: mul(m1, 10)
+  m3: inc(m2)
+  tail: add(m3, wrong)
+  oddly: inc(r)
+  kaboom: boom()
+  huge: range(100001)
+  lots: primes(2000001)
+  minus: -5
+  flip: neg(minus)
+> compute later d e
+  cull: 11 of 32 keys
+  fuse: zero + after
+  fuse: a + b + c
+  order: after, later, c, d
+  later ! ZeroDivisionError: integer division or modulo by zero (from after)
+  d = 81
+  e = 27
+  runs 3, failed 1, skipped 1
+> drop s
+  dropped s
+> compute later
+  error: script.txt:55: missing dependency s of later
+> @ deps later
+  later needs after, s (missing), x, zero
+> task s range 4
+> compute later
+  cull: 5 of 32 keys
+  fuse: zero + after
+  order: after, s, later
+  later ! ZeroDivisionError: integer division or modulo by zero (from after)
+  runs 2, failed 1, skipped 1
+> persist big
+  cull: 1 of 32 keys
+  order: big
+  big = [0, 1, 2, ..., 4998, 4999] (5000 items)
+  runs 1, failed 0, skipped 0
+  persisted 1
+> compute n
+  cull: 4 of 32 keys
+  fuse: both + n
+  order: r, n
+  n = 5040
+  runs 2, failed 0, skipped 0
+> task cy1 inc cy2
+> task cy2 inc cy3
+> task cy3 inc cy1
+> task top add x cy1
+> compute top
+  error: script.txt:67: cycle cy1 -> cy2 -> cy3 -> cy1
+> task self inc self
+> compute self
+  error: script.txt:69: cycle self -> self
+> task needs add ghost 1
+> compute needs
+  error: script.txt:71: missing dependency ghost of needs
+> compute x
+  cull: 1 of 38 keys
+  order: none
+  x = 10
+  runs 0, failed 0, skipped 0
+> persist x y
+  cull: 2 of 38 keys
+  order: none
+  x = 10
+  y = 3
+  runs 0, failed 0, skipped 0
+  persisted 0
+> compute r --nofuse r
+  error: script.txt:74: duplicate key r
+> value x 5
+  error: script.txt:77: key x already exists
+> value Bad 1
+  error: script.txt:78: bad key 'Bad'
+> value z 1234567890
+  error: script.txt:79: bad number '1234567890'
+> value z
+  error: script.txt:80: usage: value <key> <number>
+> task q
+  error: script.txt:81: usage: task <key> <func> [args]
+> task q sqrt x
+  error: script.txt:82: unknown function 'sqrt'
+> task q inc x y
+  error: script.txt:83: bad arguments for inc: inc <x>
+> task q add 1
+  error: script.txt:84: bad arguments for add: add <x> <y>...
+> task q boom 1
+  error: script.txt:85: bad arguments for boom: boom
+> task q inc Bad-Arg
+  error: script.txt:86: bad argument 'Bad-Arg'
+> task q mul 1 12345678901
+  error: script.txt:87: bad argument '12345678901'
+> task 9q inc 1
+  error: script.txt:88: bad key '9q'
+> compute
+  error: script.txt:89: usage: compute [--nofuse] <key>...
+> compute --fast x
+  error: script.txt:90: unknown option '--fast'
+> compute nowhere
+  error: script.txt:91: no key 'nowhere'
+> compute x x
+  error: script.txt:92: duplicate key x
+> persist
+  error: script.txt:93: usage: persist [--nofuse] <key>...
+> drop
+  error: script.txt:94: usage: drop <key>
+> drop ghost
+  error: script.txt:95: no key 'ghost'
+> frobnicate
+  error: script.txt:96: unknown command 'frobnicate'
+> @
+  error: script.txt:97: missing command
+> @ graph x
+  error: script.txt:98: usage: @ graph
+> @ deps
+  error: script.txt:99: usage: @ deps <key>
+> @ dependents ghost
+  error: script.txt:100: no key 'ghost'
+> @ frob
+  error: script.txt:101: unknown command '@ frob'
+== end
+  38 keys
+  4 workers: 50 runs, 67 tasks, 9 failed
+  by function: add 8, boom 1, concat 3, div 7, inc 8, len 3, mul 9, neg 8, primes 4, range 12, sum 4

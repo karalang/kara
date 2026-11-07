@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 155 |
+| diagnostics | 157 |
 | false-positive | 138 |
 | perf | 107 |
 | missing-feature | 102 |
@@ -75,11 +75,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 256 |
+| typecheck | 257 |
 | mir-llvm | 133 |
 | mir | 131 |
 | cli | 71 |
-| ownership | 59 |
+| ownership | 60 |
 | parser | 42 |
 | interp | 31 |
 | runtime | 28 |
@@ -124,6 +124,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-27 | 2026-11-07 | effect | low | Socket methods with no declared effects (local_addr, set_read_timeout, try_clone on TcpListener/TcpStream/UdpSocket) carry an `unknown (native ..)` effect, so a par branch calling one conflicts with any branch that prints, reads the clock or uses another socket | — |
 | B-2026-11-07-28 | 2026-11-07 | runtime+mir-llvm | medium | A compiled HTTP client sends a plain HTTP request for any URL scheme (`ftp://127.0.0.1:P/x` and `gopher://..` get `OK 200` from an HTTP server), while the interpreter refuses them with `Unknown Scheme`; io.md allows only http:// and https:// | — |
 | B-2026-11-07-29 | 2026-11-07 | interp | low | Through a CONNECT tunnel (`https_proxy` set, https:// URL) the interpreter's client sends the request in absolute form (`GET https://proxied.invalid:P/tunnel`), where compiled code sends origin form (`GET /tunnel`); a Kara server then reads the wrong path (B-2026-11-07-26) | — |
+| B-2026-11-07-30 | 2026-11-07 | ownership | low | A bare `for a in args` over an owned `Vec` (an `own` parameter not used after the loop) whose element's payload is moved out (`Value.List(items) => ls.push(items)`) gets the fix `items.clone()`, though the message itself names the repair that takes no copy, `for a in args.into_iter()` | — |
+| B-2026-11-07-31 | 2026-11-07 | typecheck | low | An unannotated list literal of a `ref` to a `Copy` value (`let chain = [k];` with `k` from `order.iter()`) is typed `Vec[ref i64]`, and its later use where a `Vec[i64]` is wanted is refused "expected 'Vec[i64]', found 'Vec[ref i64]'" with no fix, though annotating the `let` (`let chain: Vec[i64] = [k];`) checks and runs | — |
 
 ### Relocated
 
