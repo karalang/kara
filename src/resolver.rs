@@ -2179,9 +2179,13 @@ impl<'a> Resolver<'a> {
     /// `HashSet` was otherwise "did you mean 'Hasher'?" (B-2026-11-04-5).
     /// `BinaryHeap` -> `PriorityQueue` is right for a TYPE only; a name
     /// position goes through [`Self::report_rust_binary_heap`] first.
+    ///
+    /// Python's `Dict` (the `typing` name) is a `Map` too: it was otherwise
+    /// "did you mean 'Div'?" (B-2026-11-07-53).
     fn renamed_stdlib_type(name: &str) -> Option<&'static str> {
         match name {
             "TreeMap" => Some("SortedMap"),
+            "Dict" => Some("Map"),
             "TreeSet" => Some("SortedSet"),
             _ => crate::parser::rust_collection_rename(name),
         }

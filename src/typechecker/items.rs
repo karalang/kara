@@ -5172,14 +5172,29 @@ impl<'a> super::TypeChecker<'a> {
                                 | Type::Str
                         ) && self.type_satisfies_bound(&self_type, supertrait));
                     if !has_impl {
-                        self.type_error(
-                            format!(
-                                "impl {} for {} requires impl {} for {}",
-                                trait_name, type_name, supertrait, type_name
-                            ),
-                            imp.span,
-                            TypeErrorKind::MissingSupertrait,
+                        let message = format!(
+                            "impl {} for {} requires impl {} for {}",
+                            trait_name, type_name, supertrait, type_name
                         );
+                        match Self::partial_ord_from_ord_fix(
+                            imp,
+                            &trait_name,
+                            supertrait,
+                            &type_name,
+                        ) {
+                            Some(fix) => self.type_error_with_fix_it(
+                                format!(
+                                    "{message}: the order `cmp` gives is the partial order \
+                                     too, so `partial_cmp` returns `Some(self.cmp(other))`"
+                                ),
+                                imp.span,
+                                TypeErrorKind::MissingSupertrait,
+                                fix,
+                            ),
+                            None => {
+                                self.type_error(message, imp.span, TypeErrorKind::MissingSupertrait)
+                            }
+                        }
                     }
                 }
             }
@@ -9075,13 +9090,62 @@ impl<'a> super::TypeChecker<'a> {
                 .is_some_and(|t| !self.is_copy_type_during_check(t))
     }
 
+    /// The `impl PartialOrd` an `impl Ord` for a type without one needs,
+    /// written in front of it: `partial_cmp` is `Some(self.cmp(other))`, as
+    /// Rust's documentation prescribes for a total order. Only for a type
+    /// with no generic parameters and an impl with no attributes, where the
+    /// text is exactly what compiles (B-2026-11-07-52).
+    fn partial_ord_from_ord_fix(
+        imp: &ImplBlock,
+        trait_name: &str,
+        supertrait: &str,
+        type_name: &str,
+    ) -> Option<FixIt> {
+        if trait_name != "Ord"
+            || supertrait != "PartialOrd"
+            || imp.generic_params.is_some()
+            || !imp.attributes.is_empty()
+            || imp.span.column == 0
+        {
+            return None;
+        }
+        let ind = " ".repeat(imp.span.column - 1);
+        Some(FixIt {
+            span: Span {
+                length: 0,
+                ..imp.span
+            },
+            replacement: format!(
+                "impl PartialOrd for {type_name} {{\n{ind}    fn partial_cmp(ref self, other: ref \
+                 {type_name}) -> Option[Ordering] {{\n{ind}        Some(self.cmp(other))\n{ind}    \
+                 }}\n{ind}}}\n\n{ind}"
+            ),
+        })
+    }
+
     /// The type an inferred tuple literal gives the element `e` typed `t`:
     /// a binding an explicit `ref name` pattern made is held as the
     /// reference it is, `ref T`, as a binding over a `ref` scrutinee already
     /// is, so `match p { P.R { ref xs, ms } => (xs, ms) }` lends `xs`
-    /// rather than moving it (B-2026-11-06-4).
+    /// rather than moving it (B-2026-11-06-4). So is the `self` of a
+    /// `ref self` or `mut ref self` method, which the checker types as the
+    /// value it names: `match (self, other)` lends both, as `match (a, b)`
+    /// over two borrowed parameters does (B-2026-11-07-51).
     pub(super) fn tuple_slot_holds_ref_pattern(&self, e: &Expr, t: Type) -> Type {
-        if self.is_ref_pattern_ident(e) && !matches!(t, Type::Ref(_) | Type::MutRef(_)) {
+        if matches!(t, Type::Ref(_) | Type::MutRef(_)) {
+            return t;
+        }
+        if matches!(e.kind, ExprKind::SelfValue)
+            && self.current_self_borrowed
+            && !self.is_copy_type_during_check(&t)
+        {
+            return if self.current_fn_mut_self {
+                Type::MutRef(Box::new(t))
+            } else {
+                Type::Ref(Box::new(t))
+            };
+        }
+        if self.is_ref_pattern_ident(e) {
             Type::Ref(Box::new(t))
         } else {
             t
