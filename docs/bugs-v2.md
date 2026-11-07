@@ -128,9 +128,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-48 | 2026-11-07 | cli | medium | The v0.8.0 Linux release binaries need glibc 2.39 (karac, karac_jit_runner and kara-lsp import pidfd_spawnp/pidfd_getpid@GLIBC_2.39 and __isoc23_strtol@GLIBC_2.38), so they cannot start on Ubuntu 22.04, Debian 12, RHEL 9 or Amazon Linux 2023; the release is built on ubuntu-24.04 and neither the README nor the tarball's README states the floor | — |
 | B-2026-11-07-49 | 2026-11-07 | cli | low | README.md's Install section still says prebuilt binaries "arrive with the 0.8.0 beta. Until then, build from source" although v0.8.0 shipped tarballs on 11-01; it gives no download, sha256 or PATH steps and no link to the release page | — |
 | B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
-| B-2026-11-07-51 | 2026-11-07 | typecheck | medium | `match (self, other)` in a `ref self` (or `mut ref self`) method is refused as "cannot move a non-`Copy` value out of a borrowed place", though the same match over two borrowed parameters (`fn f(a: ref V, b: ref V) { match (a, b) { .. } }`) is accepted | — |
-| B-2026-11-07-52 | 2026-11-07 | typecheck | low | `impl Ord for T` with no `impl PartialOrd for T` is refused ("impl Ord for Value requires impl PartialOrd for Value") with no `karac fix` edit, though the missing impl is mechanical: `partial_cmp` returns `Some(self.cmp(other))` | — |
-| B-2026-11-07-53 | 2026-11-07 | resolver | low | `Dict[String, i64]` / `Dict.new()` (Python's `typing.Dict`) is "undefined type 'Dict', did you mean 'Div'?"; `HashMap`, `BTreeMap` and `HashSet` already name their Kāra collections | — |
 | B-2026-11-07-54 | 2026-11-07 | typecheck | low | `opt == Some("")` with `opt: Option[Str]` is refused ("cannot compare 'Option[Str]' and 'Option[String]'") though `let a: Option[Str] = Some("")` is accepted; `lines.last() == Some("")` over a `Vec[Str]` (and `v.last() == Some("x")` over a `Vec[String]`) is refused with no hint, and the forms the i64 hint names do not compile for a literal | — |
 
 ### Relocated
@@ -824,6 +821,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-30 | ownership | low | A bare `for a in args` over an owned `Vec` (an `own` parameter not used after the loop) whose element's payload is moved out (`Value.List(items) => l… | ec6e5415ba |
 | B-2026-11-07-31 | typecheck | low | An unannotated list literal of a `ref` to a `Copy` value (`let chain = [k];` with `k` from `order.iter()`) is typed `Vec[ref i64]`, and its later use… | ec6e5415ba |
 | B-2026-11-07-34 | typecheck | medium | A `collect` into a written collection whose items hold a call's unsolved parameter (`let mut cells: Vec[Vec[String]] = tops.iter().map(\|_\| Vec.new())… | bf2c7db3d5 |
+| B-2026-11-07-51 | typecheck | medium | `match (self, other)` in a `ref self` (or `mut ref self`) method is refused as "cannot move a non-`Copy` value out of a borrowed place", though the s… | 255b769106 |
+| B-2026-11-07-52 | typecheck | low | `impl Ord for T` with no `impl PartialOrd for T` is refused ("impl Ord for Value requires impl PartialOrd for Value") with no `karac fix` edit, thoug… | 255b769106 |
+| B-2026-11-07-53 | resolver | low | `Dict[String, i64]` / `Dict.new()` (Python's `typing.Dict`) is "undefined type 'Dict', did you mean 'Div'?"; `HashMap`, `BTreeMap` and `HashSet` alre… | 255b769106 |
 
 </details>
 
