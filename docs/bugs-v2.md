@@ -120,7 +120,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-31 | 2026-11-06 | typecheck+mir | medium | check accepts String-only building methods (push_str, push, clear, truncate, pop, reserve) on a Str, even a borrowed parameter; every backend then refuses with an internal error | — |
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
 | B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
-| B-2026-11-07-2 | 2026-11-07 | typecheck+mir+mir-llvm | high | A generic function passed as an `Fn` value is instanced with its type arguments unsolved: `apply(shout, [7], 1)` with `fn apply[U](g: Fn(own U, i64) -> i64, u: own U, n: i64)` builds `apply[()]` and `shout[()]`, which print a `Vec` as garbage under llvm; inside a generic body the item's `T` is taken for the caller's | — |
 | B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
 
 ### Relocated
@@ -773,6 +772,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-37 | typecheck | medium | `Slice[T]` has no `iter_mut`, though docs/library/collections.md lists it (`mut ref T` items): `fn bump(xs: mut Slice[i64]) { for x in xs.iter_mut()… | aeb2ac0023 |
 | B-2026-11-06-38 | typecheck | medium | A `TaskGroup.spawn` closure whose `Result` error type only a later annotation fixes is refused at lowering when its handles are kept in a `Vec`: `let… | b07a360a6d |
 | B-2026-11-06-39 | typecheck | low | A let-chain (`if let Some(s) = v and kind == "group" { . | b07a360a6d |
+| B-2026-11-07-2 | typecheck+mir+mir-llvm | high | A generic function passed as an `Fn` value is instanced with its type arguments unsolved: `apply(shout, [7], 1)` with `fn apply[U](g: Fn(own U, i64)… | 957a835c43 |
 
 </details>
 
