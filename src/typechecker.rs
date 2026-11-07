@@ -4609,8 +4609,9 @@ impl<'a> TypeChecker<'a> {
         // offenders gathered during body inference. Must run before `errors`
         // moves into the result below.
         self.emit_nested_enum_inst_errors();
-        self.report_unsolved_call_vars();
+        self.settle_deferred_call_vars();
         self.discharge_deferred_call_bounds();
+        self.report_unsolved_call_vars();
         self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();

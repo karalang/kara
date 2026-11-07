@@ -5806,11 +5806,11 @@ impl<'a> super::TypeChecker<'a> {
             if args.iter().any(|a| matches!(a, Type::TypeParam(n) if n == name)))
     }
 
-    /// B-2026-11-06-7: design.md § Type inference, "An unsolved variable is
-    /// an error at the end of the body". A generic call's parameter that
-    /// nothing at the call fixed is reported here, once the whole program has
-    /// been checked, only if no later use solved it either.
-    pub(super) fn report_unsolved_call_vars(&mut self) {
+    /// B-2026-11-06-7: the bounds deferred on a method call's receiver, and
+    /// the variables aliased to a body's own type parameters, settled once
+    /// the whole program has been checked. Runs before
+    /// [`Self::discharge_deferred_call_bounds`].
+    pub(super) fn settle_deferred_call_vars(&mut self) {
         self.report_deferred_receiver_bounds();
         for (id, name) in std::mem::take(&mut self.aliased_call_vars) {
             if let Type::TypeVar(end) = resolve_type_vars(
@@ -5823,6 +5823,18 @@ impl<'a> super::TypeChecker<'a> {
                 self.env.substitutions.insert(end, Type::TypeParam(name));
             }
         }
+    }
+
+    /// B-2026-11-06-7: design.md § Type inference, "An unsolved variable is
+    /// an error at the end of the body". A generic call's parameter that
+    /// nothing at the call fixed is reported here, once the whole program has
+    /// been checked, only if no later use solved it either.
+    ///
+    /// It runs after [`Self::discharge_deferred_call_bounds`], since a
+    /// `collect` into a written collection is such a later use: it solves
+    /// what its items left open, so `.map(|_| Vec.new()).collect()` into a
+    /// `Vec[Vec[String]]` fixes the inner `Vec`'s parameter.
+    pub(super) fn report_unsolved_call_vars(&mut self) {
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
         for (span, vars) in std::mem::take(&mut self.unsolved_call_vars) {
             let names: HashMap<TypeVarId, String> = vars.iter().cloned().collect();
