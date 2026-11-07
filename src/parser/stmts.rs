@@ -337,7 +337,7 @@ impl super::Parser {
         }
         matches!(
             self.peek_token(),
-            Token::Let | Token::Defer | Token::ErrDefer
+            Token::Let | Token::Defer | Token::ErrDefer | Token::Fn
         )
     }
 
@@ -601,6 +601,8 @@ impl super::Parser {
             // (B-2026-08-21-12). Loops still go there; everything else is
             // handled here.
             Token::Pound => self.parse_attributed_statement(),
+            // Rust's nested `fn` item (kata 1061).
+            Token::Fn => self.hoist_nested_fn(),
             _ => self.parse_expression_statement(),
         }
     }

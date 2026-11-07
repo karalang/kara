@@ -7,6 +7,14 @@
 //! - `find(mut parent, (a - b'a') as i64)`: `lossless_cast` had no fix for a
 //!   parenthesized operand, whose node ends before its `)`. The fix now
 //!   deletes the `as i64` past the `)` and keeps the parentheses.
+//! - Rust's nested `fn` inside a method body read as a misplaced identifier
+//!   (`'fn' is a reserved keyword ... write r#fn`). It is now refused as a
+//!   nested item, and the fix moves it, dedented, above the item it was in.
+//! - `(b[i] - b'a') as usize` passed where an `i64` is wanted, once the
+//!   `usize` parameters are `i64`: the fix casts to `i64`, which the lossless
+//!   cast lint then drops.
+//! - `set.first()` on a `SortedSet` named Kāra's `min()` with no fix; the fix
+//!   now renames it (and `first_key_value` and the rest of its twins).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -82,4 +90,43 @@ fn kata_1061_narrowing_cast_keeps_its_as() {
     let (first, text, _, _, _) = mend(&scratch("narrow"), src);
     assert!(!first.contains("unnecessary cast"), "{first}");
     assert!(text.contains("(x + 1) as u8"), "{text}");
+}
+
+#[test]
+fn kata_1061_nested_fn_moves_to_the_top_level() {
+    let src = "struct Solution {}\n\nimpl Solution {\n    fn run(n: i64) -> i64 {\n        fn twice(x: i64) -> i64 {\n            x * 2\n        }\n        twice(n) + 1\n    }\n}\n\nfn main() {\n    println(Solution.run(4));\n}";
+    let (first, text, clean, last, out) = mend(&scratch("nested"), src);
+    assert!(
+        first.contains("cannot be declared inside a function body"),
+        "{first}"
+    );
+    assert!(
+        text.contains("struct Solution {}\n\nfn twice(x: i64) -> i64 {\n    x * 2\n}\n\nimpl Solution {\n    fn run(n: i64) -> i64 {\n        twice(n) + 1\n"),
+        "{text}"
+    );
+    assert!(clean && !last.contains("warning"), "{text}\n{last}");
+    assert_eq!(out, "9\n");
+}
+
+#[test]
+fn kata_1061_usize_cast_where_i64_is_wanted_becomes_i64() {
+    let src = "fn find(parent: Vec<usize>, x: usize) -> usize {\n    parent[x]\n}\n\nfn main() {\n    let parent: Vec<usize> = (0..26).collect();\n    let s = \"dog\";\n    let b = s.as_bytes();\n    println(find(parent, (b[0] - b'a') as usize));\n}";
+    let (first, text, clean, last, out) = mend(&scratch("usize"), src);
+    assert!(first.contains("so cast to `i64`"), "{first}");
+    assert!(text.contains("find(parent, (b[0] - b'a'))"), "{text}");
+    assert!(clean && !last.contains("warning"), "{text}\n{last}");
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn kata_1061_sorted_set_first_is_renamed_min() {
+    let src = "fn main() {\n    let mut s: SortedSet[char] = SortedSet.new();\n    s.insert('q');\n    s.insert('c');\n    let m: SortedMap[i64, i64] = SortedMap.new();\n    println(f\"{s.first().unwrap()} {s.last().unwrap()} {m.first_key_value().is_none()}\");\n}";
+    let (first, text, clean, last, out) = mend(&scratch("twin"), src);
+    assert!(first.contains("Kāra's is `min()`"), "{first}");
+    assert!(
+        text.contains("{s.min().unwrap()} {s.max().unwrap()} {m.first().is_none()}"),
+        "{text}"
+    );
+    assert!(clean && !last.contains("warning"), "{text}\n{last}");
+    assert_eq!(out, "c q true\n");
 }

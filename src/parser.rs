@@ -457,6 +457,9 @@ pub struct Parser {
     /// `format!` rewrite carries each argument into the literal) reads it
     /// here; without it, that fix is not offered.
     pub(crate) source: Option<(std::sync::Arc<str>, usize)>,
+    /// Where the top-level item being parsed starts, the place a nested
+    /// `fn`'s fix moves it to ([`Self::hoist_nested_fn`]).
+    pub(crate) item_start: Option<usize>,
     /// Each turbofish rejected so far (`collect::<Vec<char>>`): the
     /// diagnostic's span, the method's name, the index of the token after
     /// the list, and the list's Kāra spelling when it is one type a binding
@@ -586,6 +589,7 @@ impl Parser {
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
             escaped_bindings: rustc_hash::FxHashSet::default(),
             source: None,
+            item_start: None,
             turbofishes: Vec::new(),
             closure_returns: Vec::new(),
         }
@@ -770,6 +774,7 @@ impl Parser {
         let mut script_stmts: Vec<Stmt> = Vec::new();
         while !self.is_at_end() {
             let errs_before = self.errors.len();
+            self.item_start = Some(self.current_span().offset);
             match self.parse_item() {
                 Some(item) => {
                     items.push(item);
@@ -2377,6 +2382,84 @@ impl Parser {
 
     /// The source text at `offset .. offset + length`, when the parser was
     /// given it ([`Self::with_source`]).
+    /// Rust's nested `fn`, at the keyword inside a function body. Kāra has
+    /// no nested items, and the keyword read as a misplaced identifier
+    /// (`'fn' is a reserved keyword ... write r#fn`). A Rust nested `fn`
+    /// captures nothing from the body around it, so it means the same at the
+    /// top level: one diagnostic whose fix moves its text there, above the
+    /// item it was in and with the body's indentation taken off, and the
+    /// parse skips it (kata 1061's `impl Solution`).
+    pub(crate) fn hoist_nested_fn(&mut self) -> Option<Stmt> {
+        let start = self.current_span();
+        self.parse_function(Vec::new(), false, false, false, false)?;
+        let whole = self.span_from(&start);
+        self.error_at(
+            "a `fn` cannot be declared inside a function body: Kāra has no nested items. A \
+             nested `fn` captures nothing from the body around it, so it means the same at \
+             the top level: move it above the item it is in",
+            whole,
+        );
+        if let Some(edits) = self.hoist_edits(whole) {
+            self.fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&whole), edits);
+        }
+        Some(Stmt {
+            id: crate::ids::NodeId::DUMMY,
+            span: whole,
+            kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
+                span: whole,
+                kind: ExprKind::Tuple(Vec::new()),
+            }),
+        })
+    }
+
+    /// The edits [`Self::hoist_nested_fn`] offers: the function's lines
+    /// deleted, and their text, less the indentation of its first line,
+    /// inserted where the top-level item starts. Offered only when the `fn`
+    /// begins its line and each later line carries that indentation (or is
+    /// blank).
+    fn hoist_edits(&self, whole: Span) -> Option<Vec<crate::resolver::TextEdit>> {
+        let item = self.item_start?;
+        let (source, base) = self.source.as_ref()?;
+        let at = whole.offset.checked_sub(*base)?;
+        let line_start = source.get(..at)?.rfind('\n').map_or(0, |i| i + 1);
+        let indent = source.get(line_start..at)?;
+        if !indent.chars().all(|c| c == ' ' || c == '\t') || item >= whole.offset {
+            return None;
+        }
+        let text = source.get(at..at + whole.length)?;
+        let mut moved = String::new();
+        for (i, line) in text.split('\n').enumerate() {
+            if i > 0 {
+                moved.push('\n');
+                if line.trim().is_empty() {
+                    continue;
+                }
+                moved.push_str(line.strip_prefix(indent)?);
+            } else {
+                moved.push_str(line);
+            }
+        }
+        moved.push_str("\n\n");
+        let mut end = at + whole.length;
+        if source.get(end..end + 1) == Some("\n") {
+            end += 1;
+        }
+        Some(vec![
+            crate::resolver::TextEdit {
+                offset: item,
+                length: 0,
+                replacement: moved,
+            },
+            crate::resolver::TextEdit {
+                offset: line_start + base,
+                length: end - line_start,
+                replacement: String::new(),
+            },
+        ])
+    }
+
     fn source_at(&self, offset: usize, length: usize) -> Option<&str> {
         let (source, base) = self.source.as_ref()?;
         let at = offset.checked_sub(*base)?;

@@ -6284,28 +6284,12 @@ impl<'a> TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        // Rust's names for what a sorted collection spells otherwise
-        // (B-2026-11-05-41, docs/library/collections.md).
-        let twin = match (type_name, method) {
-            ("SortedMap", "first_key_value") => Some("first"),
-            ("SortedMap", "last_key_value") => Some("last"),
-            ("SortedSet", "first") => Some("min"),
-            ("SortedSet", "last") => Some("max"),
-            _ => None,
-        };
-        let msg = match (
-            twin,
-            crate::edit_distance::suggest_method(method, known_methods),
-        ) {
-            (Some(twin), _) => format!(
-                "no method '{method}' on type '{type_name}': Kāra's is `{twin}()` \
-                 (library/collections.md)"
-            ),
-            (None, Some(suggestion)) => format!(
+        let msg = match crate::edit_distance::suggest_method(method, known_methods) {
+            Some(suggestion) => format!(
                 "no method '{}' on type '{}', did you mean '{}'?",
                 method, type_name, suggestion
             ),
-            (None, None) => format!("no method '{}' on type '{}'", method, type_name),
+            None => format!("no method '{}' on type '{}'", method, type_name),
         };
         self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
         for arg in args {

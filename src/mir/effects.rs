@@ -1419,23 +1419,39 @@ impl Origins {
 /// Can a value of type `ty` hold a resource? Scalars and strings cannot,
 /// nor can a reference to one.
 fn carries_value(tcx: &TyCtxt, ty: Ty) -> bool {
+    carries_at(tcx, ty, 0)
+}
+
+/// [`carries_value`] at nesting `depth`. A collection, tuple, array or
+/// slice holds only its elements, so one of scalars and strings holds no
+/// resource either: a byte buffer two `par` branches both read made the
+/// two files they write look like one (B-2026-11-07-20).
+fn carries_at(tcx: &TyCtxt, ty: Ty, depth: u32) -> bool {
+    if depth > 4 {
+        return true;
+    }
     let mut t = ty;
     while let SK::Ref(i) | SK::MutRef(i) | SK::RawPtr { pointee: i, .. } = tcx.kind(t) {
         t = i;
     }
-    !matches!(
-        tcx.kind(t),
+    match tcx.kind(t) {
         SK::Int(_)
-            | SK::UInt(_)
-            | SK::Float(_)
-            | SK::Bool
-            | SK::Char
-            | SK::Str
-            | SK::StaticStr
-            | SK::Unit
-            | SK::Never
-            | SK::FnDef { .. }
-    )
+        | SK::UInt(_)
+        | SK::Float(_)
+        | SK::Bool
+        | SK::Char
+        | SK::Str
+        | SK::StaticStr
+        | SK::Unit
+        | SK::Never
+        | SK::FnDef { .. } => false,
+        SK::Tuple(l) | SK::Intrinsic { args: l, .. } => tcx
+            .list(l)
+            .into_iter()
+            .any(|e| carries_at(tcx, e, depth + 1)),
+        SK::Array { elem, .. } | SK::Slice { elem, .. } => carries_at(tcx, elem, depth + 1),
+        _ => true,
+    }
 }
 
 /// Can writing through a value of type `ty` change another value: is it,
@@ -1609,6 +1625,14 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // Opening a connection or a listener sends and receives on the
         // network; accepting receives on the listener (core semantics
         // §14.12: two clients of the real network do not conflict).
+        // A socket's own address, a second handle to it, and its read
+        // timeout: docs/library/io.md gives them no effect clause, so they
+        // order nothing; the address and the handle are allocated
+        // (B-2026-11-07-27: they were `unknown`, and conflicted with any
+        // branch that printed or used another socket).
+        ("TcpListener" | "UdpSocket" | "TlsListener", "local_addr")
+        | ("TcpStream" | "UdpSocket", "try_clone") => vec![HEAP],
+        ("TcpStream" | "UdpSocket" | "TlsStream" | "WebSocket", "set_read_timeout") => vec![],
         ("TcpStream", "connect") | ("TcpListener", "bind") => vec![
             (Sends, "Network", None),
             (Receives, "Network", None),
@@ -4267,6 +4291,75 @@ fn io(_1: ref Vec[i64], _2: ref Vec[i64], _3: ref Vec[i64]) -> () {
                 })
                 .collect()
         })
+    }
+
+    /// B-2026-11-07-27: the socket methods io.md gives no effect clause
+    /// have a known, empty-of-resources effect set, so they conflict with
+    /// nothing in a `par`.
+    #[test]
+    fn effects_socket_address_clone_and_timeout_are_known() {
+        for (base, method) in [
+            ("TcpListener", "local_addr"),
+            ("UdpSocket", "local_addr"),
+            ("TlsListener", "local_addr"),
+            ("TcpStream", "try_clone"),
+            ("UdpSocket", "try_clone"),
+            ("TcpStream", "set_read_timeout"),
+            ("UdpSocket", "set_read_timeout"),
+            ("TlsStream", "set_read_timeout"),
+            ("WebSocket", "set_read_timeout"),
+        ] {
+            let e = native_effects(base, method);
+            assert!(
+                e.as_ref().is_some_and(|v| v
+                    .iter()
+                    .all(|(verb, r, _)| *verb == Verb::Allocates && *r == "Heap")),
+                "{base}.{method}: {e:?}"
+            );
+        }
+    }
+
+    /// B-2026-11-07-20: two `par` branches that pass one read-only buffer
+    /// to calls on two different channels do not conflict; the buffer holds
+    /// no resource, so it does not join the two channels. On one channel
+    /// they still do.
+    #[test]
+    fn effects_par_shared_scalar_buffer_keeps_two_channels_apart() {
+        let r = from_source(
+            "fn put(tx: Sender[i64], b: Slice[i64]) {
+    tx.send(b.len());
+}
+
+fn two_channels() {
+    let (tx1, rx1): (Sender[i64], Receiver[i64]) = Channel.new();
+    let (tx2, rx2): (Sender[i64], Receiver[i64]) = Channel.new();
+    let b: Vec[i64] = [1, 2];
+    par { put(tx1, b.as_slice()), put(tx2, b.as_slice()) };
+}
+
+fn one_channel() {
+    let (tx1, rx1): (Sender[i64], Receiver[i64]) = Channel.new();
+    let b: Vec[i64] = [1, 2];
+    par { put(tx1, b.as_slice()), put(tx1, b.as_slice()) };
+}
+
+fn main() {
+    two_channels();
+    one_channel();
+}
+",
+        );
+        assert!(
+            par_conflicts_of(&r, "two_channels").is_empty(),
+            "{:?}",
+            par_conflicts_of(&r, "two_channels")
+        );
+        assert_eq!(
+            par_conflicts_of(&r, "one_channel").len(),
+            1,
+            "{:?}",
+            r.par_conflicts
+        );
     }
 
     /// Core §11.2 with D6 keys: `par` branches that send on one channel

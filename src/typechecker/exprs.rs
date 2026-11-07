@@ -9753,6 +9753,31 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 return;
             }
+            // `(b[i] - b'a') as usize` where an `i64` is wanted (kata 1061's
+            // Rust template, its `usize` parameters already `i64`): the cast
+            // names `i64` instead, which a lossless operand then drops.
+            if let ExprKind::Cast { ty: cast_ty, .. } = &expr.kind {
+                if matches!(
+                    source,
+                    Type::UInt(UIntSize::Usize) | Type::Int(IntSize::Isize)
+                ) {
+                    self.type_error_with_fix_it(
+                        format!(
+                            "implicit coercion from '{}' to 'i64' would change sign: sizes, \
+                             lengths and indices are `i64` in Kāra (`usize` and `isize` are \
+                             for FFI), so cast to `i64`",
+                            type_display(&source)
+                        ),
+                        expr.span,
+                        TypeErrorKind::TypeMismatch,
+                        FixIt {
+                            span: cast_ty.span,
+                            replacement: "i64".to_string(),
+                        },
+                    );
+                    return;
+                }
+            }
         }
         self.type_error(
             format!(

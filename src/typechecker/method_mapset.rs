@@ -29,8 +29,73 @@ use super::expr_method_call::{
     SORTED_SET_BUILTIN_METHODS,
 };
 use super::types::Type;
+use super::{FixIt, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
+    /// Rust's names for what a sorted collection spells otherwise
+    /// (B-2026-11-05-41, docs/library/collections.md): `first` / `last` on a
+    /// `SortedSet` are `min` / `max`, and `first_key_value` /
+    /// `last_key_value` on a `SortedMap` are `first` / `last`. The fix renames
+    /// the call where `.name()` sits right after the receiver (kata 1061:
+    /// `class.first()`). A user impl's method of the name keeps it.
+    pub(super) fn rename_sorted_twin(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+        obj_ty: &Type,
+    ) -> Option<Type> {
+        let Type::Named {
+            name,
+            args: type_args,
+        } = obj_ty
+        else {
+            return None;
+        };
+        let twin = match (name.as_str(), method) {
+            ("SortedMap", "first_key_value") => "first",
+            ("SortedMap", "last_key_value") => "last",
+            ("SortedSet", "first") => "min",
+            ("SortedSet", "last") => "max",
+            _ => return None,
+        };
+        if !args.is_empty()
+            || !self
+                .env
+                .find_methods_with_args(name, type_args, method)
+                .is_empty()
+        {
+            return None;
+        }
+        let msg = format!(
+            "no method '{method}' on type '{name}': Kāra's is `{twin}()` \
+             (library/collections.md)"
+        );
+        let object_end = object.span.offset + object.span.length;
+        let to = span.offset + span.length;
+        let from = to.saturating_sub(method.len() + 3);
+        if from == object_end {
+            self.type_error_with_fix_it(
+                msg,
+                *span,
+                TypeErrorKind::NoMethodFound,
+                FixIt {
+                    span: Span {
+                        line: object.span.line,
+                        column: object.span.column,
+                        offset: from,
+                        length: to - from,
+                    },
+                    replacement: format!(".{twin}()"),
+                },
+            );
+        } else {
+            self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
+        }
+        Some(Type::Error)
+    }
+
     /// Type a call on a named container / stdlib type.
     ///
     /// Returns `Some(ty)` when this surface claims `method` (including
