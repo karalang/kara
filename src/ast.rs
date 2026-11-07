@@ -895,6 +895,12 @@ pub struct Program {
     /// they are how an author says so on purpose (`return_clause_on_fn`,
     /// design.md § `dyn Trait`, B-2026-10-30-9).
     pub paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Where an `as` cast's operand ends in the source, closing parentheses
+    /// included, keyed by the cast's span. A parenthesized operand leaves no
+    /// node of its own, so its node ends before the `)`; this is where a fix
+    /// that deletes the `as T` starts (`lossless_cast` on `(a - b) as i64`,
+    /// kata 1061).
+    pub cast_operand_ends: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// `MutFn(...)` types (`docs/core-semantics.md` §9.6), keyed by the
     /// function type's span. Kept beside the tree like
     /// [`Self::escaping_fn_types`]: the type is an ordinary non-once `FnType`

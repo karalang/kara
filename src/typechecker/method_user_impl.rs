@@ -1704,7 +1704,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     if bound_trait == "Iterator"
                         && self.into_iter_hinted
-                        && self.has_into_iter(&concrete)
+                        && self.iteration_method(&concrete).is_some()
                     {
                         return Type::Error;
                     }

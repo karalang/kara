@@ -445,6 +445,10 @@ impl super::Parser {
                     if l_bp < min_bp {
                         break;
                     }
+                    // The operand's last token, a `)` its node leaves out
+                    // when it is parenthesized.
+                    let operand_end = self.span_from(&lhs.span);
+                    let operand_end = operand_end.offset + operand_end.length;
                     self.advance();
                     let saved_cast = std::mem::replace(&mut self.cast_type, true);
                     let ty = self.parse_type();
@@ -454,6 +458,10 @@ impl super::Parser {
                     // the target type) rather than copying `lhs.span`, so
                     // `x as i64 as u8` gives its two nodes distinct keys.
                     let cast_span = self.span_from(&lhs.span);
+                    if operand_end > lhs.span.offset + lhs.span.length {
+                        self.cast_operand_ends
+                            .insert(crate::resolver::SpanKey::from_span(&cast_span), operand_end);
+                    }
                     lhs = Expr {
                         id: crate::ids::NodeId::DUMMY,
                         span: cast_span,

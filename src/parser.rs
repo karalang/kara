@@ -240,6 +240,8 @@ pub struct Parser {
     pub(crate) parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::paren_return_types`].
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// See [`crate::ast::Program::cast_operand_ends`].
+    pub(crate) cast_operand_ends: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// See [`crate::ast::Program::mut_fn_types`].
     pub(crate) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::cross_task_fn_types`].
@@ -524,6 +526,7 @@ impl Parser {
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
             parse_target_edits: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
+            cast_operand_ends: rustc_hash::FxHashMap::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
             fn_type_marker_points: rustc_hash::FxHashMap::default(),
@@ -891,6 +894,7 @@ impl Parser {
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
             parse_target_edits: std::mem::take(&mut self.parse_target_edits),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
+            cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
             fn_type_marker_points: std::mem::take(&mut self.fn_type_marker_points),

@@ -1108,12 +1108,15 @@ impl<'a> super::TypeChecker<'a> {
         concrete: &Type,
         span: Span,
     ) -> bool {
-        if trait_name != "Iterator" || !self.has_into_iter(concrete) {
+        if trait_name != "Iterator" {
             return false;
         }
+        let Some(method) = self.iteration_method(concrete) else {
+            return false;
+        };
         let message = format!(
             "trait bound `{type_name}: Iterator` is not satisfied: `{}` is a collection, \
-             not an `Iterator`; iterate it with `.into_iter()` (docs/library/iterators.md)",
+             not an `Iterator`; iterate it with `.{method}()` (docs/library/iterators.md)",
             type_display(concrete)
         );
         match self
@@ -1127,7 +1130,7 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::TypeMismatch,
                 FixIt {
                     span: at,
-                    replacement: ".into_iter()".to_string(),
+                    replacement: format!(".{method}()"),
                 },
             ),
             None => self.type_error(message, span, TypeErrorKind::TypeMismatch),
@@ -1147,18 +1150,30 @@ impl<'a> super::TypeChecker<'a> {
             )
     }
 
-    /// Whether `ty` has an `into_iter` method, its own or a trait's.
-    pub(super) fn has_into_iter(&self, ty: &Type) -> bool {
+    /// The method that iterates `ty` where an `Iterator` is wanted: its
+    /// `into_iter`, its own or a trait's, or else its `iter`, which a
+    /// borrowed view such as a `Slice` has in place of one (kata 1061:
+    /// `s1.bytes().iter().zip(s2.bytes())`).
+    pub(super) fn iteration_method(&self, ty: &Type) -> Option<&'static str> {
         let name = match ty {
             Type::Named { name, .. } => name.as_str(),
             Type::Str => "String",
             Type::Slice { .. } => "Slice",
-            _ => return false,
+            _ => return None,
         };
-        self.env
-            .impls
-            .iter()
-            .any(|imp| imp.target_type == name && imp.methods.contains_key("into_iter"))
+        let has = |method: &str| {
+            self.env
+                .impls
+                .iter()
+                .any(|imp| imp.target_type == name && imp.methods.contains_key(method))
+        };
+        if has("into_iter") {
+            Some("into_iter")
+        } else if has("iter") {
+            Some("iter")
+        } else {
+            None
+        }
     }
 
     /// B-2026-10-18-35: `let v: Vec[String] = s.split(",").collect();` from
@@ -9066,23 +9081,31 @@ impl<'a> super::TypeChecker<'a> {
         }
         // Deleting from the end of the operand to the end of the type keeps
         // the operand; offered where the operand cannot be parenthesized
-        // away from its own span.
-        let start = inner.span.offset + inner.span.length;
+        // away from its own span, or where it is parenthesized and the
+        // deletion starts past its `)` (kata 1061: `(a - b'a') as i64`).
+        let closed = self
+            .program
+            .cast_operand_ends
+            .get(&SpanKey::from_span(&expr.span))
+            .copied();
+        let start = closed.unwrap_or(inner.span.offset + inner.span.length);
         let end = ty.span.offset + ty.span.length;
-        let fix = (matches!(
-            inner.kind,
-            ExprKind::Identifier(_)
-                | ExprKind::SelfValue
-                | ExprKind::FieldAccess { .. }
-                | ExprKind::TupleIndex { .. }
-                | ExprKind::MethodCall { .. }
-                | ExprKind::Call { .. }
-                | ExprKind::Index { .. }
-                | ExprKind::Unary {
-                    op: UnaryOp::Deref,
-                    ..
-                }
-        ) && end > start)
+        let fix = ((closed.is_some()
+            || matches!(
+                inner.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::SelfValue
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::TupleIndex { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::Call { .. }
+                    | ExprKind::Index { .. }
+                    | ExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        ..
+                    }
+            ))
+            && end > start)
             .then(|| FixIt {
                 span: Span {
                     offset: start,
