@@ -114,6 +114,61 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - A UFCS call to a `mut ref self` method marks its receiver,
   `Counter.bump(mut c)`, and `own` is not written beside `escaping`; `karac
   fix` writes both (B-2026-11-04-69).
+- **Soundness holes in borrowing and tasks.** Each was accepted and is now
+  refused: a `self` method that returns a borrowed argument as its
+  result (B-2026-11-02-28); a non-escaping `Fn` parameter captured by a
+  returned closure (B-2026-11-02-31); a closure in a let-bound tuple
+  treated as non-escaping (B-2026-11-02-39); a `shared` handle entering a
+  `par` branch through a local closure (B-2026-11-03-8); a `Map` key
+  written through `iter_mut()` (B-2026-11-03-26); a view (`ref T`) sent
+  through a channel, which read freed memory at run time
+  (B-2026-11-02-27); `Option.take` / `replace` / `get_or_insert` through
+  a borrowed place (B-2026-11-07-16).
+- **Effects are charged where the spec charges them.** A `?` charges its
+  `From` conversion's effects (B-2026-11-04-18); a call charges the
+  callee's declared contract, not its body's (B-2026-11-04-26); two `par`
+  branches that write the same user-declared resource conflict
+  (B-2026-11-04-25); a declared clause is verified on private functions
+  and trait default methods (B-2026-11-04-27); a `dyn` value's drop
+  charges its drop glue's effects (B-2026-11-01-39);
+  `#[no_effect(allocates(Heap))]` sees `to_vec`, `to_string`, f-strings
+  and collection literals (B-2026-11-04-28); integer `/`, `%` and
+  checked overflow count as `panics` (B-2026-11-04-29).
+- **Trait and type rules.** `Copy` beside `Drop` on one type (the drop
+  ran once per copy, B-2026-11-06-24); a derive beside a manual impl of
+  the same trait, `#[derive(Drop)]`, an impl for `dyn Trait`, `clone(own
+  self)` and an unknown associated binding in a bound
+  (B-2026-11-06-27); overlapping impls and an inherent impl on a standard
+  type (B-2026-11-04-14, -15); `dbg` of a type without `Debug`, and a
+  derived `Debug` or `Clone` on a generic type whose arguments lack it
+  (B-2026-11-07-11).
+- **Names.** `let`, `for`, closure and pattern bindings must be
+  value-class (lower case), as parameters already were (E0127); a type or
+  constant name may not start with `_` (B-2026-11-06-18).
+- **Constants are evaluated at compile time.** An integer, bool or char
+  initializer that overflows, divides by zero or shifts out of width is a
+  check error: `const SH: i32 = 1 << 40` read as 0, and `i64.MAX + 1` or
+  `1 / 0` read 0 or panicked at each use (B-2026-11-06-20). A cycle between constants is an error instead of a
+  compiler stack overflow (B-2026-11-06-19), and polymorphic recursion
+  is refused instead of hanging the compiler (B-2026-11-06-12).
+- A process spawn is refused on `wasm_wasi` by `karac check
+  --targets=all` and a two-target build (B-2026-11-05-11).
+
+### Deprecated (errors at the next minor release)
+
+Each still compiles in 0.8.x with a `deprecated` warning and a
+`karac fix` edit; the next minor release refuses it.
+
+- **An implied derive.** `Copy` without `Clone`, `Eq` or `PartialOrd`
+  without `PartialEq`, `Ord` without `PartialOrd` and `Eq`: the compiler
+  fills the missing derive in and warns (W0245); `karac fix` writes it
+  (design.md §9, B-2026-11-06-27, tracked by B-2026-11-07-10).
+- **An f-string nested inside an f-string's hole.** When the hole is the
+  inner f-string alone, `karac fix` writes its text in place
+  (design.md §3, B-2026-11-06-18, tracked by B-2026-11-07-32).
+- **`mut` on a field of a plain struct or enum.** Mutability belongs to
+  the binding; `karac fix` deletes the field's `mut` (design.md §5,
+  tracked by B-2026-11-04-79).
 
 ### Changed
 
@@ -160,6 +215,19 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   alike. The `fix_it` object and `fixes` array a 0.8.0 type-check record
   carried beside its `replacement` are gone, so a tool that reads them reads
   `replacement` instead (design.md § 17, B-2026-11-05-30).
+- **Comparisons see through `ref`.** `==`, `!=`, `<`, `<=`, `>` and `>=`
+  compare the values whether either side is `T`, `ref T` or `mut ref T`,
+  for any `T`, and move neither; arithmetic keeps its Copy-only rule
+  (design.md § No automatic dereference in operators, B-2026-11-05-1).
+- **The Linux tarballs need glibc 2.34, not 2.39.** They are built on
+  Ubuntu 22.04 and the release checks every binary's symbol versions, so
+  they start on Ubuntu 22.04, Debian 12, RHEL 9 and Amazon Linux 2023;
+  0.8.0's did not (B-2026-11-07-48). README's Install section gives the
+  download, checksum and PATH steps (B-2026-11-07-49).
+- `"hello".substring(-5, 2)` clamps the start to 0 and gives `"he"`, as
+  strings.md says; it gave `""` (B-2026-11-03-16).
+- `karac fmt` keeps a one-element tuple type's comma (`(i64,)`), which it
+  dropped (B-2026-11-05-14).
 
 ### Added
 
@@ -200,6 +268,22 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   removes `ref` from a parameter's type. Each stays silent where the rewrite
   would not mean the same (the counter read after the loop, a `continue`, a
   bound the body changes), and `karac lint --list` lists them.
+- Script mode's implicit `main` returns `Result`, so a top-level `?`
+  works (B-2026-11-04-19). A nested module imports as itself (`import
+  db.connection;`, B-2026-11-04-21). A struct pattern with `..` destructures
+  a parameter (B-2026-11-04-63). A blanket impl of the program's own trait
+  is found (B-2026-11-04-16).
+- Library: `Vec.drain(range)` (B-2026-11-04-77), `Vec.rotate_left` /
+  `rotate_right` (B-2026-11-06-35), `Slice.iter_mut` (B-2026-11-06-37),
+  `.step_by(n).rev()` over a range (B-2026-11-05-35), `RangeTo`,
+  `RangeToInclusive` and `RangeFull` as values and types
+  (B-2026-11-05-37), `CString.from_bytes` and `CString`'s `to_str` /
+  `to_string` (B-2026-11-06-32), `Option.from` / `Result.from`
+  (B-2026-11-07-11), and reading or upgrading a `weak T` through a `ref`
+  binding (B-2026-11-07-7).
+- The debugger contract's runtime records: a JSONL panic event under
+  `karac run` and `karac test`, spawn-site ids, parent frames, task effect
+  summaries and the peer a task waits on (B-2026-11-05-18, -34, -36).
 
 ### Wrong behaviour fixed
 
@@ -323,6 +407,42 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - In a trait's default method, `self.m()` calls that trait's `m` in every
   impl the default is copied into, even when the type implements another
   trait with an `m`; it was refused as ambiguous (B-2026-11-04-40).
+- **Miscompiles.** A `Map` index place, or a place rooted in any call,
+  evaluates before the assigned value, as core-semantics §8.2 says
+  (B-2026-11-01-28, -29); `mem.swap` and `Option.replace` on `Fn` values
+  holding closure literals (B-2026-11-02-19); `ref`-element natives such
+  as `Vec[ref String].fill` and `SortedSet[ref String]` iteration
+  (B-2026-11-02-38); `#[target]` on impl members, fields and variants
+  (B-2026-11-06-22); a generic function passed as an `Fn` value
+  (B-2026-11-07-2).
+- **Crashes.** `BufReader.read_line` / `read_to_string` into a string
+  that started as a literal segfaulted (B-2026-11-07-19); `Client.get` /
+  `post` under a `Network` fake (B-2026-11-03-18); a string or integer
+  literal stored into a `ref` slot (B-2026-11-02-37); `m.get_or(k, "lit")`
+  on a `Map[String, String]` (B-2026-11-05-38); parallel assignment
+  `a, b = b, a` in a package panicked the compiler (B-2026-11-05-19);
+  deeply nested blocks ran the parser out of memory (B-2026-11-02-25);
+  `mem.replace` on an `Fn` local (B-2026-11-02-16); a private type named
+  like a library one (`struct Sender`, B-2026-11-07-6).
+- **Accepted by check, refused at run or build, now run.** Mixed-width
+  compound assignment (`total_i64 += n_i32`, B-2026-11-04-59); or-patterns
+  binding under a guard and two other pattern shapes (B-2026-11-04-57);
+  `self.raw()` on a borrowed `distinct` value (B-2026-11-04-48); a trait
+  default method reached through a blanket impl (B-2026-11-04-49); an
+  impl on a type alias (B-2026-11-04-50); cloning a `Vec` of `Fn` values
+  (B-2026-11-03-3); a receiver of `Fn + CrossTask` values iterated with
+  `for` (B-2026-11-04-4); a closure over dotted unit variants stored as
+  `Fn` (B-2026-11-07-13); provider-writing closures as `Fn` values and in
+  runtime-run closures (B-2026-10-30-3, -5).
+- **Interpreter and compiled code agree.** A negative capacity
+  (B-2026-11-03-15); a non-HTTP URL scheme is refused by the compiled
+  client too (B-2026-11-07-28); requests through a CONNECT tunnel
+  (B-2026-11-07-29); `karac test` accepts what `karac check` accepts
+  (B-2026-10-30-4).
+- About 40 more programs 0.8.0 wrongly refused are accepted, most of them
+  borrow-check and effect-check false positives (moves after iterator
+  chains, disjoint field writes in tasks, closures per branch, operator
+  impls and `std.*` imports in a package). The ledger rows are the list.
 
 ### Diagnostics
 
