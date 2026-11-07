@@ -1,0 +1,7 @@
+// design.md § Constants: an initializer that overflows has no value, so
+// check refuses it instead of the program panicking at each use.
+const XX: i64 = 9223372036854775807 + 1;
+
+fn main() {
+    println(XX);
+}

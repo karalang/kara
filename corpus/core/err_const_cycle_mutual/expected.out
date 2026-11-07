@@ -1,0 +1,1 @@
+ERROR at line 4: constant `AA` is defined through itself (`AA` -> `BB` -> `CC` -> `AA`), so it has no value; give one of them a value that does not name the others

@@ -1,0 +1,29 @@
+// design.md § Constants: initializers within range evaluate at compile time
+// and read the same at every use. A negated literal is one literal (`-128`
+// fits an i8), and a constant may name a later one.
+const ZZ: i64 = -9223372036854775808;
+const MM: i64 = 0 - 9223372036854775807 - 1;
+const TOP: u64 = 1 << 63;
+const BB: i64 = LATER * 4;
+const LATER: i64 = 1 << 20;
+const NN: i8 = -128;
+const UU: u8 = 255;
+const REM: i64 = 7 % 3;
+const NEG: i32 = -(5 - 7);
+const BL: bool = 3 > 2 and true;
+const SHR: i64 = -16 >> 2;
+const MX: i64 = i64.MAX;
+
+fn main() {
+    println(ZZ);
+    println(MM);
+    println(TOP);
+    println(BB);
+    println(NN);
+    println(UU);
+    println(REM);
+    println(NEG);
+    println(BL);
+    println(SHR);
+    println(MX);
+}

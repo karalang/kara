@@ -1,0 +1,6 @@
+// design.md § Constants: a constant that names itself has no value.
+const AA: i64 = AA + 1;
+
+fn main() {
+    println(AA);
+}

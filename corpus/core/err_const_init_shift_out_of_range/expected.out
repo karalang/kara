@@ -1,0 +1,1 @@
+ERROR at line 4: const expression overflow: 1i32 << 40i32 overflows i32

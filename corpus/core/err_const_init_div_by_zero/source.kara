@@ -1,0 +1,6 @@
+// design.md § Constants: an initializer that divides by zero has no value.
+const XX: i64 = 1 / 0;
+
+fn main() {
+    println(XX);
+}

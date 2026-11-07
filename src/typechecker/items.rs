@@ -1835,6 +1835,16 @@ impl<'a> super::TypeChecker<'a> {
                 })
             }
             ExprKind::Unary { op, operand } => {
+                // A negated literal is one literal: `-128` fits `i8` though
+                // `128` does not (B-2026-11-06-20).
+                if let (UnaryOp::Neg, ExprKind::Integer(n, sfx)) = (op, &operand.kind) {
+                    if *n > 0 {
+                        let mut lit = (**operand).clone();
+                        lit.kind = ExprKind::Integer(-*n, *sfx);
+                        lit.span = expr.span;
+                        return self.eval_const_expr_with_chain(&lit, target_ty, chain);
+                    }
+                }
                 let val = self.eval_const_expr_with_chain(operand, target_ty, chain)?;
                 apply_unary(op.clone(), val, &expr.span)
             }
@@ -5406,6 +5416,50 @@ impl<'a> super::TypeChecker<'a> {
         // "expected 'Array[i64, 3]', found 'Vec[i64]'" -- the form a local
         // `let` and a module-level `let` both accept.
         self.check_expr(&c.value, &declared_ty);
+        // A constant has a value only when its initializer reaches one
+        // without coming back to it (design.md § Constants,
+        // B-2026-11-06-19): a cycle is refused once, at the first-declared
+        // constant on it, before anything tries to build the value.
+        if let Some((cycle, at)) = self.const_cycle(c) {
+            if let Some(first) = cycle.first().filter(|f| **f == c.name) {
+                let shown = cycle
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                self.type_error(
+                    format!(
+                        "constant `{first}` is defined through itself ({shown}), so it has \
+                         no value; give one of them a value that does not name the others"
+                    ),
+                    at,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+            return;
+        }
+        // The initializer is evaluated at compile time (design.md
+        // § Constants), so one that overflows, divides by zero or shifts out
+        // of range has no value and is refused here rather than panicking
+        // at every use (B-2026-11-06-20). Shapes the evaluator does not fold
+        // (floats, aggregates, casts) are left to the checks above.
+        if matches!(
+            declared_ty,
+            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char
+        ) {
+            if let Err(e) = self.eval_const_expr(&c.value, &declared_ty) {
+                use super::const_eval::ConstEvalError as E;
+                if matches!(
+                    e,
+                    E::Overflow { .. }
+                        | E::UnaryOverflow { .. }
+                        | E::DivByZero { .. }
+                        | E::OutOfRange { .. }
+                ) {
+                    self.emit_const_eval_error(e);
+                }
+            }
+        }
         // B-2026-10-22-19: the initializer must be a compile-time constant
         // (design.md § Constants, "Allowed initializers"). The module-binding
         // walker checks the shape; the flag turns off its special forms,
@@ -5491,6 +5545,79 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+    }
+
+    /// A cycle of constants through `c`'s initializer: the constants from
+    /// the first-declared one on the cycle round to it again, and the
+    /// span in `c`'s initializer of the name that starts it.
+    fn const_cycle(&self, c: &ConstDecl) -> Option<(Vec<String>, Span)> {
+        let consts: HashMap<&str, &ConstDecl> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::ConstDecl(d) => Some((d.name.as_str(), d)),
+                _ => None,
+            })
+            .collect();
+        let names_in = |e: &Expr| {
+            let mut out: Vec<(String, Span)> = Vec::new();
+            crate::span_visitor::for_each_expr(e, &mut |x: &Expr| {
+                if let ExprKind::Identifier(n) = &x.kind {
+                    if consts.contains_key(n.as_str()) {
+                        out.push((n.clone(), x.span));
+                    }
+                }
+            });
+            out
+        };
+        // Depth-first from each name `c` uses, looking for `c`.
+        fn reaches<'p>(
+            from: &str,
+            target: &str,
+            consts: &HashMap<&str, &'p ConstDecl>,
+            names_in: &dyn Fn(&Expr) -> Vec<(String, Span)>,
+            path: &mut Vec<String>,
+            seen: &mut HashSet<String>,
+        ) -> bool {
+            if from == target {
+                return true;
+            }
+            if !seen.insert(from.to_string()) {
+                return false;
+            }
+            let Some(d) = consts.get(from) else {
+                return false;
+            };
+            for (n, _) in names_in(&d.value) {
+                path.push(n.clone());
+                if reaches(&n, target, consts, names_in, path, seen) {
+                    return true;
+                }
+                path.pop();
+            }
+            false
+        }
+        for (n, at) in names_in(&c.value) {
+            let mut path = vec![c.name.clone(), n.clone()];
+            let mut seen = HashSet::new();
+            if reaches(&n, &c.name, &consts, &names_in, &mut path, &mut seen) {
+                // Rotate so the first-declared constant leads.
+                let ring = &path[..path.len() - 1];
+                let lead = ring
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, n)| {
+                        consts.get(n.as_str()).map_or(usize::MAX, |d| d.span.offset)
+                    })
+                    .map_or(0, |(i, _)| i);
+                let mut cycle: Vec<String> =
+                    ring[lead..].iter().chain(&ring[..lead]).cloned().collect();
+                cycle.push(cycle[0].clone());
+                return Some((cycle, at));
+            }
+        }
+        None
     }
 
     /// The first `(struct, field)` of a struct in `ty` (directly, or

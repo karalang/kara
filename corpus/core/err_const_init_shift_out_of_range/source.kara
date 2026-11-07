@@ -1,0 +1,8 @@
+// design.md § Constants: the initializer is a compile-time constant, so a
+// shift past an i32's width has no value. It read as 0 before; the same
+// shift at run time panics.
+const SH: i32 = 1 << 40;
+
+fn main() {
+    println(SH);
+}

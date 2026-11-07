@@ -1,0 +1,13 @@
+// design.md § Constants: a cycle has no value whatever the type.
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+const PP: Point = QQ;
+const QQ: Point = PP;
+
+fn main() {
+    let p = PP;
+    println(p.x);
+}

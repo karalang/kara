@@ -1,0 +1,1 @@
+ERROR at line 7: constant `PP` is defined through itself (`PP` -> `QQ` -> `PP`), so it has no value; give one of them a value that does not name the others

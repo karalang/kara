@@ -1,0 +1,10 @@
+// design.md § Constants: an initializer may name other constants, but a
+// cycle has no value. Refused naming the cycle (the compiler overflowed its
+// stack here).
+const AA: i64 = BB + 1;
+const BB: i64 = CC * 2;
+const CC: i64 = AA;
+
+fn main() {
+    println(AA);
+}
