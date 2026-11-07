@@ -1783,6 +1783,73 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("has_debug_metadata", "") => vec![],
         // `std.log`'s natives, called only from its transparent functions.
         (b, "") if b.ends_with("$std_log") => vec![],
+        // Every other native the interpreter dispatches, the sweep after
+        // B-2026-11-07-27 and -36 (`effects_every_interpreted_native_has_an_effect_set`
+        // reads them off `fn native`). A method no arm above names gets its family's
+        // whole effect set, keyed as that family keys it: wider than the
+        // method needs, never `unknown`, which conflicts with everything.
+        ("Arena" | "Interner", _) => vec![HEAP, PANICS],
+        ("Atomic", _) | ("Mutex", "get_mut" | "into_inner") => vec![],
+        ("BoundedChannel", "new") => vec![HEAP],
+        ("Channel" | "BoundedChannel" | "Sender" | "Receiver", _) => vec![
+            (Sends, "Channel", Some(0)),
+            (Receives, "Channel", Some(0)),
+            (Blocks, "", None),
+            HEAP,
+        ],
+        ("BufReader" | "BufWriter" | "LinesIter", _) => vec![
+            (Reads, "File", Some(0)),
+            (Writes, "File", Some(0)),
+            (Blocks, "", None),
+            HEAP,
+        ],
+        ("Child", _) => vec![(Sends, "ProcessTable", Some(0)), (Blocks, "", None), HEAP],
+        ("ChildStdin" | "ChildStdout" | "ChildStderr", _) => vec![
+            (Sends, "Pipe", Some(0)),
+            (Receives, "Pipe", Some(0)),
+            (Blocks, "", None),
+            HEAP,
+        ],
+        ("Client" | "RequestBuilder", _) => vec![
+            (Sends, "Network", None),
+            (Receives, "Network", None),
+            (Blocks, "", None),
+            HEAP,
+        ],
+        ("TcpListener" | "TcpStream" | "TlsListener" | "TlsStream" | "UdpSocket", _) => vec![
+            (Sends, "Network", Some(0)),
+            (Receives, "Network", Some(0)),
+            (Blocks, "", None),
+            HEAP,
+        ],
+        ("FileSystem", _) => vec![
+            (Reads, "FileSystem", None),
+            (Writes, "FileSystem", None),
+            (Blocks, "", None),
+            HEAP,
+        ],
+        // Pure computations over values.
+        ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => vec![HEAP],
+        ("Cpu", "supports") | ("Secret" | "StableHash", _) | ("mem", "replace" | "swap") => {
+            vec![]
+        }
+        ("ref_eq", "") => vec![],
+        ("Vector", _) => vec![PANICS],
+        ("compiler", "error") => vec![PANICS],
+        // Leaving a critical section and returning a pooled connection
+        // release what the program held.
+        ("CriticalSectionGuard", "drop") | ("PooledConnection", _) => vec![],
+        // A closure handed to `get_or_init` is charged as every native's
+        // closure argument is; the first caller may wait for it.
+        ("LazyLock", "new") => vec![HEAP],
+        ("OnceCell" | "OnceLock", _) => vec![(Blocks, "", None), HEAP],
+        ("Pool" | "Semaphore", _) => vec![(Blocks, "", None), HEAP],
+        ("RateLimiter", _) => vec![(Reads, "Clock", None), (Blocks, "", None), HEAP],
+        ("Runtime", "list_par_blocks" | "list_tasks") => vec![(Reads, "Scheduler", None), HEAP],
+        ("Runtime", "has_debug_metadata") => vec![],
+        ("StdinLines", "next") => vec![(Writes, "Stdin", None), (Blocks, "", None), HEAP],
+        ("TaskGroup", _) => vec![HEAP],
+        ("TaskHandle", _) => vec![(Blocks, "", None)],
         _ => return None,
     })
 }
@@ -5089,5 +5156,86 @@ fn main() {
         }
         assert_eq!(spawns, 2);
         assert!(r.suspending().contains("main"));
+    }
+
+    /// Every native the MIR interpreter dispatches has an effect set here,
+    /// the sweep after B-2026-11-07-27 and -36 (each one family missing).
+    /// A native the table does not know is `unknown`, and an unknown
+    /// effect conflicts with every other effect in a `par`, so a
+    /// missing entry refuses correct programs (`par { i64.parse(a),
+    /// i64.parse(b) }` was refused over `str.char_at_byte`). The natives
+    /// are read off the interpreter's own dispatch (`fn native` in
+    /// interp.rs): a `(Base, "method")` arm needs that pair here, and a
+    /// `(Base, _)` arm needs every method of `Base` here. The few left
+    /// unknown on purpose are listed with the reason.
+    #[test]
+    fn effects_every_interpreted_native_has_an_effect_set() {
+        // Natives whose effects are the program's own, so `unknown` is
+        // the honest answer.
+        const UNKNOWN_ON_PURPOSE: &[(&str, &str)] = &[
+            // It calls whichever exporter is registered, which can be the
+            // program's own (see `native_effects`).
+            ("Log", "*"),
+            // A `LazyLock` runs its initializer at the first `get`, which
+            // is a closure from wherever the lock was made.
+            ("LazyLock", "get"),
+            // Ending the process ends every branch and task.
+            ("process", "exit"),
+        ];
+        let src = include_str!("interp.rs");
+        let start = src
+            .find("    fn native(&mut self, name: &str")
+            .expect("interp.rs has `fn native`");
+        let end = start + 1 + src[start + 1..].find("\n    fn ").expect("a fn after it");
+        let body = &src[start..end];
+        let arm = regex::Regex::new(
+            r#"\(\s*((?:"[\w\[\]]+"\s*\|\s*)*"[\w\[\]]+")\s*,\s*((?:"\w+"\s*\|\s*)*"\w+"|_|[a-z]\w*)\s*,?\s*\)\s*(?:if [^=]*)?=>"#,
+        )
+        .unwrap();
+        let lit = regex::Regex::new(r#""([^"]+)""#).unwrap();
+        let free = regex::Regex::new(r#"\|\| name == "(\w+)"|\bif name == "(\w+)""#).unwrap();
+        let mut asked: BTreeSet<(String, String)> = BTreeSet::new();
+        for c in arm.captures_iter(body) {
+            let methods: Vec<String> = lit.captures_iter(&c[2]).map(|m| m[1].to_string()).collect();
+            for b in lit.captures_iter(&c[1]) {
+                if methods.is_empty() {
+                    asked.insert((b[1].to_string(), "*".to_string()));
+                }
+                for m in &methods {
+                    asked.insert((b[1].to_string(), m.clone()));
+                }
+            }
+        }
+        for c in free.captures_iter(body) {
+            let n = c.get(1).or_else(|| c.get(2)).unwrap().as_str();
+            asked.insert((n.to_string(), String::new()));
+        }
+        // The interpreter forwards a `str` view's natives to `String`'s.
+        asked.insert(("str".to_string(), "char_at_byte".to_string()));
+        asked.insert(("str".to_string(), "is_empty".to_string()));
+        assert!(
+            asked.len() > 150,
+            "read {} natives off interp.rs",
+            asked.len()
+        );
+        let missing: Vec<String> = asked
+            .iter()
+            .filter(|(b, m)| {
+                !UNKNOWN_ON_PURPOSE
+                    .iter()
+                    .any(|(ub, um)| ub == b && (*um == "*" || um == m))
+            })
+            .filter(|(b, m)| {
+                // `*` asks for a method no arm names, which only a catch-all
+                // for the base answers.
+                let m = if m == "*" { "\u{0}any" } else { m.as_str() };
+                native_effects(b, m).is_none()
+            })
+            .map(|(b, m)| format!("{b}.{m}"))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "natives with no effect set: {missing:?}"
+        );
     }
 }
