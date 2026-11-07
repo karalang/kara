@@ -4208,7 +4208,7 @@ trait Hash {
 **The consistency contract.** Every `Hash` impl must satisfy: if `a == b`, then hashing `a` and hashing `b` feed identical bytes to any hasher. The contract is documented, not checked, since checking it would mean reasoning about arbitrary code. Breaking it is a logic bug (lookups miss keys that are present), not a safety bug.
 
 **Derive.** `#[derive(Hash)]` on a struct feeds each field to the hasher in declaration order. On an enum it feeds the discriminant, then the active variant's fields in declaration order. Every field type must be `Hash`. The derive generates ordinary code, `self.a.hash(mut hasher); self.b.hash(mut hasher);`, so a derived impl and a hand-written one behave alike.
-- **`derive(Hash)` does not require or add `PartialEq` or `Eq`.** A type may be hashable without being comparable.
+- **`derive(Hash)` does not require or add `PartialEq` or `Eq`.** A type may be hashable without being comparable. (0.8.x still adds `Eq` and `PartialEq` with a deprecation warning, as above.)
 - **A `Map` key or `Set` element needs `Hash` and `Eq` together.** For a key type that lacks one, the diagnostic names the missing trait.
 - A manual `impl Hash` is allowed but should be rare. It must keep the consistency contract with the type's `PartialEq`.
 
@@ -4367,7 +4367,7 @@ struct Point { x: i64, y: i64 }
 | `Arithmetic` | `+`, `-`, `*`, `/`, `%` and unary `-` on one distinct type ([Operator traits](#operator-traits)) | distinct types only |
 | `Serialize`, `Deserialize` | field traversal (below) | every field `Serialize` / `Deserialize` |
 
-**A derive never adds another.** A derived impl needs its supertraits implemented, like any impl ([Supertraits](#supertraits)). A missing one is an error with a machine-applicable fix that adds the derive: `#[derive(Copy)]` without `Clone`, or `#[derive(Ord)]` without `PartialOrd`, `Eq` or `PartialEq`. The order of the list does not matter. The chains are:
+**A derive never adds another.** A derived impl needs its supertraits implemented, like any impl ([Supertraits](#supertraits)). A missing one is an error with a machine-applicable fix that adds the derive: `#[derive(Copy)]` without `Clone`, or `#[derive(Ord)]` without `PartialOrd`, `Eq` or `PartialEq`. The order of the list does not matter. (In 0.8.x the compiler still fills a missing derive in, with a deprecation warning carrying the same fix; it becomes the error at the next minor release, B-2026-11-06-27.) The chains are:
 - `Eq` needs `PartialEq`;
 - `PartialOrd` needs `PartialEq`;
 - `Ord` needs `PartialOrd` and `Eq`;
