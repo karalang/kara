@@ -911,6 +911,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
             Some(DiagnosticClass::OwnershipMoveAfterUse),
         ),
     ),
+    // design.md §10: a cleanup block never captures by move (B-2026-11-06-28).
+    (
+        "E0522",
+        own(
+            "MoveInCleanupBlock",
+            Some(DiagnosticClass::OwnershipMoveAfterUse),
+        ),
+    ),
     // v2 core: borrow conflicts the checker finds before MIR borrowck runs
     // under `check`; MIR borrowck uses the same codes.
     (
@@ -2467,6 +2475,7 @@ fn concept_for_kind(kind: &str) -> Option<&'static str> {
         "UseAfterMove"
         | "MoveOutOfPlace"
         | "MovedFieldRefilledAcrossCall"
+        | "MoveInCleanupBlock"
         | "MoveOutOfNoMovePlace"
         | "IndexMoveNonCopy" => "ownership/move-semantics",
         "BorrowConflict"
@@ -2985,6 +2994,7 @@ mod tests {
             ("E0513", O::MovedFieldRefilledAcrossCall),
             ("E0514", O::RcFallbackOfDropType),
             ("E0515", O::MoveOutOfPlace),
+            ("E0522", O::MoveInCleanupBlock),
         ];
         for (code, kind) in ownerships {
             let want = crate::ownership::class_for_ownership_error_kind(kind);

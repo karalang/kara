@@ -2380,6 +2380,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::MovedFieldRefilledAcrossCall => "E0513",
                 crate::ownership::OwnershipErrorKind::RcFallbackOfDropType => "E0514",
                 crate::ownership::OwnershipErrorKind::MoveOutOfPlace => "E0515",
+                crate::ownership::OwnershipErrorKind::MoveInCleanupBlock => "E0522",
                 crate::ownership::OwnershipErrorKind::OwnershipCycle => "E0501",
                 crate::ownership::OwnershipErrorKind::NoRcViolation => "E0502",
                 crate::ownership::OwnershipErrorKind::RcFallbackNote => "N0503",

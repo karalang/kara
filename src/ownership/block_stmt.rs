@@ -399,6 +399,40 @@ impl<'a> super::OwnershipChecker<'a> {
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
                 let mut defer_states = states.clone();
                 self.check_block(body, &mut defer_states, param_types, param_usage);
+                // design.md §10: a cleanup block never captures by move. A
+                // binding of the enclosing scope that the block moves is an
+                // error at the move (B-2026-11-06-28); a binding the block
+                // declares itself is its own to move.
+                let cleanup = if matches!(stmt.kind, StmtKind::Defer { .. }) {
+                    "defer"
+                } else {
+                    "errdefer"
+                };
+                let mut moved: Vec<(&String, crate::token::Span)> = states
+                    .iter()
+                    .filter(|(_, before)| !matches!(before, ValueState::Moved { .. }))
+                    .filter_map(|(name, _)| match defer_states.get(name) {
+                        Some(ValueState::Moved { at }) => Some((name, *at)),
+                        _ => None,
+                    })
+                    .collect();
+                moved.sort_by_key(|(_, at)| (at.line, at.column));
+                for (name, at) in moved {
+                    self.errors.push(OwnershipError {
+                        message: format!(
+                            "`{cleanup}` block moves `{name}`: a cleanup block never captures by move, \
+                             so the bindings it uses stay valid until the scope ends (design.md §10)"
+                        ),
+                        span: at,
+                        kind: OwnershipErrorKind::MoveInCleanupBlock,
+                        suggestion: Some(format!(
+                            "borrow `{name}` in the block (a `ref` parameter or a `ref self` method), \
+                             or move a clone: `{name}.clone()`"
+                        )),
+                        replacement: None,
+                        consume_span: None,
+                    });
+                }
             }
             StmtKind::Assign { target, value } => {
                 // Check if target is a variable — reassignment resets state

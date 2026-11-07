@@ -726,6 +726,10 @@ pub enum OwnershipErrorKind {
     /// meaning: whichever owner runs it leaves the others holding a destroyed
     /// value, and both backends ran it early, twice or over freed memory.
     RcFallbackOfDropType,
+    /// B-2026-11-06-28 — a `defer` or `errdefer` block moves a binding of
+    /// the enclosing scope. design.md §10: a cleanup block never captures by
+    /// move; the bindings it uses must stay valid until the scope ends.
+    MoveInCleanupBlock,
     OwnershipCycle,
     /// A value of a `@no_rc` type or inside a `#[no_rc]` function
     /// would require RC fallback.
@@ -936,6 +940,9 @@ pub(crate) fn class_for_ownership_error_kind(
         // A move followed by a use the move does not dominate: the same
         // move-after-use substance, rejected rather than RC-boxed.
         OwnershipErrorKind::RcFallbackOfDropType => Some(DC::OwnershipMoveAfterUse),
+        // A move where the block's bindings must stay usable: the same
+        // move-restriction substance as a move out of a kept place.
+        OwnershipErrorKind::MoveInCleanupBlock => Some(DC::OwnershipMoveAfterUse),
 
         OwnershipErrorKind::OwnershipCycle
         | OwnershipErrorKind::NoRcViolation
