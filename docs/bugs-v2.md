@@ -111,7 +111,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
-| B-2026-11-07-14 | 2026-11-07 | ownership | medium | `karac check` refuses moving a binding made by a `let .. else` inside a loop (`let Some(done) = rx.recv() else { .. }; out[done.slot] = Some(done.outcome);`) as "moved inside a loop and not assigned again before the next iteration", though it binds afresh each iteration and every backend runs it | — |
 | B-2026-11-07-15 | 2026-11-07 | typecheck | low | For `let job = jobs[j];` whose fields are then written (`job.status = 2`), `karac fix` derives `Clone` on the element type and adds `mut`, steering toward a copy that would drop the writes; the repair that keeps them is `let job = mut ref jobs[j];` | — |
 
 ### Relocated
@@ -785,6 +784,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-11 | typecheck | low | §9 remainder of B-2026-11-06-27: `dbg` on a Display-only type and derived `Debug`/`Clone` on a generic type ignore the bound (items 8, 9); `Option.fr… | 4fdb64b0c6 |
 | B-2026-11-07-12 | mir | high | A plain binding of a non-`Copy` part of a `shared` value held in a local (`match m.a { Some(i) => . | 9d3631f381 |
 | B-2026-11-07-13 | typecheck | medium | A closure that matches a captured enum against dotted unit variants only (`match cmp { Cmp.Lt => x < v, Cmp.Ge => x >= v }`) types as `OnceFn` on the… | 9d3631f381 |
+| B-2026-11-07-14 | ownership | medium | `karac check` refuses moving a binding made by a `let . | 78f0e2b7e5 |
 
 </details>
 
