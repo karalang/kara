@@ -1,0 +1,2 @@
+ERROR at line 8: `Pair` requires its parameter `T` to implement `Ord`, but `Q` does not implement `Ord`
+ERROR at line 9: `WPair` requires its parameter `T` to implement `Ord`, but `Q` does not implement `Ord`

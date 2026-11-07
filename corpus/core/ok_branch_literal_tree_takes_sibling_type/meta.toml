@@ -1,0 +1,9 @@
+source = "B-2026-11-06-15"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["types", "lub"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-15: with LUB rule 4 enforced for numeric types, a branch that is an `if` or `match` of unsuffixed literals still joins its sibling: it takes the sibling's `u64`, `i128` or `f32`, values past i64 included."

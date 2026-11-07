@@ -5673,6 +5673,71 @@ impl<'a> super::TypeChecker<'a> {
         fits.then_some(e)
     }
 
+    /// An expression every value of which is an unsuffixed numeric literal
+    /// `peer` can hold: such a literal, or a block, `if` or `match` ending
+    /// only in them (`if b { 1 } else { 0 }`). Its literals are still type
+    /// variables (design.md § Type inference), so it takes its sibling
+    /// branch's type, as a lone literal does (B-2026-11-06-15).
+    pub(super) fn is_literal_tree(e: &Expr, peer: &Type) -> bool {
+        match &e.kind {
+            // Statements before the tail do not change the block's value
+            // (`else { bad = true; 0 }`).
+            ExprKind::Block(b) => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| Self::is_literal_tree(t, peer)),
+            ExprKind::If {
+                then_block,
+                else_branch: Some(els),
+                ..
+            } => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| Self::is_literal_tree(t, peer))
+                    && Self::is_literal_tree(els, peer)
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty() && arms.iter().all(|a| Self::is_literal_tree(&a.body, peer))
+            }
+            _ => Self::literal_taking_branch_type(e, peer).is_some(),
+        }
+    }
+
+    /// Give every literal of an [`Self::is_literal_tree`] expression, and
+    /// each block, `if` and `match` holding them, the type `peer`.
+    pub(super) fn promote_literal_tree(&mut self, e: &Expr, peer: &Type) {
+        match &e.kind {
+            ExprKind::Block(b) if b.final_expr.is_some() => {
+                if let Some(t) = b.final_expr.as_deref() {
+                    self.promote_literal_tree(t, peer);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch: Some(els),
+                ..
+            } => {
+                if let Some(t) = then_block.final_expr.as_deref() {
+                    self.promote_literal_tree(t, peer);
+                }
+                self.record_expr_type(&then_block.span, peer);
+                self.promote_literal_tree(els, peer);
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.promote_literal_tree(&arm.body, peer);
+                }
+            }
+            _ => {
+                if let Some(lit) = Self::literal_taking_branch_type(e, peer) {
+                    self.record_promoted_literal(lit, peer);
+                }
+            }
+        }
+        self.record_expr_type(&e.span, peer);
+    }
+
     /// Two closure return types that agree once each fills in what the other
     /// leaves open: `Option[T]` of a bare `None` with `Option[String]`,
     /// `Result[i64, E]` with `Result[T, String]`. `None` when they differ,
@@ -11353,6 +11418,26 @@ impl<'a> super::TypeChecker<'a> {
                             if !std::ptr::eq(t, else_expr.as_ref()) {
                                 self.record_expr_type(&else_expr.span, &then_ty);
                             }
+                            return then_ty;
+                        }
+                        // A branch that is an `if` or `match` of literals
+                        // takes the sibling's type the same way.
+                        let numeric =
+                            |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+                        if numeric(&else_ty)
+                            && then_block
+                                .final_expr
+                                .as_deref()
+                                .is_some_and(|t| Self::is_literal_tree(t, &else_ty))
+                        {
+                            if let Some(t) = then_block.final_expr.as_deref() {
+                                self.promote_literal_tree(t, &else_ty);
+                            }
+                            self.record_expr_type(&then_block.span, &else_ty);
+                            return else_ty;
+                        }
+                        if numeric(&then_ty) && Self::is_literal_tree(else_expr, &then_ty) {
+                            self.promote_literal_tree(else_expr, &then_ty);
                             return then_ty;
                         }
                     }

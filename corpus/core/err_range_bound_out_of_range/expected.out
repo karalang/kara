@@ -1,0 +1,2 @@
+ERROR at line 5: integer literal 300 out of range for 'i8' (expected -128..=127)
+ERROR at line 7: negative integer literal -1 cannot initialize unsigned type 'u8'

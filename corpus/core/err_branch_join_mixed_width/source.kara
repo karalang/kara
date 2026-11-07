@@ -1,0 +1,11 @@
+// design.md §8 Least upper bound, rule 4: two different numeric types have no
+// join; widening is a binding's and an operator's rule, not a branch's.
+fn main() {
+    let c = true;
+    let a: i32 = 1;
+    let b: i64 = 2;
+    let v = if c { a } else { b };
+    let w = match b { 2 => 1u8, _ => b };
+    println(v);
+    println(w);
+}

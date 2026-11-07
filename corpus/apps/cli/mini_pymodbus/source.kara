@@ -3189,7 +3189,7 @@ impl Decoder {
         };
         if kind.starts_with("f") {
             let bits = be(b, 0, n);
-            let x = if n == 2 {
+            let x: f64 = if n == 2 {
                 unpack_half(bits)
             } else if n == 4 {
                 (bits as u32).bits_as_f32()

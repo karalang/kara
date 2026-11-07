@@ -1,0 +1,18 @@
+// design.md §8: LUB rule 4 gives two different numeric types no join, so an
+// annotation picks the type and each branch widens into it; an unsuffixed
+// literal takes its sibling's type; a bounded struct's literal meets its bound.
+struct Pair[T: Ord] { a: T, b: T }
+fn main() {
+    let c = true;
+    let a: i32 = 1;
+    let b: i64 = 2;
+    let v: i64 = if c { a } else { b };
+    let w: i64 = match b { 2 => a, _ => b };
+    let x = if c { 7 } else { a };
+    let p = Pair { a: 3, b: 4 };
+    let y: u8 = 200;
+    let r = match y { 0..=127 => "low", 128..=255 => "high" };
+    println(v + w + p.a + p.b);
+    println(x);
+    println(r);
+}

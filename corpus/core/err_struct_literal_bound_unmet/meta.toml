@@ -1,0 +1,9 @@
+source = "B-2026-11-06-15"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["types"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-15: refused by the typechecker; it was accepted before. The expected.out wording of an error pin is guidance, not a byte oracle."

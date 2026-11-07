@@ -1,0 +1,11 @@
+// design.md §8 Bounds: a bounded struct's bound holds at an unannotated
+// literal too, inline or in a `where` clause.
+struct Q {}
+struct Pair[T: Ord] { a: T, b: T }
+struct WPair[T] where T: Ord { a: T, b: T }
+
+fn main() {
+    let p = Pair { a: Q {}, b: Q {} };
+    let w = WPair { a: Q {}, b: Q {} };
+    println(1);
+}

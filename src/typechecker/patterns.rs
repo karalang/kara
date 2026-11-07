@@ -783,7 +783,7 @@ impl<'a> super::TypeChecker<'a> {
         // first: `match k { 0 => 0, _ => y }` with `y: u128` is a `u128`.
         let peer = arms.iter().zip(&arm_types).find_map(|(arm, t)| {
             (matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
-                && Self::literal_taking_branch_type(&arm.body, t).is_none())
+                && !Self::is_literal_tree(&arm.body, t))
             .then(|| t.clone())
         });
         if let Some(peer) = peer {
@@ -796,6 +796,11 @@ impl<'a> super::TypeChecker<'a> {
                     if !std::ptr::eq(lit, &arm.body) {
                         self.record_expr_type(&arm.body.span, &peer);
                     }
+                    *t = peer.clone();
+                } else if Self::is_literal_tree(&arm.body, &peer) {
+                    // An arm that is an `if` or `match` of literals
+                    // (B-2026-11-06-15).
+                    self.promote_literal_tree(&arm.body, &peer);
                     *t = peer.clone();
                 }
             }
@@ -2540,6 +2545,23 @@ impl<'a> super::TypeChecker<'a> {
             (Some(RangeBound::Path { segments: a, span: sa }), Some(RangeBound::Path { segments: b, span: sb }))
                 if a == b && sa.offset == sb.offset
         );
+        // A literal bound is range-checked against the scrutinee's integer
+        // type exactly as a literal pattern is: `1i32..=300i32` on an `i8`,
+        // or `-1..=3` on a `u8`, names values the scrutinee cannot hold
+        // (B-2026-11-06-15).
+        let scrut_int = match scrut_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        if matches!(scrut_int, Type::Int(_) | Type::UInt(_)) {
+            let scrut_int = scrut_int.clone();
+            for b in [start, end].into_iter().flatten() {
+                if let RangeBound::Literal(LiteralPattern::Integer(n, sfx)) = b {
+                    let value = Self::pattern_literal_as_checked_value(*n, *sfx);
+                    self.check_int_literal_fits(value, &scrut_int, span, *sfx);
+                }
+            }
+        }
         let lo = start.and_then(|b| self.resolve_range_bound_value(b, scrut_ty, same_path));
         let hi = if same_path {
             lo.clone()

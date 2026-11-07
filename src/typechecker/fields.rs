@@ -1591,6 +1591,22 @@ impl<'a> super::TypeChecker<'a> {
                     None => Type::TypeParam(p.clone()),
                 })
                 .collect();
+            // design.md § Generics: a bounded struct's bounds hold at an
+            // unannotated literal too, judged on the arguments its fields
+            // fixed (B-2026-11-06-15). An annotation is judged where it is
+            // written; a parameter no field fixed is not judged here.
+            if expected_type_args.is_none() && self.table_keys_live {
+                let judged: Vec<Type> = struct_info
+                    .generic_params
+                    .iter()
+                    .zip(&args)
+                    .map(|(p, a)| match param_subs.get(p) {
+                        Some(_) => a.clone(),
+                        None => Type::Error,
+                    })
+                    .collect();
+                self.judge_adt_bounds(&struct_name, &judged, *span);
+            }
             Type::Named {
                 name: struct_name,
                 args,

@@ -21,6 +21,18 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Programs 0.8.0 accepted that are now refused
 
+- **Branches of different numeric types no longer join.** `if c { a_i32 }
+  else { b_i64 }` and a `match` with a `u8` arm beside an `i64` one were
+  typed as one of the two; design.md §8's LUB rule 4 gives them no join.
+  Annotate the binding (`let v: i64 = if ..`), where each branch widens. A
+  branch that is a literal, or an `if` or `match` of literals, still takes
+  its sibling's type (B-2026-11-06-15).
+- **A bounded struct's literal meets its bound without an annotation.**
+  `let p = Pair { a: Q {}, b: Q {} }` with `struct Pair[T: Ord]` (or
+  `where T: Ord`) was accepted when `Q` has no `Ord` (B-2026-11-06-15).
+- **A literal range bound must fit the scrutinee's type,** as a literal
+  pattern must: `1i32..=300i32` on an `i8` and `-1..=3` on a `u8` were
+  accepted (B-2026-11-06-15).
 - **A `String` building method on a `Str`.** `push_str`, `push`, `extend`,
   `clear`, `pop`, `truncate` and `reserve` on a `Str` view (a parameter, a
   literal, a slice) passed `karac check` and then failed on every backend

@@ -1,0 +1,8 @@
+// A literal range bound is range-checked against the scrutinee's type, as a
+// literal pattern is (design.md § Pattern matching).
+fn main() {
+    let y: i8 = 2;
+    match y { 1i32..=300i32 => println("big"), _ => println("out") }
+    let u: u8 = 2;
+    match u { -1..=3 => println("neg"), _ => println("out") }
+}

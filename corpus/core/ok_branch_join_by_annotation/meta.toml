@@ -1,0 +1,9 @@
+source = "B-2026-11-06-15"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["types", "lub"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-15: design.md §8 Type inference. `let v: i64 = if c { a_i32 } else { b_i64 }` checks both branches against the annotation (each widens), an unsuffixed literal branch takes its sibling's `i32`, a struct literal meeting its `T: Ord` bound is accepted, and literal range bounds inside `u8` match."

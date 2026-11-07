@@ -1,0 +1,2 @@
+ERROR at line 7: if/else branches have incompatible types: 'i32' and 'i64'
+ERROR at line 8: match arms have incompatible types: 'u8' and 'i64'

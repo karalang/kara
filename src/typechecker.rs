@@ -6392,6 +6392,14 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // LUB rule 4 (design.md § Least upper bound): two different numeric
+        // types have no join. Widening is an operator's and a binding's rule,
+        // not a branch's: `if c { 1i32 } else { 2i64 }` is refused, and an
+        // annotation picks the type (B-2026-11-06-15).
+        let numeric = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+        if numeric(a) && numeric(b) {
+            return None;
+        }
         if matches!(a, Type::Refinement { .. }) || matches!(b, Type::Refinement { .. }) {
             let a_base = strip_refinement(a);
             let b_base = strip_refinement(b);

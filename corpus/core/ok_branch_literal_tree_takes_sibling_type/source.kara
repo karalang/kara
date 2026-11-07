@@ -1,0 +1,22 @@
+// design.md § Type inference: an integer or float literal starts as a type
+// variable, so an `if` or `match` made only of literals takes its sibling
+// branch's type, as a lone literal does (B-2026-11-06-15).
+enum Val { Int(i128), Bool(bool) }
+fn num(v: own Val) -> i128 {
+    let n = match v {
+        Val.Int(x) => x,
+        Val.Bool(b) => if b { 1 } else { 0 },
+    };
+    n * 100000000000000000000
+}
+fn main() {
+    let c = true;
+    let a: u64 = 18446744073709551615;
+    let w = if c { a } else { match 3 { 1 => 5, _ => 7 } };
+    println(w);
+    println(num(Val.Bool(true)));
+    println(num(Val.Int(3)));
+    let f: f32 = 1.5;
+    let g = if c { if c { 2.5 } else { 0.5 } } else { f };
+    println(g);
+}
