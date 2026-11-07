@@ -1294,6 +1294,30 @@ impl<'a> super::TypeChecker<'a> {
                 self.expect_optional_index_arg("Slice.last", args, span);
                 option_elem
             }
+            // `cmp(other: Slice[T]) -> Ordering`: the lexicographic order
+            // collections.md § Slice gives a slice, the method form of `<` on
+            // two slices (which already lowers through the sequence
+            // comparator). `b[x..].cmp(b[y..])` in a suffix sort (kata 1062).
+            "cmp" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'cmp' expects 1 argument, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(&slice_elem, &arg_ty, args[0].value.span);
+                }
+                self.require_ord_element(&elem, "Slice", "cmp", span);
+                Type::Named {
+                    name: "Ordering".to_string(),
+                    args: Vec::new(),
+                }
+            }
             // The `Slice` twin of `Vec.is_sorted` (B-2026-08-21-10) — same
             // no-args, same total-order gate.
             "is_sorted" => {

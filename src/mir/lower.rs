@@ -21294,6 +21294,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if let ("cmp", [other]) = (method, args) {
             // A `Vec`'s `cmp`: lexicographic, as its `<` (B-2026-10-06-92).
+            // A slice's too (kata 1062's `b[x..].cmp(b[y..])`).
             let ot = self.expr_ty(object)?;
             let (_, base) = self.strip_ty_full(ot);
             if matches!(
@@ -21301,7 +21302,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 HK::Intrinsic {
                     kind: IntrinsicKind::Vec,
                     ..
-                }
+                } | HK::Slice { .. }
             ) {
                 let lp = self.expr_place(object, false)?;
                 let rp = self.expr_place(&other.value, false)?;

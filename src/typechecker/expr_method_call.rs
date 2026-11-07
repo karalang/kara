@@ -233,6 +233,7 @@ pub(crate) const STRING_BUILTIN_METHODS: &[&str] = &[
 pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
     "binary_search",
     "chunks",
+    "cmp",
     "contains",
     "fill",
     "first",

@@ -12602,6 +12602,23 @@ impl<'a> super::TypeChecker<'a> {
                         end.as_deref().map(|e| self.infer_expr(e)),
                     ),
                 };
+                // A bound that borrows an integer reads it, as an operator's
+                // operand does: `other..other + len` with `other` an
+                // iterator's `ref i64` is a range of `i64` (kata 1062).
+                let (start_ty, end_ty) = match (start_ty, end_ty) {
+                    (Some(s), Some(e)) if s != e => {
+                        let (ds, de) = (
+                            super::expr_ops::deref_integer_scalar(s.clone()),
+                            super::expr_ops::deref_integer_scalar(e.clone()),
+                        );
+                        if is_integer(&ds) && ds == de {
+                            (Some(ds), Some(de))
+                        } else {
+                            (Some(s), Some(e))
+                        }
+                    }
+                    other => other,
+                };
                 // When both bounds are present, verify they share a type.
                 if let (Some(ref s), Some(ref e)) = (&start_ty, &end_ty) {
                     if !self.types_compatible_with_projections(s, e)
