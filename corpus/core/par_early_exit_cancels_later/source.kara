@@ -1,0 +1,51 @@
+import std.time.{Duration, sleep};
+
+// An early exit in a `par {}` branch cancels the branches after it
+// (core-semantics §11.7, §11.9): a later branch waiting at a `sleep` is
+// torn down there, running its `defer`, and never prints that it woke.
+
+fn quick() -> Result[i64, String] {
+    Err("quick".to_string())
+}
+
+fn slow() -> Result[i64, String] {
+    defer { println("slow torn down"); }
+    sleep(Duration.ms(2000));
+    println("slow woke");
+    Ok(1)
+}
+
+fn by_try() -> Result[i64, String] {
+    let (a, b) = par { quick()?, slow()? };
+    Ok(a + b)
+}
+
+fn by_return() -> Result[i64, String] {
+    let (a, b) = par {
+        {
+            if true {
+                return Err("returned".to_string());
+            }
+            0
+        },
+        {
+            defer { println("block torn down"); }
+            sleep(Duration.ms(2000));
+            println("block woke");
+            1
+        },
+    };
+    Ok(a + b)
+}
+
+fn show(r: Result[i64, String]) {
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(e) => println(f"err {e}"),
+    }
+}
+
+fn main() {
+    show(by_try());
+    show(by_return());
+}

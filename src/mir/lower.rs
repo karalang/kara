@@ -12293,8 +12293,10 @@ impl<'l, 'a> Bx<'l, 'a> {
     ///
     /// In a function that returns a `Result` or `Option`, each task returns
     /// its branch's value wrapped in that type, so a `?` in it ends that
-    /// branch alone. Once every task is joined, the source-earliest error is
-    /// returned and the other results drop (§11.7).
+    /// branch. The joins go in source order, so the first error joined is
+    /// the source-earliest one: the group's later tasks are cancelled, and
+    /// the error is returned once the group is done, the results before it
+    /// dropping (§11.7, §11.9).
     ///
     /// When a branch `return`s, each task instead returns a `Result` whose
     /// error variant carries the function's whole value, which a `return`
@@ -12375,8 +12377,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.branch_end(region, entry);
             handles.push((h, ht, tt));
         }
+        // The error variant of the tasks' results, when a branch can exit
+        // early.
+        let ev = match err {
+            Some(ev) => Some(ev),
+            None if exits => handles
+                .first()
+                .and_then(|&(_, _, tt)| self.error_variant(tt)),
+            None => None,
+        };
+        let ret = Place::local(Local::RETURN_PLACE);
+        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
         let mut outs = Vec::new();
-        for &(h, ht, tt) in &handles {
+        for (k, &(h, ht, tt)) in handles.iter().enumerate() {
             let o = match err {
                 Some(_) => self.scoped_temp(tt),
                 None if exits => self.scoped_temp(tt),
@@ -12385,37 +12398,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             let name = format!("{}.join", self.tys().display(ht));
             self.call_native(&name, vec![Operand::Move(Place::local(h))], Place::local(o));
             outs.push((o, tt));
-        }
-        // Past the joins, the group drops here and the handles are moved.
-        let par_locals: Vec<Local> = std::iter::once(g)
-            .chain(handles.iter().map(|&(h, _, _)| h))
-            .collect();
-        self.unschedule_drops(&par_locals);
-        // The group ends here, so what its tasks borrow is free again.
-        let next = self.b.new_block();
-        self.goto_with(
-            TerminatorKind::Drop {
-                place: Place::local(g),
-                target: next,
-                unwind: UnwindAction::Abort,
-            },
-            next,
-        );
-        let Some(ev) = err.or_else(|| {
-            let (_, tt) = *outs.first()?;
-            exits.then(|| self.error_variant(tt)).flatten()
-        }) else {
-            let ops = outs
-                .into_iter()
-                .map(|(o, _)| Operand::Move(Place::local(o)))
-                .collect();
-            self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
-            return Ok(());
-        };
-        let ok = 1 - ev;
-        let ret = Place::local(Local::RETURN_PLACE);
-        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
-        for &(o, tt) in &outs {
+            let Some(ev) = ev else { continue };
+            // A branch that exited early is the source-earliest one, as the
+            // joins go in source order: the branches after it are
+            // cancelled (core semantics §11.7, §11.9; B-2026-11-07-38), and
+            // the function returns its value once the group is done, as the
+            // exit drops the group. The branches before it have finished.
             let p = Place::local(o);
             let d = self.temp(isize_t);
             self.assign(d, Rvalue::Discriminant(p.clone()));
@@ -12431,6 +12419,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 },
                 err_bb,
             );
+            if k + 1 < handles.len() {
+                let gr = self.ref_to(Place::local(g), group_ty);
+                let u = self.unit();
+                let u = self.temp(u);
+                self.call_native("TaskGroup.cancel", vec![gr], Place::local(u));
+            }
             // The task's error has the function's error type already; a
             // task that left early carries the function's whole value.
             let mut ops = Vec::new();
@@ -12448,6 +12442,30 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.error_exit(ret.clone(), value)?;
             self.cur = ok_bb;
         }
+        // Past the joins, the group drops here and the handles are moved.
+        let par_locals: Vec<Local> = std::iter::once(g)
+            .chain(handles.iter().map(|&(h, _, _)| h))
+            .collect();
+        self.unschedule_drops(&par_locals);
+        // The group ends here, so what its tasks borrow is free again.
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Drop {
+                place: Place::local(g),
+                target: next,
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        let Some(ev) = ev else {
+            let ops = outs
+                .into_iter()
+                .map(|(o, _)| Operand::Move(Place::local(o)))
+                .collect();
+            self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
+            return Ok(());
+        };
+        let ok = 1 - ev;
         let mut ops = Vec::new();
         for (o, tt) in outs {
             let Some(vt) = self.tys().tcx().field_ty(tt, Some(ok), 0) else {

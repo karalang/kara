@@ -1,0 +1,12 @@
+source = "core-semantics.md §11.7, §11.9"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "control-flow"]
+class = "a"
+expected_from = "spec"
+rules = ["11.7", "11.9"]
+backends = []
+env = {}
+note = "An early exit (`?` or `return`) in a `par {}` branch cancels the branches after it at their next suspension point, where each is torn down running its `defer`s; it used to wait for them to finish (B-2026-11-07-38)."
+bucket = "a"
