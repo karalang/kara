@@ -1,0 +1,8 @@
+// design.md § Const generic parameters, Inference: a const parameter only the
+// return type names, with no annotation to solve it from.
+fn zeros[const N: i64]() -> Array[i64, N] { [0; N] }
+
+fn main() {
+    let b = zeros();
+    println(b.len());
+}

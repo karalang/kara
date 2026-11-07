@@ -611,19 +611,11 @@ impl TyCtxt {
             },
             TyKind::Array { elem, len } => TyKind::Array {
                 elem: self.subst(elem, args, const_args),
-                len: match len {
-                    ArrayLen::Param(p) => const_args.get(p.index as usize).copied().unwrap_or(len),
-                    known => known,
-                },
+                len: self.subst_len(len, args, const_args),
             },
             TyKind::Vector { elem, lanes } => TyKind::Vector {
                 elem: self.subst(elem, args, const_args),
-                lanes: match lanes {
-                    ArrayLen::Param(p) => {
-                        const_args.get(p.index as usize).copied().unwrap_or(lanes)
-                    }
-                    known => known,
-                },
+                lanes: self.subst_len(lanes, args, const_args),
             },
             TyKind::Slice { elem, mutable } => TyKind::Slice {
                 elem: self.subst(elem, args, const_args),
@@ -695,6 +687,34 @@ impl TyCtxt {
                 self.match_params(a, b, out);
             }
             _ => {}
+        }
+    }
+
+    /// A const parameter's value: `const_args[index]`, or else the type
+    /// argument in its position, which carries it as the length of a `()`
+    /// array (`N` -> `Array[(), 3]`, B-2026-11-06-17).
+    pub fn subst_len(&self, len: ArrayLen, args: &[Ty], const_args: &[ArrayLen]) -> ArrayLen {
+        let ArrayLen::Param(p) = len else {
+            return len;
+        };
+        if let Some(&l) = const_args.get(p.index as usize) {
+            return l;
+        }
+        match args.get(p.index as usize).map(|&t| self.kind(t)) {
+            Some(TyKind::Array { elem, len: l }) if matches!(self.kind(elem), TyKind::Unit) => l,
+            _ => len,
+        }
+    }
+
+    /// The value a const parameter carried as a type argument stands for
+    /// (see [`Self::subst_len`]).
+    pub fn const_arg_value(&self, arg: Ty) -> Option<u64> {
+        match self.kind(arg) {
+            TyKind::Array {
+                elem,
+                len: ArrayLen::Known(n),
+            } if matches!(self.kind(elem), TyKind::Unit) => Some(n),
+            _ => None,
         }
     }
 

@@ -1,0 +1,9 @@
+source = "B-2026-11-06-17"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["generics", "const"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-17: design.md § Const generic parameters, Instances. `a.len()`, `a[0]` and `for x in a` over `Array[T, N]` in two instances each, an `Array[String, N]` loop, and a body passing its `N` to another const-generic function. The instance was keyed `first[i64, ()]` (N dropped), so the body's `Array[T, N]` had no layout on llvm and was `index into non-array` on MIR."

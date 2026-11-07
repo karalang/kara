@@ -1,0 +1,37 @@
+// design.md § Const generic parameters: each distinct tuple of type and const
+// arguments is a separate instance, so `Array[T, N]` in the body has the
+// instance's length (B-2026-11-06-17).
+fn length[const N: i64](a: Array[i64, N]) -> i64 { a.len() }
+
+fn first[T: Copy, const N: i64](a: Array[T, N]) -> T { a[0] }
+
+fn total[const N: i64](a: Array[i64, N]) -> i64 {
+    let mut s = 0;
+    for x in a { s += x; }
+    s
+}
+
+fn joined[const N: i64](a: Array[String, N]) -> String {
+    let mut out = String.new();
+    for s in a { out.push_str(s); }
+    out
+}
+
+// The caller's `N` passed through to another const-generic function.
+fn both[const N: i64](a: Array[i64, N]) -> i64 { length(a) * 100 + total(a) }
+
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    let b: Array[i64, 5] = [10, 20, 30, 40, 50];
+    println(length(a));
+    println(length(b));
+    println(first(a));
+    let c: Array[char, 2] = ['x', 'y'];
+    println(first(c));
+    println(total(a));
+    println(total(b));
+    let n: Array[String, 3] = ["a".to_string(), "b".to_string(), "c".to_string()];
+    println(joined(n));
+    println(both(a));
+    println(both(b));
+}

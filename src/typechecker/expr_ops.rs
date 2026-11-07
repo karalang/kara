@@ -788,6 +788,11 @@ impl<'a> super::TypeChecker<'a> {
                 &HashMap::new(),
             );
         }
+        // A `const` generic parameter is a value of its declared type
+        // (B-2026-11-06-14).
+        if let Some((_, ty)) = self.current_fn_const_params.iter().find(|(n, _)| n == name) {
+            return ty.clone();
+        }
         // Check functions
         if let Some((params, return_type)) = self
             .env

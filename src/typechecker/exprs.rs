@@ -293,6 +293,21 @@ pub(super) fn visible_var_ids(t: &Type, out: &mut Vec<TypeVarId>) {
     }
 }
 
+/// Does this type hold an unsolved const metavar as an array length?
+/// `fn zeros[const N: i64]() -> Array[i64, N]` returns `Array[i64, ?N]`, which
+/// an expectation `Array[i64, 8]` solves (B-2026-11-06-14).
+fn contains_const_var(t: &Type) -> bool {
+    match t {
+        Type::Array { element, size } => {
+            matches!(size, ConstArg::ConstVar(_)) || contains_const_var(element)
+        }
+        Type::Named { args, .. } | Type::Tuple(args) => args.iter().any(contains_const_var),
+        Type::Ref(i) | Type::MutRef(i) => contains_const_var(i),
+        Type::Slice { element, .. } => contains_const_var(element),
+        _ => false,
+    }
+}
+
 /// The inference variables a generic call's result holds as a type argument
 /// a later use can fix (B-2026-11-06-7): inside a struct, a collection, a
 /// tuple or a reference. `Option` / `Result` keep the path that reads an
@@ -901,6 +916,18 @@ impl<'a> super::TypeChecker<'a> {
             .and_then(|cv| super::const_eval::const_value_to_i128(&cv));
         self.errors.truncate(errors);
         value.filter(|n| *n >= 0)
+    }
+
+    /// The `const` generic parameter a repeat-literal count names, when it
+    /// names one and no local shadows it: `[0; N]` in
+    /// `fn zeros[const N: i64]() -> Array[i64, N]` (B-2026-11-06-14).
+    fn repeat_count_const_param(&self, count: &Expr) -> Option<String> {
+        let ExprKind::Identifier(name) = &count.kind else {
+            return None;
+        };
+        (self.local_scope.lookup(name).is_none()
+            && self.current_fn_const_params.iter().any(|(n, _)| n == name))
+        .then(|| name.clone())
     }
 
     /// B-2026-10-15-106 — a bare `[v; n]` always builds an `Array`
@@ -3281,6 +3308,19 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
+            } else if let Some(param) = self.repeat_count_const_param(count) {
+                self.infer_expr(count);
+                if *size != ConstArg::ConstParam(param.clone()) {
+                    self.type_error(
+                        format!(
+                            "repeat-literal count {} does not match expected array length {}",
+                            param,
+                            super::types::const_arg_display(size)
+                        ),
+                        count.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
             } else {
                 self.type_error(
                     "Array[T, N] repeat-literal requires a non-negative integer literal count"
@@ -4599,7 +4639,7 @@ impl<'a> super::TypeChecker<'a> {
             // formals list is `None` there while `sub_ret` is `Box[?0]`, which
             // is precisely the case this seeding exists for. Measured: gating on
             // the formals list left `Box.new(5)` unseeded.
-            if contains_type_var(&sub_ret) {
+            if contains_type_var(&sub_ret) || contains_const_var(&sub_ret) {
                 unify_types(
                     &sub_ret,
                     &expected_ret,
@@ -5225,13 +5265,48 @@ impl<'a> super::TypeChecker<'a> {
                 solutions.insert(name.clone(), resolved);
             }
         }
-        if rigid.is_empty() {
+        // A `const` parameter's value is recorded with the types, as the
+        // length of a `()` array: `N` -> `Array[(), 3]`, or the caller's own
+        // `Array[(), M]` when it passes its parameter through, so the
+        // instance is keyed by it and lowers `Array[T, N]` and `N` with it
+        // (B-2026-11-06-17). An unsolved one is left out, as above.
+        let mut recorded_consts: HashMap<String, Type> = HashMap::new();
+        for (&cid, name) in &const_id_to_name {
+            // A `D: Dim` shape parameter is not a `const` one.
+            let bounded = where_clause.is_some_and(|wc| {
+                wc.constraints.iter().any(
+                    |c| matches!(c, WhereConstraint::TypeBound { type_name, .. } if type_name == name),
+                )
+            });
+            if bounded {
+                continue;
+            }
+            let mut cur = cid;
+            let bound = loop {
+                match self.env.const_substitutions.get(&cur) {
+                    Some(ConstArg::ConstVar(next)) => cur = *next,
+                    Some(other) => break Some(other.clone()),
+                    None => break None,
+                }
+            };
+            if let Some(size @ (ConstArg::Literal(_) | ConstArg::ConstParam(_))) = bound {
+                recorded_consts.insert(
+                    name.clone(),
+                    Type::Array {
+                        element: Box::new(Type::Unit),
+                        size,
+                    },
+                );
+            }
+        }
+        if rigid.is_empty() && recorded_consts.is_empty() {
             self.record_call_type_subs(record_subs_for_span, &solutions);
         } else {
             let recorded = solutions
                 .iter()
                 .filter(|(n, _)| !rigid.contains(n))
                 .map(|(n, t)| (n.clone(), t.clone()))
+                .chain(recorded_consts)
                 .collect();
             self.record_call_type_subs(record_subs_for_span, &recorded);
         }
@@ -12692,6 +12767,14 @@ impl<'a> super::TypeChecker<'a> {
                             size: ConstArg::Literal(size as i64),
                         }
                     }
+                    // `[v; N]` with `N` a const parameter is an
+                    // `Array[T, N]` (B-2026-11-06-14).
+                    None if self.repeat_count_const_param(count).is_some() => Type::Array {
+                        element: Box::new(elem_ty),
+                        size: ConstArg::ConstParam(
+                            self.repeat_count_const_param(count).unwrap_or_default(),
+                        ),
+                    },
                     // B-2026-10-15-106 — on the v2 pipelines a bare `[v; n]`
                     // is an `Array` (design.md § Collection literals), and a
                     // count that is not a constant is refused with its

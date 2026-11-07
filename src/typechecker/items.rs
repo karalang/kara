@@ -2560,6 +2560,17 @@ impl<'a> super::TypeChecker<'a> {
         }
         let saved_body_dim_scope =
             std::mem::replace(&mut self.current_body_dim_scope, body_dim_scope);
+        // A `const` parameter is a value of its declared type in the body
+        // (B-2026-11-06-14).
+        let mut const_params: Vec<(String, Type)> = Vec::new();
+        if let Some(gps) = &f.generic_params {
+            for p in &gps.params {
+                if let (true, Some(ct)) = (p.is_const, &p.const_type) {
+                    const_params.push((p.name.clone(), self.lower_type_expr(ct, &gp)));
+                }
+            }
+        }
+        let saved_const_params = std::mem::replace(&mut self.current_fn_const_params, const_params);
 
         // Validate default parameter values
         self.validate_default_params(&f.params, &gp);
@@ -2874,6 +2885,7 @@ impl<'a> super::TypeChecker<'a> {
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_proj_bounds = saved_proj_bounds;
         self.current_body_dim_scope = saved_body_dim_scope;
+        self.current_fn_const_params = saved_const_params;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.current_generic_frame = saved_generic_frame;
         self.current_fn_core_key = saved_core_key;
@@ -7356,8 +7368,8 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(name) = unbound_const {
             self.type_error(
                 format!(
-                    "cannot infer const parameter '{}'; provide explicit generic args \
-                     (e.g. `f[..., 8](...)`) or add a type annotation to this binding",
+                    "cannot infer const parameter '{}': nothing at the call fixes it \
+                     (design.md § Type inference); add a type annotation to this binding",
                     name
                 ),
                 *span,

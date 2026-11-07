@@ -1,0 +1,42 @@
+// design.md § Const generic parameters: a const parameter is a value fixed
+// per instance, and one that appears only in the return type is solved from
+// the expected type (B-2026-11-06-14).
+fn cap[const N: i64](arr: Array[i64, N]) -> i64 { N }
+
+fn last_index[const N: i64](arr: Array[i64, N]) -> i64 {
+    let mut i = 0;
+    while i < N - 1 { i += 1; }
+    i
+}
+
+fn zeros[const N: i64]() -> Array[i64, N] { [0; N] }
+
+fn filled[const N: i64](v: i64) -> Array[i64, N] {
+    let a = [v; N];
+    a
+}
+
+fn doubled[const N: i64](a: Array[i64, N]) -> Array[i64, N] {
+    let mut b = [0; N];
+    let mut i = 0;
+    while i < N {
+        b[i] = a[i] * 2;
+        i += 1;
+    }
+    b
+}
+
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(cap(a));
+    let c: Array[i64, 5] = [5, 6, 7, 8, 9];
+    println(last_index(c));
+    let z: Array[i64, 4] = zeros();
+    println(z.len());
+    println(z[3]);
+    let w: Array[i64, 2] = filled(7);
+    println(w[0] + w[1]);
+    let d = doubled(a);
+    println(d[2]);
+    println(cap(d));
+}

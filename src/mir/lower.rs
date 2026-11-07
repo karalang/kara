@@ -9301,6 +9301,25 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// A path naming a value: a unit variant (`None`, `E.A`) or a constant.
     fn path_value(&mut self, e: &'a Expr, dest: Place) -> R<()> {
+        // A `const` generic parameter is its value in this instance, which
+        // the instance carries as the length of a `()` array argument
+        // (B-2026-11-06-14).
+        if let (ExprKind::Identifier(name), Some(Res::Generic(_))) =
+            (&e.kind, self.lcx.res.get(&e.id))
+        {
+            if let Some(n) = self
+                .type_param(name)
+                .and_then(|a| self.tys().tcx().const_arg_value(a))
+            {
+                let t = self.expr_ty(e)?;
+                let op = Operand::Const(Const {
+                    ty: t,
+                    kind: ConstKind::Scalar(n as u128),
+                });
+                self.assign(dest, Rvalue::Use(op));
+                return Ok(());
+            }
+        }
         // `ExitCode.SUCCESS`, `ExitCode.FAILURE`: the library's codes.
         if let ExprKind::Path { segments, .. } = &e.kind {
             if let [ty, c] = segments.as_slice() {

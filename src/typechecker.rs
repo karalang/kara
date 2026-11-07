@@ -3772,6 +3772,11 @@ pub struct TypeChecker<'a> {
     /// dim params lets `let p: Tensor[f32, [D]]` resolve `D` while `let x: T`
     /// keeps `Named` (B-2026-07-13-5 leg B).
     pub(super) current_body_dim_scope: Vec<String>,
+    /// The enclosing function's `const` generic parameters with their declared
+    /// types: `N` in `fn cap[const N: i64](a: Array[i64, N]) -> i64 { N }` is a
+    /// value of type `i64` in the body (design.md § Const generic parameters;
+    /// B-2026-11-06-14). Set by `check_function` (save/restore).
+    pub(super) current_fn_const_params: Vec<(String, Type)>,
     /// Name of the enclosing trait declaration when type-checking a default
     /// method body. Populated on entering `check_trait_def`, cleared on exit.
     /// Consumed by `dispatch_self_receiver_method` (slice 3.5 of the
@@ -4223,6 +4228,7 @@ impl<'a> TypeChecker<'a> {
             ambiguous_assoc_reported: FxHashSet::default(),
             enclosing_proj_bounds: FxHashMap::default(),
             current_body_dim_scope: Vec::new(),
+            current_fn_const_params: Vec::new(),
             enclosing_trait: None,
             closure_once_reasons: FxHashMap::default(),
             returned_closure_spans: Default::default(),
@@ -9049,6 +9055,23 @@ pub(super) fn bind_params(
             }
         }
         (Type::Ref(x), Type::Ref(y)) | (Type::MutRef(x), Type::MutRef(y)) => {
+            bind_params(x, y, scope, out)
+        }
+        // A const parameter binds as the length of a `()` array, the way a
+        // call records it (B-2026-11-06-17).
+        (
+            Type::Array {
+                element: x,
+                size: ConstArg::ConstParam(n),
+            },
+            Type::Array { element: y, size },
+        ) if !scope.iter().any(|s| s == n)
+            && matches!(size, ConstArg::Literal(_) | ConstArg::ConstParam(_)) =>
+        {
+            out.entry(n.clone()).or_insert_with(|| Type::Array {
+                element: Box::new(Type::Unit),
+                size: size.clone(),
+            });
             bind_params(x, y, scope, out)
         }
         (Type::Array { element: x, .. }, Type::Array { element: y, .. })

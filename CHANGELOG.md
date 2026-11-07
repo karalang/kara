@@ -185,6 +185,14 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   "the method call `.collect` with no resolved callee is not lowered yet"
   on every backend; `count` worked. The witness is now read at the caller's
   type arguments (B-2026-11-06-26).
+- **Const generic parameters work in function bodies.** In
+  `fn f[const N: i64](a: Array[i64, N])`, `N` is now the instance's value
+  (`N`, `N - 1`, `[0; N]`), and a parameter only the return type names is
+  solved from the annotation (`let z: Array[i64, 4] = zeros();`). Each
+  length is its own instance, so `a.len()`, `a[0]` and `for x in a` compile
+  under `karac run` and `karac build`. Before, the instance dropped `N`
+  and these failed with `has no layout` or `index into non-array`
+  (design.md § Const generic parameters, B-2026-11-06-14, B-2026-11-06-17).
 - **A named constant in a pattern compares against its value.** With
   `const LIMIT: i64 = 3`, `match x { LIMIT => .., _ => .. }` bound a new
   `LIMIT` and took that arm for every `x`, on every backend; so did
@@ -279,6 +287,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Diagnostics
 
+- `cannot infer const parameter 'N'` no longer suggests call-site generic
+  arguments (`f[..., 8](...)`), which design.md §8 rules out; it asks for
+  an annotation on the binding (B-2026-11-06-14).
 - **E0400 explains itself and `karac fix` declares the effects.** Its JSON
   record carries `inferred_effects`, `declared_effects` and a `derivation`,
   the call chain that brought in each undeclared effect (design.md §17
