@@ -95,7 +95,9 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.label }}
+          # The runner image is in the key: a target dir cached on 24.04 holds
+          # build scripts linked against glibc 2.39, which 22.04 cannot run.
+          key: release-${{ matrix.label }}-${{ matrix.runner }}
 
       # A tag equal to v<Cargo.toml version> (no `-dev`) builds the
       # release stamp, `karac 0.8.0+g<sha>` (build.rs); any other tag or
