@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2002-maximum-product-of-the-length-of-two-palindromic-subsequences/palindromes_solution.kara"
+dedup_of = []
+tags = []
+expect = "stdout"
+exit = 0
+expected_from = "mirror"
+note = "mirror: palindromes.py (the kata's mirror of the ★ arm); the arm is refused by check until B-2026-11-07-3 (a literal typed by a later use) is fixed"
+class = "e"
+bucket = "check-refuses:E0200"
+classified_with = "f753a3e8b"
+extracted_src = "0bea9a41"

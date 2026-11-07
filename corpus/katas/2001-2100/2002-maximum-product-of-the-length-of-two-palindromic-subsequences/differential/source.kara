@@ -1,0 +1,328 @@
+// LeetCode #2002: Maximum Product of the Length of Two Palindromic
+// Subsequences -- the differential.
+//
+// Five arms against the statement read literally, on 1000 problems, with six
+// properties. The sixth arm, LeetCode's Rust template, does not check yet
+// (B-2026-11-07-3) and joins when it does.
+//
+// P1  the answer is the statement read literally: every way of giving each
+//     position to the first subsequence, the second or neither, both read
+//     as palindromes, the largest product of their lengths (n <= 6)
+// P2  the string reversed leaves the answer
+// P3  the letters renamed one-to-one leave the answer
+// P4  one more letter appended never lowers the answer
+// P5  the answer lies between 1 and floor(n / 2) * ceil(n / 2)
+// P6  each arm agrees with at least two of the other four
+
+// ---- palindromes.kara: the ★ arm: each palindromic mask times the LPS of the rest
+fn longest_palindrome_star(chars: Vec[u8]) -> i64 {
+    let n = chars.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut dp = Vec.filled(n, Vec.filled(n, 0));
+    for i in (0..n).rev() {
+        dp[i][i] = 1;
+        for j in i + 1..n {
+            dp[i][j] = if chars[i] == chars[j] {
+                dp[i + 1][j - 1] + 2
+            } else {
+                dp[i + 1][j].max(dp[i][j - 1])
+            };
+        }
+    }
+    dp[0][n - 1]
+}
+
+fn star_arm(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut best = 0;
+    for mask in 1..(1 << n) {
+        let mut picked: Vec[u8] = Vec.new();
+        let mut rest: Vec[u8] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                picked.push(b[i]);
+            } else {
+                rest.push(b[i]);
+            }
+        }
+        let mut reversed = picked.clone();
+        reversed.reverse();
+        if picked == reversed {
+            best = best.max(picked.len() * longest_palindrome_star(rest));
+        }
+    }
+    best
+}
+
+// ---- palindromes_pairs.kara: every disjoint pair of palindromic masks
+fn is_palindrome_pairs(b: Vec[u8], mask: i64) -> bool {
+    let mut picked: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if (mask >> i) & 1 == 1 {
+            picked.push(b[i]);
+        }
+    }
+    let mut i = 0;
+    let mut j = picked.len() - 1;
+    while i < j {
+        if picked[i] != picked[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    true
+}
+
+fn pairs_arm(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut masks: Vec[i64] = Vec.new();
+    let mut lengths: Vec[i64] = Vec.new();
+    for mask in 1..(1 << b.len()) {
+        if is_palindrome_pairs(b, mask) {
+            masks.push(mask);
+            lengths.push(mask.count_ones());
+        }
+    }
+    let mut best = 0;
+    for i in 0..masks.len() {
+        for j in i + 1..masks.len() {
+            if masks[i] & masks[j] == 0 {
+                best = best.max(lengths[i] * lengths[j]);
+            }
+        }
+    }
+    best
+}
+
+// ---- palindromes_submask.kara: the best palindrome within every mask, by submasks
+fn submask_arm(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let full = (1 << n) - 1;
+    let mut own = Vec.filled(full + 1, 0);
+    let mut within = Vec.filled(full + 1, 0);
+    for mask in 1..full + 1 {
+        let mut picked: Vec[u8] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                picked.push(b[i]);
+            }
+        }
+        let mut reversed = picked.clone();
+        reversed.reverse();
+        if picked == reversed {
+            own[mask] = picked.len();
+        }
+        within[mask] = own[mask];
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                within[mask] = within[mask].max(within[mask ^ (1 << i)]);
+            }
+        }
+    }
+    let mut best = 0;
+    for mask in 1..full + 1 {
+        best = best.max(own[mask] * within[full ^ mask]);
+    }
+    best
+}
+
+// ---- palindromes_iter.kara: filter, flat_map and max over the masks
+fn is_palindrome_iter(b: Vec[u8], mask: i64) -> bool {
+    let picked: Vec[u8] = (0..b.len()).filter(|i| (mask >> i) & 1 == 1).map(|i| b[i]).collect();
+    picked.iter().zip(picked.iter().rev()).all(|(x, y)| x == y)
+}
+
+fn iter_arm(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let pals: Vec[(i64, i64)] = (1..(1 << b.len()))
+        .filter(|m| is_palindrome_iter(b, m))
+        .map(|m| (m, m.count_ones()))
+        .collect();
+    pals.iter()
+        .flat_map(|a| pals.iter().filter(|c| a.0 & c.0 == 0).map(|c| a.1 * c.1))
+        .max()
+        .unwrap_or(0)
+}
+
+// ---- palindromes_peel.kara: palindromes by peeling the outer bits, pairs pruned
+fn is_palindrome_peel(b: Vec[u8], mask: i64) -> bool {
+    let mut m = mask;
+    while m.count_ones() > 1 {
+        let lo = m.trailing_zeros();
+        let hi = 63 - m.leading_zeros();
+        if b[lo] != b[hi] {
+            return false;
+        }
+        m &= ~((1 << lo) | (1 << hi));
+    }
+    true
+}
+
+fn peel_arm(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut pals: Vec[(i64, i64)] = Vec.new();
+    for mask in 1..(1 << b.len()) {
+        if is_palindrome_peel(b, mask) {
+            pals.push((mask.count_ones(), mask));
+        }
+    }
+    pals.sort_by(|x, y| y.0.cmp(x.0));
+    let mut best = 0;
+    for i in 0..pals.len() {
+        if pals[i].0 * pals[i].0 <= best {
+            break;
+        }
+        for j in i + 1..pals.len() {
+            if pals[i].0 * pals[j].0 <= best {
+                break;
+            }
+            if pals[i].1 & pals[j].1 == 0 {
+                best = pals[i].0 * pals[j].0;
+            }
+        }
+    }
+    best
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn reads_as_palindrome(v: Vec[u8]) -> bool {
+    let mut r = v.clone();
+    r.reverse();
+    v == r
+}
+
+// Each position to the first subsequence, the second, or neither.
+fn literal(b: Vec[u8], at: i64, first: mut ref Vec[u8], second: mut ref Vec[u8]) -> i64 {
+    if at == b.len() {
+        if first.len() > 0 and second.len() > 0 and reads_as_palindrome(first.clone()) and reads_as_palindrome(second.clone()) {
+            return first.len() * second.len();
+        }
+        return 0;
+    }
+    let mut best = literal(b, at + 1, mut first, mut second);
+    first.push(b[at]);
+    best = best.max(literal(b, at + 1, mut first, mut second));
+    first.pop();
+    second.push(b[at]);
+    best = best.max(literal(b, at + 1, mut first, mut second));
+    second.pop();
+    best
+}
+
+fn answer(arm: i64, s: String) -> i64 {
+    match arm {
+        0 => star_arm(s),
+        1 => pairs_arm(s),
+        2 => submask_arm(s),
+        3 => iter_arm(s),
+        _ => peel_arm(s),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    text: String,
+    renamed: String,
+    appended: String,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 6 + 2;
+    let letters = next_random(mut seed) % 4 + 1;
+    let mut text = String.new();
+    for _ in 0..n {
+        text.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    // a one-to-one renaming of a..d: a rotation by 1 to 3, then reflected or not
+    let shift = next_random(mut seed) % 3 + 1;
+    let reflect = next_random(mut seed) % 2 == 1;
+    let mut renamed = String.new();
+    for c in text.bytes() {
+        let mut k = ((c as i64) - 97 + shift) % 4;
+        if reflect {
+            k = 3 - k;
+        }
+        renamed.push(((97 + k) as u8) as char);
+    }
+    let mut appended = text.clone();
+    appended.push(((97 + next_random(mut seed) % 4) as u8) as char);
+    Problem { text, renamed, appended }
+}
+
+fn main() {
+    let names = ["star", "pairs", "submask", "iter", "peel"];
+    let mut seed = 2002;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1000 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let b = prob.text.bytes().to_vec();
+        let n = b.len();
+        let mut first: Vec[u8] = Vec.new();
+        let mut second: Vec[u8] = Vec.new();
+        let truth = if n <= 6 { literal(b, 0, mut first, mut second) } else { -1 };
+        let mut reversed = String.new();
+        for i in (0..n).rev() {
+            reversed.push(b[i] as char);
+        }
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..5 {
+            got.push(answer(arm, prob.text.clone()));
+        }
+        check = (check * 31 + got[0]) % 1000000007;
+        for arm in 0..5 {
+            let a = got[arm];
+            let mut agree = 0;
+            for other in 0..5 {
+                if other != arm and got[other] == a {
+                    agree += 1;
+                }
+            }
+            let verdicts = [
+                truth == -1 or a == truth,
+                answer(arm, reversed.clone()) == a,
+                answer(arm, prob.renamed.clone()) == a,
+                answer(arm, prob.appended.clone()) >= a,
+                a >= 1 and a <= (n / 2) * ((n + 1) / 2),
+                agree >= 2,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} ({prob.text}) arm {names[arm]}: P{k + 1} fails, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1000 problems: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}
