@@ -1,0 +1,305 @@
+// LeetCode #2001: Number of Pairs of Interchangeable Rectangles -- the
+// differential.
+//
+// The six arms against the statement read literally, on 3000 problems, with
+// six properties:
+//
+// P1  the answer is the statement read literally: every pair i < j with
+//     w_i * h_j == w_j * h_i
+// P2  each rectangle scaled by its own factor leaves the answer
+// P3  every rectangle turned (w, h) -> (h, w) leaves the answer
+// P4  a copy of rectangle j appended adds as many pairs as rectangles
+//     already share j's ratio
+// P5  split in two, the answer is each half's plus the pairs across
+// P6  each arm agrees with at least three of the other five
+
+// ---- rectangles.kara: the ★ arm: gcd-reduced ratios counted in a Map
+fn gcd_star(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd_star(b, a % b) }
+}
+
+fn star_arm(rectangles: Vec[(i64, i64)]) -> i64 {
+    let mut seen: Map[(i64, i64), i64] = Map.new();
+    let mut pairs = 0;
+    for (w, h) in rectangles {
+        let g = gcd_star(w, h);
+        let key = (w / g, h / g);
+        let before = seen.get(key).unwrap_or(0);
+        pairs += before;
+        seen.insert(key, before + 1);
+    }
+    pairs
+}
+
+// ---- rectangles_sorted.kara: the reduced ratios sorted, runs counted
+fn gcd_sorted(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd_sorted(b, a % b) }
+}
+
+fn sorted_arm(rectangles: Vec[(i64, i64)]) -> i64 {
+    let mut keys: Vec[(i64, i64)] = Vec.new();
+    for (w, h) in rectangles {
+        let g = gcd_sorted(w, h);
+        keys.push((w / g, h / g));
+    }
+    keys.sort();
+    let mut pairs = 0;
+    let mut start = 0;
+    for i in 1..keys.len() + 1 {
+        if i == keys.len() or keys[i] != keys[start] {
+            let run = i - start;
+            pairs += run * (run - 1) / 2;
+            start = i;
+        }
+    }
+    pairs
+}
+
+// ---- rectangles_cross.kara: sorted by cross-multiplication, no gcd
+fn cross_arm(rectangles: Vec[(i64, i64)]) -> i64 {
+    let mut sorted = rectangles.clone();
+    sorted.sort_by(|a, b| (a.0 * b.1).cmp(b.0 * a.1));
+    let mut pairs = 0;
+    let mut run = 0;
+    for i in 0..sorted.len() {
+        if i > 0 and sorted[i].0 * sorted[i - 1].1 == sorted[i - 1].0 * sorted[i].1 {
+            run += 1;
+        } else {
+            run = 0;
+        }
+        pairs += run;
+    }
+    pairs
+}
+
+// ---- rectangles_iter.kara: counts through entry, folded to pairs
+fn gcd_iter(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd_iter(b, a % b) }
+}
+
+fn iter_arm(rectangles: Vec[(i64, i64)]) -> i64 {
+    let mut counts: Map[(i64, i64), i64] = Map.new();
+    for key in rectangles.iter().map(|(w, h)| (w / gcd_iter(w, h), h / gcd_iter(w, h))) {
+        *counts.entry(key).or_insert(0) += 1;
+    }
+    counts.values().map(|c| c * (c - 1) / 2).sum()
+}
+
+// ---- rectangles_packed.kara: binary gcd, packed key, SortedMap
+fn binary_gcd(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    let mut shift = 0;
+    while (x | y) & 1 == 0 {
+        x >>= 1;
+        y >>= 1;
+        shift += 1;
+    }
+    while x & 1 == 0 {
+        x >>= 1;
+    }
+    while y != 0 {
+        while y & 1 == 0 {
+            y >>= 1;
+        }
+        if x > y {
+            let t = x;
+            x = y;
+            y = t;
+        }
+        y -= x;
+    }
+    x << shift
+}
+
+fn packed_arm(rectangles: Vec[(i64, i64)]) -> i64 {
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    for (w, h) in rectangles {
+        let g = binary_gcd(w, h);
+        let key = w / g * 100001 + h / g;
+        counts.insert(key, counts.get(key).unwrap_or(0) + 1);
+    }
+    let mut pairs = 0;
+    for (_, c) in counts {
+        pairs += c * (c - 1) / 2;
+    }
+    pairs
+}
+
+// ---- rectangles_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+fn gcd_solution(a: i32, b: i32) -> i32 {
+    if b == 0 { a } else { gcd_solution(b, a % b) }
+}
+
+impl Solution {
+    pub fn interchangeable_rectangles(rectangles: Vec[Vec[i32]]) -> i64 {
+        let mut seen: Map[(i32, i32), i64] = Map.new();
+        let mut pairs: i64 = 0;
+        for r in rectangles.iter() {
+            let g = gcd_solution(r[0], r[1]);
+            let count = seen.entry((r[0] / g, r[1] / g)).or_insert(0);
+            pairs += *count;
+            *count += 1;
+        }
+        pairs
+    }
+}
+
+fn solution_arm(rectangles: Vec[(i64, i64)]) -> i64 {
+    let rows: Vec[Vec[i32]] = rectangles.iter().map(|(w, h)| [w as i32, h as i32]).collect();
+    Solution.interchangeable_rectangles(rows)
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn same_ratio(a: (i64, i64), b: (i64, i64)) -> bool {
+    a.0 * b.1 == b.0 * a.1
+}
+
+fn literal(rects: Vec[(i64, i64)]) -> i64 {
+    let mut pairs = 0;
+    for i in 0..rects.len() {
+        for j in i + 1..rects.len() {
+            if same_ratio(rects[i], rects[j]) {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+
+fn answer(arm: i64, rects: Vec[(i64, i64)]) -> i64 {
+    match arm {
+        0 => star_arm(rects),
+        1 => sorted_arm(rects),
+        2 => cross_arm(rects),
+        3 => iter_arm(rects),
+        4 => packed_arm(rects),
+        _ => solution_arm(rects),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    rects: Vec[(i64, i64)],
+    factors: Vec[i64],
+    split: i64,
+    extra: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 40 + 1;
+    let shapes = next_random(mut seed) % 6;
+    let mut bases: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..shapes {
+        bases.push((next_random(mut seed) % 7 + 1, next_random(mut seed) % 7 + 1));
+    }
+    let side = next_random(mut seed) % 8 + 1;
+    let mut rects: Vec[(i64, i64)] = Vec.new();
+    let mut factors: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        if shapes == 0 {
+            rects.push((next_random(mut seed) % side + 1, next_random(mut seed) % side + 1));
+        } else {
+            let (w, h) = bases[next_random(mut seed) % shapes];
+            let m = next_random(mut seed) % 12 + 1;
+            rects.push((w * m, h * m));
+        }
+        factors.push(next_random(mut seed) % 5 + 1);
+    }
+    let split = next_random(mut seed) % (n + 1);
+    let extra = next_random(mut seed) % n;
+    Problem { rects, factors, split, extra }
+}
+
+fn main() {
+    let names = ["star", "sorted", "cross", "iter", "packed", "solution"];
+    let mut seed = 2001;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..3000 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let rects = prob.rects.clone();
+        let truth = literal(rects.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let mut scaled: Vec[(i64, i64)] = Vec.new();
+        let mut turned: Vec[(i64, i64)] = Vec.new();
+        for i in 0..rects.len() {
+            let (w, h) = rects[i];
+            scaled.push((w * prob.factors[i], h * prob.factors[i]));
+            turned.push((h, w));
+        }
+        let mut grown = rects.clone();
+        grown.push(rects[prob.extra]);
+        let mut sharing = 0;
+        for r in rects.iter() {
+            if same_ratio(r, rects[prob.extra]) {
+                sharing += 1;
+            }
+        }
+        let left: Vec[(i64, i64)] = rects[0..prob.split].to_vec();
+        let right: Vec[(i64, i64)] = rects[prob.split..rects.len()].to_vec();
+        let mut across = 0;
+        for a in left.iter() {
+            for b in right.iter() {
+                if same_ratio(a, b) {
+                    across += 1;
+                }
+            }
+        }
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, rects.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut agree = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    agree += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, scaled.clone()) == a,
+                answer(arm, turned.clone()) == a,
+                answer(arm, grown.clone()) == a + sharing,
+                answer(arm, left.clone()) + answer(arm, right.clone()) + across == a,
+                agree >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{k + 1} fails, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"3000 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2001-number-of-pairs-of-interchangeable-rectangles/bench/rectangles.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 2001 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "e-differs:stdout"
+classified_with = "85169d33d"
+extracted_src = "7e105ef2"
