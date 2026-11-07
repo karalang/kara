@@ -1,0 +1,282 @@
+versions/2b7d91_products_again.mig: revision 2b7d91 already defined in versions/2b7d91_create_products.mig
+versions/ab12ab_loop_a.mig: revision ab12ab does not lead back to a base
+versions/ab34ab_loop_b.mig: revision ab34ab does not lead back to a base
+versions/bb0001_no_down.mig: missing downgrade
+versions/c0ffee_bad_type.mig:6: unknown type 'integer'
+versions/cc0002_label_clash.mig: label billing already used by 5d21c8
+versions/d00d1e_typo.mig:1: unknown key 'revison'
+versions/dd0003_outside.mig:4: operation outside upgrade/downgrade
+versions/e1e1e1_orphan.mig: down revision 777777 not found
+versions/e2e2e2_child_of_bad.mig: down revision c0ffee not found
+versions/ee0004_bad_ops.mig:6: bad name 'Users'
+versions/ee0005_bad_column.mig:6: bad column 'nickname'
+versions/ee0006_bad_flag.mig:6: unknown flag 'unique'
+versions/ee0007_unknown_op.mig:6: unknown operation 'truncate'
+versions/ee0008_usage.mig:6: usage: rename_table <old> <new>
+versions/ee0009_bad_index.mig:6: expected 'unique', found 'clustered'
+versions/ee000a_dup_key.mig:3: duplicate key 'down'
+versions/ee000b_bad_id.mig:2: bad revision id '1F0A3C'
+versions/ee000c_no_message.mig: missing message
+versions/ee000d_dup_column.mig:6: duplicate column 'name'
+versions/fa11ed_wrong_name.mig: file name does not start with revision fa11ee
+versions/ff0010_twice_section.mig:7: duplicate section 'upgrade'
+versions/ff0011_no_colon.mig:3: expected key: value
+loaded 12 revisions from 35 files, 23 skipped
+> current
+  current: base
+> heads
+  heads: 9d71e5 (experiments), b3c911
+> history
+  b3c4d5 -> b3c911 (head), index order state
+  a0b1c2 -> b3c4d5, backfill notes
+  8c5a63 -> a0b1c2, order notes
+  8c5a63 -> 9d71e5 (experiments) (head), index phones then drop them
+  6e3f40, 7b08d2 -> 8c5a63 (branchpoint) (mergepoint), merge billing into main
+  4a9b17 -> 7b08d2, order status becomes state
+  5d21c8 -> 6e3f40, invoices
+  4a9b17 -> 5d21c8 (billing), billing accounts
+  3c4e02 -> 4a9b17 (branchpoint), add phone to users
+  2b7d91 -> 3c4e02, create orders
+  1f0a3c -> 2b7d91, create products
+  base -> 1f0a3c, create users
+> upgrade 1f0a
+  upgrade base -> 1f0a3c, create users
+> current
+  current: 1f0a3c
+> upgrade +2
+  upgrade 1f0a3c -> 2b7d91, create products
+  upgrade 2b7d91 -> 3c4e02, create orders
+> schema
+  table order_items (order_id int pk, product_id int pk, qty int notnull default=1)
+  table orders (id int pk, user_id int notnull, placed date notnull, status text notnull default=new)
+  table products (id int pk, sku text notnull, title text, price real notnull default=0)
+  table users (id int pk, email text notnull, name text)
+  index ix_orders_user on orders (user_id)
+  index ix_products_sku on products (sku) unique
+  index ix_users_email on users (email) unique
+> upgrade head
+  error: multiple heads (9d71e5, b3c911); name one or use heads
+> upgrade billing@head
+  error: label billing has 2 heads (9d71e5, b3c911)
+> upgrade billing
+  upgrade 3c4e02 -> 4a9b17, add phone to users
+  upgrade 4a9b17 -> 5d21c8, billing accounts
+> current
+  current: 5d21c8
+> upgrade 6e3
+  upgrade 5d21c8 -> 6e3f40, invoices
+> upgrade 7b0
+  upgrade 4a9b17 -> 7b08d2, order status becomes state
+> current
+  current: 6e3f40, 7b08d2
+> downgrade -1
+  error: multiple current heads; name a target
+> sql 8c5a63
+  BEGIN;
+  -- upgrade 6e3f40, 7b08d2 -> 8c5a63, merge billing into main
+  UPDATE alembic_version SET version_num='8c5a63' WHERE version_num = '6e3f40';
+  DELETE FROM alembic_version WHERE version_num = '7b08d2';
+  COMMIT;
+> upgrade 8c5a63
+  upgrade 6e3f40, 7b08d2 -> 8c5a63, merge billing into main
+> current
+  current: 8c5a63
+> upgrade experiments@head
+  failed 9d71e5 at step 2 (drop_column): column users.phone is used by index ix_users_phone; rolled back
+> current
+  current: 8c5a63
+> schema
+  table accounts (id int pk, user_id int notnull, balance real notnull default=0)
+  table invoices (id int pk, account_id int notnull, total real notnull, issued date)
+  table order_items (order_id int pk, product_id int pk, qty int notnull default=1)
+  table orders (id int pk, user_id int notnull, placed date notnull, state text notnull default=new)
+  table products (id int pk, sku text notnull, title text, price real notnull default=0)
+  table users (id int pk, email text notnull, name text, phone text)
+  index ix_accounts_user on accounts (user_id) unique
+  index ix_orders_user on orders (user_id)
+  index ix_products_sku on products (sku) unique
+  index ix_users_email on users (email) unique
+> upgrade a0b1c2
+  upgrade 8c5a63 -> a0b1c2, order notes
+> upgrade +1
+  upgrade a0b1c2 -> b3c4d5, backfill notes
+> upgrade b3c
+  error: ambiguous revision 'b3c' (b3c4d5, b3c911)
+> upgrade +2
+  error: relative revision +2 goes past the head
+> upgrade +1
+  upgrade b3c4d5 -> b3c911, index order state
+> current
+  current: b3c911 (head)
+> schema
+  table accounts (id int pk, user_id int notnull, balance real notnull default=0)
+  table invoices (id int pk, account_id int notnull, total real notnull, issued date)
+  table order_lines (order_id int pk, product_id int pk, qty int notnull default=1)
+  table orders (id int pk, user_id int notnull, placed date notnull, state text notnull default=new, note text notnull)
+  table products (id int pk, sku text notnull, title text, price real notnull default=0)
+  table users (id int pk, email text notnull, name text, phone text)
+  index ix_accounts_user on accounts (user_id) unique
+  index ix_orders_state on orders (state, placed)
+  index ix_orders_user on orders (user_id)
+  index ix_products_sku on products (sku) unique
+  index ix_users_email on users (email) unique
+> stamp 9d71e5
+  stamped 9d71e5 (head)
+> check
+  replay fails at 9d71e5 step 2 (drop_column): column users.phone is used by index ix_users_phone
+> stamp a0b1c2
+  stamped a0b1c2
+> check
+  schema differs
+    missing: table orders (id int pk, user_id int notnull, placed date notnull, state text notnull default=new, note text)
+    extra: index ix_orders_state on orders (state, placed)
+    extra: table orders (id int pk, user_id int notnull, placed date notnull, state text notnull default=new, note text notnull)
+> stamp heads
+  stamped 9d71e5 (head), b3c911 (head)
+> stamp b3c911
+  stamped b3c911 (head)
+> check
+  schema matches
+> revision - b3c911 add carts table
+  generated out/versions/c5b575ec_add_carts_table.mig
+> revision wishlist 3c4e02 wishlists
+  generated out/versions/897fdf0e_wishlists.mig
+> heads
+  heads: 897fdf0e (wishlist), 9d71e5 (experiments), c5b575ec
+> merge join experiments and carts
+  generated out/versions/8f3dbb8a_join_experiments_and_car.mig
+> merge
+  error: merge needs a message
+> heads
+  heads: 8f3dbb8a
+> show 1f0a3c
+  revision: 1f0a3c
+  file: versions/1f0a3c_create_users.mig
+  message: create users
+  down: base
+  children: 2b7d91
+  upgrade: 2 steps
+    create_table users id:int:pk email:text:notnull name:text
+    create_index ix_users_email users email unique
+  downgrade: 2 steps
+    drop_index ix_users_email
+    drop_table users
+> show 8c5
+  revision: 8c5a63
+  file: versions/8c5a63_merge_billing.mig
+  message: merge billing into main
+  down: 6e3f40, 7b08d2
+  children: 9d71e5, a0b1c2
+  upgrade: no steps
+  downgrade: no steps
+> show experiments
+  revision: 9d71e5
+  file: versions/9d71e5_drop_phone.mig
+  label: experiments
+  message: index phones then drop them
+  down: 8c5a63
+  children: 8f3dbb8a
+  upgrade: 2 steps
+    create_index ix_users_phone users phone
+    drop_column users phone
+  downgrade: 2 steps
+    add_column users phone:text
+    drop_index ix_users_phone
+> history
+  897fdf0e, 9d71e5, c5b575ec -> 8f3dbb8a (head) (mergepoint), join experiments and carts
+  b3c911 -> c5b575ec, add carts table
+  b3c4d5 -> b3c911 (current), index order state
+  a0b1c2 -> b3c4d5, backfill notes
+  8c5a63 -> a0b1c2, order notes
+  8c5a63 -> 9d71e5 (experiments), index phones then drop them
+  6e3f40, 7b08d2 -> 8c5a63 (branchpoint) (mergepoint), merge billing into main
+  3c4e02 -> 897fdf0e (wishlist), wishlists
+  4a9b17 -> 7b08d2, order status becomes state
+  5d21c8 -> 6e3f40, invoices
+  4a9b17 -> 5d21c8 (billing), billing accounts
+  3c4e02 -> 4a9b17 (branchpoint), add phone to users
+  2b7d91 -> 3c4e02 (branchpoint), create orders
+  1f0a3c -> 2b7d91, create products
+  base -> 1f0a3c, create users
+> upgrade heads
+  upgrade 3c4e02 -> 897fdf0e, wishlists
+  failed 9d71e5 at step 2 (drop_column): column users.phone is used by index ix_users_phone; rolled back
+> restart
+  loaded 15 revisions from 38 files, 23 skipped
+  restarted at 897fdf0e, b3c911, 6 tables, 5 indexes
+> current
+  current: 897fdf0e, b3c911
+> downgrade 4a9b17
+  downgrade b3c911 -> b3c4d5, index order state
+  downgrade b3c4d5 -> a0b1c2, backfill notes
+  downgrade a0b1c2 -> 8c5a63, order notes
+  downgrade 8c5a63 -> 6e3f40, 7b08d2, merge billing into main
+  downgrade 7b08d2 -> 4a9b17, order status becomes state
+  downgrade 6e3f40 -> 5d21c8, invoices
+  downgrade 5d21c8 -> 4a9b17, billing accounts
+> current
+  current: 4a9b17, 897fdf0e
+> schema
+  table order_items (order_id int pk, product_id int pk, qty int notnull default=1)
+  table orders (id int pk, user_id int notnull, placed date notnull, status text notnull default=new)
+  table products (id int pk, sku text notnull, title text, price real notnull default=0)
+  table users (id int pk, email text notnull, name text, phone text)
+  index ix_orders_user on orders (user_id)
+  index ix_products_sku on products (sku) unique
+  index ix_users_email on users (email) unique
+> downgrade -2
+  error: multiple current heads; name a target
+> current
+  current: 4a9b17, 897fdf0e
+> sql heads
+  BEGIN;
+  -- upgrade 4a9b17 -> 5d21c8, billing accounts
+  CREATE TABLE accounts (id INTEGER NOT NULL, user_id INTEGER NOT NULL, balance REAL NOT NULL DEFAULT 0, PRIMARY KEY (id));
+  CREATE UNIQUE INDEX ix_accounts_user ON accounts (user_id);
+  UPDATE alembic_version SET version_num='5d21c8' WHERE version_num = '4a9b17';
+  -- upgrade 5d21c8 -> 6e3f40, invoices
+  CREATE TABLE invoices (id INTEGER NOT NULL, account_id INTEGER NOT NULL, total REAL NOT NULL, issued DATE, PRIMARY KEY (id));
+  INSERT INTO invoices (id, account_id, total) SELECT 0, 0, 0 WHERE 1 = 0;
+  UPDATE alembic_version SET version_num='6e3f40' WHERE version_num = '5d21c8';
+  -- upgrade 4a9b17 -> 7b08d2, order status becomes state
+  ALTER TABLE orders RENAME COLUMN status TO state;
+  ALTER TABLE orders ALTER COLUMN state TYPE TEXT;
+  ALTER TABLE orders ALTER COLUMN state SET NOT NULL;
+  INSERT INTO alembic_version (version_num) VALUES ('7b08d2');
+  -- upgrade 6e3f40, 7b08d2 -> 8c5a63, merge billing into main
+  UPDATE alembic_version SET version_num='8c5a63' WHERE version_num = '6e3f40';
+  DELETE FROM alembic_version WHERE version_num = '7b08d2';
+  -- upgrade 8c5a63 -> 9d71e5, index phones then drop them
+  -- failed 9d71e5 at step 2 (drop_column): column users.phone is used by index ix_users_phone
+  ROLLBACK;
+> downgrade base
+  downgrade 897fdf0e -> 3c4e02, wishlists
+  downgrade 4a9b17 -> 3c4e02, add phone to users
+  downgrade 3c4e02 -> 2b7d91, create orders
+  downgrade 2b7d91 -> 1f0a3c, create products
+  downgrade 1f0a3c -> base, create users
+> current
+  current: base
+> schema
+  (no tables)
+> check
+  schema matches
+> downgrade -1
+  error: relative revision -1 goes past base
+> upgrade +99
+  error: 3c4e02 branches to 4a9b17, 897fdf0e; name one
+> upgrade zz
+  error: no revision 'zz'
+> upgrade 1
+  error: revision prefix '1' is too short
+> upgrade e1e1e1
+  error: no revision 'e1e1e1'
+> downgrade b3c911
+  error: revision b3c911 is not applied
+> stamp
+  error: stamp needs a target
+> frobnicate now
+  error: unknown command 'frobnicate'
+> upgrade 1f0a3c 2b7d91
+  error: upgrade takes one target
+ran 67 commands

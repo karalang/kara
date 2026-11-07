@@ -1,0 +1,1913 @@
+// mini_alembic: database schema migrations in the shape of Alembic.
+// Migration scripts name their parent revisions, so they form a graph with
+// branches, labels and merge points. The tool upgrades and downgrades a
+// schema along that graph, one transaction per migration, keeps the
+// current revisions and the schema in a state file, prints the SQL an
+// upgrade would run, stamps a version without running anything, checks the
+// schema against a replay of its history, and generates new revision and
+// merge scripts on disk.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+
+const STATE: Str = "data/out/state.txt";
+
+// ------------------------------------------------------------ tokens
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_name(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 30 and (is_lower(b[0]) or b[0] == b'_')
+        and b.iter().all(|c| is_lower(c) or is_digit(c) or c == b'_')
+}
+
+fn need_name(s: Str) -> Result[String, String] {
+    if is_name(s) { Ok(s.to_string()) } else { Err(f"bad name '{s}'") }
+}
+
+fn is_hex(s: Str) -> bool {
+    s.bytes().iter().all(|c| is_digit(c) or (c >= b'a' and c <= b'f'))
+}
+
+fn is_rev(s: Str) -> bool {
+    s.len() >= 6 and s.len() <= 12 and is_hex(s)
+}
+
+fn is_label(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 24 and is_lower(b[0])
+        and b.iter().all(|c| is_lower(c) or is_digit(c) or c == b'_')
+        and s != "head" and s != "heads" and s != "base"
+}
+
+fn digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| is_digit(c))
+}
+
+fn words(s: Str) -> Vec[String] {
+    s.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+fn sql_type(t: Str) -> Option[Str] {
+    match t {
+        "int" => Some("INTEGER"),
+        "text" => Some("TEXT"),
+        "real" => Some("REAL"),
+        "bool" => Some("BOOLEAN"),
+        "date" => Some("DATE"),
+        _ => None,
+    }
+}
+
+fn hex8(v: u32) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out = String.new();
+    for i in 0..8 {
+        let d = (v >> ((7 - i) * 4) as u32) & 15;
+        out.push(digits[d as i64] as char);
+    }
+    out
+}
+
+// FNV-1a, 32 bits: the id of a generated revision.
+fn fnv1a(data: Slice[u8]) -> u32 {
+    let mut h: u32 = 0x811c9dc5;
+    for b in data.iter() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    h
+}
+
+// ------------------------------------------------------------ migration scripts
+
+#[derive(Clone, PartialEq)]
+struct Column {
+    name: String,
+    ty: String,
+    pk: bool,
+    notnull: bool,
+    default: Option[String],
+}
+
+#[derive(Clone)]
+enum Change {
+    Type(String),
+    NotNull,
+    Null,
+}
+
+#[derive(Clone)]
+enum Op {
+    CreateTable { table: String, cols: Vec[Column] },
+    DropTable { table: String },
+    AddColumn { table: String, col: Column },
+    DropColumn { table: String, column: String },
+    RenameTable { table: String, new: String },
+    RenameColumn { table: String, column: String, new: String },
+    AlterColumn { table: String, column: String, changes: Vec[Change] },
+    CreateIndex { index: String, table: String, cols: Vec[String], unique: bool },
+    DropIndex { index: String },
+    Execute { sql: String },
+}
+
+// One line of an upgrade or downgrade section, as written and as parsed.
+#[derive(Clone)]
+struct Step {
+    op: Op,
+    text: String,
+}
+
+#[derive(Clone)]
+struct Rev {
+    id: String,
+    down: Vec[String],
+    label: Option[String],
+    message: String,
+    path: String,
+    up: Vec[Step],
+    dn: Vec[Step],
+}
+
+fn usage(op: Str) -> Option[Str] {
+    match op {
+        "create_table" => Some("create_table <table> <column>..."),
+        "drop_table" => Some("drop_table <table>"),
+        "add_column" => Some("add_column <table> <column>"),
+        "drop_column" => Some("drop_column <table> <column>"),
+        "rename_table" => Some("rename_table <old> <new>"),
+        "rename_column" => Some("rename_column <table> <old> <new>"),
+        "alter_column" => Some("alter_column <table> <column> <change>..."),
+        "create_index" => Some("create_index <index> <table> <columns> [unique]"),
+        "drop_index" => Some("drop_index <index>"),
+        "execute" => Some("execute <sql>"),
+        _ => None,
+    }
+}
+
+fn op_name(o: Op) -> Str {
+    match o {
+        Op.CreateTable { .. } => "create_table",
+        Op.DropTable { .. } => "drop_table",
+        Op.AddColumn { .. } => "add_column",
+        Op.DropColumn { .. } => "drop_column",
+        Op.RenameTable { .. } => "rename_table",
+        Op.RenameColumn { .. } => "rename_column",
+        Op.AlterColumn { .. } => "alter_column",
+        Op.CreateIndex { .. } => "create_index",
+        Op.DropIndex { .. } => "drop_index",
+        Op.Execute { .. } => "execute",
+    }
+}
+
+// `name:type[:pk][:notnull][:default=v]`
+fn parse_column(spec: Str, allow_pk: bool) -> Result[Column, String] {
+    let parts: Vec[String] = spec.split(":").map(|p| p.to_string()).collect();
+    if parts.len() < 2 {
+        return Err(f"bad column '{spec}'");
+    }
+    let name = need_name(parts[0])?;
+    if sql_type(parts[1]).is_none() {
+        return Err(f"unknown type '{parts[1]}'");
+    }
+    let mut col = Column { name, ty: parts[1].clone(), pk: false, notnull: false, default: None };
+    let mut seen: Vec[String] = Vec.new();
+    for f in parts[2..].iter() {
+        let key = if f.starts_with("default=") { "default".to_string() } else { f.clone() };
+        if seen.contains(key) {
+            return Err(f"duplicate flag '{key}'");
+        }
+        seen.push(key.clone());
+        if f == "pk" {
+            if not allow_pk {
+                return Err("add_column cannot add a primary key".to_string());
+            }
+            col.pk = true;
+        } else if f == "notnull" {
+            col.notnull = true;
+        } else if key == "default" {
+            let v = f.substring(8, f.len());
+            if v.is_empty() {
+                return Err(f"bad default in '{spec}'");
+            }
+            col.default = Some(v.to_string());
+        } else {
+            return Err(f"unknown flag '{f}'");
+        }
+    }
+    Ok(col)
+}
+
+fn parse_op(text: Str) -> Result[Step, String] {
+    let w = words(text);
+    let op = w[0].clone();
+    let Some(how) = usage(op) else {
+        return Err(f"unknown operation '{op}'");
+    };
+    let n = w.len() - 1;
+    let fits = match op.as_str() {
+        "create_table" => n >= 2,
+        "drop_table" | "drop_index" => n == 1,
+        "add_column" | "drop_column" | "rename_table" => n == 2,
+        "rename_column" => n == 3,
+        "alter_column" => n >= 3,
+        "create_index" => n == 3 or n == 4,
+        _ => n >= 1,
+    };
+    if not fits {
+        return Err(f"usage: {how}");
+    }
+    let parsed = match op.as_str() {
+        "create_table" => {
+            let table = need_name(w[1])?;
+            let mut cols: Vec[Column] = Vec.new();
+            for spec in w[2..].iter() {
+                let c = parse_column(spec, true)?;
+                if cols.iter().any(|x| x.name == c.name) {
+                    return Err(f"duplicate column '{c.name}'");
+                }
+                cols.push(c);
+            }
+            Op.CreateTable { table, cols }
+        }
+        "drop_table" => Op.DropTable { table: need_name(w[1])? },
+        "add_column" => {
+            let table = need_name(w[1])?;
+            Op.AddColumn { table, col: parse_column(w[2], false)? }
+        }
+        "drop_column" => {
+            let table = need_name(w[1])?;
+            Op.DropColumn { table, column: need_name(w[2])? }
+        }
+        "rename_table" => {
+            let table = need_name(w[1])?;
+            Op.RenameTable { table, new: need_name(w[2])? }
+        }
+        "rename_column" => {
+            let table = need_name(w[1])?;
+            let column = need_name(w[2])?;
+            Op.RenameColumn { table, column, new: need_name(w[3])? }
+        }
+        "alter_column" => {
+            let table = need_name(w[1])?;
+            let column = need_name(w[2])?;
+            let mut changes: Vec[Change] = Vec.new();
+            for c in w[3..].iter() {
+                if c.starts_with("type=") {
+                    let t = c.substring(5, c.len());
+                    if sql_type(t).is_none() {
+                        return Err(f"unknown type '{t}'");
+                    }
+                    changes.push(Change.Type(t.to_string()));
+                } else if c == "notnull" {
+                    changes.push(Change.NotNull);
+                } else if c == "null" {
+                    changes.push(Change.Null);
+                } else {
+                    return Err(f"unknown change '{c}'");
+                }
+            }
+            Op.AlterColumn { table, column, changes }
+        }
+        "create_index" => {
+            let index = need_name(w[1])?;
+            let table = need_name(w[2])?;
+            let mut cols: Vec[String] = Vec.new();
+            for c in w[3].split(",") {
+                need_name(c)?;
+                if cols.contains(c.to_string()) {
+                    return Err(f"column '{c}' listed twice");
+                }
+                cols.push(c.to_string());
+            }
+            if n == 4 and w[4] != "unique" {
+                return Err(f"expected 'unique', found '{w[4]}'");
+            }
+            Op.CreateIndex { index, table, cols, unique: n == 4 }
+        }
+        "drop_index" => Op.DropIndex { index: need_name(w[1])? },
+        _ => Op.Execute { sql: text.substring(7, text.len()).trim().to_string() },
+    };
+    Ok(Step { op: parsed, text: text.to_string() })
+}
+
+// The parts of a script read so far.
+struct Draft {
+    revision: Option[String],
+    down: Option[Vec[String]],
+    label: Option[String],
+    message: Option[String],
+    section: Option[String],
+    sections: Vec[String],
+    up: Vec[Step],
+    dn: Vec[Step],
+}
+
+// One `key: value` line before the sections.
+fn header_line(d: mut ref Draft, s: Str) -> Result[(), String] {
+    let at = s.find(":").unwrap_or(0);
+    let key = s.substring(0, at);
+    let tail_ok = at + 1 == s.len() or s.substring(at + 1, at + 2) == " ";
+    if at == 0 or not key.bytes().iter().all(|c| is_lower(c) or c == b'_') or not tail_ok {
+        return Err("expected key: value".to_string());
+    }
+    let value = s.substring(at + 1, s.len()).trim().to_string();
+    let taken = match key {
+        "revision" => d.revision.is_some(),
+        "down" => d.down.is_some(),
+        "label" => d.label.is_some(),
+        "message" => d.message.is_some(),
+        _ => return Err(f"unknown key '{key}'"),
+    };
+    if taken {
+        return Err(f"duplicate key '{key}'");
+    }
+    match key {
+        "revision" => {
+            if not is_rev(value) {
+                return Err(f"bad revision id '{value}'");
+            }
+            d.revision = Some(value);
+        }
+        "down" => {
+            let mut ds: Vec[String] = Vec.new();
+            if value != "none" {
+                for part in value.split(",") {
+                    let p = part.trim();
+                    if not is_rev(p) {
+                        return Err(f"bad revision id '{p}'");
+                    }
+                    if ds.contains(p.to_string()) {
+                        return Err(f"down lists {p} twice");
+                    }
+                    ds.push(p.to_string());
+                }
+            }
+            d.down = Some(ds);
+        }
+        "label" => {
+            if not is_label(value) {
+                return Err(f"bad label '{value}'");
+            }
+            d.label = Some(value);
+        }
+        _ => {
+            if value.is_empty() {
+                return Err("empty message".to_string());
+            }
+            d.message = Some(value);
+        }
+    }
+    Ok(())
+}
+
+fn script_line(d: mut ref Draft, line: Str) -> Result[(), String] {
+    let s = line.trim();
+    if line.starts_with(" ") or line.starts_with("\t") {
+        let step = match d.section.clone() {
+            None => return Err("operation outside upgrade/downgrade".to_string()),
+            Some(sec) => (sec, parse_op(s)?),
+        };
+        if step.0 == "upgrade" {
+            d.up.push(step.1);
+        } else {
+            d.dn.push(step.1);
+        }
+        return Ok(());
+    }
+    if s == "upgrade:" or s == "downgrade:" {
+        let sec = s.substring(0, s.len() - 1).to_string();
+        if d.sections.contains(sec) {
+            return Err(f"duplicate section '{sec}'");
+        }
+        d.sections.push(sec.clone());
+        d.section = Some(sec);
+        return Ok(());
+    }
+    let first = words(s)[0].clone();
+    if usage(first).is_some() {
+        return Err(if d.section.is_none() {
+            "operation outside upgrade/downgrade".to_string()
+        } else {
+            "operation must be indented".to_string()
+        });
+    }
+    if d.section.is_some() {
+        return Err("key after the upgrade/downgrade sections".to_string());
+    }
+    header_line(mut d, s)
+}
+
+// A revision, or the line that reports why the script is skipped.
+fn parse_mig(path: Str, text: Str) -> Result[Rev, String] {
+    let mut d = Draft {
+        revision: None,
+        down: None,
+        label: None,
+        message: None,
+        section: None,
+        sections: Vec.new(),
+        up: Vec.new(),
+        dn: Vec.new(),
+    };
+    let mut lines: Vec[String] = text.split("\n").map(|l| l.to_string()).collect();
+    if lines.len() > 0 and lines[lines.len() - 1].is_empty() {
+        lines.pop();
+    }
+    for (i, raw) in lines.iter().enumerate() {
+        let line = raw.trim_end();
+        let s = line.trim();
+        if s.is_empty() or s.starts_with("#") {
+            continue;
+        }
+        if let Err(e) = script_line(mut d, line) {
+            return Err(f"{path}:{i + 1}: {e}");
+        }
+    }
+    let Some(id) = d.revision else {
+        return Err(f"{path}: missing revision");
+    };
+    let Some(down) = d.down else {
+        return Err(f"{path}: missing down");
+    };
+    let Some(message) = d.message else {
+        return Err(f"{path}: missing message");
+    };
+    for sec in ["upgrade", "downgrade"].iter() {
+        if not d.sections.contains(sec.to_string()) {
+            return Err(f"{path}: missing {sec}");
+        }
+    }
+    let name = match path.rsplit_once("/") {
+        Some((_, n)) => n.to_string(),
+        None => path.to_string(),
+    };
+    if not name.starts_with(f"{id}_") {
+        return Err(f"{path}: file name does not start with revision {id}");
+    }
+    Ok(Rev { id, down, label: d.label, message, path: path.to_string(), up: d.up, dn: d.dn })
+}
+
+// ------------------------------------------------------------ the revision graph
+
+struct Graph {
+    revs: SortedMap[String, Rev],
+    children: SortedMap[String, Vec[String]],
+    order: Vec[String],
+    pos: Map[String, i64],
+    heads: Vec[String],
+    labels: SortedMap[String, String],
+}
+
+// Topological order: of the revisions whose parents are all placed, the
+// smallest id goes next.
+fn graph(revs: own Vec[Rev]) -> Graph {
+    let mut g = Graph {
+        revs: SortedMap.new(),
+        children: SortedMap.new(),
+        order: Vec.new(),
+        pos: Map.new(),
+        heads: Vec.new(),
+        labels: SortedMap.new(),
+    };
+    for r in revs.into_iter() {
+        g.children.insert(r.id.clone(), Vec.new());
+        if let Some(l) = r.label.clone() {
+            g.labels.insert(l, r.id.clone());
+        }
+        g.revs.insert(r.id.clone(), r);
+    }
+    let mut edges: Vec[(String, String)] = Vec.new();
+    for (id, r) in g.revs.iter() {
+        for d in r.down.iter() {
+            edges.push((d.clone(), id.clone()));
+        }
+    }
+    for (parent, child) in edges.into_iter() {
+        if let Some(cs) = g.children.get_mut(parent) {
+            cs.push(child);
+        }
+    }
+    let mut placed: SortedSet[String] = SortedSet.new();
+    let mut ready: SortedSet[String] = SortedSet.new();
+    for (id, r) in g.revs.iter() {
+        if r.down.is_empty() {
+            ready.insert(id.clone());
+        }
+    }
+    while let Some(r) = ready.pop_first() {
+        placed.insert(r.clone());
+        g.pos.insert(r.clone(), g.order.len());
+        g.order.push(r.clone());
+        for c in g.kids(r).iter() {
+            if g.rev(c).down.iter().all(|d| placed.contains(d)) {
+                ready.insert(c.clone());
+            }
+        }
+    }
+    let heads: Vec[String] = g.order.iter().filter(|r| g.kids(r).is_empty()).cloned().collect();
+    g.heads = heads;
+    g
+}
+
+impl Graph {
+    fn rev(self, id: Str) -> Rev {
+        self.revs.get(id).cloned().unwrap()
+    }
+
+    fn kids(self, id: Str) -> Vec[String] {
+        self.children.get(id).cloned().unwrap_or(Vec.new())
+    }
+
+    fn is_head(self, id: Str) -> bool {
+        self.heads.contains(id.to_string())
+    }
+
+    fn ancestors(self, targets: Slice[String]) -> SortedSet[String] {
+        let mut out: SortedSet[String] = SortedSet.new();
+        let mut stack: Vec[String] = targets.to_vec();
+        while let Some(r) = stack.pop() {
+            if out.insert(r.clone()) {
+                stack.extend(self.rev(r).down);
+            }
+        }
+        out
+    }
+
+    fn descendants(self, id: Str) -> SortedSet[String] {
+        let mut out: SortedSet[String] = SortedSet.new();
+        let mut stack = self.kids(id);
+        while let Some(r) = stack.pop() {
+            if out.insert(r.clone()) {
+                stack.extend(self.kids(r));
+            }
+        }
+        out
+    }
+
+    // The members of `s`, in graph order.
+    fn in_order(self, s: SortedSet[String]) -> Vec[String] {
+        self.order.iter().filter(|r| s.contains(r)).cloned().collect()
+    }
+
+    // The applied revisions with no applied child.
+    fn current(self, applied: SortedSet[String]) -> Vec[String] {
+        self.order
+            .iter()
+            .filter(|r| applied.contains(r) and not self.kids(r).iter().any(|c| applied.contains(c)))
+            .cloned()
+            .collect()
+    }
+
+    // A revision id, or None for base.
+    fn resolve(self, spec: Str) -> Result[Option[String], String] {
+        if spec == "base" {
+            return Ok(None);
+        }
+        if spec == "head" {
+            if self.heads.len() != 1 {
+                return Err(f"multiple heads ({self.heads.join(", ")}); name one or use heads");
+            }
+            return Ok(Some(self.heads[0].clone()));
+        }
+        if let Some((label, rest)) = spec.split_once("@") {
+            if rest != "head" {
+                return Err(f"bad revision '{spec}'");
+            }
+            let Some(r) = self.labels.get(label).cloned() else {
+                return Err(f"no label '{label}'");
+            };
+            let below = self.descendants(r);
+            let hs: Vec[String] = self.heads.iter().filter(|h| h == r or below.contains(h)).cloned().collect();
+            if hs.len() != 1 {
+                return Err(f"label {label} has {hs.len()} heads ({hs.join(", ")})");
+            }
+            return Ok(Some(hs[0].clone()));
+        }
+        if let Some(r) = self.labels.get(spec) {
+            return Ok(Some(r.clone()));
+        }
+        if spec.is_empty() or not is_hex(spec) {
+            return Err(f"no revision '{spec}'");
+        }
+        if self.revs.contains_key(spec) {
+            return Ok(Some(spec.to_string()));
+        }
+        if spec.len() < 3 {
+            return Err(f"revision prefix '{spec}' is too short");
+        }
+        let m: Vec[String] = self.revs.keys().filter(|r| r.starts_with(spec)).cloned().collect();
+        if m.is_empty() {
+            return Err(f"no revision '{spec}'");
+        }
+        if m.len() > 1 {
+            return Err(f"ambiguous revision '{spec}' ({m.join(", ")})");
+        }
+        Ok(Some(m[0].clone()))
+    }
+
+    fn from_text(self, id: Str) -> String {
+        let d = self.rev(id).down;
+        if d.is_empty() { "base".to_string() } else { d.join(", ") }
+    }
+}
+
+// ------------------------------------------------------------ loading
+
+fn read(path: Str) -> Result[String, String] {
+    fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")
+}
+
+// Every script under data/versions and data/out/versions, each parsed in a
+// task of its own; the ones that do not fit the graph are reported and
+// skipped.
+fn load_revisions(verbose: bool) -> Result[Graph, String] {
+    let mut files: Vec[(String, String)] = Vec.new();
+    for (dir, shown) in [("data/out/versions", "out/versions"), ("data/versions", "versions")].iter() {
+        if fs.exists(dir) {
+            let names = fs.read_dir(dir).map_err(|e| f"cannot list {dir}: {e}")?;
+            for n in names.iter().filter(|n| n.ends_with(".mig")) {
+                files.push((f"{shown}/{n}", f"{dir}/{n}"));
+            }
+        }
+    }
+    files.sort();
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for (shown, real) in files.iter() {
+        let shown = shown.clone();
+        let real = real.clone();
+        handles.push(group.spawn(|| match fs.read_to_string(real) {
+            Ok(text) => parse_mig(shown, text),
+            Err(e) => Err(f"{shown}: cannot read: {e}"),
+        }));
+    }
+    let mut errors: Vec[(String, String)] = Vec.new();
+    let mut parsed: Vec[Rev] = Vec.new();
+    for (h, (shown, _)) in handles.into_iter().zip(files.iter()) {
+        match h.join() {
+            Ok(r) => parsed.push(r),
+            Err(e) => errors.push((shown.clone(), e)),
+        }
+    }
+    // The first script to define a revision keeps it.
+    let mut first: Map[String, String] = Map.new();
+    let mut keep: Vec[Rev] = Vec.new();
+    for r in parsed.into_iter() {
+        match first.get(r.id).cloned() {
+            Some(p) => errors.push((r.path.clone(), f"{r.path}: revision {r.id} already defined in {p}")),
+            None => {
+                first.insert(r.id.clone(), r.path.clone());
+                keep.push(r);
+            }
+        }
+    }
+    // And the first to claim a label.
+    let mut labels: Map[String, String] = Map.new();
+    let mut claimed: Vec[Rev] = Vec.new();
+    for r in keep.into_iter() {
+        if let Some(l) = r.label.clone() {
+            if let Some(owner) = labels.get(l).cloned() {
+                errors.push((r.path.clone(), f"{r.path}: label {l} already used by {owner}"));
+                continue;
+            }
+            labels.insert(l, r.id.clone());
+        }
+        claimed.push(r);
+    }
+    // A script whose parent is missing goes, which can orphan its children.
+    let mut keep = claimed;
+    loop {
+        let have: SortedSet[String] = keep.iter().map(|r| r.id.clone()).collect();
+        let mut next: Vec[Rev] = Vec.new();
+        for r in keep.iter() {
+            match r.down.iter().find(|d| not have.contains(d)) {
+                Some(d) => errors.push((r.path.clone(), f"{r.path}: down revision {d} not found")),
+                None => next.push(r.clone()),
+            }
+        }
+        if next.len() == keep.len() {
+            break;
+        }
+        keep = next;
+    }
+    // What is left must lead back to a revision with no parent.
+    let mut grounded: SortedSet[String] = SortedSet.new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in keep.iter() {
+            if not grounded.contains(r.id) and r.down.iter().all(|d| grounded.contains(d)) {
+                grounded.insert(r.id.clone());
+                changed = true;
+            }
+        }
+    }
+    let mut good: Vec[Rev] = Vec.new();
+    for r in keep.into_iter() {
+        if grounded.contains(r.id) {
+            good.push(r);
+        } else {
+            errors.push((r.path.clone(), f"{r.path}: revision {r.id} does not lead back to a base"));
+        }
+    }
+    errors.sort();
+    if verbose {
+        for (_, e) in errors.iter() {
+            println(e);
+        }
+    }
+    let lead = if verbose { "" } else { "  " };
+    println(f"{lead}loaded {good.len()} revisions from {files.len()} files, {errors.len()} skipped");
+    Ok(graph(good))
+}
+
+// ------------------------------------------------------------ the schema
+
+#[derive(Clone, PartialEq)]
+struct Index {
+    table: String,
+    cols: Vec[String],
+    unique: bool,
+}
+
+#[derive(Clone)]
+struct Schema {
+    tables: SortedMap[String, Vec[Column]],
+    indexes: SortedMap[String, Index],
+}
+
+fn empty_schema() -> Schema {
+    Schema { tables: SortedMap.new(), indexes: SortedMap.new() }
+}
+
+fn col_text(c: Column) -> String {
+    let mut s = f"{c.name} {c.ty}";
+    if c.pk {
+        s.push_str(" pk");
+    }
+    if c.notnull {
+        s.push_str(" notnull");
+    }
+    if let Some(v) = c.default {
+        s.push_str(f" default={v}");
+    }
+    s
+}
+
+fn schema_lines(sc: Schema) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for (t, cols) in sc.tables.iter() {
+        let cs: Vec[String] = cols.iter().map(|c| col_text(c)).collect();
+        out.push(f"table {t} ({cs.join(", ")})");
+    }
+    for (name, ix) in sc.indexes.iter() {
+        let u = if ix.unique { " unique" } else { "" };
+        out.push(f"index {name} on {ix.table} ({ix.cols.join(", ")}){u}");
+    }
+    out
+}
+
+fn find_col(sc: Schema, t: Str, c: Str) -> Result[i64, String] {
+    let Some(cols) = sc.tables.get(t) else {
+        return Err(f"no table {t}");
+    };
+    cols.iter().position(|x| x.name == c).ok_or(f"no column {t}.{c}")
+}
+
+fn no_table(sc: Schema, t: Str) -> Result[(), String] {
+    if sc.tables.contains_key(t) { Ok(()) } else { Err(f"no table {t}") }
+}
+
+fn apply_op(sc: mut ref Schema, o: Op) -> Result[(), String] {
+    match o {
+        Op.CreateTable { table, cols } => {
+            if sc.tables.contains_key(table) {
+                return Err(f"table {table} already exists");
+            }
+            sc.tables.insert(table.clone(), cols.clone());
+        }
+        Op.DropTable { table } => {
+            no_table(sc, table)?;
+            for (name, ix) in sc.indexes.iter() {
+                if ix.table == table {
+                    return Err(f"table {table} still has index {name}");
+                }
+            }
+            sc.tables.remove(table);
+        }
+        Op.AddColumn { table, col } => {
+            no_table(sc, table)?;
+            if find_col(sc, table, col.name).is_ok() {
+                return Err(f"column {table}.{col.name} already exists");
+            }
+            if col.notnull and col.default.is_none() {
+                return Err(f"column {table}.{col.name} is not null and has no default");
+            }
+            if let Some(cols) = sc.tables.get_mut(table) {
+                cols.push(col.clone());
+            }
+        }
+        Op.DropColumn { table, column } => {
+            let i = find_col(sc, table, column)?;
+            let cols = sc.tables.get(table).cloned().unwrap();
+            if cols[i].pk {
+                return Err(f"cannot drop primary key column {table}.{column}");
+            }
+            for (name, ix) in sc.indexes.iter() {
+                if ix.table == table and ix.cols.contains(column) {
+                    return Err(f"column {table}.{column} is used by index {name}");
+                }
+            }
+            if cols.len() == 1 {
+                return Err(f"cannot drop the last column of {table}");
+            }
+            if let Some(cols) = sc.tables.get_mut(table) {
+                cols.remove(i);
+            }
+        }
+        Op.RenameTable { table, new } => {
+            no_table(sc, table)?;
+            if sc.tables.contains_key(new) {
+                return Err(f"table {new} already exists");
+            }
+            let cols = sc.tables.remove(table).unwrap();
+            sc.tables.insert(new.clone(), cols);
+            for ix in sc.indexes.values_mut() {
+                if ix.table == table {
+                    ix.table = new.clone();
+                }
+            }
+        }
+        Op.RenameColumn { table, column, new } => {
+            let i = find_col(sc, table, column)?;
+            if find_col(sc, table, new).is_ok() {
+                return Err(f"column {table}.{new} already exists");
+            }
+            if let Some(cols) = sc.tables.get_mut(table) {
+                cols[i].name = new.clone();
+            }
+            for ix in sc.indexes.values_mut() {
+                if ix.table == table {
+                    for c in ix.cols.iter_mut() {
+                        if c == column {
+                            *c = new.clone();
+                        }
+                    }
+                }
+            }
+        }
+        Op.AlterColumn { table, column, changes } => {
+            let i = find_col(sc, table, column)?;
+            let Some(cols) = sc.tables.get_mut(table) else {
+                return Err(f"no table {table}");
+            };
+            for ch in changes.iter() {
+                match ch {
+                    Change.Type(t) => cols[i].ty = t.clone(),
+                    Change.NotNull => cols[i].notnull = true,
+                    Change.Null => {
+                        if cols[i].pk {
+                            return Err("a primary key column cannot be null".to_string());
+                        }
+                        cols[i].notnull = false;
+                    }
+                }
+            }
+        }
+        Op.CreateIndex { index, table, cols, unique } => {
+            if sc.indexes.contains_key(index) {
+                return Err(f"index {index} already exists");
+            }
+            no_table(sc, table)?;
+            for c in cols.iter() {
+                find_col(sc, table, c)?;
+            }
+            sc.indexes.insert(index.clone(), Index { table: table.clone(), cols: cols.clone(), unique: unique });
+        }
+        Op.DropIndex { index } => {
+            if sc.indexes.remove(index).is_none() {
+                return Err(f"no index {index}");
+            }
+        }
+        Op.Execute { .. } => {}
+    }
+    Ok(())
+}
+
+// Why a migration stopped: its step (from 1), the operation and the error.
+struct Failure {
+    step: i64,
+    op: String,
+    why: String,
+}
+
+// The schema after every step, or the first step that fails, leaving the
+// schema as it was: each migration is one transaction.
+fn run_steps(sc: Schema, steps: Slice[Step]) -> Result[Schema, Failure] {
+    let mut work = sc.clone();
+    for (k, s) in steps.iter().enumerate() {
+        if let Err(why) = apply_op(mut work, s.op) {
+            return Err(Failure { step: k + 1, op: op_name(s.op).to_string(), why });
+        }
+    }
+    Ok(work)
+}
+
+// ------------------------------------------------------------ SQL
+
+fn sql_value(v: Str) -> String {
+    let numeric = v.bytes().iter().all(|c| is_digit(c) or c == b'.') and v.bytes().iter().any(|c| is_digit(c));
+    if v == "true" or v == "false" or numeric { v.to_string() } else { f"'{v}'" }
+}
+
+fn col_sql(c: Column) -> String {
+    let mut s = f"{c.name} {sql_type(c.ty).unwrap_or("TEXT")}";
+    if c.notnull or c.pk {
+        s.push_str(" NOT NULL");
+    }
+    if let Some(v) = c.default {
+        s.push_str(f" DEFAULT {sql_value(v)}");
+    }
+    s
+}
+
+fn op_sql(o: Op) -> Vec[String] {
+    match o {
+        Op.CreateTable { table, cols } => {
+            let mut parts: Vec[String] = cols.iter().map(|c| col_sql(c)).collect();
+            let pk: Vec[String] = cols.iter().filter(|c| c.pk).map(|c| c.name.clone()).collect();
+            if not pk.is_empty() {
+                parts.push(f"PRIMARY KEY ({pk.join(", ")})");
+            }
+            [f"CREATE TABLE {table} ({parts.join(", ")});"]
+        }
+        Op.DropTable { table } => [f"DROP TABLE {table};"],
+        Op.AddColumn { table, col } => [f"ALTER TABLE {table} ADD COLUMN {col_sql(col)};"],
+        Op.DropColumn { table, column } => [f"ALTER TABLE {table} DROP COLUMN {column};"],
+        Op.RenameTable { table, new } => [f"ALTER TABLE {table} RENAME TO {new};"],
+        Op.RenameColumn { table, column, new } => [f"ALTER TABLE {table} RENAME COLUMN {column} TO {new};"],
+        Op.AlterColumn { table, column, changes } => {
+            let head = f"ALTER TABLE {table} ALTER COLUMN {column}";
+            changes
+                .iter()
+                .map(|ch| match ch {
+                    Change.Type(t) => f"{head} TYPE {sql_type(t).unwrap_or("TEXT")};",
+                    Change.NotNull => f"{head} SET NOT NULL;",
+                    Change.Null => f"{head} DROP NOT NULL;",
+                })
+                .collect()
+        }
+        Op.CreateIndex { index, table, cols, unique } => {
+            let u = if unique { "UNIQUE " } else { "" };
+            [f"CREATE {u}INDEX {index} ON {table} ({cols.join(", ")});"]
+        }
+        Op.DropIndex { index } => [f"DROP INDEX {index};"],
+        Op.Execute { sql } => [if sql.ends_with(";") { sql.clone() } else { f"{sql};" }],
+    }
+}
+
+// ------------------------------------------------------------ the environment
+
+struct Env {
+    g: Graph,
+    applied: SortedSet[String],
+    schema: Schema,
+}
+
+fn one_arg(cmd: Str, args: Slice[String]) -> Result[String, String] {
+    if args.is_empty() {
+        return Err(f"{cmd} needs a target");
+    }
+    if args.len() > 1 {
+        return Err(f"{cmd} takes one target");
+    }
+    Ok(args[0].clone())
+}
+
+// `+N` or `-N` with N > 0, as N.
+fn relative(spec: Str, sign: Str) -> Option[i64] {
+    if not spec.starts_with(sign) {
+        return None;
+    }
+    let rest = spec.substring(1, spec.len());
+    if not digits(rest) or rest.len() > 9 {
+        return None;
+    }
+    let n = i64.parse(rest).ok()?;
+    if n > 0 { Some(n) } else { None }
+}
+
+fn slug(message: Str) -> String {
+    let mut out = String.new();
+    for c in message.to_lowercase().chars() {
+        let keep = (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9');
+        if keep {
+            out.push(c);
+        } else if not out.is_empty() and not out.ends_with("_") {
+            out.push('_');
+        }
+    }
+    let mut cut = if out.len() > 24 { out.substring(0, 24) } else { out };
+    while let Some(t) = cut.strip_suffix("_") {
+        cut = t.to_string();
+    }
+    cut
+}
+
+impl Env {
+    fn cur_text(self) -> String {
+        let cur = self.g.current(self.applied);
+        if cur.is_empty() {
+            return "base".to_string();
+        }
+        let shown: Vec[String] = cur
+            .iter()
+            .map(|r| if self.g.is_head(r) { f"{r} (head)" } else { r.clone() })
+            .collect();
+        shown.join(", ")
+    }
+
+    fn save(self) -> Result[(), String] {
+        let mut text = String.new();
+        for r in self.g.current(self.applied).iter() {
+            text.push_str(f"version {r}\n");
+        }
+        for (t, cols) in self.schema.tables.iter() {
+            text.push_str(f"table {t}\n");
+            for c in cols.iter() {
+                text.push_str(f"column {col_text(c)}\n");
+            }
+        }
+        for (name, ix) in self.schema.indexes.iter() {
+            let u = if ix.unique { " unique" } else { "" };
+            text.push_str(f"index {name} {ix.table} {ix.cols.join(",")}{u}\n");
+        }
+        fs.write(STATE, text).map_err(|e| f"cannot write {STATE}: {e}")
+    }
+
+    // The revisions an upgrade-like command aims at.
+    fn targets(self, spec: Str, what: Str) -> Result[Vec[String], String] {
+        if spec == "heads" {
+            return Ok(self.g.heads.clone());
+        }
+        if let Some(n) = relative(spec, "+") {
+            let cur = self.g.current(self.applied);
+            if cur.len() > 1 {
+                return Err("multiple current heads; name a target".to_string());
+            }
+            let mut at: Option[String] = cur.first().cloned();
+            for _ in 0..n {
+                let cand: Vec[String] = match at {
+                    Some(ref r) => self.g.kids(r),
+                    None => self.g.order.iter().filter(|r| self.g.rev(r).down.is_empty()).cloned().collect(),
+                };
+                if cand.is_empty() {
+                    return Err(f"relative revision {spec} goes past the head");
+                }
+                if cand.len() > 1 {
+                    let from = at.unwrap_or("base".to_string());
+                    return Err(f"{from} branches to {cand.join(", ")}; name one");
+                }
+                at = Some(cand[0].clone());
+            }
+            return Ok([at.unwrap()]);
+        }
+        match self.g.resolve(spec)? {
+            Some(r) => Ok([r]),
+            None => Err(f"cannot {what} to base"),
+        }
+    }
+
+    // What an upgrade to `spec` would apply, in graph order.
+    fn pending(self, spec: Str) -> Result[Vec[String], String] {
+        let want = self.g.ancestors(self.targets(spec, "upgrade")?);
+        let missing: SortedSet[String] = want.iter().filter(|r| not self.applied.contains(r)).cloned().collect();
+        Ok(self.g.in_order(missing))
+    }
+
+    fn upgrade(mut ref self, spec: Str) -> Result[(), String] {
+        let need = self.pending(spec)?;
+        if need.is_empty() {
+            println("  nothing to upgrade");
+            return Ok(());
+        }
+        for r in need.iter() {
+            let x = self.g.rev(r);
+            match run_steps(self.schema, x.up) {
+                Err(f) => {
+                    println(f"  failed {r} at step {f.step} ({f.op}): {f.why}; rolled back");
+                    return Ok(());
+                }
+                Ok(sc) => self.schema = sc,
+            }
+            self.applied.insert(r.clone());
+            println(f"  upgrade {self.g.from_text(r)} -> {r}, {x.message}");
+        }
+        Ok(())
+    }
+
+    fn downgrade(mut ref self, spec: Str) -> Result[(), String] {
+        let gone: SortedSet[String] = if spec == "base" {
+            self.applied.clone()
+        } else if let Some(n) = relative(spec, "-") {
+            let mut left = self.applied.clone();
+            for _ in 0..n {
+                let cur = self.g.current(left);
+                if cur.is_empty() {
+                    return Err(f"relative revision {spec} goes past base");
+                }
+                if cur.len() > 1 {
+                    return Err("multiple current heads; name a target".to_string());
+                }
+                left.remove(cur[0]);
+            }
+            self.applied.iter().filter(|r| not left.contains(r)).cloned().collect()
+        } else {
+            match self.g.resolve(spec)? {
+                None => self.applied.clone(),
+                Some(r) => {
+                    if not self.applied.contains(r) {
+                        return Err(f"revision {r} is not applied");
+                    }
+                    self.g.descendants(r).iter().filter(|x| self.applied.contains(x)).cloned().collect()
+                }
+            }
+        };
+        if gone.is_empty() {
+            println("  nothing to downgrade");
+            return Ok(());
+        }
+        for r in self.g.in_order(gone).iter().rev() {
+            let x = self.g.rev(r);
+            match run_steps(self.schema, x.dn) {
+                Err(f) => {
+                    println(f"  failed {r} at step {f.step} ({f.op}): {f.why}; rolled back");
+                    return Ok(());
+                }
+                Ok(sc) => self.schema = sc,
+            }
+            self.applied.remove(r);
+            println(f"  downgrade {r} -> {self.g.from_text(r)}, {x.message}");
+        }
+        Ok(())
+    }
+
+    // The SQL an upgrade to `spec` would run, without running it.
+    fn sql(self, spec: Str) -> Result[(), String] {
+        let need = self.pending(spec)?;
+        if need.is_empty() {
+            println("  nothing to upgrade");
+            return Ok(());
+        }
+        let mut sc = self.schema.clone();
+        let mut applied = self.applied.clone();
+        println("  BEGIN;");
+        if applied.is_empty() {
+            println("  CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL, PRIMARY KEY (version_num));");
+        }
+        for r in need.iter() {
+            let x = self.g.rev(r);
+            println(f"  -- upgrade {self.g.from_text(r)} -> {r}, {x.message}");
+            match run_steps(sc, x.up) {
+                Err(f) => {
+                    println(f"  -- failed {r} at step {f.step} ({f.op}): {f.why}");
+                    println("  ROLLBACK;");
+                    return Ok(());
+                }
+                Ok(next) => sc = next,
+            }
+            for s in x.up.iter() {
+                for line in op_sql(s.op).iter() {
+                    println(f"  {line}");
+                }
+            }
+            let cur = self.g.current(applied);
+            let ps: Vec[String] = cur.iter().filter(|p| x.down.contains(p)).cloned().collect();
+            if ps.is_empty() {
+                println(f"  INSERT INTO alembic_version (version_num) VALUES ('{r}');");
+            } else {
+                println(f"  UPDATE alembic_version SET version_num='{r}' WHERE version_num = '{ps[0]}';");
+                for p in ps[1..].iter() {
+                    println(f"  DELETE FROM alembic_version WHERE version_num = '{p}';");
+                }
+            }
+            applied.insert(r.clone());
+        }
+        println("  COMMIT;");
+        Ok(())
+    }
+
+    fn stamp(mut ref self, spec: Str) -> Result[(), String] {
+        let ts: Vec[String] = if spec == "heads" {
+            self.g.heads.clone()
+        } else {
+            match self.g.resolve(spec)? {
+                Some(r) => [r],
+                None => Vec.new(),
+            }
+        };
+        self.applied = self.g.ancestors(ts);
+        println(f"  stamped {self.cur_text()}");
+        Ok(())
+    }
+
+    // Replays the applied revisions on an empty schema and compares.
+    fn check(self) {
+        let mut sc = empty_schema();
+        for r in self.g.in_order(self.applied).iter() {
+            match run_steps(sc, self.g.rev(r).up) {
+                Err(f) => {
+                    println(f"  replay fails at {r} step {f.step} ({f.op}): {f.why}");
+                    return;
+                }
+                Ok(next) => sc = next,
+            }
+        }
+        let want = schema_lines(sc);
+        let have = schema_lines(self.schema);
+        if want == have {
+            println("  schema matches");
+            return;
+        }
+        println("  schema differs");
+        let mut missing: Vec[String] = want.iter().filter(|l| not have.contains(l)).cloned().collect();
+        missing.sort();
+        for l in missing.iter() {
+            println(f"    missing: {l}");
+        }
+        let mut extra: Vec[String] = have.iter().filter(|l| not want.contains(l)).cloned().collect();
+        extra.sort();
+        for l in extra.iter() {
+            println(f"    extra: {l}");
+        }
+    }
+
+    // Writes a new, empty revision script, reads it back and adds it.
+    fn generate(mut ref self, label: Option[String], parents: Vec[String], message: Str) -> Result[(), String] {
+        let id = hex8(fnv1a(f"{message}|{parents.join(",")}".bytes()));
+        if self.g.revs.contains_key(id) {
+            return Err(f"revision {id} already exists");
+        }
+        let name = f"{id}_{slug(message)}.mig";
+        let down = if parents.is_empty() { "none".to_string() } else { parents.join(", ") };
+        let mut text = f"# generated by mini_alembic\nrevision: {id}\ndown: {down}\n";
+        if let Some(l) = label {
+            text.push_str(f"label: {l}\n");
+        }
+        text.push_str(f"message: {message}\n\nupgrade:\ndowngrade:\n");
+        fs.create_dir_all("data/out/versions").map_err(|e| f"cannot create data/out/versions: {e}")?;
+        let path = f"data/out/versions/{name}";
+        fs.write(path, text).map_err(|e| f"cannot write {path}: {e}")?;
+        let back = read(path)?;
+        let r = parse_mig(f"out/versions/{name}", back)?;
+        let mut revs: Vec[Rev] = self.g.revs.values().cloned().collect();
+        revs.push(r);
+        self.g = graph(revs);
+        println(f"  generated out/versions/{name}");
+        Ok(())
+    }
+
+    fn show(self, spec: Str) -> Result[(), String] {
+        let Some(r) = self.g.resolve(spec)? else {
+            return Err("base is not a revision".to_string());
+        };
+        let x = self.g.rev(r);
+        let head = if self.g.is_head(r) { " (head)" } else { "" };
+        println(f"  revision: {r}{head}");
+        println(f"  file: {x.path}");
+        if let Some(l) = x.label {
+            println(f"  label: {l}");
+        }
+        println(f"  message: {x.message}");
+        println(f"  down: {self.g.from_text(r)}");
+        let ch = self.g.kids(r);
+        let ch = if ch.is_empty() { "none".to_string() } else { ch.join(", ") };
+        println(f"  children: {ch}");
+        for (name, steps) in [("upgrade", x.up), ("downgrade", x.dn)].iter() {
+            let n = steps.len();
+            let count = if n == 0 {
+                "no steps".to_string()
+            } else if n == 1 {
+                "1 step".to_string()
+            } else {
+                f"{n} steps"
+            };
+            println(f"  {name}: {count}");
+            for s in steps.iter() {
+                println(f"    {s.text}");
+            }
+        }
+        Ok(())
+    }
+
+    fn history(self) {
+        let cur = self.g.current(self.applied);
+        for r in self.g.order.iter().rev() {
+            let x = self.g.rev(r);
+            let mut tags = String.new();
+            if let Some(l) = x.label {
+                tags.push_str(f" ({l})");
+            }
+            if self.g.is_head(r) {
+                tags.push_str(" (head)");
+            }
+            if self.g.kids(r).len() > 1 {
+                tags.push_str(" (branchpoint)");
+            }
+            if x.down.len() > 1 {
+                tags.push_str(" (mergepoint)");
+            }
+            if cur.contains(r) {
+                tags.push_str(" (current)");
+            }
+            println(f"  {self.g.from_text(r)} -> {r}{tags}, {x.message}");
+        }
+    }
+
+    fn command(mut ref self, w: Slice[String]) -> Result[(), String] {
+        let args = w[1..].to_vec();
+        match w[0].as_str() {
+            "current" => println(f"  current: {self.cur_text()}"),
+            "heads" => {
+                let shown: Vec[String] = self
+                    .g
+                    .heads
+                    .iter()
+                    .map(|h| match self.g.rev(h).label {
+                        Some(l) => f"{h} ({l})",
+                        None => h.clone(),
+                    })
+                    .collect();
+                println(f"  heads: {shown.join(", ")}");
+            }
+            "history" => self.history(),
+            "upgrade" => self.upgrade(one_arg("upgrade", args)?)?,
+            "downgrade" => self.downgrade(one_arg("downgrade", args)?)?,
+            "sql" => self.sql(one_arg("sql", args)?)?,
+            "stamp" => self.stamp(one_arg("stamp", args)?)?,
+            "check" => self.check(),
+            "schema" => {
+                let lines = schema_lines(self.schema);
+                if lines.is_empty() {
+                    println("  (no tables)");
+                }
+                for l in lines.iter() {
+                    println(f"  {l}");
+                }
+            }
+            "show" => self.show(one_arg("show", args)?)?,
+            "revision" => {
+                if args.len() < 3 {
+                    return Err("usage: revision <label|-> <parent> <message>".to_string());
+                }
+                let label = if args[0] == "-" { None } else { Some(args[0].clone()) };
+                if let Some(l) = label.clone() {
+                    if not is_label(l) {
+                        return Err(f"bad label '{l}'");
+                    }
+                    if let Some(owner) = self.g.labels.get(l) {
+                        return Err(f"label {l} already used by {owner}");
+                    }
+                }
+                let parents = match self.g.resolve(args[1])? {
+                    Some(p) => [p],
+                    None => Vec.new(),
+                };
+                self.generate(label, parents, args[2..].join(" "))?;
+            }
+            "merge" => {
+                if args.is_empty() {
+                    return Err("merge needs a message".to_string());
+                }
+                if self.g.heads.len() < 2 {
+                    return Err("nothing to merge: one head".to_string());
+                }
+                let heads = self.g.heads.clone();
+                self.generate(None, heads, args.join(" "))?;
+            }
+            other => return Err(f"unknown command '{other}'"),
+        }
+        Ok(())
+    }
+}
+
+// The environment a restart reads back from the state file.
+fn restore(g: own Graph) -> Result[Env, String] {
+    let text = read(STATE)?;
+    let mut heads: Vec[String] = Vec.new();
+    let mut sc = empty_schema();
+    let mut table = String.new();
+    for line in text.split("\n") {
+        let w = words(line);
+        if w.is_empty() {
+            continue;
+        }
+        match w[0].as_str() {
+            "version" => {
+                if not g.revs.contains_key(w[1]) {
+                    return Err(f"state: version {w[1]} not found");
+                }
+                heads.push(w[1].clone());
+            }
+            "table" => {
+                table = w[1].clone();
+                sc.tables.insert(table.clone(), Vec.new());
+            }
+            "column" => {
+                let mut c = Column { name: w[1].clone(), ty: w[2].clone(), pk: false, notnull: false, default: None };
+                for f in w[3..].iter() {
+                    if f == "pk" {
+                        c.pk = true;
+                    } else if f == "notnull" {
+                        c.notnull = true;
+                    } else {
+                        c.default = Some(f.substring(8, f.len()).to_string());
+                    }
+                }
+                if let Some(cols) = sc.tables.get_mut(table) {
+                    cols.push(c);
+                }
+            }
+            _ => {
+                let cols: Vec[String] = w[3].split(",").map(|c| c.to_string()).collect();
+                sc.indexes.insert(w[1].clone(), Index { table: w[2].clone(), cols, unique: w.len() == 5 });
+            }
+        }
+    }
+    let applied = g.ancestors(heads);
+    Ok(Env { g, applied, schema: sc })
+}
+
+// ------------------------------------------------------------ main
+
+fn run() -> Result[(), String] {
+    if fs.exists("data/out") {
+        fs.remove_dir_all("data/out").map_err(|e| f"cannot clear data/out: {e}")?;
+    }
+    fs.create_dir_all("data/versions").map_err(|e| f"cannot create data/versions: {e}")?;
+    write_data()?;
+    fs.create_dir_all("data/out").map_err(|e| f"cannot create data/out: {e}")?;
+    let mut env = Env { g: load_revisions(true)?, applied: SortedSet.new(), schema: empty_schema() };
+    let script = read("data/script.txt")?;
+    let mut count = 0;
+    for line in script.split("\n") {
+        let s = line.trim();
+        if s.is_empty() or s.starts_with("#") {
+            continue;
+        }
+        count += 1;
+        println(f"> {s}");
+        let w = words(s);
+        if w[0] == "restart" {
+            env.save()?;
+            let g = load_revisions(false)?;
+            match restore(g) {
+                Ok(e) => {
+                    env = e;
+                    println(f"  restarted at {env.cur_text()}, {env.schema.tables.len()} tables, {env.schema.indexes.len()} indexes");
+                }
+                Err(e) => println(f"  error: {e}"),
+            }
+        } else if let Err(e) = env.command(w) {
+            println(f"  error: {e}");
+        }
+        env.save()?;
+    }
+    println(f"ran {count} commands");
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/script.txt", file_0())?;
+    put_bytes("data/versions/1f0a3c_create_users.mig", file_1())?;
+    put_bytes("data/versions/2b7d91_create_products.mig", file_2())?;
+    put_bytes("data/versions/2b7d91_products_again.mig", file_3())?;
+    put_bytes("data/versions/3c4e02_create_orders.mig", file_4())?;
+    put_bytes("data/versions/4a9b17_add_user_phone.mig", file_5())?;
+    put_bytes("data/versions/5d21c8_billing_accounts.mig", file_6())?;
+    put_bytes("data/versions/6e3f40_invoices.mig", file_7())?;
+    put_bytes("data/versions/7b08d2_order_state.mig", file_8())?;
+    put_bytes("data/versions/8c5a63_merge_billing.mig", file_9())?;
+    put_bytes("data/versions/9d71e5_drop_phone.mig", file_10())?;
+    put_bytes("data/versions/README.txt", file_11())?;
+    put_bytes("data/versions/a0b1c2_order_notes.mig", file_12())?;
+    put_bytes("data/versions/ab12ab_loop_a.mig", file_13())?;
+    put_bytes("data/versions/ab34ab_loop_b.mig", file_14())?;
+    put_bytes("data/versions/b3c4d5_backfill_notes.mig", file_15())?;
+    put_bytes("data/versions/b3c911_index_order_state.mig", file_16())?;
+    put_bytes("data/versions/bb0001_no_down.mig", file_17())?;
+    put_bytes("data/versions/c0ffee_bad_type.mig", file_18())?;
+    put_bytes("data/versions/cc0002_label_clash.mig", file_19())?;
+    put_bytes("data/versions/d00d1e_typo.mig", file_20())?;
+    put_bytes("data/versions/dd0003_outside.mig", file_21())?;
+    put_bytes("data/versions/e1e1e1_orphan.mig", file_22())?;
+    put_bytes("data/versions/e2e2e2_child_of_bad.mig", file_23())?;
+    put_bytes("data/versions/ee0004_bad_ops.mig", file_24())?;
+    put_bytes("data/versions/ee0005_bad_column.mig", file_25())?;
+    put_bytes("data/versions/ee0006_bad_flag.mig", file_26())?;
+    put_bytes("data/versions/ee0007_unknown_op.mig", file_27())?;
+    put_bytes("data/versions/ee0008_usage.mig", file_28())?;
+    put_bytes("data/versions/ee0009_bad_index.mig", file_29())?;
+    put_bytes("data/versions/ee000a_dup_key.mig", file_30())?;
+    put_bytes("data/versions/ee000b_bad_id.mig", file_31())?;
+    put_bytes("data/versions/ee000c_no_message.mig", file_32())?;
+    put_bytes("data/versions/ee000d_dup_column.mig", file_33())?;
+    put_bytes("data/versions/fa11ed_wrong_name.mig", file_34())?;
+    put_bytes("data/versions/ff0010_twice_section.mig", file_35())?;
+    put_bytes("data/versions/ff0011_no_colon.mig", file_36())?;
+    Ok(())
+}
+
+// data/script.txt
+fn file_0() -> String {
+    """
+232041206d6f726e696e672077697468207468652073686f702773206d6967726174696f6e732e206023602073746172
+7473206120636f6d6d656e742e0a0a63757272656e740a68656164730a686973746f72790a0a75706772616465203166
+30610a63757272656e740a75706772616465202b320a736368656d610a0a232054776f206865616473206e6f772c2073
+6f2060686561646020697320616d626967756f75732e0a7570677261646520686561640a757067726164652062696c6c
+696e6740686561640a757067726164652062696c6c696e670a63757272656e740a75706772616465203665330a757067
+72616465203762300a63757272656e740a646f776e6772616465202d310a73716c203863356136330a75706772616465
+203863356136330a63757272656e740a0a2320546865206578706572696d656e74206661696c73206174206974732073
+65636f6e64207374657020616e6420697320726f6c6c6564206261636b2e0a75706772616465206578706572696d656e
+747340686561640a63757272656e740a736368656d610a75706772616465206130623163320a75706772616465202b31
+0a75706772616465206233630a75706772616465202b320a75706772616465202b310a63757272656e740a736368656d
+610a0a23205374616d70696e67206d6f766573207468652076657273696f6e20776974686f757420746f756368696e67
+2074686520736368656d612e0a7374616d70203964373165350a636865636b0a7374616d70206130623163320a636865
+636b0a7374616d702068656164730a7374616d70206233633931310a636865636b0a0a7265766973696f6e202d206233
+6339313120616464206361727473207461626c650a7265766973696f6e20776973686c69737420336334653032207769
+73686c697374730a68656164730a6d65726765206a6f696e206578706572696d656e747320616e642063617274730a6d
+657267650a68656164730a73686f77203166306133630a73686f77203863350a73686f77206578706572696d656e7473
+0a686973746f72790a757067726164652068656164730a0a726573746172740a63757272656e740a646f776e67726164
+65203461396231370a63757272656e740a736368656d610a646f776e6772616465202d320a63757272656e740a73716c
+2068656164730a646f776e677261646520626173650a63757272656e740a736368656d610a636865636b0a646f776e67
+72616465202d310a75706772616465202b39390a75706772616465207a7a0a7570677261646520310a75706772616465
+206531653165310a646f776e6772616465206233633931310a7374616d700a66726f626e6963617465206e6f770a7570
+677261646520316630613363203262376439310a
+"""
+}
+
+// data/versions/1f0a3c_create_users.mig
+fn file_1() -> String {
+    """
+2320546865206669727374207461626c653a2077686f2063616e207369676e20696e2e0a7265766973696f6e3a203166
+306133630a646f776e3a206e6f6e650a6d6573736167653a206372656174652075736572730a0a757067726164653a0a
+202020206372656174655f7461626c652075736572732069643a696e743a706b20656d61696c3a746578743a6e6f746e
+756c6c206e616d653a746578740a202020206372656174655f696e6465782069785f75736572735f656d61696c207573
+65727320656d61696c20756e697175650a646f776e67726164653a0a2020202064726f705f696e6465782069785f7573
+6572735f656d61696c0a2020202064726f705f7461626c652075736572730a
+"""
+}
+
+// data/versions/2b7d91_create_products.mig
+fn file_2() -> String {
+    """
+7265766973696f6e3a203262376439310a646f776e3a203166306133630a6d6573736167653a20637265617465207072
+6f64756374730a0a757067726164653a0a202020206372656174655f7461626c652070726f64756374732069643a696e
+743a706b20736b753a746578743a6e6f746e756c6c207469746c653a746578742070726963653a7265616c3a6e6f746e
+756c6c3a64656661756c743d300a202020206372656174655f696e6465782069785f70726f64756374735f736b752070
+726f647563747320736b7520756e697175650a646f776e67726164653a0a2020202064726f705f696e6465782069785f
+70726f64756374735f736b750a2020202064726f705f7461626c652070726f64756374730a
+"""
+}
+
+// data/versions/2b7d91_products_again.mig
+fn file_3() -> String {
+    """
+7265766973696f6e3a203262376439310a646f776e3a203166306133630a6d6573736167653a2070726f64756374732c
+2061207365636f6e642074696d650a0a757067726164653a0a202020206372656174655f7461626c652070726f647563
+74732069643a696e743a706b0a646f776e67726164653a0a2020202064726f705f7461626c652070726f64756374730a
+"""
+}
+
+// data/versions/3c4e02_create_orders.mig
+fn file_4() -> String {
+    """
+7265766973696f6e3a203363346530320a646f776e3a203262376439310a6d6573736167653a20637265617465206f72
+646572730a0a757067726164653a0a202020206372656174655f7461626c65206f72646572732069643a696e743a706b
+20757365725f69643a696e743a6e6f746e756c6c20706c616365643a646174653a6e6f746e756c6c207374617475733a
+746578743a6e6f746e756c6c3a64656661756c743d6e65770a202020206372656174655f7461626c65206f726465725f
+6974656d73206f726465725f69643a696e743a706b2070726f647563745f69643a696e743a706b207174793a696e743a
+6e6f746e756c6c3a64656661756c743d310a202020206372656174655f696e6465782069785f6f72646572735f757365
+72206f726465727320757365725f69640a646f776e67726164653a0a2020202064726f705f696e6465782069785f6f72
+646572735f757365720a2020202064726f705f7461626c65206f726465725f6974656d730a2020202064726f705f7461
+626c65206f72646572730a
+"""
+}
+
+// data/versions/4a9b17_add_user_phone.mig
+fn file_5() -> String {
+    """
+7265766973696f6e3a203461396231370a646f776e3a203363346530320a6d6573736167653a206164642070686f6e65
+20746f2075736572730a0a757067726164653a0a202020206164645f636f6c756d6e2075736572732070686f6e653a74
+6578740a646f776e67726164653a0a2020202064726f705f636f6c756d6e2075736572732070686f6e650a
+"""
+}
+
+// data/versions/5d21c8_billing_accounts.mig
+fn file_6() -> String {
+    """
+232042696c6c696e672067726f7773206f6e2061206272616e6368206f6620697473206f776e20756e74696c20697420
+6973206d6572676564206261636b2e0a7265766973696f6e3a203564323163380a646f776e3a203461396231370a6c61
+62656c3a2062696c6c696e670a6d6573736167653a2062696c6c696e67206163636f756e74730a0a757067726164653a
+0a202020206372656174655f7461626c65206163636f756e74732069643a696e743a706b20757365725f69643a696e74
+3a6e6f746e756c6c2062616c616e63653a7265616c3a6e6f746e756c6c3a64656661756c743d300a2020202063726561
+74655f696e6465782069785f6163636f756e74735f75736572206163636f756e747320757365725f696420756e697175
+650a646f776e67726164653a0a2020202064726f705f696e6465782069785f6163636f756e74735f757365720a202020
+2064726f705f7461626c65206163636f756e74730a
+"""
+}
+
+// data/versions/6e3f40_invoices.mig
+fn file_7() -> String {
+    """
+7265766973696f6e3a203665336634300a646f776e3a203564323163380a6d6573736167653a20696e766f696365730a
+0a757067726164653a0a202020206372656174655f7461626c6520696e766f696365732069643a696e743a706b206163
+636f756e745f69643a696e743a6e6f746e756c6c20746f74616c3a7265616c3a6e6f746e756c6c206973737565643a64
+6174650a202020206578656375746520494e5345525420494e544f20696e766f69636573202869642c206163636f756e
+745f69642c20746f74616c292053454c45435420302c20302c20302057484552452031203d20300a646f776e67726164
+653a0a2020202064726f705f7461626c6520696e766f696365730a
+"""
+}
+
+// data/versions/7b08d2_order_state.mig
+fn file_8() -> String {
+    """
+7265766973696f6e3a203762303864320a646f776e3a203461396231370a6d6573736167653a206f7264657220737461
+747573206265636f6d65732073746174650a0a757067726164653a0a2020202072656e616d655f636f6c756d6e206f72
+64657273207374617475732073746174650a20202020616c7465725f636f6c756d6e206f726465727320737461746520
+747970653d74657874206e6f746e756c6c0a646f776e67726164653a0a2020202072656e616d655f636f6c756d6e206f
+7264657273207374617465207374617475730a
+"""
+}
+
+// data/versions/8c5a63_merge_billing.mig
+fn file_9() -> String {
+    """
+7265766973696f6e3a203863356136330a646f776e3a203665336634302c203762303864320a6d6573736167653a206d
+657267652062696c6c696e6720696e746f206d61696e0a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/9d71e5_drop_phone.mig
+fn file_10() -> String {
+    """
+23204661696c7320617420697473207365636f6e6420737465703a2074686520696e646578206974206a757374206d61
+6465207374696c6c20757365732074686520636f6c756d6e2e0a7265766973696f6e3a203964373165350a646f776e3a
+203863356136330a6c6162656c3a206578706572696d656e74730a6d6573736167653a20696e6465782070686f6e6573
+207468656e2064726f70207468656d0a0a757067726164653a0a202020206372656174655f696e6465782069785f7573
+6572735f70686f6e652075736572732070686f6e650a2020202064726f705f636f6c756d6e2075736572732070686f6e
+650a646f776e67726164653a0a202020206164645f636f6c756d6e2075736572732070686f6e653a746578740a202020
+2064726f705f696e6465782069785f75736572735f70686f6e650a
+"""
+}
+
+// data/versions/README.txt
+fn file_11() -> String {
+    """
+4e6f742061206d6967726174696f6e3a206f6e6c79202a2e6d69672066696c65732061726520726561642e0a
+"""
+}
+
+// data/versions/a0b1c2_order_notes.mig
+fn file_12() -> String {
+    """
+7265766973696f6e3a206130623163320a646f776e3a203863356136330a6d6573736167653a206f72646572206e6f74
+65730a0a757067726164653a0a202020206164645f636f6c756d6e206f7264657273206e6f74653a746578740a202020
+2072656e616d655f7461626c65206f726465725f6974656d73206f726465725f6c696e65730a646f776e67726164653a
+0a2020202072656e616d655f7461626c65206f726465725f6c696e6573206f726465725f6974656d730a202020206472
+6f705f636f6c756d6e206f7264657273206e6f74650a
+"""
+}
+
+// data/versions/ab12ab_loop_a.mig
+fn file_13() -> String {
+    """
+7265766973696f6e3a206162313261620a646f776e3a206162333461620a6d6573736167653a206f6e652068616c6620
+6f662061206c6f6f700a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ab34ab_loop_b.mig
+fn file_14() -> String {
+    """
+7265766973696f6e3a206162333461620a646f776e3a206162313261620a6d6573736167653a20746865206f74686572
+2068616c660a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/b3c4d5_backfill_notes.mig
+fn file_15() -> String {
+    """
+7265766973696f6e3a206233633464350a646f776e3a206130623163320a6d6573736167653a206261636b66696c6c20
+6e6f7465730a0a757067726164653a0a202020206578656375746520555044415445206f726465727320534554206e6f
+7465203d20276e6f6e6527205748455245206e6f7465204953204e554c4c3b0a20202020616c7465725f636f6c756d6e
+206f7264657273206e6f7465206e6f746e756c6c0a646f776e67726164653a0a20202020616c7465725f636f6c756d6e
+206f7264657273206e6f7465206e756c6c0a
+"""
+}
+
+// data/versions/b3c911_index_order_state.mig
+fn file_16() -> String {
+    """
+7265766973696f6e3a206233633931310a646f776e3a206233633464350a6d6573736167653a20696e646578206f7264
+65722073746174650a0a757067726164653a0a202020206372656174655f696e6465782069785f6f72646572735f7374
+617465206f72646572732073746174652c706c616365640a646f776e67726164653a0a2020202064726f705f696e6465
+782069785f6f72646572735f73746174650a
+"""
+}
+
+// data/versions/bb0001_no_down.mig
+fn file_17() -> String {
+    """
+7265766973696f6e3a206262303030310a646f776e3a203363346530320a6d6573736167653a20666f72676f74207468
+6520776179206261636b0a0a757067726164653a0a202020206164645f636f6c756d6e207573657273206167653a696e
+740a
+"""
+}
+
+// data/versions/c0ffee_bad_type.mig
+fn file_18() -> String {
+    """
+7265766973696f6e3a206330666665650a646f776e3a206233633931310a6d6573736167653a2063617274730a0a7570
+67726164653a0a202020206372656174655f7461626c652063617274732069643a696e74656765723a706b2075736572
+5f69643a696e740a646f776e67726164653a0a2020202064726f705f7461626c652063617274730a
+"""
+}
+
+// data/versions/cc0002_label_clash.mig
+fn file_19() -> String {
+    """
+7265766973696f6e3a206363303030320a646f776e3a203363346530320a6c6162656c3a2062696c6c696e670a6d6573
+736167653a2061207365636f6e642062696c6c696e670a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/d00d1e_typo.mig
+fn file_20() -> String {
+    """
+72657669736f6e3a206430306431650a646f776e3a203166306133630a6d6573736167653a207479706f20696e206120
+6b65790a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/dd0003_outside.mig
+fn file_21() -> String {
+    """
+7265766973696f6e3a206464303030330a646f776e3a203166306133630a6d6573736167653a20616e206f7065726174
+696f6e206265666f7265206974732073656374696f6e0a6164645f636f6c756d6e207573657273206167653a696e740a
+0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/e1e1e1_orphan.mig
+fn file_22() -> String {
+    """
+7265766973696f6e3a206531653165310a646f776e3a203737373737370a6d6573736167653a20706172656e74206e65
+766572207772697474656e0a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/e2e2e2_child_of_bad.mig
+fn file_23() -> String {
+    """
+7265766973696f6e3a206532653265320a646f776e3a206330666665650a6d6573736167653a206368696c64206f6620
+612062726f6b656e207363726970740a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ee0004_bad_ops.mig
+fn file_24() -> String {
+    """
+7265766973696f6e3a206565303030340a646f776e3a203166306133630a6d6573736167653a20657665727920776179
+20746f206d69737370656c6c20616e206f7065726174696f6e0a0a757067726164653a0a202020206372656174655f74
+61626c652055736572732069643a696e740a646f776e67726164653a0a2020202064726f705f7461626c652075736572
+730a
+"""
+}
+
+// data/versions/ee0005_bad_column.mig
+fn file_25() -> String {
+    """
+7265766973696f6e3a206565303030350a646f776e3a203166306133630a6d6573736167653a206120636f6c756d6e20
+77697468206e6f20747970650a0a757067726164653a0a202020206164645f636f6c756d6e207573657273206e69636b
+6e616d650a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ee0006_bad_flag.mig
+fn file_26() -> String {
+    """
+7265766973696f6e3a206565303030360a646f776e3a203166306133630a6d6573736167653a20756e6b6e6f776e2066
+6c61670a0a757067726164653a0a202020206164645f636f6c756d6e207573657273206e69636b6e616d653a74657874
+3a756e697175650a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ee0007_unknown_op.mig
+fn file_27() -> String {
+    """
+7265766973696f6e3a206565303030370a646f776e3a203166306133630a6d6573736167653a20756e6b6e6f776e206f
+7065726174696f6e0a0a757067726164653a0a202020207472756e636174652075736572730a646f776e67726164653a
+0a
+"""
+}
+
+// data/versions/ee0008_usage.mig
+fn file_28() -> String {
+    """
+7265766973696f6e3a206565303030380a646f776e3a203166306133630a6d6573736167653a2077726f6e67206e756d
+626572206f6620776f7264730a0a757067726164653a0a2020202072656e616d655f7461626c652075736572730a646f
+776e67726164653a0a
+"""
+}
+
+// data/versions/ee0009_bad_index.mig
+fn file_29() -> String {
+    """
+7265766973696f6e3a206565303030390a646f776e3a203166306133630a6d6573736167653a20696e646578206f7074
+696f6e730a0a757067726164653a0a202020206372656174655f696e6465782069785f7820757365727320656d61696c
+20636c757374657265640a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ee000a_dup_key.mig
+fn file_30() -> String {
+    """
+7265766973696f6e3a206565303030610a646f776e3a203166306133630a646f776e3a203262376439310a6d65737361
+67653a2074776f20646f776e730a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ee000b_bad_id.mig
+fn file_31() -> String {
+    """
+7265766973696f6e3a206565303030620a646f776e3a203146304133430a6d6573736167653a20757070657220636173
+6520706172656e740a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ee000c_no_message.mig
+fn file_32() -> String {
+    """
+7265766973696f6e3a206565303030630a646f776e3a203166306133630a0a757067726164653a0a646f776e67726164
+653a0a
+"""
+}
+
+// data/versions/ee000d_dup_column.mig
+fn file_33() -> String {
+    """
+7265766973696f6e3a206565303030640a646f776e3a203166306133630a6d6573736167653a2073616d6520636f6c75
+6d6e2074776963650a0a757067726164653a0a202020206372656174655f7461626c6520746167732069643a696e743a
+706b206e616d653a74657874206e616d653a746578740a646f776e67726164653a0a2020202064726f705f7461626c65
+20746167730a
+"""
+}
+
+// data/versions/fa11ed_wrong_name.mig
+fn file_34() -> String {
+    """
+7265766973696f6e3a206661313165650a646f776e3a203166306133630a6d6573736167653a207468652066696c6520
+6e616d6520616e64207468652069642064697361677265650a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ff0010_twice_section.mig
+fn file_35() -> String {
+    """
+7265766973696f6e3a206666303031300a646f776e3a203166306133630a6d6573736167653a2074776f207570677261
+64652073656374696f6e730a0a757067726164653a0a202020206164645f636f6c756d6e20757365727320613a696e74
+0a757067726164653a0a202020206164645f636f6c756d6e20757365727320623a696e740a646f776e67726164653a0a
+"""
+}
+
+// data/versions/ff0011_no_colon.mig
+fn file_36() -> String {
+    """
+7265766973696f6e3a206666303031310a646f776e3a203166306133630a6d657373616765206b6565707320676f696e
+6720776974686f7574206120636f6c6f6e0a0a757067726164653a0a646f776e67726164653a0a
+"""
+}
