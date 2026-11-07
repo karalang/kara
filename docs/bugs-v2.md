@@ -113,8 +113,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-11 | 2026-11-07 | typecheck | low | §9 remainder of B-2026-11-06-27: `dbg` on a Display-only type and derived `Debug`/`Clone` on a generic type ignore the bound (items 8, 9); `Option.from`, `Result.from` and `i64.try_into` are missing, and an ambiguous `into()` reports `no method 'into'` instead of asking for an annotation (items 12, 13) | — |
-| B-2026-11-07-12 | 2026-11-07 | mir | high | A plain binding of a non-`Copy` part of a `shared` value held in a local (`match m.a { Some(i) => .. }`, `if let`, `while let`, `let`-`else`, `let (s, k) = m.pair`) is refused as "cannot move a non-`Copy` value out of a `shared` value" by `karac check` and every backend, though core semantics §4.6 makes it a `ref` | — |
-| B-2026-11-07-13 | 2026-11-07 | typecheck | medium | A closure that matches a captured enum against dotted unit variants only (`match cmp { Cmp.Lt => x < v, Cmp.Ge => x >= v }`) types as `OnceFn` on the MIR pipeline, so storing it in a `Fn` slot fails every run and build while `karac check` passes | — |
 
 ### Relocated
 
@@ -783,6 +781,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-6 | typecheck | medium | A program whose private type reuses a library type's name (`trait Receiver`, `struct Sender`) passes `karac check` but every `karac run` and `karac b… | f50642eaba |
 | B-2026-11-07-7 | typecheck | medium | A `weak T` reached through a `ref weak T` binding (a loop over a `Vec[weak T]`'s `iter()`, a `weak` payload bound by a `match`) cannot be read or upg… | f50642eaba |
 | B-2026-11-07-8 | typecheck | medium | Since 5f1222f497 (B-2026-11-06-11) a method call on a part of a tuple element of a generic `Vec[(K, K)]` walked by `for` is left unsolved: `for (k, v… | fbf880fff9 |
+| B-2026-11-07-12 | mir | high | A plain binding of a non-`Copy` part of a `shared` value held in a local (`match m.a { Some(i) => . | 9d3631f381 |
+| B-2026-11-07-13 | typecheck | medium | A closure that matches a captured enum against dotted unit variants only (`match cmp { Cmp.Lt => x < v, Cmp.Ge => x >= v }`) types as `OnceFn` on the… | 9d3631f381 |
 
 </details>
 
