@@ -18128,8 +18128,20 @@ fn http_exchange(
             .map(|r| (scheme, r)),
         None => None,
     };
+    // An https URL through a proxy is tunnelled here rather than by `ureq`,
+    // which would send the tunnelled request in absolute form: the request
+    // inside a CONNECT tunnel is the one sent to the origin, in origin form,
+    // as the compiled client sends it (RFC 9112 §3.2.1; B-2026-11-07-29).
+    let tunnel_refusal = std::sync::Arc::new(std::sync::Mutex::new(None));
     let agent = match &route {
         None => http_agent()?,
+        Some((scheme, r)) if scheme == "https" => {
+            let port = crate::http_proxy::url_port(url, scheme).unwrap_or(443);
+            let host = crate::http_proxy::url_scheme_host(url)
+                .map(|(_, h)| h)
+                .unwrap_or_default();
+            http_agent_tunnelled(r, &host, port, tunnel_refusal.clone())?
+        }
         Some((_, r)) => http_agent_through(r)?,
     };
     let mut r = agent.request(method, url);
@@ -18152,6 +18164,11 @@ fn http_exchange(
         None => r.call(),
     };
     use std::error::Error;
+    if result.is_err() {
+        if let Some(why) = tunnel_refusal.lock().ok().and_then(|mut w| w.take()) {
+            return Err(format!("{url}: {why}"));
+        }
+    }
     match result {
         Ok(resp) => Ok(resp),
         Err(ureq::Error::Transport(t))
@@ -18232,6 +18249,84 @@ fn http_agent_through(route: &crate::http_proxy::ProxyRoute) -> Result<ureq::Age
     };
     let proxy = ureq::Proxy::new(url).map_err(|e| e.to_string())?;
     http_tls_config().map(|config| http_agent_builder(config).proxy(proxy).build())
+}
+
+/// The agent for an https URL through the proxy `route`: `ureq` connects to
+/// the proxy (every name resolves to it), and the TLS step first asks the
+/// proxy for a tunnel to `host:port`, then speaks TLS to the origin through
+/// it. `ureq` has no proxy configured, so it sends the request in origin
+/// form. Why the proxy refused, or could not be reached, is left in
+/// `refusal` in the compiled client's words.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_agent_tunnelled(
+    route: &crate::http_proxy::ProxyRoute,
+    host: &str,
+    port: u16,
+    refusal: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+) -> Result<ureq::Agent, String> {
+    let tls = http_tls_config()?;
+    let proxy = (route.host.clone(), route.port);
+    let resolve = move |_: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
+        std::net::ToSocketAddrs::to_socket_addrs(&(proxy.0.as_str(), proxy.1)).map(|a| a.collect())
+    };
+    let tunnel = TunnelTls {
+        tls,
+        route: route.clone(),
+        connect: crate::http_proxy::connect_request(route, host, port),
+        refusal,
+    };
+    Ok(ureq::AgentBuilder::new()
+        .redirects(0)
+        .resolver(resolve)
+        .tls_connector(std::sync::Arc::new(tunnel))
+        .build())
+}
+
+/// The TLS step of [`http_agent_tunnelled`]: CONNECT on the stream to the
+/// proxy, then the handshake with the origin over the tunnel.
+#[cfg(not(target_arch = "wasm32"))]
+struct TunnelTls {
+    tls: std::sync::Arc<rustls::ClientConfig>,
+    route: crate::http_proxy::ProxyRoute,
+    connect: String,
+    refusal: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ureq::TlsConnector for TunnelTls {
+    fn connect(
+        &self,
+        dns_name: &str,
+        mut io: Box<dyn ureq::ReadWrite>,
+    ) -> Result<Box<dyn ureq::ReadWrite>, ureq::Error> {
+        use std::io::{Read, Write};
+        let refuse = |why: String| {
+            if let Ok(mut r) = self.refusal.lock() {
+                *r = Some(why.clone());
+            }
+            ureq::Error::from(std::io::Error::other(why))
+        };
+        let unreachable = |e: std::io::Error| {
+            refuse(crate::http_proxy::proxy_unreachable(
+                &self.route,
+                &e.to_string(),
+            ))
+        };
+        io.write_all(self.connect.as_bytes()).map_err(unreachable)?;
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") && head.len() < 64 * 1024 {
+            match io.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => head.push(byte[0]),
+                Err(e) => return Err(unreachable(e)),
+            }
+        }
+        if let Some(why) = crate::http_proxy::connect_refusal(&head) {
+            return Err(refuse(why));
+        }
+        ureq::TlsConnector::connect(&self.tls, dns_name, io)
+    }
 }
 
 /// Why the proxy at `route` refuses a tunnel to `url`'s host, asked again:

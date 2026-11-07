@@ -7190,6 +7190,12 @@ async fn http_fetch_once(
 ) -> Result<HttpFetched, String> {
     let uri: hyper::Uri = url.parse().map_err(|e| format!("{url}: bad url: {e}"))?;
     let scheme = uri.scheme_str().unwrap_or("http").to_string();
+    // A URL is http:// or https:// (docs/library/io.md § HTTP client); any
+    // other scheme is refused before a connection, in the interpreter's
+    // words, rather than spoken to in HTTP (B-2026-11-07-28).
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("{url}: Unknown Scheme: unknown scheme '{scheme}'"));
+    }
     let host = uri
         .host()
         .ok_or_else(|| format!("{url}: url has no host"))?
