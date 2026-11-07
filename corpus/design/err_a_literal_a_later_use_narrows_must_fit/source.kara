@@ -1,0 +1,7 @@
+// design.md § Type inference: the annotation that fixes `a` to u8 makes its
+// literal a u8 literal, and 300 does not fit (B-2026-11-07-3).
+fn main() {
+    let a = 300;
+    let b: u8 = a;
+    println(b);
+}

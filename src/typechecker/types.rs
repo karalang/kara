@@ -978,7 +978,13 @@ pub fn type_display(ty: &Type) -> String {
             }
         }
         Type::TypeParam(name) => name.clone(),
-        Type::TypeVar(id) => format!("?T{}", id.0),
+        // An open literal reads as the type it defaults to, as it was
+        // typed before literals were variables (B-2026-11-07-3).
+        Type::TypeVar(id) => match super::inference::literal_var_kind(*id) {
+            Some(super::inference::LiteralKind::Int) => "i64".to_string(),
+            Some(super::inference::LiteralKind::Float) => "f64".to_string(),
+            None => format!("?T{}", id.0),
+        },
         Type::AssocProjection {
             param,
             assoc,

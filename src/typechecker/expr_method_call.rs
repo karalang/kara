@@ -1685,6 +1685,45 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A receiver whose numbers no use has fixed yet (`v` after
+    /// `let mut v = Vec.new(); v.push(1);`) takes their defaults before a
+    /// method only an impl for one instantiation has is looked up
+    /// (`impl Redu for Vec[i64]`): picking that impl needs the type now
+    /// (design.md § Type inference, B-2026-11-07-3).
+    fn settle_receiver_for_specialized_impl(&mut self, object: &Expr, method: &str) {
+        // A binding's read is idempotent, so reading it here first is free.
+        if !matches!(object.kind, ExprKind::Identifier(_)) {
+            return;
+        }
+        let specialized =
+            |i: &super::env::ImplInfo| !i.target_args.is_empty() && i.methods.contains_key(method);
+        if !self.env.impls.iter().any(specialized) {
+            return;
+        }
+        let t = self.infer_expr_open(object);
+        let t = self.resolved_now(&t);
+        let mut ids = Vec::new();
+        super::exprs::type_var_ids(&t, &mut ids);
+        if !ids
+            .iter()
+            .any(|id| super::inference::literal_var_kind(*id).is_some())
+        {
+            return;
+        }
+        let head = match Self::peel_borrow(&t) {
+            Type::Named { name, .. } => name.clone(),
+            _ => return,
+        };
+        if self
+            .env
+            .impls
+            .iter()
+            .any(|i| i.target_type == head && specialized(i))
+        {
+            self.settle_literals(&t);
+        }
+    }
+
     pub(super) fn infer_method_call(
         &mut self,
         object: &Expr,
@@ -1702,6 +1741,7 @@ impl<'a> super::TypeChecker<'a> {
         // arms below.
         args_close_span: &Span,
     ) -> Type {
+        self.settle_receiver_for_specialized_impl(object, method);
         if let ("drain", [arg]) = (method, args) {
             if let Some(t) = self.drain_range_spelling(object, &arg.value) {
                 return t;

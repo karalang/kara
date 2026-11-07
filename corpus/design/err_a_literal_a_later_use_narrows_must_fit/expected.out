@@ -1,0 +1,1 @@
+ERROR at line 4: integer literal 300 out of range for 'u8' (expected 0..=255)

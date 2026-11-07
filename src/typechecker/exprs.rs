@@ -18,11 +18,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
 use super::env::{FunctionSig, ImplInfo};
+use super::inference;
 use super::inference::{
     const_value_from_literal, instantiate_signature_with_fresh_vars, resolve_const_arg,
     resolve_type_var_top, resolve_type_vars, substitute_const_idents_in_expr,
     substitute_type_params, unify_types, InstantiatedSignature,
 };
+use super::types::FloatSize;
 use super::types::{
     contains_type_param, float_width_rank, impl_args_match, impl_table_key,
     int_coercion_is_widening, int_signed_width, is_integer, lub_block_type, type_display,
@@ -1239,9 +1241,32 @@ impl<'a> super::TypeChecker<'a> {
         let deferred = matches!(&expr.kind, ExprKind::Call { callee, .. }
                 if self.callee_is_variant_constructor(callee))
             && self.variant_lint_deferred.insert(expr.id);
+        // A literal checked against a slot is open for it to fix, except
+        // against a borrow, which the value is lent to as it is.
+        // A literal written straight into a slot whose type is known takes
+        // that type on its own path, as before.
+        let saved_open = self.open_literal_expr;
+        let slot = resolve_type_var_top(expected, &self.env.substitutions);
+        let literal_into_known = (Self::is_int_literal_operator_tree(expr)
+            || matches!(&expr.kind, ExprKind::Float(_, None))
+            || matches!(&expr.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
+                if matches!(operand.kind, ExprKind::Float(_, None))))
+            && !contains_type_var(&slot);
+        if !matches!(slot, Type::Ref(_) | Type::MutRef(_)) && !literal_into_known {
+            self.open_literal_expr = Some(expr.id);
+        }
         let mut ty = self.check_expr_inner(expr, expected);
+        self.open_literal_expr = saved_open;
         if deferred {
             self.variant_lint_deferred.remove(&expr.id);
+        }
+        // A literal's variable the slot could not take keeps its default.
+        if self.unbound_literal_var(Self::peel_borrow(&ty)).is_some()
+            && !contains_type_var(expected)
+        {
+            ty = self.settle_literals(&ty);
+            self.record_expr_type(&expr.span, &ty);
+            self.record_node_type(expr.id, &ty);
         }
         // A literal whose integers took the slot's narrower types has the
         // slot's type (B-2026-11-04-82).
@@ -9313,7 +9338,19 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        let ty = self.infer_expr_inner(expr);
+        let open = self.open_literal_expr == Some(expr.id) && !expr.id.is_dummy();
+        let mut ty = self.infer_expr_inner(expr);
+        // A literal's variable stays open only where a later use can fix it
+        // (`infer_expr_open`); anywhere else the number's type is decided
+        // now, as it was before literals were variables (B-2026-11-07-3).
+        if !open && self.unbound_literal_var(Self::peel_borrow(&ty)).is_some() {
+            ty = self.settle_literals(&ty);
+        } else if let Type::TypeVar(id) = Self::peel_borrow(&ty) {
+            // A literal's variable an earlier use fixed reads as that type.
+            if inference::literal_var_kind(*id).is_some() {
+                ty = self.resolved_now(&ty);
+            }
+        }
         self.current_call_node = saved_call;
         self.variant_ctor_in_callee = false;
         self.fn_item_in_callee = false;
@@ -9655,7 +9692,7 @@ impl<'a> super::TypeChecker<'a> {
     /// The value of a shift-free [`Self::is_int_literal_operator_tree`], or
     /// `None` when it has a shift or does not evaluate (division by zero, or a
     /// value past `i128`), in which case the run-time checks decide.
-    fn int_literal_operator_tree_value(e: &Expr) -> Option<i128> {
+    pub(super) fn int_literal_operator_tree_value(e: &Expr) -> Option<i128> {
         match &e.kind {
             ExprKind::Integer(n, None) => Some(*n),
             ExprKind::Unary { operand, .. } => {
@@ -10166,6 +10203,95 @@ impl<'a> super::TypeChecker<'a> {
         self.eval_const_expr(expr, &target).is_err()
     }
 
+    /// design.md § Type inference: an unsuffixed literal that nothing types
+    /// where it is written is a variable a later use may fix; it takes `i64`
+    /// or `f64` when its body ends ([`Self::default_literal_vars`],
+    /// B-2026-11-07-3). `value` is an integer literal's. Not in a `comptime`
+    /// context, whose evaluation needs the type now.
+    fn literal_var(&mut self, expr: &Expr, value: Option<i128>) -> Option<Type> {
+        if !self.library_methods_from_source || self.comptime_depth > 0 {
+            return None;
+        }
+        // Only where a later use may fix it; anywhere else the number takes
+        // its type where it is written, on the path it always had.
+        if self.open_literal_expr != Some(expr.id) || expr.id.is_dummy() {
+            return None;
+        }
+        let Type::TypeVar(id) = self.env.fresh_type_var() else {
+            return None;
+        };
+        let kind = if value.is_some() {
+            inference::LiteralKind::Int
+        } else {
+            inference::LiteralKind::Float
+        };
+        inference::register_literal_var(id, kind);
+        self.body_literal_vars.push(super::LiteralVarSite {
+            id,
+            kind,
+            nodes: vec![(expr.span, expr.id)],
+            value,
+        });
+        Some(Type::TypeVar(id))
+    }
+
+    /// [`Self::infer_expr`] leaving an integer or float literal's variable
+    /// open, for a use a later one may fix: a `let`'s value, an operand,
+    /// an expression checked against a slot (B-2026-11-07-3).
+    pub(super) fn infer_expr_open(&mut self, expr: &Expr) -> Type {
+        let saved = self.open_literal_expr.replace(expr.id);
+        let ty = self.infer_expr(expr);
+        self.open_literal_expr = saved;
+        ty
+    }
+
+    /// The literal variable `t` is, unbound, with its kind.
+    pub(super) fn unbound_literal_var(
+        &self,
+        t: &Type,
+    ) -> Option<(TypeVarId, inference::LiteralKind)> {
+        match resolve_type_var_top(t, &self.env.substitutions) {
+            Type::TypeVar(id) => inference::literal_var_kind(id).map(|k| (id, k)),
+            _ => None,
+        }
+    }
+
+    /// `t` with each literal variable in it that nothing fixed yet given its
+    /// default now, for a use that needs the number's type to decide
+    /// (a method's receiver, a cast, a pattern, a printed value).
+    pub(super) fn settle_literals(&mut self, t: &Type) -> Type {
+        let resolved = inference::resolve_type_vars(
+            t,
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &HashMap::new(),
+        );
+        let mut ids = Vec::new();
+        type_var_ids(&resolved, &mut ids);
+        let mut changed = false;
+        for id in ids {
+            if let Some(kind) = inference::literal_var_kind(id) {
+                let default = match kind {
+                    inference::LiteralKind::Int => Type::Int(IntSize::I64),
+                    inference::LiteralKind::Float => Type::Float(FloatSize::F64),
+                };
+                self.env.substitutions.insert(id, default);
+                changed = true;
+            }
+        }
+        if !changed {
+            return resolved;
+        }
+        inference::resolve_type_vars(
+            &resolved,
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &HashMap::new(),
+        )
+    }
+
     fn infer_expr_inner(&mut self, expr: &Expr) -> Type {
         match &expr.kind {
             // Literals
@@ -10216,12 +10342,20 @@ impl<'a> super::TypeChecker<'a> {
                         crate::resolver::SpanKey::from_span(&expr.span),
                         (vec![(expr.span, expr.id)], *n),
                     );
+                    if let Some(var) = self.literal_var(expr, Some(*n)) {
+                        return var;
+                    }
                 }
                 ty
             }
             ExprKind::Float(_, sfx) => {
                 if matches!(sfx, Some(crate::token::FloatSuffix::F64)) {
                     self.warn_redundant_suffix("f64", expr.span);
+                }
+                if sfx.is_none() {
+                    if let Some(var) = self.literal_var(expr, None) {
+                        return var;
+                    }
                 }
                 Self::type_from_float_suffix(*sfx)
             }
@@ -10533,8 +10667,21 @@ impl<'a> super::TypeChecker<'a> {
                             Some((operand.span.offset, operand.span.length));
                     }
                 }
-                let ty = self.infer_unary(op, operand, &expr.span);
+                let open = self.open_literal_expr == Some(expr.id) && !expr.id.is_dummy();
+                let ty = self.infer_unary(op, operand, &expr.span, open);
                 self.neg_validated_suffixed_literal = saved_neg_key;
+                // `-5` left open: the negation is the literal, of the
+                // negated value (B-2026-11-07-3).
+                if let (UnaryOp::Neg, Some((id, _))) = (op, self.unbound_literal_var(&ty)) {
+                    if let Some(site) =
+                        self.body_literal_vars.iter_mut().rev().find(|s| {
+                            s.id == id && s.nodes.first().is_some_and(|n| n.1 == operand.id)
+                        })
+                    {
+                        site.nodes.insert(0, (expr.span, expr.id));
+                        site.value = site.value.map(|v| -v);
+                    }
+                }
                 if let (UnaryOp::Neg, ExprKind::Integer(n, None)) = (op, &operand.kind) {
                     self.int_literal_spans.insert(
                         crate::resolver::SpanKey::from_span(&expr.span),

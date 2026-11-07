@@ -1,0 +1,9 @@
+source = "B-2026-11-07-3"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "numerics", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: an integer or float literal starts as a type variable that later uses may fix, and defaults to i64 / f64 when nothing fixes it. `x` is fixed to i32 by `take_i32`, the pushed 7 and 8 by `sum32`'s Vec[i32] (15), `a` by `b: u8` (255), the pushed 7 and 250 by `Vec[u8]` (257), the Bag's T by its pushed literals (2 items); `d` keeps i64 so `impl Total for Vec[i64]` gives 6, `f` keeps f64 (3.0), and `h` keeps i64 beside the u8 by § Mixed-width operands (FNV step of 'a' masked to 32 bits)."

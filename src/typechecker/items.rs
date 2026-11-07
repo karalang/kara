@@ -2811,6 +2811,7 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
         let errors_before_body = self.errors.len();
+        let literal_mark = self.body_literal_vars.len();
         if f.body.final_expr.is_some() {
             if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
                 self.check_core_fresh_ref_return(f);
@@ -2845,6 +2846,7 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+        self.default_literal_vars(literal_mark);
         if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
             self.check_unsolved_call_results(&f.body, &gp, errors_before_body);
         }
@@ -10764,7 +10766,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_declared_type_for_polymorphic_rhs(value, &declared);
                     declared
                 } else {
-                    let inferred = self.infer_expr(value);
+                    // A literal stays open for a later use to fix
+                    // (B-2026-11-07-3).
+                    let inferred = self.infer_expr_open(value);
                     // design.md § Collection literals: an empty literal takes
                     // its element type from the expected type, and an
                     // unannotated `let` gives none. `let w = [];` typed as

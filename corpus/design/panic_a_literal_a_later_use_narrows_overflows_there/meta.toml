@@ -1,0 +1,9 @@
+source = "B-2026-11-07-3"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["design", "inference", "numerics", "literals", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: `take_i32(y)` fixes `y`, and through `x + x` also `x`, to i32, so the sum of 2000000000 and itself overflows i32 and traps (it ran as an i64 sum and was refused at the call)."

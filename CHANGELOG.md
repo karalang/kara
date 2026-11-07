@@ -201,6 +201,15 @@ Each still compiles in 0.8.x with a `deprecated` warning and a
 
 ### Changed
 
+- **A number literal takes the type a later use gives it** (design.md § Type
+  inference). `let x = 5; take_i32(x);` makes `x` an `i32`, the literals
+  pushed onto a `Vec.new()` take the element type of the parameter it is
+  later handed to, and `let a = 255; let b: u8 = a;` is a `u8` literal. A
+  literal nothing fixes still defaults to `i64` / `f64` at the end of its
+  body. Programs 0.8.0 refused as a narrowing now run; a literal that does
+  not fit the type it is fixed to is now refused at the literal
+  (`let a = 300; let b: u8 = a;`), and arithmetic in the narrower type traps
+  on overflow there (B-2026-11-07-3).
 - **`karac fmt` puts each `impl` and `trait` body in canonical order**
   (design.md § Canonical formatting): associated types first, then functions
   without `self` (constructors such as `new`), then methods, each group

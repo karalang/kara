@@ -2650,6 +2650,15 @@ pub struct TypeCheckResult {
     pub queries: Vec<crate::queries::CompilerQuery>,
 }
 
+/// One literal typed as a variable (B-2026-11-07-3): its nodes (a negation's
+/// first, then the literal's) and, for an integer, the value they denote.
+pub(super) struct LiteralVarSite {
+    pub(super) id: types::TypeVarId,
+    pub(super) kind: inference::LiteralKind,
+    pub(super) nodes: Vec<(Span, crate::ids::NodeId)>,
+    pub(super) value: Option<i128>,
+}
+
 impl TypeCheckResult {
     /// The type of `e`. At a span several copies of one trait default body
     /// share ([`Self::default_copy_spans`]), [`Self::expr_types`] holds the
@@ -3320,6 +3329,16 @@ pub struct TypeChecker<'a> {
     /// checks each one against the type recorded at its span after
     /// `check_items`.
     pub(super) wide_int_literals: Vec<(Span, i128)>,
+    /// B-2026-11-07-3 — the literal variables of the bodies being checked,
+    /// innermost body last: each body defaults its own when it ends
+    /// ([`Self::default_literal_vars`]).
+    pub(super) body_literal_vars: Vec<LiteralVarSite>,
+    /// The `expr_types` spans recorded with a literal's variable in their
+    /// type, re-read by [`Self::default_literal_vars`].
+    pub(super) literal_typed_spans: Vec<SpanKey>,
+    /// The expression whose literal variable [`Self::infer_expr`] leaves
+    /// open ([`Self::infer_expr_open`]).
+    pub(super) open_literal_expr: Option<crate::ids::NodeId>,
     /// The spans of [`Self::wide_int_literals`] an integer context has
     /// already range-checked.
     pub(super) wide_int_literals_judged: FxHashSet<SpanKey>,
@@ -4155,6 +4174,9 @@ impl<'a> TypeChecker<'a> {
             in_ensures: false,
             neg_validated_suffixed_literal: None,
             wide_int_literals: Vec::new(),
+            body_literal_vars: Vec::new(),
+            literal_typed_spans: Vec::new(),
+            open_literal_expr: None,
             wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             binding_class_reported: rustc_hash::FxHashSet::default(),
@@ -4397,6 +4419,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub fn check(mut self) -> TypeCheckResult {
+        inference::clear_literal_vars();
         self.build_type_env();
         self.validate_derive_copy();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, reject a
@@ -4467,6 +4490,8 @@ impl<'a> TypeChecker<'a> {
         self.reject_unqualifiable_impl_collisions();
         self.check_declared_table_keys();
         self.check_items();
+        // Literals outside any function body (a `const`, a `static`).
+        self.default_literal_vars(0);
         self.check_wide_int_literals();
         self.finalize_typevar_pattern_bindings();
         self.finalize_pattern_binding_inner_types();
@@ -7566,6 +7591,15 @@ impl<'a> TypeChecker<'a> {
         // rigid type. Only a `T` is a `T`, so a concrete value is never one,
         // however permissive `types_compatible`'s `TypeParam` wildcard is
         // toward a parameter still being solved.
+        // A number is never a parameter's type, so one no use has fixed yet
+        // takes its default before it is compared with one (B-2026-11-07-3).
+        let settled;
+        let found = if types::contains_type_param(expected) {
+            settled = self.settle_literals(found);
+            &settled
+        } else {
+            found
+        };
         let have = inference::resolve_type_vars(
             found,
             &self.env.substitutions,
@@ -7633,6 +7667,27 @@ impl<'a> TypeChecker<'a> {
         // `Result.Ok(a)`) is what solves that param.
         if self.solve_freshened_scrutinee_var(found, expected) {
             return true;
+        }
+        // A literal no use has fixed yet is fixed by the slot it flows into,
+        // including a slot whose own type a later use decides (`b.push(7)`
+        // on a `Bag.new()`'s `Bag[?T]`; design.md § Type inference,
+        // B-2026-11-07-3).
+        // So is one inside the value's type (a closure's `OnceFn() -> ?` for
+        // `spawn`'s `OnceFn() -> T`).
+        let mut ids = Vec::new();
+        exprs::type_var_ids(&self.resolved_now(found), &mut ids);
+        if !types::contains_type_param(expected)
+            && ids
+                .iter()
+                .any(|id| inference::literal_var_kind(*id).is_some())
+        {
+            let mut subs = self.env.substitutions.clone();
+            let mut const_subs = self.env.const_substitutions.clone();
+            if inference::unify_types(expected, found, &mut subs, &mut const_subs) {
+                self.env.substitutions = subs;
+                self.env.const_substitutions = const_subs;
+                return true;
+            }
         }
         // B-2026-10-06-124 — a value whose type still carries an
         // unsolved variable (`let e = Vec.new();` before anything pins it,
@@ -8827,6 +8882,80 @@ impl<'a> TypeChecker<'a> {
     /// where an integer context range-checked it (`let a: u64 = ...`, a `u64`
     /// operand's peer, a `u128` argument). One no context reached has the
     /// default type, `i64`, and is out of range for it.
+    /// design.md § Type inference: "Literals default last". Each literal
+    /// variable recorded since `from` that nothing fixed takes `i64` or
+    /// `f64`; then each literal is range-checked against the type it ended
+    /// with, and the spans typed with one are re-read (B-2026-11-07-3).
+    pub(super) fn default_literal_vars(&mut self, from: usize) {
+        let from = from.min(self.body_literal_vars.len());
+        let sites = self.body_literal_vars.split_off(from);
+        for site in &sites {
+            let root =
+                inference::resolve_type_var_top(&Type::TypeVar(site.id), &self.env.substitutions);
+            if let Type::TypeVar(r) = root {
+                let default = match site.kind {
+                    inference::LiteralKind::Int => Type::Int(IntSize::I64),
+                    inference::LiteralKind::Float => Type::Float(types::FloatSize::F64),
+                };
+                self.env.substitutions.insert(r, default);
+            }
+        }
+        let resolve = |this: &Self, t: &Type| {
+            inference::resolve_type_vars(
+                t,
+                &this.env.substitutions,
+                &std::collections::HashMap::new(),
+                &this.env.const_substitutions,
+                &std::collections::HashMap::new(),
+            )
+        };
+        // Only once the outermost open body ends: an inner one's spans may
+        // name an outer body's literals, which are still open.
+        if from == 0 || self.body_literal_vars.is_empty() {
+            for key in std::mem::take(&mut self.literal_typed_spans) {
+                if let Some(t) = self.expr_types.get(&key) {
+                    if exprs::contains_type_var(t) {
+                        let t = resolve(self, t);
+                        self.expr_types.insert(key, t);
+                    }
+                }
+            }
+        }
+        for site in &sites {
+            let ty = resolve(self, &Type::TypeVar(site.id));
+            // A literal a context typed directly was range-checked there.
+            let Some(&(span, node)) = site.nodes.first() else {
+                continue;
+            };
+            // A literal a context typed directly was range-checked there; one
+            // whose node holds the variable, or what it was fixed to, is
+            // checked here.
+            let node_ty = self.node_types.get(&node).map(|(t, _)| t.clone());
+            if let Some(t) = node_ty {
+                if !matches!(t, Type::TypeVar(_)) && resolve(self, &t) != ty {
+                    continue;
+                }
+            }
+            if !inference::literal_takes(site.kind, &ty) {
+                let what = match site.kind {
+                    inference::LiteralKind::Int => "an integer literal",
+                    inference::LiteralKind::Float => "a float literal",
+                };
+                self.type_error(
+                    format!("expected '{}', found {what}", type_display(&ty)),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                continue;
+            }
+            if let (Some(value), Type::Int(_) | Type::UInt(_)) = (site.value, &ty) {
+                self.wide_int_literals_judged
+                    .insert(SpanKey::from_span(&span));
+                self.check_int_literal_fits(value, &ty, &span, None);
+            }
+        }
+    }
+
     fn check_wide_int_literals(&mut self) {
         let pending = std::mem::take(&mut self.wide_int_literals);
         for (span, value) in pending {
@@ -8875,6 +9004,19 @@ impl<'a> TypeChecker<'a> {
         if let Type::Named { name, args } = ty {
             if !args.is_empty() && !self.nested_enum_param_payloads.is_empty() {
                 self.note_nested_enum_instantiation(name, args, span);
+            }
+        }
+        // A type holding a literal's variable is re-read when its body ends
+        // (B-2026-11-07-3): the ownership pass asks these spans whether a
+        // value is `Copy`.
+        if exprs::contains_type_var(ty) {
+            let mut ids = Vec::new();
+            exprs::type_var_ids(ty, &mut ids);
+            if ids
+                .iter()
+                .any(|id| inference::literal_var_kind(*id).is_some())
+            {
+                self.literal_typed_spans.push(key);
             }
         }
         self.expr_types.insert(key, ty.clone());

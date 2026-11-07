@@ -19,6 +19,49 @@ use super::types::{
 };
 use crate::ast::narrow_literal_to_i64;
 
+/// design.md § Type inference: an unsuffixed integer or float literal that
+/// nothing types where it is written is a variable a later use may fix, and
+/// takes `i64` / `f64` only at the end of its body (B-2026-11-07-3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LiteralKind {
+    Int,
+    Float,
+}
+
+thread_local! {
+    /// The literal variables of the check in progress, with their kind.
+    /// Kept beside the substitution map rather than in it so that
+    /// [`unify_types`], which has only that map, can refuse a literal a
+    /// non-number type: one checker runs per thread at a time.
+    static LITERAL_VARS: std::cell::RefCell<FxHashMap<TypeVarId, LiteralKind>> =
+        std::cell::RefCell::new(FxHashMap::default());
+}
+
+pub(crate) fn register_literal_var(id: TypeVarId, kind: LiteralKind) {
+    LITERAL_VARS.with(|m| m.borrow_mut().insert(id, kind));
+}
+
+pub(crate) fn literal_var_kind(id: TypeVarId) -> Option<LiteralKind> {
+    LITERAL_VARS.with(|m| m.borrow().get(&id).copied())
+}
+
+pub(crate) fn clear_literal_vars() {
+    LITERAL_VARS.with(|m| m.borrow_mut().clear());
+}
+
+/// Whether a literal's variable can take the type `ty`: an integer
+/// literal's any integer, a float literal's any float. An integer literal
+/// written into a float slot takes it on the checking path, not as a
+/// variable.
+pub(crate) fn literal_takes(kind: LiteralKind, ty: &Type) -> bool {
+    matches!(
+        (kind, ty),
+        (_, Type::Error)
+            | (LiteralKind::Int, Type::Int(_) | Type::UInt(_))
+            | (LiteralKind::Float, Type::Float(_))
+    )
+}
+
 /// `ref t`. A borrow of a borrow is the borrow (design.md: `ref r` of a
 /// `r: ref T` stays `ref T`), so a `ref Self.Item` whose item is `ref T` is a
 /// `ref T`.
@@ -1191,7 +1234,35 @@ fn unify_type_var(
     const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
 ) -> bool {
     let other = resolve_type_var_top(other, substitutions);
+    if other == Type::TypeVar(id) {
+        return true;
+    }
     match substitutions.get(&id).cloned() {
+        // A literal variable stays the root of what it joins, so it can
+        // still take its default, and takes only a number (B-2026-11-07-3).
+        // `Never` (a diverging sibling) and `Error` decide nothing.
+        None if literal_var_kind(id).is_some() => {
+            let kind = literal_var_kind(id).unwrap_or(LiteralKind::Int);
+            match &other {
+                Type::Never | Type::Error => true,
+                Type::TypeVar(o) => match literal_var_kind(*o) {
+                    Some(k) if k != kind => false,
+                    Some(_) => {
+                        substitutions.insert(id, other);
+                        true
+                    }
+                    None => {
+                        substitutions.insert(*o, Type::TypeVar(id));
+                        true
+                    }
+                },
+                t if literal_takes(kind, t) => {
+                    substitutions.insert(id, other);
+                    true
+                }
+                _ => false,
+            }
+        }
         None => {
             substitutions.insert(id, other);
             true

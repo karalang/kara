@@ -772,7 +772,24 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        let ty = self.infer_expr(arg);
+        // A pushed literal is open for the element type to fix
+        // (B-2026-11-07-3).
+        let mut ty = self.infer_expr_open(arg);
+        // One the element type cannot take (a `Vec[T]`'s `T`) keeps its
+        // default, as it had before, and is judged against the slot as that.
+        if self.unbound_literal_var(&ty).is_some()
+            && !matches!(slot, Type::TypeVar(_))
+            && !unify_types(
+                &ty,
+                &slot,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            )
+        {
+            ty = self.settle_literals(&ty);
+            self.record_expr_type(&arg.span, &ty);
+            self.record_node_type(arg.id, &ty);
+        }
         // A tuple literal's elements meet their slots (B-2026-10-24-17).
         if matches!(arg.kind, ExprKind::Tuple(_)) {
             self.check_tuple_literal_element(arg, &slot, &ty);

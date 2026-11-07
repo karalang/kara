@@ -1,0 +1,9 @@
+source = "B-2026-11-07-3"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "inference", "numerics", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: a later use fixes a literal's type, and the literal must fit it: `let a = 300; let b: u8 = a;` makes 300 a u8 literal and is refused at the literal (it was accepted as i64 and refused at the binding as a narrowing). The expected.out wording of an error pin is guidance, not a byte oracle."

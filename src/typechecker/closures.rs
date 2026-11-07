@@ -57,6 +57,21 @@ impl<'a> super::TypeChecker<'a> {
     /// whether a captured outer binding's type is Copy (no consume
     /// possible) or non-Copy (consume promotes the closure to OnceFn).
     pub(super) fn is_copy_type_during_check(&self, ty: &Type) -> bool {
+        // A number whose type a later use has yet to fix is a number either
+        // way (B-2026-11-07-3).
+        if let Type::TypeVar(id) =
+            super::inference::resolve_type_var_top(ty, &self.env.substitutions)
+        {
+            if super::inference::literal_var_kind(id).is_some() {
+                return true;
+            }
+        }
+        if let Type::TypeVar(_) = ty {
+            let now = self.resolved_now(ty);
+            if !matches!(now, Type::TypeVar(_)) {
+                return self.is_copy_type_during_check(&now);
+            }
+        }
         if matches!(
             ty,
             Type::Int(_)

@@ -1,0 +1,12 @@
+// design.md § Type inference: `x` is fixed to i32 by the call below, so
+// `x + x` adds in i32 and traps (B-2026-11-07-3).
+fn take_i32(n: i32) -> i32 {
+    n
+}
+
+fn main() {
+    let x = 2000000000;
+    println("start");
+    let y = x + x;
+    println(take_i32(y));
+}

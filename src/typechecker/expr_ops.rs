@@ -4031,6 +4031,120 @@ impl<'a> super::TypeChecker<'a> {
         )
     }
 
+    /// design.md § Type inference: a literal operand is a variable the
+    /// other operand fixes (B-2026-11-07-3). Two literals of one kind are
+    /// one variable, which arithmetic results in (`x + x` with `let x = 5;`
+    /// is still open to a later `take_i32`), and a shift's literal left side
+    /// is its result. `None` leaves the operator to the rest of
+    /// `infer_binary`, with any literal there still open.
+    fn literal_binary(
+        &mut self,
+        op: &BinOp,
+        left_ty: &mut Type,
+        right_ty: &mut Type,
+        left: &Expr,
+        right: &Expr,
+    ) -> Option<Type> {
+        use super::inference::LiteralKind;
+        // An operand inferred before the other one fixed its literal reads
+        // as what it was fixed to (`left == total - left - x`).
+        for t in [&mut *left_ty, &mut *right_ty] {
+            if super::exprs::contains_type_var(t) {
+                *t = self.resolved_now(t);
+            }
+        }
+        let ll = self.unbound_literal_var(strip_refs_for_compare(left_ty));
+        let rl = self.unbound_literal_var(strip_refs_for_compare(right_ty));
+        if ll.is_none() && rl.is_none() {
+            return None;
+        }
+        let arith = matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        );
+        let bits = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor);
+        let compares = matches!(
+            op,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+        );
+        let result = |l: super::types::TypeVarId| {
+            if compares {
+                Type::Bool
+            } else {
+                Type::TypeVar(l)
+            }
+        };
+        match (ll, rl) {
+            (Some((l, lk)), Some((r, rk)))
+                if lk == rk && (arith || compares || (bits && lk == LiteralKind::Int)) =>
+            {
+                super::inference::unify_types(
+                    &Type::TypeVar(l),
+                    &Type::TypeVar(r),
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+                Some(result(l))
+            }
+            (Some((l, LiteralKind::Int)), _) if matches!(op, BinOp::Shl | BinOp::Shr) => {
+                if rl.is_some() {
+                    *right_ty = self.settle_literals(right_ty);
+                    self.record_expr_type(&right.span, right_ty);
+                    self.record_node_type(right.id, right_ty);
+                }
+                is_integer(strip_refs_for_compare(right_ty)).then_some(Type::TypeVar(l))
+            }
+            // A shift's right side is any integer, and fixes nothing.
+            (None, Some(_)) if matches!(op, BinOp::Shl | BinOp::Shr) => {
+                *right_ty = self.settle_literals(right_ty);
+                self.record_expr_type(&right.span, right_ty);
+                self.record_node_type(right.id, right_ty);
+                None
+            }
+            // A literal beside a variable that is not a literal's: one type.
+            (Some((l, _)), None) | (None, Some((l, _))) if arith || compares || bits => {
+                let (lit_side, other) = if ll.is_some() {
+                    (left, &*right_ty)
+                } else {
+                    (right, &*left_ty)
+                };
+                let other = self.resolved_now(strip_refs_for_compare(other));
+                if !matches!(other, Type::TypeVar(_)) {
+                    // A literal written in the operator takes its peer's
+                    // type, as it always has; a binding holding one keeps
+                    // its default and widens by § Mixed-width operands, so
+                    // `h ^ b` with `let mut h = 2166136261;` and `b: u8`
+                    // stays `i64`. So does a literal compared with a narrower
+                    // value it does not fit (`c < 300` over `c: u8`): the
+                    // comparison widens, and only arithmetic must fit its peer.
+                    let unfit = compares
+                        && Self::int_literal_operator_tree_value(lit_side).is_some_and(|v| {
+                            Self::int_literal_range(&other).is_some_and(|(lo, hi)| v < lo || v > hi)
+                        });
+                    if !is_literal_tree(lit_side) || unfit {
+                        let ty = if ll.is_some() {
+                            &mut *left_ty
+                        } else {
+                            &mut *right_ty
+                        };
+                        *ty = self.settle_literals(ty);
+                        self.record_expr_type(&lit_side.span, ty);
+                        self.record_node_type(lit_side.id, ty);
+                    }
+                    return None;
+                }
+                super::inference::unify_types(
+                    &Type::TypeVar(l),
+                    &other,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                )
+                .then(|| result(l))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn infer_binary(
         &mut self,
         op: &BinOp,
@@ -4080,17 +4194,20 @@ impl<'a> super::TypeChecker<'a> {
             let l = strip_refinement(&self.check_expr(left, &want)).clone();
             (l, r)
         } else {
-            let l = strip_refinement(&self.infer_expr(left)).clone();
-            let r = strip_refinement(&self.infer_expr(right)).clone();
+            let l = strip_refinement(&self.infer_expr_open(left)).clone();
+            let r = strip_refinement(&self.infer_expr_open(right)).clone();
             (l, r)
         };
         for key in borrowed {
             self.borrowed_deref_operands.remove(&key);
         }
+        if let Some(t) = self.literal_binary(op, &mut left_ty, &mut right_ty, left, right) {
+            return t;
+        }
         // design.md § Type inference: an operand whose type is still a
         // variable (`best.unwrap()` of `let mut best = None;`) is fixed by
         // the other operand, as any later use fixes it (B-2026-11-06-13).
-        if !matches!(op, BinOp::And | BinOp::Or) {
+        if !matches!(op, BinOp::And | BinOp::Or | BinOp::Shl | BinOp::Shr) {
             let l = self.resolved_now(&left_ty);
             let r = self.resolved_now(&right_ty);
             let known = |t: &Type| {
@@ -4118,6 +4235,18 @@ impl<'a> super::TypeChecker<'a> {
                 left_ty = self.resolved_now(&left_ty);
                 self.record_expr_type(&left.span, &left_ty);
                 self.record_node_type(left.id, &left_ty);
+            }
+        }
+        // A literal the other operand could not fix takes its default here,
+        // as it had before literals were variables (B-2026-11-07-3).
+        for (side, ty) in [(left, &mut left_ty), (right, &mut right_ty)] {
+            if self
+                .unbound_literal_var(strip_refs_for_compare(ty))
+                .is_some()
+            {
+                *ty = self.settle_literals(ty);
+                self.record_expr_type(&side.span, ty);
+                self.record_node_type(side.id, ty);
             }
         }
         // B-2026-10-29-35 — a constructor or tuple operand of a comparison is
@@ -5200,10 +5329,37 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    pub(super) fn infer_unary(&mut self, op: &UnaryOp, operand: &Expr, span: &Span) -> Type {
-        let ty = self.infer_expr(operand);
+    /// `open`: whether the unary expression is where a later use may fix a
+    /// literal (B-2026-11-07-3); a negated literal written into a known slot
+    /// takes that slot's type on its own path, as before.
+    pub(super) fn infer_unary(
+        &mut self,
+        op: &UnaryOp,
+        operand: &Expr,
+        span: &Span,
+        open: bool,
+    ) -> Type {
+        let mut ty = if open {
+            self.infer_expr_open(operand)
+        } else {
+            self.infer_expr(operand)
+        };
         if ty == Type::Error {
             return Type::Error;
+        }
+        // A negated literal is still the literal's variable, and so is an
+        // integer literal's complement (B-2026-11-07-3).
+        if let Some((id, kind)) = self.unbound_literal_var(&ty) {
+            match (op, kind) {
+                (UnaryOp::Neg, _) | (UnaryOp::BitNot, super::inference::LiteralKind::Int) => {
+                    return Type::TypeVar(id);
+                }
+                _ => {
+                    ty = self.settle_literals(&ty);
+                    self.record_expr_type(&operand.span, &ty);
+                    self.record_node_type(operand.id, &ty);
+                }
+            }
         }
         if let Some(ty) = self.user_unary_operator_impl(op, &ty, span) {
             self.note_borrowed_operator_receiver(operand);
@@ -6357,6 +6513,20 @@ fn operand_fixes_own_type(e: &Expr) -> bool {
             BinOp::Shl | BinOp::Shr => operand_fixes_own_type(left),
             _ => operand_fixes_own_type(left) || operand_fixes_own_type(right),
         },
+        _ => false,
+    }
+}
+
+/// An unsuffixed numeric literal, negated or not, or an operator tree of
+/// them: the literal is written where it is used (B-2026-11-07-3).
+fn is_literal_tree(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(_, None) | ExprKind::Float(_, None) => true,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => is_literal_tree(operand),
+        ExprKind::Binary { left, right, .. } => is_literal_tree(left) && is_literal_tree(right),
         _ => false,
     }
 }

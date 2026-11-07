@@ -1,0 +1,93 @@
+// design.md § Type inference: an unsuffixed literal starts as a type variable
+// that later uses may fix, and defaults to i64 / f64 only when nothing in the
+// body fixes it (B-2026-11-07-3).
+struct Bag[T] {
+    items: Vec[T],
+}
+
+impl[T] Bag[T] {
+    fn new() -> Bag[T] {
+        Bag { items: Vec.new() }
+    }
+
+    fn push(mut ref self, x: own T) {
+        self.items.push(x);
+    }
+
+    fn len(ref self) -> i64 {
+        self.items.len()
+    }
+}
+
+trait Total {
+    fn total(ref self) -> i64;
+}
+
+impl Total for Vec[i64] {
+    fn total(ref self) -> i64 {
+        let mut t = 0;
+        for x in self {
+            t = t + x;
+        }
+        t
+    }
+}
+
+fn sum32(xs: Vec[i32]) -> i32 {
+    let mut t: i32 = 0;
+    for x in xs {
+        t += x;
+    }
+    t
+}
+
+fn take_i32(n: i32) -> i32 {
+    n
+}
+
+fn bytes_total(xs: Vec[u8]) -> i64 {
+    let mut t: i64 = 0;
+    for x in xs {
+        t += x;
+    }
+    t
+}
+
+fn main() {
+    // A call's parameter fixes a binding's literal.
+    let x = 5;
+    println(take_i32(x));
+    // A Vec's pushes fix nothing; the parameter it is handed to does.
+    let mut v = Vec.new();
+    v.push(7);
+    v.push(8);
+    println(sum32(v));
+    // A narrower binding's annotation fixes the literal before it.
+    let a = 255;
+    let b: u8 = a;
+    println(b);
+    // A literal past u8's range is fine in i64, the u8 elements are not.
+    let mut w = Vec.new();
+    w.push(7);
+    w.push(250);
+    println(bytes_total(w));
+    // A generic struct's parameter is fixed by the literal it takes.
+    let mut bag = Bag.new();
+    bag.push(7);
+    bag.push(8);
+    println(bag.len());
+    // Nothing fixes these: i64 and f64, and the impl for Vec[i64] applies.
+    let mut d = Vec.new();
+    d.push(1);
+    d.push(2);
+    d.push(3);
+    println(d.total());
+    let f = 1.5;
+    println(f * 2.0);
+    // A literal beside a narrower binding in an operator keeps its default
+    // and the narrower side widens (§ Mixed-width operands).
+    let mut h = 2166136261;
+    let byte: u8 = 97;
+    h = (h ^ byte) * 16777619 & 4294967295;
+    println(h);
+}
