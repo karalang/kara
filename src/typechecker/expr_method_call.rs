@@ -856,10 +856,18 @@ impl<'a> super::TypeChecker<'a> {
             if self.library_methods_from_source {
                 let key = SpanKey::from_span(span);
                 if let Some((node, _)) = self.current_call_node.filter(|(_, k)| *k == key) {
+                    let scope = match receiver {
+                        Type::Existential { scope, .. } => scope
+                            .iter()
+                            .map(|(n, t)| (n.clone(), self.resolved_now(t)))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     self.pending_existential_method_callees.push((
                         node,
                         method.to_string(),
                         origin,
+                        scope,
                     ));
                 }
             }
@@ -2726,7 +2734,7 @@ impl<'a> super::TypeChecker<'a> {
         // stdlib dispatch (design.md § StringSlice). No impl block exists for
         // it, so unlike `ref String` the derefed form routes here too.
         if matches!(&obj_ty_for_named, Type::Named { name, .. } if name == "StringSlice") {
-            return self.infer_str_method(method, args, span);
+            return self.infer_str_view_method(method, args, span);
         }
 
         // `to_string()` on a Display-able collection (`Vec`/`VecDeque`/`Map`/

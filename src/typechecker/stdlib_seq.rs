@@ -34,6 +34,11 @@ pub(super) fn is_str_like(ty: &Type) -> bool {
     }
 }
 
+/// `String`'s building methods (docs/library/strings.md § Building: `String`
+/// only), which a `Str` view does not have (B-2026-11-06-31).
+const STRING_BUILDING_METHODS: &[&str] = &[
+    "clear", "extend", "pop", "push", "push_str", "reserve", "truncate",
+];
 impl<'a> super::TypeChecker<'a> {
     /// Validate a `sort_by` / `sorted_by` comparator argument against the
     /// `Fn(elem, elem) -> Ordering` shape. Pushes the expected function
@@ -132,6 +137,46 @@ impl<'a> super::TypeChecker<'a> {
     /// Infer the return type of a method call on `String` (`Type::Str`).
     /// Called from `infer_method_call` when the object type is `Type::Str`.
     pub(super) fn infer_str_method(&mut self, method: &str, args: &[CallArg], span: &Span) -> Type {
+        self.infer_text_method("String", method, args, span)
+    }
+
+    /// A building method (docs/library/strings.md § Building: `String`
+    /// only) called on a `Str` view: refused, with the conversion that gives
+    /// an owned `String` to build on (B-2026-11-06-31). Every backend has
+    /// only `String`'s, so check is where this has to stop.
+    pub(super) fn infer_str_view_method(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        if STRING_BUILDING_METHODS.contains(&method) {
+            self.type_error(
+                format!(
+                    "no method '{method}' on type 'Str': a `Str` is a read-only view, and \
+                     `{method}` is one of `String`'s building methods; call `.to_string()` \
+                     first for an owned `String` (library/strings.md)"
+                ),
+                *span,
+                TypeErrorKind::NoMethodFound,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        self.infer_text_method("Str", method, args, span)
+    }
+
+    /// The shared `String` / `Str` method surface; `type_name` is the
+    /// receiver as an unknown-method diagnostic names it.
+    fn infer_text_method(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
         match method {
             // `s.as_str()`: the whole string as a `Str` view
             // (docs/library/strings.md).
@@ -1001,7 +1046,7 @@ impl<'a> super::TypeChecker<'a> {
             // The candidates are every name this match answers
             // (B-2026-10-19-3: `s.trimm()` named no `trim`).
             _ => self.require_known_method(
-                "String",
+                type_name,
                 method,
                 super::expr_method_call::STRING_BUILTIN_METHODS,
                 args,

@@ -1,0 +1,19 @@
+// docs/library/strings.md: a `Str` reads; the `String` that `.to_string()`
+// gives builds (B-2026-11-06-31).
+fn greet(name: Str) -> String {
+    let mut s = name.to_string();
+    s.push_str("!");
+    s.push('?');
+    let last = s.pop();
+    s.truncate(s.len() - 1);
+    s.reserve(4);
+    s.push_str(" ok");
+    println(last.unwrap().to_string());
+    s
+}
+
+fn main() {
+    let v: Str = "kara";
+    println(greet(v));
+    println(v.len().to_string());
+}

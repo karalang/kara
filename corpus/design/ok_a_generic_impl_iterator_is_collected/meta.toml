@@ -1,0 +1,9 @@
+source = "B-2026-11-06-26"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "impl-trait"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §9 Return-position impl Trait: one concrete witness per instance, so a generic function's impl Iterator is collected, summed and counted at the caller's type arguments; collect had no callee because the witness was read over the callee's own T."

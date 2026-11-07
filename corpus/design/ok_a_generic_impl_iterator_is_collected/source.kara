@@ -1,0 +1,33 @@
+// design.md §9 Return-position impl Trait: the existential is erased after
+// type checking, one concrete witness per instance, so a generic function's
+// `impl Iterator[Item = T]` is consumed like a non-generic one
+// (B-2026-11-06-26).
+fn evs[T](xs: own Vec[T]) -> impl Iterator[Item = T] {
+    xs.into_iter().step_by(2)
+}
+
+fn doubled[T: Copy](xs: own Vec[T]) -> impl Iterator[Item = (T, T)] {
+    xs.into_iter().map(|x| (x, x))
+}
+
+fn outer[U](xs: own Vec[U]) -> Vec[U] {
+    evs(xs).collect()
+}
+
+fn main() {
+    let w: Vec[String] = evs(["a".to_string(), "b".to_string(), "c".to_string()]).collect();
+    println(w.join(","));
+    let v: Vec[i64] = [1, 2, 3, 4, 5];
+    let it = evs(v);
+    let n: Vec[i64] = it.collect();
+    println(n.len().to_string());
+    let total: i64 = evs([10, 20, 30]).sum();
+    println(total.to_string());
+    let p: Vec[(f64, f64)] = doubled([1.5, 2.5]).collect();
+    println(p.len().to_string());
+    println(p[1].0.to_string());
+    let c = evs([true, false, true]).count();
+    println(c.to_string());
+    let o: Vec[String] = outer(["x".to_string(), "y".to_string(), "z".to_string()]);
+    println(o.join(""));
+}

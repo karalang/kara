@@ -1,0 +1,9 @@
+source = "B-2026-11-06-31"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/strings.md: the String that .to_string() gives has every building method; the Str it came from is unchanged."

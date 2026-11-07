@@ -21,6 +21,12 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Programs 0.8.0 accepted that are now refused
 
+- **A `String` building method on a `Str`.** `push_str`, `push`, `extend`,
+  `clear`, `pop`, `truncate` and `reserve` on a `Str` view (a parameter, a
+  literal, a slice) passed `karac check` and then failed on every backend
+  with an internal error. They are refused at check with a hint to call
+  `.to_string()` for an owned `String` first, as docs/library/strings.md
+  says (B-2026-11-06-31).
 - **A type nothing in the body fixes.** `let v = Vec.new();` used only for
   `v.len()`, a channel whose element type nothing names, and a closure whose
   parameter is never typed (`let f = |x| x;` never called) are refused at the
@@ -174,6 +180,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Wrong behaviour fixed
 
+- **A generic function's `impl Iterator` collects.** `fn evs[T](xs: own
+  Vec[T]) -> impl Iterator[Item = T]` then `evs(v).collect()` failed with
+  "the method call `.collect` with no resolved callee is not lowered yet"
+  on every backend; `count` worked. The witness is now read at the caller's
+  type arguments (B-2026-11-06-26).
 - **A named constant in a pattern compares against its value.** With
   `const LIMIT: i64 = 3`, `match x { LIMIT => .., _ => .. }` bound a new
   `LIMIT` and took that arm for every `x`, on every backend; so did

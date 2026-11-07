@@ -1,0 +1,9 @@
+source = "B-2026-11-06-31"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/strings.md: building methods (push, push_str, extend, clear, pop, truncate, reserve) are `String` only and a `Str` is a borrowed view, so each is refused on a `Str` at check; every backend had only String's and refused with an internal error. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -3128,7 +3128,11 @@ pub struct TypeChecker<'a> {
     /// MIR pipeline: `(call, method, origin)`. The typed HIR calls the
     /// witness's own method, which is known once every body is walked
     /// (B-2026-10-20-35).
-    pub(super) pending_existential_method_callees: Vec<(crate::ids::NodeId, String, SpanKey)>,
+    /// The fourth part is the receiver's `scope`: what each generic name the
+    /// witness is written over stands for at this use (B-2026-11-06-26).
+    #[allow(clippy::type_complexity)]
+    pub(super) pending_existential_method_callees:
+        Vec<(crate::ids::NodeId, String, SpanKey, Vec<(String, Type)>)>,
     /// Origins that saw two or more DISTINCT witnesses across the program and
     /// so must never be rewritten. Tracked separately from the map above
     /// because a later single-witness function must not resurrect an origin an
@@ -4491,10 +4495,22 @@ impl<'a> TypeChecker<'a> {
                 self.node_types.insert(node, (ty, frame));
             }
         }
-        for (node, method, origin) in std::mem::take(&mut self.pending_existential_method_callees) {
+        for (node, method, origin, scope) in
+            std::mem::take(&mut self.pending_existential_method_callees)
+        {
             let Some(witness) = self.impl_trait_return_witnesses.get(&origin).cloned() else {
                 continue;
             };
+            // The witness is written over the defining function's generics
+            // (`VecIntoIter[T]` for `fn evs[T](..) -> impl Iterator[Item = T]`);
+            // the callee's receiver substitutions are the caller's, so read it
+            // at this use's arguments, as its type lowers (B-2026-11-06-26).
+            let at_use: std::collections::HashMap<String, SubstValue> = scope
+                .iter()
+                .filter(|(n, t)| !matches!(t, Type::TypeParam(p) if p == n))
+                .map(|(n, t)| (n.clone(), SubstValue::Type(t.clone())))
+                .collect();
+            let witness = inference::substitute_type_params(&witness, &at_use);
             // An inherent library method names its owner; a trait method
             // (`sum`, `map`, a provided body) is keyed on the witness type,
             // as the same call on a concretely typed receiver is.
