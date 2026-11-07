@@ -2848,6 +2848,8 @@ impl<'a> super::TypeChecker<'a> {
             self.check_unsolved_call_results(&f.body, &gp, errors_before_body);
         }
         self.offer_iter_let_fixes();
+        self.offer_for_into_iter_fixes(f);
+        self.offer_ref_list_annotations(f, errors_before_body);
         self.iter_lets = saved_iter_lets;
         self.explain_str_lit_lets();
         self.str_lit_lets = saved_str_lit_lets;
@@ -8836,6 +8838,11 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             None
         };
+        if has_clone {
+            if let Some(at) = self.core_for_into_iter_fix(value) {
+                self.core_clone_or_into_iter.push((value.span, at));
+            }
+        }
         self.type_lint_warning_with_fix(
             message,
             value.span,
@@ -8856,6 +8863,95 @@ impl<'a> super::TypeChecker<'a> {
         };
         let (at, depth) = *self.core_for_into_iter.get(n.as_str())?;
         (self.local_scope.depth_of(n) == Some(depth) && self.local_scope.is_view(n)).then_some(at)
+    }
+
+    /// B-2026-11-07-30: a move out of a bare `for` element over an owned
+    /// collection gets `.into_iter()` on the loop rather than a `.clone()`
+    /// of the element when nothing uses the collection after the loop and no
+    /// loop or closure around it would reach the loop again with the
+    /// collection already consumed.
+    fn offer_for_into_iter_fixes(&mut self, f: &Function) {
+        let sites = std::mem::take(&mut self.core_clone_or_into_iter);
+        let loops = std::mem::take(&mut self.core_into_iter_loops);
+        for (span, at) in sites {
+            let Some((root, lp)) = loops.get(&at.offset) else {
+                continue;
+            };
+            if let Some((root, field)) = root {
+                if !consumable_after(&f.body, root, field.as_deref(), lp) {
+                    continue;
+                }
+            }
+            for e in self.errors.iter_mut().chain(self.warnings.iter_mut()) {
+                if e.span != span
+                    || e.lint_name.as_deref() != Some("borrow_projection_copy")
+                    || !e
+                        .fix_it
+                        .as_ref()
+                        .is_some_and(|x| x.replacement == ".clone()")
+                {
+                    continue;
+                }
+                e.message = e.message.replace(
+                    ". Write `.clone()` to take a copy, or keep using it in place",
+                    ". The collection is not used after the loop, so the fix iterates it \
+                     with `.into_iter()`",
+                );
+                e.fix_it = Some(crate::typechecker::FixIt {
+                    span: at,
+                    replacement: ".into_iter()".to_string(),
+                });
+            }
+        }
+    }
+
+    /// B-2026-11-07-31: an unannotated `let x = [k];` whose elements are
+    /// `ref`s to a `Copy` value is a `Vec[ref T]`, refused where a `Vec[T]`
+    /// is wanted. Annotating the `let` reads each `ref` as its value
+    /// (B-2026-10-22-6), so that is the fix on the refusal at a use of `x`.
+    fn offer_ref_list_annotations(&mut self, f: &Function, from: usize) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let mut lets: Vec<(String, Span, usize)> = Vec::new();
+        let mut idents: Vec<(Span, String)> = Vec::new();
+        list_lets(&f.body, &mut lets, &mut idents);
+        for e in self.errors.iter_mut().skip(from) {
+            if e.kind != TypeErrorKind::TypeMismatch || e.fix_it.is_some() {
+                continue;
+            }
+            let (Some(want), Some(got)) = (&e.expected, &e.got) else {
+                continue;
+            };
+            let Some(inner) = want.strip_prefix("Vec[") else {
+                continue;
+            };
+            if *got != format!("Vec[ref {inner}") {
+                continue;
+            }
+            let Some((_, name)) = idents.iter().find(|(sp, _)| *sp == e.span) else {
+                continue;
+            };
+            let Some((_, at, _)) = lets
+                .iter()
+                .filter(|(n, _, o)| n == name && *o < e.span.offset)
+                .max_by_key(|(_, _, o)| *o)
+            else {
+                continue;
+            };
+            e.message += &format!(
+                ". `{name}` is a list of borrows of its elements: the fix annotates it \
+                 `{name}: {want}`, which reads each one as its value"
+            );
+            e.fix_it = Some(crate::typechecker::FixIt {
+                span: Span {
+                    offset: at.offset + at.length,
+                    length: 0,
+                    ..*at
+                },
+                replacement: format!(": {want}"),
+            });
+        }
     }
 
     /// B-2026-09-27-69 follow-up, decided by the project owner: moving a bare
@@ -12014,4 +12110,148 @@ fn derive_backers(items: &[Item]) -> HashSet<String> {
         });
     }
     out
+}
+
+/// Whether `.into_iter()` may consume `root` (or its field `field`, when
+/// the loop iterates one) at the loop spanning `lp` in `body`: no use of it
+/// that the loop can reach afterwards, and no loop or closure around the
+/// loop that began before `root` was declared (a parameter is declared
+/// before everything), which would reach the loop again (B-2026-11-07-30).
+/// A use of another field of `root` is no use of `field`, and a use past
+/// the end of a block that holds the loop and ends in `return` is not
+/// reached from it.
+fn consumable_after(body: &Block, root: &str, field: Option<&str>, lp: &Span) -> bool {
+    use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
+    struct Scan<'a> {
+        root: &'a str,
+        field: Option<&'a str>,
+        lp: (usize, usize),
+        declared: usize,
+        later: Vec<usize>,
+        reach: usize,
+        around: Vec<usize>,
+    }
+    fn returns(e: &Expr) -> bool {
+        matches!(e.kind, ExprKind::Return(_))
+    }
+    fn block(b: &Block, s: &mut Scan<'_>) {
+        let end = b.span.offset + b.span.length;
+        let ends_in_return = match (&b.final_expr, b.stmts.last()) {
+            (Some(e), _) => returns(e),
+            (None, Some(stmt)) => matches!(&stmt.kind, StmtKind::Expr(e) if returns(e)),
+            (None, None) => false,
+        };
+        if ends_in_return && b.span.offset <= s.lp.0 && end >= s.lp.1 {
+            s.reach = s.reach.min(end);
+        }
+        for stmt in &b.stmts {
+            if let StmtKind::Let { pattern, .. } = &stmt.kind {
+                if stmt.span.offset < s.lp.0 && pattern.binding_names().iter().any(|n| n == s.root)
+                {
+                    s.declared = s.declared.max(stmt.span.offset);
+                }
+            }
+        }
+        for_each_block_child(b, &mut |ch| child(ch, s));
+    }
+    fn child(ch: Child<'_>, s: &mut Scan<'_>) {
+        let e = match ch {
+            Child::Block(b) => return block(b, s),
+            Child::Expr(e) => e,
+        };
+        let (start, end) = (e.span.offset, e.span.offset + e.span.length);
+        // A loop or `match` around the loop whose pattern binds `root`
+        // declares it afresh each time round.
+        let binds = match &e.kind {
+            ExprKind::For { pattern, .. } | ExprKind::WhileLet { pattern, .. } => {
+                pattern.binding_names().iter().any(|n| n == s.root)
+            }
+            ExprKind::Match { arms, .. } => arms.iter().any(|arm| {
+                arm.span.offset <= s.lp.0
+                    && arm.span.offset + arm.span.length >= s.lp.1
+                    && arm.pattern.binding_names().iter().any(|n| n == s.root)
+            }),
+            _ => false,
+        };
+        if binds && start < s.lp.0 && end >= s.lp.1 {
+            s.declared = s.declared.max(start + 1);
+        }
+        match &e.kind {
+            ExprKind::FieldAccess { object, field }
+                if matches!(&object.kind, ExprKind::Identifier(n) if n == s.root)
+                    && s.field.is_some_and(|f| f != field) =>
+            {
+                return;
+            }
+            ExprKind::Identifier(n) if n == s.root && start >= s.lp.1 => s.later.push(start),
+            ExprKind::For { .. }
+            | ExprKind::While { .. }
+            | ExprKind::WhileLet { .. }
+            | ExprKind::Loop { .. }
+            | ExprKind::Closure { .. }
+                if start < s.lp.0 && end >= s.lp.1 =>
+            {
+                s.around.push(start)
+            }
+            _ => {}
+        }
+        for_each_child_public(e, &mut |ch| child(ch, s));
+    }
+    let mut s = Scan {
+        root,
+        field,
+        lp: (lp.offset, lp.offset + lp.length),
+        declared: 0,
+        later: Vec::new(),
+        reach: usize::MAX,
+        around: Vec::new(),
+    };
+    block(body, &mut s);
+    s.later.iter().all(|&u| u >= s.reach) && s.around.iter().all(|&a| s.declared > a)
+}
+
+/// Each un-annotated `let name = [..];` in `body` (its name, the name's span
+/// and the statement's offset), and every identifier, for
+/// [`TypeChecker::offer_ref_list_annotations`].
+fn list_lets(
+    body: &Block,
+    lets: &mut Vec<(String, Span, usize)>,
+    idents: &mut Vec<(Span, String)>,
+) {
+    use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
+    fn block(b: &Block, lets: &mut Vec<(String, Span, usize)>, idents: &mut Vec<(Span, String)>) {
+        for stmt in &b.stmts {
+            if let StmtKind::Let {
+                pattern,
+                ty: None,
+                value,
+                ..
+            } = &stmt.kind
+            {
+                if let (PatternKind::Binding(n), ExprKind::ArrayLiteral(items)) =
+                    (&pattern.kind, &value.kind)
+                {
+                    if !items.is_empty() {
+                        lets.push((n.clone(), pattern.span, stmt.span.offset));
+                    }
+                }
+            }
+        }
+        for_each_block_child(b, &mut |ch| child(ch, lets, idents));
+    }
+    fn child(
+        ch: Child<'_>,
+        lets: &mut Vec<(String, Span, usize)>,
+        idents: &mut Vec<(Span, String)>,
+    ) {
+        let e = match ch {
+            Child::Block(b) => return block(b, lets, idents),
+            Child::Expr(e) => e,
+        };
+        if let ExprKind::Identifier(n) = &e.kind {
+            idents.push((e.span, n.clone()));
+        }
+        for_each_child_public(e, &mut |ch| child(ch, lets, idents));
+    }
+    block(body, lets, idents);
 }

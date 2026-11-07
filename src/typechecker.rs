@@ -2974,6 +2974,18 @@ pub struct TypeChecker<'a> {
     /// The depth is the loop's scope, so a shadowing binding of the same
     /// name is not mistaken for the element.
     pub(super) core_for_into_iter: FxHashMap<String, (Span, usize)>,
+    /// Each loop an entry of [`Self::core_for_into_iter`] points into, by the
+    /// offset of its `.into_iter()` site: the variable its iterable hangs
+    /// off and the field of it the iterable starts with (`None` for a
+    /// temporary), and the loop's span (B-2026-11-07-30).
+    #[allow(clippy::type_complexity)]
+    pub(super) core_into_iter_loops: FxHashMap<usize, (Option<(String, Option<String>)>, Span)>,
+    /// A move out of a bare `for` element given the `.clone()` fix where
+    /// `.into_iter()` on the loop's iterable would avoid the copy: the
+    /// move's span and the `.into_iter()` site. Settled at the end of the
+    /// function, once its later uses of the collection are known
+    /// (B-2026-11-07-30).
+    pub(super) core_clone_or_into_iter: Vec<(Span, Span)>,
     /// Every call under the strict commands: its node, its span, and the
     /// callee's name when it is a plain free-function call.
     pub(super) core_call_sites: Vec<(crate::ids::NodeId, Span, Option<String>)>,
@@ -4072,6 +4084,8 @@ impl<'a> TypeChecker<'a> {
             current_fn_core_key: None,
             core_let_ref_fix: false,
             core_for_into_iter: FxHashMap::default(),
+            core_into_iter_loops: FxHashMap::default(),
+            core_clone_or_into_iter: Vec::new(),
             core_call_sites: Vec::new(),
             core_pattern_moves: Vec::new(),
             errors: Vec::new(),

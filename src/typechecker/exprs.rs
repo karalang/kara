@@ -11844,6 +11844,23 @@ impl<'a> super::TypeChecker<'a> {
                         length: 0,
                         ..iterable.span
                     };
+                    let mut root = &**iterable;
+                    let mut field = None;
+                    while let ExprKind::FieldAccess { object, .. }
+                    | ExprKind::TupleIndex { object, .. } = &root.kind
+                    {
+                        field = match &root.kind {
+                            ExprKind::FieldAccess { field, .. } => Some(field.clone()),
+                            _ => None,
+                        };
+                        root = object;
+                    }
+                    let root = match &root.kind {
+                        ExprKind::Identifier(n) => Some((n.clone(), field)),
+                        _ => None,
+                    };
+                    self.core_into_iter_loops
+                        .insert(at.offset, (root, expr.span));
                     (at, self.local_scope.depth())
                 })
                 .or_else(|| {

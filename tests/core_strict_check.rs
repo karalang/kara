@@ -593,14 +593,17 @@ fn a_map_get_payload_is_a_reference() {
 
 #[test]
 fn a_for_over_a_temporary_collection_binds_refs() {
-    rejected_then_fixed(
+    // A temporary nobody else can reuse is consumed by `.into_iter()`
+    // rather than copied element by element (B-2026-11-07-30).
+    rejected_then_fixed_by(
         "for-temp",
         "fn mk() -> Vec[String] { [\"a\".to_string()] }\n\
          fn take(s: own String) -> i64 { s.len() }\n\
          fn main() { for s in mk() { println(take(s)); } }\n",
         "cannot move 's'",
+        "for s in mk().into_iter()",
     );
-    rejected_then_fixed(
+    rejected_then_fixed_by(
         "for-map-pair",
         "fn take(s: own String) -> i64 { s.len() }\n\
          fn main() {\n\
@@ -609,6 +612,7 @@ fn a_for_over_a_temporary_collection_binds_refs() {
              for (k, v) in m { println(take(v) + k); }\n\
          }\n",
         "cannot move 'v'",
+        "for (k, v) in m.into_iter()",
     );
     accepted(
         "for-into-iter",
