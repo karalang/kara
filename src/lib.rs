@@ -1229,8 +1229,51 @@ pub struct HoverInfo {
 /// that type-checked even if other parts error — `run_static_checks` collects
 /// typecheck errors but keeps going, so `expr_types` is populated regardless.
 pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
-    let (resolved, typed, effects) = analyze_for_hover(source)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let nav = cli::editor_nav::analyze(source)?;
+        // A method's name: its declaration and effects, not the call's
+        // type; a binding's own name: the binding's type (B-2026-11-07-45).
+        if let Some(m) = nav.member_at(byte_offset) {
+            if let Some((key, Some(header))) = &m.method {
+                return Some(HoverInfo {
+                    type_display: header.clone(),
+                    effect_signature: Some(effect_signature_display(key, nav.effects())),
+                    effect_signature_grouped: Some(effect_signature_display_grouped(
+                        key,
+                        nav.effects(),
+                    )),
+                    span_offset: m.name_offset,
+                    span_length: m.name_length,
+                });
+            }
+        }
+        if let Some((ty, offset, length)) = nav.binding_at(byte_offset) {
+            return Some(HoverInfo {
+                type_display: crate::typechecker::types::type_display(ty),
+                effect_signature: None,
+                effect_signature_grouped: None,
+                span_offset: offset,
+                span_length: length,
+            });
+        }
+        hover_from_tables(nav.resolved(), nav.typed(), nav.effects(), byte_offset)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (resolved, typed, effects) = analyze_for_hover(source)?;
+        hover_from_tables(&resolved, &typed, &effects, byte_offset)
+    }
+}
 
+/// [`hover_at`] over the type and resolution tables: the innermost typed
+/// expression at `byte_offset`.
+fn hover_from_tables(
+    resolved: &ResolveResult,
+    typed: &TypeCheckResult,
+    effects: &EffectCheckResult,
+    byte_offset: usize,
+) -> Option<HoverInfo> {
     // `expr_types` is keyed by `SpanKey(offset, length)` — one entry per unique
     // span (a `MethodCall` shares its receiver's span and overwrites it with the
     // result type, so there is no ambiguity from equal spans). Pick the smallest
@@ -1246,15 +1289,15 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
         }
     }
     let (span_offset, span_length, ty) = best?;
-    let fn_name = hovered_function_name(byte_offset, &resolved);
+    let fn_name = hovered_function_name(byte_offset, resolved);
     Some(HoverInfo {
         type_display: crate::typechecker::types::type_display(ty),
         effect_signature: fn_name
             .as_deref()
-            .map(|n| effect_signature_display(n, &effects)),
+            .map(|n| effect_signature_display(n, effects)),
         effect_signature_grouped: fn_name
             .as_deref()
-            .map(|n| effect_signature_display_grouped(n, &effects)),
+            .map(|n| effect_signature_display_grouped(n, effects)),
         span_offset,
         span_length,
     })
@@ -1445,6 +1488,65 @@ pub struct DefLocation {
 /// source location (a synthetic zero-length span). Single-document today: the
 /// definition is in the same `source`.
 pub fn goto_definition(source: &str, byte_offset: usize) -> Option<DefLocation> {
+    match goto_definition_site(source, byte_offset)? {
+        DefSite::Buffer(loc) => Some(loc),
+        DefSite::Library { .. } => None,
+    }
+}
+
+/// Where a definition is: in the buffer, or in a file of the Kāra library,
+/// whose text the editor shows when it opens it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefSite {
+    Buffer(DefLocation),
+    Library {
+        /// The library file, `source/iter.kara`.
+        file: &'static str,
+        /// Its text.
+        text: &'static str,
+        span_offset: usize,
+        span_length: usize,
+    },
+}
+
+/// [`goto_definition`], and also a method call's or field access's name,
+/// which the typechecker resolves, including a library method's, whose
+/// definition is in the library source (B-2026-11-07-45).
+pub fn goto_definition_site(source: &str, byte_offset: usize) -> Option<DefSite> {
+    if let Some(loc) = resolver_definition(source, byte_offset) {
+        return Some(DefSite::Buffer(loc));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let nav = cli::editor_nav::analyze(source)?;
+        match nav.member_at(byte_offset)?.def? {
+            cli::editor_nav::NavSite::Buffer { offset, length } => {
+                Some(DefSite::Buffer(DefLocation {
+                    span_offset: offset,
+                    span_length: length,
+                }))
+            }
+            cli::editor_nav::NavSite::Library {
+                file,
+                text,
+                offset,
+                length,
+            } => Some(DefSite::Library {
+                file,
+                text,
+                span_offset: offset,
+                span_length: length,
+            }),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// A name the resolver binds: a local, parameter, function or type.
+fn resolver_definition(source: &str, byte_offset: usize) -> Option<DefLocation> {
     let (_program, resolved) = resolve_source(source)?;
 
     let mut best: Option<(usize, crate::resolver::SymbolId)> = None;

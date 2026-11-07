@@ -162,17 +162,66 @@ pub fn render_crash_report(json_text: &str) -> Result<String, String> {
 /// (not a resolved reference, or a prelude/builtin with no source location).
 /// `catch_unwind`-guarded like [`diagnostics`].
 pub fn definition(text: &str, position: Position) -> Option<Range> {
+    match definition_site(text, position)? {
+        (None, range) => Some(range),
+        (Some(_), _) => None,
+    }
+}
+
+/// [`definition`], and also a method's or field's name (B-2026-11-07-45). A
+/// definition in the Kāra library comes with the URI of a read-only copy of
+/// its library file, written under the system temp directory once per
+/// compiler version; `None` means the same document.
+pub fn definition_site(text: &str, position: Position) -> Option<(Option<Uri>, Range)> {
     let index = LineIndex::new(text);
     let offset = index.offset(position);
-    let def =
-        match std::panic::catch_unwind(AssertUnwindSafe(|| karac::goto_definition(text, offset))) {
-            Ok(def) => def?,
-            Err(_) => {
-                eprintln!("kara-lsp: definition analysis panicked; returning no definition");
-                return None;
-            }
-        };
-    Some(index.range(def.span_offset, def.span_length))
+    let def = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        karac::goto_definition_site(text, offset)
+    })) {
+        Ok(def) => def?,
+        Err(_) => {
+            eprintln!("kara-lsp: definition analysis panicked; returning no definition");
+            return None;
+        }
+    };
+    match def {
+        karac::DefSite::Buffer(def) => Some((None, index.range(def.span_offset, def.span_length))),
+        karac::DefSite::Library {
+            file,
+            text: lib,
+            span_offset,
+            span_length,
+        } => {
+            let uri = library_file_uri(file, lib)?;
+            Some((
+                Some(uri),
+                LineIndex::new(lib).range(span_offset, span_length),
+            ))
+        }
+    }
+}
+
+/// A `file:` URI for a copy of library file `file` holding `text`, written
+/// if it is missing or stale.
+fn library_file_uri(file: &str, text: &str) -> Option<Uri> {
+    let dir = std::env::temp_dir().join(format!("kara-library-{}", env!("CARGO_PKG_VERSION")));
+    let path = dir.join(file);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        std::fs::write(&path, text).ok()?;
+    }
+    let mut uri = String::from("file://");
+    for b in path.to_str()?.replace('\\', "/").bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~:".contains(&b) {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    if !uri.starts_with("file:///") {
+        uri.insert(7, '/');
+    }
+    uri.parse().ok()
 }
 
 /// Find every reference to the symbol under `position` (all use-sites that
@@ -995,5 +1044,55 @@ mod tests {
             !titles.iter().any(|t| t.ends_with("`expect(\"…\")`")),
             "{titles:?}"
         );
+    }
+    /// Go-to-definition reaches the names the typechecker resolves: a method
+    /// call's, a field access's (`self.name` too) and a library method's;
+    /// hover on a `let` binding's own name gives its type, and on a method's
+    /// name its declaration (B-2026-11-07-45).
+    #[test]
+    fn definition_and_hover_reach_members_and_bindings() {
+        let src = "struct User { name: String, age: i64 }\n\nimpl User {\n    fn greet(self) -> String {\n        f\"hi {self.name}\"\n    }\n}\n\nfn total(xs: Vec[i64]) -> i64 {\n    xs.iter().sum()\n}\n\nfn main() {\n    let v = [1, 2, 3].to_vec();\n    let u = User { name: \"a\".to_string(), age: 3 };\n    let t = total(v);\n    println(u.greet());\n    println(f\"{u.age + t}\");\n}\n";
+        let idx = LineIndex::new(src);
+        let at = |needle: &str, nth_from_end: bool| {
+            let o = if nth_from_end {
+                src.rfind(needle)
+            } else {
+                src.find(needle)
+            };
+            idx.position(o.unwrap())
+        };
+        let same_doc = |pos| match definition_site(src, pos) {
+            Some((None, r)) => r,
+            other => panic!("expected a definition in the buffer, got {other:?}"),
+        };
+        // `greet` in `u.greet()` -> `fn greet` on line 3.
+        let r = same_doc(at("greet()", true));
+        assert_eq!((r.start.line, r.start.character), (3, 7));
+        // `age` in `u.age` -> the field on line 0.
+        let r = same_doc(at("age + t", true));
+        assert_eq!((r.start.line, r.start.character), (0, 28));
+        // `name` in `self.name` -> the field on line 0.
+        let self_name = src.find("self.name").unwrap() + "self.".len();
+        let r = same_doc(idx.position(self_name));
+        assert_eq!((r.start.line, r.start.character), (0, 14));
+        // `iter` in `xs.iter()` -> a library file.
+        match definition_site(src, at("iter()", false)) {
+            Some((Some(uri), _)) => {
+                let path = file_path(&uri).expect("a file URI");
+                let text = std::fs::read_to_string(&path).expect("library copy written");
+                assert!(text.contains("fn iter"), "{path:?}");
+            }
+            other => panic!("expected a library definition, got {other:?}"),
+        }
+        let show = |pos| match hover(src, pos).map(|h| h.contents) {
+            Some(HoverContents::Markup(m)) => m.value,
+            other => panic!("expected markup, got {other:?}"),
+        };
+        // `t` in `let t = total(v);` -> `i64`.
+        let let_t = src.find("let t").unwrap() + "let ".len();
+        assert!(show(idx.position(let_t)).contains("i64"));
+        // `greet` -> its declaration, not the call's `String`.
+        let h = show(at("greet()", true));
+        assert!(h.contains("fn greet(self) -> String"), "{h}");
     }
 }

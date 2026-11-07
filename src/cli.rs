@@ -30,6 +30,7 @@ mod build_cmds;
 mod build_v2;
 mod diag_json;
 pub(crate) mod editor;
+pub(crate) mod editor_nav;
 pub mod explain;
 mod explain_item;
 mod fix_cmds;

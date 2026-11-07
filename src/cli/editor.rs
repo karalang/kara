@@ -17,7 +17,7 @@ use crate::{PlaygroundDiagnostic, SourceFix};
 /// the JSON records, which are read back below for their text.
 const BUFFER: &str = "main.kara";
 
-fn checked(source: &str) -> Pipeline {
+pub(super) fn checked(source: &str) -> Pipeline {
     let mut pipeline = Pipeline::new(BUFFER, source).strict_core().with_library();
     pipeline.run_all_checks();
     pipeline

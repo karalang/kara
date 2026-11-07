@@ -185,9 +185,9 @@ fn handle_request(
                     let pos = p.text_document_position_params.position;
                     let uri = p.text_document_position_params.text_document.uri;
                     let resp = docs.get(&uri.to_string()).and_then(|text| {
-                        analysis::definition(text, pos).map(|range| {
+                        analysis::definition_site(text, pos).map(|(at, range)| {
                             GotoDefinitionResponse::Scalar(Location {
-                                uri: uri.clone(),
+                                uri: at.unwrap_or_else(|| uri.clone()),
                                 range,
                             })
                         })
