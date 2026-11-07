@@ -254,5 +254,5 @@ fn fix_it_help_text_renders_per_variant() {
         .contains("OnceLock"));
     assert!(CrossTaskUnsafeFixIt::RawPointer
         .help_text("*const u8")
-        .contains("Atomic"));
+        .contains("channel"));
 }

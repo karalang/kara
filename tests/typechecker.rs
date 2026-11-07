@@ -10412,8 +10412,8 @@ fn test_atomic_eligible_inner_types_typecheck() {
     // `i64`, `u32` and `u64` — all construct cleanly (B-2026-11-07-21).
     typecheck_ok("fn main() { let _a: Atomic[i64] = Atomic.new(0); }");
     typecheck_ok("fn main() { let _a = Atomic.new(0 as u32); }");
-    typecheck_ok("fn main() { let _a: Atomic[i32] = Atomic.new(0); }");
-    typecheck_ok("fn main() { let _a: Atomic[u64] = Atomic.new(0); }");
+    typecheck_ok("fn main() { let _a = Atomic.new(0i32); }");
+    typecheck_ok("fn main() { let _a = Atomic.new(0u64); }");
     typecheck_ok("fn main() { let _a = Atomic.new(0); }");
     typecheck_ok("fn main() { let _a: Atomic[bool] = Atomic.new(false); }");
 }
