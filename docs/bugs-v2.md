@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 151 |
 | false-positive | 128 |
-| perf | 106 |
+| perf | 107 |
 | missing-feature | 97 |
 | soundness | 51 |
 | miscompile | 39 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 240 |
-| mir-llvm | 128 |
+| mir-llvm | 129 |
 | mir | 128 |
 | cli | 71 |
 | ownership | 56 |
@@ -91,7 +91,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-07). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -99,7 +99,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
-| B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch; ATTRIBUTED: arm64 loop branched twice (ctpop over SimplifyCFG's phi-fold threshold), a723c25762 raises it 4 -> 6, M5 awaits a Mac re-run | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Katas 333 (1.19x) and 338 (1.17x) still execute over legacy's instructions on the M5 at eb17818b45 (LLVM 22), where 321, 337, 339 and 343 are within; both gaps are larger than x86's (1.05x, 1.10x); 338's inclusive-range piece is Thread B's | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-05-27 | 2026-11-05 | mir-llvm | medium | x86 only, within on the M5: two kata benches run about 2x slower on LLVM 22 than on LLVM 18 on x86, min_stack (155) 951 ms vs 444 and hsearch (275) 1074 vs 526; Gowtham's M5 run at 7c63217740 reads 0.904x and 1.056x legacy's cycles; teemo, the third of B-2026-11-05-4, is fixed | — |
@@ -125,6 +124,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 2.5x Rust's `sort_by` in kata 1058's benchmark, where a plain `sort()` keeps pace | — |
 | B-2026-11-06-38 | 2026-11-06 | typecheck | medium | A `TaskGroup.spawn` closure whose `Result` error type only a later annotation fixes is refused at lowering when its handles are kept in a `Vec`: `let r: Result[i64, String] = h.join();`, the annotation `?`'s own diagnostic asks for, leaves `let mut hs = Vec.new()` as "an expression whose type does not lower (Type(UnknownParam(\"E\"))) is not lowered yet" | — |
 | B-2026-11-06-39 | 2026-11-06 | typecheck | low | A let-chain (`if let Some(s) = v and kind == "group" { .. }`, Rust's `if let .. && ..`) gets two unrelated errors ("logical operator requires 'bool', found 'Option[String]'" and a pattern-against-`bool` mismatch) and no word that Kāra has no let-chains or how to nest the `if` | — |
+| B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
 
 ### Relocated
 
@@ -670,6 +670,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-36 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also… | e5ccf4fc0c |
 | B-2026-11-04-40 | mir | medium | A trait's default method body calling `self.m()` is refused as ambiguous ("ambiguous method 'm' on receiver of type 'S'") in the copy for a type that… | d78c610976 |
 | B-2026-11-04-41 | mir-llvm | medium | Kata 344's two-pointer reverse stays scalar: LLVM 18's SCEV cannot count a loop whose bound moves (`while i < j { ...; i += 1; j -= 1 }`) and its dep… | 6dcdc1a604 |
+| B-2026-11-04-37 | mir-llvm | low | Kata 342 ran 1.20x legacy's instructions and 1.39x its cycles on the MIR backend; arm64 loop branched twice (ctpop over SimplifyCFG's phi-fold thresh… | a723c25762 |
 | B-2026-11-04-38 | mir-llvm | low | Kata 3629's seq peak RSS rose from 59.9 to 88.9 MiB on the MIR backend while Rust held at 60.1 MiB | d273d89f37 |
 | B-2026-11-04-42 | mir | medium | The MIR effect pass gives every call of an `extern` function every effect, ignoring its declaration: two `par` branches that each call a `pure fn` fr… | b8f73d1a3f |
 | B-2026-11-04-43 | resolver+parser | low | Rust's `Box.new(e)` (what `Box::new(e)` becomes) gets `undefined name 'Box', did you mean 'Hex'?` with no fix, though Kāra has no `Box` (design.md §… | a3e6d2fd30 |
