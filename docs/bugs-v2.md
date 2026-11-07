@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 151 |
 | false-positive | 128 |
 | perf | 107 |
-| missing-feature | 97 |
+| missing-feature | 98 |
 | soundness | 51 |
 | miscompile | 40 |
 | run-vs-build | 24 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 241 |
+| typecheck | 242 |
 | mir-llvm | 130 |
 | mir | 129 |
 | cli | 71 |
@@ -104,7 +104,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-27 | 2026-11-05 | mir-llvm | medium | x86 only, within on the M5: two kata benches run about 2x slower on LLVM 22 than on LLVM 18 on x86, min_stack (155) 951 ms vs 444 and hsearch (275) 1074 vs 526; Gowtham's M5 run at 7c63217740 reads 0.904x and 1.056x legacy's cycles; teemo, the third of B-2026-11-05-4, is fixed | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-06-8 | 2026-11-06 | mir-llvm | low | Kata 354 on arm64 still runs 1.36x rustc -O's cycles after d70e6d474a, though 0.954x legacy's and level with Rust on x86 | — |
-| B-2026-11-06-13 | 2026-11-06 | typecheck | medium | Numeric literals do not default last: a literal bound by `let` (directly or pushed into `Vec.new()`) is fixed at i64 before a later use can fix it, so design.md §8's own example (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused; `.collect()` passed straight to a generic `Vec[T]` parameter leaks `UnknownParam("T")` | — |
 | B-2026-11-06-14 | 2026-11-06 | typecheck | medium | Const generic parameters cannot be used as values or solved from the expected type: `N` in a body is `a type that failed to check is not lowered yet`, `[0; N]` is refused as a non-literal count, and `fn zeros[const N: i64]() -> Array[i64, N]` with `let a: Array[i64, 8] = zeros();` finds `Array[i64, N]` | — |
 | B-2026-11-06-15 | 2026-11-06 | typecheck | low | §8 roll-up: a `where` bound on a struct is never checked and an inline struct bound is not checked on an unannotated literal; `if c { 1i32 } else { 2i64 }` joins to i64 though §8's LUB has no rule for it; an unsolved `Vec.new()` used only for `.len()` and a never-called `|x| x` are accepted | — |
 | B-2026-11-06-17 | 2026-11-06 | mir+mir-llvm | medium | Const-generic functions pass `karac check` but do not compile: the instance is named `first[i64, ()]` (N instantiated as `()`), so `a.len()` / `a[0]` on `Array[T, N]` fail with `Array[i64, N] has no layout` (llvm) or `index into non-array Array[i64, N]` (MIR), and `for x in a` is `a for loop over a collection is not lowered yet` | — |
@@ -122,6 +121,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
 | B-2026-11-07-1 | 2026-11-07 | mir-llvm | low | Kata 7 runs 1.11x the cycles on arm64 at SimplifyCFG's phi-fold threshold 6 (a723c25762) than at 4: the rare `result == min_div and digit < -8` guard is now computed every digit | — |
 | B-2026-11-07-2 | 2026-11-07 | typecheck+mir+mir-llvm | high | A generic function passed as an `Fn` value is instanced with its type arguments unsolved: `apply(shout, [7], 1)` with `fn apply[U](g: Fn(own U, i64) -> i64, u: own U, n: i64)` builds `apply[()]` and `shout[()]`, which print a `Vec` as garbage under llvm; inside a generic body the item's `T` is taken for the caller's | — |
+| B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
 
 ### Relocated
 
@@ -761,6 +761,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-10 | typecheck | medium | `let H { xs, n } = h` on a `shared struct H` is refused with `struct pattern `H` used but type is `H``, though core semantics §4.6 lets a shared scru… | bd1c1521a1 |
 | B-2026-11-06-11 | typecheck | low | Remainder of B-2026-11-06-7: a later use still does not fix a call's return-only type parameter when the result is an `Option`/`Result` (`let mut bes… | 5f1222f497 |
 | B-2026-11-06-12 | typecheck+mir | high | Polymorphic recursion hangs the compiler: `fn deep[T: Display](x: own T, n: i64) -> i64 { . | d4c94d8b4b |
+| B-2026-11-06-13 | typecheck | medium | [Literal half split to B-2026-11-07-3; this row closed on shapes 5-6] Numeric literals do not default last: a literal bound by `let` (directly or pus… | 9bee6df335 |
 | B-2026-11-06-16 | typecheck+mir | high | A `const` in a pattern binds a fresh name instead of comparing against the constant: with `const LIMIT: i64 = 3`, `match x { LIMIT => .., _ => . | 473651262e |
 | B-2026-11-06-22 | resolver+typecheck+mir | medium | `#[target]` is not honoured on impl members, struct fields or enum variants: with `#[target(native)] fn f(self) -> i64 { 1 }` and `#[target(wasm_wasi… | e963bf0239 |
 | B-2026-11-06-23 | cli+typecheck | low | §4 roll-up: the spec's own `[build].target = "x86_64-linux"` makes `karac build` demand a runtime archive for that triple, `main_linux.kara` is ignor… | e963bf0239 |
