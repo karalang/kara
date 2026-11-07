@@ -2755,9 +2755,9 @@ unsafe fn merge_sort(
 /// every backend (B-2026-10-13-18).
 const MERGE_BLOCK: usize = 1024;
 
-/// The runs [`merge_widths`] insertion-sorts when it starts at width 1,
-/// as the interpreter's `INSERTION_RUN` and the emitted sort do.
-const INSERTION_RUN: usize = 16;
+/// The runs [`merge_widths`] sorts when it starts at width 1, as the
+/// interpreter's `SMALL_RUN` and the emitted sort do.
+const SMALL_RUN: usize = 4;
 
 /// The bottom-up merge of [`merge_sort`], between `buf` and one scratch
 /// buffer: widths 1, 2, 4, ..., the right element first only when
@@ -2804,9 +2804,10 @@ unsafe fn merge_passes<const N: usize>(
 
 /// The passes of widths `width`, `2 * width`, ... below `limit` over the
 /// `n` elements at `buf`, using `tmp` (room for `n`), ending in `buf`. A
-/// start at width 1 insertion-sorts runs of [`INSERTION_RUN`] in place
-/// instead of the narrowest passes (an element moves left past each it is
-/// strictly less than).
+/// start at width 1 first sorts each whole run of [`SMALL_RUN`] with the
+/// interpreter's `sort4` network (src/mir/interp.rs) and insertion-sorts
+/// a short last run; each merge runs from both ends at once, as
+/// `merge_pass` there does, with the same comparisons in the same order.
 ///
 /// # Safety
 /// `buf` and `tmp` hold `n` elements of `size` bytes and do not overlap.
@@ -2833,10 +2834,43 @@ unsafe fn merge_widths<const N: usize>(
         }
     };
     if width == 1 {
-        let mut x = LeanVec::<u8>::with_capacity(size);
-        for lo in (0..n).step_by(INSERTION_RUN) {
-            let hi = (lo + INSERTION_RUN).min(n);
-            for k in lo + 1..hi {
+        let mut lo = 0;
+        while lo + SMALL_RUN <= n {
+            let v = |k: usize| at(buf, lo + k) as *const u8;
+            let c1 = usize::from(cmp(v(1), v(0)) < 0);
+            let c2 = usize::from(cmp(v(3), v(2)) < 0);
+            let (a, b, c, d) = (c1, 1 - c1, 2 + c2, 3 - c2);
+            let c3 = cmp(v(c), v(a)) < 0;
+            let c4 = cmp(v(d), v(b)) < 0;
+            let min = if c3 { c } else { a };
+            let max = if c4 { b } else { d };
+            let left = if c3 {
+                a
+            } else if c4 {
+                c
+            } else {
+                b
+            };
+            let right = if c4 {
+                d
+            } else if c3 {
+                b
+            } else {
+                c
+            };
+            let c5 = cmp(v(right), v(left)) < 0;
+            let (l, h) = if c5 { (right, left) } else { (left, right) };
+            // Through `tmp`: the four go out in their order, then back.
+            for (k, from) in [min, l, h, max].into_iter().enumerate() {
+                put(at(tmp, lo + k), v(from));
+            }
+            // SAFETY: four whole elements of each buffer, in bounds.
+            unsafe { std::ptr::copy_nonoverlapping(at(tmp, lo), at(buf, lo), SMALL_RUN * size) };
+            lo += SMALL_RUN;
+        }
+        if lo + 1 < n {
+            let mut x = LeanVec::<u8>::with_capacity(size);
+            for k in lo + 1..n {
                 // SAFETY: indices below `n`; `x` holds one element.
                 unsafe {
                     let x = x.as_mut_ptr();
@@ -2850,33 +2884,47 @@ unsafe fn merge_widths<const N: usize>(
                 }
             }
         }
-        width = INSERTION_RUN;
+        width = SMALL_RUN;
     }
     while width < limit {
-        let mut k = 0;
         // A plain loop: `step_by` asserts a nonzero step, a Rust panic in
         // every binary that sorts (B-2026-11-04-31).
         let mut lo = 0;
         while lo < n {
             let mid = (lo + width).min(n);
             let hi = (lo + 2 * width).min(n);
-            let (mut i, mut j) = (lo, mid);
-            while i < mid && j < hi {
-                if cmp(at(src, j), at(src, i)) < 0 {
-                    put(at(dst, k), at(src, j));
-                    j += 1;
-                } else {
-                    put(at(dst, k), at(src, i));
-                    i += 1;
-                }
+            // Cursors at the front, and one past the back.
+            let (mut i, mut j, mut k) = (lo, mid, lo);
+            let (mut ie, mut je, mut ke) = (mid, hi, hi);
+            for _ in 0..(mid - lo).min(hi - mid) {
+                let right = cmp(at(src, j), at(src, i)) < 0;
+                put(at(dst, k), at(src, if right { j } else { i }));
+                j += usize::from(right);
+                i += usize::from(!right);
+                k += 1;
+                ke -= 1;
+                let left = cmp(at(src, je - 1), at(src, ie - 1)) < 0;
+                put(at(dst, ke), at(src, if left { ie - 1 } else { je - 1 }));
+                ie -= usize::from(left);
+                je -= usize::from(!left);
+            }
+            // Both ends took one element: merge the pair again from the
+            // front, so the result is a permutation.
+            if i > ie || j > je {
+                (i, j, k, ie, je) = (lo, mid, lo, mid, hi);
+            }
+            while i < ie && j < je {
+                let right = cmp(at(src, j), at(src, i)) < 0;
+                put(at(dst, k), at(src, if right { j } else { i }));
+                j += usize::from(right);
+                i += usize::from(!right);
                 k += 1;
             }
             // SAFETY: the rest of each run, whole elements in bounds.
             unsafe {
-                std::ptr::copy_nonoverlapping(at(src, i), at(dst, k), (mid - i) * size);
-                k += mid - i;
-                std::ptr::copy_nonoverlapping(at(src, j), at(dst, k), (hi - j) * size);
-                k += hi - j;
+                std::ptr::copy_nonoverlapping(at(src, i), at(dst, k), (ie - i) * size);
+                k += ie - i;
+                std::ptr::copy_nonoverlapping(at(src, j), at(dst, k), (je - j) * size);
             }
             lo = hi;
         }
@@ -5013,7 +5061,9 @@ mod tests {
     #[test]
     fn merge_sort_is_stable() {
         let mut rng = 99u64;
-        for n in [0usize, 1, 2, 3, 7, 16, 100, 1000] {
+        for n in [
+            0usize, 1, 2, 3, 4, 5, 7, 8, 9, 16, 17, 100, 1000, 1025, 3001,
+        ] {
             // (key, original position): 16 bytes, and 12 with the key
             // as an i32 pair padded to an odd size.
             let mut v16: Vec<(i64, i64)> = (0..n as i64)
@@ -5054,6 +5104,34 @@ mod tests {
             // SAFETY: `v12` holds `n` elements of 12 bytes.
             unsafe { merge_sort(v12.as_mut_ptr().cast(), n, 12, &mut key) };
             assert_eq!(v12, w12);
+        }
+    }
+
+    /// With a comparator that is not an order, the two ends of a merge take
+    /// the same element; the merge is then redone from the front, so every
+    /// element is still there exactly once.
+    #[test]
+    fn merge_sort_keeps_a_permutation_for_any_comparator() {
+        for n in [4usize, 5, 9, 16, 37, 100, 1025, 3000] {
+            for kind in 0..3u64 {
+                let mut v: Vec<u64> = (0..n as u64).collect();
+                let mut calls = 0u64;
+                let mut odd = |_: *const u8, _: *const u8| {
+                    calls = calls.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    match kind {
+                        0 => [1, -1][(calls & 1) as usize],
+                        1 => ((calls >> 33) % 3) as i32 - 1,
+                        _ => -1,
+                    }
+                };
+                // SAFETY: `v` holds `n` elements of 8 bytes.
+                unsafe { merge_sort(v.as_mut_ptr().cast(), n, 8, &mut odd) };
+                v.sort_unstable();
+                assert!(
+                    v.iter().copied().eq(0..n as u64),
+                    "n {n}, comparator {kind}"
+                );
+            }
         }
     }
 }

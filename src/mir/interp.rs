@@ -1117,10 +1117,11 @@ pub const PART_DEPTH: usize = 64;
 /// with its pivot: about `PART_GATE` distinct keys or fewer.
 pub const PART_GATE: usize = 64;
 
-/// The runs a merge sort's first width insertion-sorts before its first
-/// merge, in the same schedule on every backend (runtime/src/mir.rs
-/// `INSERTION_RUN`). A power of two dividing [`MERGE_BLOCK`].
-pub const INSERTION_RUN: usize = 16;
+/// The runs a merge sort sorts before its first merge, in the same
+/// schedule on every backend (runtime/src/mir.rs `SMALL_RUN`): each whole
+/// run by [`Interp::sort4`]'s network, a short last one by insertion. A
+/// power of two dividing [`MERGE_BLOCK`].
+pub const SMALL_RUN: usize = 4;
 
 /// A table's removed-entry slots ([`Interp::table_holes`]).
 #[derive(Default)]
@@ -3959,14 +3960,13 @@ impl<'a> Interp<'a> {
     /// A stable merge sort of `0..n` under `cmp`, which may call into the
     /// program; the result lists the old index of each new position.
     ///
-    /// Bottom-up: runs of [`INSERTION_RUN`] are insertion-sorted (an
-    /// element moves left past each it is strictly less than), then merged
-    /// at widths 16, 32, ..., the right element first only when strictly
-    /// less. Past [`MERGE_BLOCK`] elements, every width below it
+    /// Bottom-up: runs of [`SMALL_RUN`] are sorted ([`Interp::small_runs`]),
+    /// then merged at widths 4, 8, ... ([`Interp::merge_pass`]). Past
+    /// [`MERGE_BLOCK`] elements, every width below it
     /// runs one block at a time before the wider passes. Those merges are
     /// the same as a full pass would make, taken block by block so a
     /// compiled sort stays in cache. The compiled backend runs this
-    /// schedule too (runtime/src/mir.rs `merge_passes`, and the emitted
+    /// schedule too (runtime/src/mir.rs `merge_widths`, and the emitted
     /// sort in src/backend/mir/callable.rs), so the comparator sees the
     /// same calls in the same order on each (B-2026-10-13-18).
     fn merge_order(
@@ -3979,8 +3979,8 @@ impl<'a> Interp<'a> {
         if n > MERGE_BLOCK {
             for b in (0..n).step_by(MERGE_BLOCK) {
                 let end = (b + MERGE_BLOCK).min(n);
-                self.insertion_runs(&mut order, b, end, cmp)?;
-                let mut w = INSERTION_RUN;
+                self.small_runs(&mut order, b, end, cmp)?;
+                let mut w = SMALL_RUN;
                 while w < MERGE_BLOCK {
                     let out = self.merge_pass(&order, b, end, w, cmp)?;
                     order[b..end].copy_from_slice(&out);
@@ -3989,8 +3989,8 @@ impl<'a> Interp<'a> {
             }
             width = MERGE_BLOCK;
         } else {
-            self.insertion_runs(&mut order, 0, n, cmp)?;
-            width = INSERTION_RUN;
+            self.small_runs(&mut order, 0, n, cmp)?;
+            width = SMALL_RUN;
         }
         while width < n {
             order = self.merge_pass(&order, 0, n, width, cmp)?;
@@ -3999,30 +3999,81 @@ impl<'a> Interp<'a> {
         Ok(order)
     }
 
-    /// Insertion-sorts each [`INSERTION_RUN`] of `order[from..to]`.
-    fn insertion_runs(
+    /// Sorts each whole [`SMALL_RUN`] of `order[from..to]` with
+    /// [`Interp::sort4`], then insertion-sorts the short run left at the
+    /// end, if any (an element moves left past each it is strictly less
+    /// than).
+    fn small_runs(
         &mut self,
         order: &mut [usize],
         from: usize,
         to: usize,
         cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
     ) -> R<()> {
-        for lo in (from..to).step_by(INSERTION_RUN) {
-            let hi = (lo + INSERTION_RUN).min(to);
-            for k in lo + 1..hi {
-                let x = order[k];
-                let mut j = k;
-                while j > lo && cmp(self, x, order[j - 1])?.is_lt() {
-                    order[j] = order[j - 1];
-                    j -= 1;
-                }
-                order[j] = x;
+        let mut lo = from;
+        while lo + SMALL_RUN <= to {
+            let run = [order[lo], order[lo + 1], order[lo + 2], order[lo + 3]];
+            let sorted = self.sort4(run, cmp)?;
+            order[lo..lo + SMALL_RUN].copy_from_slice(&sorted);
+            lo += SMALL_RUN;
+        }
+        for k in lo + 1..to {
+            let x = order[k];
+            let mut j = k;
+            while j > lo && cmp(self, x, order[j - 1])?.is_lt() {
+                order[j] = order[j - 1];
+                j -= 1;
             }
+            order[j] = x;
         }
         Ok(())
     }
 
-    /// One merge pass of width `width` over `order[from..to]`.
+    /// Four elements in order by five comparisons whose operands depend
+    /// only on earlier outcomes, so the compiled sort chooses with
+    /// arithmetic instead of branches (core's `sort4_stable`). Stable for an
+    /// order, and a permutation of `v` whatever the comparator says.
+    fn sort4(
+        &mut self,
+        v: [usize; 4],
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<[usize; 4]> {
+        let c1 = cmp(self, v[1], v[0])?.is_lt();
+        let c2 = cmp(self, v[3], v[2])?.is_lt();
+        let (a, b) = if c1 { (1, 0) } else { (0, 1) };
+        let (c, d) = if c2 { (3, 2) } else { (2, 3) };
+        let c3 = cmp(self, v[c], v[a])?.is_lt();
+        let c4 = cmp(self, v[d], v[b])?.is_lt();
+        let min = if c3 { c } else { a };
+        let max = if c4 { b } else { d };
+        let left = if c3 {
+            a
+        } else if c4 {
+            c
+        } else {
+            b
+        };
+        let right = if c4 {
+            d
+        } else if c3 {
+            b
+        } else {
+            c
+        };
+        let c5 = cmp(self, v[right], v[left])?.is_lt();
+        let (lo, hi) = if c5 { (right, left) } else { (left, right) };
+        Ok([v[min], v[lo], v[hi], v[max]])
+    }
+
+    /// One merge pass of width `width` over `order[from..to]`. Each pair of
+    /// runs merges from both ends at once, as many steps from each end as
+    /// the shorter run is long: a step at the front takes the right
+    /// element only when it is strictly less than the left one, a step at
+    /// the back takes the left element only when the right one is
+    /// strictly less than it, front and back alternating. What is left in
+    /// the middle merges from the front. If the two ends took the same
+    /// element (a comparator that is not an order), the pair is merged
+    /// again from the front alone, so the result is a permutation.
     fn merge_pass(
         &mut self,
         order: &[usize],
@@ -4031,23 +4082,50 @@ impl<'a> Interp<'a> {
         width: usize,
         cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
     ) -> R<Vec<usize>> {
-        let mut out = Vec::with_capacity(to - from);
-        for lo in (from..to).step_by(2 * width) {
+        let mut out = vec![0; to - from];
+        let mut lo = from;
+        while lo < to {
             let mid = (lo + width).min(to);
             let hi = (lo + 2 * width).min(to);
-            let (mut i, mut j) = (lo, mid);
-            while i < mid && j < hi {
-                // The right element goes first only when strictly less.
+            // Cursors at the front, and one past the back.
+            let (mut i, mut j, mut k) = (lo, mid, lo);
+            let (mut ie, mut je, mut ke) = (mid, hi, hi);
+            for _ in 0..(mid - lo).min(hi - mid) {
                 if cmp(self, order[j], order[i])?.is_lt() {
-                    out.push(order[j]);
+                    out[k - from] = order[j];
                     j += 1;
                 } else {
-                    out.push(order[i]);
+                    out[k - from] = order[i];
                     i += 1;
                 }
+                k += 1;
+                ke -= 1;
+                if cmp(self, order[je - 1], order[ie - 1])?.is_lt() {
+                    out[ke - from] = order[ie - 1];
+                    ie -= 1;
+                } else {
+                    out[ke - from] = order[je - 1];
+                    je -= 1;
+                }
             }
-            out.extend_from_slice(&order[i..mid]);
-            out.extend_from_slice(&order[j..hi]);
+            if i > ie || j > je {
+                (i, j, k, ie, je) = (lo, mid, lo, mid, hi);
+            }
+            while i < ie && j < je {
+                if cmp(self, order[j], order[i])?.is_lt() {
+                    out[k - from] = order[j];
+                    j += 1;
+                } else {
+                    out[k - from] = order[i];
+                    i += 1;
+                }
+                k += 1;
+            }
+            for &x in order[i..ie].iter().chain(&order[j..je]) {
+                out[k - from] = x;
+                k += 1;
+            }
+            lo = hi;
         }
         Ok(out)
     }

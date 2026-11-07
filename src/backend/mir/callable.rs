@@ -1043,11 +1043,12 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
-    /// The body of a [`Shim::MergeSort`]: bottom-up merge passes of widths
-    /// 1, 2, 4, ... between `buf` and one scratch buffer, the right element
-    /// first only when strictly less. These are `merge_passes`' comparisons
-    /// in its order (runtime/src/mir.rs), so the result is the
-    /// interpreter's even for a comparator that is not an order.
+    /// The body of a [`Shim::MergeSort`]: runs of four sorted by a network,
+    /// then bottom-up merge passes of widths 4, 8, ... between `buf` and
+    /// one scratch buffer, each merge from both ends at once. These are
+    /// the interpreter's comparisons in its order (src/mir/interp.rs
+    /// `merge_order`, and runtime/src/mir.rs `merge_widths`), so the result
+    /// is the interpreter's even for a comparator that is not an order.
     #[allow(clippy::too_many_arguments)]
     fn build_merge_widths(
         &mut self,
@@ -1093,6 +1094,14 @@ impl<'ctx> Cx<'ctx, '_> {
             var("i", i64t.into())?,
             var("j", i64t.into())?,
         );
+        // The back cursors, one past the next element each end takes, and
+        // the steps taken from both ends.
+        let (v_ie, v_je, v_ke, v_t) = (
+            var("ie", i64t.into())?,
+            var("je", i64t.into())?,
+            var("ke", i64t.into())?,
+            var("t", i64t.into())?,
+        );
         let ld = |v: PointerValue<'ctx>| -> R<IntValue<'ctx>> {
             Ok(b.build_load(i64t, v, "").map_err(e)?.into_int_value())
         };
@@ -1110,16 +1119,16 @@ impl<'ctx> Cx<'ctx, '_> {
         b.build_store(v_src, buf).map_err(e)?;
         b.build_store(v_dst, scratch).map_err(e)?;
         b.build_store(v_w, width).map_err(e)?;
-        // A start at width 1 insertion-sorts runs of INSERTION_RUN in
-        // place instead of the narrowest passes (interp.rs
-        // `insertion_runs`): an element moves left past each it is
+        // A start at width 1 sorts each whole run of SMALL_RUN by
+        // interp.rs `sort4`'s network, then insertion-sorts a short last
+        // run (`small_runs`): an element moves left past each it is
         // strictly less than.
-        let run = i64t.const_int(crate::mir::interp::INSERTION_RUN as u64, false);
+        let run = i64t.const_int(crate::mir::interp::SMALL_RUN as u64, false);
         let x = b
             .build_alloca(i8t.array_type(size as u32), "elem")
             .map_err(e)?;
-        let (ins, r_head, r_body, k_head, k_body, s_head, s_test, s_body, s_done) = (
-            bb("ins"),
+        let (ins, g_head, g_body) = (bb("ins"), bb("ins.four"), bb("ins.four.body"));
+        let (r_head, r_body, k_head, k_body, s_head, s_test, s_body, s_done) = (
             bb("ins.run"),
             bb("ins.run.body"),
             bb("ins.k"),
@@ -1129,14 +1138,77 @@ impl<'ctx> Cx<'ctx, '_> {
             bb("ins.shift.body"),
             bb("ins.put"),
         );
+        // `cmp(ctx, x, y) < 0` as 0 or 1, through a value LLVM cannot see
+        // into, so what it chooses stays arithmetic rather than a branch:
+        // which way a comparison goes is as random as the data.
+        let less01 = |x: PointerValue<'ctx>, y: PointerValue<'ctx>| -> R<IntValue<'ctx>> {
+            let o = b
+                .build_call(cmp, &[ctx.into(), x.into(), y.into()], "")
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let less = b
+                .build_int_compare(IntPredicate::SLT, o, o.get_type().const_zero(), "")
+                .map_err(e)?;
+            let t = b.build_int_z_extend(less, i64t, "").map_err(e)?;
+            opaque_i64(self.llcx, b, t)
+        };
+        // `t ? y : x` for `t` of 0 or 1, without a select.
+        let pick = |t: IntValue<'ctx>, x: IntValue<'ctx>, y: IntValue<'ctx>| -> R<IntValue<'ctx>> {
+            let mask = b.build_int_sub(zero, t, "").map_err(e)?;
+            let gap = b.build_int_sub(y, x, "").map_err(e)?;
+            let off = b.build_and(gap, mask, "").map_err(e)?;
+            b.build_int_add(x, off, "").map_err(e)
+        };
         let first = b
             .build_int_compare(IntPredicate::EQ, width, one, "")
             .map_err(e)?;
         b.build_conditional_branch(first, ins, w_head).map_err(e)?;
         b.position_at_end(ins);
         b.build_store(v_lo, zero).map_err(e)?;
-        b.build_unconditional_branch(r_head).map_err(e)?;
-        // for lo in (0..n).step_by(RUN)
+        b.build_unconditional_branch(g_head).map_err(e)?;
+        // while lo + 4 <= n: the network, out through `scratch` and back.
+        b.position_at_end(g_head);
+        let lo = ld(v_lo)?;
+        let end = b.build_int_add(lo, run, "").map_err(e)?;
+        let whole = b
+            .build_int_compare(IntPredicate::ULE, end, n, "")
+            .map_err(e)?;
+        b.build_conditional_branch(whole, g_body, r_head)
+            .map_err(e)?;
+        b.position_at_end(g_body);
+        let lo = ld(v_lo)?;
+        let el = |k: IntValue<'ctx>| -> R<PointerValue<'ctx>> {
+            at(buf, b.build_int_add(lo, k, "").map_err(e)?)
+        };
+        let c = |k: u64| i64t.const_int(k, false);
+        let c1 = less01(el(c(1))?, el(c(0))?)?;
+        let c2 = less01(el(c(3))?, el(c(2))?)?;
+        let (ia, ib) = (c1, b.build_int_sub(one, c1, "").map_err(e)?);
+        let ic = b.build_int_add(c(2), c2, "").map_err(e)?;
+        let id = b.build_int_sub(c(3), c2, "").map_err(e)?;
+        let c3 = less01(el(ic)?, el(ia)?)?;
+        let c4 = less01(el(id)?, el(ib)?)?;
+        let min = pick(c3, ia, ic)?;
+        let max = pick(c4, id, ib)?;
+        let left = pick(c3, pick(c4, ib, ic)?, ia)?;
+        let right = pick(c4, pick(c3, ic, ib)?, id)?;
+        let c5 = less01(el(right)?, el(left)?)?;
+        let low = pick(c5, left, right)?;
+        let high = pick(c5, right, left)?;
+        for (k, from) in [min, low, high, max].into_iter().enumerate() {
+            let to = at(scratch, b.build_int_add(lo, c(k as u64), "").map_err(e)?)?;
+            b.build_memcpy(to, 1, el(from)?, 1, sz).map_err(e)?;
+        }
+        let four = b.build_int_mul(run, sz, "").map_err(e)?;
+        b.build_memcpy(at(buf, lo)?, 1, at(scratch, lo)?, 1, four)
+            .map_err(e)?;
+        b.build_store(v_lo, b.build_int_add(lo, run, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(g_head).map_err(e)?;
+        // The short last run, from where the whole ones end: for lo in
+        // (lo..n).step_by(RUN) runs at most once.
         b.position_at_end(r_head);
         let lo = ld(v_lo)?;
         let ins_done = bb("ins.done");
@@ -1207,7 +1279,6 @@ impl<'ctx> Cx<'ctx, '_> {
         b.build_conditional_branch(lt(w, limit)?, w_body, finish)
             .map_err(e)?;
         b.position_at_end(w_body);
-        b.build_store(v_k, zero).map_err(e)?;
         b.build_store(v_lo, zero).map_err(e)?;
         b.build_unconditional_branch(lo_head).map_err(e)?;
         // for lo in (0..n).step_by(2 * width)
@@ -1215,53 +1286,106 @@ impl<'ctx> Cx<'ctx, '_> {
         let lo = ld(v_lo)?;
         b.build_conditional_branch(lt(lo, n)?, lo_body, w_next)
             .map_err(e)?;
+        // Each pair of runs merges from both ends at once (interp.rs
+        // `merge_pass`), as many steps from each end as the shorter run
+        // is long; the two chains of loads and comparisons do not wait on
+        // each other. Then the middle from the front.
+        let (b_head, b_body, b_check, b_reset) = (
+            bb("m.both"),
+            bb("m.both.body"),
+            bb("m.both.check"),
+            bb("m.both.redo"),
+        );
         b.position_at_end(lo_body);
         let w = ld(v_w)?;
         let lo = ld(v_lo)?;
         let mid = umin(b.build_int_add(lo, w, "").map_err(e)?, n)?;
         let w2 = b.build_int_add(w, w, "").map_err(e)?;
         let hi = umin(b.build_int_add(lo, w2, "").map_err(e)?, n)?;
-        b.build_store(v_i, lo).map_err(e)?;
-        b.build_store(v_j, mid).map_err(e)?;
+        let steps = umin(
+            b.build_int_sub(mid, lo, "").map_err(e)?,
+            b.build_int_sub(hi, mid, "").map_err(e)?,
+        )?;
+        // The cursors at the start of the pair: the front ones at each
+        // run's first element, the back ones past each run's last.
+        let start = || -> R<()> {
+            b.build_store(v_i, lo).map_err(e)?;
+            b.build_store(v_j, mid).map_err(e)?;
+            b.build_store(v_k, lo).map_err(e)?;
+            b.build_store(v_ie, mid).map_err(e)?;
+            b.build_store(v_je, hi).map_err(e)?;
+            Ok(())
+        };
+        start()?;
+        b.build_store(v_ke, hi).map_err(e)?;
+        b.build_store(v_t, zero).map_err(e)?;
+        b.build_unconditional_branch(b_head).map_err(e)?;
+        // One step at the front: the right element only when strictly less.
+        let front = || -> R<()> {
+            let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
+            let (i, j, k) = (ld(v_i)?, ld(v_j)?, ld(v_k)?);
+            let took_j = less01(at(src, j)?, at(src, i)?)?;
+            b.build_memcpy(at(dst, k)?, 1, at(src, pick(took_j, i, j)?)?, 1, sz)
+                .map_err(e)?;
+            let took_i = b.build_int_sub(one, took_j, "").map_err(e)?;
+            b.build_store(v_j, b.build_int_add(j, took_j, "").map_err(e)?)
+                .map_err(e)?;
+            b.build_store(v_i, b.build_int_add(i, took_i, "").map_err(e)?)
+                .map_err(e)?;
+            b.build_store(v_k, b.build_int_add(k, one, "").map_err(e)?)
+                .map_err(e)?;
+            Ok(())
+        };
+        // while t < steps: a step at each end.
+        b.position_at_end(b_head);
+        let t = ld(v_t)?;
+        b.build_conditional_branch(lt(t, steps)?, b_body, b_check)
+            .map_err(e)?;
+        b.position_at_end(b_body);
+        front()?;
+        // One step at the back: the left element only when the right one
+        // is strictly less than it.
+        let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
+        let (ie, je, ke) = (ld(v_ie)?, ld(v_je)?, ld(v_ke)?);
+        let (ie1, je1) = (
+            b.build_int_sub(ie, one, "").map_err(e)?,
+            b.build_int_sub(je, one, "").map_err(e)?,
+        );
+        let ke1 = b.build_int_sub(ke, one, "").map_err(e)?;
+        let took_l = less01(at(src, je1)?, at(src, ie1)?)?;
+        b.build_memcpy(at(dst, ke1)?, 1, at(src, pick(took_l, je1, ie1)?)?, 1, sz)
+            .map_err(e)?;
+        let took_r = b.build_int_sub(one, took_l, "").map_err(e)?;
+        b.build_store(v_ie, b.build_int_sub(ie, took_l, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_store(v_je, b.build_int_sub(je, took_r, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_store(v_ke, ke1).map_err(e)?;
+        let t = ld(v_t)?;
+        b.build_store(v_t, b.build_int_add(t, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(b_head).map_err(e)?;
+        // Both ends took one element (a comparator that is not an order):
+        // the pair merges again from the front, so the result is a
+        // permutation.
+        b.position_at_end(b_check);
+        let crossed_i = lt(ld(v_ie)?, ld(v_i)?)?;
+        let crossed_j = lt(ld(v_je)?, ld(v_j)?)?;
+        let crossed = b.build_or(crossed_i, crossed_j, "").map_err(e)?;
+        b.build_conditional_branch(crossed, b_reset, m_head)
+            .map_err(e)?;
+        b.position_at_end(b_reset);
+        start()?;
         b.build_unconditional_branch(m_head).map_err(e)?;
-        // while i < mid && j < hi
+        // while i < ie && j < je
         b.position_at_end(m_head);
-        b.build_conditional_branch(lt(ld(v_i)?, mid)?, m_test, tail)
+        b.build_conditional_branch(lt(ld(v_i)?, ld(v_ie)?)?, m_test, tail)
             .map_err(e)?;
         b.position_at_end(m_test);
-        b.build_conditional_branch(lt(ld(v_j)?, hi)?, m_body, tail)
+        b.build_conditional_branch(lt(ld(v_j)?, ld(v_je)?)?, m_body, tail)
             .map_err(e)?;
         b.position_at_end(m_body);
-        let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
-        let (i, j, k) = (ld(v_i)?, ld(v_j)?, ld(v_k)?);
-        let (pj, pi, pk) = (at(src, j)?, at(src, i)?, at(dst, k)?);
-        let o = b
-            .build_call(cmp, &[ctx.into(), pj.into(), pi.into()], "")
-            .map_err(e)?
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_int_value();
-        let less = b
-            .build_int_compare(IntPredicate::SLT, o, o.get_type().const_zero(), "")
-            .map_err(e)?;
-        let k1 = b.build_int_add(k, one, "").map_err(e)?;
-        b.build_store(v_k, k1).map_err(e)?;
-        // Branch free: which side is taken is as random as the data, so
-        // a branch on it mispredicts about half the time. LLVM turns a
-        // `select` here back into a branch, so the choice is arithmetic on
-        // a mask it cannot see through.
-        let took_j = b.build_int_z_extend(less, i64t, "").map_err(e)?;
-        let took_j = opaque_i64(self.llcx, b, took_j)?;
-        let mask = b.build_int_sub(zero, took_j, "").map_err(e)?;
-        let gap = b.build_int_sub(j, i, "").map_err(e)?;
-        let off = b.build_and(gap, mask, "").map_err(e)?;
-        let x = b.build_int_add(i, off, "").map_err(e)?;
-        b.build_memcpy(pk, 1, at(src, x)?, 1, sz).map_err(e)?;
-        let took_i = b.build_int_sub(one, took_j, "").map_err(e)?;
-        b.build_store(v_j, b.build_int_add(j, took_j, "").map_err(e)?)
-            .map_err(e)?;
-        b.build_store(v_i, b.build_int_add(i, took_i, "").map_err(e)?)
-            .map_err(e)?;
+        front()?;
         b.build_unconditional_branch(m_head).map_err(e)?;
         // The rest of each run, an element at a time: a merge of random
         // runs leaves a few, too few for a call to `memcpy`.
@@ -1270,8 +1394,8 @@ impl<'ctx> Cx<'ctx, '_> {
         b.position_at_end(take_i);
         let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
         let (i, j, k) = (ld(v_i)?, ld(v_j)?, ld(v_k)?);
-        let from_i = lt(i, mid)?;
-        let more = b.build_or(from_i, lt(j, hi)?, "").map_err(e)?;
+        let from_i = lt(i, ld(v_ie)?)?;
+        let more = b.build_or(from_i, lt(j, ld(v_je)?)?, "").map_err(e)?;
         let rest = bb("run.rest");
         b.build_conditional_branch(more, take_j, rest).map_err(e)?;
         b.position_at_end(take_j);
