@@ -9,6 +9,7 @@
 
 use crate::ast::*;
 use crate::token::Span;
+use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 use super::const_eval::primitive_const_type;
@@ -653,6 +654,57 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// Whether type `name`, marked `#[non_exhaustive]` or not, is seen from
+    /// outside the package that defines it: a library type from a user
+    /// function, or a type of another package of the tree (B-2026-11-07-23).
+    pub(super) fn sees_from_outside(&self, name: &str, defining_stdlib_origin: bool) -> bool {
+        if defining_stdlib_origin {
+            return !self.current_fn_stdlib_origin;
+        }
+        let (Some(tree), Some(current)) = (self.tree, self.current_module) else {
+            return false;
+        };
+        let defines = |m: &crate::module::Module| {
+            m.items.iter().any(|it| match it {
+                Item::StructDef(sd) => sd.name == name,
+                Item::EnumDef(ed) => ed.name == name,
+                _ => false,
+            })
+        };
+        if defines(tree.module(current)) {
+            return false;
+        }
+        let origin = match self.type_origins.get(name) {
+            Some((path, _, _)) => tree.graph.by_path.get::<[String]>(path).copied(),
+            None => tree
+                .modules
+                .iter()
+                .position(|m| !m.is_synthetic && defines(m))
+                .and_then(|i| {
+                    tree.graph
+                        .by_path
+                        .get::<[String]>(&tree.modules[i].path)
+                        .copied()
+                }),
+        };
+        origin.is_some_and(|id| tree.module(id).package != tree.module(current).package)
+    }
+
+    /// Recompute [`TypeEnv::open_enums`] for the function about to be
+    /// checked; returns the previous set for the caller to restore.
+    pub(super) fn open_enums_for_current_fn(&mut self) -> FxHashSet<String> {
+        let open: FxHashSet<String> = self
+            .env
+            .enums
+            .iter()
+            .filter(|(name, info)| {
+                info.is_non_exhaustive && self.sees_from_outside(name, info.defining_stdlib_origin)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        std::mem::replace(&mut self.env.open_enums, open)
+    }
+
     /// The module of the package that defines struct `name`, for a struct the
     /// current module neither defines nor imports: one it reaches only
     /// through another module's signature or field (`mk().secret` with only
@@ -1178,8 +1230,7 @@ impl<'a> super::TypeChecker<'a> {
         // per-package boundaries land, the comparison below shifts at
         // this site without touching the `is_non_exhaustive` plumbing.
         if struct_info.is_non_exhaustive
-            && struct_info.defining_stdlib_origin
-            && !self.current_fn_stdlib_origin
+            && self.sees_from_outside(&struct_name, struct_info.defining_stdlib_origin)
         {
             self.type_error(
                 format!(

@@ -1,0 +1,9 @@
+source = "B-2026-11-07-23"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "patterns"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-07-23: a match outside std naming every DecodeError variant was accepted, at the top (a qualified variant read as a catch-all binding) and inside a Result (exhaustiveness treated the enum as closed). The expected.out wording of an error pin is guidance, not a byte oracle."

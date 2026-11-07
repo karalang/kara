@@ -1469,7 +1469,12 @@ fn enumerate_ctors(ty: &Type, env: &TypeEnv) -> Option<Vec<PatCtor>> {
             Some(vec![PatCtor::Struct(name.clone())])
         }
         Type::Named { name, .. } => {
-            if let Some(info) = env.enums.get(name) {
+            if env.open_enums.contains(name) {
+                // A `#[non_exhaustive]` enum seen from outside its package
+                // may grow variants: an open domain, so only a wildcard
+                // covers it (B-2026-11-07-23).
+                None
+            } else if let Some(info) = env.enums.get(name) {
                 Some(
                     info.variants
                         .iter()

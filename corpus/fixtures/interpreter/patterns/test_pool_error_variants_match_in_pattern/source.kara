@@ -5,6 +5,7 @@ fn classify(e: own PoolError[String]) -> String {
                  PoolError.PoolClosed => "closed",
                  PoolError.CreateFailed(_) => "create_failed",
                  PoolError.Busy => "busy",
+                 _ => "other",
              }
          }
          fn main() {

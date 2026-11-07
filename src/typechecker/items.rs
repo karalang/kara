@@ -2727,6 +2727,7 @@ impl<'a> super::TypeChecker<'a> {
         // function's origin while their bodies are checked.
         let saved_fn_stdlib_origin = self.current_fn_stdlib_origin;
         self.current_fn_stdlib_origin = f.stdlib_origin;
+        let saved_open_enums = self.open_enums_for_current_fn();
 
         // Lint-level slice 4b — push this function's lint overrides
         // as the innermost cascade frame. Popped on exit so sibling
@@ -2889,6 +2890,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_body_dim_scope = saved_body_dim_scope;
         self.current_fn_const_params = saved_const_params;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
+        self.env.open_enums = saved_open_enums;
         self.current_generic_frame = saved_generic_frame;
         self.current_fn_core_key = saved_core_key;
         self.lint_override_stack.pop();

@@ -540,6 +540,7 @@ fn show(r: Result[PooledConnection[Conn], PoolError[ConnectError]]) -> String {
         Err(PoolError.Timeout) => "timeout".to_string(),
         Err(PoolError.Busy) => "busy".to_string(),
         Err(PoolError.PoolClosed) => "closed".to_string(),
+        Err(_) => "other".to_string(),
     }
 }
 fn main() {

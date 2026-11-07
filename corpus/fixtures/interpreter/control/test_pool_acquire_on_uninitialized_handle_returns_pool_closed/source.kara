@@ -8,5 +8,6 @@ fn main() {
              Err(PoolError.Busy) => println("busy"),
              Err(PoolError.PoolClosed) => println("closed"),
              Err(PoolError.CreateFailed(_)) => println("create_failed"),
+             Err(_) => println("other"),
          }
      }

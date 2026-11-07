@@ -1408,6 +1408,33 @@ impl PackageCheck {
         (singles, groups)
     }
 
+    /// The machine-applicable fixes of the module-boundary type refusals of
+    /// the module at `file` (a wildcard arm or a `..` for a
+    /// `#[non_exhaustive]` type of another package; B-2026-11-07-23), as
+    /// offsets into that file's text. The combined check cannot see these.
+    pub(super) fn boundary_type_fixes_of(
+        &self,
+        file: &std::path::Path,
+    ) -> Vec<crate::resolver::TextEdit> {
+        let same =
+            |p: &std::path::Path| match (std::fs::canonicalize(p), std::fs::canonicalize(file)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => p == file,
+            };
+        self.type_errors
+            .iter()
+            .filter(|m| same(&m.file))
+            .flat_map(|m| m.errors.iter())
+            .filter(|e| type_error_is_a_module_boundary_rule(&e.kind))
+            .filter_map(|e| e.fix_it.as_ref())
+            .map(|f| crate::resolver::TextEdit {
+                offset: f.span.offset,
+                length: f.span.length,
+                replacement: f.replacement.clone(),
+            })
+            .collect()
+    }
+
     pub(super) fn has_errors(&self) -> bool {
         !self.parse_errors.is_empty()
             || !self.cycles.is_empty()

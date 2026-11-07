@@ -120,6 +120,7 @@ fn show(r: Result[i64, PoolError[String]]) -> String {
         Err(PoolError.Busy) => "busy".to_string(),
         Err(PoolError.PoolClosed) => "closed".to_string(),
         Err(PoolError.CreateFailed(e)) => f"create failed {e}",
+        Err(_) => "other".to_string(),
     }
 }
 fn take(pool: ref Pool[Conn, String], ms: i64) -> Result[i64, PoolError[String]] {

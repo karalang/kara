@@ -433,6 +433,11 @@ pub struct RefinementPred {
 }
 
 pub struct TypeEnv {
+    /// The `#[non_exhaustive]` enums the function being checked sees from
+    /// outside their package: exhaustiveness treats them as open, so a match
+    /// needs a wildcard wherever one sits (design.md § `#[non_exhaustive]`;
+    /// B-2026-11-07-23). Set at each function's entry.
+    pub open_enums: FxHashSet<String>,
     pub structs: FxHashMap<String, StructInfo>,
     pub enums: FxHashMap<String, EnumInfo>,
     /// Where each user-written (non-stdlib) struct or enum is declared, for
@@ -625,6 +630,7 @@ pub struct TypeEnv {
 impl TypeEnv {
     pub(super) fn new() -> Self {
         TypeEnv {
+            open_enums: FxHashSet::default(),
             partial_eq_impl_dispatches: false,
             vec_is_ord: false,
             structs: FxHashMap::default(),

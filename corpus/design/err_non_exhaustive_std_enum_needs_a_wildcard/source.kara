@@ -1,0 +1,21 @@
+// design.md § `#[non_exhaustive]`: outside the defining package a match on
+// a `#[non_exhaustive]` enum needs a wildcard arm even when it names every
+// variant. std's DecodeError (library/encoding.md) is one, at the top of a
+// match and inside a Result.
+import std.encoding.{base64_decode, DecodeError};
+
+fn show(e: DecodeError) -> String {
+    match e {
+        DecodeError.InvalidByte(at) => f"byte {at}",
+        DecodeError.InvalidLength => "length",
+    }
+}
+
+fn main() {
+    match base64_decode("x") {
+        Ok(_) => println("ok"),
+        Err(DecodeError.InvalidByte(_)) => println("byte"),
+        Err(DecodeError.InvalidLength) => println("length"),
+    }
+    println(show(DecodeError.InvalidLength));
+}

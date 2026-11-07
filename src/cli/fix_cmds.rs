@@ -567,6 +567,7 @@ fn package_member_fixes(filename: &str, source: &str) -> Option<FixSet> {
         fixes.groups(groups.iter());
         return Some(fixes);
     }
+    fixes.singles(pc.boundary_type_fixes_of(this));
     let files = super::project_v2::source_files(&pc.tree, false).ok()?;
     let a = super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "").ok()?;
     let entry = super::project_v2::shown(&pc.tree.modules[pc.tree.root].file);

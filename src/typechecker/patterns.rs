@@ -1781,12 +1781,17 @@ impl<'a> super::TypeChecker<'a> {
                 // points at inserting `..` before the closing brace so the
                 // pattern keeps matching when the defining package adds
                 // fields.
-                if let Some(info) = self.env.structs.get(&struct_name).filter(|_| names_struct) {
-                    if info.is_non_exhaustive
-                        && info.defining_stdlib_origin
-                        && !self.current_fn_stdlib_origin
-                        && !*has_rest
-                    {
+                let outside = self
+                    .env
+                    .structs
+                    .get(&struct_name)
+                    .filter(|_| names_struct)
+                    .is_some_and(|info| {
+                        info.is_non_exhaustive
+                            && self.sees_from_outside(&struct_name, info.defining_stdlib_origin)
+                    });
+                {
+                    if outside && !*has_rest {
                         let fix_it = non_exhaustive_pattern_fix_it(&pattern.span, fields);
                         self.type_error_with_fix_it(
                             format!(
@@ -2934,9 +2939,7 @@ impl<'a> super::TypeChecker<'a> {
                 // unit-variant constructor, not a fresh binding.
                 let variant_names: std::collections::HashSet<&str> =
                     enum_info.variants.iter().map(|(n, _)| n.as_str()).collect();
-                if enum_info.is_non_exhaustive
-                    && enum_info.defining_stdlib_origin
-                    && !self.current_fn_stdlib_origin
+                if self.env.open_enums.contains(name)
                     && !arms_contain_catchall(arms, &variant_names)
                 {
                     let fix_it = non_exhaustive_match_fix_it(
@@ -2967,6 +2970,34 @@ impl<'a> super::TypeChecker<'a> {
 
         match check_match_exhaustive(scrutinee_type, arms, &self.env) {
             ExhaustiveResult::Exhaustive | ExhaustiveResult::Skipped => {}
+            ExhaustiveResult::NonExhaustive { witness }
+                if !self.env.open_enums.is_empty() && {
+                    // Covered but for a `#[non_exhaustive]` enum of another
+                    // package inside the scrutinee (`Err(DecodeError.X)`):
+                    // the cross-package rule, which a module-aware check
+                    // keeps (B-2026-11-07-23).
+                    let open = std::mem::take(&mut self.env.open_enums);
+                    let closed = check_match_exhaustive(scrutinee_type, arms, &self.env);
+                    self.env.open_enums = open;
+                    matches!(closed, ExhaustiveResult::Exhaustive)
+                } =>
+            {
+                let arm = format!("{witness} => panic(\"handle new variant\")");
+                let fix_it = non_exhaustive_match_fix_it(&span, arms, &arm);
+                self.type_error_with_fix_it(
+                    format!(
+                        "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_MATCH]: pattern `{witness}` not \
+                         covered — a `#[non_exhaustive]` enum defined in another package \
+                         sits inside this match, so new variants may land without breaking \
+                         source compatibility. Add `{arm}` (or a real handler) before the \
+                         closing brace. See design.md § `#[non_exhaustive]` for Evolvable \
+                         Public Types."
+                    ),
+                    span,
+                    TypeErrorKind::NonExhaustiveCrossPackageMatch,
+                    fix_it,
+                );
+            }
             ExhaustiveResult::NonExhaustive { witness } => {
                 // Preserve the prior diagnostic wording for bool and enum
                 // scrutinees when the witness names a single top-level
@@ -3898,12 +3929,12 @@ impl<'a> super::TypeChecker<'a> {
                 // so the slice-4 rule must fire here too. Without this,
                 // exhaustive let-destructures of cross-package
                 // non-exhaustive structs would silently slip through.
-                if let Some(info) = self.env.structs.get(struct_name) {
-                    if info.is_non_exhaustive
-                        && info.defining_stdlib_origin
-                        && !self.current_fn_stdlib_origin
-                        && !*has_rest
-                    {
+                let outside = self.env.structs.get(struct_name).is_some_and(|info| {
+                    info.is_non_exhaustive
+                        && self.sees_from_outside(struct_name, info.defining_stdlib_origin)
+                });
+                {
+                    if outside && !*has_rest {
                         let fix_it = non_exhaustive_pattern_fix_it(&pattern.span, fields);
                         self.type_error_with_fix_it(
                             format!(
@@ -4202,7 +4233,9 @@ fn arms_contain_catchall(
 fn pattern_is_catchall(p: &Pattern, variant_names: &std::collections::HashSet<&str>) -> bool {
     match &p.kind {
         PatternKind::Wildcard => true,
-        PatternKind::Binding(name) => !variant_names.contains(name.as_str()),
+        // A qualified unit variant (`Kind.A`) is a `Binding` of the dotted
+        // path, never a catch-all (B-2026-11-07-23).
+        PatternKind::Binding(name) => !name.contains('.') && !variant_names.contains(name.as_str()),
         PatternKind::AtBinding { pattern, .. } => pattern_is_catchall(pattern, variant_names),
         PatternKind::Or(alts) => alts.iter().any(|p| pattern_is_catchall(p, variant_names)),
         _ => false,

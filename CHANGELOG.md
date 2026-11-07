@@ -35,6 +35,12 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   `usize`, `isize`, a 128-bit integer and a raw pointer were accepted, and
   `Atomic[i128]` failed to link under AddressSanitizer
   (B-2026-11-07-21).
+- **A match on another package's `#[non_exhaustive]` enum needs a wildcard
+  arm,** even when it names every variant, and wherever the enum sits in
+  the scrutinee (`Err(DecodeError.InvalidLength)`); `karac fix` adds it. A
+  user package's types are covered now, not only the standard library's,
+  and so are the struct literal and the struct pattern without `..`
+  (B-2026-11-07-23).
 - **A literal range bound must fit the scrutinee's type,** as a literal
   pattern must: `1i32..=300i32` on an `i8` and `-1..=3` on a `u8` were
   accepted (B-2026-11-06-15).
