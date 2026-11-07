@@ -1,4 +1,4 @@
-shared struct ListNode { val: i64, mut next: Option[ListNode] }
+#[derive(Debug)] shared struct ListNode { val: i64, mut next: Option[ListNode] }
 fn build(n: i64) -> Option[ListNode] {
     let head = ListNode { val: 1, next: None };
     let mut tail = head;

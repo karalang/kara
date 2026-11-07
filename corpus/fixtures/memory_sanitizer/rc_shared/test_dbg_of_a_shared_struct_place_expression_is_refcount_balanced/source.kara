@@ -1,6 +1,6 @@
 
-shared struct Flat { a: i64, b: String }
-shared struct Link { v: i64, mut next: Option[Link] }
+#[derive(Debug)] shared struct Flat { a: i64, b: String }
+#[derive(Debug)] shared struct Link { v: i64, mut next: Option[Link] }
 fn main() {
     let f = Flat { a: 1_i64, b: "t".to_uppercase() };
     dbg(f);

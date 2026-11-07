@@ -2518,6 +2518,34 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
     if let Some(mem) = cx.mem {
         rewrite_mem_call(expr, mem);
     }
+    rewrite_wrapping_from(expr);
+}
+
+/// `Option.from(x)` is `Some(x)` and `Result.from(x)` is `Ok(x)`: the
+/// standard `impl From[T] for Option[T]` / `impl From[T] for Result[T, E]`
+/// (design.md §9 Conversion traits, "Common standard impls";
+/// B-2026-11-07-11). `x.into()` at an `Option` / `Result` position already
+/// lowers to the same constructor (`try_apply_into_coercion`); this is the
+/// associated-call spelling.
+fn rewrite_wrapping_from(expr: &mut Expr) {
+    let ExprKind::Call { callee, args } = &mut expr.kind else {
+        return;
+    };
+    let ctor = match &callee.kind {
+        ExprKind::Path {
+            segments,
+            generic_args: None,
+        } if segments.len() == 2 && segments[1] == "from" => match segments[0].as_str() {
+            "Option" => "Some",
+            "Result" => "Ok",
+            _ => return,
+        },
+        _ => return,
+    };
+    if args.len() != 1 || args[0].label.is_some() {
+        return;
+    }
+    callee.kind = ExprKind::Identifier(ctor.to_string());
 }
 
 /// The `std.mem` functions a program may call as `mem.<f>(..)`

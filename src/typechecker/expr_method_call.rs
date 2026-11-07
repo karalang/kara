@@ -2582,6 +2582,79 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `x.into()` / `x.try_into()` with nothing fixing the target type:
+        // the conversion is picked by the expected type, and with none the
+        // call asks for an annotation (design.md §9 Conversion traits,
+        // "Choosing among several impls"; B-2026-11-07-11). An annotated
+        // position never reaches here: `try_apply_into_coercion` and
+        // `try_apply_tryinto_coercion` answer it. A receiver with a method
+        // of that name of its own, or a type parameter, keeps the ordinary
+        // lookup.
+        if matches!(method, "into" | "try_into") && args.is_empty() {
+            let concrete = !matches!(
+                obj_ty_for_named,
+                Type::TypeParam(_)
+                    | Type::TypeVar(_)
+                    | Type::AssocProjection { .. }
+                    | Type::Dyn { .. }
+                    | Type::Existential { .. }
+                    | Type::Error
+            );
+            let own = method_callee_type_name(&obj_ty_for_named)
+                .is_some_and(|n| !self.env.find_methods_with_args(&n, &[], method).is_empty());
+            if concrete && !own {
+                let trait_name = if method == "into" { "From" } else { "TryFrom" };
+                let assoc = if method == "into" { "from" } else { "try_from" };
+                let mut targets: Vec<String> = self
+                    .env
+                    .impls_by_trait
+                    .get(trait_name)
+                    .into_iter()
+                    .flatten()
+                    .map(|&i| &self.env.impls[i])
+                    .filter(|imp| {
+                        imp.methods
+                            .get(assoc)
+                            .and_then(|sig| sig.params.first())
+                            .is_some_and(|p| {
+                                super::env::conversion_param_takes(p, &obj_ty_for_named)
+                            })
+                    })
+                    .map(|imp| imp.target_type.clone())
+                    .collect();
+                targets.sort();
+                targets.dedup();
+                let shown = type_display(&obj_ty_for_named);
+                let candidates = match targets.len() {
+                    0 => String::new(),
+                    _ => format!(
+                        " `{shown}` converts into {}.",
+                        targets
+                            .iter()
+                            .map(|t| format!("`{t}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                };
+                let annotate = if method == "into" {
+                    "`let x: Target = v.into();`, or call `Target.from(v)`"
+                } else {
+                    "`let r: Result[Target, _] = v.try_into();`, or call `Target.try_from(v)`"
+                };
+                self.type_error(
+                    format!(
+                        "`.{method}()` on '{shown}' cannot pick a conversion: nothing here fixes \
+                         the target type, which is what chooses the `{trait_name}` impl \
+                         (design.md §9 Conversion traits).{candidates} Annotate the target: \
+                         {annotate}"
+                    ),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        }
+
         // `x.fmt_debug()`: the `Debug` text `dbg` shows, on a type that is
         // `Debug` without a `fmt_debug` of its own: a derived one, a number,
         // a collection (design.md § Display and Debug, B-2026-10-31-6). A

@@ -28009,8 +28009,8 @@ fn test_main_result_err_render_is_deterministic_across_runs() {
 #[test]
 fn test_dbg_renders_identically_on_all_three_backends() {
     let tmp = scratch_project("dbg-three-backend-parity");
-    let src = "struct S { zeta: i64, alpha: String, mid: char }\n\
-               enum Shape { Dot, Line(i64, i64), Box { w: i64, h: i64 } }\n\
+    let src = "#[derive(Debug)] struct S { zeta: i64, alpha: String, mid: char }\n\
+               #[derive(Debug)] enum Shape { Dot, Line(i64, i64), Box { w: i64, h: i64 } }\n\
                fn main() {\n\
                \x20   let a = dbg(42);\n\
                \x20   let b = dbg(-7);\n\
@@ -28384,7 +28384,7 @@ fn test_dbg_struct_field_order_is_declaration_order_every_run() {
     let tmp = scratch_project("dbg-decl-order-stable");
     write(
         &tmp.join("o.kara"),
-        "struct S { zeta: i64, alpha: i64, mid: i64 }\n\
+        "#[derive(Debug)] struct S { zeta: i64, alpha: i64, mid: i64 }\n\
          fn main() {\n\
          \x20   dbg(S { zeta: 1, alpha: 2, mid: 3 });\n\
          \x20   println(\"done\");\n\
@@ -28445,8 +28445,8 @@ fn test_dbg_struct_field_order_is_declaration_order_every_run() {
 #[test]
 fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
     let tmp = scratch_project("dbg-shared-struct-parity");
-    let src = "shared struct Node { zeta: i64, alpha: String, mut counter: i64, mid: bool }\n\
-               shared struct Link { v: i64, mut next: Option[Link] }\n\
+    let src = "#[derive(Debug)] shared struct Node { zeta: i64, alpha: String, mut counter: i64, mid: bool }\n\
+               #[derive(Debug)] shared struct Link { v: i64, mut next: Option[Link] }\n\
                fn main() {\n\
                \x20   let n = Node { zeta: 7, alpha: \"hi\", counter: 3, mid: true };\n\
                \x20   dbg(n);\n\
@@ -28536,8 +28536,8 @@ fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
 #[test]
 fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
     let tmp = scratch_project("dbg-shared-struct-nested");
-    let src = "shared struct P { x: i64, tag: String }\n\
-               sync struct C { a: i64, b: String }\n\
+    let src = "#[derive(Debug)] shared struct P { x: i64, tag: String }\n\
+               #[derive(Debug)] sync struct C { a: i64, b: String }\n\
                fn main() {\n\
                \x20   let v = [P { x: 1, tag: \"a\\\"q\" }, P { x: 2, tag: \"b\" }];\n\
                \x20   dbg(v);\n\
@@ -28601,7 +28601,7 @@ fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
 #[test]
 fn test_dbg_of_a_shared_enum_renders_the_same_on_all_three_backends() {
     let tmp = scratch_project("dbg-shared-enum-parity");
-    let src = "shared enum Shape { Circle(i64), Rect(i64, i64), Empty, Named { w: i64, label: String } }\n\
+    let src = "#[derive(Debug)] shared enum Shape { Circle(i64), Rect(i64, i64), Empty, Named { w: i64, label: String } }\n\
                fn main() {\n\
                \x20   dbg(Shape.Circle(5));\n\
                \x20   dbg(Shape.Rect(3, 4));\n\
@@ -28693,8 +28693,8 @@ fn test_dbg_of_a_shared_enum_renders_the_same_on_all_three_backends() {
 #[test]
 fn test_dbg_of_a_self_referential_shared_enum_renders_on_all_three_backends() {
     let tmp = scratch_project("dbg-shared-enum-cyclic");
-    let src = "shared enum T2 { Node(i64, T2), Leaf(i64) }\n\
-               shared enum Tree { Wrap(Tree), Tip }\n\
+    let src = "#[derive(Debug)] shared enum T2 { Node(i64, T2), Leaf(i64) }\n\
+               #[derive(Debug)] shared enum Tree { Wrap(Tree), Tip }\n\
                fn main() {\n\
                \x20   let l = T2.Leaf(99);\n\
                \x20   let m = T2.Node(7, l);\n\
@@ -28787,7 +28787,7 @@ fn test_dbg_of_a_self_referential_shared_enum_renders_on_all_three_backends() {
 #[test]
 fn test_dbg_of_a_would_be_headerless_chain_renders_on_all_three_backends() {
     let tmp = scratch_project("dbg-headerless-chain");
-    let src = "shared struct ListNode { val: i64, mut next: Option[ListNode] }\n\
+    let src = "#[derive(Debug)] shared struct ListNode { val: i64, mut next: Option[ListNode] }\n\
                fn build(n: i64) -> Option[ListNode] {\n\
                \x20   let head = ListNode { val: 1, next: None };\n\
                \x20   let mut tail = head;\n\
@@ -29491,7 +29491,7 @@ fn main() -> Result[(), i64] {
 #[test]
 fn test_user_display_impl_wins_at_depth_without_capturing_debug() {
     let tmp = scratch_project("user-display-depth");
-    let src = r#"enum Ue { A { n: i64 }, B }
+    let src = r#"#[derive(Debug)] enum Ue { A { n: i64 }, B }
 impl Display for Ue {
     fn to_string(ref self) -> String {
         match self { A { n } => f"aye {n}", B => "bee" }

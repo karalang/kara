@@ -1,5 +1,5 @@
-shared enum T2 { Node(i64, T2), Leaf(i64) }
-shared enum Tree { Wrap(Tree), Tip }
+#[derive(Debug)] shared enum T2 { Node(i64, T2), Leaf(i64) }
+#[derive(Debug)] shared enum Tree { Wrap(Tree), Tip }
 fn main() {
     let l = T2.Leaf(99);
     let m = T2.Node(7, l);

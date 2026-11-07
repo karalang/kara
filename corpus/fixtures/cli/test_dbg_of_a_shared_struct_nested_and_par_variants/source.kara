@@ -1,5 +1,5 @@
-shared struct P { x: i64, tag: String }
-sync struct C { a: i64, b: String }
+#[derive(Debug)] shared struct P { x: i64, tag: String }
+#[derive(Debug)] sync struct C { a: i64, b: String }
 fn main() {
     let v = [P { x: 1, tag: "a\"q" }, P { x: 2, tag: "b" }];
     dbg(v);

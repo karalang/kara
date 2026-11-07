@@ -1,5 +1,5 @@
 
-struct Pair { a: i64, b: String }
+#[derive(Debug)] struct Pair { a: i64, b: String }
 fn main() {
     let mut vs: Vec[i64] = Vec.new();
     vs.push(1_i64);

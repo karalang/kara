@@ -1,5 +1,5 @@
-shared struct Node { zeta: i64, alpha: String, mut counter: i64, mid: bool }
-shared struct Link { v: i64, mut next: Option[Link] }
+#[derive(Debug)] shared struct Node { zeta: i64, alpha: String, mut counter: i64, mid: bool }
+#[derive(Debug)] shared struct Link { v: i64, mut next: Option[Link] }
 fn main() {
     let n = Node { zeta: 7, alpha: "hi", counter: 3, mid: true };
     dbg(n);

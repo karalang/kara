@@ -1,4 +1,4 @@
-enum Ue { A { n: i64 }, B }
+#[derive(Debug)] enum Ue { A { n: i64 }, B }
 impl Display for Ue {
     fn to_string(ref self) -> String {
         match self { A { n } => f"aye {n}", B => "bee" }

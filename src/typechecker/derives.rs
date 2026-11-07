@@ -2774,10 +2774,16 @@ impl super::env::TypeEnv {
                 }
                 // A `shared` type named directly clones as its handle does
                 // (the `Type::Shared` arm below): a refcount bump.
+                // A derived `Clone` on a generic type is
+                // `impl[T: Clone] Clone for Pair[T]` (design.md §9): it holds
+                // for the arguments that clone (B-2026-11-07-11).
+                let derived = |d: &std::collections::HashSet<String>| {
+                    d.contains("Clone") && args.iter().all(|a| self.type_supports_clone(a))
+                };
                 if let Some(info) = self.structs.get(name) {
-                    info.is_shared || info.derived_traits.contains("Clone")
+                    info.is_shared || derived(&info.derived_traits)
                 } else if let Some(info) = self.enums.get(name) {
-                    info.is_shared || info.derived_traits.contains("Clone")
+                    info.is_shared || derived(&info.derived_traits)
                 } else if let Some(traits) = self.distinct_types.get(name) {
                     traits.contains("Clone")
                 } else {
@@ -2936,10 +2942,16 @@ impl super::env::TypeEnv {
                 if self.has_impl("Debug", name, args) {
                     return true;
                 }
+                // A derived `Debug` on a generic type is
+                // `impl[T: Debug] Debug for W[T]` (design.md §9): it holds
+                // for the arguments that are `Debug` (B-2026-11-07-11).
+                let derived = |d: &std::collections::HashSet<String>| {
+                    d.contains("Debug") && args.iter().all(|a| self.type_supports_debug(a))
+                };
                 if let Some(info) = self.structs.get(name) {
-                    info.derived_traits.contains("Debug")
+                    derived(&info.derived_traits)
                 } else if let Some(info) = self.enums.get(name) {
-                    info.derived_traits.contains("Debug")
+                    derived(&info.derived_traits)
                 } else if let Some(traits) = self.distinct_types.get(name) {
                     traits.contains("Debug")
                 } else {

@@ -2528,9 +2528,9 @@ impl<'a> super::TypeChecker<'a> {
         //
         // Deliberately NO `Display` bound, unlike the console family above:
         // dbg renders through `Debug` (design.md § Debug trait names "`dbg(x)`
-        // output" as its first consumer), which every type has. Requiring
-        // Display here would reject `dbg(some_struct)` — which the interpreter
-        // accepts and which is most of what dbg is for.
+        // output" as its first consumer). Display is never required or used
+        // in its place; a named type without `Debug` is refused under strict
+        // check (B-2026-11-07-11).
         if let ExprKind::Identifier(name) = &callee.kind {
             if name == "dbg" && self.local_scope.lookup(name).is_none() {
                 let ty = match args.len() {
@@ -2546,7 +2546,26 @@ impl<'a> super::TypeChecker<'a> {
                             while let Type::Ref(i) | Type::MutRef(i) = peeled {
                                 peeled = *i;
                             }
-                            if matches!(peeled, Type::Function { .. } | Type::OnceFunction { .. }) {
+                            let named = matches!(peeled, Type::Named { .. } | Type::Shared(_));
+                            if named && !self.type_supports_debug(&peeled) {
+                                // design.md §9 "Two traits, no fallback": a
+                                // type with no `Debug` is refused, never
+                                // printed through `Display` (B-2026-11-07-11).
+                                self.type_error(
+                                    format!(
+                                        "dbg() argument must implement `Debug`, and '{}' does \
+                                         not; add `#[derive(Debug)]` to it (or to the type \
+                                         argument that lacks it). dbg never falls back to \
+                                         `Display` (design.md §9 Display and Debug)",
+                                        type_display(&peeled)
+                                    ),
+                                    args[0].value.span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                );
+                            } else if matches!(
+                                peeled,
+                                Type::Function { .. } | Type::OnceFunction { .. }
+                            ) {
                                 self.type_error(
                                     format!(
                                         "dbg() argument must implement Debug, but '{}' is a \
