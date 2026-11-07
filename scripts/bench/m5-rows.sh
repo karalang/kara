@@ -152,7 +152,14 @@ ROWS = [
     ("B-2026-11-04-37", "401-500/467-unique-substrings-in-wraparound-string", "unique_substrings.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 1.03x"),
     ("B-2026-11-06-8", "301-400/354-russian-doll-envelopes", "russian_doll.kara", "rust:russian_doll.rs", "cycles", "M5 1.360x at 4471044a8a; x86 level"),
     ("B-2026-11-04-33", "301-400/318-maximum-product-of-word-lengths", "max_product.kara", "pair", "instructions", "x86 1.19x: write_word not inlined"),
-    ("B-2026-11-04-33", "1601-1700/1665-minimum-initial-energy-to-finish-tasks", "greedy.kara", "pair", "instructions", "x86 1.29x"),
+    ("B-2026-11-04-33", "1601-1700/1665-minimum-initial-energy-to-finish-tasks", "greedy.kara", "pair", "instructions", "x86 1.29x -> 1.18x"),
+    # -33's other four: first M5 figures since the row was filed.
+    ("B-2026-11-04-33", "201-300/214-shortest-palindrome", "shortest_palindrome.kara", "pair", "instructions", "x86 1.007x"),
+    ("B-2026-11-04-33", "201-300/247-strobogrammatic-number-ii", "strobogrammatic_ii.kara", "pair", "instructions", "x86 1.015x"),
+    ("B-2026-11-04-33", "201-300/288-unique-word-abbreviation", "uniqueabbr.kara", "pair", "instructions", "x86 0.926x"),
+    ("B-2026-11-04-33", "801-900/895-maximum-frequency-stack", "freq_stack.kara", "par", "wall", "par lane; M5 7.72 ms vs 6.85"),
+    # -07-1: kata 7 at the default phi-fold threshold 6 against 4, its own row.
+    ("B-2026-11-07-1", "1-100/7-reverse-integer", "reverse.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "M5 1.111x at 6e709e5fdd"),
     ("B-2026-11-05-10", "1-100/73-set-matrix-zeroes", "set_matrix_zeroes.kara", "par", "wall", "x86 8.7 s -> 0.44 s; par lane"),
 ]
 
