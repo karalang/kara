@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 153 |
-| false-positive | 132 |
+| diagnostics | 154 |
+| false-positive | 133 |
 | perf | 107 |
 | missing-feature | 100 |
 | soundness | 51 |
@@ -75,11 +75,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 249 |
+| typecheck | 250 |
 | mir | 131 |
 | mir-llvm | 130 |
 | cli | 71 |
-| ownership | 57 |
+| ownership | 58 |
 | parser | 42 |
 | interp | 30 |
 | effect | 25 |
@@ -113,6 +113,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-11 | 2026-11-07 | typecheck | low | §9 remainder of B-2026-11-06-27: `dbg` on a Display-only type and derived `Debug`/`Clone` on a generic type ignore the bound (items 8, 9); `Option.from`, `Result.from` and `i64.try_into` are missing, and an ambiguous `into()` reports `no method 'into'` instead of asking for an annotation (items 12, 13) | — |
+| B-2026-11-07-14 | 2026-11-07 | ownership | medium | `karac check` refuses moving a binding made by a `let .. else` inside a loop (`let Some(done) = rx.recv() else { .. }; out[done.slot] = Some(done.outcome);`) as "moved inside a loop and not assigned again before the next iteration", though it binds afresh each iteration and every backend runs it | — |
+| B-2026-11-07-15 | 2026-11-07 | typecheck | low | For `let job = jobs[j];` whose fields are then written (`job.status = 2`), `karac fix` derives `Clone` on the element type and adds `mut`, steering toward a copy that would drop the writes; the repair that keeps them is `let job = mut ref jobs[j];` | — |
 
 ### Relocated
 
