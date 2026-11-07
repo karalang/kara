@@ -133,6 +133,10 @@ const ALWAYS_KEPT: &[&str] = &[
     "remove",
     "retain",
     "reverse",
+    // The integer rotates the interpreter and backend answer by name share
+    // these with `Vec.rotate_left` / `rotate_right` (B-2026-11-06-35).
+    "rotate_left",
+    "rotate_right",
     "split",
     "split_whitespace",
     "strip_prefix",
