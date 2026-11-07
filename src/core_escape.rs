@@ -355,9 +355,15 @@ impl Walker<'_> {
                             && self.enums.contains(&segments[segments.len() - 2]);
                         match self.sigs.get(&key) {
                             Some(sig) => self.walk_args(args, Some(sig), None),
-                            // An enum variant constructor: the payload goes
-                            // where the value goes.
-                            None if variant => self.walk_args(args, None, value_of(pos)),
+                            // An enum variant constructor: a payload is a
+                            // positional field, so a closure in one escapes
+                            // as in a struct field or a tuple, even in a
+                            // local value (§9.3, B-2026-11-07-5).
+                            None if variant => self.walk_args(
+                                args,
+                                None,
+                                Some(value_of(pos).unwrap_or("stored in an enum payload")),
+                            ),
                             // A built-in associated function (`Vec.from_fn`):
                             // its function-typed parameters do not escape
                             // (§9.3, B-2026-10-25-20).

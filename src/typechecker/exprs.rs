@@ -10121,8 +10121,20 @@ impl<'a> super::TypeChecker<'a> {
                 // is: a read upgrades it to `Option[T]`, and an assignment's
                 // target keeps the slot's type so the store downgrades
                 // (design.md § Cycles and `weak`, B-2026-10-25-45).
+                // A `ref weak T` binding (`for w in v.iter()` over a
+                // `Vec[weak T]`, a `weak` payload bound by a `match` on a
+                // borrowed enum) reads through its reference the same way
+                // (B-2026-11-07-7).
                 if !self.assigning_lhs {
-                    if let Type::Weak(inner) = &ty {
+                    let weak = match &ty {
+                        Type::Weak(inner) => Some(inner),
+                        Type::Ref(r) => match &**r {
+                            Type::Weak(inner) => Some(inner),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(inner) = weak {
                         self.weak_slot_reads.insert(SpanKey::from_span(&expr.span));
                         return Type::Named {
                             name: "Option".to_string(),

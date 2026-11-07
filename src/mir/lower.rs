@@ -5939,6 +5939,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 ExprKind::Return(Some(v)) => is_sym(v),
                 ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => es.iter().any(is_sym),
+                // An `E.V(..)` payload is a positional field, so a closure
+                // stored there escapes as in a struct field (§9.3,
+                // B-2026-11-07-5); `core_escape` reads it the same way.
+                ExprKind::Call { callee, args }
+                    if matches!(callee.kind, ExprKind::Path { .. })
+                        && matches!(
+                            self.lcx.res.get(&callee.id),
+                            Some(Res::Def(d)) if self.lcx.defs.table.get(*d).kind == DefKind::Variant
+                        ) =>
+                {
+                    args.iter().any(|a| is_sym(&a.value))
+                }
                 _ => false,
             };
         });

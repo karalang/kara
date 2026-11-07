@@ -48,7 +48,7 @@ use crate::ownership::{
     lookup_callee_param_modes, OwnershipMode,
 };
 use crate::resolver::SpanKey;
-use crate::typechecker::{Type, TypeCheckResult};
+use crate::typechecker::{Type, TypeCheckResult, VariantTypeInfo};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 
@@ -631,6 +631,16 @@ impl<'a> UseClassifier<'a> {
             self.walk_stmt(stmt);
         }
         if let Some(final_expr) = &block.final_expr {
+            // A tail `if`'s condition, like a statement `if`'s, runs before
+            // either branch (B-2026-11-07-4).
+            if let ExprKind::If { condition, .. } = &final_expr.kind {
+                if self.closure_span_stack.is_empty() {
+                    self.record_chain_closures(
+                        condition,
+                        (condition.span.offset, condition.span.length),
+                    );
+                }
+            }
             self.walk_expr(final_expr, terminal_mode);
         }
         if let Some(outer) = outer {
@@ -677,27 +687,48 @@ impl<'a> UseClassifier<'a> {
         // what they read, lies after them (kata 1053's
         // `let Some(i) = r.find(|k| v[k] > 2) else { return v; }`).
         let mut extent = (stmt.span.offset, stmt.span.length);
-        let value = match &stmt.kind {
-            StmtKind::Let { value, .. } => {
-                if !self.tc.expr_type(value).is_some_and(holds_no_closure) {
-                    return;
+        let value =
+            match &stmt.kind {
+                StmtKind::Let { value, .. } => {
+                    if !self.tc.expr_type(value).is_some_and(|t| {
+                        holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
+                    }) {
+                        return;
+                    }
+                    value
                 }
-                value
-            }
-            StmtKind::LetElse {
-                value, else_block, ..
-            } => {
-                if !self.tc.expr_type(value).is_some_and(holds_no_closure)
-                    || else_block.span.offset <= stmt.span.offset
-                {
-                    return;
+                StmtKind::LetElse {
+                    value, else_block, ..
+                } => {
+                    if !self.tc.expr_type(value).is_some_and(|t| {
+                        holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
+                    }) || else_block.span.offset <= stmt.span.offset
+                    {
+                        return;
+                    }
+                    extent.1 = else_block.span.offset - stmt.span.offset;
+                    value
                 }
-                extent.1 = else_block.span.offset - stmt.span.offset;
-                value
-            }
-            StmtKind::Expr(e) => e,
-            _ => return,
-        };
+                // An `if`'s condition runs before either branch, so a branch
+                // that moves what the condition's closures read lies after them
+                // (`if ps.iter().any(|p| p.name == name) { .. } Ok(P { name })`,
+                // B-2026-11-07-4).
+                StmtKind::Expr(e) => match &e.kind {
+                    ExprKind::If { condition, .. } => {
+                        extent = (condition.span.offset, condition.span.length);
+                        condition
+                    }
+                    _ => e,
+                },
+                _ => return,
+            };
+        self.record_chain_closures(value, extent);
+    }
+
+    /// The closure literals of `value`'s receiver chain (or of the named
+    /// function call at its root), which run within `extent`; see
+    /// [`Self::record_statement_closures`].
+    fn record_chain_closures(&mut self, value: &Expr, extent: (usize, usize)) {
         let mut found = Vec::new();
         let mut e = value;
         loop {
@@ -734,7 +765,10 @@ impl<'a> UseClassifier<'a> {
         }
         if found.is_empty()
             || matches!(e.kind, ExprKind::MethodCall { .. })
-            || !self.tc.expr_type(e).is_some_and(holds_no_closure)
+            || !self
+                .tc
+                .expr_type(e)
+                .is_some_and(|t| holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[]))
         {
             return;
         }
@@ -2788,10 +2822,44 @@ fn builds_a_temporary(e: &Expr) -> bool {
     )
 }
 
-/// A type that cannot hold a closure: scalars, strings, and the standard
-/// collections, `Option` and `Result` over such types (B-2026-10-29-43). A
-/// user type, a type parameter or a `dyn` might hold one, so none counts.
-fn holds_no_closure(ty: &Type) -> bool {
+/// The standard types that hold a closure only through their type
+/// arguments. A range is two bounds, so `(1..n + 1).filter(|i| ..).collect()`
+/// is a chain whose root holds no closure, like `v.iter()`'s
+/// (B-2026-11-03-20). They are asked before the user-type tables, which
+/// list some of them too.
+const STANDARD_CLOSURE_FREE: &[&str] = &[
+    "String",
+    "Vec",
+    "VecDeque",
+    "Map",
+    "Set",
+    "SortedMap",
+    "SortedSet",
+    "Option",
+    "Result",
+    "Range",
+    "RangeInclusive",
+    "RangeFrom",
+    "RangeTo",
+    "RangeToInclusive",
+    "RangeFull",
+];
+
+/// Whether a value of `ty` can hold no closure (B-2026-10-29-43): scalars,
+/// strings, the standard collections, `Option`, `Result` and ranges over
+/// such types, and a user struct or enum (plain or `shared`) whose fields
+/// hold none either, read from the typechecker's tables
+/// (`ps.iter().any(|p| p.name == name)` over a `Vec[P]` of plain records,
+/// B-2026-11-07-4). A type parameter's argument or a `dyn` might hold one. `seen` cuts a recursive type off at its second visit;
+/// `params` are the generic parameters in scope, whose arguments the
+/// caller has already checked.
+fn holds_no_closure_in(
+    ty: &Type,
+    tc: Option<&TypeCheckResult>,
+    seen: &mut Vec<String>,
+    params: &[String],
+) -> bool {
+    let rec = |t: &Type, seen: &mut Vec<String>| holds_no_closure_in(t, tc, seen, params);
     match ty {
         Type::Int(_)
         | Type::UInt(_)
@@ -2801,34 +2869,60 @@ fn holds_no_closure(ty: &Type) -> bool {
         | Type::Str
         | Type::Unit
         | Type::Never => true,
-        Type::Ref(t) | Type::MutRef(t) => holds_no_closure(t),
-        Type::Tuple(ts) => ts.iter().all(holds_no_closure),
-        Type::Array { element, .. } | Type::Slice { element, .. } => holds_no_closure(element),
-        Type::Named { name, args } => {
-            matches!(
-                name.as_str(),
-                "String"
-                    | "Vec"
-                    | "VecDeque"
-                    | "Map"
-                    | "Set"
-                    | "SortedMap"
-                    | "SortedSet"
-                    | "Option"
-                    | "Result"
-                    // B-2026-11-03-20: a range is two bounds, so
-                    // `(1..n + 1).filter(|i| ..).collect()` is a chain whose
-                    // root holds no closure, like `v.iter()`'s.
-                    | "Range"
-                    | "RangeInclusive"
-                    | "RangeFrom"
-                    | "RangeTo"
-                    | "RangeToInclusive"
-                    | "RangeFull"
-            ) && args.iter().all(holds_no_closure)
+        Type::Ref(t) | Type::MutRef(t) => rec(t, seen),
+        Type::Tuple(ts) => ts.iter().all(|t| rec(t, seen)),
+        Type::Array { element, .. } | Type::Slice { element, .. } => rec(element, seen),
+        Type::Named { name, args } if args.is_empty() && params.contains(name) => true,
+        Type::Shared(name) => tc.is_some_and(|tc| user_type_holds_no_closure(tc, name, &[], seen)),
+        Type::Named { name, args } if STANDARD_CLOSURE_FREE.contains(&name.as_str()) => {
+            args.iter().all(|t| rec(t, seen))
+        }
+        Type::Named { name, args }
+            if tc.is_some_and(|tc| {
+                tc.struct_info.contains_key(name) || tc.enum_info.contains_key(name)
+            }) =>
+        {
+            args.iter().all(|t| rec(t, seen))
+                && tc.is_some_and(|tc| user_type_holds_no_closure(tc, name, args, seen))
         }
         _ => false,
     }
+}
+
+/// Whether every field of the user struct or enum `name` holds no closure.
+/// A generic parameter's field is the caller's argument, already checked.
+fn user_type_holds_no_closure(
+    tc: &TypeCheckResult,
+    name: &str,
+    args: &[Type],
+    seen: &mut Vec<String>,
+) -> bool {
+    if seen.iter().any(|n| n == name) {
+        return true;
+    }
+    seen.push(name.to_string());
+    let ok = if let Some(si) = tc.struct_info.get(name) {
+        si.generic_params.len() == args.len()
+            && si
+                .fields
+                .iter()
+                .all(|(_, t, _)| holds_no_closure_in(t, Some(tc), seen, &si.generic_params))
+    } else if let Some(ei) = tc.enum_info.get(name) {
+        ei.generic_params.len() == args.len()
+            && ei.variants.iter().all(|(_, v)| match v {
+                VariantTypeInfo::Unit => true,
+                VariantTypeInfo::Tuple(ts) => ts
+                    .iter()
+                    .all(|t| holds_no_closure_in(t, Some(tc), seen, &ei.generic_params)),
+                VariantTypeInfo::Struct(fs) => fs
+                    .iter()
+                    .all(|(_, t)| holds_no_closure_in(t, Some(tc), seen, &ei.generic_params)),
+            })
+    } else {
+        false
+    };
+    seen.pop();
+    ok
 }
 
 #[cfg(test)]

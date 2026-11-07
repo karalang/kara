@@ -550,7 +550,15 @@ fn first_witness(
             // closure is made. When the two closures are made on mutually
             // exclusive paths (one `if` arm each, no loop around them), no
             // run makes both, so nothing uses the value after the move.
-            if !closure_local && (c.capture_scope.is_some() || cfg.closure_body_blocks.contains(cb))
+            // The same holds for a plain move on one path and a closure that
+            // reads the value made on another (`match k { "a" => find(|s|
+            // s.name == opt), _ => Mailer { from: opt } }`, B-2026-11-07-4): a
+            // closure that borrows its capture dies with the frame, so it can
+            // run after the move only if it is made on a path through it.
+            if !closure_local
+                && (c.capture_scope.is_some()
+                    || cfg.closure_body_blocks.contains(cb)
+                    || cfg.closure_body_blocks.contains(ub))
             {
                 let made = |site: &UseSite, b: BlockId| -> Option<BlockId> {
                     let owner = site

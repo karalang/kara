@@ -1146,7 +1146,14 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn check_signature_visibility(&mut self) {
         let type_vis = self.collect_type_visibility();
         let items: &[Item] = &self.program.items;
+        // The library's signatures name the library's types. `type_vis` is
+        // keyed by name, so a program's private `trait Receiver` would read
+        // as the type the library's `channel` returns (B-2026-11-07-6).
+        let library = self.program.library_start.unwrap_or(usize::MAX);
         for item in items {
+            if item.span().offset >= library {
+                continue;
+            }
             match item {
                 Item::Function(f) if f.is_pub => {
                     let scope = Self::generic_param_names(&f.generic_params);
