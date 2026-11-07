@@ -1,0 +1,33 @@
+// A method under the caller's bound, called on a part of a tuple element of
+// a generic `Vec[(K, K)]` walked by `for`: the receiver's `K` is the caller's
+// own parameter, not one the call solves (B-2026-11-07-8).
+trait Show {
+    fn show(self) -> String;
+}
+
+impl Show for i64 {
+    fn show(self) -> String {
+        f"<{self}>"
+    }
+}
+
+fn body[K: Show](d: Vec[(K, K)]) -> String {
+    let mut s = "";
+    for (k, v) in d.iter() {
+        s = s + k.show() + v.show();
+    }
+    s
+}
+
+fn firsts[K: Show](d: Vec[(K, K)]) -> String {
+    let mut s = "";
+    for p in d.iter() {
+        s = s + p.0.show();
+    }
+    s
+}
+
+fn main() {
+    println(body([(1, 2), (3, 4)]));
+    println(firsts([(5, 6), (7, 8)]));
+}

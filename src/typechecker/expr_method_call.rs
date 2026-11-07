@@ -6343,10 +6343,35 @@ pub(super) fn collect_type_param_names(ty: &Type, out: &mut Vec<String>) {
         }
         return;
     }
-    if let Type::Named { args, .. } = ty {
-        for a in args {
-            collect_type_param_names(a, out);
+    // Every shape a receiver's type can hold one in: a tuple element of a
+    // `Vec[(K, K)]` is the caller's `K` too (B-2026-11-07-8).
+    match ty {
+        Type::Named { args, .. } => args.iter().for_each(|a| collect_type_param_names(a, out)),
+        Type::Ref(i) | Type::MutRef(i) => collect_type_param_names(i, out),
+        Type::Tuple(ts) => ts.iter().for_each(|a| collect_type_param_names(a, out)),
+        Type::Array { element, .. } | Type::Slice { element, .. } => {
+            collect_type_param_names(element, out)
         }
+        Type::Function {
+            params,
+            return_type,
+            ..
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+            ..
+        } => {
+            params.iter().for_each(|a| collect_type_param_names(a, out));
+            collect_type_param_names(return_type, out);
+        }
+        Type::Dyn { args, assoc, .. } => {
+            args.iter().for_each(|a| collect_type_param_names(a, out));
+            assoc
+                .iter()
+                .for_each(|(_, a)| collect_type_param_names(a, out));
+        }
+        _ => {}
     }
 }
 

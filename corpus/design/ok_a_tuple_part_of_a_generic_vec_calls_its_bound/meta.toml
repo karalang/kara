@@ -1,0 +1,9 @@
+source = "B-2026-11-07-8"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Generics: inside fn body[K: Show], a tuple element of a Vec[(K, K)] holds the caller's K, so k.show() dispatches through the bound; check refused it as 'a type that failed to check is not lowered yet' since 5f1222f497."
