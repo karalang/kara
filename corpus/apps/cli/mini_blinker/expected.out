@@ -1,0 +1,161 @@
+== load
+wiring.conf: 6 signals, 5 plugins, 20 connections
+wiring.conf:29: bad signal name 'Order_Placed'
+wiring.conf:30: signal order_placed already defined
+wiring.conf:31: plugin mailer already defined
+wiring.conf:32: unknown kind 'courier'
+wiring.conf:33: bad value for limit: 'lots'
+wiring.conf:34: loyalty needs rate=<value>
+wiring.conf:35: no signal 'no_such_signal'
+wiring.conf:36: mailer already connected to order_placed
+wiring.conf:37: no receiver 'ghost'
+wiring.conf:38: no signal 'refunds'
+wiring.conf:39: metrics cannot be connected weakly
+wiring.conf:40: unknown option 'bogus'
+wiring.conf:41: usage: connect <receiver> <signal|*> [sender=<name>] [weak]
+wiring.conf:42: unknown directive 'frobnicate'
+stock.csv: 5 items
+stock.csv:7: bad qty 'two'
+stock.csv:8: expected 3 fields
+events.log: 39 lines
+== events
+> 09:00:01 checkout order_placed order=1001 customer=ana sku=tea-01 qty=2 total=18.40
+  inventory: reserved 2 tea-01, 10 left
+  mailer: mail #1 to ana
+  loyalty: ana +1 points, 1 in all
+> 09:00:05 checkout order_placed order=1002 customer=ben sku=mug-07 qty=1 total=12.00
+  >> stock_low from inventory: sku=mug-07 left=2
+    mailer: mail #2 to buyer
+    inventory failed: re-entrant delivery skipped
+  inventory: reserved 1 mug-07, 2 left
+  mailer: mail #3 to ben
+  loyalty: ben +1 points, 1 in all
+> 09:00:09 phone order_placed order=1003 customer=cy sku=tea-01 qty=6 total=55.20
+  >> stock_low from inventory: sku=tea-01 left=4
+    mailer: mail #4 to buyer
+    inventory failed: re-entrant delivery skipped
+  inventory: reserved 6 tea-01, 4 left
+  loyalty: cy +5 points, 5 in all
+> 09:00:12 checkout payment_received order=1001 amount=18.40
+> 09:00:15 checkout payment_received order=1003 amount=812.00
+  fraud failed: payment of 812.00 for order 1003 is over the limit of 500.00
+> 09:00:20 @ status
+  order_placed: audit, inventory, mailer (from checkout), loyalty (weak), metrics
+  order_cancelled: audit, inventory, metrics
+  order_shipped: audit, mailer, metrics
+  payment_received: audit, fraud, metrics
+  stock_low: audit, mailer, inventory, metrics
+  refund_issued: audit, metrics
+> 09:00:30 checkout order_placed order=1004 customer=ana sku=tea-01 qty=1 total=9.20
+  inventory: reserved 1 tea-01, 3 left
+  mailer: mail #5 to ana
+  loyalty: ana +0 points, 1 in all
+> 09:00:31 checkout order_placed order=1005 customer=dee sku=cup-11 qty=1 total=4.00
+  inventory failed: out of stock: cup-11 has 0, wants 1
+  mailer: mail #6 to dee
+  loyalty: dee +0 points, 0 in all
+> 09:00:32 checkout order_placed order=1006 customer=ed sku=vase-9 qty=1 total=30.00
+  inventory failed: unknown sku 'vase-9'
+  mailer: mail #7 to ed
+  loyalty: ed +3 points, 3 in all
+> 09:00:40 warehouse order_shipped order=1001 customer=ana
+  mailer: mail #8 to ana
+> 09:00:45 checkout order_cancelled order=1003 customer=cy sku=tea-01 qty=6
+  inventory: released 6 tea-01, 9 left
+> 09:01:00 @ temp order_placed 2
+  trace on order_placed for 2 sends
+> 09:01:05 checkout order_placed order=1007 customer=fay sku=pot-03 qty=4 total=88.00
+  >> stock_low from inventory: sku=pot-03 left=1
+    mailer: mail #9 to buyer
+    inventory failed: re-entrant delivery skipped
+  inventory: reserved 4 pot-03, 1 left
+  mailer: mail #10 to fay
+  loyalty: fay +8 points, 8 in all
+  trace: trace #1: order=1007 customer=fay sku=pot-03 qty=4 total=88.00
+> 09:01:06 @ mute order_shipped
+  muted order_shipped
+> 09:01:07 warehouse order_shipped order=1002 customer=ben
+  (muted)
+> 09:01:08 @ unmute order_shipped
+  unmuted order_shipped
+> 09:01:10 checkout order_placed order=1008 customer=ben sku=tea-02 qty=6 total=41.40
+  >> stock_low from inventory: sku=tea-02 left=2
+    mailer: mail #11 to buyer
+    inventory failed: re-entrant delivery skipped
+  inventory: reserved 6 tea-02, 2 left
+  mailer: mail #12 to ben
+  loyalty: ben +4 points, 5 in all
+  trace: trace #2: order=1008 customer=ben sku=tea-02 qty=6 total=41.40
+  trace on order_placed ended
+> 09:01:15 checkout order_placed order=1009 customer=ana sku=tea-02 qty=1 total=6.90
+  inventory: reserved 1 tea-02, 1 left
+  mailer: mail #13 to ana
+  loyalty: ana +0 points, 1 in all
+> 09:01:20 @ drop loyalty
+  dropped loyalty
+> 09:01:25 checkout order_placed order=1010 customer=gus sku=mug-07 qty=2 total=24.00
+  inventory: reserved 2 mug-07, 0 left
+  mailer: mail #14 to gus
+  pruned loyalty
+> 09:01:30 @ disconnect mailer order_shipped
+  disconnected mailer from order_shipped
+> 09:01:31 warehouse order_shipped order=1007 customer=fay
+> 09:01:32 @ disconnect mailer order_shipped
+  error: events.log:24: mailer is not connected to order_shipped
+> 09:01:40 accounts refund_issued order=1003 amount=55.20
+> 09:01:45 checkout order_placed order=1011 customer=hal sku=tea-01 qty=x total=1.00
+  inventory failed: bad qty 'x'
+  mailer: mail #15 to hal
+> 09:01:46 checkout order_placed order=1012 customer=ivy qty=1 total=3.00
+  inventory failed: missing field 'sku'
+  mailer: mail #16 to ivy
+> 09:01:50 checkout payment_received order=1010 amount=24.00
+> 09:01:55 @ status
+  order_placed: audit, inventory, mailer (from checkout), metrics
+  order_cancelled: audit, inventory, metrics
+  order_shipped: audit, metrics
+  payment_received: audit, fraud, metrics
+  stock_low: audit, mailer, inventory, metrics
+  refund_issued: audit, metrics
+> 09:02:00 @ drop audit
+  dropped audit
+> 09:02:05 warehouse order_shipped order=1008 customer=ben
+> 09:02:10 checkout order_placed order=1013 customer=jo sku=pot-03 qty=1 total=22.00
+  inventory: reserved 1 pot-03, 0 left
+  mailer: mail #17 to jo
+> 09:02:20 checkout order_exploded order=1
+  error: events.log:35: no signal 'order_exploded'
+> 9:02:21 checkout order_placed order=1014
+  error: events.log:36: bad time '9:02:21'
+> 09:02:22 checkout order_placed order 1014
+  error: events.log:37: bad field 'order'
+> 09:02:23 @ mute nothing
+  error: events.log:38: no signal 'nothing'
+> 09:02:24 @ temp order_placed 0
+  error: events.log:39: bad count '0'
+> 09:02:25 @ drop loyalty
+  error: events.log:40: loyalty is not held
+> 09:02:26 @ dance
+  error: events.log:41: unknown command 'dance'
+> 09:02:27 checkout
+  error: events.log:42: missing signal
+== end
+  inventory: 14 delivered; 9 orders reserved, 1 released
+  mailer: 17 delivered; 17 mails
+  audit: 25 delivered; 25 lines in audit.log
+  fraud: 3 delivered; 1 payments refused
+  loyalty: gone
+  stock tea-01: 9 (reorder at 4)
+  stock mug-07: 0 (reorder at 2)
+  stock pot-03: 0 (reorder at 1)
+  stock tea-02: 1 (reorder at 3)
+  stock cup-11: 0 (reorder at 2)
+  sent order_placed: 13
+  sent order_cancelled: 1
+  sent order_shipped: 3
+  sent payment_received: 3
+  sent stock_low: 4
+  sent refund_issued: 1
+== files
+  audit.log: 25 lines
+  outbox.txt: 17 lines

@@ -1,0 +1,1050 @@
+// mini_blinker: an in-process signal bus in the shape of blinker. Named
+// signals deliver an event to their receivers in connection order:
+// plugins behind `dyn Receiver` (held strongly or weakly), and closures
+// such as the metrics counter and a temporary tracer that a guard
+// disconnects when it is dropped. A receiver may send another signal
+// while it handles one, a receiver that is already busy is skipped rather
+// than re-entered, and a weakly held plugin that nothing else keeps alive
+// is pruned at the next send. The plugins write their mail and audit
+// files as they go.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+import std.io.File;
+import std.io.BufWriter;
+
+// ------------------------------------------------------------ tokens
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_ident(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 32 and is_lower(b[0])
+        and b.iter().all(|c| is_lower(c) or is_digit(c) or c == b'_')
+}
+
+fn is_word(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 40
+        and b.iter().all(|c| is_lower(c) or is_digit(c) or c == b'-' or c == b'_' or c == b'.')
+}
+
+fn digits(s: Str) -> bool {
+    s.len() > 0 and s.len() <= 9 and s.bytes().iter().all(|c| is_digit(c))
+}
+
+fn count(s: Str) -> Option[i64] {
+    if digits(s) { i64.parse(s).ok() } else { None }
+}
+
+// Cents: `12`, `12.5` and `12.50` are all fine.
+fn money(s: Str) -> Option[i64] {
+    let (whole, frac) = match s.split_once(".") {
+        Some((w, f)) => {
+            if not digits(f) or f.len() > 2 {
+                return None;
+            }
+            (w, f)
+        }
+        None => (s, ""),
+    };
+    let w = count(whole)?;
+    let f = if frac.is_empty() { 0 } else if frac.len() == 1 { count(frac)? * 10 } else { count(frac)? };
+    Some(w * 100 + f)
+}
+
+fn show_money(c: i64) -> String {
+    let cents = c % 100;
+    let pad = if cents < 10 { "0" } else { "" };
+    f"{c / 100}.{pad}{cents}"
+}
+
+// The words of a line before any `#`.
+fn words(line: Str) -> Vec[String] {
+    let body = match line.split_once("#") {
+        Some((before, _)) => before,
+        None => line,
+    };
+    body.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+fn fields_text(fields: Slice[(String, String)]) -> String {
+    let parts: Vec[String] = fields.iter().map(|(k, v)| f"{k}={v}").collect();
+    parts.join(" ")
+}
+
+// ------------------------------------------------------------ wiring.conf
+
+#[derive(Clone)]
+struct PluginDef {
+    name: String,
+    kind: String,
+    opts: SortedMap[String, String],
+}
+
+#[derive(Clone)]
+struct ConnDef {
+    recv: String,
+    signal: String,
+    weak: bool,
+    sender: Option[String],
+}
+
+struct Wiring {
+    signals: Vec[String],
+    plugins: Vec[PluginDef],
+    conns: Vec[ConnDef],
+    errors: Vec[String],
+}
+
+// The setting a plugin kind takes; every kind takes exactly one, and needs it.
+fn setting_of(kind: Str) -> Option[Str] {
+    match kind {
+        "inventory" => Some("low"),
+        "mailer" => Some("from"),
+        "audit" => Some("file"),
+        "fraud" => Some("limit"),
+        "loyalty" => Some("rate"),
+        _ => None,
+    }
+}
+
+fn check_setting(k: Str, v: Str, signals: Slice[String]) -> Result[(), String] {
+    let ok = match k {
+        "low" => {
+            if not signals.contains(v.to_string()) {
+                return Err(f"no signal '{v}'");
+            }
+            true
+        }
+        "from" => match v.split_once("@") {
+            Some((user, host)) => is_word(f"{user}{host}") and not host.contains("@"),
+            None => false,
+        },
+        "file" => is_word(v),
+        "limit" => money(v).is_some(),
+        _ => count(v).is_some_and(|n| n > 0),
+    };
+    if ok { Ok(()) } else { Err(f"bad value for {k}: '{v}'") }
+}
+
+fn plugin_line(w: Slice[String], wiring: Wiring) -> Result[PluginDef, String] {
+    if w.len() < 3 {
+        return Err("usage: plugin <name> <kind> [key=value...]".to_string());
+    }
+    let name = w[1].clone();
+    let kind = w[2].clone();
+    if not is_ident(name) {
+        return Err(f"bad plugin name '{name}'");
+    }
+    if name == "metrics" {
+        return Err("plugin name 'metrics' is reserved".to_string());
+    }
+    if wiring.plugins.iter().any(|p| p.name == name) {
+        return Err(f"plugin {name} already defined");
+    }
+    let Some(want) = setting_of(kind) else {
+        return Err(f"unknown kind '{kind}'");
+    };
+    let mut opts: SortedMap[String, String] = SortedMap.new();
+    for o in w[3..].iter() {
+        let Some((k, v)) = o.split_once("=") else {
+            return Err(f"expected key=value, found '{o}'");
+        };
+        if k != want {
+            return Err(f"unknown setting {k} for {kind}");
+        }
+        if opts.contains_key(k) {
+            return Err(f"duplicate setting {k}");
+        }
+        check_setting(k, v, wiring.signals)?;
+        opts.insert(k.to_string(), v.to_string());
+    }
+    if not opts.contains_key(want) {
+        return Err(f"{kind} needs {want}=<value>");
+    }
+    Ok(PluginDef { name, kind, opts })
+}
+
+fn connect_line(w: Slice[String], wiring: Wiring) -> Result[Vec[ConnDef], String] {
+    if w.len() < 3 {
+        return Err("usage: connect <receiver> <signal|*> [sender=<name>] [weak]".to_string());
+    }
+    let r = w[1].clone();
+    let s = w[2].clone();
+    if r != "metrics" and not wiring.plugins.iter().any(|p| p.name == r) {
+        return Err(f"no receiver '{r}'");
+    }
+    if s != "*" and not wiring.signals.contains(s) {
+        return Err(f"no signal '{s}'");
+    }
+    let mut weak = false;
+    let mut sender: Option[String] = None;
+    for o in w[3..].iter() {
+        if o == "weak" {
+            if r == "metrics" {
+                return Err("metrics cannot be connected weakly".to_string());
+            }
+            weak = true;
+        } else if o.starts_with("sender=") and is_word(o.substring(7, o.len())) {
+            sender = Some(o.substring(7, o.len()).to_string());
+        } else {
+            return Err(f"unknown option '{o}'");
+        }
+    }
+    let targets: Vec[String] = if s == "*" { wiring.signals.clone() } else { [s] };
+    for t in targets.iter() {
+        if wiring.conns.iter().any(|c| c.recv == r and c.signal == t) {
+            return Err(f"{r} already connected to {t}");
+        }
+    }
+    Ok(targets.iter().map(|t| ConnDef { recv: r.clone(), signal: t.clone(), weak, sender: sender.clone() }).collect())
+}
+
+fn parse_wiring(text: Str) -> Wiring {
+    let mut wiring = Wiring { signals: Vec.new(), plugins: Vec.new(), conns: Vec.new(), errors: Vec.new() };
+    for (i, raw) in text.split("\n").enumerate() {
+        let w = words(raw);
+        if w.is_empty() {
+            continue;
+        }
+        let r: Result[(), String] = match w[0].as_str() {
+            "signal" => {
+                if w.len() != 2 {
+                    Err("usage: signal <name>".to_string())
+                } else if not is_ident(w[1]) {
+                    Err(f"bad signal name '{w[1]}'")
+                } else if wiring.signals.contains(w[1]) {
+                    Err(f"signal {w[1]} already defined")
+                } else {
+                    wiring.signals.push(w[1].clone());
+                    Ok(())
+                }
+            }
+            "plugin" => plugin_line(w, wiring).map(|p| wiring.plugins.push(p)),
+            "connect" => connect_line(w, wiring).map(|cs| wiring.conns.extend(cs)),
+            other => Err(f"unknown directive '{other}'"),
+        };
+        if let Err(e) = r {
+            wiring.errors.push(f"wiring.conf:{i + 1}: {e}");
+        }
+    }
+    wiring
+}
+
+// ------------------------------------------------------------ stock.csv
+
+#[derive(Clone)]
+struct Item {
+    sku: String,
+    qty: i64,
+    reorder: i64,
+}
+
+fn parse_stock(text: Str) -> (Vec[Item], Vec[String]) {
+    let mut lines: Vec[String] = text.split("\n").map(|l| l.to_string()).collect();
+    if lines.len() > 0 and lines[lines.len() - 1].is_empty() {
+        lines.pop();
+    }
+    if lines.is_empty() or lines[0] != "sku,qty,reorder" {
+        return (Vec.new(), ["stock.csv:1: bad header".to_string()]);
+    }
+    let mut items: Vec[Item] = Vec.new();
+    let mut errors: Vec[String] = Vec.new();
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        let no = i + 1;
+        let f: Vec[String] = line.split(",").map(|x| x.to_string()).collect();
+        if f.len() != 3 {
+            errors.push(f"stock.csv:{no}: expected 3 fields");
+        } else if not is_word(f[0]) {
+            errors.push(f"stock.csv:{no}: bad sku '{f[0]}'");
+        } else if items.iter().any(|it| it.sku == f[0]) {
+            errors.push(f"stock.csv:{no}: duplicate sku {f[0]}");
+        } else {
+            match (count(f[1]), count(f[2])) {
+                (None, _) => errors.push(f"stock.csv:{no}: bad qty '{f[1]}'"),
+                (_, None) => errors.push(f"stock.csv:{no}: bad reorder level '{f[2]}'"),
+                (Some(qty), Some(reorder)) => items.push(Item { sku: f[0].clone(), qty, reorder }),
+            }
+        }
+    }
+    (items, errors)
+}
+
+// ------------------------------------------------------------ events.log
+
+struct EventLine {
+    no: i64,
+    line: String,
+    at: String,
+    sender: String,
+    signal: String,
+    fields: Vec[(String, String)],
+    cmd: Option[Vec[String]],
+    err: Option[String],
+}
+
+fn is_time(t: Str) -> bool {
+    let b = t.bytes();
+    if b.len() != 8 or b[2] != b':' or b[5] != b':' {
+        return false;
+    }
+    match (count(t.substring(0, 2)), count(t.substring(3, 5)), count(t.substring(6, 8))) {
+        (Some(h), Some(m), Some(s)) => h < 24 and m < 60 and s < 60,
+        _ => false,
+    }
+}
+
+fn parse_events(text: Str) -> Vec[EventLine] {
+    let mut evs: Vec[EventLine] = Vec.new();
+    for (i, raw) in text.split("\n").enumerate() {
+        let line = raw.trim();
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        let w: Vec[String] = line.split_whitespace().map(|x| x.to_string()).collect();
+        let mut ev = EventLine {
+            no: i + 1,
+            line: line.to_string(),
+            at: w[0].clone(),
+            sender: String.new(),
+            signal: String.new(),
+            fields: Vec.new(),
+            cmd: None,
+            err: None,
+        };
+        if not is_time(w[0]) {
+            ev.err = Some(f"bad time '{w[0]}'");
+        } else if w.len() >= 2 and w[1] == "@" {
+            if w.len() < 3 {
+                ev.err = Some("missing command".to_string());
+            } else {
+                ev.cmd = Some(w[2..].to_vec());
+            }
+        } else if w.len() < 3 {
+            ev.err = Some("missing signal".to_string());
+        } else {
+            ev.sender = w[1].clone();
+            ev.signal = w[2].clone();
+            for f in w[3..].iter() {
+                match f.split_once("=") {
+                    Some((k, v)) if not k.is_empty() => ev.fields.push((k.to_string(), v.to_string())),
+                    _ => {
+                        ev.err = Some(f"bad field '{f}'");
+                        break;
+                    }
+                }
+            }
+        }
+        evs.push(ev);
+    }
+    evs
+}
+
+// ------------------------------------------------------------ the bus
+
+#[derive(Clone)]
+struct Delivery {
+    signal: String,
+    sender: String,
+    at: String,
+    fields: Vec[(String, String)],
+    depth: i64,
+}
+
+impl Delivery {
+    fn field(self, k: Str) -> Result[String, String] {
+        match self.fields.iter().find(|(kk, _)| kk == k) {
+            Some((_, v)) => Ok(v.clone()),
+            None => Err(f"missing field '{k}'"),
+        }
+    }
+}
+
+type Reply = Result[Option[String], String];
+
+trait Receiver {
+    fn receive(mut ref self, d: Delivery) -> Reply;
+    fn summary(self) -> String;
+
+    // Lines for the end report after the plugin lines.
+    fn report(self) -> Vec[String] {
+        Vec.new()
+    }
+}
+
+// A plugin as the bus holds it.
+shared struct Sub {
+    name: String,
+    mut handler: dyn Receiver,
+    mut busy: bool,
+    mut delivered: i64,
+}
+
+enum Link {
+    Strong(Sub),
+    Weak(weak Sub),
+    Func(Fn(Delivery) -> Reply),
+}
+
+struct Conn {
+    id: i64,
+    name: String,
+    sender: Option[String],
+    link: Link,
+}
+
+shared struct Signal {
+    name: String,
+    mut receivers: Vec[Conn],
+    mut muted: bool,
+}
+
+fn indent(depth: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..depth {
+        s.push_str("  ");
+    }
+    s
+}
+
+impl Signal {
+    // Delivers to every receiver in connection order, printing what each
+    // one says. A nested send (depth > 0) prints its own header.
+    fn send(self, sender: Str, at: Str, fields: Slice[(String, String)], depth: i64) {
+        let ind = indent(depth + 1);
+        if depth > 0 {
+            println(f"{indent(depth)}>> {self.name} from {sender}: {fields_text(fields)}");
+        }
+        if self.muted {
+            println(f"{ind}(muted)");
+            return;
+        }
+        let d = Delivery {
+            signal: self.name.clone(),
+            sender: sender.to_string(),
+            at: at.to_string(),
+            fields: fields.to_vec(),
+            depth,
+        };
+        let mut dead: Vec[i64] = Vec.new();
+        for conn in self.receivers.iter() {
+            if let Some(s) = conn.sender {
+                if s != sender {
+                    continue;
+                }
+            }
+            let reply = match conn.link {
+                Link.Func(f) => f(d),
+                Link.Strong(sub) => deliver(sub, d),
+                Link.Weak(w) => match w.upgrade() {
+                    Some(sub) => deliver(sub, d),
+                    None => {
+                        dead.push(conn.id);
+                        println(f"{ind}pruned {conn.name}");
+                        continue;
+                    }
+                },
+            };
+            match reply {
+                Ok(Some(r)) => println(f"{ind}{conn.name}: {r}"),
+                Ok(None) => {}
+                Err(e) => println(f"{ind}{conn.name} failed: {e}"),
+            }
+        }
+        self.receivers.retain(|c| not dead.contains(c.id));
+    }
+
+    fn disconnect(self, id: i64) {
+        self.receivers.retain(|c| c.id != id);
+    }
+}
+
+fn deliver(sub: Sub, d: Delivery) -> Reply {
+    if sub.busy {
+        return Err("re-entrant delivery skipped".to_string());
+    }
+    sub.busy = true;
+    let r = sub.handler.receive(d);
+    sub.busy = false;
+    sub.delivered += 1;
+    r
+}
+
+// A tracer connected for a number of sends; dropping it disconnects it.
+struct Temp {
+    signal: Signal,
+    id: i64,
+    left: i64,
+}
+
+impl Drop for Temp {
+    fn drop(mut ref self) {
+        self.signal.disconnect(self.id);
+        println(f"  trace on {self.signal.name} ended");
+    }
+}
+
+shared struct Counter {
+    mut n: i64,
+}
+
+shared struct Counts {
+    mut by_signal: SortedMap[String, i64],
+}
+
+// ------------------------------------------------------------ plugins
+
+struct Inventory {
+    stock: Vec[Item],
+    low: weak Signal,
+    flagged: SortedSet[String],
+    reserved: i64,
+    released: i64,
+}
+
+impl Receiver for Inventory {
+    fn receive(mut ref self, d: Delivery) -> Reply {
+        if d.signal != "order_placed" and d.signal != "order_cancelled" {
+            return Ok(None);
+        }
+        let sku = d.field("sku")?;
+        let qs = d.field("qty")?;
+        let q = match count(qs) {
+            Some(q) if q > 0 => q,
+            _ => return Err(f"bad qty '{qs}'"),
+        };
+        let Some(i) = self.stock.iter().position(|it| it.sku == sku) else {
+            return Err(f"unknown sku '{sku}'");
+        };
+        let have = self.stock[i].qty;
+        let level = self.stock[i].reorder;
+        if d.signal == "order_cancelled" {
+            self.stock[i].qty = have + q;
+            self.released += 1;
+            if have + q > level {
+                self.flagged.remove(sku);
+            }
+            return Ok(Some(f"released {q} {sku}, {have + q} left"));
+        }
+        if q > have {
+            return Err(f"out of stock: {sku} has {have}, wants {q}");
+        }
+        let left = have - q;
+        self.stock[i].qty = left;
+        self.reserved += 1;
+        if left <= level and not self.flagged.contains(sku) {
+            self.flagged.insert(sku.clone());
+            if let Some(low) = self.low {
+                low.send("inventory", d.at, [("sku".to_string(), sku.clone()), ("left".to_string(), f"{left}")], d.depth + 1);
+            }
+        }
+        Ok(Some(f"reserved {q} {sku}, {left} left"))
+    }
+
+    fn summary(self) -> String {
+        f"{self.reserved} orders reserved, {self.released} released"
+    }
+
+    fn report(self) -> Vec[String] {
+        self.stock.iter().map(|it| f"  stock {it.sku}: {it.qty} (reorder at {it.reorder})").collect()
+    }
+}
+
+struct Mailer {
+    from: String,
+    n: i64,
+    out: BufWriter[File],
+}
+
+impl Mailer {
+    fn mail(mut ref self, to: Str, subject: Str) -> Reply {
+        self.n += 1;
+        let line = f"#{self.n} from {self.from} to {to}: {subject}\n";
+        self.out.write_all(line.bytes()).map_err(|e| f"cannot write the outbox: {e}")?;
+        Ok(Some(f"mail #{self.n} to {to}"))
+    }
+}
+
+impl Receiver for Mailer {
+    fn receive(mut ref self, d: Delivery) -> Reply {
+        if d.signal == "order_placed" or d.signal == "order_shipped" {
+            let order = d.field("order")?;
+            let customer = d.field("customer")?;
+            let what = if d.signal == "order_placed" { "received" } else { "shipped" };
+            return self.mail(customer, f"order {order} {what}");
+        }
+        if d.signal == "stock_low" {
+            let subject = f"restock {d.field("sku")?}, {d.field("left")?} left";
+            return self.mail("buyer", subject);
+        }
+        Ok(None)
+    }
+
+    fn summary(self) -> String {
+        f"{self.n} mails"
+    }
+}
+
+struct Audit {
+    file: String,
+    n: i64,
+    out: BufWriter[File],
+}
+
+impl Receiver for Audit {
+    fn receive(mut ref self, d: Delivery) -> Reply {
+        self.n += 1;
+        let line = f"{d.at} {d.signal} {d.sender} {fields_text(d.fields)}\n";
+        self.out.write_all(line.bytes()).map_err(|e| f"cannot write {self.file}: {e}")?;
+        Ok(None)
+    }
+
+    fn summary(self) -> String {
+        f"{self.n} lines in {self.file}"
+    }
+}
+
+struct Fraud {
+    limit: i64,
+    refused: i64,
+}
+
+impl Receiver for Fraud {
+    fn receive(mut ref self, d: Delivery) -> Reply {
+        if d.signal != "payment_received" {
+            return Ok(None);
+        }
+        let order = d.field("order")?;
+        let a = d.field("amount")?;
+        let Some(c) = money(a) else {
+            return Err(f"bad amount '{a}'");
+        };
+        if c > self.limit {
+            self.refused += 1;
+            return Err(f"payment of {show_money(c)} for order {order} is over the limit of {show_money(self.limit)}");
+        }
+        Ok(None)
+    }
+
+    fn summary(self) -> String {
+        f"{self.refused} payments refused"
+    }
+}
+
+struct Loyalty {
+    rate: i64,
+    points: SortedMap[String, i64],
+}
+
+impl Receiver for Loyalty {
+    fn receive(mut ref self, d: Delivery) -> Reply {
+        if d.signal != "order_placed" {
+            return Ok(None);
+        }
+        let customer = d.field("customer")?;
+        let t = d.field("total")?;
+        let Some(c) = money(t) else {
+            return Err(f"bad total '{t}'");
+        };
+        let p = c / (self.rate * 100);
+        let total = (self.points.get(customer) ?? 0) + p;
+        self.points.insert(customer.clone(), total);
+        Ok(Some(f"{customer} +{p} points, {total} in all"))
+    }
+
+    fn summary(self) -> String {
+        if self.points.is_empty() {
+            return "no points".to_string();
+        }
+        let parts: Vec[String] = self.points.iter().map(|(k, v)| f"{k} {v}").collect();
+        parts.join(", ")
+    }
+}
+
+fn make_plugin(p: PluginDef, stock: Slice[Item], signals: Slice[Signal]) -> Result[dyn Receiver, String] {
+    let opt = p.opts.values().next().cloned().unwrap_or(String.new());
+    match p.kind.as_str() {
+        "inventory" => {
+            let low = signals.iter().find(|s| s.name == opt).cloned().unwrap();
+            Ok(Inventory { stock: stock.to_vec(), low, flagged: SortedSet.new(), reserved: 0, released: 0 })
+        }
+        "mailer" => {
+            let out = BufWriter.new(File.create("data/out/outbox.txt").map_err(|e| f"cannot create data/out/outbox.txt: {e}")?);
+            Ok(Mailer { from: opt, n: 0, out })
+        }
+        "audit" => {
+            let path = f"data/out/{opt}";
+            let out = BufWriter.new(File.create(path).map_err(|e| f"cannot create {path}: {e}")?);
+            Ok(Audit { file: opt, n: 0, out })
+        }
+        "fraud" => Ok(Fraud { limit: money(opt).unwrap_or(0), refused: 0 }),
+        _ => Ok(Loyalty { rate: count(opt).unwrap_or(1), points: SortedMap.new() }),
+    }
+}
+
+// ------------------------------------------------------------ running
+
+struct Bus {
+    signals: Vec[Signal],
+    held: SortedMap[String, Sub],
+    plugins: Vec[String],
+    next_id: i64,
+    temps: Vec[Temp],
+}
+
+impl Bus {
+    fn signal(self, name: Str) -> Result[Signal, String] {
+        match self.signals.iter().find(|s| s.name == name) {
+            Some(s) => Ok(s.clone()),
+            None => Err(f"no signal '{name}'"),
+        }
+    }
+
+    fn connect(mut ref self, sig: Signal, name: Str, sender: own Option[String], link: own Link) -> i64 {
+        self.next_id += 1;
+        sig.receivers.push(Conn { id: self.next_id, name: name.to_string(), sender, link });
+        self.next_id
+    }
+
+    // The plugin's handle, from the bus's own hold or a strong connection.
+    fn alive(self, name: Str) -> Option[Sub] {
+        if let Some(s) = self.held.get(name) {
+            return Some(s.clone());
+        }
+        for sig in self.signals.iter() {
+            for c in sig.receivers.iter() {
+                if c.name == name {
+                    if let Link.Strong(s) = c.link {
+                        return Some(s.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn status(self) {
+        for sig in self.signals.iter() {
+            let parts: Vec[String] = sig
+                .receivers
+                .iter()
+                .map(|c| {
+                    let mut t = c.name.clone();
+                    if let Link.Weak(_) = c.link {
+                        t.push_str(" (weak)");
+                    }
+                    if let Some(s) = c.sender {
+                        t.push_str(f" (from {s})");
+                    }
+                    t
+                })
+                .collect();
+            let m = if sig.muted { " [muted]" } else { "" };
+            let shown = if parts.is_empty() { "none".to_string() } else { parts.join(", ") };
+            println(f"  {sig.name}{m}: {shown}");
+        }
+    }
+
+    fn command(mut ref self, w: Slice[String]) -> Result[(), String] {
+        let cmd = w[0].clone();
+        let args = w[1..].to_vec();
+        let usage = match cmd.as_str() {
+            "status" => "",
+            "mute" | "unmute" => "<signal>",
+            "drop" => "<plugin>",
+            "disconnect" => "<receiver> <signal>",
+            "temp" => "<signal> <count>",
+            _ => return Err(f"unknown command '{cmd}'"),
+        };
+        if args.len() != usage.split_whitespace().count() {
+            return Err(f"usage: @ {cmd} {usage}".trim_end().to_string());
+        }
+        match cmd.as_str() {
+            "status" => self.status(),
+            "mute" | "unmute" => {
+                let sig = self.signal(args[0])?;
+                sig.muted = cmd == "mute";
+                println(f"  {cmd}d {args[0]}");
+            }
+            "drop" => {
+                if self.held.remove(args[0]).is_none() {
+                    return Err(f"{args[0]} is not held");
+                }
+                println(f"  dropped {args[0]}");
+            }
+            "disconnect" => {
+                let sig = self.signal(args[1])?;
+                let Some(id) = sig.receivers.iter().find(|c| c.name == args[0]).map(|c| c.id) else {
+                    return Err(f"{args[0]} is not connected to {args[1]}");
+                };
+                sig.disconnect(id);
+                println(f"  disconnected {args[0]} from {args[1]}");
+            }
+            _ => {
+                let sig = self.signal(args[0])?;
+                let n = match count(args[1]) {
+                    Some(n) if n > 0 and n <= 99 => n,
+                    _ => return Err(f"bad count '{args[1]}'"),
+                };
+                let seen = Counter { n: 0 };
+                let trace = |d: Delivery| {
+                    seen.n += 1;
+                    Ok(Some(f"trace #{seen.n}: {fields_text(d.fields)}"))
+                };
+                let id = self.connect(sig, "trace", None, Link.Func(trace));
+                self.temps.push(Temp { signal: sig, id, left: n });
+                println(f"  trace on {args[0]} for {n} sends");
+            }
+        }
+        Ok(())
+    }
+
+    fn event(mut ref self, ev: EventLine) -> Result[(), String] {
+        let sig = self.signal(ev.signal)?;
+        sig.send(ev.sender, ev.at, ev.fields, 0);
+        // A tracer counts the sends of its signal and goes after the last.
+        let mut keep: Vec[Temp] = Vec.new();
+        for t in self.temps.drain(0..self.temps.len()) {
+            let mut t = t;
+            if t.signal.ref_eq(sig) {
+                t.left -= 1;
+            }
+            if t.left > 0 {
+                keep.push(t);
+            }
+        }
+        self.temps = keep;
+        Ok(())
+    }
+
+    fn end(self) {
+        println("== end");
+        let mut extra: Vec[String] = Vec.new();
+        for name in self.plugins.iter() {
+            match self.alive(name) {
+                None => println(f"  {name}: gone"),
+                Some(sub) => {
+                    println(f"  {name}: {sub.delivered} delivered; {sub.handler.summary()}");
+                    extra.extend(sub.handler.report());
+                }
+            }
+        }
+        for l in extra.iter() {
+            println(l);
+        }
+    }
+}
+
+fn read(path: Str) -> Result[String, String] {
+    fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")
+}
+
+// Wires the bus, runs the events, and prints the end report; everything
+// the bus holds, open files included, is dropped on return.
+fn run_bus(wiring: Wiring, stock: Slice[Item], evs: Slice[EventLine]) -> Result[(), String] {
+    let mut bus = Bus { signals: Vec.new(), held: SortedMap.new(), plugins: Vec.new(), next_id: 0, temps: Vec.new() };
+    for s in wiring.signals.iter() {
+        bus.signals.push(Signal { name: s.clone(), receivers: Vec.new(), muted: false });
+    }
+    for p in wiring.plugins.iter() {
+        let handler = make_plugin(p, stock, bus.signals)?;
+        bus.held.insert(p.name.clone(), Sub { name: p.name.clone(), handler, busy: false, delivered: 0 });
+        bus.plugins.push(p.name.clone());
+    }
+    let counts = Counts { by_signal: SortedMap.new() };
+    for c in wiring.conns.iter() {
+        let sig = bus.signal(c.signal)?;
+        let link = if c.recv == "metrics" {
+            let counts = counts.clone();
+            Link.Func(|d: Delivery| {
+                let n = counts.by_signal.get(d.signal) ?? 0;
+                counts.by_signal.insert(d.signal.clone(), n + 1);
+                Ok(None)
+            })
+        } else {
+            let sub = bus.held.get(c.recv).cloned().unwrap();
+            if c.weak { Link.Weak(sub) } else { Link.Strong(sub) }
+        };
+        bus.connect(sig, c.recv, c.sender.clone(), link);
+    }
+
+    println("== events");
+    for ev in evs.iter() {
+        println(f"> {ev.line}");
+        if let Some(e) = ev.err {
+            println(f"  error: events.log:{ev.no}: {e}");
+            continue;
+        }
+        let r = match ev.cmd {
+            Some(w) => bus.command(w),
+            None => bus.event(ev),
+        };
+        if let Err(e) = r {
+            println(f"  error: events.log:{ev.no}: {e}");
+        }
+    }
+    bus.end();
+    for s in wiring.signals.iter() {
+        let n = counts.by_signal.get(s) ?? 0;
+        println(f"  sent {s}: {n}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    if fs.exists("data/out") {
+        fs.remove_dir_all("data/out").map_err(|e| f"cannot clear data/out: {e}")?;
+    }
+    fs.create_dir_all("data/out").map_err(|e| f"cannot create data/out: {e}")?;
+    write_data()?;
+    let wtext = read("data/wiring.conf")?;
+    let stext = read("data/stock.csv")?;
+    let etext = read("data/events.log")?;
+    // Each input is parsed in a task of its own.
+    let tasks = TaskGroup.new();
+    let hw = tasks.spawn(|| parse_wiring(wtext));
+    let hs = tasks.spawn(|| parse_stock(stext));
+    let he = tasks.spawn(|| parse_events(etext));
+    let wiring = hw.join();
+    let (stock, serrs) = hs.join();
+    let evs = he.join();
+
+    println("== load");
+    println(f"wiring.conf: {wiring.signals.len()} signals, {wiring.plugins.len()} plugins, {wiring.conns.len()} connections");
+    for e in wiring.errors.iter() {
+        println(e);
+    }
+    println(f"stock.csv: {stock.len()} items");
+    for e in serrs.iter() {
+        println(e);
+    }
+    println(f"events.log: {evs.len()} lines");
+    run_bus(wiring, stock, evs)?;
+
+    println("== files");
+    let names = fs.read_dir("data/out").map_err(|e| f"cannot list data/out: {e}")?;
+    for n in names.iter() {
+        let text = read(f"data/out/{n}")?;
+        let lines = text.bytes().iter().filter(|c| c == b'\n').count();
+        println(f"  {n}: {lines} lines");
+    }
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/events.log", file_0())?;
+    put_bytes("data/stock.csv", file_1())?;
+    put_bytes("data/wiring.conf", file_2())?;
+    Ok(())
+}
+
+// data/events.log
+fn file_0() -> String {
+    """
+232074696d652073656e646572207369676e616c206669656c64732e2e2e0a30393a30303a303120636865636b6f7574
+206f726465725f706c61636564206f726465723d3130303120637573746f6d65723d616e6120736b753d7465612d3031
+207174793d3220746f74616c3d31382e34300a30393a30303a303520636865636b6f7574206f726465725f706c616365
+64206f726465723d3130303220637573746f6d65723d62656e20736b753d6d75672d3037207174793d3120746f74616c
+3d31322e30300a30393a30303a30392070686f6e65206f726465725f706c61636564206f726465723d31303033206375
+73746f6d65723d637920736b753d7465612d3031207174793d3620746f74616c3d35352e32300a30393a30303a313220
+636865636b6f7574207061796d656e745f7265636569766564206f726465723d3130303120616d6f756e743d31382e34
+300a30393a30303a313520636865636b6f7574207061796d656e745f7265636569766564206f726465723d3130303320
+616d6f756e743d3831322e30300a30393a30303a32302040207374617475730a30393a30303a333020636865636b6f75
+74206f726465725f706c61636564206f726465723d3130303420637573746f6d65723d616e6120736b753d7465612d30
+31207174793d3120746f74616c3d392e32300a30393a30303a333120636865636b6f7574206f726465725f706c616365
+64206f726465723d3130303520637573746f6d65723d64656520736b753d6375702d3131207174793d3120746f74616c
+3d342e30300a30393a30303a333220636865636b6f7574206f726465725f706c61636564206f726465723d3130303620
+637573746f6d65723d656420736b753d766173652d39207174793d3120746f74616c3d33302e30300a30393a30303a34
+302077617265686f757365206f726465725f73686970706564206f726465723d3130303120637573746f6d65723d616e
+610a30393a30303a343520636865636b6f7574206f726465725f63616e63656c6c6564206f726465723d313030332063
+7573746f6d65723d637920736b753d7465612d3031207174793d360a30393a30313a303020402074656d70206f726465
+725f706c6163656420320a30393a30313a303520636865636b6f7574206f726465725f706c61636564206f726465723d
+3130303720637573746f6d65723d66617920736b753d706f742d3033207174793d3420746f74616c3d38382e30300a30
+393a30313a30362040206d757465206f726465725f736869707065640a30393a30313a30372077617265686f75736520
+6f726465725f73686970706564206f726465723d3130303220637573746f6d65723d62656e0a30393a30313a30382040
+20756e6d757465206f726465725f736869707065640a30393a30313a313020636865636b6f7574206f726465725f706c
+61636564206f726465723d3130303820637573746f6d65723d62656e20736b753d7465612d3032207174793d3620746f
+74616c3d34312e34300a30393a30313a313520636865636b6f7574206f726465725f706c61636564206f726465723d31
+30303920637573746f6d65723d616e6120736b753d7465612d3032207174793d3120746f74616c3d362e39300a30393a
+30313a323020402064726f70206c6f79616c74790a30393a30313a323520636865636b6f7574206f726465725f706c61
+636564206f726465723d3130313020637573746f6d65723d67757320736b753d6d75672d3037207174793d3220746f74
+616c3d32342e30300a30393a30313a3330204020646973636f6e6e656374206d61696c6572206f726465725f73686970
+7065640a30393a30313a33312077617265686f757365206f726465725f73686970706564206f726465723d3130303720
+637573746f6d65723d6661790a30393a30313a3332204020646973636f6e6e656374206d61696c6572206f726465725f
+736869707065640a30393a30313a3430206163636f756e747320726566756e645f697373756564206f726465723d3130
+303320616d6f756e743d35352e32300a30393a30313a343520636865636b6f7574206f726465725f706c61636564206f
+726465723d3130313120637573746f6d65723d68616c20736b753d7465612d3031207174793d7820746f74616c3d312e
+30300a30393a30313a343620636865636b6f7574206f726465725f706c61636564206f726465723d3130313220637573
+746f6d65723d697679207174793d3120746f74616c3d332e30300a30393a30313a353020636865636b6f757420706179
+6d656e745f7265636569766564206f726465723d3130313020616d6f756e743d32342e30300a30393a30313a35352040
+207374617475730a30393a30323a303020402064726f702061756469740a30393a30323a30352077617265686f757365
+206f726465725f73686970706564206f726465723d3130303820637573746f6d65723d62656e0a30393a30323a313020
+636865636b6f7574206f726465725f706c61636564206f726465723d3130313320637573746f6d65723d6a6f20736b75
+3d706f742d3033207174793d3120746f74616c3d32322e30300a0a23204d697374616b65732e0a30393a30323a323020
+636865636b6f7574206f726465725f6578706c6f646564206f726465723d310a393a30323a323120636865636b6f7574
+206f726465725f706c61636564206f726465723d313031340a30393a30323a323220636865636b6f7574206f72646572
+5f706c61636564206f7264657220313031340a30393a30323a32332040206d757465206e6f7468696e670a30393a3032
+3a323420402074656d70206f726465725f706c6163656420300a30393a30323a323520402064726f70206c6f79616c74
+790a30393a30323a323620402064616e63650a30393a30323a323720636865636b6f75740a
+"""
+}
+
+// data/stock.csv
+fn file_1() -> String {
+    """
+736b752c7174792c72656f726465720a7465612d30312c31322c340a6d75672d30372c332c320a706f742d30332c352c
+310a7465612d30322c382c330a6375702d31312c302c320a6b6574746c652c74776f2c310a73706f6f6e2d342c390a
+"""
+}
+
+// data/wiring.conf
+fn file_2() -> String {
+    """
+23205468652073686f702773206576656e74206275732e205369676e616c732066697273742c207468656e20706c7567
+696e732c207468656e20636f6e6e656374696f6e732c0a232077686963682064656c6976657220696e20746865206f72
+646572207468657920617265206c69737465642e0a0a7369676e616c206f726465725f706c616365640a7369676e616c
+206f726465725f63616e63656c6c65640a7369676e616c206f726465725f736869707065640a7369676e616c20706179
+6d656e745f72656365697665640a7369676e616c2073746f636b5f6c6f770a7369676e616c20726566756e645f697373
+7565640a0a706c7567696e20696e76656e746f727920696e76656e746f7279206c6f773d73746f636b5f6c6f770a706c
+7567696e206d61696c6572206d61696c65722066726f6d3d73686f70406578616d706c652e746573740a706c7567696e
+2061756469742061756469742066696c653d61756469742e6c6f670a706c7567696e206672617564206672617564206c
+696d69743d3530302e30300a706c7567696e206c6f79616c7479206c6f79616c747920726174653d31300a0a636f6e6e
+656374206175646974202a0a636f6e6e65637420696e76656e746f7279206f726465725f706c616365640a636f6e6e65
+637420696e76656e746f7279206f726465725f63616e63656c6c65640a636f6e6e656374206d61696c6572206f726465
+725f706c616365642073656e6465723d636865636b6f75740a636f6e6e656374206d61696c6572206f726465725f7368
+69707065640a636f6e6e656374206d61696c65722073746f636b5f6c6f770a636f6e6e65637420696e76656e746f7279
+2073746f636b5f6c6f7720202020202320696e76656e746f72792073656e64732069742c20736f206974206973206275
+73790a636f6e6e656374206672617564207061796d656e745f72656365697665640a636f6e6e656374206c6f79616c74
+79206f726465725f706c61636564207765616b0a636f6e6e656374206d657472696373202a0a0a23204d697374616b65
+732c2065616368207265706f7274656420616e6420736b69707065642e0a7369676e616c204f726465725f506c616365
+640a7369676e616c206f726465725f706c616365640a706c7567696e206d61696c6572206d61696c65720a706c756769
+6e20636f757269657220636f75726965720a706c7567696e20667261756432206672617564206c696d69743d6c6f7473
+0a706c7567696e206c6f79616c747932206c6f79616c74790a706c7567696e20696e76656e746f72793220696e76656e
+746f7279206c6f773d6e6f5f737563685f7369676e616c0a636f6e6e656374206d61696c6572206f726465725f706c61
+6365640a636f6e6e6563742067686f7374206f726465725f706c616365640a636f6e6e65637420667261756420726566
+756e64730a636f6e6e656374206d657472696373206f726465725f706c61636564207765616b0a636f6e6e6563742066
+72617564207061796d656e745f726563656976656420626f6775730a636f6e6e6563740a66726f626e69636174650a
+"""
+}
