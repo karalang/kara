@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 158 |
+| diagnostics | 159 |
 | false-positive | 139 |
 | perf | 108 |
 | missing-feature | 102 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 258 |
+| typecheck | 259 |
 | mir-llvm | 134 |
 | mir | 131 |
 | cli | 71 |
@@ -110,10 +110,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-18 | 2026-11-07 | typecheck | low | f32 copysign / pow / hypot / atan2 refuse a negative float literal argument (`h.copysign(-1.0)`: expects f32, got f64); a positive literal, and min / max / clamp / total_cmp with a negative one, are accepted | — |
-| B-2026-11-07-21 | 2026-11-07 | typecheck | low | check accepts Atomic[T] for T outside the documented set (i8, u8, i16, u16, i128, usize all pass); Atomic[i128] then fails to link under ASan (undefined __atomic_load_16) | — |
-| B-2026-11-07-23 | 2026-11-07 | typecheck | low | #[non_exhaustive] is not enforced outside the defining package: a match naming every variant with no wildcard is accepted, for a user package's enum and for std's DecodeError | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
+| B-2026-11-07-35 | 2026-11-07 | typecheck | low | A generic function's `Atomic.new(x)` over `x: own T` is not judged at the instance: `wrap(1i8)` with `fn wrap[T](x: own T) -> Atomic[T]` passes check and runs, though Atomic[i8] is outside concurrency.md's five | — |
 
 ### Relocated
 
@@ -795,7 +794,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-17 | typecheck | medium | i128.MIN, i128.MAX and u128.MAX are refused with the internal `a type that failed to check is not lowered yet`; the other widths' MIN/MAX work | a44db5f5ac |
 | B-2026-11-07-19 | mir-llvm+runtime | high | BufReader.read_line / read_to_string and ChildStdout.read_to_string append into a `mut ref String` whose buffer is still a string literal's static da… | a17505d129 |
 | B-2026-11-07-20 | effect | low | par branches writing two different Files conflict when both pass the same read-only buffer (`par { f.write(b.as_slice()), g.write(b.as_slice()) }`),… | 39dbc078da |
+| B-2026-11-07-21 | typecheck | low | check accepts Atomic[T] for T outside the documented set (i8, u8, i16, u16, i128, usize all pass); Atomic[i128] then fails to link under ASan (undefi… | 3f39b2aafd |
 | B-2026-11-07-22 | typecheck | medium | A struct literal of another package's struct is refused even when every field is `pub` (`Opts { port: 1 }` -> E0111 field 'port' is not `pub`); the l… | b92f71fe7d |
+| B-2026-11-07-23 | typecheck | low | #[non_exhaustive] is not enforced outside the defining package: a match naming every variant with no wildcard is accepted, for a user package's enum… | 03ecef223d |
 | B-2026-11-07-25 | runtime+mir-llvm | high | A compiled TLS server (Server.serve_tls, TlsListener) is killed by SIGPIPE (exit -13) when a client disconnects without close_notify: one client that… | 81bda056fb |
 | B-2026-11-07-26 | runtime | medium | For an absolute-form request target (`GET http://example.com/z?k=v HTTP/1.1`) the server's Request.path() returns `http://example.com/z` and for `GET… | 81bda056fb |
 | B-2026-11-07-27 | effect | low | Socket methods with no declared effects (local_addr, set_read_timeout, try_clone on TcpListener/TcpStream/UdpSocket) carry an `unknown (native ..)` e… | 39dbc078da |
