@@ -8847,21 +8847,21 @@ fn mir_index_by_a_let_bound_range() {
     }
 }
 
-/// `F.value` with an uppercase local `F`, which the parser reads as a path:
-/// the local's field, nested fields too (B-2026-10-22-36).
+/// `F.value` with an uppercase local `F` (B-2026-10-22-36) is no longer a
+/// program: a local's name is Value-class (design.md §3 CN-2,
+/// B-2026-11-06-18), so the binding is refused before MIR.
 #[test]
 fn mir_uppercase_local_field_paths() {
     let src = "struct In { x: i64 }\nstruct Foo { value: i64, inner: In }\n\
                fn main() {\n    let F = Foo { value: 5, inner: In { x: 7 } };\n    \
                let a: i64 = F.value;\n    let b = F.inner.x;\n    println(f\"{a} {b} {F.value + F.inner.x}\");\n}\n";
-    let want = "5 7 12\n";
-    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
-    assert_eq!(interp.output, want);
-    for opt in [0, 2] {
-        if let Some(out) = build_and_run(src, opt) {
-            assert_eq!(out, want, "at -O{opt}");
-        }
-    }
+    let Err(err) = karac::mir::lower::run_source(src) else {
+        panic!("an uppercase local is refused");
+    };
+    assert!(
+        format!("{err:?}").contains("`F` is Type-class but binding names must be Value-class"),
+        "{err:?}"
+    );
 }
 
 /// B-2026-10-22-36: `F64.from` and `F32.from` named as a value, passed to
@@ -8953,10 +8953,22 @@ fn main() {
 }
 
 /// B-2026-10-22-36: a method call on an uppercase local (`C.doubled()`,
-/// `Q.inner.bump(2)`), which the parser reads as a path, takes the local
-/// (through any fields) as its receiver, in each receiver mode.
+/// `Q.inner.bump(2)`), which the parser reads as a path. Such a local is now
+/// refused (design.md §3 CN-2, B-2026-11-06-18); the same calls on
+/// snake_case locals run in each receiver mode.
 #[test]
 fn mir_a_method_call_on_an_uppercase_local() {
+    let refused = "struct Counter { n: i64 }
+impl Counter { fn doubled(self) -> i64 { self.n * 2 } }
+fn main() { let C: Counter = Counter { n: 21 }; println(C.doubled()); }
+";
+    let Err(err) = karac::mir::lower::run_source(refused) else {
+        panic!("an uppercase local is refused");
+    };
+    assert!(
+        format!("{err:?}").contains("`C` is Type-class but binding names must be Value-class"),
+        "{err:?}"
+    );
     let src = r#"struct Counter { n: i64 }
 impl Counter {
     fn doubled(self) -> i64 { self.n * 2 }
@@ -8965,18 +8977,18 @@ impl Counter {
 }
 struct P { inner: Counter }
 fn show(c: Counter) -> i64 {
-    let K = c;
-    K.doubled() + 1
+    let k = c;
+    k.doubled() + 1
 }
 fn main() {
-    let mut C: Counter = Counter { n: 21 };
-    C.bump(4);
-    println(C.doubled());
-    let mut Q = P { inner: Counter { n: 1 } };
-    Q.inner.bump(2);
-    println(Q.inner.doubled());
-    println(show(C));
-    println(C.take());
+    let mut c: Counter = Counter { n: 21 };
+    c.bump(4);
+    println(c.doubled());
+    let mut q = P { inner: Counter { n: 1 } };
+    q.inner.bump(2);
+    println(q.inner.doubled());
+    println(show(c));
+    println(c.take());
 }
 "#;
     let want = "50\n6\n51\n25\n";

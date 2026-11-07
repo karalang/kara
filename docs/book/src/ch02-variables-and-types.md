@@ -177,16 +177,16 @@ Note: `_` on its own isn't a name — it's a wildcard used in patterns, `let _ =
 
 The point of enforcing this is that every Kāra codebase reads the same way — no per-project casing debates, no PR bikeshedding, no re-tuning when you move between libraries.
 
-## Module-level bindings
+## Module-level constants
 
-You can declare bindings at the top of a file, outside any function:
+A value at the top of a file, outside any function, is a `const`:
 
 ```kara
-let MAX_RETRIES: i32 = 5;
-let TIMEOUT_MS: i64 = 60 * 1000;
-let APP_NAME: String = "myapp";
+const MAX_RETRIES: i32 = 5;
+const TIMEOUT_MS: i64 = 60 * 1000;
+const APP_NAME: Str = "myapp";
 ```
 
-Module-level bindings must be initialized with compile-time constant expressions — no function calls, no I/O, no allocations. This is a deliberate restriction: there's no hidden code running before `main`, no initialization order bugs, no startup effects you can't see.
+Constants must be initialized with compile-time constant expressions — no function calls, no I/O, no allocations. This is a deliberate restriction: there's no hidden code running before `main`, no initialization order bugs, no startup effects you can't see.
 
 Values that need runtime initialization (config files, database connections) are constructed inside `main` and passed down. We'll cover this pattern in later chapters.

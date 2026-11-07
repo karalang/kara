@@ -318,7 +318,14 @@ impl<'a> super::Resolver<'a> {
     fn check_binding_name_class(&mut self, name: &str, span: Span) {
         use crate::lexer::IdentClass;
         let actual = crate::lexer::classify_ident(name);
-        if actual == IdentClass::Value || name.starts_with("__") {
+        // A reserved name (`Fn`) is refused by `define` as reserved: one
+        // report is enough.
+        if actual == IdentClass::Value
+            || name.starts_with("__")
+            || super::SymbolTable::RESERVED_IDENTIFIERS
+                .iter()
+                .any(|(r, _)| *r == name)
+        {
             return;
         }
         let actual_desc = if actual == IdentClass::Type {
