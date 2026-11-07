@@ -63,11 +63,11 @@ fn main() {
         let mut wi = 0;
         while wi < m {
             state = (state * 1103515245 + 12345) & 2147483647;
-            let L = (state / 65536) % 4 + 1;
+            let l = (state / 65536) % 4 + 1;
             st.push(buf.len());
-            ln.push(L);
+            ln.push(l);
             let mut p = 0;
-            while p < L {
+            while p < l {
                 state = (state * 1103515245 + 12345) & 2147483647;
                 buf.push((state / 65536) % alpha);
                 p = p + 1;
@@ -168,9 +168,9 @@ fn main() {
             let mut w = 0;
             while w < n {
                 let s = wstart[base + w];
-                let L = wlen[base + w];
+                let l = wlen[base + w];
                 let mut p = 0;
-                while p < L { present[letters[s + p]] = true; p = p + 1; }
+                while p < l { present[letters[s + p]] = true; p = p + 1; }
                 w = w + 1;
             }
 

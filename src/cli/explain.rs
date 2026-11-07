@@ -285,6 +285,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ),
     ),
     ("E0102", res("ReservedIdentifier", None)),
+    ("E0127", res("BindingNameClass", None)),
     ("E0103", res("PrivateAccess", None)),
     (
         "E0104",
@@ -611,6 +612,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
             Some(DiagnosticClass::TypeMismatch),
         ),
     ),
+    ("E0128", ty("BindingNameClass", None)),
     (
         "E0273",
         ty(
@@ -649,6 +651,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     ("W0295", ty("StyleLint", Some(DiagnosticClass::LintWarning))),
     (
+        "W0296",
+        ty("UnusedDocComment", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "W0292",
         ty("LaterTrack", Some(DiagnosticClass::LintWarning)),
     ),
@@ -677,6 +683,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("RedundantCast", Some(DiagnosticClass::LintWarning)),
     ),
     ("E0295", ty("StyleLint", Some(DiagnosticClass::LintWarning))),
+    (
+        "E0296",
+        ty("UnusedDocComment", Some(DiagnosticClass::LintWarning)),
+    ),
     (
         "E0290",
         ty("ReturnClauseOnFn", Some(DiagnosticClass::LintWarning)),
@@ -2413,7 +2423,9 @@ pub fn concept_for(
 fn concept_for_kind(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "Syntax" | "UnexpectedToken" | "ReservedKeyword" | "RawIdentNotAllowed"
-        | "ReservedSyntax" | "ReservedIdentifier" => "syntax/lexical-structure",
+        | "ReservedSyntax" | "ReservedIdentifier" | "BindingNameClass" | "UnusedDocComment" => {
+            "syntax/lexical-structure"
+        }
         "DuplicateLintLevel"
         | "UnknownLint"
         | "ForbiddenLintAllow"

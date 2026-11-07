@@ -435,7 +435,7 @@ let msg = f"hello {name}, {count} items, {count + 1} total";
 - **A language feature, not a library call.** The lexer recognizes `f"`. Each hole `{expr}` holds any expression. The compiler formats each hole with the value's `Display` implementation (`expr.to_string()`, [§9](#9-traits)) and concatenates the parts in one allocation. There is no user-visible concatenation function.
 - **Order.** The holes are evaluated left to right ([core-semantics.md §8.1](core-semantics.md#8-evaluation-order)).
 - **Full expressions.** The parser balances quotes, brackets and braces inside a hole, so `f"value: {map["key"]}"`, `f"item: {arr[idx]}"` and `f"pair: {(a, b)}"` work.
-- **No nesting.** An f-string inside a hole is a compile error. Bind it first: `let inner = f"inner: {x}"; let outer = f"outer: {inner}";`.
+- **No nesting.** An f-string inside a hole is a compile error. Bind it first: `let inner = f"inner: {x}"; let outer = f"outer: {inner}";`. (In 0.8.x it is a deprecation warning, and when the hole is the inner f-string alone `karac fix` writes its text in the hole's place; it becomes the error at the next minor release, B-2026-11-06-18.)
 - **Literal braces.** `{{` and `}}` produce `{` and `}`. In a plain `"..."` string a brace is an ordinary character.
 - **Multi-line.** `f"""..."""` follows the `"""` rules above.
 

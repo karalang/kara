@@ -26,8 +26,8 @@ fn main() {
     t.0 = 9;
     println(t.0);
     println(T_THREE.0);
-    let Wv = Outer { i: Inner { s: "abc", n: -5 }, k: 9 };
-    println(Wv.i.s.len());
-    println(Wv.i.n.abs());
-    println(Wv.k);
+    let wv = Outer { i: Inner { s: "abc", n: -5 }, k: 9 };
+    println(wv.i.s.len());
+    println(wv.i.n.abs());
+    println(wv.k);
 }

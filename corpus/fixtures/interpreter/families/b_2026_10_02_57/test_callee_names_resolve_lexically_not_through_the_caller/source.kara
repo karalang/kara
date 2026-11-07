@@ -29,8 +29,8 @@ fn d(n: i64) -> i64 {
 fn main() {
     let helper = || 99;
     println(f"a{f()} {helper()}");
-    let LIMIT = 5;
-    println(f"b{g()} {LIMIT}");
+    let limit = 5;
+    println(f"b{g()} {limit}");
     let p = P { n: 3 };
     println(f"c{p.get()}");
     let k = || helper() + 1;

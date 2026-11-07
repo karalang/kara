@@ -62,6 +62,41 @@ fn split_format_spec(raw: &str) -> (String, Option<String>) {
 use super::{starts_upper, ParseError};
 
 impl super::Parser {
+    /// Record each f-string literal inside the hole `expr_src`, which starts
+    /// at byte `offset` of the source, in [`Self::nested_fstrings`]. When the
+    /// hole is that f-string alone (`{f"{a}{b}"}`, no format spec), the fix
+    /// writes its text in the hole's place (`{a}{b}`), which formats the
+    /// same; otherwise it has to be bound first, which needs a name.
+    fn record_nested_fstrings(&mut self, expr_src: &str, no_spec: bool, offset: usize) {
+        let toks = crate::tokenize(expr_src);
+        let nested: Vec<&crate::token::SpannedToken> = toks
+            .iter()
+            .filter(|t| matches!(t.token, Token::InterpolatedStringLiteral(_)))
+            .collect();
+        let alone = toks
+            .iter()
+            .filter(|t| !matches!(t.token, Token::EOF))
+            .count()
+            == 1;
+        let trimmed = expr_src.trim();
+        for t in &nested {
+            let at = offset + t.span.offset;
+            let fix = (alone
+                && no_spec
+                && trimmed.len() >= 3
+                && trimmed.starts_with("f\"")
+                && !trimmed.starts_with("f\"\"\"")
+                && trimmed.ends_with('"'))
+            .then(|| crate::resolver::TextEdit {
+                // The hole, braces included.
+                offset: offset - 1,
+                length: expr_src.len() + 2,
+                replacement: trimmed[2..trimmed.len() - 1].to_string(),
+            });
+            self.nested_fstrings.insert(at, fix);
+        }
+    }
+
     // ── Expressions (Pratt Parser) ───────────────────────────────
 
     pub(crate) fn parse_expression(&mut self) -> Option<Expr> {
@@ -1541,6 +1576,12 @@ impl super::Parser {
                             // SpanKey unique across f-strings (B-2026-06-09-1)
                             // and the line/column correct for diagnostics that
                             // point into the hole (B-2026-06-09-1a).
+                            // design.md §3 "No nesting": an f-string inside a
+                            // hole. 0.8.x reports it as `deprecated` (the type
+                            // checker, from `Program::nested_fstrings`), since
+                            // programs written against 0.8.0 use it
+                            // (B-2026-11-06-18).
+                            self.record_nested_fstrings(&expr_src, spec.is_none(), offset);
                             let wrapper = format!("fn __interp__() {{ {}; }}", expr_src);
                             let result = crate::parse(&wrapper);
                             // B-2026-08-11-5: a `ParseResult` has THREE fields

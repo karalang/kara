@@ -1660,18 +1660,18 @@ fn hist_rows(out: mut ref String, lengths: ref Vec[i64]) {
     let n = lengths.len();
     let mut top: i64 = 0;
     let mut total: i64 = 0;
-    for L in lengths {
-        if *L > top {
-            top = *L;
+    for len in lengths {
+        if *len > top {
+            top = *len;
         }
-        total += *L;
+        total += *len;
     }
     let mut counts: Vec[i64] = Vec.new();
     for _ in 0..top + 1 {
         counts.push(0);
     }
-    for L in lengths {
-        counts[*L] += 1;
+    for len in lengths {
+        counts[*len] += 1;
     }
     out.push_str(" Length  Number     % of total  Coverage\n");
     out.push_str(f"      0  {ljust(f"{counts[0]}", 10)} ({pct(counts[0], n)}%)\n");
@@ -1687,13 +1687,13 @@ fn sysv_lengths(e: ref Elf, off: i64) -> Vec[i64] {
     let nb = le(b, off, 4);
     let mut out: Vec[i64] = Vec.new();
     for i in 0..nb {
-        let mut L: i64 = 0;
+        let mut len: i64 = 0;
         let mut k = le(b, off + 8 + 4 * i, 4);
         while k != 0 {
-            L += 1;
+            len += 1;
             k = le(b, off + 8 + 4 * nb + 4 * k, 4);
         }
-        out.push(L);
+        out.push(len);
     }
     out
 }
@@ -1735,18 +1735,18 @@ fn gh_chain(e: ref Elf, g: ref GnuHash, sym: i64) -> i64 {
 fn gnu_lengths(e: ref Elf, g: ref GnuHash) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     for i in 0..g.nb {
-        let mut L: i64 = 0;
+        let mut len: i64 = 0;
         let mut k = gh_bucket(e, g, i);
         if k != 0 {
             loop {
-                L += 1;
+                len += 1;
                 if gh_chain(e, g, k) & 1 != 0 {
                     break;
                 }
                 k += 1;
             }
         }
-        out.push(L);
+        out.push(len);
     }
     out
 }

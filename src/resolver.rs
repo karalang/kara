@@ -803,6 +803,11 @@ pub enum ResolveErrorKind {
     UndefinedName,
     DuplicateDefinition,
     ReservedIdentifier,
+    /// A fresh binding a pattern introduces (`let`, `for`, a `match` arm,
+    /// `if let`) whose name is not Value-class (design.md §3 CN-2;
+    /// B-2026-11-06-18). Parameters get the parser's check; a pattern's bare
+    /// name is a binding only once the resolver knows it names no variant.
+    BindingNameClass,
     PrivateAccess,
     UndefinedType,
     UndefinedVariant,
@@ -1248,6 +1253,10 @@ pub struct Resolver<'a> {
     /// to the function-body control flow; closure bodies cannot target
     /// outer labels).
     pub(crate) loop_labels: Vec<(Option<String>, LabelKind)>,
+    /// Set while a `fn`'s parameters are defined: the parser already checks
+    /// their names (`check_ident_class(.., "parameter", ..)`), so the
+    /// resolver's binding-class check stays quiet there (B-2026-11-06-18).
+    pub(crate) defining_fn_params: bool,
     /// B-2026-07-02-5: while resolving a statement-branch of an explicit
     /// `par { }` block, the binding names introduced by SIBLING branches
     /// (name → the sibling binding's span). Each top-level statement of a
@@ -1398,6 +1407,7 @@ impl<'a> Resolver<'a> {
             effectless_types: std::collections::HashSet::new(),
             current_impl_type: None,
             loop_labels: Vec::new(),
+            defining_fn_params: false,
             par_sibling_bindings: FxHashMap::default(),
             is_stdlib_source: false,
             is_test_file: false,

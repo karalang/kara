@@ -1237,6 +1237,12 @@ pub enum TypeErrorKind {
     /// used to suppress the redundant non-exhaustive diagnostic on the same
     /// poisoned match.
     PatternScrutineeMismatch,
+    /// design.md §3 CN-2: a Type-class name bound by a refutable pattern
+    /// (`Some(Val)`) whose scrutinee is not an enum declaring it. The
+    /// resolver reports every other binding (`E0127`); this one waits for the
+    /// scrutinee's type, since a bare name may be its variant
+    /// (B-2026-11-06-18).
+    BindingNameClass,
     /// `impl Foo for T` is missing a required `impl Bar for T` where `Bar` is
     /// a supertrait of `Foo`. See design.md § Trait Constraints (Supertraits).
     MissingSupertrait,
@@ -1332,6 +1338,10 @@ pub enum TypeErrorKind {
     /// `redundant_literal_method`, `redundant_ref_param`. Reported after
     /// typechecking, from source text; the entry's `lint_name` says which.
     StyleLint,
+    /// `unused_doc_comment` lint (B-2026-11-06-18): a `///` run that
+    /// documents nothing, which design.md §3 Doc comments discards with a
+    /// warning. The parser records each (`Program::discarded_doc_comments`).
+    UnusedDocComment,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1717,7 +1727,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ModuleMutBinding
         | TypeErrorKind::ReturnClauseOnFn
         | TypeErrorKind::LaterTrack
-        | TypeErrorKind::StyleLint => Some(DC::LintWarning),
+        | TypeErrorKind::StyleLint
+        | TypeErrorKind::UnusedDocComment => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON
         // emit site. Backfill is incremental; each one is a small
@@ -1757,7 +1768,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::GpuNotSafe
         | TypeErrorKind::ReprTransparentInvalid
         | TypeErrorKind::DiscriminantInvalid
-        | TypeErrorKind::ExternSignatureInvalid => None,
+        | TypeErrorKind::ExternSignatureInvalid
+        | TypeErrorKind::BindingNameClass => None,
     }
 }
 
@@ -3301,6 +3313,9 @@ pub struct TypeChecker<'a> {
     /// `42i64` warns once per visit. Keyed on `(offset, length)` like the
     /// other span-keyed state above.
     pub(super) redundant_suffix_reported: rustc_hash::FxHashSet<(usize, usize)>,
+    /// Pattern bindings already reported as `BindingNameClass`, by offset:
+    /// a pattern is re-checked under bidirectional inference.
+    pub(super) binding_class_reported: rustc_hash::FxHashSet<usize>,
     /// `vec![..]` literals already warned on, by `(offset, length)`.
     pub(super) vec_macro_reported: rustc_hash::FxHashSet<(usize, usize)>,
     /// Casts `redundant_cast` / `lossless_cast` already reported, for the
@@ -4110,6 +4125,7 @@ impl<'a> TypeChecker<'a> {
             wide_int_literals: Vec::new(),
             wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
+            binding_class_reported: rustc_hash::FxHashSet::default(),
             vec_macro_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
             pending_cast_expected: None,
@@ -4356,6 +4372,7 @@ impl<'a> TypeChecker<'a> {
         self.validate_bound_assoc_bindings();
         self.validate_serde_default_constants();
         self.warn_implied_derives();
+        self.warn_discarded_doc_comments();
         self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
         self.check_signature_visibility();

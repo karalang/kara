@@ -550,6 +550,9 @@ impl super::Parser {
     }
 
     fn parse_impl_block_scoped(&mut self, attributes: Vec<Attribute>) -> Option<ImplBlock> {
+        // A `///` run before `impl` documents nothing (design.md §3); left
+        // pending, it used to attach to the block's first undocumented method.
+        self.discard_pending_doc(super::DOC_IMPL);
         let start = self.current_span();
         self.expect(&Token::Impl)?;
 

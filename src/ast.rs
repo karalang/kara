@@ -858,6 +858,20 @@ pub struct Program {
     /// the PARSER, which desugars the literal to an ordinary `Vec` one.
     pub vec_macro_literals:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
+    /// `///` runs that document nothing (design.md §3 Doc comments: a run
+    /// attaches to the item directly after it, "otherwise the run is
+    /// discarded with a warning"), each with why: a statement, an `impl`
+    /// block or a declaration that takes no doc comment follows it, a blank
+    /// line or comment separates it from what follows, or nothing does. Set
+    /// by the PARSER, which drops the text; the type checker reports each
+    /// as `unused_doc_comment`.
+    pub discarded_doc_comments: Vec<(crate::token::Span, &'static str)>,
+    /// f-string literals inside another f-string's `{..}` (design.md §3
+    /// Interpolated strings: "No nesting"), keyed by the inner literal's
+    /// byte offset, with the edit that writes its text in the hole's place
+    /// when the hole is that literal alone. Set by the PARSER; the type
+    /// checker reports each as `deprecated` in 0.8.x (B-2026-11-06-18).
+    pub nested_fstrings: rustc_hash::FxHashMap<usize, Option<crate::resolver::TextEdit>>,
     /// Rust's `Box.new(e)` (what `Box::new(e)` reads as), keyed by the offset
     /// of `Box`, with the edit that writes `e` in the call's place: Kāra has
     /// no `Box`, the owned form is the value itself (design.md § dyn Trait).

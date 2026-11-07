@@ -1407,6 +1407,26 @@ impl<'a> super::TypeChecker<'a> {
                             return;
                         }
                     }
+                    // Not an enum's variant: an ordinary binding, whose name
+                    // must be Value-class (B-2026-11-06-18).
+                    if !self.binding_class_reported.contains(&pattern.span.offset) {
+                        self.binding_class_reported.insert(pattern.span.offset);
+                        let advice = match crate::lexer::suggest_name_for_class(
+                            name,
+                            crate::lexer::IdentClass::Value,
+                        ) {
+                            Some(s) => format!("consider renaming to `{s}`"),
+                            None => "rename it to snake_case".to_string(),
+                        };
+                        self.type_error(
+                            format!(
+                                "`{name}` is Type-class but binding names must be \
+                                 Value-class (snake_case) (design.md §3 CN-2); {advice}"
+                            ),
+                            pattern.span,
+                            TypeErrorKind::BindingNameClass,
+                        );
+                    }
                 }
                 // v2 core: a dotted unit variant (`Slot.Empty`) over its own
                 // enum binds nothing, so it moves nothing (§4.6). Legacy

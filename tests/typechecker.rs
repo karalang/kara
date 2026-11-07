@@ -42,6 +42,27 @@ fn typecheck_ok(source: &str) -> TypeCheckResult {
     result
 }
 
+/// design.md §3 CN-2 (B-2026-11-06-18): a local binding's name is
+/// Value-class, so the resolver refuses `name`, which is not.
+fn resolve_refuses_binding_name(source: &str, name: &str) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved
+            .errors
+            .iter()
+            .any(|e| e.message.contains(&format!("`{name}` is "))
+                && e.message.contains("binding names must be Value-class")),
+        "expected `{name}` refused as a binding name, got: {:?}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>(),
+    );
+}
+
 fn typecheck_errors(source: &str) -> Vec<TypeError> {
     let parsed = parse(source);
     assert!(
@@ -29669,23 +29690,38 @@ fn test_uppercase_module_binding_field_read_ok() {
 
 #[test]
 fn test_uppercase_local_binding_field_read_annotated_ok() {
-    typecheck_ok(
+    // A local is never Type-class (design.md §3 CN-2, B-2026-11-06-18), so
+    // the uppercase-receiver field read is a module binding's alone.
+    resolve_refuses_binding_name(
         "struct Foo { value: i64 }
          fn run() -> i64 {
              let F: Foo = Foo { value: 5 };
              let x: i64 = F.value;
              x
          }",
+        "F",
     );
 }
 
 #[test]
 fn test_uppercase_binding_nested_field_read_ok() {
-    typecheck_ok(
+    // A Const-class local is refused (design.md §3 CN-2, B-2026-11-06-18);
+    // the module-binding form still reads through.
+    resolve_refuses_binding_name(
         "struct Inner { field: i64 }
          struct Outer { inner: Inner }
          fn run() -> i64 {
              let OUTER: Outer = Outer { inner: Inner { field: 9 } };
+             let n: i64 = OUTER.inner.field;
+             n
+         }",
+        "OUTER",
+    );
+    typecheck_ok(
+        "struct Inner { field: i64 }
+         struct Outer { inner: Inner }
+         let OUTER: Outer = Outer { inner: Inner { field: 9 } };
+         fn run() -> i64 {
              let n: i64 = OUTER.inner.field;
              n
          }",
@@ -29813,7 +29849,8 @@ fn test_uppercase_local_method_dispatch() {
     // against the env and routes value-binding receivers through
     // `infer_method_call`, matching the implicit method-call shape
     // lowercase locals already get from the parser's postfix loop.
-    typecheck_ok(
+    // A local is never Type-class (design.md §3 CN-2, B-2026-11-06-18).
+    resolve_refuses_binding_name(
         "struct Foo { value: i64 }\n\
          impl Foo {\n\
              fn double(self) -> i64 { self.value * 2 }\n\
@@ -29822,6 +29859,7 @@ fn test_uppercase_local_method_dispatch() {
              let F: Foo = Foo { value: 5 };\n\
              let _ = F.double();\n\
          }",
+        "F",
     );
 }
 
@@ -29897,14 +29935,15 @@ fn test_uppercase_binding_field_then_method_dispatch() {
              println(ORIGIN.y.to_string());\n\
          }",
     );
-    // The axis is the receiver name's first letter, not its scope — a
-    // function-local uppercase binding takes the same parser route.
-    typecheck_ok(
+    // A function-local uppercase binding is refused outright (design.md
+    // §3 CN-2, B-2026-11-06-18).
+    resolve_refuses_binding_name(
         "struct Point { x: i64, y: i64 }\n\
          fn main() {\n\
              let Origin = Point { x: 1, y: 2 };\n\
              println(Origin.x.to_string());\n\
          }",
+        "Origin",
     );
     // Deeper field chains resolve too (codegen defers the chained-receiver
     // shape itself — `chained_field_receiver` reports that separately).
@@ -44408,34 +44447,27 @@ fn a_local_binding_still_beats_a_variant_name_of_the_expected_enum() {
     // scan; both the diagnostic and the type-directed arm must honour that, so
     // here `A` is the i64 local and the mismatch is i64-vs-First, not an
     // ambiguity.
-    let errors = typecheck_errors(
+    //
+    // design.md §3 CN-2 (B-2026-11-06-18) now refuses the local itself: a
+    // binding is never Type-class, so no local can be named like a variant.
+    resolve_refuses_binding_name(
         "enum First { A, B }
          enum Second { A, C }
          fn main() { let A = 77; let x: First = A; }",
-    );
-    assert!(
-        errors
-            .iter()
-            .all(|e| e.kind != TypeErrorKind::AmbiguousBareVariant),
-        "a local named `A` is not a variant reference, got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("expected 'First', found 'i64'")),
-        "expected the local's own type mismatch, got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        "A",
     );
 }
 
 #[test]
 fn a_local_named_like_a_colliding_variant_is_not_diagnosed_at_all() {
     // The plain form of the same regression — no expected type in sight.
-    typecheck_ok(
+    // The resolver's binding-name rule is now the only report (design.md §3
+    // CN-2, B-2026-11-06-18), not an ambiguity diagnostic.
+    resolve_refuses_binding_name(
         "enum First { A, B }
          enum Second { A, C }
          fn main() { let A = 77; println(A); }",
+        "A",
     );
 }
 

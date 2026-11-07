@@ -41,6 +41,14 @@ impl super::Parser {
                 self.reject_test_block_in_body();
                 continue;
             }
+            // `///` in a body documents nothing: no item is declared here.
+            // design.md §3 discards it with a warning; it used to be the
+            // parse error "Expected expression, found a doc comment".
+            if matches!(self.peek_token_ref(), Token::DocComment(_)) {
+                self.collect_leading_doc_comments();
+                self.discard_pending_doc(super::DOC_STMT);
+                continue;
+            }
             // Try to parse a statement or final expression
             let before = self.pos;
             if self.is_statement_start() {

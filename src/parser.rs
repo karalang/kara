@@ -357,6 +357,13 @@ pub struct Parser {
     /// field. Cleared after consumption so a subsequent item without docs
     /// gets `None`.
     pub(crate) pending_doc: Option<String>,
+    /// The span of the `///` run behind [`Self::pending_doc`], first line to
+    /// last, so a run nothing takes can be reported where it is written.
+    pending_doc_span: Option<Span>,
+    /// See [`crate::ast::Program::discarded_doc_comments`].
+    discarded_doc_comments: Vec<(Span, &'static str)>,
+    /// See [`crate::ast::Program::nested_fstrings`].
+    pub(crate) nested_fstrings: rustc_hash::FxHashMap<usize, Option<crate::resolver::TextEdit>>,
     /// Stack of `FnContext`s for the function-like signature we are currently
     /// parsing parameters for. Drives the anonymous-parameter focused
     /// diagnostic: trait-method bodies emit `E_TRAIT_METHOD_ANONYMOUS_PARAM`
@@ -483,6 +490,19 @@ pub const MACRO_FUNCTION_TWINS: &[&str] = &[
 /// format string. Their Kāra twins take one string, so a call with format
 /// arguments is rewritten to an f-string rather than losing its `!`
 /// (B-2026-11-01-8).
+/// Why a `///` run documents nothing (design.md §3 Doc comments), the tail
+/// of the warning the type checker reports from
+/// `Program::discarded_doc_comments`.
+/// A blank line or a plain comment after the run, a `}`, or the end of the
+/// file: one wording, since `karac check` appends the library after the
+/// user's source and the parser cannot tell the end of the file from a gap.
+pub(crate) const DOC_NO_ITEM: &str =
+    "no item directly follows it: a blank line, a comment, a `}` or the end of the file comes first";
+pub(crate) const DOC_STMT: &str = "a statement takes no doc comment";
+pub(crate) const DOC_DECL: &str = "what follows it takes no doc comment";
+pub(crate) const DOC_IMPL: &str =
+    "an `impl` block takes no doc comment; its methods document themselves";
+
 const PRINT_MACROS: &[&str] = &["println", "print", "eprintln", "panic"];
 
 /// Reason an `impl Trait` type expression is rejected at the current
@@ -550,6 +570,9 @@ impl Parser {
             allow_script_mode: true,
             saw_top_level_statements: false,
             pending_doc: None,
+            pending_doc_span: None,
+            discarded_doc_comments: Vec::new(),
+            nested_fstrings: rustc_hash::FxHashMap::default(),
             fn_context_stack: Vec::new(),
             effect_var_stack: Vec::new(),
             impl_trait_block_stack: Vec::new(),
@@ -617,18 +640,59 @@ impl Parser {
     /// Drain pending leading `///` doc-comment text. Returns `None` when no
     /// doc comments are attached. Called from each item-construction site.
     fn take_pending_doc(&mut self) -> Option<String> {
+        self.pending_doc_span = None;
         self.pending_doc.take()
+    }
+
+    /// A pending `///` run that nothing takes: design.md §3 Doc comments
+    /// discards it with a warning (`Program::discarded_doc_comments`).
+    /// `why` says what follows the run instead of a documented item.
+    pub(crate) fn discard_pending_doc(&mut self, why: &'static str) {
+        let span = self.pending_doc_span.take();
+        if self.pending_doc.take().is_some() {
+            if let Some(span) = span {
+                self.discarded_doc_comments.push((span, why));
+            }
+        }
     }
 
     /// Consume any leading `Token::DocComment` tokens at the current
     /// position and accumulate their text (newline-joined) into
     /// `pending_doc`. Idempotent — safe to call when no doc comments
     /// follow. Stops at the first non-doc-comment token.
+    ///
+    /// design.md §3: a run is consecutive `///` lines, and it attaches to
+    /// what directly follows it, "with no blank line and no other token in
+    /// between". So a blank line (or a plain `//` comment, which leaves no
+    /// token) inside or after the run, or the end of the file, leaves the
+    /// lines before it documenting nothing: they are discarded with a
+    /// warning rather than attached to whatever comes later.
     fn collect_leading_doc_comments(&mut self) {
         let mut buf: Option<String> = None;
+        // The run so far: its span (offset of the first line to the end of
+        // the last) and the lines it starts and ends on.
+        let mut run: Option<(Span, usize)> = None;
         while let Token::DocComment(text) = self.peek_token() {
             let line = text.clone();
+            let span = self.current_span();
             self.advance();
+            if let Some((r, last)) = run {
+                if span.line > last + 1 {
+                    self.discarded_doc_comments.push((r, DOC_NO_ITEM));
+                    buf = None;
+                    run = None;
+                }
+            }
+            run = Some(match run {
+                Some((r, _)) => (
+                    Span {
+                        length: (span.offset + span.length).saturating_sub(r.offset),
+                        ..r
+                    },
+                    span.line,
+                ),
+                None => (span, span.line),
+            });
             match &mut buf {
                 Some(s) => {
                     s.push('\n');
@@ -637,8 +701,16 @@ impl Parser {
                 None => buf = Some(line),
             }
         }
-        if buf.is_some() {
+        let Some((at, last)) = run else {
+            return;
+        };
+        if self.is_at_end() || self.check(&Token::RightBrace) || self.current_span().line > last + 1
+        {
+            self.discarded_doc_comments.push((at, DOC_NO_ITEM));
+        } else {
+            self.discard_pending_doc(DOC_DECL);
             self.pending_doc = buf;
+            self.pending_doc_span = Some(at);
         }
     }
 
@@ -702,8 +774,10 @@ impl Parser {
                 Some(item) => {
                     items.push(item);
                     items.append(&mut self.pending_extra_items);
+                    self.discard_pending_doc(DOC_DECL);
                 }
                 None if self.errors.len() == errs_before && !self.is_at_end() => {
+                    self.discard_pending_doc(DOC_STMT);
                     // Non-item head with no diagnostic — a top-level
                     // statement. Parse it as one; a statement parse that
                     // ALSO fails falls back to the item-level recovery so
@@ -719,7 +793,11 @@ impl Parser {
                     }
                 }
                 None => {
-                    // Error recovery: skip to next item-starting token
+                    // Error recovery: skip to next item-starting token. A
+                    // doc run before the failed item is dropped unreported:
+                    // the error already names the line.
+                    self.pending_doc = None;
+                    self.pending_doc_span = None;
                     self.synchronize_to_item();
                 }
             }
@@ -888,6 +966,8 @@ impl Parser {
             ref_binding_keywords: std::mem::take(&mut self.ref_binding_keywords),
             escaping_fn_types: std::mem::take(&mut self.escaping_fn_types),
             vec_macro_literals: std::mem::take(&mut self.vec_macro_literals),
+            discarded_doc_comments: std::mem::take(&mut self.discarded_doc_comments),
+            nested_fstrings: std::mem::take(&mut self.nested_fstrings),
             rust_box_new: std::mem::take(&mut self.rust_box_new),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             rust_reverse_wraps: self.rust_reverse_wraps(),
@@ -1889,14 +1969,6 @@ impl Parser {
                 self.advance();
                 Some(name)
             }
-            Token::Requires => {
-                self.advance();
-                Some("requires".to_string())
-            }
-            Token::Ensures => {
-                self.advance();
-                Some("ensures".to_string())
-            }
             _ => {
                 self.error(&format!(
                     "Expected attribute argument name, found {}",
@@ -1923,10 +1995,7 @@ impl Parser {
         if self.pos + 1 >= self.tokens.len() {
             return false;
         }
-        let is_name_token = matches!(
-            self.tokens[self.pos].token,
-            Token::Identifier { .. } | Token::Requires | Token::Ensures
-        );
+        let is_name_token = matches!(self.tokens[self.pos].token, Token::Identifier { .. });
         if !is_name_token {
             return false;
         }
@@ -2536,6 +2605,22 @@ impl Parser {
     /// suggestion.
     fn check_ident_class(&mut self, name: &str, expected: IdentClass, context: &str, span: Span) {
         let actual = classify_ident(name);
+        // design.md §3 CN-5: only a Value-class name may begin with `_`, the
+        // mark of an intentionally unused binding (B-2026-11-06-18).
+        if actual == expected && expected != IdentClass::Value && name.starts_with('_') {
+            let trimmed = name.trim_start_matches('_');
+            self.errors.push(ParseError {
+                kind: ParseErrorKind::Syntax,
+                message: format!(
+                    "`{name}` begins with `_`, but {context} names may not: a leading \
+                     underscore marks an unused Value-class binding, and Type-class and \
+                     Const-class names never take one (design.md §3 CN-5); rename it to \
+                     `{trimmed}`"
+                ),
+                span,
+            });
+            return;
+        }
         if actual == expected {
             return;
         }

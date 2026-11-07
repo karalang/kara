@@ -1410,10 +1410,10 @@ impl[T] FromIterator[T] for Vec[T] {
     }
 }
 
-/// `Some` of every item's value gathered into `C`, or `None` at the first
-/// `None`, with no more items pulled, as Rust's `collect` into an `Option`.
-/// The values wait in a `Vec` until the last one is known to be there.
 impl[T, C: FromIterator[T]] FromIterator[Option[T]] for Option[C] {
+    /// `Some` of every item's value gathered into `C`, or `None` at the first
+    /// `None`, with no more items pulled, as Rust's `collect` into an `Option`.
+    /// The values wait in a `Vec` until the last one is known to be there.
     fn from_iter[I: Iterator[Item = Option[T]]](iter: own I) -> Option[C] {
         let mut it = iter;
         let mut values: Vec[T] = Vec.new();
@@ -1427,9 +1427,9 @@ impl[T, C: FromIterator[T]] FromIterator[Option[T]] for Option[C] {
     }
 }
 
-/// `Ok` of every item's value gathered into `C`, or the first `Err`, with no
-/// more items pulled, as Rust's `collect` into a `Result`.
 impl[T, E, C: FromIterator[T]] FromIterator[Result[T, E]] for Result[C, E] {
+    /// `Ok` of every item's value gathered into `C`, or the first `Err`, with no
+    /// more items pulled, as Rust's `collect` into a `Result`.
     fn from_iter[I: Iterator[Item = Result[T, E]]](iter: own I) -> Result[C, E] {
         let mut it = iter;
         let mut values: Vec[T] = Vec.new();

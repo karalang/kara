@@ -1321,6 +1321,35 @@ impl<'a> super::TypeChecker<'a> {
     /// release, the B-2026-11-04-79 transition. The standard library and the
     /// library compiled from source are exempt; `#[allow(deprecated)]` on the
     /// type suppresses it.
+    /// `unused_doc_comment`: each `///` run the parser found documenting
+    /// nothing (design.md §3 Doc comments: "Otherwise the run is discarded
+    /// with a warning"). The user's source only, never the appended library.
+    pub(super) fn warn_discarded_doc_comments(&mut self) {
+        if self.compiling_stdlib {
+            return;
+        }
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let found: Vec<(Span, &'static str)> = self
+            .program
+            .discarded_doc_comments
+            .iter()
+            .filter(|(span, _)| span.offset < library)
+            .copied()
+            .collect();
+        for (span, why) in found {
+            self.type_lint_warning_with_fix(
+                format!(
+                    "this doc comment documents nothing ({why}), so it is discarded \
+                     (design.md §3 Doc comments); write `//` for a plain comment"
+                ),
+                span,
+                TypeErrorKind::UnusedDocComment,
+                "unused_doc_comment",
+                None,
+            );
+        }
+    }
+
     pub(super) fn warn_implied_derives(&mut self) {
         // §9's chains: the derives each derive needs. 0.8.x's fill-in also
         // makes a `Hash` type comparable, so `Hash` is reported as needing

@@ -84,30 +84,30 @@ fn middle_pair_off(a: Slice[i64], a_off: i64, a_len: i64,
 }
 
 fn main() {
-    let M = 1000000;
-    let N = 1000000;
-    let R = 1000;
-    let K = 10000000;
+    let m = 1000000;
+    let n = 1000000;
+    let r = 1000;
+    let iters = 10000000;
 
-    let mut base_a: Vec[i64] = Vec.filled(M + R, 0);
+    let mut base_a: Vec[i64] = Vec.filled(m + r, 0);
     let mut p = 0;
-    while p < M + R {
+    while p < m + r {
         base_a[p] = 2 * p;
         p = p + 1;
     }
 
-    let mut base_b: Vec[i64] = Vec.filled(N + R, 0);
+    let mut base_b: Vec[i64] = Vec.filled(n + r, 0);
     p = 0;
-    while p < N + R {
+    while p < n + r {
         base_b[p] = 2 * p + 1;
         p = p + 1;
     }
 
     let mut sum = 0;
     let mut k = 0;
-    while k < K {
-        let off = k % R;
-        let pair = middle_pair_off(base_a, off, M, base_b, off, N);
+    while k < iters {
+        let off = k % r;
+        let pair = middle_pair_off(base_a, off, m, base_b, off, n);
         sum = sum + pair[0] + pair[1];
         k = k + 1;
     }

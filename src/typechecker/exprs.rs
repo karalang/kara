@@ -8935,6 +8935,10 @@ impl<'a> super::TypeChecker<'a> {
     /// literals; Gowtham 2026-11-04), with the parser's rewrite as the fix.
     /// A warning, never an error: the spelling still means what it did.
     fn warn_vec_macro(&mut self, expr: &Expr) {
+        if matches!(expr.kind, ExprKind::InterpolatedStringLit(_)) {
+            self.warn_nested_fstring(expr);
+            return;
+        }
         if !matches!(
             expr.kind,
             ExprKind::PrefixCollectionLiteral { .. } | ExprKind::RepeatLiteral { .. }
@@ -8967,6 +8971,44 @@ impl<'a> super::TypeChecker<'a> {
         self.type_lint_warning_with_fix(
             "use of deprecated `vec![..]`: the list literal is `[a, b]` (and `Vec.filled(n, v)` \
              for `vec![v; n]`) — suppress with `#[allow(deprecated)]` on the enclosing item"
+                .to_string(),
+            expr.span,
+            TypeErrorKind::Deprecated,
+            "deprecated",
+            fix_it,
+        );
+    }
+
+    /// `deprecated` on an f-string inside another's `{..}` (design.md §3
+    /// Interpolated strings: "No nesting"; B-2026-11-06-18). 0.8.x warns,
+    /// since programs written against 0.8.0 nest them; the fix flattens a
+    /// hole that is the inner f-string alone.
+    fn warn_nested_fstring(&mut self, expr: &Expr) {
+        if self.compiling_stdlib {
+            return;
+        }
+        let Some(edit) = self.program.nested_fstrings.get(&expr.span.offset).cloned() else {
+            return;
+        };
+        if !self
+            .vec_macro_reported
+            .insert((expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        let fix_it = edit.map(|e| crate::typechecker::FixIt {
+            span: Span {
+                offset: e.offset,
+                length: e.length,
+                ..expr.span
+            },
+            replacement: e.replacement,
+        });
+        self.type_lint_warning_with_fix(
+            "use of deprecated nested f-string: design.md §3 allows no f-string inside an \
+             f-string's `{..}`, and a later release refuses it; write its text in the hole, or \
+             bind it first (`let inner = f\"..\"; f\"..{inner}..\"`) — suppress with \
+             `#[allow(deprecated)]` on the enclosing item"
                 .to_string(),
             expr.span,
             TypeErrorKind::Deprecated,

@@ -1706,6 +1706,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::UndefinedName => "E0100",
                 crate::resolver::ResolveErrorKind::DuplicateDefinition => "E0101",
                 crate::resolver::ResolveErrorKind::ReservedIdentifier => "E0102",
+                crate::resolver::ResolveErrorKind::BindingNameClass => "E0127",
                 crate::resolver::ResolveErrorKind::PrivateAccess => "E0103",
                 crate::resolver::ResolveErrorKind::UndefinedType => "E0104",
                 crate::resolver::ResolveErrorKind::UndefinedVariant => "E0105",
@@ -1880,6 +1881,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::RedundantCast => "E0291",
                 // A style lint escalated by `-D`/`#[deny]`; `W0295` below.
                 crate::typechecker::TypeErrorKind::StyleLint => "E0295",
+                crate::typechecker::TypeErrorKind::UnusedDocComment => "E0296",
                 crate::typechecker::TypeErrorKind::RedundantAliasBound => "E0293",
                 crate::typechecker::TypeErrorKind::WeakReadUnwrap => "E0294",
                 crate::typechecker::TypeErrorKind::PreludeShadow => "E0282",
@@ -2044,6 +2046,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // `Color.Red`, or a bare unit-variant name like `None`) matched
                 // against a scrutinee whose type cannot own that variant.
                 crate::typechecker::TypeErrorKind::PatternScrutineeMismatch => "E0273",
+                crate::typechecker::TypeErrorKind::BindingNameClass => "E0128",
             };
             // Also surface a typecheck fix-it as the top-level
             // `"replacement":{offset,length,text}` shape every other phase
@@ -2117,6 +2120,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "W0290",
                 crate::typechecker::TypeErrorKind::LaterTrack => "W0292",
                 crate::typechecker::TypeErrorKind::StyleLint => "W0295",
+                crate::typechecker::TypeErrorKind::UnusedDocComment => "W0296",
                 // Other kinds aren't expected to appear as warnings today.
                 _ => "W0299",
             };

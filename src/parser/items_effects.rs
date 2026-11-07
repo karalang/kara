@@ -291,6 +291,12 @@ impl super::Parser {
 
             // Parse space-separated effect items: verbs, effect variables, or group names
             loop {
+                // `requires` / `ensures` are contextual (design.md §3: not v1
+                // keywords): after an effect clause they open the contract,
+                // not a user effect `ensures(result)` (B-2026-11-06-18).
+                if self.at_kw("requires") || self.at_kw("ensures") {
+                    break;
+                }
                 // Try verb first (reads, writes, blocks, user-defined, etc.)
                 if let Some(verb) = self.try_parse_effect_verb() {
                     items.push(EffectItem::Verb(verb));

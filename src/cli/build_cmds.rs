@@ -828,6 +828,7 @@ pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::UndefinedName => "E0100",
         ResolveErrorKind::DuplicateDefinition => "E0101",
         ResolveErrorKind::ReservedIdentifier => "E0102",
+        ResolveErrorKind::BindingNameClass => "E0127",
         ResolveErrorKind::PrivateAccess => "E0103",
         ResolveErrorKind::UndefinedType => "E0104",
         ResolveErrorKind::UndefinedVariant => "E0105",
@@ -1159,6 +1160,7 @@ pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
         K::AtomicMissingOrdering => "E0270",
         K::AtomicInvalidInnerType => "E0272",
         K::PatternScrutineeMismatch => "E0273",
+        K::BindingNameClass => "E0128",
         _ => "E0200",
     }
 }

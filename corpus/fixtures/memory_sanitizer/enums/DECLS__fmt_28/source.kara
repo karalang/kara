@@ -4,6 +4,6 @@ sync enum W { Wa, Wb }
 impl Drop for W { fn drop(mut ref self) { println(f"dW") } }
 fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } U.Uc => { return 2 } } }
 fn main() {
-    { let Uc = 7; let s = Uc; println(f"n{s}"); }
+    { let uc = 7; let s = uc; println(f"n{s}"); }
     println("end");
 }

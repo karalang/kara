@@ -2006,10 +2006,7 @@ fn keyword_or_ident(text: own String) -> Token {
         // Type system
         "as" => Token.As,
         "dyn" => Token.Dyn,
-        // Contracts
-        "requires" => Token.Requires,
-        "ensures" => Token.Ensures,
-        "invariant" => Token.Invariant,
+        // Contracts: not keywords in v1 (design.md §3); contextual in the parser.
         // Safety
         "unsafe" => Token.Unsafe,
         "extern" => Token.Extern,

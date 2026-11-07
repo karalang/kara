@@ -310,6 +310,52 @@ impl<'a> super::Resolver<'a> {
 
     // ── Pattern resolution ──────────────────────────────────────
 
+    /// design.md §3 CN-2: a binding is Value-class (snake_case). The parser
+    /// checks parameters and `ref` bindings; a bare name in a pattern is a
+    /// binding only when it names no unit variant, which is known here
+    /// (B-2026-11-06-18). A Const-class name that names a `const` gets its
+    /// own wording: a pattern never compares against a constant.
+    fn check_binding_name_class(&mut self, name: &str, span: Span) {
+        use crate::lexer::IdentClass;
+        let actual = crate::lexer::classify_ident(name);
+        if actual == IdentClass::Value || name.starts_with("__") {
+            return;
+        }
+        let actual_desc = if actual == IdentClass::Type {
+            "Type-class"
+        } else {
+            "Const-class"
+        };
+        let suggestion = crate::lexer::suggest_name_for_class(name, IdentClass::Value);
+        let advice = match &suggestion {
+            Some(s) => format!("consider renaming to `{s}`"),
+            None => "rename it to snake_case".to_string(),
+        };
+        let names_const = self
+            .table
+            .lookup(name)
+            .is_some_and(|s| matches!(s.kind, SymbolKind::Constant));
+        let note = if names_const {
+            format!(
+                "; a pattern binds a fresh name and never compares against the constant \
+                 `{name}`: write a guard (`x if x == {name}`) to compare"
+            )
+        } else {
+            String::new()
+        };
+        self.errors.push(ResolveError {
+            message: format!(
+                "`{name}` is {actual_desc} but binding names must be Value-class \
+                 (snake_case) (design.md §3 CN-2); {advice}{note}"
+            ),
+            span,
+            kind: ResolveErrorKind::BindingNameClass,
+            suggestion: suggestion.map(|s| format!("rename to `{s}`")),
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+
     pub(crate) fn resolve_pattern(&mut self, pattern: &Pattern) {
         match &pattern.kind {
             PatternKind::Wildcard => {}
@@ -329,6 +375,14 @@ impl<'a> super::Resolver<'a> {
                         self.error_undefined_name(first, pattern.span);
                     }
                     None => {
+                        // A Type-class name here may be a bare variant of
+                        // the scrutinee's enum, which only the type checker
+                        // knows (a library enum's `NotFound`); it reports a
+                        // Type-class binding there. A Const-class name is
+                        // never a variant.
+                        if crate::lexer::classify_ident(name) != crate::lexer::IdentClass::Type {
+                            self.check_binding_name_class(name, pattern.span);
+                        }
                         let defined = self.table.define(
                             name.clone(),
                             SymbolKind::Variable { is_mut: false },
@@ -486,6 +540,14 @@ impl<'a> super::Resolver<'a> {
     /// it (creates a fresh binding) rather than erroring — design.md
     /// § Variables > Shadowing. Duplicate binders *within the same pattern*
     /// (e.g. `let (a, a) = ...`) are still rejected, tracked via `bound`.
+    /// A `fn` parameter's pattern: [`Self::define_pattern_bindings`] without
+    /// the binding-class check, which the parser already made.
+    pub(crate) fn define_fn_param_bindings(&mut self, pattern: &Pattern) {
+        self.defining_fn_params = true;
+        self.define_pattern_bindings(pattern, false);
+        self.defining_fn_params = false;
+    }
+
     pub(crate) fn define_let_bindings(&mut self, pattern: &Pattern, is_mut: bool) {
         let mut bound = std::collections::HashSet::new();
         self.define_pattern_bindings_inner(pattern, is_mut, true, &mut bound);
@@ -504,6 +566,9 @@ impl<'a> super::Resolver<'a> {
         allow_shadow: bool,
         bound: &mut std::collections::HashSet<String>,
     ) {
+        if !self.defining_fn_params {
+            self.check_binding_name_class(name, span);
+        }
         if !bound.insert(name.to_string()) {
             self.errors.push(ResolveError {
                 message: format!("'{}' is bound more than once in the same pattern", name),

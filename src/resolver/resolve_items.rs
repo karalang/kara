@@ -206,7 +206,7 @@ impl<'a> super::Resolver<'a> {
 
         // Register parameters
         for param in &f.params {
-            self.define_pattern_bindings(&param.pattern, false);
+            self.define_fn_param_bindings(&param.pattern);
             self.resolve_type_expr(&param.ty);
         }
 
@@ -411,7 +411,7 @@ impl<'a> super::Resolver<'a> {
                     }
 
                     for param in &method.params {
-                        self.define_pattern_bindings(&param.pattern, false);
+                        self.define_fn_param_bindings(&param.pattern);
                         self.resolve_type_expr(&param.ty);
                     }
 
@@ -744,7 +744,7 @@ impl<'a> super::Resolver<'a> {
     fn resolve_extern_function(&mut self, e: &ExternFunction) {
         self.table.push_scope(ScopeKind::Function);
         for param in &e.params {
-            self.define_pattern_bindings(&param.pattern, false);
+            self.define_fn_param_bindings(&param.pattern);
             self.resolve_type_expr(&param.ty);
         }
         if let Some(ref ret_ty) = e.return_type {

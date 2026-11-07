@@ -457,7 +457,8 @@ impl super::Parser {
 
     pub(crate) fn parse_requires_clauses(&mut self) -> Vec<Expr> {
         let mut clauses = Vec::new();
-        while self.eat(&Token::Requires) {
+        while self.at_kw("requires") {
+            self.advance();
             if let Some(expr) = self.parse_expression() {
                 clauses.push(expr);
             }
@@ -467,7 +468,8 @@ impl super::Parser {
 
     pub(crate) fn parse_ensures_clauses(&mut self) -> Vec<EnsuresClause> {
         let mut clauses = Vec::new();
-        while self.eat(&Token::Ensures) {
+        while self.at_kw("ensures") {
+            self.advance();
             let start = self.current_span();
             // Result-binding syntax. Two accepted forms:
             //   `ensures(result) <postcond>` — the design syntax (design.md
@@ -520,7 +522,7 @@ impl super::Parser {
         }
         first_on_line
             && match self.peek_token_ref_at(at) {
-                Token::Impl => self.peek_token_ref_at(at + 1) != &Token::Invariant,
+                Token::Impl => !self.at_kw_at(at + 1, "invariant"),
                 Token::Fn | Token::Struct | Token::Enum | Token::Trait | Token::Const => {
                     matches!(self.peek_token_ref_at(at + 1), Token::Identifier { .. })
                 }
@@ -543,7 +545,7 @@ impl super::Parser {
             // `impl invariant <expr>` — checked at *every* method exit (pub
             // and private), unlike the plain `invariant` form below
             // (design.md § Contracts — `impl invariant`).
-            if self.check(&Token::Impl) && self.peek_token_ref_at(1) == &Token::Invariant {
+            if self.check(&Token::Impl) && self.at_kw_at(1, "invariant") {
                 self.advance(); // impl
                 self.advance(); // invariant
                 let _ = self.take_pending_doc();
@@ -553,7 +555,9 @@ impl super::Parser {
                 continue;
             }
             // Check for invariant
-            if self.eat(&Token::Invariant) {
+            // `invariant` is contextual: `invariant: i64` is a field.
+            if self.at_kw("invariant") && self.peek_token_ref_at(1) != &Token::Colon {
+                self.advance();
                 // Doc comments don't attach to invariants — drop any
                 // accumulated text so it doesn't bleed into the next field.
                 let _ = self.take_pending_doc();

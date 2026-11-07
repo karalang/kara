@@ -433,10 +433,10 @@ impl[T: RangeStep + PartialOrd + Copy] DoubleEndedIterator for RangeInclusive[T]
     }
 }
 
-/// `(0..n).step_by(k).rev()`: a step over a range walks back from the last
-/// value it reaches, `start + j * k`, and shrinks the range's end past it,
-/// so both ends of one step meet in the middle (B-2026-11-05-35).
 impl[T: RangeStep + PartialOrd + Copy] DoubleEndedIterator for IterStepBy[Range[T]] {
+    /// `(0..n).step_by(k).rev()`: a step over a range walks back from the last
+    /// value it reaches, `start + j * k`, and shrinks the range's end past it,
+    /// so both ends of one step meet in the middle (B-2026-11-05-35).
     fn next_back(mut ref self) -> Option[T] {
         if self.it.start >= self.it.end {
             return None;

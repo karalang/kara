@@ -1802,10 +1802,10 @@ impl<'a> Lexer<'a> {
             // Type system
             "as" => Token::As,
             "dyn" => Token::Dyn,
-            // Contracts
-            "requires" => Token::Requires,
-            "ensures" => Token::Ensures,
-            "invariant" => Token::Invariant,
+            // Contracts: `requires`, `ensures` and `invariant` are not
+            // keywords in v1 (design.md §3); the parser reads them as
+            // contextual words where a contract can start, so they stay
+            // usable as names (B-2026-11-06-18).
             // Safety
             "unsafe" => Token::Unsafe,
             "extern" => Token::Extern,
