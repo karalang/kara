@@ -1264,8 +1264,15 @@ impl<'a> super::TypeChecker<'a> {
         // a literal names its fields as surely as a read does (design.md §5,
         // B-2026-11-04-46; a `private` field from another directory was
         // accepted in a literal).
+        // Only a field without `pub` can be out of view, as at a field read
+        // (B-2026-11-07-22: every field of another package's struct was
+        // refused, `pub` ones included).
         for f in fields {
-            if expected_fields.contains(f.name.as_str()) {
+            let is_pub = struct_info
+                .fields
+                .iter()
+                .any(|(n, _, is_pub)| n == &f.name && *is_pub);
+            if expected_fields.contains(f.name.as_str()) && !is_pub {
                 self.check_cross_module_field_access(&struct_name, &f.name, &f.span);
             }
             if !expected_fields.contains(f.name.as_str()) {

@@ -192,6 +192,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Wrong behaviour fixed
 
+- A struct literal of another package's struct may name its `pub` fields
+  again: `Opts { port: 1 }` with `pub port` was refused with E0111 since the
+  literal check for B-2026-11-04-46 (B-2026-11-07-22).
 - **A generic function's `impl Iterator` collects.** `fn evs[T](xs: own
   Vec[T]) -> impl Iterator[Item = T]` then `evs(v).collect()` failed with
   "the method call `.collect` with no resolved callee is not lowered yet"
