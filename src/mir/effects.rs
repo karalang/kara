@@ -4457,8 +4457,12 @@ fn main() {
     /// since the caller can pass one file twice.
     #[test]
     fn effects_par_capabilities_do_not_conflict_but_parameters_may_alias() {
+        // The handles are a struct's, which holds a resource: a `Vec[i64]`
+        // holds none, so two of them never alias (B-2026-11-07-20).
         let (p, tys) = from_mir(
             "
+struct File { fd: i64 }
+
 fn fetch(_1: ref Vec[i64], _2: ref Vec[i64]) -> () {
     let mut _0: ();
     let _3: ();
@@ -4478,7 +4482,7 @@ fn fetch(_1: ref Vec[i64], _2: ref Vec[i64]) -> () {
     }
 }
 
-fn store(_1: ref Vec[i64], _2: ref Vec[i64]) -> () {
+fn store(_1: ref File, _2: ref File) -> () {
     let mut _0: ();
     let _3: ();
     let _4: ();
