@@ -22,6 +22,7 @@ pub mod codegen_queries;
 pub mod comptime;
 pub mod concurrency;
 pub mod concurrency_report;
+pub mod const_patterns;
 pub(crate) mod consume_class;
 pub mod core_escape;
 pub mod cost_summary;

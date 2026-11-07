@@ -1,0 +1,12 @@
+// A constant in a pattern must be of an integer or `char` type, or have a
+// literal value; one that is neither is refused rather than read as a new
+// binding (B-2026-11-06-16).
+const GREETING: Str = "hi";
+const BYE: Str = GREETING;
+
+fn main() {
+    match "hi" {
+        BYE => println("bye"),
+        _ => println("other"),
+    }
+}

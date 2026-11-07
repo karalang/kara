@@ -1,0 +1,9 @@
+source = "B-2026-11-06-16"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["patterns", "const"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-16: design.md § Pattern matching lists `a const` among the patterns that match `That value`. A const-class name in a match arm, a variant payload, `if let`, `while let` and `let ... else` compares against the constant (integer, computed integer, bool, char, u8, Str) and an integer type's limit; it bound a fresh variable before, so `match 5 { LIMIT => .. }` took the LIMIT arm."

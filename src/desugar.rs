@@ -22,6 +22,9 @@ pub fn desugar_program(program: &mut Program) {
     // `select { .. }` (core-semantics §11.11) FIRST, so every pass after it
     // sees only the loop and `match` it stands for.
     crate::select_desugar::desugar_selects(program);
+    // A named constant in a pattern is its value, never a binding
+    // (B-2026-11-06-16); before anything reads a pattern's bindings.
+    crate::const_patterns::rewrite_const_patterns(program);
     hoist_assoc_bindings_in_program(program);
     synthesize_default_impls(program);
     synthesize_trait_default_methods(program);

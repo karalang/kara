@@ -1,0 +1,1 @@
+ERROR at line 9: constant 'BYE' in a pattern must be of an integer or `char` type, or have a literal value

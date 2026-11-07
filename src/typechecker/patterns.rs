@@ -2530,8 +2530,20 @@ impl<'a> super::TypeChecker<'a> {
         scrut_ty: &Type,
         span: &Span,
     ) {
-        let lo = start.and_then(|b| self.resolve_range_bound_value(b, scrut_ty));
-        let hi = end.and_then(|b| self.resolve_range_bound_value(b, scrut_ty));
+        // A constant in a pattern is the one-value range `C..=C`
+        // (B-2026-11-06-16): resolve its name once, so a bad one is
+        // reported once, and as a constant rather than a range bound.
+        let same_path = matches!(
+            (start, end),
+            (Some(RangeBound::Path { segments: a, span: sa }), Some(RangeBound::Path { segments: b, span: sb }))
+                if a == b && sa.offset == sb.offset
+        );
+        let lo = start.and_then(|b| self.resolve_range_bound_value(b, scrut_ty, same_path));
+        let hi = if same_path {
+            lo.clone()
+        } else {
+            end.and_then(|b| self.resolve_range_bound_value(b, scrut_ty, false))
+        };
 
         if let (Some(lo), Some(hi)) = (&lo, &hi) {
             // Type-matching (slice 5): char-vs-int family mismatch, or two
@@ -2739,6 +2751,7 @@ impl<'a> super::TypeChecker<'a> {
         &mut self,
         bound: &RangeBound,
         scrut_ty: &Type,
+        const_pattern: bool,
     ) -> Option<(i128, Type, bool)> {
         match bound {
             RangeBound::Literal(LiteralPattern::Integer(n, sfx)) => {
@@ -2753,6 +2766,28 @@ impl<'a> super::TypeChecker<'a> {
             // range-bound position, so other literal kinds are unreachable;
             // be defensive rather than panic.
             RangeBound::Literal(_) => None,
+            RangeBound::Path { segments, .. }
+                if segments.len() == 2
+                    && crate::exhaustive::int_type_limit(&segments[0], &segments[1]).is_some() =>
+            {
+                // An integer type's limit (`i64.MAX`), B-2026-11-06-16.
+                let v = crate::exhaustive::int_type_limit(&segments[0], &segments[1])?;
+                let ty = match segments[0].as_str() {
+                    "i8" => Type::Int(IntSize::I8),
+                    "i16" => Type::Int(IntSize::I16),
+                    "i32" => Type::Int(IntSize::I32),
+                    "i64" => Type::Int(IntSize::I64),
+                    "i128" => Type::Int(IntSize::I128),
+                    "isize" => Type::Int(IntSize::Isize),
+                    "u8" => Type::UInt(UIntSize::U8),
+                    "u16" => Type::UInt(UIntSize::U16),
+                    "u32" => Type::UInt(UIntSize::U32),
+                    "u64" => Type::UInt(UIntSize::U64),
+                    "u128" => Type::UInt(UIntSize::U128),
+                    _ => Type::UInt(UIntSize::Usize),
+                };
+                Some((v, ty, true))
+            }
             RangeBound::Path { segments, span } => {
                 let expr = Expr {
                     id: crate::ids::NodeId::DUMMY,
@@ -2777,15 +2812,20 @@ impl<'a> super::TypeChecker<'a> {
                 match resolved {
                     Some((v, ty)) => Some((v, ty, true)),
                     None => {
-                        self.type_error(
+                        let message = if const_pattern {
+                            format!(
+                                "constant '{}' in a pattern must be of an integer or `char` \
+                                 type, or have a literal value",
+                                segments.join("."),
+                            )
+                        } else {
                             format!(
                                 "range pattern bound '{}' must resolve to a module-level \
                                  integer or char const",
                                 segments.join("."),
-                            ),
-                            *span,
-                            TypeErrorKind::RangePatternBoundNotConst,
-                        );
+                            )
+                        };
+                        self.type_error(message, *span, TypeErrorKind::RangePatternBoundNotConst);
                         None
                     }
                 }

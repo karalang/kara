@@ -324,7 +324,39 @@ fn range_bound_to_i128(b: &RangeBound, env: &TypeEnv) -> Option<i128> {
             .const_values
             .get(&segments[0])
             .and_then(crate::typechecker::const_value_to_i128),
-        RangeBound::Path { .. } => None,
+        // An integer type's limit (`i64.MAX`), which a constant in a
+        // pattern may name (B-2026-11-06-16).
+        RangeBound::Path { segments, .. } => match segments.as_slice() {
+            [ty, limit] => int_type_limit(ty, limit),
+            _ => None,
+        },
+    }
+}
+
+/// `ty.MAX` / `ty.MIN` for an integer type name, in the `i128` space (a
+/// `u128.MAX` does not fit, so it has no value here).
+pub(crate) fn int_type_limit(ty: &str, limit: &str) -> Option<i128> {
+    let (bits, signed) = match ty {
+        "i8" => (8, true),
+        "i16" => (16, true),
+        "i32" => (32, true),
+        "i64" | "isize" => (64, true),
+        "i128" => (128, true),
+        "u8" => (8, false),
+        "u16" => (16, false),
+        "u32" => (32, false),
+        "u64" | "usize" => (64, false),
+        "u128" => (128, false),
+        _ => return None,
+    };
+    match (limit, signed) {
+        ("MIN", false) => Some(0),
+        ("MAX", false) if bits < 128 => Some((1i128 << bits) - 1),
+        ("MAX", true) if bits == 128 => Some(i128::MAX),
+        ("MIN", true) if bits == 128 => Some(i128::MIN),
+        ("MAX", true) => Some((1i128 << (bits - 1)) - 1),
+        ("MIN", true) => Some(-(1i128 << (bits - 1))),
+        _ => None,
     }
 }
 

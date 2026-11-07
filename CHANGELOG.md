@@ -168,6 +168,13 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Wrong behaviour fixed
 
+- **A named constant in a pattern compares against its value.** With
+  `const LIMIT: i64 = 3`, `match x { LIMIT => .., _ => .. }` bound a new
+  `LIMIT` and took that arm for every `x`, on every backend; so did
+  `Some(LIMIT)`, a `Str` constant and `if let LIMIT = 5`. A constant now
+  matches only its value, an integer type's limit (`i64.MAX`) is accepted
+  as one, and a constant with neither an integer or `char` type nor a
+  literal value is refused (design.md § Pattern matching, B-2026-11-06-16).
 - A type parameter that only a call's result names is solved by a later use
   in the body: `let mut h = PriorityQueue.new(); h.push((3, 1))`, a
   `Bag.new()` from `impl[T] Bag[T]` followed by `b.push(x)`, and

@@ -1,0 +1,13 @@
+// A constant in a pattern matches only its value, so one arm naming it does
+// not cover the scrutinee's type (B-2026-11-06-16).
+const LIMIT: i64 = 3;
+
+fn f(x: i64) -> i64 {
+    match x {
+        LIMIT => 1,
+    }
+}
+
+fn main() {
+    println(f(3));
+}

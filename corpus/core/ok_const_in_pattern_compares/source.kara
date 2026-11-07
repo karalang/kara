@@ -1,0 +1,68 @@
+// A named constant in a pattern is that value: the arm is taken only when
+// the scrutinee equals it, and nothing is bound (design.md § Pattern
+// matching, "a `const` | That value"; B-2026-11-06-16). An integer type's
+// limit (`i64.MAX`) is one too.
+const LIMIT: i64 = 3;
+const SIX: i64 = 2 * 3;
+const ON: bool = true;
+const QQ: char = 'q';
+const SMALL: u8 = 7;
+const NAME: Str = "bob";
+
+fn kind(x: i64) -> Str {
+    match x {
+        LIMIT => "limit",
+        SIX | 4 => "six or four",
+        n @ 10 => if n == 10 { "ten" } else { "?" },
+        i64.MAX => "max",
+        _ => "other",
+    }
+}
+
+fn opt(o: Option[i64]) -> Str {
+    match o {
+        Some(LIMIT) => "some-limit",
+        Some(_) => "some",
+        None => "none",
+    }
+}
+
+fn who(s: Str) -> Str {
+    match s {
+        NAME => "bob!",
+        _ => "someone",
+    }
+}
+
+fn main() {
+    println(kind(5));
+    println(kind(3));
+    println(kind(6));
+    println(kind(4));
+    println(kind(10));
+    println(kind(9223372036854775807));
+    println(opt(Some(5)));
+    println(opt(Some(3)));
+    println(who("al"));
+    println(who("bob"));
+    if let LIMIT = 5 { println("then") } else { println("else") }
+    match (QQ, true) {
+        (QQ, ON) => println("q on"),
+        _ => println("not"),
+    }
+    let b: u8 = 7;
+    match b {
+        SMALL => println("small"),
+        _ => println("big"),
+    }
+    let mut v = [SIX, SIX, 2];
+    while let Some(SIX) = v.first() {
+        println("six first");
+        v.remove(0);
+    }
+    let Some(SIX) = Some(6) else {
+        println("no");
+        return;
+    };
+    println("let-else six");
+}
