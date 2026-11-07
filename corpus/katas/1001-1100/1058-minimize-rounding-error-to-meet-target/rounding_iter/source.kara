@@ -1,0 +1,136 @@
+// LeetCode #1058: Minimize Rounding Error to Meet Target -- by iterators.
+//
+// `split_once` and `parse` read each price into its whole part and its
+// fraction, `sum` gives the floor, `filter` keeps the fractions, and a
+// descending `sort_by` puts the largest first; `take` rounds up and `skip`
+// rounds down. O(n log n).
+
+fn minimize_error(prices: Vec[String], target: i64) -> String {
+    let parsed: Vec[(i64, i64)] = prices
+        .iter()
+        .map(|p| {
+            let (w, f) = p.split_once(".").unwrap();
+            (i64.parse(w).unwrap(), i64.parse(f).unwrap())
+        })
+        .collect();
+    let floor_sum: i64 = parsed.iter().map(|(w, _)| w).sum();
+    let mut fracs: Vec[i64] = parsed.iter().map(|(_, f)| f).filter(|f| f > 0).collect();
+    let need = target - floor_sum;
+    if need < 0 or need > fracs.len() {
+        return "-1";
+    }
+    fracs.sort_by(|a, b| b.cmp(a));
+    let need = need;
+    let error: i64 = fracs.iter().take(need).map(|f| 1000 - f).sum()
+        + fracs.iter().skip(need).sum();
+    f"{error / 1000}.{error % 1000:03}"
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A price or an answer, written with exactly three decimals, in thousandths.
+fn thousandths(p: String) -> i64 {
+    let mut value = 0;
+    for c in p.chars() {
+        if c != '.' {
+            value = value * 10 + c.to_digit(10).unwrap();
+        }
+    }
+    value
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A price below `most`, with three decimals: a whole number one time in
+// four, otherwise a fraction from `fractions` kinds (all 999 when 999).
+fn random_price(most: i64, fractions: i64, seed: mut ref i64) -> String {
+    let whole = next_random(mut seed) % most;
+    let part = if next_random(mut seed) % 4 == 0 {
+        0
+    } else {
+        (next_random(mut seed) % fractions + 1) * (999 / fractions)
+    };
+    f"{whole}.{part:03}"
+}
+
+// `count` random problems of 1 to `most` prices: how many reach the target,
+// the total of their errors in thousandths, and a checksum of every answer.
+fn trial(count: i64, most: i64, below: i64, fractions: i64, seed: mut ref i64) -> (i64, i64, i64) {
+    let mut reached = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..count {
+        let n = next_random(mut seed) % most + 1;
+        let mut prices: Vec[String] = Vec.new();
+        let mut floor_sum = 0;
+        for _ in 0..n {
+            let p = random_price(below, fractions, mut seed);
+            floor_sum += thousandths(p) / 1000;
+            prices.push(p);
+        }
+        // a target from one below the smallest sum to one above the largest
+        let target = floor_sum - 1 + next_random(mut seed) % (n + 3);
+        let answer = minimize_error(prices, target);
+        if answer != "-1" {
+            reached += 1;
+            total += thousandths(answer);
+        }
+        for c in answer.chars() {
+            check = (check * 131 + c as i64) % 1000000007;
+        }
+    }
+    (reached, total, check)
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[String], i64)] = [
+        (["0.700", "2.800", "4.900"].iter().map(|s| s.to_string()).collect(), 8),
+        (["1.500", "2.500", "3.500"].iter().map(|s| s.to_string()).collect(), 10),
+        (["1.500", "2.500", "3.500"].iter().map(|s| s.to_string()).collect(), 9),
+        (["0.000"].iter().map(|s| s.to_string()).collect(), 0),
+        (["0.000", "1.000"].iter().map(|s| s.to_string()).collect(), 2),
+        (["0.001", "999.999"].iter().map(|s| s.to_string()).collect(), 1000),
+        (["0.500", "0.500"].iter().map(|s| s.to_string()).collect(), 1),
+        (["1000.000", "0.250", "0.750"].iter().map(|s| s.to_string()).collect(), 1001),
+    ];
+    for (prices, target) in examples.iter() {
+        println(f"{prices} {target} -> {minimize_error(prices, target)}");
+    }
+    let mut seed = 1058;
+    let (reached, total, check) = trial(3000, 8, 10, 4, mut seed);
+    println(f"3000 problems of 1 to 8 prices below 10: {reached} reached, total {total}, checksum {check}");
+    let (reached, total, check) = trial(300, 500, 1000, 999, mut seed);
+    println(f"300 problems of 1 to 500 prices below 1000: {reached} reached, total {total}, checksum {check}");
+    // the largest: 500 prices, every target that can be reached and one past each end
+    let mut prices: Vec[String] = Vec.new();
+    let mut floor_sum = 0;
+    let mut with_fraction = 0;
+    for _ in 0..500 {
+        let p = random_price(1000, 999, mut seed);
+        let t = thousandths(p);
+        floor_sum += t / 1000;
+        if t % 1000 != 0 {
+            with_fraction += 1;
+        }
+        prices.push(p);
+    }
+    let mut check = 0;
+    let mut least = 1000000000;
+    let mut most = 0;
+    for target in floor_sum - 1..floor_sum + with_fraction + 2 {
+        let answer = minimize_error(prices, target);
+        for c in answer.chars() {
+            check = (check * 131 + c as i64) % 1000000007;
+        }
+        if answer != "-1" {
+            least = least.min(thousandths(answer));
+            most = most.max(thousandths(answer));
+        }
+    }
+    println(f"500 prices, {with_fraction + 3} targets: checksum {check}, least {least}, most {most}");
+    println(f"one past each end: {minimize_error(prices, floor_sum - 1)} {minimize_error(prices, floor_sum + with_fraction + 1)}");
+}

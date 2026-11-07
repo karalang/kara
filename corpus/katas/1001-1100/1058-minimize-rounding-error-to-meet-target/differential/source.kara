@@ -1,0 +1,365 @@
+// LeetCode #1058: Minimize Rounding Error to Meet Target -- the differential.
+//
+// The six arms against the statement read literally, on 3000 problems, with
+// six properties:
+//
+// P1  the answer is the statement read literally: every way to round each
+//     price down or up, the ones whose sum is the target, the least error
+// P2  the answer is "-1" exactly when the target lies below every price
+//     rounded down or above every price rounded up
+// P3  the prices reversed, or turned round by one, leave the answer
+// P4  a whole price added, with the target raised by it, leaves the answer
+// P5  over every target that can be reached, the error falls and rises at
+//     most once: each price more rounded up costs at least the one before
+// P6  each arm agrees with at least three of the other five
+
+// ---- shared by the arms and the harness
+
+// The price `p`, written with exactly three decimals, in thousandths.
+fn thousandths(p: String) -> i64 {
+    let mut value = 0;
+    for c in p.chars() {
+        if c != '.' {
+            value = value * 10 + c.to_digit(10).unwrap();
+        }
+    }
+    value
+}
+
+// ---- rounding.kara: the ★ arm: the largest fractions rounded up
+fn star_arm(prices: Vec[String], target: i64) -> String {
+    let mut floor_sum = 0;
+    let mut fractions: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        let t = thousandths(p);
+        floor_sum += t / 1000;
+        if t % 1000 != 0 {
+            fractions.push(t % 1000);
+        }
+    }
+    let up = target - floor_sum;
+    if up < 0 or up > fractions.len() {
+        return "-1";
+    }
+    fractions.sort_by(|a, b| b.cmp(a));
+    let mut error = 0;
+    for (k, f) in fractions.iter().enumerate() {
+        error += if k < up { 1000 - f } else { f };
+    }
+    f"{error / 1000}.{error % 1000:03}"
+}
+
+// ---- rounding_float.kara: in floating point
+fn float_arm(prices: Vec[String], target: i64) -> String {
+    let mut floor_sum: i64 = 0;
+    let mut diffs: Vec[f64] = Vec.new();
+    for p in prices {
+        let x: f64 = f64.parse(p).unwrap();
+        let f = x.floor();
+        floor_sum += f as i64;
+        if x - f > 1e-9 {
+            diffs.push(x - f);
+        }
+    }
+    let need = target - floor_sum;
+    if need < 0 or need > diffs.len() {
+        return "-1";
+    }
+    diffs.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    let mut err = 0.0;
+    for (i, d) in diffs.iter().enumerate() {
+        if i < need {
+            err += 1.0 - d;
+        } else {
+            err += d;
+        }
+    }
+    f"{err:.3}"
+}
+
+// ---- rounding_count.kara: the fractions counted
+fn count_arm(prices: Vec[String], target: i64) -> String {
+    let mut count = Vec.filled(1000, 0);
+    let mut floor_sum = 0;
+    let mut with_fraction = 0;
+    for p in prices.iter() {
+        let (whole, frac) = p.split_once(".").unwrap();
+        floor_sum += i64.parse(whole).unwrap();
+        let f = usize.parse(frac).unwrap();
+        if f > 0 {
+            count[f] += 1;
+            with_fraction += 1;
+        }
+    }
+    let mut need = target - floor_sum;
+    if need < 0 or need > with_fraction {
+        return String.from("-1");
+    }
+    let mut error = 0;
+    for f in (1..1000).rev() {
+        let up = count[f].min(need);
+        need -= up;
+        error += up * (1000 - f) + (count[f] - up) * f;
+    }
+    f"{error / 1000}.{error % 1000:03}"
+}
+
+// ---- rounding_dp.kara: a table of the fewest errors
+fn dp_arm(prices: Vec[String], target: i64) -> String {
+    let mut floor_sum = 0;
+    let mut fracs: Vec[i64] = Vec.new();
+    for p in prices {
+        let digits: String = p.chars().filter(|c| c != '.').collect();
+        let t: i64 = i64.parse(digits).unwrap();
+        floor_sum += t / 1000;
+        if t % 1000 != 0 {
+            fracs.push(t % 1000);
+        }
+    }
+    let need = target - floor_sum;
+    if need < 0 or need > fracs.len() {
+        return "-1";
+    }
+    let need = need;
+    let inf = i64.MAX / 2;
+    let mut best = Vec.filled(need + 1, inf);
+    best[0] = 0;
+    for f in ref fracs {
+        for j in (0..=need).rev() {
+            let down = best[j] + f;
+            let up = if j > 0 { best[j - 1] + 1000 - f } else { inf };
+            best[j] = down.min(up);
+        }
+    }
+    let e = best[need];
+    f"{e / 1000}.{e % 1000:03}"
+}
+
+// ---- rounding_heap.kara: a heap of the fractions
+fn heap_arm(prices: Vec[String], target: i64) -> String {
+    let mut heap = PriorityQueue.max_first();
+    let mut floor_sum = 0;
+    for p in prices {
+        let mut parts = p.split(".");
+        let whole: i64 = i64.parse(parts.next().unwrap()).unwrap();
+        let frac: i64 = i64.parse(parts.next().unwrap()).unwrap();
+        floor_sum += whole;
+        if frac != 0 {
+            heap.push(frac);
+        }
+    }
+    let need = target - floor_sum;
+    if need < 0 or need > heap.len() {
+        return "-1";
+    }
+    let mut error = 0;
+    for _ in 0..need {
+        error += 1000 - heap.pop().unwrap();
+    }
+    while let Some(f) = heap.pop() {
+        error += f;
+    }
+    f"{error / 1000}.{error % 1000:03}"
+}
+
+// ---- rounding_iter.kara: by iterators
+fn iter_arm(prices: Vec[String], target: i64) -> String {
+    let parsed: Vec[(i64, i64)] = prices
+        .iter()
+        .map(|p| {
+            let (w, f) = p.split_once(".").unwrap();
+            (i64.parse(w).unwrap(), i64.parse(f).unwrap())
+        })
+        .collect();
+    let floor_sum: i64 = parsed.iter().map(|(w, _)| w).sum();
+    let mut fracs: Vec[i64] = parsed.iter().map(|(_, f)| f).filter(|f| f > 0).collect();
+    let need = target - floor_sum;
+    if need < 0 or need > fracs.len() {
+        return "-1";
+    }
+    fracs.sort_by(|a, b| b.cmp(a));
+    let need = need;
+    let error: i64 = fracs.iter().take(need).map(|f| 1000 - f).sum()
+        + fracs.iter().skip(need).sum();
+    f"{error / 1000}.{error % 1000:03}"
+}
+
+// ---- the differential
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(a: i64, prices: Vec[String], target: i64) -> String {
+    match a {
+        0 => star_arm(prices, target),
+        1 => float_arm(prices, target),
+        2 => count_arm(prices, target),
+        3 => dp_arm(prices, target),
+        4 => heap_arm(prices, target),
+        _ => iter_arm(prices, target),
+    }
+}
+
+// Every price rounded down or up, by the bits of a number below 2^n: of the
+// ways whose sum is the target, the least error, as the arms write it.
+fn read_literally(prices: Vec[String], target: i64) -> String {
+    let n = prices.len();
+    let t: Vec[i64] = prices.iter().map(|p| thousandths(p)).collect();
+    let mut best = -1;
+    for way in 0..(1 << n) {
+        let mut sum = 0;
+        let mut error = 0;
+        for i in 0..n {
+            let rounded = if (way >> i) % 2 == 1 {
+                (t[i] + 999) / 1000 * 1000
+            } else {
+                t[i] / 1000 * 1000
+            };
+            sum += rounded / 1000;
+            error += (rounded - t[i]).abs();
+        }
+        if sum == target and (best < 0 or error < best) {
+            best = error;
+        }
+    }
+    if best < 0 {
+        return "-1";
+    }
+    f"{best / 1000}.{best % 1000:03}"
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// A price below `most` with three decimals: a whole number one time in
+// four, otherwise one of `fractions` kinds of fraction (all 999 at 999).
+fn random_price(most: i64, fractions: i64, seed: mut ref i64) -> String {
+    let whole = next_random(mut seed) % most;
+    let part = if next_random(mut seed) % 4 == 0 {
+        0
+    } else {
+        (next_random(mut seed) % fractions + 1) * (999 / fractions)
+    };
+    f"{whole}.{part:03}"
+}
+
+fn check_case(t: mut ref Tally, prices: Vec[String], target: i64) {
+    let n = prices.len();
+    let low: i64 = prices.iter().map(|p| thousandths(p) / 1000).sum();
+    let high: i64 = prices.iter().map(|p| (thousandths(p) + 999) / 1000).sum();
+    let answers: Vec[String] = (0..6).map(|a| arm(a, prices, target)).collect();
+    let want = if n <= 9 { read_literally(prices, target) } else { answers[0].clone() };
+    let mut reversed = prices.clone();
+    reversed.reverse();
+    let mut turned = prices.clone();
+    turned.rotate_left(1);
+    let mut whole = prices.clone();
+    whole.push("7.000");
+    for a in 0..6 {
+        let answer = answers[a].clone();
+        let what = f"arm {a}, {prices} {target} -> {answer}";
+        if n <= 9 {
+            expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        }
+        let out = target < low or target > high;
+        expect(mut t, 2, (answer == "-1") == out, f"P2 {what}, sums {low} to {high}");
+        let back = arm(a, reversed, target);
+        expect(mut t, 3, back == answer, f"P3 {what}: reversed -> {back}");
+        let round = arm(a, turned, target);
+        expect(mut t, 3, round == answer, f"P3 {what}: turned -> {round}");
+        let more = arm(a, whole, target + 7);
+        expect(mut t, 4, more == answer, f"P4 {what}: 7.000 added -> {more}");
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    for c in want.chars() {
+        t.check = (t.check * 131 + c as i64) % 1000000007;
+    }
+}
+
+// An answer's error in thousandths, or `None` for "-1" or anything else
+// that is not digits with one point.
+fn error_of(answer: String) -> Option[i64] {
+    let mut value = 0;
+    let mut points = 0;
+    for c in answer.chars() {
+        if c == '.' {
+            points += 1;
+        } else {
+            value = value * 10 + c.to_digit(10)?;
+        }
+    }
+    if points == 1 { Some(value) } else { None }
+}
+
+// P5 for one arm: the errors over every target from `low` to `high`.
+fn check_targets(t: mut ref Tally, a: i64, prices: Vec[String]) {
+    let low: i64 = prices.iter().map(|p| thousandths(p) / 1000).sum();
+    let high: i64 = prices.iter().map(|p| (thousandths(p) + 999) / 1000).sum();
+    let answers: Vec[String] = (low..=high).map(|g| arm(a, prices, g)).collect();
+    let errors: Vec[i64] = answers.iter().filter_map(|x| error_of(x)).collect();
+    if errors.len() < answers.len() {
+        expect(mut t, 5, false, f"P5 arm {a}, {prices}: answers {answers} from {low}");
+        return;
+    }
+    for k in 2..errors.len() {
+        let (x, y, z) = (errors[k - 2], errors[k - 1], errors[k]);
+        expect(mut t, 5, z - y >= y - x, f"P5 arm {a}, {prices}: errors {x} {y} {z} at {low + k - 2}");
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 3000 problems: 2000 of 1 to 9 prices below 10 with fractions in
+    // quarters, where fractions tie often, and 1000 of 1 to 9 or 1 to 60
+    // below 1000 with any fraction; each target from two below the least sum
+    // to two above the greatest
+    let mut seed = 10581;
+    for i in 0..3000 {
+        let (most, below, fractions) = if i < 2000 {
+            (9, 10, 4)
+        } else if i % 2 == 0 {
+            (9, 1000, 999)
+        } else {
+            (60, 1000, 999)
+        };
+        let n = next_random(mut seed) % most + 1;
+        let mut prices: Vec[String] = Vec.new();
+        for _ in 0..n {
+            prices.push(random_price(below, fractions, mut seed));
+        }
+        let low: i64 = prices.iter().map(|p| thousandths(p) / 1000).sum();
+        let target = low - 2 + next_random(mut seed) % (n + 5);
+        check_case(mut t, prices, target);
+        if i % 10 == 0 {
+            for a in 0..6 {
+                check_targets(mut t, a, prices);
+            }
+        }
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

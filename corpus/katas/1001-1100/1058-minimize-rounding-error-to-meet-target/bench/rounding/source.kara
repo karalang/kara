@@ -1,0 +1,83 @@
+// LeetCode #1058: Minimize Rounding Error to Meet Target -- the benchmark:
+// the ★ arm on 40 lists of 500 prices below 1000, built once, asked every
+// target from one below the least sum to one above the greatest, 8 rounds.
+
+// The price `p`, written with exactly three decimals, in thousandths.
+fn thousandths(p: String) -> i64 {
+    let mut value = 0;
+    for c in p.chars() {
+        if c != '.' {
+            value = value * 10 + c.to_digit(10).unwrap();
+        }
+    }
+    value
+}
+
+fn minimize_error(prices: Vec[String], target: i64) -> String {
+    let mut floor_sum = 0;
+    let mut fractions: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        let t = thousandths(p);
+        floor_sum += t / 1000;
+        if t % 1000 != 0 {
+            fractions.push(t % 1000);
+        }
+    }
+    let up = target - floor_sum;
+    if up < 0 or up > fractions.len() {
+        return "-1";
+    }
+    fractions.sort_by(|a, b| b.cmp(a));
+    let mut error = 0;
+    for (k, f) in fractions.iter().enumerate() {
+        error += if k < up { 1000 - f } else { f };
+    }
+    f"{error / 1000}.{error % 1000:03}"
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A price below 1000 with three decimals, a whole number one time in four.
+fn random_price(seed: mut ref i64) -> String {
+    let whole = next_random(mut seed) % 1000;
+    let part = if next_random(mut seed) % 4 == 0 { 0 } else { next_random(mut seed) % 999 + 1 };
+    f"{whole}.{part:03}"
+}
+
+fn main() {
+    let mut seed = 1058;
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    for _ in 0..40 {
+        let mut prices: Vec[String] = Vec.new();
+        for _ in 0..500 {
+            prices.push(random_price(mut seed));
+        }
+        lists.push(prices);
+    }
+    let mut calls = 0;
+    let mut check = 0;
+    for _ in 0..8 {
+        for prices in lists.iter() {
+            let mut floor_sum = 0;
+            let mut with_fraction = 0;
+            for p in prices.iter() {
+                let t = thousandths(p);
+                floor_sum += t / 1000;
+                if t % 1000 != 0 {
+                    with_fraction += 1;
+                }
+            }
+            for target in floor_sum - 1..floor_sum + with_fraction + 2 {
+                let answer = minimize_error(prices, target);
+                for c in answer.chars() {
+                    check = (check * 131 + c as i64) % 1000000007;
+                }
+                calls += 1;
+            }
+        }
+    }
+    println(f"{calls} calls: checksum {check}");
+}
