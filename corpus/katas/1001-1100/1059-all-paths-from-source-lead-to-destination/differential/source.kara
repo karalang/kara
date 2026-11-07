@@ -1,0 +1,438 @@
+// LeetCode #1059: All Paths from Source Lead to Destination -- the
+// differential.
+//
+// The six arms against the statement read literally, on 3000 problems, with
+// six properties:
+//
+// P1  the answer is the statement read literally: every walk from the
+//     source, edge by edge, must stop, and stop at the destination
+// P2  the nodes renamed by a random permutation leave the answer
+// P3  the edges listed in reverse, or a node added that nothing reaches
+//     with edges into the graph, leave the answer
+// P4  every edge doubled leaves the answer
+// P5  when every path leads to the destination: an edge added from a node
+//     the source reaches to the destination leaves the answer true, and an
+//     edge out of the destination makes it false
+// P6  each arm agrees with at least three of the other five
+
+const UNSEEN: i64 = 0;
+const ON_PATH: i64 = 1;
+const DONE: i64 = 2;
+
+// ---- paths.kara: the ★ arm: an iterative search with three colours
+fn star_arm(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (u, v) in edges.iter() {
+        adj[u].push(v);
+    }
+    let mut state = Vec.filled(n, UNSEEN);
+    let mut stack: Vec[(i64, i64)] = [(source, 0)];
+    state[source] = ON_PATH;
+    while not stack.is_empty() {
+        let top = stack.len() - 1;
+        let (u, next) = stack[top];
+        if adj[u].is_empty() and u != destination {
+            return false;
+        }
+        if next == adj[u].len() {
+            state[u] = DONE;
+            stack.pop();
+            continue;
+        }
+        stack[top] = (u, next + 1);
+        let v = adj[u][next];
+        if state[v] == ON_PATH {
+            return false;
+        }
+        if state[v] == UNSEEN {
+            state[v] = ON_PATH;
+            stack.push((v, 0));
+        }
+    }
+    true
+}
+
+// ---- paths_recursive.kara: the same search, recursive
+fn leads_rec(u: i64, adj: Vec[Vec[i64]], state: mut ref Vec[i64], destination: i64) -> bool {
+    if state[u] == ON_PATH {
+        return false;
+    }
+    if state[u] == DONE {
+        return true;
+    }
+    if adj[u].is_empty() {
+        return u == destination;
+    }
+    state[u] = ON_PATH;
+    for v in adj[u].iter() {
+        if not leads_rec(v, adj, mut state, destination) {
+            return false;
+        }
+    }
+    state[u] = DONE;
+    true
+}
+
+fn recursive_arm(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (u, v) in edges.iter() {
+        adj[u].push(v);
+    }
+    let mut state = Vec.filled(n, UNSEEN);
+    leads_rec(source, adj, mut state, destination)
+}
+
+// ---- paths_kahn.kara: the reached nodes, then Kahn's peeling
+fn kahn_arm(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (u, v) in edges.iter() {
+        adj[u].push(v);
+    }
+    let mut reached = Vec.filled(n, false);
+    let mut order: Vec[i64] = [source];
+    reached[source] = true;
+    let mut head = 0;
+    while head < order.len() {
+        let u = order[head];
+        head += 1;
+        if adj[u].is_empty() and u != destination {
+            return false;
+        }
+        for v in adj[u].iter() {
+            if not reached[v] {
+                reached[v] = true;
+                order.push(v);
+            }
+        }
+    }
+    // in-degrees within the reached nodes
+    let mut indegree = Vec.filled(n, 0);
+    for u in order.iter() {
+        for v in adj[u].iter() {
+            indegree[v] += 1;
+        }
+    }
+    let mut ready: VecDeque[i64] = VecDeque.new();
+    for u in order.iter() {
+        if indegree[u] == 0 {
+            ready.push_back(u);
+        }
+    }
+    let mut removed = 0;
+    while let Some(u) = ready.pop_front() {
+        removed += 1;
+        for v in adj[u].iter() {
+            indegree[v] -= 1;
+            if indegree[v] == 0 {
+                ready.push_back(v);
+            }
+        }
+    }
+    removed == order.len()
+}
+
+// ---- paths_reverse.kara: safe nodes, backward from the destination
+fn reverse_arm(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let mut unsettled = Vec.filled(n, 0);
+    let mut reverse: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (u, v) in edges.iter() {
+        unsettled[u] += 1;
+        reverse[v].push(u);
+    }
+    if unsettled[destination] != 0 {
+        return false;
+    }
+    let mut safe = Vec.filled(n, false);
+    let mut work: Vec[i64] = [destination];
+    safe[destination] = true;
+    while let Some(v) = work.pop() {
+        for u in reverse[v].iter() {
+            unsettled[u] -= 1;
+            if unsettled[u] == 0 {
+                safe[u] = true;
+                work.push(u);
+            }
+        }
+    }
+    safe[source]
+}
+
+// ---- paths_map.kara: a recursive search over hashed tables
+fn leads_map(
+    u: i64,
+    graph: Map[i64, Vec[i64]],
+    on_path: mut ref Set[i64],
+    known: mut ref Map[i64, bool],
+    destination: i64,
+) -> bool {
+    if let Some(answer) = known.get(u) {
+        return *answer;
+    }
+    if on_path.contains(u) {
+        return false;
+    }
+    let answer = match graph.get(u) {
+        None => u == destination,
+        Some(next) => {
+            on_path.insert(u);
+            let all = next.iter().all(|v| leads_map(v, graph, mut on_path, mut known, destination));
+            on_path.remove(u);
+            all
+        }
+    };
+    known.insert(u, answer);
+    answer
+}
+
+fn map_arm(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let mut graph: Map[i64, Vec[i64]] = Map.new();
+    for (u, v) in edges.iter() {
+        graph.entry(u).or_insert(Vec.new()).push(v);
+    }
+    let mut on_path: Set[i64] = Set.new();
+    let mut known: Map[i64, bool] = Map.new();
+    leads_map(source, graph, mut on_path, mut known, destination)
+}
+
+// ---- paths_enum.kara: an enum of colours, as Rust writes it
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum State {
+    Unvisited,
+    Visiting,
+    Done,
+}
+
+fn dfs(u: i64, adj: ref Vec[Vec[i64]], state: mut ref Vec[State], destination: i64) -> bool {
+    match state[u] {
+        State.Visiting => return false,
+        State.Done => return true,
+        State.Unvisited => {}
+    }
+    if adj[u].is_empty() {
+        return u == destination;
+    }
+    state[u] = State.Visiting;
+    for v in ref adj[u] {
+        if not dfs(v, adj, mut state, destination) {
+            return false;
+        }
+    }
+    state[u] = State.Done;
+    true
+}
+
+fn enum_arm(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let n = n;
+    let mut adj: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (u, v) in edges.iter() {
+        adj[u as usize].push(v);
+    }
+    let mut state = Vec.filled(n, State.Unvisited);
+    dfs(source, adj, mut state, destination)
+}
+
+// ---- the differential
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(a: i64, n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    match a {
+        0 => star_arm(n, edges, source, destination),
+        1 => recursive_arm(n, edges, source, destination),
+        2 => kahn_arm(n, edges, source, destination),
+        3 => reverse_arm(n, edges, source, destination),
+        4 => map_arm(n, edges, source, destination),
+        _ => enum_arm(n, edges, source, destination),
+    }
+}
+
+// Every walk from `u` after `taken` edges, extended edge by edge: a walk of
+// `n` edges has met some node twice, so it can go round for ever; a walk
+// that stops must stop at the destination.
+fn walks_end(u: i64, taken: i64, n: i64, adj: Vec[Vec[i64]], destination: i64) -> bool {
+    if taken == n {
+        return false;
+    }
+    if adj[u].is_empty() {
+        return u == destination;
+    }
+    for v in adj[u].iter() {
+        if not walks_end(v, taken + 1, n, adj, destination) {
+            return false;
+        }
+    }
+    true
+}
+
+// LeetCode's second example (0 -> 1 <-> 2, 0 -> 3) is false because a walk
+// can loop for ever, so "every path leads to the destination" counts the
+// walks that never stop.
+fn read_literally(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (u, v) in edges.iter() {
+        adj[u].push(v);
+    }
+    walks_end(source, 0, n, adj, destination)
+}
+
+// The nodes `source` reaches, itself included.
+fn reached_from(n: i64, edges: Vec[(i64, i64)], source: i64) -> Vec[bool] {
+    let mut reached = Vec.filled(n, false);
+    reached[source] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for (u, v) in edges.iter() {
+            if reached[u] and not reached[v] {
+                reached[v] = true;
+                grew = true;
+            }
+        }
+    }
+    reached
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn random_graph(n: i64, most_edges: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let m = next_random(mut seed) % (most_edges + 1);
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..m {
+        let u = next_random(mut seed) % n;
+        let v = next_random(mut seed) % n;
+        edges.push((u, v));
+    }
+    edges
+}
+
+fn leaning_graph(n: i64, per_node: i64, back: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for u in 0..n - 1 {
+        let k = next_random(mut seed) % (per_node + 1);
+        for _ in 0..k {
+            let span = (n - 1 - u).min(20);
+            edges.push((u, u + 1 + next_random(mut seed) % span));
+        }
+        if k == 0 and next_random(mut seed) % 4 != 0 {
+            edges.push((u, n - 1));
+        }
+        if next_random(mut seed) % back == 0 {
+            edges.push((u, next_random(mut seed) % (u + 1)));
+        }
+    }
+    edges
+}
+
+fn check_case(
+    t: mut ref Tally,
+    n: i64,
+    edges: Vec[(i64, i64)],
+    source: i64,
+    destination: i64,
+    seed: mut ref i64,
+) {
+    let answers: Vec[bool] = (0..6).map(|a| arm(a, n, edges, source, destination)).collect();
+    let want = if n <= 9 { read_literally(n, edges, source, destination) } else { answers[0] };
+    // the nodes renamed: a random permutation, by swaps
+    let mut name: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        name.swap(i, j);
+    }
+    let renamed: Vec[(i64, i64)] = edges.iter().map(|(u, v)| (name[u], name[v])).collect();
+    let mut backward = edges.clone();
+    backward.reverse();
+    // node n, which nothing reaches, with edges to three nodes
+    let mut extra = edges.clone();
+    for _ in 0..3 {
+        extra.push((n, next_random(mut seed) % (n + 1)));
+    }
+    let mut doubled: Vec[(i64, i64)] = Vec.new();
+    for e in edges.iter() {
+        doubled.push(e);
+        doubled.push(e);
+    }
+    let reached = reached_from(n, edges, source);
+    let reached_nodes: Vec[i64] = (0..n).filter(|u| reached[u] and u != destination).collect();
+    let mut shortcut = edges.clone();
+    if not reached_nodes.is_empty() {
+        let k = next_random(mut seed) % reached_nodes.len();
+        shortcut.push((reached_nodes[k], destination));
+    }
+    let mut onward = edges.clone();
+    onward.push((destination, next_random(mut seed) % n));
+    for a in 0..6 {
+        let answer = answers[a];
+        let what = f"arm {a}, {n} {edges} {source} {destination} -> {answer}";
+        if n <= 9 {
+            expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        }
+        let moved = arm(a, n, renamed, name[source], name[destination]);
+        expect(mut t, 2, moved == answer, f"P2 {what}: renamed {name} -> {moved}");
+        let back = arm(a, n, backward, source, destination);
+        expect(mut t, 3, back == answer, f"P3 {what}: reversed -> {back}");
+        let more = arm(a, n + 1, extra, source, destination);
+        expect(mut t, 3, more == answer, f"P3 {what}: node {n} added -> {more}");
+        let twice = arm(a, n, doubled, source, destination);
+        expect(mut t, 4, twice == answer, f"P4 {what}: doubled -> {twice}");
+        if answer {
+            let short = arm(a, n, shortcut, source, destination);
+            expect(mut t, 5, short, f"P5 {what}: shortcut {shortcut} -> {short}");
+            let past = arm(a, n, onward, source, destination);
+            expect(mut t, 5, not past, f"P5 {what}: onward {onward} -> {past}");
+        }
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + if want { 7 } else { 3 }) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 3000 problems: 1500 of 1 to 9 nodes with up to 14 edges anywhere, and
+    // 1500 leaning toward the last node, of 1 to 9 or 1 to 60 nodes
+    let mut seed = 10591;
+    for i in 0..3000 {
+        let (n, edges, source, destination) = if i < 1500 {
+            let n = next_random(mut seed) % 9 + 1;
+            let edges = random_graph(n, 14, mut seed);
+            let source = next_random(mut seed) % n;
+            let destination = next_random(mut seed) % n;
+            (n, edges, source, destination)
+        } else {
+            let most = if i % 2 == 0 { 9 } else { 60 };
+            let n = next_random(mut seed) % most + 1;
+            let edges = leaning_graph(n, 2, 6 + n, mut seed);
+            let source = next_random(mut seed) % n;
+            (n, edges, source, n - 1)
+        };
+        check_case(mut t, n, edges, source, destination, mut seed);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

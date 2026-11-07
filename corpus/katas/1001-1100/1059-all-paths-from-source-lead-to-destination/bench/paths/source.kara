@@ -1,0 +1,84 @@
+// LeetCode #1059: All Paths from Source Lead to Destination -- the
+// benchmark, the ★ arm of paths.kara.
+
+const UNSEEN: i64 = 0;
+const ON_PATH: i64 = 1;
+const DONE: i64 = 2;
+
+fn leads_to_destination(n: i64, edges: Vec[(i64, i64)], source: i64, destination: i64) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (u, v) in edges.iter() {
+        adj[u].push(v);
+    }
+    let mut state = Vec.filled(n, UNSEEN);
+    let mut stack: Vec[(i64, i64)] = [(source, 0)];
+    state[source] = ON_PATH;
+    while not stack.is_empty() {
+        let top = stack.len() - 1;
+        let (u, next) = stack[top];
+        if adj[u].is_empty() and u != destination {
+            return false;
+        }
+        if next == adj[u].len() {
+            state[u] = DONE;
+            stack.pop();
+            continue;
+        }
+        stack[top] = (u, next + 1);
+        let v = adj[u][next];
+        if state[v] == ON_PATH {
+            return false;
+        }
+        if state[v] == UNSEEN {
+            state[v] = ON_PATH;
+            stack.push((v, 0));
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaning_graph(n: i64, per_node: i64, back: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for u in 0..n - 1 {
+        let k = next_random(mut seed) % (per_node + 1);
+        for _ in 0..k {
+            let span = (n - 1 - u).min(20);
+            edges.push((u, u + 1 + next_random(mut seed) % span));
+        }
+        if k == 0 and next_random(mut seed) % 4 != 0 {
+            edges.push((u, n - 1));
+        }
+        if next_random(mut seed) % back == 0 {
+            edges.push((u, next_random(mut seed) % (u + 1)));
+        }
+    }
+    edges
+}
+
+fn main() {
+    let mut seed = 1059;
+    let n = 2000;
+    let mut graphs: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..20 {
+        graphs.push(leaning_graph(n, 2, 1000, mut seed));
+    }
+    let mut calls = 0;
+    let mut yes = 0;
+    let mut check = 0;
+    for edges in graphs.iter() {
+        for source in 0..n {
+            let answer = leads_to_destination(n, edges, source, n - 1);
+            if answer {
+                yes += 1;
+            }
+            check = (check * 31 + if answer { 7 + source % 13 } else { 3 }) % 1000000007;
+            calls += 1;
+        }
+    }
+    println(f"{calls} calls: {yes} lead, checksum {check}");
+}
