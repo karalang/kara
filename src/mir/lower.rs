@@ -28553,6 +28553,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // `KARAC_MIR_ASCII_CHARS=0` decodes every char of an ASCII literal
     // (`ascii_chars`).
     let ascii_chars = std::env::var("KARAC_MIR_ASCII_CHARS").as_deref() != Ok("0");
+    // `KARAC_MIR_HALVING=0` keeps every signed `x / 2^k` a division
+    // (`halving`).
+    let halving = std::env::var("KARAC_MIR_HALVING").as_deref() != Ok("0");
     // A program that binds a resource passes its providers explicitly
     // (core semantics §14.3), decided by the effects of the program as
     // built, which `par_check` reports from.
@@ -28631,6 +28634,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         }
         if presize {
             crate::mir::presize::presize_pushes(body, &lowered.tys);
+        }
+        if halving && !coroutines.contains(&body.instance.name) {
+            crate::mir::halving::halve_non_negative(body, &lowered.tys, &|n| !names.contains(n));
         }
         if concat && !coroutines.contains(&body.instance.name) {
             crate::mir::concat::take_concat_lefts(body, &lowered.tys);

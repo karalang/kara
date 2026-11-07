@@ -150,7 +150,18 @@ ROWS = [
     ("B-2026-11-04-37", "1-100/7-reverse-integer", "reverse.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 1.05x"),
     ("B-2026-11-04-37", "301-400/391-perfect-rectangle", "perfect_rectangle.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 1.04x"),
     ("B-2026-11-04-37", "401-500/467-unique-substrings-in-wraparound-string", "unique_substrings.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 1.03x"),
-    ("B-2026-11-06-8", "301-400/354-russian-doll-envelopes", "russian_doll.kara", "rust:russian_doll.rs", "cycles", "M5 1.360x at 4471044a8a; x86 level"),
+    # -07-1: kata 7's guard arms weighed rare (rare_exits.rs), against the
+    # same compiler with the weights off; with them on, its arm64 object is
+    # the threshold-4 one, so the -37 row for kata 7 above should read ~1.0x.
+    ("B-2026-11-07-1", "1-100/7-reverse-integer", "reverse.kara", "env:KARAC_MIR_RARE_EXITS=0", "cycles", "x86 0.69x (763 vs 1113 ms)"),
+    ("B-2026-11-06-8", "301-400/354-russian-doll-envelopes", "russian_doll.kara", "rust:russian_doll.rs", "cycles", "M5 1.304x at 3dc7786b7f; x86 0.91x"),
+    # -8 split by phase (`kara:` = a directory of this checkout,
+    # scripts/bench/probes/354/README.md), and the halving rewrite's own
+    # effect on the LIS phase.
+    ("B-2026-11-06-8", "kara:scripts/bench/probes/354", "gen_only.kara", "rust:gen_only.rs", "cycles", "x86 0.97x"),
+    ("B-2026-11-06-8", "kara:scripts/bench/probes/354", "sort_only.kara", "rust:sort_only.rs", "cycles", "x86 0.90x"),
+    ("B-2026-11-06-8", "kara:scripts/bench/probes/354", "lis_only.kara", "rust:lis_only.rs", "cycles", "x86 1.15x -> 1.09x"),
+    ("B-2026-11-06-8", "kara:scripts/bench/probes/354", "lis_only.kara", "env:KARAC_MIR_HALVING=0", "cycles", "x86 0.94x"),
     ("B-2026-11-04-33", "301-400/318-maximum-product-of-word-lengths", "max_product.kara", "pair", "instructions", "x86 1.19x: write_word not inlined"),
     ("B-2026-11-04-33", "1601-1700/1665-minimum-initial-energy-to-finish-tasks", "greedy.kara", "pair", "instructions", "x86 1.29x -> 1.18x"),
     # -33's other four: first M5 figures since the row was filed.
@@ -249,8 +260,13 @@ rows_out = []
 for rid, kdir, srcname, kind, metric, note in ROWS:
     if ONLY and ONLY not in rid and ONLY not in kdir:
         continue
-    src = os.path.join(KATAS, "leetcode", kdir, "bench", srcname)
-    kata = kdir.split("/")[1].split("-")[0]
+    if kdir.startswith("kara:"):
+        # A probe kept in this checkout (the script runs from its root).
+        src = os.path.join(os.getcwd(), kdir[5:], srcname)
+        kata = os.path.basename(kdir[5:]) + ":" + srcname[:-5]
+    else:
+        src = os.path.join(KATAS, "leetcode", kdir, "bench", srcname)
+        kata = kdir.split("/")[1].split("-")[0]
     log(f"== {rid} kata {kata} {srcname}: {kind} {metric}")
     a = b = None
     sink = "same"

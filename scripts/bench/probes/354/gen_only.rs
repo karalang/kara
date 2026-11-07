@@ -1,0 +1,21 @@
+// Rust mirror of gen_only.kara (B-2026-11-06-8).
+const ROUNDS: i64 = 20;
+const COUNT: i64 = 200000;
+
+fn main() {
+    let mut sink: i64 = 0;
+    for round in 0..ROUNDS {
+        let mut seed = 354 + round;
+        let mut envelopes: Vec<(i64, i64)> = Vec::new();
+        for _ in 0..COUNT {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let w = seed % 100000 + 1;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let h = seed % 100000 + 1;
+            envelopes.push((w, h));
+        }
+        let (w, h) = envelopes[envelopes.len() / 2];
+        sink = (sink * 31 + w + h + envelopes.len() as i64 + round) % 1000000007;
+    }
+    println!("{}", sink);
+}

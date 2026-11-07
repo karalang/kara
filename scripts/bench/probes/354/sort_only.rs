@@ -1,0 +1,27 @@
+// Rust mirror of sort_only.kara (B-2026-11-06-8).
+const ROUNDS: i64 = 20;
+const COUNT: i64 = 200000;
+
+fn sorted_probe(envelopes: &[(i64, i64)]) -> i64 {
+    let mut order = envelopes.to_vec();
+    order.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(&b.0) } else { b.1.cmp(&a.1) });
+    let n = order.len();
+    order[0].1 + order[n / 2].0 * 7 + order[n / 3].1 * 13 + order[n - 1].0
+}
+
+fn main() {
+    let mut sink: i64 = 0;
+    for round in 0..ROUNDS {
+        let mut seed = 354 + round;
+        let mut envelopes: Vec<(i64, i64)> = Vec::new();
+        for _ in 0..COUNT {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let w = seed % 100000 + 1;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let h = seed % 100000 + 1;
+            envelopes.push((w, h));
+        }
+        sink = (sink * 31 + sorted_probe(&envelopes) + round) % 1000000007;
+    }
+    println!("{}", sink);
+}

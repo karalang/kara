@@ -1610,11 +1610,16 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             crate::mir::guard_bounds::upper_proven_indexes(body, self.tys)
         };
         // `KARAC_MIR_COLD_OVERFLOW=0` leaves overflow tests unweighted.
-        let overflows = if std::env::var("KARAC_MIR_COLD_OVERFLOW").as_deref() == Ok("0") {
+        let mut overflows = if std::env::var("KARAC_MIR_COLD_OVERFLOW").as_deref() == Ok("0") {
             Vec::new()
         } else {
             crate::mir::counters::overflow_tests(body)
         };
+        // `KARAC_MIR_RARE_EXITS=0` leaves the short-circuit arms inside a
+        // loop's early-return guard unweighted (`rare_exits`).
+        if std::env::var("KARAC_MIR_RARE_EXITS").as_deref() != Ok("0") {
+            overflows.extend(crate::mir::rare_exits::rare_exit_arms(body, self.tys));
+        }
         // `KARAC_MIR_MIDPOINT=0` leaves binary-search midpoints unstated.
         let midpoints = if std::env::var("KARAC_MIR_MIDPOINT").as_deref() == Ok("0") {
             Vec::new()
