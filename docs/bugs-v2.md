@@ -85,11 +85,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | runtime | 28 |
 | effect | 28 |
 | codegen | 22 |
-| resolver | 12 |
+| resolver | 13 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
-| resolve | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-07). Do not edit this block by hand; edit the ledger and regenerate._
@@ -131,7 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
 | B-2026-11-07-51 | 2026-11-07 | typecheck | medium | `match (self, other)` in a `ref self` (or `mut ref self`) method is refused as "cannot move a non-`Copy` value out of a borrowed place", though the same match over two borrowed parameters (`fn f(a: ref V, b: ref V) { match (a, b) { .. } }`) is accepted | — |
 | B-2026-11-07-52 | 2026-11-07 | typecheck | low | `impl Ord for T` with no `impl PartialOrd for T` is refused ("impl Ord for Value requires impl PartialOrd for Value") with no `karac fix` edit, though the missing impl is mechanical: `partial_cmp` returns `Some(self.cmp(other))` | — |
-| B-2026-11-07-53 | 2026-11-07 | resolve | low | `Dict[String, i64]` / `Dict.new()` (Python's `typing.Dict`) is "undefined type 'Dict', did you mean 'Div'?"; `HashMap`, `BTreeMap` and `HashSet` already name their Kāra collections | — |
+| B-2026-11-07-53 | 2026-11-07 | resolver | low | `Dict[String, i64]` / `Dict.new()` (Python's `typing.Dict`) is "undefined type 'Dict', did you mean 'Div'?"; `HashMap`, `BTreeMap` and `HashSet` already name their Kāra collections | — |
 | B-2026-11-07-54 | 2026-11-07 | typecheck | low | `opt == Some("")` with `opt: Option[Str]` is refused ("cannot compare 'Option[Str]' and 'Option[String]'") though `let a: Option[Str] = Some("")` is accepted; `lines.last() == Some("")` over a `Vec[Str]` (and `v.last() == Some("x")` over a `Vec[String]`) is refused with no hint, and the forms the i64 hint names do not compile for a literal | — |
 
 ### Relocated
