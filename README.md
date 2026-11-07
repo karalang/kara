@@ -220,7 +220,7 @@ Pre-1.0. The first release, 0.8.0, is a beta: the language and tools are complet
 Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS are on the [releases page](https://github.com/karalang/kara/releases). Pick your platform's tarball (`x86_64-linux`, `aarch64-linux` or `aarch64-macos`), check it, unpack it anywhere and put its `bin/` on your PATH:
 
 ```bash
-V=0.8.0; P=x86_64-linux
+V=0.8.1; P=x86_64-linux
 curl -LO https://github.com/karalang/kara/releases/download/v$V/karac-$V-$P.tar.gz
 curl -LO https://github.com/karalang/kara/releases/download/v$V/karac-$V-$P.tar.gz.sha256
 sha256sum -c karac-$V-$P.tar.gz.sha256     # macOS: shasum -a 256 -c
@@ -229,7 +229,7 @@ export PATH="$PWD/karac-$V-$P/bin:$PATH"
 karac --version
 ```
 
-The 0.8.0 Linux binaries need glibc 2.39 or newer (Ubuntu 24.04, Fedora 40); on an older distro (Ubuntu 22.04, Debian 12, RHEL 9, Amazon Linux 2023) build from source. Later releases are built against glibc 2.34. `karac build` needs a C linker (`build-essential` or the Xcode command-line tools); `karac run` does not.
+The Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later); 0.8.0's needed 2.39 (Ubuntu 24.04). On RHEL 9, Amazon Linux 2023 or another distro with an older glibc, build from source. `karac build` needs a C linker (`build-essential` or the Xcode command-line tools); `karac run` does not.
 
 ### Build from source
 

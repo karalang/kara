@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "kara-lsp"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "karac",
  "lsp-server",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "karac"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "blake3",
  "bytes",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "karac-runtime"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arrow-array",
  "arrow-ipc",

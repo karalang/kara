@@ -64,8 +64,8 @@ jobs:
       matrix:
         include:
           # 22.04, not 24.04: the binaries take the glibc they are linked
-          # against as their floor, and 24.04's 2.39 shut out Ubuntu 22.04,
-          # Debian 12, RHEL 9 and Amazon Linux 2023 (B-2026-11-07-48).
+          # against as their floor, and 24.04's 2.39 shut out Ubuntu 22.04
+          # and Debian 12 (B-2026-11-07-48).
           - runner: ubuntu-22.04
             label: x86_64-linux
           - runner: ubuntu-22.04-arm
@@ -109,9 +109,10 @@ jobs:
         run: bash scripts/package-release.sh ${{ matrix.label }}
 
       # The floor the bundle promises: no binary in it may need a glibc
-      # newer than 2.34, the oldest of Ubuntu 22.04 (2.35), Debian 12
-      # (2.36), RHEL 9 and Amazon Linux 2023 (2.34). Checked by symbol
-      # version, which is what the dynamic loader refuses on (B-2026-11-07-48).
+      # newer than 2.35, Ubuntu 22.04's (Debian 12 has 2.36). A 22.04 build
+      # references 2.35 symbols, so RHEL 9 and Amazon Linux 2023 (2.34)
+      # build from source. Checked by symbol version, which is what the
+      # dynamic loader refuses on (B-2026-11-07-48).
       - name: Check glibc floor
         if: runner.os == 'Linux'
         run: |
@@ -120,8 +121,8 @@ jobs:
           worst="$(find /tmp/floor -type f -perm -u+x -exec objdump -T {} \; 2>/dev/null \
             | { grep -o 'GLIBC_[0-9][0-9.]*' || true; } | sort -uV | tail -1)"
           echo "highest glibc symbol version: ${worst:-none}"
-          if [ -n "$worst" ] && [ "$(printf '%s\n' "$worst" GLIBC_2.34 | sort -V | tail -1)" != GLIBC_2.34 ]; then
-            echo "ERROR: bundle needs $worst, above the 2.34 floor" >&2
+          if [ -n "$worst" ] && [ "$(printf '%s\n' "$worst" GLIBC_2.35 | sort -V | tail -1)" != GLIBC_2.35 ]; then
+            echo "ERROR: bundle needs $worst, above the 2.35 floor" >&2
             exit 1
           fi
 
@@ -143,8 +144,8 @@ jobs:
       matrix:
         include:
           # 22.04, not 24.04: the binaries take the glibc they are linked
-          # against as their floor, and 24.04's 2.39 shut out Ubuntu 22.04,
-          # Debian 12, RHEL 9 and Amazon Linux 2023 (B-2026-11-07-48).
+          # against as their floor, and 24.04's 2.39 shut out Ubuntu 22.04
+          # and Debian 12 (B-2026-11-07-48).
           - runner: ubuntu-22.04
             label: x86_64-linux
           - runner: ubuntu-22.04-arm

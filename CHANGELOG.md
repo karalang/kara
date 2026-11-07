@@ -219,10 +219,11 @@ Each still compiles in 0.8.x with a `deprecated` warning and a
   compare the values whether either side is `T`, `ref T` or `mut ref T`,
   for any `T`, and move neither; arithmetic keeps its Copy-only rule
   (design.md § No automatic dereference in operators, B-2026-11-05-1).
-- **The Linux tarballs need glibc 2.34, not 2.39.** They are built on
+- **The Linux tarballs need glibc 2.35, not 2.39.** They are built on
   Ubuntu 22.04 and the release checks every binary's symbol versions, so
-  they start on Ubuntu 22.04, Debian 12, RHEL 9 and Amazon Linux 2023;
-  0.8.0's did not (B-2026-11-07-48). README's Install section gives the
+  they start on Ubuntu 22.04 and Debian 12, where 0.8.0's did not. RHEL 9
+  and Amazon Linux 2023 (glibc 2.34) still build from source
+  (B-2026-11-07-48). README's Install section gives the
   download, checksum and PATH steps (B-2026-11-07-49).
 - `"hello".substring(-5, 2)` clamps the start to 0 and gives `"he"`, as
   strings.md says; it gave `""` (B-2026-11-03-16).

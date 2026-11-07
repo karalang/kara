@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+Ships with Kāra 0.8.1; the bundled `kara-lsp` carries 0.8.1's fixes. No change to the extension itself.
+
 ## 0.8.0
 
 First release, with Kāra 0.8.0 (beta).
