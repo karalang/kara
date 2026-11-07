@@ -6437,13 +6437,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A place reached through a reference (`h.pe` with `h` a
                     // bare parameter) is a `ref` scrutinee, as in a `match`
                     // (core semantics §4.6): its non-`Copy` parts bind `ref`s.
+                    // So is a part of a `shared` value held in a local
+                    // (`m.pair` with `m` a handle, B-2026-11-07-12).
                     None if self.destructures(pattern)
                         && self.is_place(value)
                         && self.is_local_rooted(value)
-                        && self
-                            .expr_place(value, false)?
-                            .projection
-                            .contains(&ProjElem::Deref) =>
+                        && {
+                            let p = self.expr_place(value, false)?;
+                            p.projection.contains(&ProjElem::Deref) || self.inside_shared(&p)
+                        } =>
                     {
                         let mutable = self.binds_mut_ref([pattern]);
                         let (p, st, by_ref) = self.scrutinee(value, mutable)?;
@@ -16139,8 +16141,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(r, Rvalue::Ref(kind, place));
                 (Place::local(r).project(ProjElem::Deref), st, true)
             }
+            // A part of a `shared` value held in a local (`m.name` with
+            // `m` a handle) is a `ref` scrutinee too: a plain binding of a
+            // non-`Copy` part is a `ref` into it, never a move out of the
+            // handle (core semantics §4.6, B-2026-11-07-12).
+            _ if !value_read && self.inside_shared(&place) => (place, st, true),
             _ => (place, st, false),
         })
+    }
+
+    /// Whether the path to `place` passes through a `shared` handle.
+    fn inside_shared(&self, place: &Place) -> bool {
+        let mut q = Place::local(place.local);
+        for el in &place.projection {
+            if matches!(
+                self.tys().tcx().kind(self.place_type(&q)),
+                HK::Shared { .. }
+            ) {
+                return true;
+            }
+            q = q.project(*el);
+        }
+        false
     }
 
     /// The parts of `match (a, b, ..)` over locals' places (a `ref` one seen

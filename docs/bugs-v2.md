@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 153 |
-| false-positive | 131 |
+| false-positive | 132 |
 | perf | 107 |
 | missing-feature | 100 |
 | soundness | 51 |
 | miscompile | 40 |
-| run-vs-build | 24 |
+| run-vs-build | 25 |
 | codegen-gap | 22 |
 | other | 19 |
 | crash | 13 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 248 |
+| typecheck | 249 |
+| mir | 131 |
 | mir-llvm | 130 |
-| mir | 130 |
 | cli | 71 |
 | ownership | 57 |
 | parser | 42 |
@@ -113,6 +113,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-11 | 2026-11-07 | typecheck | low | §9 remainder of B-2026-11-06-27: `dbg` on a Display-only type and derived `Debug`/`Clone` on a generic type ignore the bound (items 8, 9); `Option.from`, `Result.from` and `i64.try_into` are missing, and an ambiguous `into()` reports `no method 'into'` instead of asking for an annotation (items 12, 13) | — |
+| B-2026-11-07-12 | 2026-11-07 | mir | high | A plain binding of a non-`Copy` part of a `shared` value held in a local (`match m.a { Some(i) => .. }`, `if let`, `while let`, `let`-`else`, `let (s, k) = m.pair`) is refused as "cannot move a non-`Copy` value out of a `shared` value" by `karac check` and every backend, though core semantics §4.6 makes it a `ref` | — |
+| B-2026-11-07-13 | 2026-11-07 | typecheck | medium | A closure that matches a captured enum against dotted unit variants only (`match cmp { Cmp.Lt => x < v, Cmp.Ge => x >= v }`) types as `OnceFn` on the MIR pipeline, so storing it in a `Fn` slot fails every run and build while `karac check` passes | — |
 
 ### Relocated
 

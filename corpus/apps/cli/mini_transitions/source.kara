@@ -1,0 +1,870 @@
+// mini_transitions: state machines in the shape of pytransitions. Each
+// machine has nested states, variables, named conditions and actions,
+// transitions guarded by `if=` / `unless=` with `before=` / `after=`
+// actions, and enter/exit callbacks on states. A transition leaves states
+// up to the common ancestor and enters down to the target. An action may
+// trigger an event on any machine: a plain machine handles it at once,
+// nested; a queued one that is busy runs it after the current one.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+
+const QUEUE_LIMIT: i64 = 3;
+const DEPTH_LIMIT: i64 = 5;
+
+// ------------------------------------------------------------ tokens
+
+fn is_ident(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 32 and b[0] >= b'a' and b[0] <= b'z'
+        and b.iter().all(|c| (c >= b'a' and c <= b'z') or (c >= b'0' and c <= b'9') or c == b'_')
+}
+
+// An i64 written as an optional `-` and 1 to 9 digits.
+fn number(s: Str) -> Option[i64] {
+    let d = s.strip_prefix("-") ?? s;
+    if d.len() == 0 or d.len() > 9 or not d.bytes().iter().all(|c| c >= b'0' and c <= b'9') {
+        return None;
+    }
+    i64.parse(s).ok()
+}
+
+fn words(line: Str) -> Vec[String] {
+    let body = match line.split_once("#") {
+        Some((before, _)) => before,
+        None => line,
+    };
+    body.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+// `a.b.c` -> `a`, `a.b`, `a.b.c`.
+fn ancestors(path: Str) -> Vec[String] {
+    let parts: Vec[Str] = path.split(".").collect();
+    let mut out: Vec[String] = Vec.new();
+    for i in 1..parts.len() + 1 {
+        out.push(parts[0..i].join("."));
+    }
+    out
+}
+
+fn indent(depth: i64) -> String {
+    "  ".repeat(depth + 1)
+}
+
+// ------------------------------------------------------------ machines
+
+enum Cmp { Eq, Ne, Lt, Le, Gt, Ge }
+
+fn cmp_of(op: Str) -> Option[Cmp] {
+    match op {
+        "==" => Some(Cmp.Eq),
+        "!=" => Some(Cmp.Ne),
+        "<" => Some(Cmp.Lt),
+        "<=" => Some(Cmp.Le),
+        ">" => Some(Cmp.Gt),
+        ">=" => Some(Cmp.Ge),
+        _ => None,
+    }
+}
+
+// A condition reads one variable, so it is kept as a closure over the
+// variable's slot, the comparison and the value.
+type Test = Fn(Slice[Var]) -> bool;
+
+struct Var {
+    name: String,
+    value: i64,
+}
+
+enum Act {
+    Say(String),
+    Add { var: i64, by: i64 },
+    Set { var: i64, to: i64 },
+    Trigger { machine: String, event: String },
+}
+
+#[derive(Clone)]
+struct Transition {
+    trigger: String,
+    // `None` is `*`: every state that is not final.
+    src: Option[String],
+    // `None` is `=`: an internal transition, which leaves and enters nothing.
+    dst: Option[String],
+    when: Option[String],
+    unless: Option[String],
+    before: Option[String],
+    after: Option[String],
+}
+
+shared struct Machine {
+    name: String,
+    mut queued: bool,
+    mut vars: Vec[Var],
+    mut states: Vec[String],
+    mut finals: SortedSet[String],
+    mut initial: Option[String],
+    mut conds: SortedMap[String, Test],
+    mut actions: SortedMap[String, Act],
+    mut transitions: Vec[Transition],
+    mut on_enter: SortedMap[String, Vec[String]],
+    mut on_exit: SortedMap[String, Vec[String]],
+    mut state: String,
+    mut busy: bool,
+    mut queue: VecDeque[String],
+    mut fired: i64,
+    mut blocked: i64,
+    mut refused: i64,
+}
+
+impl Machine {
+    fn new(name: Str) -> Machine {
+        Machine {
+            name: name.to_string(),
+            queued: false,
+            vars: Vec.new(),
+            states: Vec.new(),
+            finals: SortedSet.new(),
+            initial: None,
+            conds: SortedMap.new(),
+            actions: SortedMap.new(),
+            transitions: Vec.new(),
+            on_enter: SortedMap.new(),
+            on_exit: SortedMap.new(),
+            state: String.new(),
+            busy: false,
+            queue: VecDeque.new(),
+            fired: 0,
+            blocked: 0,
+            refused: 0,
+        }
+    }
+
+    fn var_index(self, name: Str) -> Option[i64] {
+        self.vars.iter().position(|v| v.name == name)
+    }
+
+    fn has_state(self, path: Str) -> bool {
+        self.states.iter().any(|s| s == path)
+    }
+
+    fn is_final(self, path: Str) -> bool {
+        self.finals.contains(path)
+    }
+
+    fn show_vars(self) -> String {
+        let parts: Vec[String] = self.vars.iter().map(|v| f"{v.name}={v.value}").collect();
+        parts.join(" ")
+    }
+
+    // One directive of machines.conf.
+    fn directive(self, w: Slice[String]) -> Result[(), String] {
+        match w[0].as_str() {
+            "queued" => {
+                if w.len() != 1 {
+                    return Err("usage: queued");
+                }
+                self.queued = true;
+            }
+            "var" => {
+                if w.len() != 3 {
+                    return Err("usage: var <name> <value>");
+                }
+                if not is_ident(w[1]) {
+                    return Err(f"bad var name '{w[1]}'");
+                }
+                if self.var_index(w[1]).is_some() {
+                    return Err(f"var {w[1]} already defined");
+                }
+                let Some(v) = number(w[2]) else {
+                    return Err(f"bad value '{w[2]}'");
+                };
+                self.vars.push(Var { name: w[1].clone(), value: v });
+            }
+            "state" => self.state_line(w)?,
+            "cond" => self.cond_line(w)?,
+            "action" => self.action_line(w)?,
+            "transition" => self.transition_line(w)?,
+            "on_enter" | "on_exit" => {
+                let d = w[0].as_str();
+                if w.len() != 3 {
+                    return Err(f"usage: {d} <state> <action>");
+                }
+                if not self.has_state(w[1]) {
+                    return Err(f"no state '{w[1]}'");
+                }
+                if not self.actions.contains_key(w[2]) {
+                    return Err(f"no action '{w[2]}'");
+                }
+                if d == "on_enter" {
+                    add_callback(mut self.on_enter, w[1], w[2]);
+                } else {
+                    add_callback(mut self.on_exit, w[1], w[2]);
+                }
+            }
+            d => return Err(f"unknown directive '{d}'"),
+        }
+        Ok(())
+    }
+
+    fn state_line(self, w: Slice[String]) -> Result[(), String] {
+        if w.len() < 2 {
+            return Err("usage: state <path> [initial] [final]");
+        }
+        let p = w[1].clone();
+        if not p.split(".").all(|s| is_ident(s)) {
+            return Err(f"bad state name '{p}'");
+        }
+        if self.has_state(p) {
+            return Err(f"state {p} already defined");
+        }
+        if let Some((parent, _)) = p.rsplit_once(".") {
+            if not self.has_state(parent) {
+                return Err(f"no state '{parent}'");
+            }
+            if self.is_final(parent) {
+                return Err(f"final state {parent} cannot have children");
+            }
+        }
+        let mut initial = false;
+        let mut is_final = false;
+        for f in w[2..].iter() {
+            match f.as_str() {
+                "initial" => initial = true,
+                "final" => is_final = true,
+                other => return Err(f"unknown flag '{other}'"),
+            }
+        }
+        if initial {
+            if let Some(i) = self.initial {
+                return Err(f"initial state already set to {i}");
+            }
+            self.initial = Some(p.clone());
+        }
+        if is_final {
+            self.finals.insert(p.clone());
+        }
+        self.states.push(p);
+        Ok(())
+    }
+
+    fn cond_line(self, w: Slice[String]) -> Result[(), String] {
+        if w.len() != 5 {
+            return Err("usage: cond <name> <var> <op> <value>");
+        }
+        if not is_ident(w[1]) {
+            return Err(f"bad cond name '{w[1]}'");
+        }
+        if self.conds.contains_key(w[1]) {
+            return Err(f"cond {w[1]} already defined");
+        }
+        let Some(slot) = self.var_index(w[2]) else {
+            return Err(f"no var '{w[2]}'");
+        };
+        let Some(cmp) = cmp_of(w[3]) else {
+            return Err(f"bad operator '{w[3]}'");
+        };
+        let Some(v) = number(w[4]) else {
+            return Err(f"bad value '{w[4]}'");
+        };
+        let test: Test = |vars: Slice[Var]| {
+            let x = vars[slot].value;
+            match cmp {
+                Cmp.Eq => x == v,
+                Cmp.Ne => x != v,
+                Cmp.Lt => x < v,
+                Cmp.Le => x <= v,
+                Cmp.Gt => x > v,
+                Cmp.Ge => x >= v,
+            }
+        };
+        self.conds.insert(w[1].clone(), test);
+        Ok(())
+    }
+
+    fn action_line(self, w: Slice[String]) -> Result[(), String] {
+        if w.len() < 3 {
+            return Err("usage: action <name> <op> ...");
+        }
+        let name = w[1].clone();
+        let args = w[3..];
+        if not is_ident(name) {
+            return Err(f"bad action name '{name}'");
+        }
+        if self.actions.contains_key(name) {
+            return Err(f"action {name} already defined");
+        }
+        let act = match w[2].as_str() {
+            "say" => {
+                if args.is_empty() {
+                    return Err("usage: action <name> say <words>");
+                }
+                Act.Say(args.join(" "))
+            }
+            "add" | "set" => {
+                let op = w[2].as_str();
+                if args.len() != 2 {
+                    return Err(f"usage: action <name> {op} <var> <value>");
+                }
+                let Some(slot) = self.var_index(args[0]) else {
+                    return Err(f"no var '{args[0]}'");
+                };
+                let Some(v) = number(args[1]) else {
+                    return Err(f"bad value '{args[1]}'");
+                };
+                if op == "add" { Act.Add { var: slot, by: v } } else { Act.Set { var: slot, to: v } }
+            }
+            "trigger" => match args.len() {
+                1 => Act.Trigger { machine: self.name.clone(), event: args[0].clone() },
+                2 => Act.Trigger { machine: args[0].clone(), event: args[1].clone() },
+                _ => return Err("usage: action <name> trigger [<machine>] <event>"),
+            },
+            other => return Err(f"unknown action '{other}'"),
+        };
+        self.actions.insert(name, act);
+        Ok(())
+    }
+
+    fn transition_line(self, w: Slice[String]) -> Result[(), String] {
+        if w.len() < 5 or w[3] != "->" {
+            return Err("usage: transition <trigger> <src> -> <dst> [options]");
+        }
+        let trig = w[1].clone();
+        if not is_ident(trig) {
+            return Err(f"bad trigger name '{trig}'");
+        }
+        if trig.starts_with("to_") {
+            return Err("trigger names starting with to_ are reserved");
+        }
+        let src = if w[2] == "*" { None } else { Some(w[2].clone()) };
+        if let Some(ref s) = src {
+            if not self.has_state(s) {
+                return Err(f"no state '{s}'");
+            }
+            if self.is_final(s) {
+                return Err(f"final state {s} has no exits");
+            }
+        }
+        let dst = if w[4] == "=" { None } else { Some(w[4].clone()) };
+        if let Some(ref d) = dst {
+            if not self.has_state(d) {
+                return Err(f"no state '{d}'");
+            }
+        }
+        let mut t = Transition { trigger: trig, src, dst, when: None, unless: None, before: None, after: None };
+        for o in w[5..].iter() {
+            let Some((k, v)) = o.split_once("=") else {
+                return Err(f"unknown option '{o}'");
+            };
+            let taken = match k {
+                "if" => t.when.is_some(),
+                "unless" => t.unless.is_some(),
+                "before" => t.before.is_some(),
+                "after" => t.after.is_some(),
+                _ => return Err(f"unknown option '{o}'"),
+            };
+            if taken {
+                return Err(f"duplicate option {k}");
+            }
+            let known = if k == "if" or k == "unless" {
+                self.conds.contains_key(v)
+            } else {
+                self.actions.contains_key(v)
+            };
+            if not known {
+                let what = if k == "if" or k == "unless" { "cond" } else { "action" };
+                return Err(f"no {what} '{v}'");
+            }
+            let v = Some(v.to_string());
+            match k {
+                "if" => t.when = v,
+                "unless" => t.unless = v,
+                "before" => t.before = v,
+                _ => t.after = v,
+            }
+        }
+        self.transitions.push(t);
+        Ok(())
+    }
+
+    fn holds(self, cond: Str) -> bool {
+        match self.conds.get(cond) {
+            Some(test) => test(self.vars),
+            None => false,
+        }
+    }
+
+    // The user triggers that can fire from the current state.
+    fn triggers(self) -> Vec[String] {
+        let levels = ancestors(self.state);
+        let open = not self.is_final(self.state);
+        let mut names: SortedSet[String] = SortedSet.new();
+        for t in self.transitions.iter() {
+            let here = match t.src {
+                Some(s) => levels.contains(s),
+                None => open,
+            };
+            if here {
+                names.insert(t.trigger.clone());
+            }
+        }
+        names.into_iter().collect()
+    }
+}
+
+fn add_callback(table: mut ref SortedMap[String, Vec[String]], state: Str, action: Str) {
+    match table.get_mut(state) {
+        Some(list) => list.push(action.to_string()),
+        None => {
+            table.insert(state.to_string(), [action.to_string()]);
+        }
+    }
+}
+
+struct Loaded {
+    machines: Vec[Machine],
+    errors: Vec[String],
+}
+
+fn close_machine(cur: own Option[Machine], machines: mut ref Vec[Machine], errors: mut ref Vec[String]) {
+    let Some(m) = cur else {
+        return;
+    };
+    match m.initial {
+        Some(i) => {
+            m.state = i.clone();
+            machines.push(m);
+        }
+        None => errors.push(f"machines.conf: machine {m.name} has no initial state"),
+    }
+}
+
+fn parse_machines(text: Str) -> Loaded {
+    let mut machines: Vec[Machine] = Vec.new();
+    let mut errors: Vec[String] = Vec.new();
+    let mut cur: Option[Machine] = None;
+    for (i, raw) in text.split("\n").enumerate() {
+        let no = i + 1;
+        let w = words(raw);
+        if w.is_empty() {
+            continue;
+        }
+        if w[0] == "machine" {
+            close_machine(cur, mut machines, mut errors);
+            cur = None;
+            if w.len() != 2 {
+                errors.push(f"machines.conf:{no}: usage: machine <name>");
+            } else if not is_ident(w[1]) {
+                errors.push(f"machines.conf:{no}: bad machine name '{w[1]}'");
+            } else if machines.iter().any(|m| m.name == w[1]) {
+                errors.push(f"machines.conf:{no}: machine {w[1]} already defined");
+            } else {
+                cur = Some(Machine.new(w[1]));
+            }
+            continue;
+        }
+        match cur {
+            Some(m) => {
+                if let Err(e) = m.directive(w) {
+                    errors.push(f"machines.conf:{no}: {e}");
+                }
+            }
+            None => errors.push(f"machines.conf:{no}: no machine to add to"),
+        }
+    }
+    close_machine(cur, mut machines, mut errors);
+    Loaded { machines, errors }
+}
+
+struct EventLine {
+    no: i64,
+    line: String,
+}
+
+fn parse_events(text: Str) -> Vec[EventLine] {
+    let mut out: Vec[EventLine] = Vec.new();
+    for (i, raw) in text.split("\n").enumerate() {
+        let line = raw.trim();
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        out.push(EventLine { no: i + 1, line: line.to_string() });
+    }
+    out
+}
+
+// ------------------------------------------------------------ running
+
+struct Bus {
+    machines: Vec[Machine],
+}
+
+impl Bus {
+    fn get(self, name: Str) -> Option[Machine] {
+        self.machines.iter().find(|m| m.name == name).cloned()
+    }
+
+    fn act(self, m: Machine, action: Str, depth: i64) {
+        let ind = indent(depth);
+        let Some(act) = m.actions.get(action) else {
+            return;
+        };
+        match act {
+            Act.Say(text) => println(f"{ind}{m.name} says: {text}"),
+            Act.Add { var, by } => m.vars[var].value += by,
+            Act.Set { var, to } => m.vars[var].value = to,
+            Act.Trigger { machine, event } => {
+                println(f"{ind}-> {machine} {event}");
+                match self.get(machine) {
+                    Some(t) => self.trigger(t, event, depth + 1),
+                    None => println(f"{ind}no machine '{machine}'"),
+                }
+            }
+        }
+    }
+
+    fn trigger(self, m: Machine, event: Str, depth: i64) {
+        let ind = indent(depth);
+        if depth > DEPTH_LIMIT {
+            println(f"{ind}{m.name}: too deep, {event} dropped");
+            return;
+        }
+        if not m.queued {
+            self.process(m, event, depth);
+            return;
+        }
+        if m.busy {
+            m.queue.push_back(event.to_string());
+            println(f"{ind}queued {m.name} {event}");
+            return;
+        }
+        m.busy = true;
+        self.process(m, event, depth);
+        let mut ran = 0;
+        while let Some(e) = m.queue.pop_front() {
+            if ran == QUEUE_LIMIT {
+                println(f"{ind}{m.name}: queue limit, dropped {m.queue.len() + 1}");
+                m.queue.clear();
+                break;
+            }
+            ran += 1;
+            println(f"{ind}run queued {m.name} {e}");
+            self.process(m, e, depth);
+        }
+        m.busy = false;
+    }
+
+    fn process(self, m: Machine, trig: Str, depth: i64) {
+        let ind = indent(depth);
+        let cur = m.state.clone();
+        if let Some(dst) = trig.strip_prefix("to_") {
+            if not m.has_state(dst) {
+                println(f"{ind}{m.name}: no state '{dst}'");
+                m.refused += 1;
+                return;
+            }
+            if m.is_final(cur) {
+                println(f"{ind}{m.name}: can't {trig} from {cur}");
+                m.refused += 1;
+                return;
+            }
+            let auto = Transition {
+                trigger: trig.to_string(),
+                src: Some(cur.clone()),
+                dst: Some(dst.to_string()),
+                when: None,
+                unless: None,
+                before: None,
+                after: None,
+            };
+            self.fire(m, auto, depth);
+            return;
+        }
+        // The current state's own transitions first, then each ancestor's,
+        // then the `*` ones.
+        let mut cands: Vec[i64] = Vec.new();
+        for level in ancestors(cur).iter().rev() {
+            for (i, t) in m.transitions.iter().enumerate() {
+                if t.trigger == trig and t.src == Some(level.clone()) {
+                    cands.push(i);
+                }
+            }
+        }
+        if not m.is_final(cur) {
+            for (i, t) in m.transitions.iter().enumerate() {
+                if t.trigger == trig and t.src.is_none() {
+                    cands.push(i);
+                }
+            }
+        }
+        if cands.is_empty() {
+            println(f"{ind}{m.name}: can't {trig} from {cur}");
+            m.refused += 1;
+            return;
+        }
+        for i in cands.iter() {
+            let t = m.transitions[i].clone();
+            if let Some(ref c) = t.when {
+                if not m.holds(c) {
+                    continue;
+                }
+            }
+            if let Some(ref c) = t.unless {
+                if m.holds(c) {
+                    continue;
+                }
+            }
+            self.fire(m, t, depth);
+            return;
+        }
+        println(f"{ind}{m.name}: {trig} blocked in {cur}");
+        m.blocked += 1;
+    }
+
+    fn fire(self, m: Machine, t: Transition, depth: i64) {
+        let ind = indent(depth);
+        let cur = m.state.clone();
+        m.fired += 1;
+        if let Some(a) = t.before {
+            self.act(m, a, depth);
+        }
+        match t.dst {
+            None => println(f"{ind}{m.name}: {cur} -> {cur} (internal)"),
+            Some(dst) => {
+                let a = ancestors(cur);
+                let b = ancestors(dst);
+                let mut k = 0;
+                while k < a.len() and k < b.len() and a[k] == b[k] {
+                    k += 1;
+                }
+                if k == b.len() {
+                    k -= 1;
+                }
+                for s in a[k..].iter().rev() {
+                    println(f"{ind}exit {s}");
+                    let calls = m.on_exit.get(s).cloned() ?? Vec.new();
+                    for x in calls.iter() {
+                        self.act(m, x, depth);
+                    }
+                }
+                m.state = dst.clone();
+                println(f"{ind}{m.name}: {cur} -> {dst}");
+                for s in b[k..].iter() {
+                    println(f"{ind}enter {s}");
+                    let calls = m.on_enter.get(s).cloned() ?? Vec.new();
+                    for x in calls.iter() {
+                        self.act(m, x, depth);
+                    }
+                }
+            }
+        }
+        if let Some(a) = t.after {
+            self.act(m, a, depth);
+        }
+    }
+
+    fn command(self, w: Slice[String]) -> Result[(), String] {
+        let cmd = w[0].as_str();
+        let usage = match cmd {
+            "state" => "<machine>",
+            "set" => "<machine> <var> <value>",
+            "triggers" => "<machine>",
+            _ => return Err(f"unknown command '{cmd}'"),
+        };
+        if w.len() - 1 != usage.split(" ").count() {
+            return Err(f"usage: @ {cmd} {usage}");
+        }
+        let Some(m) = self.get(w[1]) else {
+            return Err(f"no machine '{w[1]}'");
+        };
+        match cmd {
+            "state" => {
+                let vs = m.show_vars();
+                if vs.is_empty() {
+                    println(f"  {m.name}: {m.state}");
+                } else {
+                    println(f"  {m.name}: {m.state} ({vs})");
+                }
+            }
+            "set" => {
+                let Some(slot) = m.var_index(w[2]) else {
+                    return Err(f"no var '{w[2]}'");
+                };
+                let Some(x) = number(w[3]) else {
+                    return Err(f"bad value '{w[3]}'");
+                };
+                m.vars[slot].value = x;
+                println(f"  set {m.name}.{w[2]} = {x}");
+            }
+            _ => {
+                let names = m.triggers();
+                let list = if names.is_empty() { "none" } else { names.join(", ") };
+                println(f"  {m.name} in {m.state}: {list}");
+            }
+        }
+        Ok(())
+    }
+
+    fn event(self, w: Slice[String]) -> Result[(), String] {
+        if w[0] == "@" {
+            if w.len() < 2 {
+                return Err("missing command");
+            }
+            return self.command(w[1..]);
+        }
+        if w.len() != 2 {
+            return Err("usage: <machine> <trigger>");
+        }
+        let Some(m) = self.get(w[0]) else {
+            return Err(f"no machine '{w[0]}'");
+        };
+        self.trigger(m, w[1], 0);
+        Ok(())
+    }
+}
+
+fn read(path: Str) -> Result[String, String] {
+    fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data").map_err(|e| f"cannot create data: {e}")?;
+    write_data()?;
+    let mtext = read("data/machines.conf")?;
+    let etext = read("data/events.log")?;
+    // The events are split in a task of their own while the machines,
+    // which hold `shared` state and so stay on this task, load.
+    let tasks = TaskGroup.new();
+    let he = tasks.spawn(|| parse_events(etext));
+    let loaded = parse_machines(mtext);
+    let lines = he.join();
+
+    println("== load");
+    println(f"machines.conf: {loaded.machines.len()} machines");
+    for e in loaded.errors.iter() {
+        println(e);
+    }
+    for m in loaded.machines.iter() {
+        let q = if m.queued { ", queued" } else { "" };
+        let init = m.initial.clone() ?? String.new();
+        println(f"  {m.name}: {m.states.len()} states, {m.transitions.len()} transitions, starts in {init}{q}");
+    }
+    println(f"events.log: {lines.len()} lines");
+
+    let bus = Bus { machines: loaded.machines };
+    println("== events");
+    for ev in lines.iter() {
+        println(f"> {ev.line}");
+        let w = words(ev.line);
+        if let Err(e) = bus.event(w) {
+            println(f"  error: events.log:{ev.no}: {e}");
+        }
+    }
+
+    println("== end");
+    for m in bus.machines.iter() {
+        let vs = m.show_vars();
+        let tail = if vs.is_empty() { String.new() } else { f"; {vs}" };
+        println(f"  {m.name}: {m.state} after {m.fired} transitions, {m.blocked} blocked, {m.refused} refused{tail}");
+    }
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/events.log", file_0())?;
+    put_bytes("data/machines.conf", file_1())?;
+    Ok(())
+}
+
+// data/events.log
+fn file_0() -> String {
+    """
+232041206d6f726e696e67206174207468652066726f6e7420646f6f722e0a646f6f72206f70656e0a646f6f7220636c
+6f73650a4020737461746520646f6f720a646f6f72206c6f636b0a646f6f72206f70656e0a646f6f7220756e6c6f636b
+0a646f6f72206f70656e0a646f6f72206f70656e0a616c61726d2061726d0a4020747269676765727320616c61726d0a
+646f6f7220636c6f73650a646f6f72206f70656e0a616c61726d20737461790a646f6f7220636c6f73650a646f6f7220
+6f70656e0a616c61726d2072657365740a4020737461746520616c61726d0a616c61726d2064697361726d0a616c6172
+6d20737461790a402073657420646f6f72206b65797320300a646f6f7220636c6f73650a646f6f72206c6f636b0a646f
+6f7220756e6c6f636b0a402073657420646f6f72206b65797320310a646f6f7220756e6c6f636b0a636f756e74657220
+7469636b0a636f756e746572207469636b0a636f756e74657220756e7469636b0a636f756e74657220746f5f69646c65
+0a636f756e74657220746f5f627573790a636f756e746572207370696e0a636f756e74657220746f5f6e6f7768657265
+0a636f756e74657220726573740a636f756e7465722070696e670a4020747269676765727320636f756e7465720a646f
+6f72206b69636b0a646f6f72206c6f636b0a646f6f72206b69636b0a646f6f7220746f5f636c6f7365640a646f6f7220
+6f70656e0a4020747269676765727320646f6f720a4020737461746520646f6f720a6e6f7375636820676f0a616c6172
+6d0a402073657420646f6f72206b657973206d616e790a402073657420646f6f722067686f73747320310a4020737461
+7465206e6f737563680a402066726f626e69636174650a400a616c61726d20746f5f6f6e2e61726d65642e737461790a
+616c61726d20646f6f725f6f70656e65640a4020737461746520616c61726d0a636f756e7465722065787472610a
+"""
+}
+
+// data/machines.conf
+fn file_1() -> String {
+    """
+2320412066726f6e7420646f6f722c2074686520616c61726d2069742074616c6b7320746f2c20616e64206120766973
+69746f7220636f756e7465722e0a0a6d616368696e6520646f6f720a766172206b65797320310a766172206f70656e73
+20300a766172206c6f636b65645f617420300a737461746520636c6f73656420696e697469616c0a7374617465206f70
+656e0a7374617465206c6f636b65640a73746174652062726f6b656e2066696e616c0a636f6e64206861735f6b657920
+6b657973203e20300a636f6e64206e6f5f6b6579206b657973203c3d20300a636f6e6420776f726e206f70656e73203e
+3d20340a616374696f6e206368696d65207361792064696e6720646f6e670a616374696f6e20636f756e742061646420
+6f70656e7320310a616374696f6e206e6f74655f6c6f636b20736574206c6f636b65645f617420310a616374696f6e20
+756e6e6f74655f6c6f636b20736574206c6f636b65645f617420300a616374696f6e2074656c6c5f616c61726d207472
+696767657220616c61726d20646f6f725f6f70656e65640a616374696f6e20637265616b20736179207468652068696e
+676520637265616b730a7472616e736974696f6e206f70656e20636c6f736564202d3e206f70656e206265666f72653d
+636f756e742061667465723d74656c6c5f616c61726d0a7472616e736974696f6e206f70656e206f70656e202d3e203d
+206265666f72653d637265616b0a7472616e736974696f6e20636c6f7365206f70656e202d3e20636c6f7365640a7472
+616e736974696f6e206c6f636b20636c6f736564202d3e206c6f636b65642069663d6861735f6b65792061667465723d
+6e6f74655f6c6f636b0a7472616e736974696f6e206c6f636b20636c6f736564202d3e206c6f636b656420756e6c6573
+733d6861735f6b6579206265666f72653d637265616b0a7472616e736974696f6e20756e6c6f636b206c6f636b656420
+2d3e20636c6f7365642069663d6861735f6b65792061667465723d756e6e6f74655f6c6f636b0a7472616e736974696f
+6e206b69636b206c6f636b6564202d3e2062726f6b656e2069663d776f726e0a7472616e736974696f6e206b69636b20
+2a202d3e203d206265666f72653d637265616b0a6f6e5f656e746572206f70656e206368696d650a6f6e5f6578697420
+6c6f636b656420637265616b0a0a6d616368696e6520616c61726d0a7175657565640a76617220747269707320300a76
+61722061726d656420300a7374617465206f666620696e697469616c0a7374617465206f6e0a7374617465206f6e2e61
+726d65640a7374617465206f6e2e61726d65642e617761790a7374617465206f6e2e61726d65642e737461790a737461
+7465206f6e2e747269707065640a616374696f6e20736972656e20736179205745454f4f0a616374696f6e2074726970
+2061646420747269707320310a616374696f6e2061726d5f666c6167207365742061726d656420310a616374696f6e20
+64697361726d5f666c6167207365742061726d656420300a616374696f6e2063616c6d207472696767657220616c6172
+6d2072657365740a616374696f6e206c6f6f70207472696767657220616c61726d20646f6f725f6f70656e65640a7472
+616e736974696f6e2061726d206f6666202d3e206f6e2e61726d65642e617761792061667465723d61726d5f666c6167
+0a7472616e736974696f6e2073746179206f6e2e61726d65642e61776179202d3e206f6e2e61726d65642e737461790a
+7472616e736974696f6e20646f6f725f6f70656e6564206f6e2e61726d6564202d3e206f6e2e74726970706564206265
+666f72653d747269702061667465723d736972656e0a7472616e736974696f6e20646f6f725f6f70656e6564206f6666
+202d3e203d0a7472616e736974696f6e2064697361726d206f6e202d3e206f66662061667465723d64697361726d5f66
+6c61670a7472616e736974696f6e207265736574206f6e2e74726970706564202d3e206f6e2e61726d65642e61776179
+2061667465723d6c6f6f700a6f6e5f656e746572206f6e2e747269707065642063616c6d0a6f6e5f65786974206f6e2e
+61726d65642064697361726d5f666c61670a6f6e5f656e746572206f6e2e61726d65642061726d5f666c61670a0a6d61
+6368696e6520636f756e7465720a766172206e20300a73746174652069646c6520696e697469616c0a73746174652062
+7573790a616374696f6e20696e6320616464206e20310a616374696f6e2064656320616464206e202d310a616374696f
+6e20616761696e2074726967676572207370696e0a616374696f6e207061676520747269676765722070616765722070
+6167650a7472616e736974696f6e207469636b2069646c65202d3e20627573792061667465723d696e630a7472616e73
+6974696f6e207469636b2062757379202d3e203d2061667465723d696e630a7472616e736974696f6e20756e7469636b
+2062757379202d3e203d2061667465723d6465630a7472616e736974696f6e20726573742062757379202d3e2069646c
+650a7472616e736974696f6e207370696e2062757379202d3e203d206265666f72653d696e632061667465723d616761
+696e0a7472616e736974696f6e2070696e67202a202d3e203d2061667465723d706167650a0a23204d697374616b6573
+2c2065616368207265706f7274656420616e6420736b69707065642e0a6d616368696e6520646f6f720a6d616368696e
+65204261642d4e616d650a7374617465206e6f77686572650a6d616368696e652065787472610a766172207820310a76
+6172207820320a7661722079206c6f74730a7374617465206120696e697469616c0a7374617465206220696e69746961
+6c0a737461746520632e640a737461746520610a737461746520652066696e616c0a636f6e642063312078207e20330a
+636f6e64206332207a203e20310a636f6e642063332078203e20310a616374696f6e2061312064616e636520780a6163
+74696f6e20613220616464207a20310a616374696f6e2061332061646420780a616374696f6e20613420747269676765
+720a7472616e736974696f6e20676f2061202d3e206e6f70650a7472616e736974696f6e20676f2065202d3e20610a74
+72616e736974696f6e20676f2061202d3e20652069663d63390a7472616e736974696f6e20676f2061202d3e20652073
+6f6d6574696d65733d63330a7472616e736974696f6e20746f5f622061202d3e20620a7472616e736974696f6e20676f
+206120620a6f6e5f656e746572207a7a2061310a6f6e5f657869742061206e6f70650a66726f626e69636174650a6d61
+6368696e652073746174656c6573730a766172207620300a
+"""
+}

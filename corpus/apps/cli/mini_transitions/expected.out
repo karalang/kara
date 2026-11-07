@@ -1,0 +1,312 @@
+== load
+machines.conf: 4 machines
+machines.conf:73: machine door already defined
+machines.conf:74: bad machine name 'Bad-Name'
+machines.conf:75: no machine to add to
+machines.conf:78: var x already defined
+machines.conf:79: bad value 'lots'
+machines.conf:81: initial state already set to a
+machines.conf:82: no state 'c'
+machines.conf:83: state a already defined
+machines.conf:85: bad operator '~'
+machines.conf:86: no var 'z'
+machines.conf:88: unknown action 'dance'
+machines.conf:89: no var 'z'
+machines.conf:90: usage: action <name> add <var> <value>
+machines.conf:91: usage: action <name> trigger [<machine>] <event>
+machines.conf:92: no state 'nope'
+machines.conf:93: final state e has no exits
+machines.conf:94: no cond 'c9'
+machines.conf:95: unknown option 'sometimes=c3'
+machines.conf:96: trigger names starting with to_ are reserved
+machines.conf:97: usage: transition <trigger> <src> -> <dst> [options]
+machines.conf:98: no state 'zz'
+machines.conf:99: no action 'nope'
+machines.conf:100: unknown directive 'frobnicate'
+machines.conf: machine stateless has no initial state
+  door: 4 states, 8 transitions, starts in closed
+  alarm: 6 states, 6 transitions, starts in off, queued
+  counter: 2 states, 6 transitions, starts in idle
+  extra: 2 states, 0 transitions, starts in a
+events.log: 53 lines
+== events
+> door open
+  exit closed
+  door: closed -> open
+  enter open
+  door says: ding dong
+  -> alarm door_opened
+    alarm: off -> off (internal)
+> door close
+  exit open
+  door: open -> closed
+  enter closed
+> @ state door
+  door: closed (keys=1 opens=1 locked_at=0)
+> door lock
+  exit closed
+  door: closed -> locked
+  enter locked
+> door open
+  door: can't open from locked
+> door unlock
+  exit locked
+  door says: the hinge creaks
+  door: locked -> closed
+  enter closed
+> door open
+  exit closed
+  door: closed -> open
+  enter open
+  door says: ding dong
+  -> alarm door_opened
+    alarm: off -> off (internal)
+> door open
+  door says: the hinge creaks
+  door: open -> open (internal)
+> alarm arm
+  exit off
+  alarm: off -> on.armed.away
+  enter on
+  enter on.armed
+  enter on.armed.away
+> @ triggers alarm
+  alarm in on.armed.away: disarm, door_opened, stay
+> door close
+  exit open
+  door: open -> closed
+  enter closed
+> door open
+  exit closed
+  door: closed -> open
+  enter open
+  door says: ding dong
+  -> alarm door_opened
+    exit on.armed.away
+    exit on.armed
+    alarm: on.armed.away -> on.tripped
+    enter on.tripped
+    -> alarm reset
+      queued alarm reset
+    alarm says: WEEOO
+    run queued alarm reset
+    exit on.tripped
+    alarm: on.tripped -> on.armed.away
+    enter on.armed
+    enter on.armed.away
+    -> alarm door_opened
+      queued alarm door_opened
+    run queued alarm door_opened
+    exit on.armed.away
+    exit on.armed
+    alarm: on.armed.away -> on.tripped
+    enter on.tripped
+    -> alarm reset
+      queued alarm reset
+    alarm says: WEEOO
+    run queued alarm reset
+    exit on.tripped
+    alarm: on.tripped -> on.armed.away
+    enter on.armed
+    enter on.armed.away
+    -> alarm door_opened
+      queued alarm door_opened
+    alarm: queue limit, dropped 1
+> alarm stay
+  exit on.armed.away
+  alarm: on.armed.away -> on.armed.stay
+  enter on.armed.stay
+> door close
+  exit open
+  door: open -> closed
+  enter closed
+> door open
+  exit closed
+  door: closed -> open
+  enter open
+  door says: ding dong
+  -> alarm door_opened
+    exit on.armed.stay
+    exit on.armed
+    alarm: on.armed.stay -> on.tripped
+    enter on.tripped
+    -> alarm reset
+      queued alarm reset
+    alarm says: WEEOO
+    run queued alarm reset
+    exit on.tripped
+    alarm: on.tripped -> on.armed.away
+    enter on.armed
+    enter on.armed.away
+    -> alarm door_opened
+      queued alarm door_opened
+    run queued alarm door_opened
+    exit on.armed.away
+    exit on.armed
+    alarm: on.armed.away -> on.tripped
+    enter on.tripped
+    -> alarm reset
+      queued alarm reset
+    alarm says: WEEOO
+    run queued alarm reset
+    exit on.tripped
+    alarm: on.tripped -> on.armed.away
+    enter on.armed
+    enter on.armed.away
+    -> alarm door_opened
+      queued alarm door_opened
+    alarm: queue limit, dropped 1
+> alarm reset
+  alarm: can't reset from on.armed.away
+> @ state alarm
+  alarm: on.armed.away (trips=4 armed=1)
+> alarm disarm
+  exit on.armed.away
+  exit on.armed
+  exit on
+  alarm: on.armed.away -> off
+  enter off
+> alarm stay
+  alarm: can't stay from off
+> @ set door keys 0
+  set door.keys = 0
+> door close
+  exit open
+  door: open -> closed
+  enter closed
+> door lock
+  door says: the hinge creaks
+  exit closed
+  door: closed -> locked
+  enter locked
+> door unlock
+  door: unlock blocked in locked
+> @ set door keys 1
+  set door.keys = 1
+> door unlock
+  exit locked
+  door says: the hinge creaks
+  door: locked -> closed
+  enter closed
+> counter tick
+  exit idle
+  counter: idle -> busy
+  enter busy
+> counter tick
+  counter: busy -> busy (internal)
+> counter untick
+  counter: busy -> busy (internal)
+> counter to_idle
+  exit busy
+  counter: busy -> idle
+  enter idle
+> counter to_busy
+  exit idle
+  counter: idle -> busy
+  enter busy
+> counter spin
+  counter: busy -> busy (internal)
+  -> counter spin
+    counter: busy -> busy (internal)
+    -> counter spin
+      counter: busy -> busy (internal)
+      -> counter spin
+        counter: busy -> busy (internal)
+        -> counter spin
+          counter: busy -> busy (internal)
+          -> counter spin
+            counter: busy -> busy (internal)
+            -> counter spin
+              counter: too deep, spin dropped
+> counter to_nowhere
+  counter: no state 'nowhere'
+> counter rest
+  exit busy
+  counter: busy -> idle
+  enter idle
+> counter ping
+  counter: idle -> idle (internal)
+  -> pager page
+  no machine 'pager'
+> @ triggers counter
+  counter in idle: ping, tick
+> door kick
+  door says: the hinge creaks
+  door: closed -> closed (internal)
+> door lock
+  exit closed
+  door: closed -> locked
+  enter locked
+> door kick
+  exit locked
+  door says: the hinge creaks
+  door: locked -> broken
+  enter broken
+> door to_closed
+  door: can't to_closed from broken
+> door open
+  door: can't open from broken
+> @ triggers door
+  door in broken: none
+> @ state door
+  door: broken (keys=1 opens=4 locked_at=1)
+> nosuch go
+  error: events.log:44: no machine 'nosuch'
+> alarm
+  error: events.log:45: usage: <machine> <trigger>
+> @ set door keys many
+  error: events.log:46: bad value 'many'
+> @ set door ghosts 1
+  error: events.log:47: no var 'ghosts'
+> @ state nosuch
+  error: events.log:48: no machine 'nosuch'
+> @ frobnicate
+  error: events.log:49: unknown command 'frobnicate'
+> @
+  error: events.log:50: missing command
+> alarm to_on.armed.stay
+  exit off
+  alarm: off -> on.armed.stay
+  enter on
+  enter on.armed
+  enter on.armed.stay
+> alarm door_opened
+  exit on.armed.stay
+  exit on.armed
+  alarm: on.armed.stay -> on.tripped
+  enter on.tripped
+  -> alarm reset
+    queued alarm reset
+  alarm says: WEEOO
+  run queued alarm reset
+  exit on.tripped
+  alarm: on.tripped -> on.armed.away
+  enter on.armed
+  enter on.armed.away
+  -> alarm door_opened
+    queued alarm door_opened
+  run queued alarm door_opened
+  exit on.armed.away
+  exit on.armed
+  alarm: on.armed.away -> on.tripped
+  enter on.tripped
+  -> alarm reset
+    queued alarm reset
+  alarm says: WEEOO
+  run queued alarm reset
+  exit on.tripped
+  alarm: on.tripped -> on.armed.away
+  enter on.armed
+  enter on.armed.away
+  -> alarm door_opened
+    queued alarm door_opened
+  alarm: queue limit, dropped 1
+> @ state alarm
+  alarm: on.armed.away (trips=6 armed=1)
+> counter extra
+  counter: can't extra from idle
+== end
+  door: broken after 16 transitions, 1 blocked, 3 refused; keys=1 opens=4 locked_at=1
+  alarm: on.armed.away after 18 transitions, 0 blocked, 2 refused; trips=6 armed=1
+  counter: idle after 13 transitions, 0 blocked, 2 refused; n=7
+  extra: a after 0 transitions, 0 blocked, 0 refused; x=1

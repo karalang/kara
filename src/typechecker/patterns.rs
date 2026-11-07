@@ -1551,8 +1551,10 @@ impl<'a> super::TypeChecker<'a> {
                 // The closure-kind walker's question, on both pipelines: could
                 // this binding move its part out? A bare type parameter's
                 // value counts, its move being decided per instantiation
-                // (B-2026-10-25-13).
+                // (B-2026-10-25-13). A dotted unit variant binds nothing, so it
+                // moves nothing on the MIR pipeline either (B-2026-11-07-13).
                 if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                    && !(name.contains('.') && is_variant_pattern)
                     && matches!(mode, ScrutineeMode::Owned)
                     && self.core_shared_depth == 0
                     && !self
