@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 154 |
-| false-positive | 133 |
+| diagnostics | 155 |
+| false-positive | 138 |
 | perf | 107 |
-| missing-feature | 100 |
-| soundness | 51 |
-| miscompile | 40 |
-| run-vs-build | 25 |
+| missing-feature | 102 |
+| soundness | 52 |
+| miscompile | 41 |
+| run-vs-build | 27 |
 | codegen-gap | 22 |
 | other | 19 |
-| crash | 13 |
+| crash | 15 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -75,17 +75,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 250 |
+| typecheck | 256 |
+| mir-llvm | 133 |
 | mir | 131 |
-| mir-llvm | 130 |
 | cli | 71 |
-| ownership | 58 |
+| ownership | 59 |
 | parser | 42 |
-| interp | 30 |
-| effect | 25 |
-| runtime | 24 |
+| interp | 31 |
+| runtime | 28 |
+| effect | 27 |
 | codegen | 22 |
-| resolver | 10 |
+| resolver | 11 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
@@ -111,7 +111,19 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-3 | 2026-11-07 | typecheck | medium | Numeric literals do not default last (split from B-2026-11-06-13): an unsuffixed literal is typed i64/f64 when inferred, so a later use cannot fix it; design.md §8's own demo (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused | — |
 | B-2026-11-07-9 | 2026-11-07 | typecheck | low | A const parameter only the return type names is not solved by a later use: `let b = zeros(); let c: Array[i64, 4] = b;` is refused at the `let` with `cannot infer const parameter 'N'` | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
-| B-2026-11-07-15 | 2026-11-07 | typecheck | low | For `let job = jobs[j];` whose fields are then written (`job.status = 2`), `karac fix` derives `Clone` on the element type and adds `mut`, steering toward a copy that would drop the writes; the repair that keeps them is `let job = mut ref jobs[j];` | — |
+| B-2026-11-07-16 | 2026-11-07 | ownership | high | Option.take / replace / get_or_insert / get_or_insert_with (all `mut ref self`) are accepted through a bare borrowed parameter, a field of one, an index of an immutable Vec, and (take, replace) on a non-mut local; every backend then mutates the caller's value | — |
+| B-2026-11-07-17 | 2026-11-07 | typecheck | medium | i128.MIN, i128.MAX and u128.MAX are refused with the internal `a type that failed to check is not lowered yet`; the other widths' MIN/MAX work | — |
+| B-2026-11-07-18 | 2026-11-07 | typecheck | low | f32 copysign / pow / hypot / atan2 refuse a negative float literal argument (`h.copysign(-1.0)`: expects f32, got f64); a positive literal, and min / max / clamp / total_cmp with a negative one, are accepted | — |
+| B-2026-11-07-19 | 2026-11-07 | mir-llvm+runtime | high | BufReader.read_line / read_to_string and ChildStdout.read_to_string append into a `mut ref String` whose buffer is still a string literal's static data: segfault on build and run, ASan global-buffer-overflow WRITE in karac_mir_buf | — |
+| B-2026-11-07-20 | 2026-11-07 | effect | low | par branches writing two different Files conflict when both pass the same read-only buffer (`par { f.write(b.as_slice()), g.write(b.as_slice()) }`), and the error blames `writes(File @ l1)` vs `writes(File @ l4)` | — |
+| B-2026-11-07-21 | 2026-11-07 | typecheck | low | check accepts Atomic[T] for T outside the documented set (i8, u8, i16, u16, i128, usize all pass); Atomic[i128] then fails to link under ASan (undefined __atomic_load_16) | — |
+| B-2026-11-07-22 | 2026-11-07 | typecheck | medium | A struct literal of another package's struct is refused even when every field is `pub` (`Opts { port: 1 }` -> E0111 field 'port' is not `pub`); the literal path calls the cross-module check without the is_pub test the field-access path makes | — |
+| B-2026-11-07-23 | 2026-11-07 | typecheck | low | #[non_exhaustive] is not enforced outside the defining package: a match naming every variant with no wildcard is accepted, for a user package's enum and for std's DecodeError | — |
+| B-2026-11-07-25 | 2026-11-07 | runtime+mir-llvm | high | A compiled TLS server (Server.serve_tls, TlsListener) is killed by SIGPIPE (exit -13) when a client disconnects without close_notify: one client that sends a request and drops the TCP connection takes the whole HTTPS server down | — |
+| B-2026-11-07-26 | 2026-11-07 | runtime | medium | For an absolute-form request target (`GET http://example.com/z?k=v HTTP/1.1`) the server's Request.path() returns `http://example.com/z` and for `GET http://example.com` returns `http://example.com`, not `/z` and `/` | — |
+| B-2026-11-07-27 | 2026-11-07 | effect | low | Socket methods with no declared effects (local_addr, set_read_timeout, try_clone on TcpListener/TcpStream/UdpSocket) carry an `unknown (native ..)` effect, so a par branch calling one conflicts with any branch that prints, reads the clock or uses another socket | — |
+| B-2026-11-07-28 | 2026-11-07 | runtime+mir-llvm | medium | A compiled HTTP client sends a plain HTTP request for any URL scheme (`ftp://127.0.0.1:P/x` and `gopher://..` get `OK 200` from an HTTP server), while the interpreter refuses them with `Unknown Scheme`; io.md allows only http:// and https:// | — |
+| B-2026-11-07-29 | 2026-11-07 | interp | low | Through a CONNECT tunnel (`https_proxy` set, https:// URL) the interpreter's client sends the request in absolute form (`GET https://proxied.invalid:P/tunnel`), where compiled code sends origin form (`GET /tunnel`); a Kara server then reads the wrong path (B-2026-11-07-26) | — |
 
 ### Relocated
 
@@ -124,6 +136,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-40 | 2026-11-01 | effect | low | CORRECTED 11-02 (kata thread): no index-disjointness analysis exists on v2 for `par {}` OR `par for` (`par for i in 0..2 { v[i] = i + 1 }` is refused too, and so is an Array); the analysis core-semantics 11.2 calls "existing" is deferred.md "Auto-Parallel Loops over Provably-Disjoint Indexed Writes". Was: Two `par {}` branches that write CONSTANT, different indices of one `Vec` (`{ v[0] = 1; 0 }` and `{ v[1] = 2; 0 }`) are refused as conflicting mutable borrows of `v`, where core-semantics 11.2 says disjoint index ranges proven by the disjointness analysis do not conflict | docs/deferred.md § Auto-Parallel Loops over Provably-Disjoint Indexed Writes |
 | B-2026-11-02-5 | 2026-11-02 | mir-llvm | low | Kata 246's strobogrammatic check runs 1.31x legacy's instructions on the MIR backend (1.24x its cycles), on top of the wontfix unrolling gap B-2026-08-15-31: the seq lane went from 1.57x to 1.87x rustc -O | docs/deferred.md § Interprocedural Range Facts |
 | B-2026-11-03-2 | 2026-11-03 | mir-llvm | low | Kata 302's default build no longer auto-parallelizes on the MIR backend: the item 13 cost gate declines min_area's group as reached from a loop, a 1.9x loss on x86 at 4 workers that no static rule can take without flipping kata 165's 318x pin; relocated to a runtime work estimate | docs/deferred.md § Runtime Work Estimate for Auto-Par Groups in Hot Bodies |
+| B-2026-11-07-24 | 2026-11-07 | resolver+typecheck | low | std.secret exports only Secret: Zeroize and ConstantTimeEq cannot be imported or named (so the documented user `impl Zeroize` cannot be written), and `impl Debug for Secret[i64]` is accepted though secret.md makes it a compile error | docs/implementation_checklist/phase-11-stdlib-longtail.md |
 
 </details>
 
@@ -785,6 +798,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-12 | mir | high | A plain binding of a non-`Copy` part of a `shared` value held in a local (`match m.a { Some(i) => . | 9d3631f381 |
 | B-2026-11-07-13 | typecheck | medium | A closure that matches a captured enum against dotted unit variants only (`match cmp { Cmp.Lt => x < v, Cmp.Ge => x >= v }`) types as `OnceFn` on the… | 9d3631f381 |
 | B-2026-11-07-14 | ownership | medium | `karac check` refuses moving a binding made by a `let . | 78f0e2b7e5 |
+| B-2026-11-07-15 | typecheck | low | For `let job = jobs[j];` whose fields are then written (`job.status = 2`), `karac fix` derives `Clone` on the element type and adds `mut`, steering t… | 849eb1f1b9 |
 
 </details>
 

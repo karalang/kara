@@ -130,7 +130,7 @@ order.
   (`let Some(done) = rx.recv() else { .. }; out[done.slot] =
   Some(done.outcome);`) as moved on the next iteration, while every backend
   ran it.
-- B-2026-11-07-15, open: for `let job = self.jobs[j];` whose fields are
-  then written, `karac fix` derives `Clone` and adds `mut`, steering
-  toward a copy that would drop the writes, where `mut ref self.jobs[j]`
-  is the repair. The program writes `mut ref` by hand.
+- B-2026-11-07-15, fixed in kara 849eb1f1b9: for `let job =
+  self.jobs[j];` whose fields are then written, `karac fix` derived
+  `Clone` and added `mut`, steering toward a copy that would drop the
+  writes. It now writes the repair, `mut ref self.jobs[j]`, at both sites.
