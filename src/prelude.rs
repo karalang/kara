@@ -2393,6 +2393,10 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "Sender",
             "Receiver",
             "SendError",
+            // `recv_timeout` / `send_timeout`'s errors, defined in
+            // runtime/stdlib/source/sync.kara (B-2026-11-07-21).
+            "RecvTimeoutError",
+            "SendTimeoutError",
             "TaskGroup",
             "IsolatingGroup",
             "TaskFailed",

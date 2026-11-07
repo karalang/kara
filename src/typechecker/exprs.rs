@@ -2943,6 +2943,10 @@ impl<'a> super::TypeChecker<'a> {
                         args: vec![inner.clone()],
                     };
                     self.check_atomic_operand(&args[0].value, &inner);
+                    if name == "Atomic" {
+                        // Only five of these an atomic holds (B-2026-11-07-21).
+                        self.report_atomic_inner(&inner, args[0].value.span);
+                    }
                     self.record_expr_type(&expr.span, &ty);
                     return ty;
                 }
@@ -5804,6 +5808,41 @@ impl<'a> super::TypeChecker<'a> {
     fn names_current_impl_param(&self, name: &str) -> bool {
         matches!(&self.current_impl_target, Some(Type::Named { args, .. })
             if args.iter().any(|a| matches!(a, Type::TypeParam(n) if n == name)))
+    }
+
+    /// B-2026-11-07-21: an `Atomic.new(v)` whose `v` was still a variable
+    /// at the call is judged once the body has fixed it. One left open
+    /// defaults to `i64`, which an atomic holds.
+    pub(super) fn report_pending_atomic_inners(&mut self) {
+        for (span, ty) in std::mem::take(&mut self.pending_atomic_inners) {
+            let resolved = resolve_type_vars(
+                &ty,
+                &self.env.substitutions,
+                &HashMap::new(),
+                &self.env.const_substitutions,
+                &HashMap::new(),
+            );
+            if !matches!(resolved, Type::TypeVar(_)) {
+                self.report_atomic_inner(&resolved, span);
+            }
+        }
+    }
+
+    /// The E0272 refusal of an `Atomic[T]` whose `T` no atomic holds.
+    pub(super) fn report_atomic_inner(&mut self, inner: &Type, span: Span) {
+        if let Some(kind) = super::expr_call::atomic_ineligible_inner_kind(inner) {
+            self.type_error(
+                format!(
+                    "Atomic[{}] is not a valid atomic type: {kind} cannot be operated on \
+                     atomically. An atomic holds `bool` or one of the integers `i32`, `i64`, \
+                     `u32` and `u64` (library/concurrency.md § Atomics); to share other data \
+                     across tasks use `Mutex[T]`, which can guard any type",
+                    type_display(inner)
+                ),
+                span,
+                TypeErrorKind::AtomicInvalidInnerType,
+            );
+        }
     }
 
     /// B-2026-11-06-7: the bounds deferred on a method call's receiver, and

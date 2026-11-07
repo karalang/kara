@@ -1,0 +1,23 @@
+// The two timeout errors are std.sync's, and an import names them
+// (library/concurrency.md § Channels).
+import std.sync.{channel, RecvTimeoutError, SendTimeoutError};
+import std.time.{Duration};
+
+fn main() {
+    let (tx, rx) = channel(1);
+    match rx.recv_timeout(Duration.ms(1)) {
+        Ok(v) => println(f"got {v}"),
+        Err(RecvTimeoutError.TimedOut) => println("timed out"),
+        Err(RecvTimeoutError.Closed) => println("closed"),
+    }
+    let _ = tx.send(1);
+    match tx.send_timeout(2, Duration.ms(1)) {
+        Ok(()) => println("sent"),
+        Err(SendTimeoutError.TimedOut(v)) => println(f"timed out with {v}"),
+        Err(SendTimeoutError.Closed(v)) => println(f"closed with {v}"),
+    }
+    match rx.recv() {
+        Some(v) => println(f"got {v}"),
+        None => println("none"),
+    }
+}

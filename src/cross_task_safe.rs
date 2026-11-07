@@ -22,8 +22,7 @@
 //! - **`Rc[T]`** — single-task RC, not atomic. Fix-it: `Arc[T]`.
 //! - **`OnceCell[T]`** — single-task once-init. Fix-it: `OnceLock[T]`.
 //! - **`*const T` / `*mut T`** — raw pointers carry no ownership
-//!   tracking. Fix-it: wrap in `Atomic[*mut T]` or transfer through a
-//!   channel.
+//!   tracking. Fix-it: transfer ownership of the data through a channel.
 //!
 //! ## Walker behavior
 //!
@@ -100,7 +99,8 @@ pub enum CrossTaskUnsafeFixIt {
     SharedToPar,
     /// `OnceCell[T]` → `OnceLock[T]`.
     OnceCellToLock,
-    /// Raw pointers — wrap in `Atomic[*mut T]` or transfer through a channel.
+    /// Raw pointers — transfer ownership of the data through a channel
+    /// (design.md §11 makes no thread-safety claim about a raw pointer).
     RawPointer,
     /// `dyn Trait` → `dyn Trait + CrossTask`: the concrete type is not in
     /// the type, so only the marked form may cross.
@@ -128,7 +128,8 @@ impl CrossTaskUnsafeFixIt {
                 unsafe_leaf
             ),
             CrossTaskUnsafeFixIt::RawPointer => format!(
-                "wrap `{}` in `Atomic[*mut T]` or transfer ownership through a channel",
+                "transfer ownership of the data `{}` points to through a channel instead: \
+                 the language makes no thread-safety claim about a raw pointer",
                 unsafe_leaf
             ),
             CrossTaskUnsafeFixIt::FnCrossTask => format!(

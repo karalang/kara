@@ -1,0 +1,9 @@
+source = "B-2026-11-07-21"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-07-21: library/concurrency.md names the five types an atomic holds; i8, u8, i16, u16, usize and i128 used to pass check, and Atomic[i128] failed to link under ASan (__atomic_load_16). The expected.out wording of an error pin is guidance, not a byte oracle."

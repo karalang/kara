@@ -10408,15 +10408,14 @@ fn test_atomic_non_scalar_inner_type_rejected() {
 
 #[test]
 fn test_atomic_eligible_inner_types_typecheck() {
-    // The eligible set — integers, unsigned integers, `bool`, and raw pointers
-    // — all construct cleanly. (`usize` covers the canonical `Atomic[usize]`
-    // counter; `*mut i32` is the `Atomic[*mut T]` cross-task pointer form from
-    // design.md § raw-pointer replacement.)
+    // The eligible set — library/concurrency.md § Atomics: `bool`, `i32`,
+    // `i64`, `u32` and `u64` — all construct cleanly (B-2026-11-07-21).
     typecheck_ok("fn main() { let _a: Atomic[i64] = Atomic.new(0); }");
     typecheck_ok("fn main() { let _a = Atomic.new(0 as u32); }");
-    typecheck_ok("fn main() { let _a = Atomic.new(0 as usize); }");
+    typecheck_ok("fn main() { let _a: Atomic[i32] = Atomic.new(0); }");
+    typecheck_ok("fn main() { let _a: Atomic[u64] = Atomic.new(0); }");
+    typecheck_ok("fn main() { let _a = Atomic.new(0); }");
     typecheck_ok("fn main() { let _a: Atomic[bool] = Atomic.new(false); }");
-    typecheck_ok("fn main() { let mut c: i32 = 0; let _p = unsafe { Atomic.new(ptr.mut(c)) }; }");
 }
 
 #[test]
@@ -31190,7 +31189,7 @@ fn spawn_capturing_raw_pointer_rejected_with_atomic_or_channel_fix_it() {
         });
     assert!(
         cross_task.message.contains("Atomic") || cross_task.message.contains("channel"),
-        "raw-ptr fix-it should mention Atomic[*mut T] or channel transfer, got: {}",
+        "raw-ptr fix-it should mention channel transfer, got: {}",
         cross_task.message,
     );
 }
@@ -31397,7 +31396,7 @@ fn par_block_capturing_raw_pointer_rejected() {
     );
     assert!(
         cross_task.message.contains("Atomic") || cross_task.message.contains("channel"),
-        "raw-ptr fix-it should mention Atomic[*mut T] or channel transfer, got: {}",
+        "raw-ptr fix-it should mention channel transfer, got: {}",
         cross_task.message,
     );
 }

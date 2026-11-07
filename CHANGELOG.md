@@ -30,6 +30,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - **A bounded struct's literal meets its bound without an annotation.**
   `let p = Pair { a: Q {}, b: Q {} }` with `struct Pair[T: Ord]` (or
   `where T: Ord`) was accepted when `Q` has no `Ord` (B-2026-11-06-15).
+- **`Atomic[T]` holds only `bool`, `i32`, `i64`, `u32` and `u64`**
+  (library/concurrency.md § Atomics). `Atomic[i8]`, `u8`, `i16`, `u16`,
+  `usize`, `isize`, a 128-bit integer and a raw pointer were accepted, and
+  `Atomic[i128]` failed to link under AddressSanitizer
+  (B-2026-11-07-21).
 - **A literal range bound must fit the scrutinee's type,** as a literal
   pattern must: `1i32..=300i32` on an `i8` and `-1..=3` on a `u8` were
   accepted (B-2026-11-06-15).
@@ -192,6 +197,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Wrong behaviour fixed
 
+- `import std.sync.{RecvTimeoutError, SendTimeoutError}` names the two
+  timeout errors; it was refused as `std.sync has no item`
+  (B-2026-11-07-21).
 - A struct literal of another package's struct may name its `pub` fields
   again: `Opts { port: 1 }` with `pub port` was refused with E0111 since the
   literal check for B-2026-11-04-46 (B-2026-11-07-22).

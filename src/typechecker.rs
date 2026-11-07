@@ -3479,6 +3479,9 @@ pub struct TypeChecker<'a> {
     /// nothing at the call fixed, with those variables, judged at the end of
     /// `check` (`report_unsolved_call_vars`).
     pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
+    /// `Atomic.new(v)` arguments still a variable at the call, judged at the
+    /// end against library/concurrency.md's five (B-2026-11-07-21).
+    pub(super) pending_atomic_inners: Vec<(Span, Type)>,
     /// B-2026-11-06-11: a generic call's unfixed parameters spelled like a
     /// parameter in scope at the call; one still unsolved at the end names
     /// that parameter.
@@ -4186,6 +4189,7 @@ impl<'a> TypeChecker<'a> {
             call_bound_receiver_subs: None,
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
+            pending_atomic_inners: Vec::new(),
             aliased_call_vars: Vec::new(),
             deferred_receiver_bounds: Vec::new(),
             call_borrowed_fn_params: Vec::new(),
@@ -4611,6 +4615,7 @@ impl<'a> TypeChecker<'a> {
         self.emit_nested_enum_inst_errors();
         self.settle_deferred_call_vars();
         self.discharge_deferred_call_bounds();
+        self.report_pending_atomic_inners();
         self.report_unsolved_call_vars();
         self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();

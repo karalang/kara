@@ -1,0 +1,11 @@
+// library/concurrency.md § Atomics: `Atomic[T]` exists for `T` = `bool`,
+// `i32`, `i64`, `u32` and `u64`. Any other `T` is refused at check, whether
+// an annotation or the argument fixes it.
+fn main() {
+    let a: Atomic[i8] = Atomic.new(127);
+    let b = Atomic.new(0u16);
+    let n: usize = 3;
+    let c = Atomic.new(n);
+    let d: Atomic[i128] = Atomic.new(1);
+    println(f"{a.load()} {b.load()} {c.load()} {d.load()}");
+}

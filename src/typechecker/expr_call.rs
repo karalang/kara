@@ -2221,19 +2221,14 @@ impl<'a> super::TypeChecker<'a> {
                 // guards any type), so this guard is `Atomic`-only.
                 if segments[0] == "Atomic" {
                     let resolved = resolve_type_var_top(&inner_ty, &self.env.substitutions);
-                    if let Some(kind) = atomic_ineligible_inner_kind(&resolved) {
-                        self.type_error(
-                            format!(
-                                "Atomic[{}] is not a valid atomic type: {kind} cannot be operated \
-                                 on atomically. An atomic's inner type must be an integer \
-                                 (i8..i64 / u8..u64 / usize / isize), `bool`, or a raw pointer \
-                                 (`*const T` / `*mut T`); to share richer data across tasks use \
-                                 `Mutex[T]`, which can guard any type",
-                                type_display(&resolved)
-                            ),
-                            args[0].value.span,
-                            TypeErrorKind::AtomicInvalidInnerType,
-                        );
+                    if matches!(resolved, Type::TypeVar(_)) {
+                        // A literal's variable is fixed later, by an
+                        // annotation or a use (`let a: Atomic[i8] =
+                        // Atomic.new(1)`); judged at the end (B-2026-11-07-21).
+                        self.pending_atomic_inners
+                            .push((args[0].value.span, inner_ty.clone()));
+                    } else {
+                        self.report_atomic_inner(&resolved, args[0].value.span);
                     }
                 }
                 let ty = Type::Named {
@@ -3618,17 +3613,26 @@ impl<'a> super::TypeChecker<'a> {
 /// Classify an `Atomic[T]` inner type for atomic eligibility. Returns
 /// `Some(human-readable kind)` when `T` is a *definitively concrete*
 /// non-eligible type (so the caller can reject with a clear message), and
-/// `None` when `T` is eligible (integer / `bool` / raw pointer, per
-/// deferred.md § Atomic Operations) OR when `T` is not yet pinned down —
+/// `None` when `T` is eligible (`bool`, `i32`, `i64`, `u32`, `u64`, per
+/// library/concurrency.md § Atomics) OR when `T` is not yet pinned down —
 /// an unresolved inference var, a generic type parameter, an opaque
 /// existential / associated-type projection, or an error type. Deferring
 /// the uncertain cases keeps the guard from false-positiving inside a
 /// generic body (`fn f[T](x: T) { Atomic.new(x) }`); a truly-bad
 /// monomorphization is still caught downstream by codegen.
-fn atomic_ineligible_inner_kind(ty: &Type) -> Option<&'static str> {
+pub(super) fn atomic_ineligible_inner_kind(ty: &Type) -> Option<&'static str> {
+    use super::types::{IntSize, UIntSize};
     match ty {
-        // Eligible — the set LLVM lowers to a single hardware atomic.
-        Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Pointer { .. } => None,
+        // Eligible — library/concurrency.md § Atomics: `bool`, `i32`, `i64`,
+        // `u32` and `u64` (B-2026-11-07-21).
+        Type::Int(IntSize::I32 | IntSize::I64)
+        | Type::UInt(UIntSize::U32 | UIntSize::U64)
+        | Type::Bool => None,
+        Type::Int(IntSize::I128) | Type::UInt(UIntSize::U128) => Some("a 128-bit integer"),
+        Type::Int(_) | Type::UInt(_) => Some("an integer of this width"),
+        // design.md §11: the language makes no thread-safety claim about a
+        // raw pointer; its data is transferred, not shared.
+        Type::Pointer { .. } => Some("a raw pointer"),
         // Not-yet-known — defer, do not reject.
         Type::TypeVar(_)
         | Type::TypeParam(_)

@@ -1,0 +1,9 @@
+source = "B-2026-11-07-21"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-07-21 (folded): RecvTimeoutError and SendTimeoutError are std.sync's (library/concurrency.md § Channels), so `import std.sync.{RecvTimeoutError, SendTimeoutError}` binds them; it was refused as `std.sync has no item`."
