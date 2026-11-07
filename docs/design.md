@@ -696,7 +696,7 @@ logging = { path = "../logging" }  # local path dependency
 proptest = "0.4"                   # only in tests and examples
 
 [build]
-target = "x86_64-linux"            # default manifest-overlay triple; --target overrides
+target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host triple cross-builds; --target overrides
 ```
 
 - `[package].name` is required. It is the package's identity, and it gives the name dependents use as a path's first segment.
@@ -770,10 +770,10 @@ Each `karac build --target X` produces one artifact. Building a matrix of target
 
 **Build cache.** Each package's own output goes in `dist/` (in the default `.gitignore`; `karac clean` removes it). Compiled dependencies go in the machine-wide `~/.kara/cache/`, keyed by compiler version, package version, edition, profile and target triple. A compiler upgrade invalidates the cache; time never does. `karac clean --global` evicts it.
 
-**`karac init`.** `karac init [<name>] [--bin | --lib] [--force]` scaffolds a package.
+**`karac init`.** `karac init [<name>] [--bin | --lib | --backend | --cli] [--force]` scaffolds a package.
 - Bare `karac init` uses the working directory; `karac init <name>` creates `./<name>/`, and refuses if it exists and is not empty.
 - The directory name is the package name and the root module name. It must match `[a-z][a-z0-9_]*` and not be a keyword; otherwise nothing is written (no automatic rewriting of `my-project`).
-- `--bin` (the default) and `--lib` are exclusive. A package is a binary or a library; a library plus a CLI is a workspace.
+- `--bin` (the default), `--lib`, `--backend` and `--cli` are exclusive. A package is a binary or a library; a library plus a CLI is a workspace. `--backend` and `--cli` write `karac new`'s scaffolds of the same name (below) in place of the hello-world `main`.
 - It refuses if `kara.toml`, `src/main.kara` or `src/lib.kara` exists, unless `--force`. It never overwrites `README.md`, the test file or `.gitignore`, even with `--force`. It does not run `git init`.
 - It writes five files: `kara.toml` (`name`, `version = "0.1.0"`, `authors = []`, `edition = "2026"`, an empty `[dependencies]`), `src/main.kara` with `fn main() { println("Hello, world!"); }` or `src/lib.kara` with a documented `pub fn add(a: i64, b: i64) -> i64 { a + b }`, a matching `_test.kara` with one test, a `README.md` holding the title, and a `.gitignore` holding `/dist/`.
 
