@@ -1,0 +1,53 @@
+// design.md §8: recursion at the same type, at a swapped or unrelated
+// type, or at a growing type outside any cycle needs finitely many
+// instances, and compiles.
+fn cnt[T](v: ref Vec[T], i: i64) -> i64 {
+    if i >= v.len() { 0 } else { cnt(v, i + 1) + 1 }
+}
+
+fn swap[A: Display, B: Display](a: own A, b: own B, n: i64) -> i64 {
+    if n == 0 {
+        println(a);
+        println(b);
+        0
+    } else {
+        swap(b, a, n - 1)
+    }
+}
+
+fn concrete[T: Display](x: own T, n: i64) -> i64 {
+    if n == 0 {
+        println(x);
+        0
+    } else {
+        concrete(n, n - 1) + 1
+    }
+}
+
+fn shrink[T: Display](v: own Option[T], n: i64) -> i64 {
+    match v {
+        Some(x) => if n == 0 {
+            println(x);
+            1
+        } else {
+            shrink(Some(x), n - 1) + 1
+        },
+        None => 0,
+    }
+}
+
+fn wrap_once[T](x: own T) -> i64 {
+    leaf([x])
+}
+
+fn leaf[T](v: own Vec[T]) -> i64 {
+    v.len()
+}
+
+fn main() {
+    println(cnt([1, 2, 3], 0));
+    println(swap(1, "s", 3));
+    println(concrete("a", 2));
+    println(shrink(Some(4), 2));
+    println(wrap_once(9));
+}

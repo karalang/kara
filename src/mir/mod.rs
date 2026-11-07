@@ -31,6 +31,7 @@ pub mod monotone;
 pub mod movecheck;
 pub mod parse;
 pub mod place_ty;
+pub mod poly_recursion;
 pub mod popcount;
 pub mod presize;
 pub mod pretty;

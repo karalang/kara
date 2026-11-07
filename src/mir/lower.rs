@@ -549,7 +549,44 @@ fn lower_program_inner<'a>(
             }
         }
     }
+    // Polymorphic recursion would make the worklist below run forever, one
+    // instance per nesting depth (design.md §8, B-2026-11-06-12). It is
+    // found in the call graph first, and a program with one is refused
+    // before any instance is made.
+    let poly_refused = {
+        let fns: Vec<crate::mir::poly_recursion::GenericFn<'_>> = lcx
+            .fns
+            .iter()
+            .filter(|(_, i)| !i.f.stdlib_origin)
+            .map(|(d, i)| crate::mir::poly_recursion::GenericFn {
+                def: *d,
+                f: i.f,
+                params: i.impl_params + i.f.generic_params.as_ref().map_or(0, |g| g.params.len()),
+                impl_params: i.impl_params,
+                impl_names: i
+                    .impl_generics
+                    .iter()
+                    .flat_map(|g| g.params.iter().map(|p| p.name.as_str()))
+                    .collect(),
+                target_ty: i.impl_target_ty,
+                target: i.impl_target,
+            })
+            .filter(|g| g.params > 0)
+            .collect();
+        let typed = crate::mir::poly_recursion::Typed {
+            calls: &lcx.calls,
+            node_types: &lcx.node_types,
+            tcx: lcx.tys.tcx(),
+        };
+        let found = crate::mir::poly_recursion::refusals(&fns, &typed, &|d| lcx.def_name(d));
+        let refused = !found.is_empty();
+        for r in found {
+            lcx.errors.push(format!("{}: {}", at(r.span), r.message));
+        }
+        refused
+    };
     match roots {
+        _ if poly_refused => {}
         // A comptime evaluation's roots (B-2026-10-22-20): its wrapper
         // functions, and no `main`.
         Some(roots) => {
@@ -581,7 +618,7 @@ fn lower_program_inner<'a>(
     // to a build that reaches them: a check refuses what is wrong, not what
     // the builder does not lower yet.
     let mut later_roots: Option<Vec<DefId>> = None;
-    if let (Some(from), None) = (signatures_only_from, roots) {
+    if let (Some(from), None, false) = (signatures_only_from, roots, poly_refused) {
         let mut own: Vec<DefId> = lcx
             .fns
             .iter()
@@ -605,7 +642,7 @@ fn lower_program_inner<'a>(
     let mut later_errors_from = None;
     // The `#[panic_handler]` thunk is a root too: nothing calls it but the
     // backends, when a panic ends the process.
-    if let Some(thunk) = defs.lookup(0, PANIC_THUNK) {
+    if let Some(thunk) = defs.lookup(0, PANIC_THUNK).filter(|_| !poly_refused) {
         lcx.instance(thunk, Vec::new());
     }
     let mut receivers = FxHashSet::default();

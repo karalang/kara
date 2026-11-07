@@ -1,0 +1,9 @@
+source = "B-2026-11-06-12"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["generics", "polymorphic-recursion"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-12: design.md §8, recursion at the same, a swapped or an unrelated type, or through a dispatch that peels back what the call added, needs finitely many instances and compiles."

@@ -1,0 +1,27 @@
+// design.md §8: the cycle may run through a trait method that dispatches
+// on a parameter's type. `Vec[T]`'s `grow` hands `[self]`, a
+// `Vec[Vec[T]]`, to `helper[U]`, whose `u.grow(n)` picks `Vec[T]`'s impl
+// again at `T = Vec[T]`, so every round needs a deeper instance.
+trait Grow {
+    fn grow(own self, n: i64) -> i64;
+}
+
+impl Grow for i64 {
+    fn grow(own self, n: i64) -> i64 {
+        if n == 0 { 0 } else { helper([self], n - 1) }
+    }
+}
+
+impl[T: Grow] Grow for Vec[T] {
+    fn grow(own self, n: i64) -> i64 {
+        if n == 0 { 0 } else { helper([self], n - 1) }
+    }
+}
+
+fn helper[U: Grow](u: own U, n: i64) -> i64 {
+    u.grow(n) + 1
+}
+
+fn main() {
+    println(5.grow(3));
+}

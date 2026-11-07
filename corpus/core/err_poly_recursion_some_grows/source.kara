@@ -1,0 +1,13 @@
+// design.md §8: the same refusal when the growing argument is an enum
+// payload: `deep[T]` calls itself at `Option[T]`.
+fn deep[T](x: own T, n: i64) -> i64 {
+    if n == 0 {
+        0
+    } else {
+        deep(Some(x), n - 1) + 1
+    }
+}
+
+fn main() {
+    println(deep(1, 3));
+}

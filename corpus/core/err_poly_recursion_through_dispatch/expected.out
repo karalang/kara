@@ -1,0 +1,1 @@
+ERROR at line 17: polymorphic recursion: `grow` calls `helper` with `Vec[Vec[T]]`, built from its own `T`, and the calls lead back to `grow`, so the argument grows on every round and would need an instance per depth; recurse at the same type, or keep the growing values in one type that does not change between rounds (a `Vec` of them)

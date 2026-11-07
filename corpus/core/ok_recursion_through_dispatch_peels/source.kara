@@ -1,0 +1,45 @@
+// design.md §8: recursion through a helper is fine when the dispatch takes
+// back what the call added. `Tree[T]`'s `show` passes its children, a
+// `Vec[Tree[T]]`, to `show_all[U]` at `U = Tree[T]`, and `c.show()` on a
+// `U` picks `Tree[T]`'s impl at the same `T`: finitely many instances.
+trait Show {
+    fn show(ref self) -> i64;
+}
+
+struct Tree[T] {
+    v: T,
+    kids: Vec[Tree[T]],
+}
+
+impl Show for i64 {
+    fn show(ref self) -> i64 {
+        1
+    }
+}
+
+impl[T: Show] Show for Tree[T] {
+    fn show(ref self) -> i64 {
+        self.v.show() + show_all(self.kids)
+    }
+}
+
+impl[T: Show] Show for Vec[T] {
+    fn show(ref self) -> i64 {
+        show_all(self)
+    }
+}
+
+fn show_all[U: Show](v: ref Vec[U]) -> i64 {
+    let mut n = 0;
+    for c in v {
+        n = n + c.show();
+    }
+    n
+}
+
+fn main() {
+    let leaf = Tree { v: 2, kids: Vec.new() };
+    let t = Tree { v: 1, kids: [leaf] };
+    println(t.show());
+    println([[1, 2], [3]].show());
+}

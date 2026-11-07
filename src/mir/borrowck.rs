@@ -2649,6 +2649,10 @@ fn main() -> () {
             // A tuple holds an explicit `ref name` binding as a reference
             // (B-2026-11-06-4).
             "ok_ref_pattern_binding_into_tuple",
+            // `impl .. for Vec[T]` is for the library's `Vec`
+            // (B-2026-11-06-12).
+            "err_poly_recursion_through_dispatch",
+            "ok_recursion_through_dispatch_peels",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

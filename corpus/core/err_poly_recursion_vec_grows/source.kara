@@ -1,0 +1,15 @@
+// design.md §8: polymorphic recursion is an error. `deep[T]` calls itself
+// at `Vec[T]`, so each round would need a new instance; `check` refuses
+// the recursive call instead of expanding instances forever.
+fn deep[T: Display](x: own T, n: i64) -> i64 {
+    if n == 0 {
+        println(x);
+        0
+    } else {
+        deep([x], n - 1) + 1
+    }
+}
+
+fn main() {
+    println(deep(1, 3));
+}

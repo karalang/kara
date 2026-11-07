@@ -1,0 +1,22 @@
+// design.md §8: the cycle may run through another generic. `ping[T]`
+// calls `pong` at `(T, i64)` and `pong[U]` calls `ping` back at `U`, so
+// the argument grows once per round trip.
+fn ping[T](x: own T, n: i64) -> i64 {
+    if n == 0 {
+        0
+    } else {
+        pong((x, 1), n - 1)
+    }
+}
+
+fn pong[U](y: own U, n: i64) -> i64 {
+    if n == 0 {
+        0
+    } else {
+        ping(y, n - 1)
+    }
+}
+
+fn main() {
+    println(ping(1, 4));
+}

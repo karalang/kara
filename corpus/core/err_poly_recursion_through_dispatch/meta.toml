@@ -1,0 +1,9 @@
+source = "B-2026-11-06-12"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["generics", "polymorphic-recursion"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-12: design.md §8, polymorphic recursion is an error, refused at the recursive call from the call graph before any instance is made (check never loops). The expected.out wording of an error pin is guidance, not a byte oracle."
