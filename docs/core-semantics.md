@@ -642,7 +642,7 @@ It applies only where the compiler proves all of that. In particular, it does no
 - **A panic** in any branch ends the process (§11.4).
 - **Removed.** `Cancellable`, `#[derive(Cancellable)]`, `collect_all` and `collect_all_vec` are removed. A block whose branches produce `Result` values without `?` already returns every result, in source order.
 
-Pin: `par_error_runs_siblings`.
+Pin: `par_error_runs_siblings`, `par_early_exit_cancels_later` (B-2026-11-07-38). `karac` checks the branches' results as they join, in source order, so it cancels the later branches once every branch before the exiting one has finished; §11.9's timing freedom allows that delay.
 
 **The M4a rules (§11.8–§11.12).** Decided 2026-10-24: Gowtham chose teardown at the wait for cancellation and opt-in isolating groups for panics, and the rest are review-thread rulings (`review/m4a-spec-draft.md` in the shared folder). Each rule takes effect when its M4 plan item lands (`review/m4-plan-2026-10-24.md`): §11.8 with items 2–4, §11.9 and §11.10 with item 5, §11.11 with item 6 and §11.12 with item 9. Until then `karac` cancels nothing, and every panic ends the process. Each rule gets its pin in `corpus/core/` when it lands.
 
