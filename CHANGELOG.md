@@ -14,7 +14,7 @@ All notable changes to the Kāra language and compiler will be documented in thi
 
 ---
 
-## 0.8.1 — unreleased
+## 0.8.1 (beta) — 2026-11-07
 
 Fixes only. Several close soundness holes, so programs that were wrongly
 accepted by 0.8.0 are now refused, each with a fix-it.
@@ -425,6 +425,9 @@ Each still compiles in 0.8.x with a `deprecated` warning and a
   deeply nested blocks ran the parser out of memory (B-2026-11-02-25);
   `mem.replace` on an `Fn` local (B-2026-11-02-16); a private type named
   like a library one (`struct Sender`, B-2026-11-07-6).
+- **An early exit in `par {}` cancels the branches after it**, as
+  core-semantics §11.7 says; they ran to completion. They are torn down at
+  their next wait, running their `defer`s (B-2026-11-07-38).
 - **Accepted by check, refused at run or build, now run.** Mixed-width
   compound assignment (`total_i64 += n_i32`, B-2026-11-04-59); or-patterns
   binding under a guard and two other pattern shapes (B-2026-11-04-57);
@@ -440,6 +443,10 @@ Each still compiles in 0.8.x with a `deprecated` warning and a
   client too (B-2026-11-07-28); requests through a CONNECT tunnel
   (B-2026-11-07-29); `karac test` accepts what `karac check` accepts
   (B-2026-10-30-4).
+- `match (self, other)` in a `ref self` method is no longer refused as a
+  move (B-2026-11-07-51). `impl Ord` without `PartialOrd` offers the missing
+  impl as a fix (B-2026-11-07-52), and `Dict` suggests `Map`
+  (B-2026-11-07-53).
 - About 40 more programs 0.8.0 wrongly refused are accepted, most of them
   borrow-check and effect-check false positives (moves after iterator
   chains, disjoint field writes in tasks, closures per branch, operator
