@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 159 |
-| false-positive | 139 |
+| diagnostics | 169 |
+| false-positive | 143 |
 | perf | 108 |
-| missing-feature | 102 |
+| missing-feature | 104 |
 | soundness | 52 |
 | miscompile | 41 |
 | run-vs-build | 27 |
+| other | 22 |
 | codegen-gap | 22 |
-| other | 19 |
 | crash | 15 |
 | leak | 4 |
 | use-after-free | 1 |
@@ -75,20 +75,21 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 259 |
-| mir-llvm | 134 |
-| mir | 131 |
-| cli | 71 |
-| ownership | 60 |
-| parser | 43 |
-| interp | 31 |
+| typecheck | 267 |
+| mir-llvm | 135 |
+| mir | 132 |
+| cli | 78 |
+| ownership | 62 |
+| parser | 46 |
+| interp | 32 |
 | runtime | 28 |
-| effect | 27 |
+| effect | 28 |
 | codegen | 22 |
-| resolver | 11 |
+| resolver | 12 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
+| resolve | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-07). Do not edit this block by hand; edit the ledger and regenerate._
@@ -113,6 +114,25 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
 | B-2026-11-07-35 | 2026-11-07 | typecheck | low | A generic function's `Atomic.new(x)` over `x: own T` is not judged at the instance: `wrap(1i8)` with `fn wrap[T](x: own T) -> Atomic[T]` passes check and runs, though Atomic[i8] is outside concurrency.md's five | — |
+| B-2026-11-07-36 | 2026-11-07 | effect | medium | Number parsing in two `par` branches or a `par for` is refused as a conflict: `par { i64.parse(a), i64.parse(b) }` reports `unknown (native str.char_at_byte)` vs `unknown (native str.char_at_byte)`; `f64.parse` adds `unknown (native str.is_empty)` | — |
+| B-2026-11-07-37 | 2026-11-07 | typecheck+ownership+mir | medium | `karac check` accepts calling an `OnceFn` struct field twice (`(job.run)(); (job.run)();`); every run lane then stops with the internal `move check main: bb10[term]: use of _2.0, which may have been moved or never initialized` instead of E0500 at the second call | — |
+| B-2026-11-07-38 | 2026-11-07 | interp+mir-llvm | medium | An early exit in a `par {}` branch does not cancel the branches after it: with `par { quick()?, slow()? }` where `slow` sleeps 2 s, the function returns its Err only after `slow` wakes and runs to its end (prints, 2000 ms), though §11.7 cancels later branches at their next suspension point; `par for` cancels correctly | — |
+| B-2026-11-07-39 | 2026-11-07 | ownership+typecheck | medium | The item of a bare `for x in xs` over a borrowed parameter cannot be returned: `fn last(xs: Slice[String]) -> ref String { let mut best = ref xs[0]; for x in xs { best = x; } best }` is `returned borrow does not originate from a ref parameter` and `for x in xs { if .. { return Some(x); } }` into `Option[ref String]` is `cannot move 'x'`; the same bodies over `xs.iter()` check clean | — |
+| B-2026-11-07-40 | 2026-11-07 | resolver+parser+cli | medium | `karac fix` applies did-you-mean edits to foreign keywords and builtins that produce nonsense: `null` -> `Mul`, `nil` -> `n` (or `Div`), `range(3)` -> `Range(3)`, `fmt` -> `Not`, `func` -> `fence`; `func main() {` and `def main():` get `expected ;` with a fix inserting `;` (`func; main(); {`) | — |
+| B-2026-11-07-41 | 2026-11-07 | parser+typecheck | medium | `std::thread::spawn(|| ..)` is told `Kāra's spawn needs no module path: write spawn`, and that fix is then refused as `free spawn is removed (§11.1)`; the first message should point at `TaskGroup.spawn` / `par` | — |
+| B-2026-11-07-42 | 2026-11-07 | parser | low | A `Self { x: x }` struct literal in a method body is `expected ; after this expression statement` at `Self`, and `karac fix` inserts the `;` (`Self; { x }`), which then fails as `expected P, found i64`; it should say to write the type's name (`P { x }`) | — |
+| B-2026-11-07-43 | 2026-11-07 | typecheck | low | Two obvious repairs have no machine fix: a function whose last statement is `a + b;` under `-> i64` (fix: drop the `;`), and `?` in a `fn main()` returning `()` (fix: `fn main() -> Result[(), AnyError]` with `Ok(())`); the second's message also names no remedy | — |
+| B-2026-11-07-44 | 2026-11-07 | cli | low | `karac fmt` moves comments off the item they annotate: a `// first` after a parameter lands after the fn's `{` (where it reads as a comment on the body), a `/* second */` after a parameter moves into the body, and a `// one` after a call argument goes to the end of the statement; design.md § Canonical formatting says comments travel with their item | — |
+| B-2026-11-07-45 | 2026-11-07 | cli | low | kara-lsp go-to-definition returns null on a method call (`u.greet()`), a field access (`u.age`, `self.name`) and a library call (`xs.iter()`), and hover returns null on a `let` binding's own name; definition works only for names the resolver binds (locals, params, free functions, types) | — |
+| B-2026-11-07-46 | 2026-11-07 | cli | low | kara-lsp diagnostics carry the phase (`ownership`, `typecheck`) as the LSP `code` instead of the diagnostic code (`E0500`), and drop the help line, so an editor user sees `value 'u' moved here, used again here` with no remedy and no code to `karac explain` | — |
+| B-2026-11-07-47 | 2026-11-07 | typecheck | low | `karac explain E0517` prints the TYPE_MISMATCH class text ("Operand, argument, or return-value type doesn't match ...") for the write-through-a-borrowed-parameter error, because E0517 is classed TYPE_MISMATCH in JSON too; and 8 codes a newcomer hits print no explanation at all (E0001, E0002, E0205, E0254, E0506, E0509, E0510, E_NOT_CROSS_TASK) | — |
+| B-2026-11-07-48 | 2026-11-07 | cli | medium | The v0.8.0 Linux release binaries need glibc 2.39 (karac, karac_jit_runner and kara-lsp import pidfd_spawnp/pidfd_getpid@GLIBC_2.39 and __isoc23_strtol@GLIBC_2.38), so they cannot start on Ubuntu 22.04, Debian 12, RHEL 9 or Amazon Linux 2023; the release is built on ubuntu-24.04 and neither the README nor the tarball's README states the floor | — |
+| B-2026-11-07-49 | 2026-11-07 | cli | low | README.md's Install section still says prebuilt binaries "arrive with the 0.8.0 beta. Until then, build from source" although v0.8.0 shipped tarballs on 11-01; it gives no download, sha256 or PATH steps and no link to the release page | — |
+| B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
+| B-2026-11-07-51 | 2026-11-07 | typecheck | medium | `match (self, other)` in a `ref self` (or `mut ref self`) method is refused as "cannot move a non-`Copy` value out of a borrowed place", though the same match over two borrowed parameters (`fn f(a: ref V, b: ref V) { match (a, b) { .. } }`) is accepted | — |
+| B-2026-11-07-52 | 2026-11-07 | typecheck | low | `impl Ord for T` with no `impl PartialOrd for T` is refused ("impl Ord for Value requires impl PartialOrd for Value") with no `karac fix` edit, though the missing impl is mechanical: `partial_cmp` returns `Some(self.cmp(other))` | — |
+| B-2026-11-07-53 | 2026-11-07 | resolve | low | `Dict[String, i64]` / `Dict.new()` (Python's `typing.Dict`) is "undefined type 'Dict', did you mean 'Div'?"; `HashMap`, `BTreeMap` and `HashSet` already name their Kāra collections | — |
+| B-2026-11-07-54 | 2026-11-07 | typecheck | low | `opt == Some("")` with `opt: Option[Str]` is refused ("cannot compare 'Option[Str]' and 'Option[String]'") though `let a: Option[Str] = Some("")` is accepted; `lines.last() == Some("")` over a `Vec[Str]` (and `v.last() == Some("x")` over a `Vec[String]`) is refused with no hint, and the forms the i64 hint names do not compile for a literal | — |
 
 ### Relocated
 

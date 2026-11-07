@@ -1,0 +1,196 @@
+== script (4 workers)
+> input harbor input/harbor.txt
+  harbor: 1 file, 160 lines
+> input orchard input/orchard.txt
+  orchard: 1 file, 90 lines
+> input both input/harbor.txt input/orchard.txt
+  both: 2 files, 250 lines
+> input none input/empty.txt
+  none: 1 file, 0 lines
+> input lost input/missing.txt
+  error: script.txt:6: cannot read input/missing.txt
+> input harbor input/orchard.txt
+  error: script.txt:7: input harbor already exists
+> input Bad input/harbor.txt
+  error: script.txt:8: bad name 'Bad'
+> job wc words|sum|sum
+  wc: 1 step
+> job wc_plain words|sum
+  wc_plain: 1 step
+> job top words|sum|sum pack|top3
+  top: 2 steps
+> job letters words|sum|sum first_letter|sum
+  letters: 2 steps
+> job idx index|collect
+  idx: 1 step
+> job lens lengths|count
+  lens: 1 step
+> job pairs bigrams|sum|sum pack|top3
+  pairs: 2 steps
+> job widest lengths|sum|sum total|max
+  widest: 2 steps
+> job bad_sum index|sum
+  bad_sum: 1 step
+> job bad_pack pack|top3
+  bad_pack: 1 step
+> job bad_first lengths|count first_letter|sum
+  bad_first: 2 steps
+> job typo words|summ
+  error: script.txt:22: unknown reducer 'summ'
+> job nocombine words|count|sum
+  error: script.txt:23: bad combiner 'count': only sum and max can combine
+> job wc words|sum
+  error: script.txt:24: job wc already exists
+> run wc harbor
+  run wc on harbor (maps 4, reduces 3)
+  step 1 words|sum|sum: map 160 in, 2340 out, 196 combined; reduce [72, 60, 64] in, 49 out
+  output: 49 records
+    "a"	196
+    "basket"	28
+    "bridge"	32
+    "bright"	45
+    "carries"	18
+    "engine"	38
+    "follows"	28
+    "green"	42
+    "heavy"	37
+    "in"	36
+    ... 39 more
+> run wc harbor maps=1 reduces=1
+  run wc on harbor (maps 1, reduces 1)
+  step 1 words|sum|sum: map 160 in, 2340 out, 49 combined; reduce [49] in, 49 out
+  output: 49 records
+    "a"	196
+    "anchor"	44
+    "and"	145
+    "basket"	28
+    "bridge"	32
+    "bright"	45
+    "by"	53
+    "carries"	18
+    "counts"	35
+    "early"	44
+    ... 39 more
+> run wc_plain harbor maps=7 reduces=5
+  run wc_plain on harbor (maps 7, reduces 5)
+  step 1 words|sum: map 160 in, 2340 out; reduce [516, 155, 467, 219, 983] in, 49 out
+  output: 49 records
+    "bridge"	32
+    "bright"	45
+    "by"	53
+    "early"	44
+    "finds"	26
+    "guards"	34
+    "lantern"	45
+    "ledger"	44
+    "market"	40
+    "mends"	19
+    ... 39 more
+> run top both maps=5 reduces=2
+  run top on both (maps 5, reduces 2)
+  step 1 words|sum|sum: map 250 in, 3714 out, 245 combined; reduce [145, 100] in, 49 out
+  step 2 pack|top3: map 49 in, 49 out; reduce [49, 0] in, 1 out
+  output: 1 record
+    "all"	[[496,"the"],[329,"a"],[231,"and"]]
+> run letters orchard show=26
+  run letters on orchard (maps 4, reduces 3)
+  step 1 words|sum|sum: map 90 in, 1374 out, 196 combined; reduce [72, 60, 64] in, 49 out
+  step 2 first_letter|sum: map 49 in, 49 out; reduce [19, 9, 21] in, 20 out
+  output: 20 records
+    "a"	244
+    "b"	102
+    "g"	60
+    "i"	30
+    "k"	37
+    "m"	83
+    "s"	51
+    "e"	40
+    "h"	60
+    "o"	86
+    "c"	27
+    "f"	65
+    "l"	67
+    "n"	26
+    "p"	15
+    "q"	39
+    "r"	23
+    "t"	245
+    "v"	25
+    "w"	49
+> run idx orchard maps=3 reduces=4 show=2
+  run idx on orchard (maps 3, reduces 4)
+  step 1 index|collect: map 90 in, 1374 out; reduce [317, 205, 682, 170] in, 49 out
+  output: 49 records
+    "and"	["orchard:1","orchard:10","orchard:11","orchard:12","orchard:13","orchard:14","orchard:15","orchard:16","orchard:17","orchard:18","orchard:19","orchard:20","orchard:21","orchard:23","orchard:24","orchard:25","orchard:26","orchard:29","orchard:3","orchard:30","orchard:31","orchard:32","orchard:33","orchard:34","orchard:35","orchard:36","orchard:37","orchard:38","orchard:39","orchard:4","orchard:40","orchard:41","orchard:45","orchard:46","orchard:47","orchard:48","orchard:49","orchard:5","orchard:50","orchard:51","orchard:52","orchard:55","orchard:59","orchard:60","orchard:62","orchard:63","orchard:64","orchard:66","orchard:67","orchard:68","orchard:69","orchard:7","orchard:70","orchard:72","orchard:73","orchard:75","orchard:76","orchard:78","orchard:8","orchard:82","orchard:84","orchard:86","orchard:88","orchard:90"]
+    "far"	["orchard:18","orchard:23","orchard:24","orchard:25","orchard:26","orchard:27","orchard:28","orchard:31","orchard:32","orchard:33","orchard:34","orchard:35","orchard:4","orchard:45","orchard:59","orchard:61","orchard:64","orchard:66","orchard:76","orchard:85","orchard:88"]
+    ... 47 more
+> run lens both maps=2 reduces=3 show=20
+  run lens on both (maps 2, reduces 3)
+  step 1 lengths|count: map 250 in, 3714 out; reduce [212, 734, 2768] in, 7 out
+  output: 7 records
+    7	212
+    1	329
+    2	294
+    4	111
+    3	863
+    5	721
+    6	1184
+> run pairs harbor reduces=1
+  run pairs on harbor (maps 4, reduces 1)
+  step 1 bigrams|sum|sum: map 160 in, 2180 out, 1302 combined; reduce [1302] in, 646 out
+  step 2 pack|top3: map 646 in, 646 out; reduce [646] in, 1 out
+  output: 1 record
+    "all"	[[105,"and the"],[32,"the small"],[30,"the narrow"]]
+> run widest both
+  run widest on both (maps 4, reduces 3)
+  step 1 lengths|sum|sum: map 250 in, 3714 out, 28 combined; reduce [4, 12, 12] in, 7 out
+  step 2 total|max: map 7 in, 7 out; reduce [0, 7, 0] in, 1 out
+  output: 1 record
+    "total"	1184
+> run wc none
+  run wc on none (maps 4, reduces 3)
+  step 1 words|sum|sum: map 0 in, 0 out, 0 combined; reduce [0, 0, 0] in, 0 out
+  output: 0 records
+> run top none
+  run top on none (maps 4, reduces 3)
+  step 1 words|sum|sum: map 0 in, 0 out, 0 combined; reduce [0, 0, 0] in, 0 out
+  step 2 pack|top3: map 0 in, 0 out; reduce [0, 0, 0] in, 0 out
+  output: 0 records
+> run bad_sum harbor
+  run bad_sum on harbor (maps 4, reduces 3)
+  step 1 index|sum: failed in reduce task 0: TypeError: sum expects ints, got text
+> run bad_pack harbor
+  run bad_pack on harbor (maps 4, reduces 3)
+  step 1 pack|top3: failed in map task 0: TypeError: pack expects a pair, got a line
+> run bad_first orchard maps=3
+  run bad_first on orchard (maps 3, reduces 3)
+  step 1 lengths|count: map 90 in, 1374 out; reduce [83, 284, 1007] in, 7 out
+  step 2 first_letter|sum: failed in map task 0: TypeError: first_letter expects a text key, got an int
+> run nojob harbor
+  error: script.txt:41: no job 'nojob'
+> run wc nowhere
+  error: script.txt:42: no input 'nowhere'
+> run wc harbor maps=0
+  error: script.txt:43: bad value for maps: '0'
+> run wc harbor reduces=x
+  error: script.txt:44: bad value for reduces: 'x'
+> run wc harbor speed=9
+  error: script.txt:45: unknown option 'speed=9'
+> run wc
+  error: script.txt:46: usage: run <job> <input> [maps=<n>] [reduces=<n>] [show=<n>]
+> jobs
+  bad_first: lengths|count first_letter|sum (1 run)
+  bad_pack: pack|top3 (1 run)
+  bad_sum: index|sum (1 run)
+  idx: index|collect (1 run)
+  lens: lengths|count (1 run)
+  letters: words|sum|sum first_letter|sum (1 run)
+  pairs: bigrams|sum|sum pack|top3 (1 run)
+  top: words|sum|sum pack|top3 (2 runs)
+  wc: words|sum|sum (3 runs)
+  wc_plain: words|sum (1 run)
+  widest: lengths|sum|sum total|max (1 run)
+== end
+  4 inputs, 11 jobs
+  4 workers: 126 tasks, 16647 records in, 10 failed
+  by kind: map 77, reduce 49

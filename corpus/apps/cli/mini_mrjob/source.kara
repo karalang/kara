@@ -1,0 +1,1240 @@
+// mini_mrjob: MapReduce jobs in the shape of mrjob's. A job is a list of
+// steps, each a mapper, an optional combiner and a reducer. A run splits
+// the step's input into map tasks, combines each task's pairs, partitions
+// them by a hash of the key, sorts each partition and reduces it, and the
+// next step reads what the last one wrote. The tasks of each stage go to a
+// pool of worker tasks that share one channel behind a mutex and count what
+// they do in atomics and a locked table.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+import std.sync.{channel, Sender, Receiver, Mutex, Atomic};
+
+const WORKERS: i64 = 4;
+const CAPACITY: i64 = 64;
+
+// ------------------------------------------------------------ tokens
+
+fn is_name(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b.len() <= 32 and b[0] >= b'a' and b[0] <= b'z'
+        and b.iter().all(|c| (c >= b'a' and c <= b'z') or (c >= b'0' and c <= b'9') or c == b'_')
+}
+
+// An i64 written as an optional `-` and 1 to 9 digits.
+fn number(s: Str) -> Option[i64] {
+    let d = s.strip_prefix("-") ?? s;
+    if d.len() == 0 or d.len() > 9 or not d.bytes().iter().all(|c| c >= b'0' and c <= b'9') {
+        return None;
+    }
+    i64.parse(s).ok()
+}
+
+fn words(line: Str) -> Vec[String] {
+    let body = match line.split_once("#") {
+        Some((before, _)) => before,
+        None => line,
+    };
+    body.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+fn joined(parts: Slice[String], sep: Str) -> String {
+    let mut out = String.new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+    }
+    out
+}
+
+fn plural(n: i64, word: Str) -> String {
+    if n == 1 { f"{n} {word}" } else { f"{n} {word}s" }
+}
+
+// The runs of ASCII letters in a line, lowercased.
+fn tokens(text: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in text.chars() {
+        let c = c.to_ascii_lowercase();
+        if c >= 'a' and c <= 'z' {
+            cur.push(c);
+        } else if not cur.is_empty() {
+            out.push(cur);
+            cur = String.new();
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// ------------------------------------------------------------ values
+
+#[derive(Clone, PartialEq, Eq)]
+enum Value {
+    Int(i64),
+    Text(String),
+    List(Vec[Value]),
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(ref self, other: ref Value) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Value {
+    fn cmp(ref self, other: ref Value) -> Ordering {
+        match (self, other) {
+            (Value.Int(a), Value.Int(b)) => a.cmp(b),
+            (Value.Text(a), Value.Text(b)) => a.cmp(b),
+            (Value.List(a), Value.List(b)) => {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    let o = x.cmp(y);
+                    if not o.is_eq() {
+                        return o;
+                    }
+                }
+                a.len().cmp(b.len())
+            }
+            _ => rank(self).cmp(rank(other)),
+        }
+    }
+}
+
+fn rank(v: ref Value) -> i64 {
+    match v {
+        Value.Int(_) => 0,
+        Value.Text(_) => 1,
+        Value.List(_) => 2,
+    }
+}
+
+fn kind(v: ref Value) -> Str {
+    match v {
+        Value.Int(_) => "an int",
+        Value.Text(_) => "text",
+        Value.List(_) => "a list",
+    }
+}
+
+fn json(v: ref Value) -> String {
+    match v {
+        Value.Int(n) => n.to_string(),
+        Value.Text(s) => {
+            let mut out = String.from("\"");
+            for c in s.chars() {
+                if c == '"' or c == '\\' {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            out.push('"');
+            out
+        }
+        Value.List(items) => {
+            let parts: Vec[String] = items.iter().map(|x| json(x)).collect();
+            f"[{joined(parts, ",")}]"
+        }
+    }
+}
+
+// FNV-1a, 32 bits, over the key's JSON text.
+fn fnv(s: Str) -> i64 {
+    let mut h: i64 = 2166136261;
+    for b in s.bytes() {
+        h = h ^ b;
+        h = (h * 16777619) % 4294967296;
+    }
+    h
+}
+
+// ------------------------------------------------------------ steps
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mapper { Words, Bigrams, Lengths, Index, Pack, FirstLetter, Total }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Reducer { Sum, Max, Count, Collect, Top3 }
+
+fn mapper_of(name: Str) -> Option[Mapper] {
+    match name {
+        "words" => Some(Mapper.Words),
+        "bigrams" => Some(Mapper.Bigrams),
+        "lengths" => Some(Mapper.Lengths),
+        "index" => Some(Mapper.Index),
+        "pack" => Some(Mapper.Pack),
+        "first_letter" => Some(Mapper.FirstLetter),
+        "total" => Some(Mapper.Total),
+        _ => None,
+    }
+}
+
+fn mapper_name(m: Mapper) -> Str {
+    match m {
+        Mapper.Words => "words",
+        Mapper.Bigrams => "bigrams",
+        Mapper.Lengths => "lengths",
+        Mapper.Index => "index",
+        Mapper.Pack => "pack",
+        Mapper.FirstLetter => "first_letter",
+        Mapper.Total => "total",
+    }
+}
+
+fn reducer_of(name: Str) -> Option[Reducer] {
+    match name {
+        "sum" => Some(Reducer.Sum),
+        "max" => Some(Reducer.Max),
+        "count" => Some(Reducer.Count),
+        "collect" => Some(Reducer.Collect),
+        "top3" => Some(Reducer.Top3),
+        _ => None,
+    }
+}
+
+fn reducer_name(r: Reducer) -> Str {
+    match r {
+        Reducer.Sum => "sum",
+        Reducer.Max => "max",
+        Reducer.Count => "count",
+        Reducer.Collect => "collect",
+        Reducer.Top3 => "top3",
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Step {
+    mapper: Mapper,
+    combiner: Option[Reducer],
+    reducer: Reducer,
+}
+
+fn step_name(s: Step) -> String {
+    match s.combiner {
+        Some(c) => f"{mapper_name(s.mapper)}|{reducer_name(c)}|{reducer_name(s.reducer)}",
+        None => f"{mapper_name(s.mapper)}|{reducer_name(s.reducer)}",
+    }
+}
+
+// A record a mapper reads: a line of an input file, or a pair a step wrote.
+#[derive(Clone)]
+enum Rec {
+    Line(String, i64, String),
+    Pair(Value, Value),
+}
+
+fn stem(path: Str) -> Str {
+    let name = match path.rsplit_once("/") {
+        Some((_, n)) => n,
+        None => path,
+    };
+    match name.rsplit_once(".") {
+        Some((s, _)) => s,
+        None => name,
+    }
+}
+
+fn map_one(m: Mapper, rec: ref Rec, out: mut ref Vec[(Value, Value)]) -> Result[(), String] {
+    match rec {
+        Rec.Line(path, no, text) => {
+            let ws = tokens(text);
+            match m {
+                Mapper.Words => {
+                    for w in ws.into_iter() {
+                        out.push((Value.Text(w), Value.Int(1)));
+                    }
+                }
+                Mapper.Bigrams => {
+                    for i in 1..ws.len() {
+                        out.push((Value.Text(f"{ws[i - 1]} {ws[i]}"), Value.Int(1)));
+                    }
+                }
+                Mapper.Lengths => {
+                    for w in ws.iter() {
+                        out.push((Value.Int(w.len()), Value.Int(1)));
+                    }
+                }
+                Mapper.Index => {
+                    let at = f"{stem(path)}:{no}";
+                    for w in ws.into_iter() {
+                        out.push((Value.Text(w), Value.Text(at.clone())));
+                    }
+                }
+                _ => return Err(f"TypeError: {mapper_name(m)} expects a pair, got a line"),
+            }
+        }
+        Rec.Pair(k, v) => match m {
+            Mapper.Pack => out.push((Value.Text("all"), Value.List([v.clone(), k.clone()]))),
+            Mapper.Total => out.push((Value.Text("total"), v.clone())),
+            Mapper.FirstLetter => match k {
+                Value.Text(s) => {
+                    let first: String = s.chars().take(1).collect();
+                    out.push((Value.Text(first), v.clone()));
+                }
+                other => return Err(f"TypeError: first_letter expects a text key, got {kind(other)}"),
+            },
+            _ => return Err(f"TypeError: {mapper_name(m)} expects a line, got a pair"),
+        },
+    }
+    Ok(())
+}
+
+fn reduce_one(r: Reducer, vals: own Vec[Value]) -> Result[Value, String] {
+    match r {
+        Reducer.Sum | Reducer.Max => {
+            let mut ints: Vec[i64] = Vec.new();
+            for v in vals.iter() {
+                match v {
+                    Value.Int(n) => ints.push(n),
+                    other => return Err(f"TypeError: {reducer_name(r)} expects ints, got {kind(other)}"),
+                }
+            }
+            if r == Reducer.Max {
+                return Ok(Value.Int(ints.iter().max() ?? 0));
+            }
+            let mut total: i64 = 0;
+            for n in ints.iter() {
+                total = total.checked_add(*n).ok_or("OverflowError: sum does not fit in 64 bits")?;
+            }
+            Ok(Value.Int(total))
+        }
+        Reducer.Count => Ok(Value.Int(vals.len())),
+        Reducer.Collect => {
+            let mut s = vals;
+            s.sort();
+            s.dedup();
+            Ok(Value.List(s))
+        }
+        Reducer.Top3 => {
+            let mut s = vals;
+            s.sort_by(|a, b| b.cmp(a));
+            s.truncate(3);
+            Ok(Value.List(s))
+        }
+    }
+}
+
+// Sorts pairs by key, keeping their order within a key, and reduces each
+// key's values.
+fn reduce_all(r: Reducer, pairs: own Vec[(Value, Value)]) -> Result[Vec[(Value, Value)], String] {
+    let mut pairs = pairs;
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out: Vec[(Value, Value)] = Vec.new();
+    let mut key: Option[Value] = None;
+    let mut vals: Vec[Value] = Vec.new();
+    for (k, v) in pairs.into_iter() {
+        if let Some(cur) = key {
+            if cur == k {
+                vals.push(v);
+                key = Some(cur);
+                continue;
+            }
+            out.push((cur, reduce_one(r, vals)?));
+            vals = Vec.new();
+        }
+        key = Some(k);
+        vals.push(v);
+    }
+    if let Some(cur) = key {
+        out.push((cur, reduce_one(r, vals)?));
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the pool
+
+enum Work {
+    Map(Vec[Rec]),
+    Reduce(Vec[(Value, Value)]),
+}
+
+struct Task {
+    slot: i64,
+    step: Step,
+    reduces: i64,
+    work: Work,
+}
+
+// A map task's pairs after its combiner, by partition, and how many the
+// mapper wrote; a reduce task's output is its one partition.
+struct Out {
+    emitted: i64,
+    parts: Vec[Vec[(Value, Value)]],
+}
+
+struct Done {
+    slot: i64,
+    result: Result[Out, String],
+}
+
+sync struct Pool {
+    inbox: Mutex[Receiver[Task]],
+    tasks: Atomic[i64],
+    records: Atomic[i64],
+    failed: Atomic[i64],
+    by_kind: Mutex[SortedMap[String, i64]],
+}
+
+fn map_task(step: Step, reduces: i64, recs: ref Vec[Rec]) -> Result[Out, String] {
+    let mut pairs: Vec[(Value, Value)] = Vec.new();
+    for rec in recs.iter() {
+        map_one(step.mapper, rec, mut pairs)?;
+    }
+    let emitted = pairs.len();
+    if let Some(c) = step.combiner {
+        pairs = reduce_all(c, pairs)?;
+    }
+    let mut parts: Vec[Vec[(Value, Value)]] = Vec.new();
+    for _ in 0..reduces {
+        parts.push(Vec.new());
+    }
+    for (k, v) in pairs.into_iter() {
+        let p = fnv(json(k)) % reduces;
+        parts[p].push((k, v));
+    }
+    Ok(Out { emitted: emitted, parts: parts })
+}
+
+fn perform(pool: Pool, task: own Task) -> Result[Out, String] {
+    let (name, n, result) = match task.work {
+        Work.Map(recs) => ("map", recs.len(), map_task(task.step, task.reduces, recs)),
+        Work.Reduce(pairs) => {
+            let n = pairs.len();
+            let result = reduce_all(task.step.reducer, pairs).map(|out| Out { emitted: n, parts: [out] });
+            ("reduce", n, result)
+        }
+    };
+    pool.tasks.fetch_add(1);
+    pool.records.fetch_add(n);
+    if result.is_err() {
+        pool.failed.fetch_add(1);
+    }
+    {
+        let g = pool.by_kind.lock();
+        let had = g.value.get(name) ?? 0;
+        g.value.insert(name.to_string(), had + 1);
+    }
+    result
+}
+
+fn worker(pool: Pool, out: own Sender[Done]) {
+    loop {
+        let next = {
+            let g = pool.inbox.lock();
+            g.value.recv()
+        };
+        let Some(task) = next else {
+            return;
+        };
+        let slot = task.slot;
+        let result = perform(pool, task);
+        if out.send(Done { slot: slot, result: result }).is_err() {
+            return;
+        }
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+struct Opts {
+    maps: i64,
+    reduces: i64,
+    show: i64,
+}
+
+struct Mr {
+    inputs: Map[String, Vec[Rec]],
+    jobs: SortedMap[String, Vec[Step]],
+    runs: Map[String, i64],
+    to_workers: Sender[Task],
+    from_workers: Receiver[Done],
+}
+
+// Contiguous chunks, the first `n % k` one record longer.
+fn chunks(recs: ref Vec[Rec], k: i64) -> Vec[Vec[Rec]] {
+    let base = recs.len() / k;
+    let extra = recs.len() % k;
+    let mut out: Vec[Vec[Rec]] = Vec.new();
+    let mut at = 0;
+    for i in 0..k {
+        let size = if i < extra { base + 1 } else { base };
+        out.push(recs[at..at + size].to_vec());
+        at += size;
+    }
+    out
+}
+
+impl Mr {
+    fn new(to_workers: own Sender[Task], from_workers: own Receiver[Done]) -> Mr {
+        Mr {
+            inputs: Map.new(),
+            jobs: SortedMap.new(),
+            runs: Map.new(),
+            to_workers: to_workers,
+            from_workers: from_workers,
+        }
+    }
+
+    // Hands the stage's tasks to the workers and puts each result in its
+    // slot, whatever order they finish in.
+    fn stage(ref self, step: Step, reduces: i64, works: own Vec[Work]) -> Result[Vec[Result[Out, String]], String] {
+        let n = works.len();
+        for (i, work) in works.into_iter().enumerate() {
+            let task = Task { slot: i, step: step, reduces: reduces, work: work };
+            self.to_workers.send(task).map_err(|_| "the workers are gone")?;
+        }
+        let mut slots: Vec[Option[Result[Out, String]]] = Vec.new();
+        for _ in 0..n {
+            slots.push(None);
+        }
+        for _ in 0..n {
+            let Some(done) = self.from_workers.recv() else {
+                return Err("the workers are gone".to_string());
+            };
+            slots[done.slot] = Some(done.result);
+        }
+        Ok(slots.into_iter().map(|s| s.unwrap()).collect())
+    }
+
+    fn run(mut ref self, job: Str, input: Str, o: Opts) -> Result[(), String] {
+        self.runs[job.to_string()] += 1;
+        println(f"  run {job} on {input} (maps {o.maps}, reduces {o.reduces})");
+        let steps = self.jobs[job].clone();
+        let mut recs = self.inputs[input].clone();
+        for (si, step) in steps.iter().enumerate() {
+            let head = f"  step {si + 1} {step_name(*step)}";
+            let n_in = recs.len();
+            let works: Vec[Work] = chunks(recs, o.maps).into_iter().map(|c| Work.Map(c)).collect();
+            let mut emitted = 0;
+            let mut ins: Vec[Vec[(Value, Value)]] = Vec.new();
+            for _ in 0..o.reduces {
+                ins.push(Vec.new());
+            }
+            for (i, r) in self.stage(*step, o.reduces, works)?.into_iter().enumerate() {
+                match r {
+                    Ok(out) => {
+                        emitted += out.emitted;
+                        for (p, part) in out.parts.into_iter().enumerate() {
+                            ins[p].extend(part);
+                        }
+                    }
+                    Err(e) => {
+                        println(f"{head}: failed in map task {i}: {e}");
+                        return Ok(());
+                    }
+                }
+            }
+            let combined: i64 = ins.iter().map(|p| p.len()).sum();
+            let sizes: Vec[String] = ins.iter().map(|p| p.len().to_string()).collect();
+            let works: Vec[Work] = ins.into_iter().map(|p| Work.Reduce(p)).collect();
+            let mut out: Vec[(Value, Value)] = Vec.new();
+            for (i, r) in self.stage(*step, o.reduces, works)?.into_iter().enumerate() {
+                match r {
+                    Ok(done) => {
+                        for part in done.parts.into_iter() {
+                            out.extend(part);
+                        }
+                    }
+                    Err(e) => {
+                        println(f"{head}: failed in reduce task {i}: {e}");
+                        return Ok(());
+                    }
+                }
+            }
+            let comb = if step.combiner.is_some() { f", {combined} combined" } else { String.new() };
+            println(f"{head}: map {n_in} in, {emitted} out{comb}; reduce [{joined(sizes, ", ")}] in, {out.len()} out");
+            recs = out.into_iter().map(|(k, v)| Rec.Pair(k, v)).collect();
+        }
+        println(f"  output: {plural(recs.len(), "record")}");
+        for rec in recs.iter().take(o.show) {
+            if let Rec.Pair(k, v) = rec {
+                println(f"    {json(k)}\t{json(v)}");
+            }
+        }
+        if recs.len() > o.show {
+            println(f"    ... {recs.len() - o.show} more");
+        }
+        Ok(())
+    }
+
+    fn input(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        if w.len() < 3 {
+            return Err("usage: input <name> <path>...".to_string());
+        }
+        let name = w[1].clone();
+        if not is_name(name) {
+            return Err(f"bad name '{name}'");
+        }
+        if self.inputs.contains_key(name) {
+            return Err(f"input {name} already exists");
+        }
+        let mut recs: Vec[Rec] = Vec.new();
+        for path in w[2..].iter() {
+            let text = fs.read_to_string(f"data/{path}").map_err(|_| f"cannot read {path}")?;
+            let mut lines: Vec[Str] = text.split("\n").collect();
+            if lines.last().is_some_and(|l| l.is_empty()) {
+                lines.pop();
+            }
+            for (i, line) in lines.iter().enumerate() {
+                recs.push(Rec.Line(path.clone(), i + 1, line.to_string()));
+            }
+        }
+        println(f"  {name}: {plural(w.len() - 2, "file")}, {recs.len()} lines");
+        self.inputs.insert(name, recs);
+        Ok(())
+    }
+
+    fn job(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        if w.len() < 3 {
+            return Err("usage: job <name> <step>...".to_string());
+        }
+        let name = w[1].clone();
+        if not is_name(name) {
+            return Err(f"bad name '{name}'");
+        }
+        if self.jobs.contains_key(name) {
+            return Err(f"job {name} already exists");
+        }
+        let mut steps: Vec[Step] = Vec.new();
+        for s in w[2..].iter() {
+            let parts: Vec[Str] = s.split("|").collect();
+            if parts.len() != 2 and parts.len() != 3 {
+                return Err(f"bad step '{s}': want mapper|reducer or mapper|combiner|reducer");
+            }
+            let mapper = mapper_of(parts[0]).ok_or(f"unknown mapper '{parts[0]}'")?;
+            let mut combiner: Option[Reducer] = None;
+            if parts.len() == 3 {
+                let c = reducer_of(parts[1]);
+                if c != Some(Reducer.Sum) and c != Some(Reducer.Max) {
+                    return Err(f"bad combiner '{parts[1]}': only sum and max can combine");
+                }
+                combiner = c;
+            }
+            let last = parts[parts.len() - 1];
+            let reducer = reducer_of(last).ok_or(f"unknown reducer '{last}'")?;
+            steps.push(Step { mapper: mapper, combiner: combiner, reducer: reducer });
+        }
+        println(f"  {name}: {plural(steps.len(), "step")}");
+        self.runs.insert(name.clone(), 0);
+        self.jobs.insert(name, steps);
+        Ok(())
+    }
+
+    fn start(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        if w.len() < 3 {
+            return Err("usage: run <job> <input> [maps=<n>] [reduces=<n>] [show=<n>]".to_string());
+        }
+        let job = w[1].clone();
+        let input = w[2].clone();
+        if not self.jobs.contains_key(job) {
+            return Err(f"no job '{job}'");
+        }
+        if not self.inputs.contains_key(input) {
+            return Err(f"no input '{input}'");
+        }
+        let mut given: Map[String, i64] = Map.new();
+        for o in w[3..].iter() {
+            let Some((k, v)) = o.split_once("=") else {
+                return Err(f"unknown option '{o}'");
+            };
+            if k != "maps" and k != "reduces" and k != "show" {
+                return Err(f"unknown option '{o}'");
+            }
+            if given.contains_key(k) {
+                return Err(f"option {k} given twice");
+            }
+            let (lo, hi) = if k == "show" { (0, 1000) } else { (1, 64) };
+            let n = number(v).filter(|n| *n >= lo and *n <= hi).ok_or(f"bad value for {k}: '{v}'")?;
+            given.insert(k.to_string(), n);
+        }
+        let opts = Opts {
+            maps: given.get("maps") ?? 4,
+            reduces: given.get("reduces") ?? 3,
+            show: given.get("show") ?? 10,
+        };
+        self.run(job, input, opts)
+    }
+
+    fn list(ref self) {
+        for (name, steps) in self.jobs.iter() {
+            let names: Vec[String] = steps.iter().map(|s| step_name(*s)).collect();
+            let runs = self.runs.get(name) ?? 0;
+            println(f"  {name}: {joined(names, " ")} ({plural(runs, "run")})");
+        }
+    }
+
+    fn command(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        match w[0].as_str() {
+            "input" => self.input(w),
+            "job" => self.job(w),
+            "run" => self.start(w),
+            "jobs" => {
+                if w.len() != 1 {
+                    return Err("usage: jobs".to_string());
+                }
+                self.list();
+                Ok(())
+            }
+            other => Err(f"unknown command '{other}'"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn play(text: Str, to_workers: own Sender[Task], from_workers: own Receiver[Done]) {
+    let mut mr = Mr.new(to_workers, from_workers);
+    println(f"== script ({WORKERS} workers)");
+    for (i, line) in text.split("\n").enumerate() {
+        let w = words(line);
+        if w.is_empty() {
+            continue;
+        }
+        println(f"> {joined(w, " ")}");
+        if let Err(e) = mr.command(w) {
+            println(f"  error: script.txt:{i + 1}: {e}");
+        }
+    }
+    println("== end");
+    println(f"  {mr.inputs.len()} inputs, {mr.jobs.len()} jobs");
+}   // mr drops here, which closes the workers' channel
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/input").map_err(|e| f"cannot create data/input: {e}")?;
+    write_data()?;
+    let text = fs.read_to_string("data/script.txt").map_err(|e| f"cannot read data/script.txt: {e}")?;
+    let (to_workers, inbox): (Sender[Task], Receiver[Task]) = channel(CAPACITY);
+    let (outbox, from_workers): (Sender[Done], Receiver[Done]) = channel(CAPACITY);
+    let pool = Pool {
+        inbox: Mutex.new(inbox),
+        tasks: Atomic.new(0),
+        records: Atomic.new(0),
+        failed: Atomic.new(0),
+        by_kind: Mutex.new(SortedMap.new()),
+    };
+    {
+        let workers = TaskGroup.new();
+        for _ in 0..WORKERS {
+            let out = outbox.clone();
+            workers.spawn(|| worker(pool, out));
+        }
+        play(text, to_workers, from_workers);
+    }   // every worker has seen the channel close; the group joins them
+    let kinds = {
+        let g = pool.by_kind.lock();
+        let parts: Vec[String] = g.value.iter().map(|(k, n)| f"{k} {n}").collect();
+        if parts.is_empty() { "none".to_string() } else { joined(parts, ", ") }
+    };
+    println(f"  {WORKERS} workers: {pool.tasks.load()} tasks, {pool.records.load()} records in, {pool.failed.load()} failed");
+    println(f"  by kind: {kinds}");
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/input/empty.txt", file_0())?;
+    put_bytes("data/input/harbor.txt", file_1())?;
+    put_bytes("data/input/orchard.txt", file_2())?;
+    put_bytes("data/script.txt", file_3())?;
+    Ok(())
+}
+
+// data/input/empty.txt
+fn file_0() -> String {
+    """
+
+"""
+}
+
+// data/input/harbor.txt
+fn file_1() -> String {
+    """
+546865206e6172726f7720746f7765722067756172647320746865206b6574746c6520616e642074686520677265656e
+206d6972726f723b2054686520686561767920656e67696e65206c6966747320746f206c616e7465726e20616e642074
+686520736d616c6c206c65646765722e2041207761726d206261736b65742066696e647320746f20686172626f722061
+6e642074686520666172206d6972726f722e0a54686520736d616c6c2077696e646f7720636f756e7473206f66206d69
+72726f72212041206f6c6420656e67696e652067756172647320746f206f7263686172642e2054686520677265656e20
+72697665722066696e6473206f6620686172626f722e0a54484520515549455420425249444745204b45455053205448
+45204f52434841524421204120425249474854204f52434841524420464f4c4c4f575320494e20414e43484f5220414e
+4420544845204845415659204d4541444f57210a412062726967687420746f7765722067756172647320627920676172
+64656e2e204120627269676874206d6972726f72206361727269657320616e6420686172626f723b0a41207175696574
+207369676e616c206f70656e73206f662062726964676520616e6420746865206561726c79206272696467653f204120
+6e6172726f77206c65646765722063617272696573206f6620746f7765722e2041206f6c6420616e63686f7220747572
+6e7320616e642071756172727920616e6420746865207175696574207369676e616c3f0a4120677265656e2077696e64
+6f77206b6565707320696e206f72636861726420616e642074686520736d616c6c206f7263686172642120546865206e
+6172726f772077696e646f7720636f756e747320627920686172626f722e0a544845205741524d204d4952524f522046
+4f4c4c4f5753204f4620414e43484f5221204120425249474854204c4544474552204f50454e532054484520414e4348
+4f5220414e4420544845205741524d204c414d502e0a546865206561726c7920616e63686f7220636172726965732061
+6e6420656e67696e6520616e6420746865207761726d206d6561646f77210a546865206f6c642071756172727920666f
+6c6c6f77732074686520746f7765723b0a412020475245454e2047415244454e204f50454e5320544845204252494447
+4521202d2d203135390a54686520677265656e206f72636861726420636f756e7473206f6620656e67696e652e0a5468
+652020677265656e206b6574746c65206c6966747320746f20746f7765722e2041206561726c79206c6564676572206b
+65657073206f66206d6561646f772e202d2d203731360a4120627269676874207269766572207061696e747320746865
+206c616e7465726e3b2054686520736d616c6c20726976657220666f6c6c6f7773206279206d6561646f773b0a546865
+20677265656e207369676e616c20666f6c6c6f7773206f66206d61726b65742e0a412062726967687420627269646765
+207061696e74732061206d61726b65742e2041206f6c64206b6574746c652066696e647320746f207175617272792061
+6e6420746865207761726d2077696e646f77212054686520627269676874206d61726b657420666f6c6c6f777320746f
+2077696e646f7720616e642074686520736d616c6c2077696e646f773b0a412068656176792071756172727920747572
+6e7320616e64206c616d703f2041206561726c79206d6561646f7720636f756e747320696e206c616e7465726e3b2054
+686520717569657420656e67696e65206361727269657320627920717561727279210a54686520666172206d6972726f
+72206b6565707320616e642067617264656e20616e642074686520677265656e206272696467652e2054686520677265
+656e206f726368617264207475726e7320696e20616e63686f72212041207175696574206d61726b6574206c69667473
+206279206c656467657220616e6420746865206f6c64207175617272793b0a41206272696768742077696e646f77206f
+70656e7320616e64206c616e7465726e2120546865206f6c64206d61726b6574206c6966747320696e20717561727279
+20616e6420746865206561726c79206d6972726f723f0a4120677265656e206c616e7465726e206c6966747320696e20
+746f77657220616e642074686520677265656e206d6972726f723b205468652071756965742077696e646f7720636172
+7269657320746865206c616e7465726e3b204120686561767920746f776572206b65657073206f66206d6561646f7720
+616e642074686520736d616c6c207369676e616c210a4120736d616c6c206b6574746c65206b6565707320616e642076
+616c6c657920616e6420746865207175696574206272696467653f0a4120206272696768742067617264656e20666f6c
+6c6f777320746865206f7263686172642120546865207761726d206d61726b65742067756172647320746f206f726368
+61726420616e6420746865206f6c64206c65646765722e2041206f6c6420726976657220677561726473206f66207175
+6172727920616e6420746865207761726d206c616d702e202d2d203636320a54686520206561726c792076616c6c6579
+206f70656e7320746865207175617272792e202d2d203133340a546865206561726c792071756172727920666f6c6c6f
+777320746f207175617272793b0a546865206561726c79206261736b657420636f756e74732061206d61726b65743b0a
+54686520736d616c6c206b6574746c6520636f756e7473206f662072697665722e204120677265656e206d6972726f72
+206f70656e7320746f20656e67696e65212054686520686561767920616e63686f722066696e647320746865206d6972
+726f722e0a4120666172206b6574746c65206d656e647320746f206f7263686172642e0a546865206661722062726964
+6765206b6565707320696e2067617264656e3f0a546865206e6172726f77206b6574746c652067756172647320612068
+6172626f7220616e64207468652068656176792077696e646f773b204120627269676874206d61726b657420686f6c64
+7320696e206c616e7465726e3b2041206561726c7920616e63686f72207475726e7320696e206c65646765722e0a5468
+65207761726d206d6561646f77206f70656e73206279206c616d7020616e642074686520677265656e206261736b6574
+3b2054686520686561767920686172626f7220686f6c6473206f662072697665723f2041207761726d20686172626f72
+20666f6c6c6f7773206f66206d6561646f7720616e6420746865206865617679206c616e7465726e3b0a41207761726d
+2077696e646f77206c69667473206120746f77657220616e6420746865206e6172726f77207369676e616c2e20412066
+61722062726964676520677561726473206f66207175617272792e204120736d616c6c206b6574746c65206c69667473
+2062792076616c6c65792e0a4120677265656e206261736b6574206c69667473206279206c616e7465726e20616e6420
+7468652066617220656e67696e652e0a41206561726c79206f726368617264206c69667473207468652067617264656e
+20616e642074686520736d616c6c20686172626f723f20546865206e6172726f7720656e67696e652067756172647320
+62792076616c6c65793f0a54686520206561726c79206d6972726f72206361727269657320616e64206f726368617264
+20616e6420746865207761726d206c616e7465726e212041206f6c64207369676e616c2066696e647320612071756172
+72793b2041206561726c7920686172626f7220636f756e74732061206f72636861726420616e642074686520736d616c
+6c20656e67696e6521202d2d203637300a546865206e6172726f7720627269646765206f70656e7320696e206b657474
+6c652e20546865206e6172726f77206261736b6574206c69667473206279206d6972726f7220616e6420746865207761
+726d206c616d703b0a546865207761726d2076616c6c6579206c6966747320616e64206b6574746c6520616e64207468
+65206865617679206d6972726f72210a41207761726d206c616e7465726e20686f6c64732074686520686172626f7221
+2041206f6c64206c616e7465726e206b656570732061207175617272793f204120677265656e206d6561646f77206f70
+656e7320696e2067617264656e20616e642074686520677265656e206c616d703b0a41206865617679206c6564676572
+206f70656e7320627920717561727279212054686520666172206d6561646f77206d656e64732061206261736b657420
+616e6420746865207175696574206d61726b65742e0a4120484541565920454e47494e45204341525249455320494e20
+4f5243484152442e20544845204541524c5920544f57455220434f554e545320544845204b4554544c4520414e442054
+484520464152204252494447453b0a4120627269676874206d6972726f72207061696e7473206279206d61726b657420
+616e6420746865206e6172726f7720686172626f722120546865206f6c64206c616d70206f70656e7320746865206f72
+636861726420616e6420746865207175696574206c65646765722e2054686520736d616c6c206d6561646f7720636172
+72696573206120656e67696e653f0a4120686561767920686172626f72207061696e747320696e206d6972726f723b20
+546865206f6c642077696e646f772066696e64732074686520686172626f723b0a546865206e6172726f77206c656467
+657220666f6c6c6f7773206f662067617264656e20616e642074686520627269676874206b6574746c653f2054686520
+736d616c6c20686172626f72206c696674732074686520616e63686f723b0a4120677265656e20616e63686f72206775
+6172647320696e20686172626f72210a546865207761726d206d6972726f72207475726e73206f66206b6574746c6521
+2041207761726d20746f776572206c6966747320616e64206f7263686172643f0a546865206561726c79206c65646765
+7220636f756e7473206f6620746f7765723f20546865206f6c64207269766572206f70656e7320616e64206b6574746c
+6520616e642074686520627269676874206d6972726f7221205468652066617220656e67696e65207061696e74732074
+6f206c65646765723f0a546865206561726c79206d6972726f722067756172647320746f2077696e646f773b20412071
+756965742076616c6c6579206c69667473206279206d6561646f772e2054686520627269676874207269766572207061
+696e747320627920686172626f72210a546865206661722077696e646f772066696e647320696e206d61726b65742e20
+41206e6172726f77206d61726b657420636172726965732062792072697665722e0a41207175696574206261736b6574
+206b6565707320746f2077696e646f773b2041206865617679206d6972726f72206d656e647320746f20686172626f72
+3f2041206865617679207369676e616c207061696e747320696e206c656467657220616e642074686520717569657420
+67617264656e210a41204541524c5920515541525259205455524e53204120414e43484f522120544845204f4c44204c
+414d5020484f4c44532041204d4952524f52210a54484520475245454e20484152424f52205041494e545320414e4420
+4d41524b45543b2041205155494554204d4541444f572046494e445320544845204f5243484152442e20544845205741
+524d20484152424f52204d454e445320425920454e47494e453b0a54686520736d616c6c206b6574746c65206f70656e
+73206279206d61726b657420616e6420746865206e6172726f772072697665722e205468652066617220746f77657220
+6d656e647320746865206c616d7020616e642074686520666172206c65646765723b0a41206865617679206d61726b65
+74206f70656e7320746865206d61726b657420616e6420746865206e6172726f7720686172626f722e20546865206f6c
+642067617264656e20686f6c647320746f206d6972726f7220616e642074686520736d616c6c206c65646765723f2054
+686520686561767920717561727279206775617264732074686520656e67696e6520616e642074686520677265656e20
+6d6972726f72210a54484520204e4152524f5720425249444745205041494e545320494e2047415244454e2e20544845
+20534d414c4c204d41524b45542046494e44532041204d41524b45543f202d2d203338330a546865206f6c6420626173
+6b657420636f756e747320696e20656e67696e653f205468652068656176792072697665722067756172647320627920
+6c616d7020616e642074686520627269676874206c6564676572210a41206272696768742077696e646f7720686f6c64
+732061206b6574746c652e2041206e6172726f77206261736b657420636f756e747320746f20616e63686f7221204120
+736d616c6c2077696e646f7720636f756e7473206f662076616c6c65793f0a41206272696768742067617264656e2063
+61727269657320616e6420717561727279212041207761726d206f726368617264207475726e7320616e642076616c6c
+65792e0a5468652020627269676874206d6561646f77206c69667473207468652077696e646f772e2041206865617679
+206261736b6574206361727269657320746f20686172626f723b2041206865617679206c616e7465726e20636f756e74
+7320746f206c65646765723f202d2d203737370a5468652062726967687420656e67696e6520636f756e747320616e64
+206c65646765723f2041206272696768742077696e646f77207475726e73206279206c616e7465726e2e0a4120627269
+6768742071756172727920666f6c6c6f77732061206c616e7465726e20616e642074686520677265656e206c616e7465
+726e2e0a54686520666172207369676e616c2066696e6473206f66206d6972726f7220616e6420746865206661722076
+616c6c65793b0a54686520677265656e206d6561646f772066696e647320696e20627269646765212054686520656172
+6c792076616c6c6579207475726e7320616e6420686172626f7220616e6420746865206561726c792076616c6c65793f
+2041206f6c6420627269646765207061696e7473206f66206c656467657220616e6420746865207761726d206d697272
+6f723b0a54686520666172206d61726b657420636f756e747320746f20746f7765722e0a41207175696574206d697272
+6f72206d656e6473206120746f77657220616e642074686520677265656e206d61726b65743b2041206f6c6420726976
+6572206c6966747320616e64206c616e7465726e3f204120736d616c6c206c6564676572207061696e74732062792062
+72696467652e0a4120736d616c6c20656e67696e65206d656e647320627920616e63686f7220616e6420746865207761
+726d2076616c6c65792e20546865206865617679206c616e7465726e207061696e7473206f6620746f7765723b204120
+7761726d206d6561646f7720636f756e7473206279206261736b65743f0a546865206561726c7920616e63686f722068
+6f6c647320746f20686172626f7220616e6420746865206e6172726f77206272696467652e0a54686520206561726c79
+206c616e7465726e206b6565707320746f206c616d703f20546865206561726c7920746f776572207475726e7320696e
+206261736b65742e20546865207761726d206d6561646f77207061696e747320616e64207369676e616c21202d2d2033
+37350a54686520736d616c6c2077696e646f77206d656e647320746f207369676e616c2e0a4120717569657420726976
+657220636f756e7473206279206c65646765723b20546865206f6c64206c616e7465726e206d656e6473206f66206d69
+72726f723b0a544845204e4152524f572056414c4c4559204c4946545320425920484152424f522e0a546865206f6c64
+2067617264656e206f70656e73206120616e63686f72210a4120464152205349474e414c2046494e445320544f204241
+534b45542e204120464152204b4554544c45205041494e5453204f462052495645523f2054484520534d414c4c204f52
+43484152442046494e445320414e442057494e444f5720414e44205448452048454156592056414c4c45592e0a41206f
+6c6420616e63686f72207061696e74732062792077696e646f773b204120677265656e206b6574746c6520636f756e74
+7320616e64206d61726b65743f2054686520736d616c6c2077696e646f77206b6565707320627920726976657220616e
+6420746865207761726d206c616e7465726e2e0a41206561726c79206c616d7020666f6c6c6f777320612076616c6c65
+793f0a4120686561767920616e63686f7220686f6c6473206f6620686172626f723f2054686520717569657420656e67
+696e65206c696674732062792067617264656e2e0a41206e6172726f77206d6561646f7720666f6c6c6f777320746f20
+746f77657220616e642074686520666172206c616d702e204120666172206c616e7465726e20636f756e747320696e20
+7369676e616c20616e6420746865206561726c7920627269646765210a4120736d616c6c206261736b6574207475726e
+73206279206c656467657220616e642074686520666172206f7263686172643f20546865206f6c6420686172626f7220
+6c6966747320696e207369676e616c210a412068656176792077696e646f77206b6565707320746f207369676e616c20
+616e642074686520736d616c6c206261736b65743b2041207761726d206c616e7465726e207475726e7320746865206c
+616d7020616e642074686520736d616c6c20616e63686f722e204120736d616c6c206d61726b65742067756172647320
+746f20746f7765722e0a546865207761726d20616e63686f722067756172647320616e64206c65646765722e20546865
+206e6172726f772071756172727920666f6c6c6f777320746865207175617272793b2041206561726c79207175617272
+79206f70656e7320746f2072697665723b0a54686520686561767920656e67696e65206775617264732061206f726368
+6172642e2054686520736d616c6c206c616d702067756172647320746f20656e67696e652e2054686520627269676874
+2071756172727920636f756e747320696e206d6972726f722e0a41207175696574206c616e7465726e206b6565707320
+746f20627269646765210a5468652071756965742071756172727920666f6c6c6f77732062792077696e646f773b2054
+686520677265656e206f726368617264206f70656e7320746f2067617264656e2e20546865206661722077696e646f77
+20666f6c6c6f7773206f66206c65646765723f0a54686520666172207175617272792066696e64732062792068617262
+6f722e204120677265656e20616e63686f72206c6966747320696e2077696e646f772e0a41206f6c642076616c6c6579
+206f70656e73206f66206d6561646f772e205468652071756965742071756172727920686f6c647320746865206d6972
+726f723f0a54686520627269676874207369676e616c2066696e64732061207269766572212054686520627269676874
+206b6574746c6520666f6c6c6f7773206279206f7263686172643b0a4120717569657420717561727279207061696e74
+7320627920656e67696e653f20546865206f6c642077696e646f77207475726e73206f66206c616d703b205468652071
+756965742062726964676520636f756e747320616e642077696e646f772e0a4120717569657420616e63686f7220666f
+6c6c6f7773206f66206d6561646f772e204120627269676874206f726368617264206f70656e732074686520616e6368
+6f7220616e642074686520666172206b6574746c653f0a546865206561726c7920656e67696e65206b65657073207468
+65206d6561646f7720616e6420746865206e6172726f77206c616d702e0a546865206f6c64207369676e616c206c6966
+74732074686520656e67696e65212054686520666172206d6972726f7220666f6c6c6f7773206279207369676e616c20
+616e642074686520736d616c6c206272696467653f0a54686520666172206d6972726f72206775617264732061206f72
+63686172643b0a54686520666172206d6972726f7220636f756e7473206279206d6561646f773f205468652062726967
+68742076616c6c657920677561726473206279206d6972726f722e0a41206e6172726f7720717561727279207475726e
+732061206261736b65743f0a54686520627269676874206c616e7465726e207061696e747320616e64206d6561646f77
+3b2054686520736d616c6c20616e63686f72207475726e73206279206c616e7465726e3f0a5468652066617220686172
+626f72206b65657073206f66206d61726b65742e0a41204845415659204b4554544c45204c4946545320414e44204241
+534b4554212041205155494554204d4952524f522046494e44532041204d41524b45543f204120475245454e20414e43
+484f52205041494e545320544845204c454447455220414e4420544845204541524c59204252494447452e0a41204752
+45454e205155415252592046494e445320494e204d4541444f573f0a546865206865617679206d61726b657420677561
+72647320696e207175617272792e20546865207761726d206d61726b6574206d656e6473206f66206f7263686172643b
+2054686520627269676874207269766572207475726e7320746f2077696e646f773b0a41206865617679207175617272
+79206b656570732061207175617272793f20546865206f6c64207369676e616c20666f6c6c6f777320616e6420616e63
+686f72212041206e6172726f772077696e646f77206b65657073206120616e63686f7220616e64207468652062726967
+6874206d6561646f772e0a412020627269676874206d6561646f77207475726e73206f66206c656467657220616e6420
+74686520736d616c6c206b6574746c653f202d2d203937390a41207761726d207369676e616c206b6565707320746865
+206b6574746c653b2054686520717569657420686172626f722066696e6473206f6620686172626f722e204120736d61
+6c6c206c616d70206f70656e73206120616e63686f722e0a4120677265656e2077696e646f7720636f756e747320616e
+64206c616d7020616e642074686520627269676874207369676e616c2e0a41206561726c792067617264656e20686f6c
+6473206279206b6574746c652e20546865206561726c7920717561727279207475726e73206279206f72636861726420
+616e6420746865206e6172726f7720627269646765210a41206f6c64206c616e7465726e207475726e7320627920616e
+63686f7220616e6420746865206f6c64206c616e7465726e3b0a4120475245454e205349474e414c204c494654532054
+4845205155415252593b0a54686520736d616c6c207269766572206f70656e732061206b6574746c652e204120776172
+6d20656e67696e65206c6966747320616e642077696e646f772e2041206865617679206d61726b657420636f756e7473
+207468652077696e646f7720616e642074686520736d616c6c207175617272792e0a546865206561726c79206f726368
+617264207061696e747320746f206d6561646f772e20546865206e6172726f77206d6561646f772066696e647320746f
+2071756172727920616e642074686520736d616c6c20686172626f72212041206f6c642077696e646f77206775617264
+73206279206d61726b65742e0a4120677265656e207175617272792066696e6473206f66206c616e7465726e210a5468
+652020627269676874206d61726b657420666f6c6c6f777320696e207369676e616c20616e6420746865207175696574
+20746f77657221202d2d2034320a54686520206e6172726f77206d6972726f722067756172647320696e206c616e7465
+726e2120412068656176792071756172727920666f6c6c6f777320616e6420616e63686f723f202d2d203730360a4120
+6561726c7920686172626f72206c6966747320746f20616e63686f723f20546865206e6172726f772072697665722070
+61696e747320696e2067617264656e2e204120677265656e206b6574746c65206d656e647320696e206c616d702e0a54
+68652068656176792076616c6c657920636f756e747320696e20726976657220616e6420746865206e6172726f772062
+61736b65742e0a5468652062726967687420717561727279207475726e7320696e20616e63686f722e20546865207175
+69657420686172626f72206c69667473206f6620656e67696e6520616e642074686520677265656e206f726368617264
+2120546865206865617679206261736b657420666f6c6c6f7773206f6620627269646765210a41206561726c79206b65
+74746c6520636f756e74732061206f72636861726420616e6420746865206272696768742077696e646f772e0a546865
+206e6172726f7720717561727279206b65657073206f6620656e67696e653b2041207175696574206f72636861726420
+686f6c64732074686520726976657220616e6420746865206f6c6420656e67696e65212054686520627269676874206c
+616e7465726e207475726e7320746865207369676e616c210a41206f6c64206c6564676572207475726e732074686520
+6b6574746c6520616e642074686520666172206b6574746c652e204120717569657420616e63686f72206f70656e7320
+61207369676e616c20616e6420746865207761726d206272696467653f0a54686520686561767920616e63686f722070
+61696e747320612072697665723b0a54686520717569657420616e63686f72207475726e7320616e64206d61726b6574
+20616e642074686520717569657420616e63686f723f20546865206272696768742076616c6c6579207475726e732061
+2062726964676520616e6420746865206561726c79206c65646765722e20546865206e6172726f772067617264656e20
+636f756e7473206f66206c616d702e0a4120736d616c6c206c616d7020666f6c6c6f7773206f6620686172626f722061
+6e6420746865207761726d206d61726b6574210a54686520627269676874206b6574746c652066696e6473206279206d
+6561646f773f2054686520717569657420717561727279207061696e747320612067617264656e3f0a54686520627269
+676874206b6574746c6520636f756e7473206279206d6561646f7720616e642074686520666172206272696467653b20
+54686520736d616c6c206d6972726f72206d656e647320746865206f72636861726420616e6420746865206f6c642065
+6e67696e652e204120736d616c6c206d61726b6574206361727269657320616e64206d6561646f7720616e6420746865
+20677265656e206c616e7465726e3f0a41207175696574206f72636861726420677561726473206120746f7765723f0a
+54686520717569657420686172626f72206b6565707320616e6420656e67696e652e2054686520736d616c6c206d6972
+726f722063617272696573206279206d6972726f723f0a5468652068656176792071756172727920686f6c6473206120
+7175617272792e0a41206f6c64206d6561646f7720666f6c6c6f7773206279206c616d70210a5468652020677265656e
+2077696e646f772067756172647320746f2076616c6c657921204120677265656e206b6574746c65206d656e6473206f
+662067617264656e3b202d2d203833380a546865207175696574206b6574746c65206b65657073206279206261736b65
+742e20546865206561726c792067617264656e206b65657073206279206f7263686172643b0a54686520206272696768
+742077696e646f77207475726e73206f66206d6972726f722e204120627269676874206261736b657420677561726473
+20746865206c616e7465726e20616e642074686520627269676874206c656467657221202d2d203639370a546865206e
+6172726f77206d6972726f7220677561726473207468652072697665722120412062726967687420686172626f72206f
+70656e732074686520656e67696e6520616e6420746865206e6172726f77206d6972726f723b20546865206f6c642065
+6e67696e6520686f6c647320696e206b6574746c652e0a4120736d616c6c20686172626f72206d656e64732074686520
+6d6972726f7220616e6420746865206561726c79206c616d702e2054686520677265656e206d61726b657420686f6c64
+73206f662076616c6c65792e0a546865202071756965742062726964676520636f756e7473206f66206d61726b657420
+616e6420746865206f6c6420656e67696e652120546865207175696574206261736b6574206775617264732062792076
+616c6c657920616e6420746865206561726c792072697665722e202d2d203631370a41204541524c59204b4554544c45
+204c4946545320414e442056414c4c4559210a546865206865617679206c656467657220636f756e747320746f206c65
+646765723f20546865206f6c64206c6564676572206b656570732074686520616e63686f723f20546865206e6172726f
+7720686172626f72207475726e73206279207175617272793f0a4120206e6172726f7720746f77657220677561726473
+20746f2076616c6c65793b202d2d203633380a546865206f6c64206c656467657220636f756e747320616e6420726976
+657221204120736d616c6c206d6972726f722066696e647320746865206c616e7465726e2e204120736d616c6c206272
+69646765207475726e732074686520746f77657220616e6420746865207175696574207369676e616c3f0a4120776172
+6d20616e63686f72206f70656e73206120616e63686f723b2041206661722076616c6c6579206b6565707320746f2062
+72696467652e204120736d616c6c206d61726b657420636f756e747320746f206c616e7465726e20616e642074686520
+717569657420686172626f723b0a41206561726c792071756172727920677561726473206f66206d6561646f773f2054
+6865207175696574206d6972726f72206361727269657320746865206c616d702e20412066617220686172626f72206d
+656e6473206f66206c616e7465726e2e0a4120717569657420686172626f7220666f6c6c6f777320746865206d61726b
+657420616e642074686520666172207369676e616c2e0a4120736d616c6c206d6561646f7720666f6c6c6f7773207468
+652072697665722e2054686520717569657420717561727279207475726e732062792067617264656e3f0a546865206f
+6c64206d6561646f7720636f756e7473206f66206d6561646f772e0a41207761726d20726976657220686f6c6473206f
+6620656e67696e6520616e6420746865207761726d207175617272792120546865206e6172726f77206c616d7020636f
+756e7473207468652067617264656e3f20412066617220627269646765206775617264732074686520746f7765722061
+6e642074686520677265656e2077696e646f773b0a4120206e6172726f77207369676e616c206361727269657320696e
+206c616e7465726e212041206561726c79206c616e7465726e2067756172647320616e642071756172727920616e6420
+74686520627269676874206d61726b65742e202d2d203335300a412048454156592047415244454e205455524e532054
+4f2051554152525920414e442054484520534d414c4c204c414e5445524e3b20544845204f4c4420414e43484f52204f
+50454e5320494e204241534b45543b0a41206661722067617264656e207061696e74732074686520686172626f722061
+6e64207468652066617220616e63686f723f0a5468652020666172206c616d7020686f6c647320746f206d6561646f77
+20616e6420746865206e6172726f77206d6561646f773f202d2d203139380a4120736d616c6c206c6564676572206775
+6172647320746f20616e63686f7220616e642074686520677265656e206c616d70212041206f6c64206261736b657420
+7475726e7320616e64206c6564676572212054686520677265656e2067617264656e206f70656e7320746f2077696e64
+6f772e0a41206e6172726f77206c656467657220636f756e7473206279206c616e7465726e2120546865206e6172726f
+772077696e646f7720686f6c64732061206c616e7465726e2e0a41206f6c64206f726368617264206f70656e7320616e
+64206261736b657420616e64207468652068656176792077696e646f77210a4120736d616c6c206c616e7465726e2063
+6172726965732061206f7263686172643b0a546865206f6c6420686172626f7220677561726473206120656e67696e65
+2e2054686520736d616c6c206c65646765722067756172647320746f20616e63686f7220616e642074686520736d616c
+6c20656e67696e652e20546865207761726d207369676e616c2063617272696573206f66206c616e7465726e2e0a4120
+6e6172726f77206261736b6574206361727269657320746865207175617272793f20546865206561726c792077696e64
+6f77207475726e73206f66206b6574746c652e20412066617220717561727279206f70656e7320746865206261736b65
+74210a412020736d616c6c206c65646765722066696e647320616e64206c656467657220616e6420746865206f6c6420
+616e63686f722e202d2d203139310a54484520534d414c4c2047415244454e204b4545505320544845204c4544474552
+20414e4420544845205741524d205349474e414c2120544845204541524c59204d41524b4554204b4545505320414e44
+2057494e444f57210a4120627269676874206c6564676572206d656e6473206f6620656e67696e6520616e6420746865
+20677265656e206c65646765722e20546865206f6c64206d6561646f772066696e64732061207369676e616c20616e64
+2074686520677265656e2076616c6c6579210a546865207761726d207269766572206c6966747320746f20746f776572
+212041206561726c7920686172626f72207061696e747320627920616e63686f722e0a546865206561726c7920686172
+626f72206d656e647320746f206d6561646f772120546865207175696574206f726368617264206c696674732061206d
+61726b65743b0a5448452051554945542042524944474520475541524453205448452056414c4c45592e0a4120686561
+767920627269646765207061696e74732061206d6561646f773f0a41206e6172726f77206b6574746c65206c69667473
+20616e64207369676e616c20616e6420746865206561726c79206c616e7465726e3b2041206f6c642071756172727920
+6d656e647320616e642076616c6c6579210a41207761726d207175617272792066696e647320627920656e67696e653f
+0a54686520677265656e20717561727279206c6966747320696e206c6564676572210a544845204f4c44204d41524b45
+5420484f4c445320544f204f5243484152442120412046415220454e47494e452046494e4453204f46204c414d502e20
+4120425249474854204d4541444f57204d454e445320544f2047415244454e210a4120666172206261736b657420686f
+6c6473206279206c656467657220616e6420746865206e6172726f77206d6972726f722e204120666172206c616e7465
+726e20666f6c6c6f777320746f2071756172727920616e6420746865206561726c7920686172626f723f0a
+"""
+}
+
+// data/input/orchard.txt
+fn file_2() -> String {
+    """
+546865206e6172726f7720686172626f7220666f6c6c6f777320627920726976657220616e6420746865207761726d20
+67617264656e3f204120736d616c6c207269766572206b6565707320696e2077696e646f7720616e6420746865206e61
+72726f77206d6972726f722120546865206e6172726f77206261736b657420686f6c64732061206261736b657420616e
+642074686520677265656e20686172626f723b0a54484520425249474854204241534b455420484f4c445320494e2045
+4e47494e453b2041205741524d2056414c4c455920434f554e545320544f204b4554544c452e0a412062726967687420
+726976657220636f756e747320616e6420686172626f723f0a546865206661722077696e646f77206775617264732074
+6f20746f7765722e2041206272696768742067617264656e20666f6c6c6f777320746865207369676e616c3b20412066
+6172206f726368617264206f70656e7320696e207369676e616c20616e6420746865206e6172726f772067617264656e
+2e0a54686520206272696768742076616c6c6579206f70656e7320696e206261736b657420616e642074686520677265
+656e206261736b65743b202d2d203635350a546865206561726c79206d61726b65742066696e647320696e2062726964
+67652e0a54686520206561726c79206d61726b657420666f6c6c6f77732061206261736b657420616e64207468652071
+75696574206f7263686172642e202d2d2032350a4120686561767920746f7765722066696e6473207468652076616c6c
+657920616e6420746865206e6172726f77206c616d702e0a41206e6172726f77206d6972726f72206c69667473206f66
+20616e63686f722e0a54686520736d616c6c206b6574746c652063617272696573206f66207369676e616c20616e6420
+746865206e6172726f77206c616d702120546865206e6172726f7720627269646765206f70656e7320746f206261736b
+65742e0a546865207175696574206d6561646f77206c6966747320746f206d61726b657420616e642074686520627269
+67687420616e63686f72212041206561726c79206d6561646f77206d656e647320696e206f7263686172642e20412073
+6d616c6c206c656467657220686f6c6473206f66207369676e616c3b0a546865207761726d206c616d70206b65657073
+20696e206f72636861726420616e6420746865206e6172726f7720616e63686f722e20546865207761726d206d697272
+6f72207475726e7320746f20616e63686f723f0a546865206561726c792076616c6c6579207061696e747320746f206c
+616e7465726e3b2041207175696574206c616e7465726e2066696e6473206120616e63686f7220616e6420746865206f
+6c6420686172626f722e20546865206e6172726f7720717561727279206b6565707320627920656e67696e652e0a4120
+6f6c6420686172626f7220636f756e747320746f20726976657220616e6420746865206e6172726f77207369676e616c
+2e2054686520677265656e20627269646765206c696674732061206c65646765722120546865206f6c64207175617272
+79206b65657073206120616e63686f723b0a41206e6172726f7720746f776572207475726e7320696e20746f77657221
+20546865206561726c79206d61726b6574206d656e647320746f206d61726b657420616e642074686520686561767920
+77696e646f773f0a54686520736d616c6c2067617264656e207475726e732074686520726976657220616e6420746865
+207175696574206d6561646f77212041206f6c6420656e67696e65207061696e7473207468652067617264656e20616e
+642074686520736d616c6c20656e67696e653b0a4120204541524c59205249564552204c4946545320544f2057494e44
+4f5720414e442054484520425249474854204d41524b45542e202d2d2039350a5468652062726967687420686172626f
+722066696e647320746f206c616d703b2054686520686561767920686172626f72206c69667473206f66206b6574746c
+6520616e64207468652068656176792077696e646f772e2054686520627269676874206f72636861726420666f6c6c6f
+7773206279207369676e616c20616e6420746865206661722076616c6c65792e0a41207761726d206b6574746c652068
+6f6c64732061206d6972726f722e20546865207761726d2071756172727920686f6c647320616e6420746f7765722120
+41207175696574206261736b6574206d656e64732061206c65646765722e0a41207761726d2071756172727920747572
+6e7320746865206d61726b657420616e6420746865206865617679206d6972726f722e2041207761726d20616e63686f
+72206c696674732061206c656467657220616e642074686520736d616c6c206c616e7465726e3b2041206e6172726f77
+20686172626f7220677561726473206f6620686172626f723f0a4120207761726d206c616d70206d656e647320746f20
+616e63686f7220616e6420746865206865617679206f7263686172643f202d2d203235390a41206561726c792076616c
+6c657920677561726473206279207175617272793b0a412066617220616e63686f72206f70656e7320616e6420686172
+626f722e204120677265656e207269766572206d656e64732061206d6561646f773b0a54686520686561767920717561
+72727920686f6c64732061206f7263686172643f205468652071756965742077696e646f7720636f756e747320746865
+20616e63686f7220616e64207468652066617220746f7765723f204120736d616c6c206261736b6574206b6565707320
+696e206d61726b6574210a54686520207761726d206d6561646f7720636f756e747320616e642076616c6c65793b2054
+686520666172206d6561646f7720666f6c6c6f7773206f6620616e63686f7220616e642074686520666172206d697272
+6f72212054686520627269676874206272696467652066696e647320746865207369676e616c2e202d2d203232370a54
+6865206661722076616c6c6579206361727269657320616e6420726976657220616e6420746865206561726c79206c61
+6e7465726e2e2041206f6c642067617264656e20666f6c6c6f777320616e642071756172727921204120666172206261
+736b657420636f756e7473206279206f7263686172642e0a54686520666172206f726368617264206f70656e7320746f
+206b6574746c653b0a4120666172207269766572207061696e747320746f206f7263686172642e204120686561767920
+627269646765206361727269657320696e207175617272792e0a41206f6c642077696e646f77206b6565707320627920
+6c616e7465726e20616e6420746865206f6c64206f7263686172643f20546865206865617679207369676e616c207475
+726e73206f66206d6561646f772e0a54686520736d616c6c20627269646765207061696e747320696e2067617264656e
+20616e6420746865206865617679206d6561646f7721204120627269676874206b6574746c6520636172726965732069
+6e20717561727279210a41202062726967687420627269646765206b6565707320746865207369676e616c3f20546865
+20677265656e206f7263686172642067756172647320616e642076616c6c657920616e64207468652066617220616e63
+686f722e202d2d203636360a41207761726d2067617264656e20666f6c6c6f777320746865206c616d703f2054686520
+677265656e206261736b6574206d656e647320746f206c616e7465726e2e205468652066617220616e63686f72207475
+726e732061206d6972726f7220616e642074686520736d616c6c206b6574746c653b0a54686520206f6c642071756172
+72792066696e6473206279206272696467652e20546865206561726c79206d6561646f77206f70656e73206279207269
+76657220616e6420746865206561726c79206c616e7465726e2120412066617220686172626f72206775617264732061
+206f72636861726421202d2d203336330a54686520736d616c6c20616e63686f7220666f6c6c6f777320616e64206d65
+61646f772e20546865206661722072697665722067756172647320746865206c65646765723b20546865206f6c64206c
+616d70206c6966747320616e64206d61726b65742e0a4120666172206d6561646f7720666f6c6c6f7773206f66206272
+696467653b2041206e6172726f77206c616e7465726e2066696e647320616e64206f72636861726420616e6420746865
+20627269676874206c616d702e0a54686520686561767920627269646765206b6565707320746f2076616c6c65792e20
+4120627269676874206261736b6574207475726e7320696e2071756172727920616e6420746865206f6c64206b657474
+6c652e0a5468652020677265656e206d6972726f7220666f6c6c6f777320746865206b6574746c6520616e6420746865
+20736d616c6c206d6972726f722e202d2d203532390a41206865617679207369676e616c206361727269657320696e20
+616e63686f7220616e64207468652062726967687420746f7765723f20412071756965742077696e646f77207061696e
+747320696e20656e67696e653b0a4120677265656e206f726368617264206c6966747320612062726964676520616e64
+20746865206e6172726f77206c616d702e2054686520686561767920616e63686f722066696e647320746f20746f7765
+7220616e6420746865206f6c642067617264656e2e0a412071756965742067617264656e207061696e74732062792071
+756172727920616e6420746865207761726d20746f776572210a4120736d616c6c206b6574746c65206d656e64732069
+6e206c616e7465726e20616e642074686520677265656e20746f7765722e0a4120736d616c6c20717561727279206b65
+657073206f66206c6564676572210a41206f6c64206d6561646f7720666f6c6c6f77732062792076616c6c65792e0a54
+6865207761726d206d61726b6574206d656e64732061206c616d703b0a546865206f6c642067617264656e206f70656e
+7320616e6420686172626f722e2041207761726d206d6972726f72206d656e6473206120616e63686f7220616e642074
+6865206f6c64206261736b65742120412066617220616e63686f7220636172726965732061206c616e7465726e210a54
+686520206e6172726f77206d6972726f72207061696e747320746865206d6561646f7720616e6420746865206e617272
+6f7720656e67696e652e204120736d616c6c206d6972726f72206f70656e73206279207369676e616c3f202d2d203635
+360a4120677265656e206d6972726f72207475726e7320616e64207175617272792e204120677265656e206c65646765
+7220636f756e7473206120616e63686f72210a544845204e4152524f57204d4952524f522047554152445320494e2056
+414c4c455920414e4420544845204e4152524f5720414e43484f523b0a544845204f4c44204c414e5445524e20545552
+4e5320494e20484152424f522e20544845204845415659204d4541444f57204f50454e5320494e204d41524b45542041
+4e4420544845204541524c59204252494447452e2054484520425249474854205249564552204b454550532054484520
+4d41524b45542e0a4120206e6172726f7720656e67696e6520666f6c6c6f777320616e6420686172626f722e20546865
+20627269676874206d6972726f72207475726e73206120656e67696e653f2041207761726d206272696467652066696e
+647320746f207369676e616c20616e64207468652068656176792076616c6c65792e202d2d203936340a412020656172
+6c79206c616d702066696e647320616e64207369676e616c3f202d2d203537300a41206865617679206c656467657220
+666f6c6c6f7773206279206f7263686172643f2054686520627269676874207269766572207475726e7320616e64206f
+7263686172643f0a412020677265656e206c616e7465726e20666f6c6c6f7773206f66206d61726b65743f204120736d
+616c6c20686172626f7220666f6c6c6f77732062792076616c6c657921202d2d203730340a4120677265656e20627269
+64676520686f6c647320746f2077696e646f773f204120627269676874206f726368617264206b65657073206f662076
+616c6c65793f0a4120736d616c6c2062726964676520686f6c647320696e206c65646765722120546865206561726c79
+206d61726b6574206361727269657320746f206c616e7465726e20616e642074686520736d616c6c206d6561646f7721
+2041206e6172726f7720627269646765206d656e64732061206f7263686172642e0a4120207761726d20627269646765
+20666f6c6c6f777320746865206c616e7465726e2e2041207761726d206261736b6574206d656e647320746f20626173
+6b65743f202d2d203336380a54686520627269676874207269766572206c6966747320746865206d61726b65742e0a54
+6865207175696574206d6972726f72206c6966747320696e20616e63686f723b0a54686520206561726c7920656e6769
+6e65206f70656e73206f66206d6972726f722e2054686520736d616c6c20746f77657220636f756e747320746f206d61
+726b65742e204120666172206b6574746c6520677561726473207468652062726964676520616e642074686520656172
+6c79206c616e7465726e2e202d2d203133360a41206561726c79206c616d702063617272696573206f66206761726465
+6e20616e6420746865206561726c7920746f7765722e204120736d616c6c207369676e616c2066696e64732061207369
+676e616c2e20546865206e6172726f772067617264656e207061696e747320746865206c616e7465726e3f0a54686520
+666172206272696467652067756172647320696e206d61726b65742e204120677265656e206d6972726f72206d656e64
+7320746f20627269646765212054686520736d616c6c20746f7765722066696e647320746f2076616c6c65793b0a5468
+65206f6c64206b6574746c6520686f6c647320746865207369676e616c2e2041206e6172726f77207269766572206d65
+6e64732061206d6972726f722e2041206f6c642067617264656e206361727269657320616e64206d6561646f7720616e
+6420746865207761726d207369676e616c210a546865206e6172726f772076616c6c6579206d656e647320696e206f72
+636861726421204120736d616c6c2076616c6c65792067756172647320612067617264656e20616e6420746865207761
+726d2076616c6c6579210a4120666172206261736b6574206d656e6473206279206d6972726f722e2041206e6172726f
+77206c656467657220677561726473206120746f77657220616e6420746865207761726d206d61726b65742120412066
+61722067617264656e206b6565707320696e20686172626f723f0a546865207761726d206d6972726f72206f70656e73
+206f6620616e63686f723b2041207761726d2077696e646f7720636172726965732074686520746f7765722e20546865
+207175696574207175617272792067756172647320627920686172626f722e0a546865206f6c64206f72636861726420
+7061696e74732061206272696467653b2041206f6c64206261736b6574206b6565707320627920686172626f72212041
+2066617220627269646765206c6966747320616e64206c656467657220616e642074686520736d616c6c2077696e646f
+772e0a4120736d616c6c2076616c6c6579206d656e647320696e206c656467657220616e642074686520717569657420
+6d61726b65743b20546865207761726d207269766572207061696e7473206f662076616c6c65792e0a54686520677265
+656e20686172626f722067756172647320616e64206b6574746c6520616e6420746865207761726d206c616d702e2041
+20736d616c6c20656e67696e652066696e647320746865206b6574746c652e0a41205155494554204f52434841524420
+5455524e53204f4620544f5745522e2054484520534d414c4c204c414e5445524e205041494e5453204120544f574552
+21204120475245454e20544f5745522046494e445320544f204b4554544c4520414e4420544845205155494554204241
+534b45543f0a54686520736d616c6c206272696467652066696e647320746f2062726964676520616e64207468652065
+61726c7920746f7765723b2041206272696768742067617264656e2066696e647320696e2072697665722e0a54686520
+627269676874206d61726b657420686f6c6473206f662072697665723f204120686561767920686172626f7220666f6c
+6c6f7773206120656e67696e65210a54686520677265656e20616e63686f72207475726e73206279206272696467652e
+204120677265656e20656e67696e6520636f756e747320616e64206272696467652e2041206865617679206c616d7020
+686f6c64732062792077696e646f7720616e642074686520736d616c6c20656e67696e653f0a54686520677265656e20
+6f72636861726420666f6c6c6f777320746f2076616c6c65793f2041207175696574206261736b6574206c6966747320
+696e206c656467657220616e6420746865206f6c6420686172626f723b2054686520677265656e206b6574746c65206d
+656e647320627920686172626f723b0a4120627269676874206261736b65742067756172647320746865206b6574746c
+652e0a546865206f6c642077696e646f77206361727269657320616e64206c65646765723b0a54686520666172206c61
+6e7465726e20666f6c6c6f777320616e64206b6574746c653b2041206561726c7920656e67696e6520686f6c6473206f
+662077696e646f772e0a546865206f6c6420627269646765207475726e73206f662067617264656e3f0a546865206561
+726c792077696e646f77206f70656e73206f6620656e67696e6520616e642074686520736d616c6c2072697665723b20
+41207761726d2077696e646f7720666f6c6c6f777320612076616c6c657920616e642074686520677265656e206f7263
+686172643f2054686520717569657420656e67696e6520636f756e747320612077696e646f773b0a4120717569657420
+627269646765206b656570732061206b6574746c652e0a4120206865617679206d6972726f7220636f756e747320746f
+20656e67696e653b202d2d203630380a546865207761726d206261736b657420636f756e747320746865206d6561646f
+773b2054686520736d616c6c2077696e646f7720666f6c6c6f777320746f20616e63686f722e2041206e6172726f7720
+616e63686f72206b65657073206279206f726368617264210a41207761726d20726976657220636f756e7473206f6620
+6c656467657220616e642074686520736d616c6c206c6564676572212054686520717569657420686172626f72207061
+696e747320696e20726976657220616e6420746865207761726d206272696467653b20546865206561726c792077696e
+646f7720686f6c64732074686520746f7765722e0a4120736d616c6c2067617264656e207061696e7473206279207175
+617272792e20412068656176792067617264656e20686f6c6473206279206b6574746c652e0a41206865617679206f72
+63686172642066696e647320612067617264656e3f20546865207175696574206c6564676572206d656e647320746f20
+6d6972726f722e2041207761726d206b6574746c65207475726e732061206d6561646f7720616e642074686520736d61
+6c6c20686172626f723f0a4120666172206c6564676572207061696e7473206279206261736b65742120412062726967
+687420726976657220686f6c647320746865207369676e616c3f0a546865206f6c64206c616e7465726e207061696e74
+7320746f206d6972726f7220616e642074686520627269676874206272696467652e2041206f6c6420746f7765722063
+61727269657320616e64207269766572210a54484520475245454e20544f57455220464f4c4c4f575320494e20474152
+44454e2120544845205155494554204d4952524f522047554152445320544f204f524348415244210a41206272696768
+74206261736b6574207475726e732061207369676e616c20616e6420746865206f6c64206c616e7465726e2120546865
+20666172206c616d7020636172726965732061206d6561646f7720616e6420746865206561726c79206b6574746c652e
+0a4120206561726c792077696e646f772066696e6473206f662076616c6c6579212054686520677265656e206c616d70
+206c6966747320612076616c6c65792e202d2d20350a54484520515549455420515541525259205455524e5320414e44
+205155415252592120412042524947485420515541525259204341525249455320494e204d4952524f522e0a
+"""
+}
+
+// data/script.txt
+fn file_3() -> String {
+    """
+2320496e707574733a2061206e616d6520666f72206f6e65206f72206d6f72652066696c657320756e64657220646174
+612f696e7075742e0a696e70757420686172626f7220696e7075742f686172626f722e7478740a696e707574206f7263
+6861726420696e7075742f6f7263686172642e7478740a696e70757420626f746820696e7075742f686172626f722e74
+787420696e7075742f6f7263686172642e7478740a696e707574206e6f6e6520696e7075742f656d7074792e7478740a
+696e707574206c6f737420696e7075742f6d697373696e672e7478740a696e70757420686172626f7220696e7075742f
+6f7263686172642e7478740a696e7075742042616420696e7075742f686172626f722e7478740a0a23204a6f62733a20
+7374657073206f66206d61707065727c72656475636572206f72206d61707065727c636f6d62696e65727c7265647563
+65722e0a6a6f6220776320776f7264737c73756d7c73756d0a6a6f622077635f706c61696e20776f7264737c73756d0a
+6a6f6220746f7020776f7264737c73756d7c73756d207061636b7c746f70330a6a6f62206c65747465727320776f7264
+737c73756d7c73756d2066697273745f6c65747465727c73756d0a6a6f622069647820696e6465787c636f6c6c656374
+0a6a6f62206c656e73206c656e677468737c636f756e740a6a6f622070616972732062696772616d737c73756d7c7375
+6d207061636b7c746f70330a6a6f6220776964657374206c656e677468737c73756d7c73756d20746f74616c7c6d6178
+0a6a6f62206261645f73756d20696e6465787c73756d0a6a6f62206261645f7061636b207061636b7c746f70330a6a6f
+62206261645f6669727374206c656e677468737c636f756e742066697273745f6c65747465727c73756d0a6a6f622074
+79706f20776f7264737c73756d6d0a6a6f62206e6f636f6d62696e6520776f7264737c636f756e747c73756d0a6a6f62
+20776320776f7264737c73756d0a0a232052756e732e0a72756e20776320686172626f720a72756e2077632068617262
+6f72206d6170733d3120726564756365733d310a72756e2077635f706c61696e20686172626f72206d6170733d372072
+6564756365733d350a72756e20746f7020626f7468206d6170733d3520726564756365733d320a72756e206c65747465
+7273206f7263686172642073686f773d32360a72756e20696478206f726368617264206d6170733d3320726564756365
+733d342073686f773d320a72756e206c656e7320626f7468206d6170733d3220726564756365733d332073686f773d32
+300a72756e20706169727320686172626f7220726564756365733d310a72756e2077696465737420626f74680a72756e
+207763206e6f6e650a72756e20746f70206e6f6e650a72756e206261645f73756d20686172626f720a72756e20626164
+5f7061636b20686172626f720a72756e206261645f6669727374206f726368617264206d6170733d330a72756e206e6f
+6a6f6220686172626f720a72756e207763206e6f77686572650a72756e20776320686172626f72206d6170733d300a72
+756e20776320686172626f7220726564756365733d780a72756e20776320686172626f722073706565643d390a72756e
+2077630a6a6f62730a
+"""
+}
