@@ -94,6 +94,16 @@ fn poly_recursion_through_trait_dispatch_is_refused() {
 }
 
 #[test]
+fn poly_recursion_through_a_fn_value_is_refused() {
+    refused(
+        "fn-value",
+        include_str!("../corpus/core/err_poly_recursion_through_fn_value/source.kara"),
+        13,
+        "`deep` calls itself with `Vec[T]` in place of `T`",
+    );
+}
+
+#[test]
 fn recursion_that_needs_finitely_many_instances_checks() {
     for (tag, src) in [
         (
@@ -103,6 +113,10 @@ fn recursion_that_needs_finitely_many_instances_checks() {
         (
             "peels",
             include_str!("../corpus/core/ok_recursion_through_dispatch_peels/source.kara"),
+        ),
+        (
+            "fn-value",
+            include_str!("../corpus/core/ok_generic_fn_value_own_instance/source.kara"),
         ),
     ] {
         let Some((ok, err)) = check(tag, src) else {

@@ -1,0 +1,1 @@
+ERROR at line 13: polymorphic recursion: `deep` calls itself with `Vec[T]` in place of `T`, so the argument grows on every round and would need an instance per depth; recurse at the same type, or keep the growing values in one type that does not change between rounds (a `Vec` of them)

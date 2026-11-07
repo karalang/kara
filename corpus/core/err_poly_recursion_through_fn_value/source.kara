@@ -1,0 +1,19 @@
+// design.md §8 and B-2026-11-07-2: a generic function that passes itself
+// as a value at a growing type is polymorphic recursion too. `deep[T]`
+// hands `deep` to `apply` with a `Vec[T]`, so the value is `deep` at
+// `Vec[T]` and each round would need a deeper instance.
+fn apply[U](g: Fn(own U, i64) -> i64, u: own U, n: i64) -> i64 {
+    g(u, n)
+}
+
+fn deep[T](x: own T, n: i64) -> i64 {
+    if n == 0 {
+        0
+    } else {
+        apply(deep, [x], n - 1) + 1
+    }
+}
+
+fn main() {
+    println(deep(1, 3));
+}

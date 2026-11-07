@@ -3871,6 +3871,11 @@ pub struct TypeChecker<'a> {
     /// constructor nested somewhere INSIDE a callee expression
     /// (`foo(Col.A)(3)`) is still in value position and still rejected.
     pub(super) variant_ctor_in_callee: bool,
+    /// Set with `variant_ctor_in_callee` and handed on only to a bare
+    /// identifier: a generic function item named as the callee keeps its
+    /// declared parameters for the call's own instantiation, while one
+    /// named as a value gets fresh ones (B-2026-11-07-2).
+    pub(super) fn_item_in_callee: bool,
     /// Binding name → span of the bare `[]` literal that left that binding's
     /// type un-inferrable (B-2026-08-25-31).
     ///
@@ -4223,6 +4228,7 @@ impl<'a> TypeChecker<'a> {
             baked_impls: FxHashSet::default(),
             reported_uninferrable_empty_literal: false,
             variant_ctor_in_callee: false,
+            fn_item_in_callee: false,
             uninferrable_binding_origins: FxHashMap::default(),
             stdlib_self_module: None,
             lint_override_stack: Vec::new(),

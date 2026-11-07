@@ -3870,10 +3870,34 @@ impl<'a> super::TypeChecker<'a> {
                     Some((SpanKey::from_span(&expr.span), expected.clone()));
             }
         }
-        let actual = self.infer_expr(expr);
+        let mut actual = self.infer_expr(expr);
         self.pending_expected_call_return = None;
         self.pending_expected_call_payload = None;
         self.pending_expected_method_return = None;
+        // A generic function item named as a value came back with fresh
+        // parameters; the slot's `Fn` type solves them
+        // (`let f: Fn(own Vec[T], i64) -> i64 = shout`, B-2026-11-07-2).
+        if matches!(expr.kind, ExprKind::Identifier(_))
+            && matches!(actual, Type::Function { .. })
+            && matches!(expected, Type::Function { .. })
+            && contains_type_var(&actual)
+        {
+            unify_types(
+                &actual,
+                expected,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
+            actual = resolve_type_vars(
+                &actual,
+                &self.env.substitutions,
+                &HashMap::new(),
+                &self.env.const_substitutions,
+                &HashMap::new(),
+            );
+            self.record_expr_type(&expr.span, &actual);
+            self.record_node_type(expr.id, &actual);
+        }
         // Expected-type-driven generic resolution: when a generic call's
         // return type came back as `TypeParam(T)` (the solver had no arg
         // information to fix `T`), `expected` lets us bind `T` to a concrete
@@ -8977,6 +9001,10 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(expr.kind, ExprKind::Path { .. }) {
             self.variant_ctor_in_callee = in_callee;
         }
+        let fn_callee = std::mem::take(&mut self.fn_item_in_callee);
+        if matches!(expr.kind, ExprKind::Identifier(_)) {
+            self.fn_item_in_callee = fn_callee;
+        }
         let saved_call = self.current_call_node;
         if matches!(
             expr.kind,
@@ -9014,6 +9042,7 @@ impl<'a> super::TypeChecker<'a> {
         let ty = self.infer_expr_inner(expr);
         self.current_call_node = saved_call;
         self.variant_ctor_in_callee = false;
+        self.fn_item_in_callee = false;
         self.record_expr_type(&expr.span, &ty);
         self.record_node_type(expr.id, &ty);
         self.link_part_node_types(expr);
@@ -9968,6 +9997,33 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
                 let ty = self.resolve_identifier_type(name, &expr.span);
+                let as_callee = std::mem::take(&mut self.fn_item_in_callee);
+                // A generic function item named as a value takes fresh
+                // parameters at each use, solved from where the value goes
+                // (`apply(shout, [7], 1)` uses `shout` at `Vec[i64]`); its
+                // own `T` is never the enclosing function's `T` of the same
+                // spelling (B-2026-11-07-2). A callee keeps its declared
+                // parameters: the call instantiates them itself.
+                let ty = match ty {
+                    Type::Function {
+                        params,
+                        return_type,
+                        cross_task,
+                    } if !as_callee && self.local_scope.lookup(name).is_none() => {
+                        let fresh = instantiate_signature_with_fresh_vars(
+                            &params,
+                            &return_type,
+                            &mut self.env.next_type_var,
+                            &mut self.env.next_const_var,
+                        );
+                        Type::Function {
+                            params: fresh.params,
+                            return_type: Box::new(fresh.return_type),
+                            cross_task,
+                        }
+                    }
+                    ty => ty,
+                };
                 // B-2026-11-01-26: a name that is no local and still has a
                 // function type is a function item or a constructor. It has
                 // no environment, so auto-par may treat it as `CrossTask`.

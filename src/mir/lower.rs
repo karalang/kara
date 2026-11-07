@@ -575,6 +575,7 @@ fn lower_program_inner<'a>(
             .collect();
         let typed = crate::mir::poly_recursion::Typed {
             calls: &lcx.calls,
+            res: lcx.res,
             node_types: &lcx.node_types,
             tcx: lcx.tys.tcx(),
         };

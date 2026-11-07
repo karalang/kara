@@ -16,7 +16,9 @@
 //! receiver of a parameter's type (`u.grow(n)` with `u: U`) reaches every
 //! impl of that method that could take the receiver; the impl's parameter
 //! sits `e` levels down in its target (`T` of `impl[T] .. for Vec[T]` is
-//! 1), so that edge weighs `d - e`. The weight bounds how much deeper the
+//! 1), so that edge weighs `d - e`. A generic function named as a value
+//! (`apply(deep, [x], ..)`) is an edge too, to the instance its `Fn` type
+//! names. The weight bounds how much deeper the
 //! callee's argument is than the caller's, so the instances are finite
 //! exactly when no cycle weighs more than 0; each call of positive weight
 //! that closes such a cycle is refused. Recursion at the same parameter
@@ -67,6 +69,7 @@ struct Edge {
 /// What the call graph needs from the typed program.
 pub struct Typed<'a> {
     pub calls: &'a FxHashMap<NodeId, ResolvedCall>,
+    pub res: &'a FxHashMap<NodeId, crate::node_res::Res>,
     pub node_types: &'a FxHashMap<NodeId, Ty>,
     pub tcx: &'a TyCtxt,
 }
@@ -90,7 +93,44 @@ pub fn refusals(
     let mut edges: Vec<Edge> = Vec::new();
     for g in fns {
         let from_base = base[&g.def];
+        // A function named as a callee is the call's; any other naming of
+        // one is a value, whose type says the instance it is
+        // (B-2026-11-07-2).
+        let mut callees: Vec<NodeId> = Vec::new();
+        crate::span_visitor::for_each_expr_in_block(&g.f.body, &mut |e: &Expr| {
+            if let ExprKind::Call { callee, .. } = &e.kind {
+                callees.push(callee.id);
+            }
+        });
         let mut visit = |e: &Expr| {
+            if let (ExprKind::Identifier(_) | ExprKind::Path { .. }, false) =
+                (&e.kind, callees.contains(&e.id))
+            {
+                let item = match typed.res.get(&e.id) {
+                    Some(crate::node_res::Res::Def(d)) => fns.iter().find(|c| c.def == *d),
+                    _ => None,
+                };
+                if let (Some(c), Some(&vt)) = (item, typed.node_types.get(&e.id)) {
+                    let args = value_args(typed, c, vt);
+                    for (j, arg) in args.into_iter().enumerate() {
+                        let Some(arg) = arg else { continue };
+                        for (i, depth) in params_in(tcx, arg) {
+                            if (i as usize) < g.params {
+                                edges.push(Edge {
+                                    from: from_base + i as usize,
+                                    to: base[&c.def] + j,
+                                    weight: depth,
+                                    span: e.span,
+                                    callee: c.def,
+                                    arg,
+                                    param: param_of(tcx, arg, i),
+                                });
+                            }
+                        }
+                    }
+                }
+                return;
+            }
             let resolved = typed.calls.get(&e.id).and_then(|rc| match rc.callee {
                 Callee::Def(d) => base.get(&d).map(|&b| (rc, d, b)),
                 _ => None,
@@ -239,6 +279,48 @@ fn closes_heavy_cycle(edges: &[Edge], comp: &[usize], n: usize) -> bool {
         }
     }
     best.get(&e.from).is_some_and(|&b| b + e.weight > 0)
+}
+
+/// The instance a generic function named as a value is, read off the
+/// value's `Fn` type against the function's declared parameter types.
+fn value_args(typed: &Typed<'_>, c: &GenericFn<'_>, vt: Ty) -> Vec<Option<Ty>> {
+    let tcx = typed.tcx;
+    let mut out: Vec<Option<Ty>> = vec![None; c.params];
+    let TyKind::Fn { params, .. } = tcx.kind(peel_refs(tcx, vt)) else {
+        return out;
+    };
+    let got = tcx.list(params);
+    if got.len() != c.f.params.len() {
+        return out;
+    }
+    for (p, &w) in c.f.params.iter().zip(&got) {
+        if let Some(&d) = typed.node_types.get(&p.pattern.id) {
+            solve(tcx, d, w, &mut out);
+        }
+    }
+    out
+}
+
+/// Bind each `Param` of the declared `d` to the part of `w` in its place.
+fn solve(tcx: &TyCtxt, d: Ty, w: Ty, out: &mut [Option<Ty>]) {
+    if let TyKind::Param(p) = tcx.kind(d) {
+        if let Some(slot) = out.get_mut(p.index as usize) {
+            slot.get_or_insert(w);
+        }
+        return;
+    }
+    let (d, w) = (peel_refs(tcx, d), peel_refs(tcx, w));
+    let mut ds: Vec<Ty> = Vec::new();
+    let mut ws: Vec<Ty> = Vec::new();
+    children(tcx, d, &mut |t| ds.push(t));
+    children(tcx, w, &mut |t| ws.push(t));
+    if ds.len() == ws.len()
+        && std::mem::discriminant(&tcx.kind(d)) == std::mem::discriminant(&tcx.kind(w))
+    {
+        for (a, b) in ds.into_iter().zip(ws) {
+            solve(tcx, a, b, out);
+        }
+    }
 }
 
 fn peel_refs(tcx: &TyCtxt, mut ty: Ty) -> Ty {

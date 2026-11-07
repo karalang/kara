@@ -1,0 +1,36 @@
+// B-2026-11-07-2: a generic function named as a value takes its own type
+// arguments at each use, solved from where the value goes. `apply(shout,
+// [7], 1)` uses `shout` at `Vec[i64]`, and inside a generic body the
+// item's `T` is its own, never the enclosing function's `T`.
+fn apply[U](g: Fn(own U, i64) -> i64, u: own U, n: i64) -> i64 {
+    g(u, n)
+}
+
+fn shout[T: Display](x: own T, n: i64) -> i64 {
+    println(x);
+    n
+}
+
+fn wrap[T: Display](x: own T) -> i64 {
+    apply(shout, [x], 1)
+}
+
+fn count[T](x: own T) -> i64 {
+    let v: Vec[T] = [x];
+    apply(shout, v.len(), 2)
+}
+
+fn annotated[T: Display](x: own T) -> i64 {
+    let f: Fn(own Vec[T], i64) -> i64 = shout;
+    f([x], 3)
+}
+
+fn main() {
+    println(apply(shout, [7], 4));
+    println(apply(shout, "s", 5));
+    println(wrap(8));
+    println(count("c"));
+    println(annotated(9));
+    let g = shout;
+    println(g(6, 7));
+}

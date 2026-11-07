@@ -1,0 +1,9 @@
+source = "B-2026-11-07-2"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["generics", "fn-value"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-07-2: a generic function named as a value takes fresh type arguments at each use, solved from the slot it fills (design.md §8 monomorphization: one instance per argument tuple). The checker reused the item's own `T`, so `apply(shout, [7], 1)` built `shout[()]`."

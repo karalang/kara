@@ -2878,8 +2878,10 @@ impl<'a> super::TypeChecker<'a> {
         // `let g = Col.A`. Mark the callee so that arm can tell them apart —
         // see `infer_expr`, which passes the marker to a `Path` node only.
         self.variant_ctor_in_callee = true;
+        self.fn_item_in_callee = true;
         let mut callee_ty = self.infer_expr(annotated_callee.as_ref().unwrap_or(callee));
         self.variant_ctor_in_callee = false;
+        self.fn_item_in_callee = false;
         // A value whose type is a type parameter with a function-trait bound
         // (`f: F` with `F: MutFn(T) -> U`) is called with the bound's
         // signature.
