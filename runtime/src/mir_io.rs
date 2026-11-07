@@ -242,7 +242,10 @@ pub(crate) unsafe fn push_bytes(s: *mut RawVec, b: &[u8]) {
     }
     // SAFETY: the caller's contract.
     let s = unsafe { &mut *s };
-    if s.cap - s.len < b.len() {
+    // A constant's bytes have `cap == 0` and `len > 0`: `cap - len` would
+    // wrap, read as room to spare, and write into the literal's static data
+    // (B-2026-11-07-19), so compare the sum.
+    if s.cap < s.len + b.len() {
         let cap = (s.len + b.len()).max(s.cap * 2);
         let p = karac_realloc_or_panic(std::ptr::null_mut(), cap);
         if s.len > 0 {
