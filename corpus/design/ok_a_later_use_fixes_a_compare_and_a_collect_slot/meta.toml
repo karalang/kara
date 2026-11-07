@@ -1,0 +1,9 @@
+source = "B-2026-11-06-13"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "generics", "option", "iter"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: a later use in the body fixes a type variable. `best` (`let mut best = None`) is fixed by the comparison `x > best.unwrap()` and the assignment, so the largest of 3 9 4 is Some(9) and the smallest Some(3); a bare `collect()` handed to `largest(v: Vec[T])` builds a Vec of the iterator's items, which fixes T: the doubled 1 5 3 give 10, and the lengths of bb c aaa give 3; collected into `count(s: Set[T])` the remainders mod 2 of 1 5 3 are the one value 1, so 1."

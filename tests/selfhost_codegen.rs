@@ -129,7 +129,9 @@ const CORPUS: &[&str] = &[
     // Slice 13: Vec[i64] — new/push/len/index/iteration; grow-by-one realloc
     // (observationally identical to the seed's amortized doubling), buffer
     // freed at scope exit (free(null)-safe for the empty vec).
-    "fn main() { let v = Vec.new(); println(v.len().to_string()) }",
+    // The element is named: an unsolved `Vec.new()` is refused at the end
+    // of the body (design.md § Type inference, B-2026-11-06-15).
+    "fn main() { let v: Vec[i64] = Vec.new(); println(v.len().to_string()) }",
     "fn main() { let mut v = Vec.new(); v.push(10); v.push(20); v.push(30); println(v.len().to_string()); println(v[0].to_string()) }",
     "fn main() { let mut v = Vec.new(); v.push(7); v.push(8); println((v[0] * v[1]).to_string()) }",
     "fn main() { let mut v = Vec.new(); let mut i = 0; while i < 6 { v.push(i * i); i = i + 1; } let mut s = 0; let mut j = 0; while j < v.len() { s = s + v[j]; j = j + 1; } println(s.to_string()) }",

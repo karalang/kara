@@ -15979,8 +15979,10 @@ fn bounded_channel_requires_a_positive_capacity() {
     // capacity is statically known, and a variable must not be rejected for
     // being unknowable rather than for being wrong.
     for src in [
-        "fn main() { let (tx, rx) = Channel.bounded(1); }",
-        "fn main() { let n = 4; let (tx, rx) = Channel.bounded(n); }",
+        // The element type is named: one nothing fixes is refused at the
+        // end of the body (design.md § Type inference, B-2026-11-06-15).
+        "fn main() { let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.bounded(1); }",
+        "fn main() { let n = 4; let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.bounded(n); }",
     ] {
         let result = typecheck_ok(src);
         assert!(

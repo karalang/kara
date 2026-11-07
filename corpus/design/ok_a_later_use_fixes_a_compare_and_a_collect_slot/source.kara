@@ -1,0 +1,35 @@
+fn largest[T: Ord + Copy](v: Vec[T]) -> T {
+    let mut m = v[0];
+    for x in v {
+        if x > m {
+            m = x;
+        }
+    }
+    m
+}
+
+fn count[T: Hash + Eq](s: Set[T]) -> i64 {
+    s.len()
+}
+
+fn main() {
+    let mut best = None;
+    for x in [3, 9, 4] {
+        if best.is_none() or x > best.unwrap() {
+            best = Some(*x);
+        }
+    }
+    println(best);
+    let mut low = None;
+    for x in [3, 9, 4] {
+        if low.is_none() or low.unwrap() > x {
+            low = Some(x);
+        }
+    }
+    println(low);
+    let w = [1, 5, 3];
+    println(largest(w.iter().map(|s| s * 2).collect()));
+    println(count(w.iter().map(|s| s % 2).collect()));
+    let names = ["bb", "c", "aaa"];
+    println(largest(names.iter().map(|s| s.len()).collect()));
+}

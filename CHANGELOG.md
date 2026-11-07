@@ -21,6 +21,12 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Programs 0.8.0 accepted that are now refused
 
+- **A type nothing in the body fixes.** `let v = Vec.new();` used only for
+  `v.len()`, a channel whose element type nothing names, and a closure whose
+  parameter is never typed (`let f = |x| x;` never called) are refused at the
+  end of the body with "cannot infer type parameter ..." or "cannot infer
+  closure parameter type", as design.md § Type inference says
+  (B-2026-11-06-15). Annotate the binding or use the value.
 - **A multi-segment attribute path outside the compiler's namespaces.**
   `#[tool::name]` was dropped silently; attribute paths have one segment in
   v1, apart from `karac::` (the protobuf derive's `#[karac::proto]` and
@@ -187,6 +193,13 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   (`let x = make(); let y: i64 = x;`), and for a call inside a generic
   function whose own parameter has the same name (`Bag.new()` inside
   `fn g[T]`, which read the Bag's `T` as `g`'s) (B-2026-11-06-11).
+- A comparison or arithmetic operand whose type is still open is fixed by
+  the other operand: `x > best.unwrap()` after `let mut best = None;` was
+  refused with "cannot compare 'i64' and '?T0'". A bare `collect()` handed to
+  a generic collection parameter (`largest(it.collect())` over
+  `fn largest[T](v: Vec[T])`) builds that collection of the iterator's items;
+  it stopped with an internal "UnknownParam("T") is not lowered yet"
+  (design.md § Type inference, B-2026-11-06-13).
 - **`let` can destructure a `shared` value.** `let H { xs, n } = h` on a
   `shared struct H` was refused with ``struct pattern `H` used but type is
   `H` `` though `match` accepted it. It now binds a non-`Copy` part as a `ref`

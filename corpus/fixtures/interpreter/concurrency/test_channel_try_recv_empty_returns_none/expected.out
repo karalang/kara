@@ -1,1 +1,1 @@
-empty
+ERROR at line 2: cannot infer type parameter 'T' of `(Sender[T], Receiver[T])`: nothing in the body fixes it

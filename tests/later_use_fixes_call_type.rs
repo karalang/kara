@@ -91,3 +91,29 @@ fn a_none_nothing_fixes_is_still_refused() {
         "{text}"
     );
 }
+
+/// B-2026-11-06-15: design.md § Type inference, "An unsolved variable is an
+/// error at the end of the body": a `Vec.new()` used only for `.len()`, and
+/// a closure whose parameter nothing types.
+#[test]
+fn an_unsolved_constructor_and_an_untyped_closure_parameter_are_refused() {
+    let (ok, text) = check(
+        "unsolved-vec",
+        "fn main() {\n    let v = Vec.new();\n    println(v.len());\n}\n",
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(":2:13: cannot infer type parameter 'T' of `Vec[T]`"),
+        "{text}"
+    );
+    let (ok, text) = check(
+        "untyped-closure",
+        "fn main() {\n    let f = |x| x;\n    let g = |x| x + 1;\n    println(g(2));\n}\n",
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(":2:13: cannot infer closure parameter type"),
+        "{text}"
+    );
+    assert_eq!(text.matches("cannot infer").count(), 1, "{text}");
+}

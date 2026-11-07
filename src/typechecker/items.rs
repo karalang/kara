@@ -7093,6 +7093,26 @@ impl<'a> super::TypeChecker<'a> {
             return inferred;
         }
         let (ty, mut vars) = self.open_unbound_params(inferred);
+        // A variable the initializer left open itself (`Vec.new()`'s
+        // element, a closure parameter nothing typed) is judged at the end
+        // too, unless the call that made it already registered it (B-2026-11-06-15).
+        let mut own = Vec::new();
+        // A `comptime` block's type is the code it splices, known only then.
+        if !matches!(value.kind, ExprKind::Comptime(_)) {
+            super::exprs::visible_var_ids(&self.resolved_now(&ty), &mut own);
+        }
+        let closure = matches!(value.kind, ExprKind::Closure { .. });
+        for id in own {
+            let known = vars.iter().any(|(v, _)| *v == id)
+                || self
+                    .unsolved_call_vars
+                    .iter()
+                    .any(|(_, vs)| vs.iter().any(|(v, _)| *v == id));
+            if !known {
+                let name = if closure { "<closure>" } else { "T" };
+                vars.push((id, name.to_string()));
+            }
+        }
         if !vars.is_empty() {
             vars.sort_by(|a, b| a.1.cmp(&b.1));
             self.unsolved_call_vars.push((value.span, vars.clone()));

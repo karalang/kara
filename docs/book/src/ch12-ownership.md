@@ -85,7 +85,7 @@ v[i] = x;                      // index assignment — silent
 When a value is moved, the original binding is gone:
 
 ```kara
-let a = Vec.new();
+let a = Vec.filled(3, 0);
 let b = a;           // `a` is moved into `b`
 // println(a);       // compile error: `a` has been moved
 println(b);          // ok

@@ -249,6 +249,50 @@ pub(super) fn contains_type_var(t: &Type) -> bool {
     }
 }
 
+/// Every inference variable `t` names, in the shapes `contains_type_var`
+/// walks.
+pub(super) fn type_var_ids(t: &Type, out: &mut Vec<TypeVarId>) {
+    match t {
+        Type::TypeVar(id) => out.push(*id),
+        Type::Named { args, .. } => args.iter().for_each(|a| type_var_ids(a, out)),
+        Type::Ref(i) | Type::MutRef(i) => type_var_ids(i, out),
+        Type::Tuple(ts) => ts.iter().for_each(|a| type_var_ids(a, out)),
+        Type::Array { element, .. } | Type::Slice { element, .. } => type_var_ids(element, out),
+        Type::Function {
+            params,
+            return_type,
+            ..
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+            ..
+        } => {
+            params.iter().for_each(|a| type_var_ids(a, out));
+            type_var_ids(return_type, out);
+        }
+        Type::Dyn { args, assoc, .. } => {
+            args.iter().for_each(|a| type_var_ids(a, out));
+            assoc.iter().for_each(|(_, a)| type_var_ids(a, out));
+        }
+        _ => {}
+    }
+}
+
+/// [`type_var_ids`] without a collection's hidden hasher argument, which
+/// takes its default when nothing names it.
+pub(super) fn visible_var_ids(t: &Type, out: &mut Vec<TypeVarId>) {
+    match t {
+        Type::Named { name, args } => super::types::element_args(name, args)
+            .iter()
+            .for_each(|a| visible_var_ids(a, out)),
+        Type::Ref(i) | Type::MutRef(i) => visible_var_ids(i, out),
+        Type::Tuple(ts) => ts.iter().for_each(|a| visible_var_ids(a, out)),
+        Type::Array { element, .. } | Type::Slice { element, .. } => visible_var_ids(element, out),
+        t => type_var_ids(t, out),
+    }
+}
+
 /// The inference variables a generic call's result holds as a type argument
 /// a later use can fix (B-2026-11-06-7): inside a struct, a collection, a
 /// tuple or a reference. `Option` / `Result` keep the path that reads an
@@ -4631,6 +4675,13 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // design.md § Type inference (B-2026-11-06-13): a bare `collect()`
+        // handed to a slot that is a collection of a still-unsolved element
+        // (`largest(it.collect())` over `fn largest[T](v: Vec[T])`) builds
+        // that collection of the iterator's items, which fixes the element.
+        for (arg, slot) in args.iter().zip(sub_params.iter()) {
+            self.solve_collect_slot_from_items(&arg.value, slot);
+        }
         let mut arg_tys: Vec<Option<Type>> = Vec::with_capacity(args.len());
         for (idx, (arg, formal_param_ty)) in args.iter().zip(params.iter()).enumerate() {
             if matches!(arg.value.kind, ExprKind::Closure { .. }) {
@@ -4692,7 +4743,11 @@ impl<'a> super::TypeChecker<'a> {
                         | ExprKind::RepeatLiteral { .. }
                 ) || (self.library_methods_from_source
                     && is_bare_collect(&arg.value));
-                let seeded_slot = if seeded_from_expectation && arg_adopts_from_context {
+                // A bare `collect()` whose slot its items just solved
+                // (`solve_collect_slot_from_items`) is checked against it too.
+                let seeded_slot = if (seeded_from_expectation || is_bare_collect(&arg.value))
+                    && arg_adopts_from_context
+                {
                     let resolved = resolve_type_vars(
                         &sub_params[idx],
                         &self.env.substitutions,
@@ -4701,6 +4756,12 @@ impl<'a> super::TypeChecker<'a> {
                         &const_id_to_name,
                     );
                     let resolved = self.resolve_assoc_projections(&resolved);
+                    // Lent to a borrowed slot, `collect()` builds the value
+                    // the borrow is of (core-semantics §4.1).
+                    let resolved = match resolved {
+                        Type::Ref(inner) if is_bare_collect(&arg.value) => *inner,
+                        t => t,
+                    };
                     expectation_is_concrete(&resolved).then_some(resolved)
                 } else if matches!(
                     &arg.value.kind,
@@ -5599,6 +5660,16 @@ impl<'a> super::TypeChecker<'a> {
                 )
             });
             let Some((_, name)) = unsolved else { continue };
+            if name == "<closure>" {
+                self.type_error(
+                    "cannot infer closure parameter type; annotate or call in a context \
+                     with an expected type (design.md § Type inference)"
+                        .to_string(),
+                    span,
+                    TypeErrorKind::CannotInferTypeParam,
+                );
+                continue;
+            }
             let ty = self
                 .expr_types
                 .get(&SpanKey::from_span(&span))
@@ -7720,6 +7791,53 @@ impl<'a> super::TypeChecker<'a> {
     /// struct's `Iterator` impl, `ref`s kept (`IterEnumerate[SliceIter[String]]`
     /// gives `(i64, ref String)`). `None` off the library, or when the
     /// projection does not resolve.
+    /// See the call site in the generic-call checker: `slot` is a
+    /// one-element collection (`Vec[?T]`) whose element is unsolved, and
+    /// `arg` a bare `collect()`; the element is the iterator's item, read as
+    /// a value.
+    fn solve_collect_slot_from_items(&mut self, arg: &Expr, slot: &Type) {
+        if !is_bare_collect(arg) {
+            return;
+        }
+        let ExprKind::MethodCall { object, .. } = &arg.kind else {
+            return;
+        };
+        let slot = resolve_type_vars(
+            slot,
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &HashMap::new(),
+        );
+        let Type::Named { name, args } = Self::peel_borrow(&slot) else {
+            return;
+        };
+        let elem = match (name.as_str(), args.as_slice()) {
+            ("Vec" | "VecDeque" | "Set" | "SortedSet", [e]) => e.clone(),
+            _ => return,
+        };
+        if !matches!(elem, Type::TypeVar(_)) {
+            return;
+        }
+        let mark = (self.errors.len(), self.warnings.len());
+        self.infer_expr(object);
+        self.errors.truncate(mark.0);
+        self.warnings.truncate(mark.1);
+        let Some(item) = self.library_iter_item(object) else {
+            return;
+        };
+        let item = self.read_as_value(&item);
+        if contains_type_var(&item) || matches!(item, Type::Error | Type::TypeParam(_)) {
+            return;
+        }
+        unify_types(
+            &elem,
+            &item,
+            &mut self.env.substitutions,
+            &mut self.env.const_substitutions,
+        );
+    }
+
     pub(super) fn library_iter_item(&self, object: &Expr) -> Option<Type> {
         if !self.library_methods_from_source {
             return None;

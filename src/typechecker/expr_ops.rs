@@ -3960,6 +3960,17 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `t` with every variable the substitutions have solved put in.
+    pub(super) fn resolved_now(&self, t: &Type) -> Type {
+        super::inference::resolve_type_vars(
+            t,
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &HashMap::new(),
+        )
+    }
+
     pub(super) fn infer_binary(
         &mut self,
         op: &BinOp,
@@ -4015,6 +4026,39 @@ impl<'a> super::TypeChecker<'a> {
         };
         for key in borrowed {
             self.borrowed_deref_operands.remove(&key);
+        }
+        // design.md § Type inference: an operand whose type is still a
+        // variable (`best.unwrap()` of `let mut best = None;`) is fixed by
+        // the other operand, as any later use fixes it (B-2026-11-06-13).
+        if !matches!(op, BinOp::And | BinOp::Or) {
+            let l = self.resolved_now(&left_ty);
+            let r = self.resolved_now(&right_ty);
+            let known = |t: &Type| {
+                !super::exprs::contains_type_var(t) && !matches!(t, Type::Error | Type::Never)
+            };
+            if matches!(strip_refs_for_compare(&r), Type::TypeVar(_)) && known(&l) {
+                let fixed = strip_refs_for_compare(&l).clone();
+                super::inference::unify_types(
+                    strip_refs_for_compare(&r),
+                    &fixed,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+                right_ty = self.resolved_now(&right_ty);
+                self.record_expr_type(&right.span, &right_ty);
+                self.record_node_type(right.id, &right_ty);
+            } else if matches!(strip_refs_for_compare(&l), Type::TypeVar(_)) && known(&r) {
+                let fixed = strip_refs_for_compare(&r).clone();
+                super::inference::unify_types(
+                    strip_refs_for_compare(&l),
+                    &fixed,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+                left_ty = self.resolved_now(&left_ty);
+                self.record_expr_type(&left.span, &left_ty);
+                self.record_node_type(left.id, &left_ty);
+            }
         }
         // B-2026-10-29-35 — a constructor or tuple operand of a comparison is
         // checked against the other operand's type where it differs from it
