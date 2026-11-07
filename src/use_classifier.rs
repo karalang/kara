@@ -1220,6 +1220,15 @@ impl<'a> UseClassifier<'a> {
                     } else {
                         self.walk_expr(callee, Mode::Reading);
                     }
+                } else if matches!(
+                    callee.kind,
+                    ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                ) && matches!(self.tc.expr_type(callee), Some(Type::OnceFunction { .. }))
+                {
+                    // §9.6: calling an `OnceFn` moves it, a field's too:
+                    // `(job.run)(); (job.run)();` is E0500 at the second
+                    // call, as for a binding (B-2026-11-07-37).
+                    self.walk_expr(callee, Mode::Consuming);
                 } else {
                     self.walk_expr(callee, Mode::Reading);
                 }

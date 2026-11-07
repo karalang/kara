@@ -1,0 +1,7 @@
+struct Job { run: OnceFn() }
+fn main() {
+    let s = "x".to_string();
+    let job = Job { run: || { let t = s; } };
+    (job.run)();
+    (job.run)();
+}

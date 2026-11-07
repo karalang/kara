@@ -1,0 +1,43 @@
+// §4.6: a bare `for x in xs` borrows `xs` and each `x` is a `ref` into it,
+// so with `xs` borrowed from the caller (§5.4) an item may be returned,
+// directly or in an `Option[ref String]` (B-2026-11-07-39).
+fn longest(xs: Slice[String]) -> ref String {
+    let mut best = ref xs[0];
+    for x in xs {
+        if x.len() > best.len() {
+            best = x;
+        }
+    }
+    best
+}
+
+fn first_of_len(xs: Vec[String], n: i64) -> Option[ref String] {
+    for x in xs {
+        if x.len() == n {
+            return Some(x);
+        }
+    }
+    None
+}
+
+fn first(xs: Slice[String]) -> ref String {
+    for x in xs {
+        return x;
+    }
+    ref xs[0]
+}
+
+fn main() {
+    let v = ["a".to_string(), "ccc".to_string(), "bb".to_string()];
+    println(longest(v.as_slice()));
+    match first_of_len(v, 2) {
+        Some(s) => println(s),
+        None => println("none"),
+    }
+    match first_of_len(v, 5) {
+        Some(s) => println(s),
+        None => println("none"),
+    }
+    println(first(v.as_slice()));
+    println(v.len());
+}

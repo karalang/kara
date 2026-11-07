@@ -2475,6 +2475,24 @@ impl<'a> OwnershipChecker<'a> {
             else {
                 continue;
             };
+            // §9.6: the move was the call of an `OnceFn` field
+            // (`(job.run)()`), worded as a binding's (B-2026-11-07-37).
+            let once = &self.typecheck_result.core_once_calls;
+            if once.contains(&SpanKey::from_span(&moved))
+                || once.contains(&SpanKey::from_span(&consume))
+            {
+                e.message = format!(
+                    "{text} moved by the first call at line {}:{} (an OnceFn is called once, \
+                     §9.6)",
+                    consume.line, consume.column
+                );
+                e.suggestion = Some(format!(
+                    "call `{text}` once, or have its body clone what it moves out so it is an \
+                     `Fn` (design.md §7 Function types and kinds)"
+                ));
+                e.replacement = None;
+                continue;
+            }
             let supports_clone = self
                 .typecheck_result
                 .clonable_expr_spans

@@ -1,0 +1,12 @@
+source = "probe:core-4.6"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "pin"
+rules = ["4.6", "5.4"]
+backends = []
+env = {}
+note = "§4.6 / §5.4: the item of a bare `for` over a borrowed parameter is a borrow of it and may be returned, alone or in an Option[ref String] (B-2026-11-07-39)."
+bucket = "a:ok"

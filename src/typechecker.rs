@@ -3934,6 +3934,10 @@ pub struct TypeChecker<'a> {
     /// constructor nested somewhere INSIDE a callee expression
     /// (`foo(Col.A)(3)`) is still in value position and still rejected.
     pub(super) variant_ctor_in_callee: bool,
+    /// The variant constructor calls `check_expr` is checking against an
+    /// expectation, whose stored-view lint waits for that expectation
+    /// (B-2026-11-07-39): `Some(x)` into `Option[ref String]` lends `x`.
+    pub(super) variant_lint_deferred: FxHashSet<crate::ids::NodeId>,
     /// Set with `variant_ctor_in_callee` and handed on only to a bare
     /// identifier: a generic function item named as the callee keeps its
     /// declared parameters for the call's own instantiation, while one
@@ -4301,6 +4305,7 @@ impl<'a> TypeChecker<'a> {
             baked_impls: FxHashSet::default(),
             reported_uninferrable_empty_literal: false,
             variant_ctor_in_callee: false,
+            variant_lint_deferred: FxHashSet::default(),
             fn_item_in_callee: false,
             uninferrable_binding_origins: FxHashMap::default(),
             stdlib_self_module: None,

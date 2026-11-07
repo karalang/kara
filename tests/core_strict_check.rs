@@ -2391,6 +2391,91 @@ fn writing_a_place_a_for_loop_iterates_is_an_error() {
     );
 }
 
+/// §4.6 / §5.4: the item of a bare `for` over a borrowed parameter borrows
+/// it, so it may be returned, alone or in an `Option[ref String]` (pin
+/// ok_for_item_of_borrowed_param_returned, B-2026-11-07-39); over an owned
+/// local it still dangles, and into an owned slot it is still a move.
+#[test]
+fn for_item_of_borrowed_param_may_be_returned() {
+    accepted(
+        "for-item-returned",
+        "fn longest(xs: Slice[String]) -> ref String {\n\
+             let mut best = ref xs[0];\n\
+             for x in xs { if x.len() > best.len() { best = x; } }\n\
+             best\n\
+         }\n\
+         fn find(xs: Vec[String], n: i64) -> Option[ref String] {\n\
+             for x in xs { if x.len() == n { return Some(x); } }\n\
+             None\n\
+         }\n\
+         fn main() {\n\
+             let v = [\"a\".to_string(), \"ccc\".to_string()];\n\
+             println(longest(v.as_slice()));\n\
+             match find(v, 1) { Some(s) => println(s), None => println(\"none\") }\n\
+         }\n",
+    );
+    rejected_with(
+        "for-item-of-local-returned",
+        "fn pick(xs: Slice[String]) -> ref String {\n\
+             let v = [\"q\".to_string()];\n\
+             for x in v { return x; }\n\
+             ref xs[0]\n\
+         }\n\
+         fn main() { }\n",
+        "returned borrow does not originate from a `ref` parameter",
+    );
+    rejected_with(
+        "for-item-into-owned-option",
+        "fn own_it(xs: Slice[String]) -> Option[String] {\n\
+             for x in xs { return Some(x); }\n\
+             None\n\
+         }\n\
+         fn main() { }\n",
+        "cannot move 'x': it borrows its value",
+    );
+}
+
+/// §9.6: calling an `OnceFn` struct field moves the field, so a second call
+/// is E0500 as a binding's is (pin err_once_field_called_twice,
+/// B-2026-11-07-37), and through a `ref` it is a move out of a borrow.
+#[test]
+fn once_fn_field_called_twice_is_refused() {
+    rejected_with(
+        "once-field-twice",
+        "struct Job { run: OnceFn() }\n\
+         fn main() {\n\
+             let s = \"x\".to_string();\n\
+             let job = Job { run: || { let t = s; } };\n\
+             (job.run)();\n\
+             (job.run)();\n\
+         }\n",
+        "job.run moved by the first call at line 5:2 (an OnceFn is called once, §9.6)",
+    );
+    rejected_with(
+        "once-field-through-ref",
+        "struct Job { run: OnceFn() }\n\
+         fn go(job: ref Job) { (job.run)(); }\n\
+         fn main() {\n\
+             let s = \"x\".to_string();\n\
+             go(Job { run: || { let t = s; } });\n\
+         }\n",
+        "cannot move `job.run`: it is reached through a shared `ref`",
+    );
+    accepted(
+        "once-field-once",
+        "struct Job { run: OnceFn() }\n\
+         struct Rep { run: Fn() }\n\
+         fn main() {\n\
+             let s = \"x\".to_string();\n\
+             let job = Job { run: || { let t = s; } };\n\
+             (job.run)();\n\
+             let r = Rep { run: || println(\"hi\") };\n\
+             (r.run)();\n\
+             (r.run)();\n\
+         }\n",
+    );
+}
+
 /// §9.6: a function type has a kind. A closure that writes a capture is a
 /// `MutFn`, which a plain `Fn` parameter does not take (pins
 /// ok_closure_kinds, err_fn_kind_mismatch); calling an `OnceFn` moves it,

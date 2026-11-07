@@ -1787,12 +1787,14 @@ impl Walk<'_, '_> {
             }
             return;
         }
-        let ExprKind::Identifier(name) = &callee.kind else {
-            return;
-        };
+        // The callee of an `OnceFn` call, a binding or a field
+        // (`(job.run)()`, B-2026-11-07-37).
         if let Some((Type::OnceFunction { .. }, _)) = self.node_types.get(&callee.id) {
             self.once_calls.insert(SpanKey::from_span(&callee.span));
         }
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return;
+        };
         if self.lookup(name).is_some() {
             return;
         }

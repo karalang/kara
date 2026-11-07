@@ -1236,7 +1236,13 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.collect_views_into_strings_fix(expr, expected);
         self.retyped_int_literal = None;
+        let deferred = matches!(&expr.kind, ExprKind::Call { callee, .. }
+                if self.callee_is_variant_constructor(callee))
+            && self.variant_lint_deferred.insert(expr.id);
         let mut ty = self.check_expr_inner(expr, expected);
+        if deferred {
+            self.variant_lint_deferred.remove(&expr.id);
+        }
         // A literal whose integers took the slot's narrower types has the
         // slot's type (B-2026-11-04-82).
         if let Some((key, want)) = self.retyped_int_literal.take() {

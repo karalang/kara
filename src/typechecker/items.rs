@@ -9272,11 +9272,36 @@ impl<'a> super::TypeChecker<'a> {
         expr: &Expr,
         expected: Option<&Type>,
     ) {
+        if expected.is_none() && self.variant_lint_deferred.contains(&expr.id) {
+            return;
+        }
         let ref_slots: Vec<bool> = match (&expr.kind, expected) {
             (ExprKind::Tuple(_), Some(Type::Tuple(slots)))
                 if self.cli_lint_overrides.strict_core =>
             {
                 slots.iter().map(|t| matches!(t, Type::Ref(_))).collect()
+            }
+            // `Some(x)` / `Ok(x)` / `Err(x)` into an `Option` or `Result`
+            // whose payload is a `ref` lends `x` (B-2026-11-07-39).
+            (ExprKind::Call { callee, .. }, Some(Type::Named { name, args }))
+                if self.cli_lint_overrides.strict_core =>
+            {
+                let variant = match &callee.kind {
+                    ExprKind::Identifier(v) => Some(v.as_str()),
+                    ExprKind::Path { segments, .. } => segments.last().map(|v| v.as_str()),
+                    _ => None,
+                };
+                let slot = match (name.as_str(), variant) {
+                    ("Option", Some("Some")) | ("Result", Some("Ok")) => args.first(),
+                    ("Result", Some("Err")) => args.get(1),
+                    _ => None,
+                };
+                vec![slot.is_some_and(|t| {
+                    matches!(
+                        resolve_type_var_top(t, &self.env.substitutions),
+                        Type::Ref(_)
+                    )
+                })]
             }
             _ => Vec::new(),
         };
@@ -9328,7 +9353,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Is `callee` an enum variant constructor: `Some` / `Ok` / `Err`, or
     /// `E.V` / `E::V` naming a declared variant?
-    fn callee_is_variant_constructor(&self, callee: &Expr) -> bool {
+    pub(super) fn callee_is_variant_constructor(&self, callee: &Expr) -> bool {
         let (owner, variant) = match &callee.kind {
             ExprKind::Identifier(n) => {
                 return matches!(n.as_str(), "Some" | "Ok" | "Err");

@@ -1361,9 +1361,20 @@ fn core_defs_in_expr<'e>(
         }
         // A `for` over a borrowing walk of a place lends each element of it
         // (B-2026-10-14-60): `for (k, it) in v.iter()` with `v: ref Vec[..]`.
+        // So does a bare `for x in xs` over a place, which borrows it
+        // through Iterable (core §4.6; B-2026-11-07-39).
         ExprKind::For {
             pattern, iterable, ..
-        } => match borrowed_walk_place(iterable) {
+        } => match borrowed_walk_place(iterable).or_else(|| {
+            matches!(
+                iterable.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::SelfValue
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::TupleIndex { .. }
+            )
+            .then_some(&**iterable)
+        }) {
             Some(place) => {
                 for n in pattern.binding_names() {
                     defs.entry(n).or_default().push(CoreDef::Projection(place));

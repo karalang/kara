@@ -1,0 +1,12 @@
+source = "probe:core-9.6"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "pin"
+backends = []
+env = {}
+note = "§9.6: calling an OnceFn moves it, a struct field's too, so a second `(job.run)()` is E0500 at check, as err_once_called_twice is for a parameter (B-2026-11-07-37)."
+bucket = "a:refused"
+rules = ["9.6"]
