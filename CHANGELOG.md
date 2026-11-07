@@ -49,6 +49,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - **A string literal inside `Some(..)`, `Ok(..)`, `Err(..)` or a tuple
   compares with an `Option[Str]`** (or a `Result` or tuple of `Str`):
   `name == Some("bob")` was refused with a type mismatch (B-2026-11-07-54).
+- **A method called straight on a constant reads it at its declared type.**
+  With `const CC: u8 = 200;`, `CC.leading_zeros()` gave 56 (the `i64`
+  count) and a `u64` or `i128` constant past `i64` printed through
+  `to_string()` as a negative number; `let v = CC;` and `println(CC)` were
+  already right (B-2026-11-07-56).
 
 ### Diagnostics
 

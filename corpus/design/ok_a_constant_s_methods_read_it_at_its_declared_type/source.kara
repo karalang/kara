@@ -1,0 +1,20 @@
+const CC: u8 = 200;
+const NN: i8 = -100;
+const WW: i128 = 170141183460469231731687303715884105727;
+const UU: u64 = 18446744073709551615;
+const HALF: f32 = 2.25;
+const NEG: f64 = -2.5;
+const PAIR: (u8, i64) = (200, 1);
+fn main() {
+    println(CC.to_string());
+    println(CC.count_ones());
+    println(CC.leading_zeros());
+    println(CC.wrapping_add(100));
+    println(NN.abs());
+    println(WW.to_string());
+    println(UU.to_string());
+    println(UU.count_ones());
+    println(HALF.sqrt());
+    println(NEG.abs());
+    println(PAIR.0.leading_zeros());
+}

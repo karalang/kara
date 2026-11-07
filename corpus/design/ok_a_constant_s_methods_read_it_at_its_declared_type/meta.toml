@@ -1,0 +1,9 @@
+source = "B-2026-11-07-56"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "constants", "numerics", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Constants: a constant has its declared type, so a method called straight on one reads the value at that type. `CC: u8 = 200` is 200, has 3 bits set and no leading zeros, and wraps to 44 when 100 is added; `NN: i8 = -100` has abs 100; `WW: i128` and `UU: u64` print their full values past i64 (UU has 64 bits set); `HALF: f32 = 2.25` has sqrt 1.5, `NEG: f64 = -2.5` abs 2.5; and `PAIR.0` of a (u8, i64) tuple is the u8 200."

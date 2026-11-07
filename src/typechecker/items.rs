@@ -5555,6 +5555,39 @@ impl<'a> super::TypeChecker<'a> {
         self.lint_override_stack.pop();
     }
 
+    /// A constant whose value is a bare number (`const CC: u8 = 200;`,
+    /// `let BB: u64 = 18446744073709551615;`) holds it at its declared type,
+    /// in typed HIR too: a method called straight on the constant
+    /// (`CC.leading_zeros()`) builds its receiver from the value, and read
+    /// it at the literal's `i64` (B-2026-11-07-56).
+    fn literal_value_at_declared_type(&mut self, value: &Expr, declared: &Type) {
+        let fits = match (&value.kind, declared) {
+            (ExprKind::Integer(_, None), Type::Int(_) | Type::UInt(_))
+            | (ExprKind::Float(_, None), Type::Float(_)) => true,
+            (
+                ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    operand,
+                },
+                _,
+            ) if matches!(
+                (&operand.kind, declared),
+                (ExprKind::Integer(_, None), Type::Int(_))
+                    | (ExprKind::Float(_, None), Type::Float(_))
+            ) =>
+            {
+                self.record_expr_type(&operand.span, declared);
+                self.record_node_type(operand.id, declared);
+                true
+            }
+            _ => false,
+        };
+        if fits {
+            self.record_expr_type(&value.span, declared);
+            self.record_node_type(value.id, declared);
+        }
+    }
+
     fn check_const_decl(&mut self, c: &ConstDecl) {
         let declared_ty = self.lower_type_expr(&c.ty, &[]);
         // B-2026-10-06-41: CHECK the value against the declared type
@@ -5566,6 +5599,7 @@ impl<'a> super::TypeChecker<'a> {
         // "expected 'Array[i64, 3]', found 'Vec[i64]'" -- the form a local
         // `let` and a module-level `let` both accept.
         self.check_expr(&c.value, &declared_ty);
+        self.literal_value_at_declared_type(&c.value, &declared_ty);
         // A constant has a value only when its initializer reaches one
         // without coming back to it (design.md § Constants,
         // B-2026-11-06-19): a cycle is refused once, at the first-declared
@@ -6070,6 +6104,7 @@ impl<'a> super::TypeChecker<'a> {
             // E_MODULE_BINDING_HEAP_TYPE, so a module constant carrying a
             // name, path, or message was unrepresentable.
             self.check_module_binding_value(&b.value, &declared);
+            self.literal_value_at_declared_type(&b.value, &declared);
         } else {
             // No annotation — infer from the initializer. The const-init
             // walker above has already verified the value's shape, so any
