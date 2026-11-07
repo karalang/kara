@@ -1137,9 +1137,11 @@ const CODE_PROSE: &[(&str, &str)] = &[
         "A `match` must be exhaustive: every value of the scrutinee's type must \
          be matched by some arm (design.md § Pattern exhaustiveness). The \
          message lists what is missing. A guarded arm (`P if cond => ...`) does \
-         not count toward exhaustiveness, and a match over integers, `char` or \
-         strings needs a wildcard arm, since the compiler does not check \
-         whether a set of literals or ranges covers the whole type. Add an arm \
+         not count toward exhaustiveness, and a match over integers, floats, `char` or \
+         strings needs an arm that matches the rest: `_`, a binding, or a \
+         half-open range such as `10..`, since the compiler does not check \
+         whether a set of literals covers the whole type. On a `Vec`, the slice \
+         patterns `[]` and `[x, ..rest]` together cover every length. Add an arm \
          for each missing case, or a `_ => ...` arm when the rest share one \
          behaviour; on an enum, explicit arms keep a variant added later \
          reported here.",
