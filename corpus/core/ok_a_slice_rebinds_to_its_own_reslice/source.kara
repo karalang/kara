@@ -1,0 +1,35 @@
+// A `Slice` is a view, like a `Str` (core semantics §5.2): slicing one
+// borrows what the slice borrows, not the local holding it, so the local
+// may be bound to its own sub-slice (B-2026-11-08-66).
+fn drop_first(xs: Slice[i64]) -> i64 {
+    let mut rest = xs;
+    rest = rest[1..];
+    rest.len()
+}
+
+fn after_keyword(words: Slice[String]) -> String {
+    let mut rest = words;
+    if not rest.is_empty() and rest[0] == "attr" {
+        rest = rest[1..];
+    }
+    rest.join(" ")
+}
+
+fn drop_first_char(s: Str) -> Str {
+    let mut t = s;
+    t = t[1..];
+    t
+}
+
+fn main() {
+    let v = [1, 2, 3];
+    println(drop_first(v));
+    let w: Vec[String] = ["attr", "rank=same", "nodesep=0.3"];
+    println(after_keyword(w));
+    let mut r = w.as_slice();
+    while r.len() > 1 {
+        r = r[1..];
+    }
+    println(r[0]);
+    println(drop_first_char("xyz"));
+}

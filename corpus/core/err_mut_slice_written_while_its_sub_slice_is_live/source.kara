@@ -1,0 +1,13 @@
+// A sub-slice of a `mut Slice` borrows it, so the slice may not be
+// written while the sub-slice is live (core semantics §5.6). The slice
+// rebinding that B-2026-11-08-66 accepts is for read-only slices only.
+fn first_after_write(xs: mut Slice[i64]) -> i64 {
+    let head = xs[0..1];
+    xs[0] = 5;
+    head[0]
+}
+
+fn main() {
+    let mut v = [1, 2, 3];
+    println(first_after_write(mut v));
+}

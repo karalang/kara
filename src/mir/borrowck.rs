@@ -308,6 +308,7 @@ pub fn borrow_errors(
         tys,
         loans: &loans,
         has_receiver,
+        writes_slices: writes_slices(body, tys, &loans),
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
@@ -486,6 +487,7 @@ pub(super) fn loan_liveness(
         tys,
         loans: &loans,
         has_receiver,
+        writes_slices: writes_slices(body, tys, &loans),
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
@@ -925,6 +927,19 @@ struct Cx<'a> {
     tys: &'a TyInterner,
     loans: &'a [Loan],
     has_receiver: &'a dyn Fn(&InstanceId) -> ResultBorrows,
+    /// Whether the body borrows any `Slice` place mutably. A MIR slice
+    /// type does not say whether it is a `mut Slice`, so in a body that
+    /// writes through some slice no slice counts as read-only.
+    writes_slices: bool,
+}
+
+/// Whether some loan of the body is a `mut` borrow of a `Slice` place.
+fn writes_slices(body: &Body, tys: &TyInterner, loans: &[Loan]) -> bool {
+    loans.iter().any(|l| {
+        l.kind == BorrowKind::Mut
+            && place_ty(body, tys, &l.place)
+                .is_ok_and(|pt| matches!(tys.kind(pt.ty), TyKind::Slice(_)))
+    })
 }
 
 impl Cx<'_> {
@@ -980,6 +995,22 @@ impl Cx<'_> {
                 TyKind::Ref(t) | TyKind::MutRef(t) => matches!(self.tys.kind(t), TyKind::Str),
                 _ => false,
             })
+    }
+
+    /// A shared reference to a `Slice` that cannot be written through: a
+    /// view, like a `str`, so what a native makes from it (`rest[1..]`)
+    /// borrows what the slice borrows, not the local holding it, and the
+    /// local may be bound to the result (`rest = rest[1..]`,
+    /// B-2026-11-08-66).
+    fn refers_to_read_only_slice(&self, op: &Operand) -> bool {
+        !self.writes_slices
+            && op
+                .place()
+                .and_then(|p| place_ty(self.body, self.tys, p).ok())
+                .is_some_and(|pt| match self.tys.kind(pt.ty) {
+                    TyKind::Ref(t) => matches!(self.tys.kind(t), TyKind::Slice(_)),
+                    _ => false,
+                })
     }
 
     fn pointee_origins(&self, o: &Origins, op: &Operand, into: &mut LoanSet) {
@@ -1309,7 +1340,9 @@ impl Cx<'_> {
             // A `str` is itself a view (core semantics §5.2): what a native
             // makes from a reference to one borrows the `String` it views,
             // not the place holding the view.
-            ResultBorrows::Receiver if self.refers_to_str(&args[0]) => {
+            ResultBorrows::Receiver
+                if self.refers_to_str(&args[0]) || self.refers_to_read_only_slice(&args[0]) =>
+            {
                 self.pointee_origins(o, &args[0], &mut val)
             }
             ResultBorrows::Receiver => self.operand_origins(o, &args[0], &mut val),
