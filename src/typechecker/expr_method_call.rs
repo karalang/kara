@@ -614,10 +614,15 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        let bounds = match self.enclosing_bounds.get(type_param_name) {
+        let mut bounds = match self.enclosing_bounds.get(type_param_name) {
             Some(b) => b.clone(),
             None => Vec::new(),
         };
+        if let Some((p, b)) = &self.blanket_impl_bound {
+            if p == type_param_name {
+                bounds.push(b.clone());
+            }
+        }
         let self_ty = Type::TypeParam(type_param_name.to_string());
         self.dispatch_bounded_receiver_method(type_param_name, self_ty, bounds, method, args, span)
     }

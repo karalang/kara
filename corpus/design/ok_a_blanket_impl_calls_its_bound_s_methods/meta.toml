@@ -1,0 +1,9 @@
+source = "B-2026-11-08-32"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "traits", "generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Coherence allows `impl[S: Store] Counter for S`. Its body calls the bound's `get` and its own trait's `peek`; the generic-trait form `impl[T: Table[String, i64]] Tally for T` reads through `lookup` and writes through `put`. M.get is 3, so peek is 4 (direct, UFCS) and twice through a bound is 8; bumping a twice then b gives b=1, a=2, and a missing key counts 0. Every call on `self` was refused with \"a type that failed to check is not lowered yet\" before the fix."

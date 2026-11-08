@@ -5165,6 +5165,12 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     lowered.clone()
                 }
+                // A blanket impl's `self` is a value of the impl's own
+                // parameter (`impl[S: Store] Counter for S`), so its methods
+                // are the bounds' (B-2026-11-08-32). As `Named { "S" }` it
+                // matched no impl and every call on it typed as an error in
+                // silence.
+                Type::TypeParam(p) if gp.contains(p) => lowered.clone(),
                 _ => Type::Named {
                     name: type_name.clone(),
                     args: Vec::new(),
@@ -5403,6 +5409,28 @@ impl<'a> super::TypeChecker<'a> {
         for (name, bounds) in Self::collect_param_bounds(&imp.generic_params, &imp.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
+        // A blanket impl's parameter implements the impl's own trait inside
+        // it: `self.tag()` in `impl[T: Display] Shout for T` is `Shout`'s
+        // `tag`, beside the methods of `T`'s declared bounds
+        // (B-2026-11-04-49, B-2026-11-08-32).
+        let mut blanket_bound = None;
+        if let (Some(tr), TypeKind::Path(p)) = (&imp.trait_name, &imp.target_type.kind) {
+            if let [param] = p.segments.as_slice() {
+                if gp.contains(param) && p.generic_args.is_none() {
+                    blanket_bound = Some((
+                        param.clone(),
+                        crate::ast::TraitBound {
+                            path: tr.segments.clone(),
+                            generic_args: tr.generic_args.clone(),
+                            assoc_bindings: Vec::new(),
+                            fn_sig: None,
+                            span: tr.span,
+                        },
+                    ));
+                }
+            }
+        }
+        let saved_blanket_bound = std::mem::replace(&mut self.blanket_impl_bound, blanket_bound);
         let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
         self.enclosing_assoc_eqs
             .extend(self.collect_assoc_eqs(&imp.where_clause));
@@ -5637,6 +5665,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         self.enclosing_bounds = saved_bounds;
+        self.blanket_impl_bound = saved_blanket_bound;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_proj_bounds = saved_proj_bounds;
         self.current_impl_target = saved_impl_target;

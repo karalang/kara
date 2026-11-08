@@ -1,0 +1,81 @@
+// design.md § Coherence: a blanket impl's methods call the methods of its
+// parameter's bounds, and its own trait's (B-2026-11-08-32).
+trait Store {
+    fn get(self) -> i64;
+}
+
+trait Counter {
+    fn peek(self) -> i64;
+    fn twice(self) -> i64;
+}
+
+impl[S: Store] Counter for S {
+    fn peek(self) -> i64 {
+        self.get() + 1
+    }
+
+    fn twice(self) -> i64 {
+        self.peek() * 2
+    }
+}
+
+trait Table[K, V] {
+    fn lookup(self, k: K) -> Option[V];
+    fn put(mut ref self, k: own K, v: V);
+}
+
+trait Tally {
+    fn count(self, k: String) -> i64;
+    fn bump(mut ref self, k: String) -> i64;
+}
+
+impl[T: Table[String, i64]] Tally for T {
+    fn count(self, k: String) -> i64 {
+        self.lookup(k) ?? 0
+    }
+
+    fn bump(mut ref self, k: String) -> i64 {
+        let n = self.count(k.clone()) + 1;
+        self.put(k.clone(), n);
+        n
+    }
+}
+
+struct M {}
+
+impl Store for M {
+    fn get(self) -> i64 {
+        3
+    }
+}
+
+struct Mem {
+    items: SortedMap[String, i64],
+}
+
+impl Table[String, i64] for Mem {
+    fn lookup(self, k: String) -> Option[i64] {
+        self.items.get(k).cloned()
+    }
+
+    fn put(mut ref self, k: own String, v: i64) {
+        self.items.insert(k, v);
+    }
+}
+
+fn through_bound[C: Counter](c: C) -> i64 {
+    c.twice()
+}
+
+fn main() {
+    let m = M {};
+    println(m.peek());
+    println(Counter.peek(m));
+    println(through_bound(m));
+    let mut mem = Mem { items: SortedMap.new() };
+    mem.bump("a".to_string());
+    mem.bump("a".to_string());
+    println(mem.bump("b".to_string()));
+    println(mem.count("a".to_string()));
+    println(mem.count("z".to_string()));
+}
