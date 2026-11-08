@@ -87,6 +87,7 @@ fn kata_2008_rust_mut_parameter_becomes_own_with_let_mut() {
 fn kata_2008_tuple_let_of_usize_casts_becomes_i64() {
     let src = "fn gain(r: Vec[i32], i: i64) -> i64 {\n    let (end, tip) = (r[1] as usize, r[2] as i64);\n    let reach: i64 = end;\n    reach - i + tip\n}\n\nfn main() {\n    println(gain([1, 5, 2], 1));\n}";
     let (first, text, clean, out) = mend(&scratch("tuple_let_of_usize_c"), src);
+    assert!(first.contains("as usize"), "{first}");
     assert!(
         text.contains("let (end, tip) = (r[1] as i64, r[2] as i64);"),
         "{text}"
