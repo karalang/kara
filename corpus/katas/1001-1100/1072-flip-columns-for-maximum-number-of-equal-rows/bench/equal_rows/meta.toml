@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1072-flip-columns-for-maximum-number-of-equal-rows/bench/equal_rows.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1072 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "f723e9c16"
+extracted_src = "2be62ddb"

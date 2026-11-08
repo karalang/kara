@@ -1,0 +1,283 @@
+// LeetCode #1072: Flip Columns For Maximum Number of Equal Rows -- the
+// differential: copies of the six arms checked against the statement read
+// literally (every set of columns flipped, the rows that come out all
+// zeros or all ones counted) and against each other, on 2000 problems.
+
+// ---- equal_rows.kara ----
+
+fn star_max_equal_rows(matrix: Vec[Vec[i64]]) -> i64 {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut best = 0;
+    for row in matrix.iter() {
+        let mut key = String.new();
+        for c in row.iter() {
+            key.push(if *c != row[0] { '1' } else { '0' });
+        }
+        let seen = counts.get(key).unwrap_or(0) + 1;
+        counts.insert(key, seen);
+        best = best.max(seen);
+    }
+    best
+}
+
+// ---- equal_rows_brute.kara ----
+
+fn brute_same_or_flipped(a: Vec[i64], b: Vec[i64]) -> bool {
+    let mut same = true;
+    let mut flipped = true;
+    for j in 0..a.len() {
+        if a[j] == b[j] {
+            flipped = false;
+        } else {
+            same = false;
+        }
+        if not same and not flipped {
+            return false;
+        }
+    }
+    true
+}
+
+fn brute_max_equal_rows(matrix: Vec[Vec[i64]]) -> i64 {
+    let mut best = 0;
+    for a in matrix.iter() {
+        let count = matrix.iter().filter(|b| brute_same_or_flipped(a, b)).count();
+        best = best.max(count);
+    }
+    best
+}
+
+// ---- equal_rows_sorted.kara ----
+
+fn sorted_max_equal_rows(matrix: Vec[Vec[i64]]) -> i64 {
+    let mut rows: Vec[Vec[i64]] = matrix.iter().map(|row| row.iter().map(|c| c ^ row[0]).collect()).collect();
+    rows.sort();
+    let mut best = 0;
+    let mut run = 0;
+    for i in 0..rows.len() {
+        if i > 0 and rows[i] == rows[i - 1] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    best
+}
+
+// ---- equal_rows_bits.kara ----
+
+fn bits_packed(row: Vec[i64]) -> Vec[u64] {
+    let mut words: Vec[u64] = Vec.filled((row.len() + 63) / 64, 0);
+    for (j, c) in row.iter().enumerate() {
+        if *c != row[0] {
+            words[j / 64] |= 1u64 << (j % 64);
+        }
+    }
+    words
+}
+
+fn bits_max_equal_rows(matrix: Vec[Vec[i64]]) -> i64 {
+    let mut counts: Map[Vec[u64], i64] = Map.new();
+    for row in matrix.iter() {
+        let key = bits_packed(row);
+        let value = counts.get(key).unwrap_or(0) + 1;
+        counts[key] = value;
+    }
+    counts.values().max().unwrap_or(0)
+}
+
+// ---- equal_rows_trie.kara ----
+
+fn trie_max_equal_rows(matrix: Vec[Vec[i64]]) -> i64 {
+    let mut next: Vec[Array[i64, 2]] = [[-1, -1]];
+    let mut ends: Vec[i64] = [0];
+    let mut best = 0;
+    for row in matrix.iter() {
+        let mut node = 0;
+        for c in row.iter() {
+            let bit = c ^ row[0];
+            if next[node][bit] < 0 {
+                next[node][bit] = next.len();
+                next.push([-1, -1]);
+                ends.push(0);
+            }
+            node = next[node][bit];
+        }
+        ends[node] += 1;
+        best = best.max(ends[node]);
+    }
+    best
+}
+
+// ---- equal_rows_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn max_equal_rows_after_flips(matrix: Vec[Vec[i32]]) -> i32 {
+        let mut count: Map[Vec[i32], i32] = Map.new();
+        for row in matrix.iter() {
+            let key: Vec[i32] = row.iter().map(|x| x ^ row[0]).collect();
+            *count.entry(key).or_insert(0) += 1;
+        }
+        *count.values().max().unwrap()
+    }
+}
+
+fn solution_max_equal_rows(matrix: Vec[Vec[i64]]) -> i64 {
+    let rows: Vec[Vec[i32]] = matrix.iter().map(|row| row.iter().map(|c| *c as i32).collect()).collect();
+    Solution.max_equal_rows_after_flips(rows)
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// Every set of columns flipped, as the bits of `mask`, and the rows that
+// then hold one value in every cell counted; the most over all sets.
+fn literally(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix[0].len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut equal = 0;
+        for row in matrix.iter() {
+            let mut cells: Vec[i64] = Vec.new();
+            for j in 0..n {
+                cells.push(row[j] ^ ((mask >> j) & 1));
+            }
+            if cells.iter().all(|c| *c == cells[0]) {
+                equal += 1;
+            }
+        }
+        best = best.max(equal);
+    }
+    best
+}
+
+fn arm(w: i64, matrix: Vec[Vec[i64]]) -> i64 {
+    match w {
+        0 => star_max_equal_rows(matrix),
+        1 => brute_max_equal_rows(matrix),
+        2 => sorted_max_equal_rows(matrix),
+        3 => bits_max_equal_rows(matrix),
+        4 => trie_max_equal_rows(matrix),
+        _ => solution_max_equal_rows(matrix),
+    }
+}
+
+// ---- the properties -------------------------------------------------------
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn show(matrix: Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    for (i, row) in matrix.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        for c in row.iter() {
+            out.push_str(f"{c}");
+        }
+    }
+    out
+}
+
+fn check_case(t: mut ref Tally, matrix: Vec[Vec[i64]]) {
+    let want = literally(matrix);
+    let answers: Vec[i64] = (0..6).map(|w| arm(w, matrix)).collect();
+    let m = matrix.len();
+    let reversed: Vec[Vec[i64]] = matrix.iter().rev().map(|row| row.clone()).collect();
+    let mirrored: Vec[Vec[i64]] = matrix.iter().map(|row| row.iter().rev().map(|c| *c).collect()).collect();
+    let flipped: Vec[Vec[i64]] = matrix.iter().map(|row| (0..row.len()).map(|j| if j == 0 { 1 - row[j] } else { row[j] }).collect()).collect();
+    let complemented: Vec[Vec[i64]] = (0..m).map(|i| matrix[i].iter().map(|c| if i == 0 { 1 - c } else { *c }).collect()).collect();
+    let stacked: Vec[Vec[i64]] = matrix.iter().chain(matrix.iter()).map(|row| row.clone()).collect();
+    let widened: Vec[Vec[i64]] = matrix.iter().map(|row| row.iter().chain(row.iter()).map(|c| *c).collect()).collect();
+    for w in 0..6 {
+        let answer = answers[w];
+        let what = f"arm {w}, {show(matrix)} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let r = arm(w, reversed);
+        expect(mut t, 2, r == answer, f"P2 {what}: rows reversed -> {r}");
+        let c = arm(w, mirrored);
+        expect(mut t, 3, c == answer, f"P3 {what}: columns reversed -> {c}");
+        let f = arm(w, flipped);
+        expect(mut t, 4, f == answer, f"P4 {what}: first column flipped -> {f}");
+        let k = arm(w, complemented);
+        expect(mut t, 4, k == answer, f"P4 {what}: first row complemented -> {k}");
+        let s = arm(w, stacked);
+        expect(mut t, 5, s == 2 * answer, f"P5 {what}: stacked on itself -> {s}");
+        let d = arm(w, widened);
+        expect(mut t, 5, d == answer, f"P5 {what}: each row doubled -> {d}");
+        let agree = (0..6).filter(|o| o != w and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want) % 1000000007;
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_bits(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut bits = Vec.new();
+    for _ in 0..n {
+        bits.push(next_random(mut seed) % 2);
+    }
+    bits
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems: 1000 up to 6 rows by 4 columns and 1000 up to 12 by
+    // 8, each row one of one to three patterns, its complement, or one time
+    // in four a row of its own. Every choice is drawn before any arm answers.
+    let mut seed = 10721;
+    for i in 0..2000 {
+        let (rows, cols) = if i < 1000 { (6, 4) } else { (12, 8) };
+        let m = next_random(mut seed) % rows + 1;
+        let n = next_random(mut seed) % cols + 1;
+        let mut patterns = Vec.new();
+        for _ in 0..next_random(mut seed) % 3 + 1 {
+            patterns.push(random_bits(n, mut seed));
+        }
+        let mut matrix: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let roll = next_random(mut seed) % 8;
+            if roll < 2 {
+                matrix.push(random_bits(n, mut seed));
+            } else {
+                let p: Vec[i64] = patterns[next_random(mut seed) % patterns.len()].clone();
+                if roll < 5 {
+                    matrix.push(p.iter().map(|c| 1 - c).collect());
+                } else {
+                    matrix.push(p);
+                }
+            }
+        }
+        check_case(mut t, matrix);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

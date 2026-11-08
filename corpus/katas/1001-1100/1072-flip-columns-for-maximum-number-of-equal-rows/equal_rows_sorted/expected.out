@@ -1,0 +1,15 @@
+01 11 -> 1
+01 10 -> 2
+000 001 110 -> 2
+1 -> 1
+00 00 11 -> 3
+010 101 011 111 -> 2
+1001 0110 1001 0000 1111 -> 3
+01101 11001 00110 -> 2
+111 011 100 000 110 -> 2
+3000 matrices up to 8 by 6: answers sum 9791, checksum 517915951
+40 matrices up to 300 by 300: answers sum 2970, checksum 91915530
+300 by 300 of zeros: 300
+300 by 300 of stripes: 300
+0 to 299 in 9 bits: 2
+one row of 9 zeros: 1

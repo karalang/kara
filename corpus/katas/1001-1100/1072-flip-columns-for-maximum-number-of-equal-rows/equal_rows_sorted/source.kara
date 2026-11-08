@@ -1,0 +1,107 @@
+// LeetCode #1072: Flip Columns For Maximum Number of Equal Rows -- the rows
+// flipped to begin with 0, sorted, and the longest run of equal neighbours.
+// O(m * n * log m).
+
+fn max_equal_rows(matrix: Vec[Vec[i64]]) -> i64 {
+    let mut rows: Vec[Vec[i64]] = matrix.iter().map(|row| row.iter().map(|c| c ^ row[0]).collect()).collect();
+    rows.sort();
+    let mut best = 0;
+    let mut run = 0;
+    for i in 0..rows.len() {
+        if i > 0 and rows[i] == rows[i - 1] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_bits(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut bits = Vec.new();
+    for _ in 0..n {
+        bits.push(next_random(mut seed) % 2);
+    }
+    bits
+}
+
+// one to three patterns; each row is one of them, its complement, or one
+// time in four a row of its own
+fn random_matrix(rows: i64, cols: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let m = next_random(mut seed) % rows + 1;
+    let n = next_random(mut seed) % cols + 1;
+    let mut patterns = Vec.new();
+    for _ in 0..next_random(mut seed) % 3 + 1 {
+        patterns.push(random_bits(n, mut seed));
+    }
+    let mut matrix = Vec.new();
+    for _ in 0..m {
+        let roll = next_random(mut seed) % 8;
+        if roll < 2 {
+            matrix.push(random_bits(n, mut seed));
+        } else {
+            let p = patterns[next_random(mut seed) % patterns.len()].clone();
+            if roll < 5 {
+                matrix.push(p.iter().map(|c| 1 - c).collect());
+            } else {
+                matrix.push(p);
+            }
+        }
+    }
+    matrix
+}
+
+fn show(matrix: Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    for (i, row) in matrix.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        for c in row.iter() {
+            out.push_str(f"{c}");
+        }
+    }
+    out
+}
+
+fn main() {
+    let examples = [
+        [[0, 1], [1, 1]],
+        [[0, 1], [1, 0]],
+        [[0, 0, 0], [0, 0, 1], [1, 1, 0]],
+        [[1]],
+        [[0, 0], [0, 0], [1, 1]],
+        [[0, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]],
+        [[1, 0, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1], [0, 0, 0, 0], [1, 1, 1, 1]],
+        [[0, 1, 1, 0, 1], [1, 1, 0, 0, 1], [0, 0, 1, 1, 0]],
+        [[1, 1, 1], [0, 1, 1], [1, 0, 0], [0, 0, 0], [1, 1, 0]],
+    ];
+    for matrix in examples.iter() {
+        println(f"{show(matrix)} -> {max_equal_rows(matrix)}");
+    }
+    let mut seed = 1072;
+    for (count, rows, cols, label) in [(3000, 8, 6, "3000 matrices up to 8 by 6"), (40, 300, 300, "40 matrices up to 300 by 300")] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let x = max_equal_rows(random_matrix(rows, cols, mut seed));
+            total += x;
+            check = (check * 31 + x) % 1000000007;
+        }
+        println(f"{label}: answers sum {total}, checksum {check}");
+    }
+    let zeros: Vec[Vec[i64]] = (0..300).map(|_| Vec.filled(300, 0)).collect();
+    let stripes: Vec[Vec[i64]] = (0..300).map(|i| (0..300).map(|j| (i + j) % 2).collect()).collect();
+    let counting: Vec[Vec[i64]] = (0..300).map(|i| (0..9).map(|j| (i >> j) & 1).collect()).collect();
+    let single: Vec[Vec[i64]] = [Vec.filled(9, 0)];
+    println(f"300 by 300 of zeros: {max_equal_rows(zeros)}");
+    println(f"300 by 300 of stripes: {max_equal_rows(stripes)}");
+    println(f"0 to 299 in 9 bits: {max_equal_rows(counting)}");
+    println(f"one row of 9 zeros: {max_equal_rows(single)}");
+}
