@@ -4148,6 +4148,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (Some((fc, fb)), Some((tc, tb))) = (class(from), class(to)) else {
             return false;
         };
+        // `isize` and `usize` widen as if they were 32 to 64 bits wide: a
+        // conversion is lossless only at both widths (design.md § Mixed-width
+        // operands, 91324ad352; B-2026-11-08-48).
+        let tcx = self.tys().tcx();
+        match (tcx.kind(from), tcx.kind(to)) {
+            (HK::Int(IntSize::Isize), HK::Int(IntSize::I64))
+            | (HK::UInt(UIntSize::Usize), HK::UInt(UIntSize::U64)) => return true,
+            (HK::UInt(_), HK::Int(IntSize::Isize)) => return fb <= 16,
+            _ => {}
+        }
         match (fc, tc) {
             ('s', 's') | ('u', 'u') | ('u', 's') => fb < tb,
             ('s', 'f') => fb - 1 <= tb,

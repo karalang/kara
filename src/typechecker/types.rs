@@ -1262,11 +1262,22 @@ pub(super) fn int_signed_width(ty: &Type) -> Option<(u32, bool)> {
 ///
 /// Equal types are trivially fine. Non-integer types return `false` here;
 /// callers gate on both sides being integers first.
+///
+/// `isize` and `usize` are 32 bits on some targets and 64 on others, so they
+/// widen as if they were both (design.md § Mixed-width operands,
+/// B-2026-11-08-48): as a source they count 64 bits (`isize` into `i64`,
+/// `usize` into `u64`), as a destination 32 (`i32` and `u16` into `isize`,
+/// `u32` into `usize`; `i64` and `u32` into `isize` need `as`).
 pub(super) fn int_coercion_is_widening(from: &Type, to: &Type) -> bool {
     if from == to {
         return true;
     }
-    let (Some((fw, fs)), Some((tw, ts))) = (int_signed_width(from), int_signed_width(to)) else {
+    let to_width = match to {
+        Type::Int(IntSize::Isize) => Some((32, true)),
+        Type::UInt(UIntSize::Usize) => Some((32, false)),
+        other => int_signed_width(other),
+    };
+    let (Some((fw, fs)), Some((tw, ts))) = (int_signed_width(from), to_width) else {
         return false;
     };
     match (fs, ts) {

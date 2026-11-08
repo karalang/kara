@@ -5067,11 +5067,18 @@ impl<'a> super::TypeChecker<'a> {
                 // the parameter's type the call solves (`max(b, y)` with
                 // `y: i32`; design.md § Type inference, B-2026-11-07-57).
                 // Only a by-value `T`: a borrowed one would take the
-                // reference for the number (`take(mut x)`).
+                // reference for the number (`take(mut x)`). So is a literal
+                // written as the argument, which the call's result may be
+                // fixed through (`it.fold(0, ..)` returned as `i32`,
+                // B-2026-11-08-44).
                 let inferred = match &seeded_slot {
                     Some(slot) => self.check_expr(&arg.value, slot),
-                    None if matches!(arg.value.kind, ExprKind::Identifier(_))
-                        && matches!(formal_param_ty, Type::TypeParam(_)) =>
+                    None if matches!(
+                        arg.value.kind,
+                        ExprKind::Identifier(_)
+                            | ExprKind::Integer(_, None)
+                            | ExprKind::Float(_, None)
+                    ) && matches!(formal_param_ty, Type::TypeParam(_)) =>
                     {
                         self.infer_expr_open(&arg.value)
                     }

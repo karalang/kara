@@ -1,0 +1,9 @@
+source = "B-2026-11-08-44"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "numerics", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §8 Literals: a literal written as a generic call's argument is a variable the call's result can fix. `skip(1).fold(0, ..)` returned as `i32` counts 3 items; over u64 elements the `0` takes u64 beside them (u64::MAX); `id(7)` returned as `i16` is 7; `fold(0.5, ..)` over `f32` gives 0.5 * 2 * 4 = 4.0; `id(5)` that nothing fixes keeps i64, whose leading_zeros is 61."

@@ -24,6 +24,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   call that instantiates it: `wrap(1i8)` over `fn wrap[T](x: own T) ->
   Atomic[T]` is refused with E0272, as `Atomic[i8]` written directly is
   (B-2026-11-07-35).
+- An `i64` or `u32` into an `isize`, and a `u64` into a `usize`, need `as`
+  at a binding, an argument or a return (design.md § Mixed-width operands):
+  `isize` and `usize` may be 32 bits, so they widen as 64-bit types but take
+  only what fits in 32. `let m: isize = k` with `k: i64` was accepted
+  (B-2026-11-08-48).
 
 ### Changed
 
@@ -110,6 +115,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `s.split_whitespace().rev()` gives the words last first and
   `s.split(",").rev()` the forward pieces in reverse; both were refused with
   "no method 'rev'" (B-2026-11-08-15).
+- **A literal argument of a generic call takes the type of its result.**
+  `v.iter().skip(1).fold(0, |x, _| x + 1)` returned as an `i32` was refused
+  as an `i64`, while `v.iter().fold(0, ..)` was accepted (B-2026-11-08-44).
+- **An `isize` or `usize` operand beside a wider type compiles.**
+  `fn f(i: isize, k: i64) -> i64 { i - k }` passed `karac check` and then
+  failed with "invalid MIR: binary operands of different types isize and
+  i64"; the `isize` now widens, as does a `usize` beside a `u64`
+  (B-2026-11-08-48).
 
 ### Performance
 

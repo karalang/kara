@@ -1,0 +1,32 @@
+// design.md §8 Literals: an argument fixes a literal's type, and so does the
+// use of a generic call's result it flows into (B-2026-11-08-44).
+fn id[T](a: own T) -> T {
+    a
+}
+
+fn steps(v: Vec[i64]) -> i32 {
+    v.iter().skip(1).fold(0, |x, a| x + 1)
+}
+
+fn wide(v: Vec[u64]) -> u64 {
+    v.iter().skip(1).fold(0, |x, a| x + *a)
+}
+
+fn narrow() -> i16 {
+    let z = id(7);
+    z
+}
+
+fn half(v: Vec[f32]) -> f32 {
+    v.iter().fold(0.5, |x, a| x * *a)
+}
+
+fn main() {
+    println(steps([1, 2, 3, 4]));
+    println(wide([1, 18446744073709551610, 5]));
+    println(narrow());
+    println(half([2.0, 4.0]));
+    // Nothing fixes this one: it keeps i64.
+    let big = id(5);
+    println(big.leading_zeros());
+}

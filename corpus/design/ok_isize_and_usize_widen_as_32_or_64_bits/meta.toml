@@ -1,0 +1,9 @@
+source = "B-2026-11-08-48"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "numerics", "mixed-width"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Mixed-width operands: isize and usize widen as 32-or-64-bit types. isize - i64 is an i64 (10 - 3 = 7), i64 * isize too (-20); usize + u64 is a u64 (7 + (2^64 - 16) = 2^64 - 9); isize + i32 stays isize (997); a literal beside isize keeps i64 (-1 - 2 = -3); usize + i128 is an i128; i32 and u16 bind into isize, u32 into usize, isize into i64, usize into u64 and i128 (1 + 2 + 3 + 4 + 5 + 5 = 20)."

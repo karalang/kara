@@ -1,0 +1,10 @@
+// design.md § Mixed-width operands: `isize` may be 32 bits, so an `i64` does
+// not widen into it and the binding needs `as` (B-2026-11-08-48).
+fn narrow(k: i64) -> isize {
+    let m: isize = k;
+    m
+}
+
+fn main() {
+    println(narrow(3));
+}

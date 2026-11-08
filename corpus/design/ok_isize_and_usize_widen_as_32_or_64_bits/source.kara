@@ -1,0 +1,51 @@
+// design.md § Mixed-width operands: `isize` and `usize` widen as if they were
+// 32 bits on some targets and 64 on others (B-2026-11-08-48). As a source they
+// count 64 bits, as a destination 32, at a binding and in an operator alike.
+fn diff(i: isize, k: i64) -> i64 {
+    // `isize` widens into `i64`, so the difference is an `i64`.
+    i - k
+}
+
+fn scale(k: i64, i: isize) -> i64 {
+    k * i
+}
+
+fn total(u: usize, w: u64) -> u64 {
+    u + w
+}
+
+fn step(i: isize, d: i32) -> isize {
+    // `i32` widens into `isize`, so the sum stays `isize`.
+    i + d
+}
+
+fn back(i: isize) -> i64 {
+    // A literal beside `isize` keeps its default; `isize` widens into it.
+    let k = 2;
+    i - k
+}
+
+fn wide(u: usize, big: i128) -> i128 {
+    u + big
+}
+
+fn bind(a: i32, b: u16, c: u32, d: isize, e: usize) -> i128 {
+    let x: isize = a;
+    let y: isize = b;
+    let z: usize = c;
+    let p: i64 = d;
+    let q: u64 = e;
+    let r: i128 = e;
+    let s: i128 = x + y;
+    s + z + p + q + r
+}
+
+fn main() {
+    println(diff(10, 3));
+    println(scale(4, -5));
+    println(total(7, 18446744073709551600));
+    println(step(-3, 1000));
+    println(back(-1));
+    println(wide(5, 170141183460469231731687303715884105000));
+    println(bind(1, 2, 3, 4, 5));
+}

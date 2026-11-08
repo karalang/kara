@@ -1,0 +1,9 @@
+source = "B-2026-11-08-48"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "numerics", "mixed-width"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Mixed-width operands: isize may be 32 bits, so `let m: isize = k` with `k: i64` needs `as` (it was accepted, since isize counted as 64 bits both ways). The expected.out wording of an error pin is guidance, not a byte oracle."
