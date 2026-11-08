@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/1501-1600/1502-can-make-arithmetic-progression-from-sequence/progression_solution.kara"
+dedup_of = []
+tags = []
+class = "e"
+bucket = "check-refuses:E0002"
+classified_with = "acb9d4c5b"
+extracted_src = "b9782049"

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1501-1600/1502-can-make-arithmetic-progression-from-sequence/bench/progression.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1502 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "e-differs:stdout"
+classified_with = "acb9d4c5b"
+extracted_src = "c3e0ffc6"

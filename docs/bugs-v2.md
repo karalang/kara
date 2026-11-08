@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 170 |
-| false-positive | 144 |
-| perf | 118 |
-| missing-feature | 104 |
+| diagnostics | 173 |
+| false-positive | 145 |
+| perf | 119 |
+| missing-feature | 105 |
 | soundness | 52 |
 | miscompile | 42 |
 | run-vs-build | 27 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 268 |
-| mir-llvm | 146 |
+| typecheck | 271 |
+| mir-llvm | 147 |
 | mir | 132 |
-| cli | 78 |
-| ownership | 62 |
-| parser | 46 |
+| cli | 79 |
+| ownership | 63 |
+| parser | 47 |
 | interp | 33 |
 | runtime | 28 |
 | effect | 28 |
@@ -122,6 +122,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-8 | 2026-11-08 | mir-llvm | low | A Map lookup calls SipHash out of line, reloading the hash state from a global and checking the seed on every call, and probes its index one 8-byte cell at a time: kata 454 runs 1.03x Rust's instructions but 2.9x its branch mispredicts and 2.5x its data reads | — |
 | B-2026-11-08-9 | 2026-11-08 | mir-llvm | low | Dropping a shared-struct handle calls an out-of-line, self-recursive drop function even when the count does not reach zero (154M calls, 21% of kata 510's instructions), and each weak upgrade adds 2 to the count and then calls that drop to take 1 back | — |
 | B-2026-11-08-10 | 2026-11-08 | mir-llvm | low | PriorityQueue's sift loops (runtime/stdlib/priority_queue.kara) take 24-27 instructions a level against Rust BinaryHeap's 9-12: bounds checks on every access, the Vec header reloaded from self each level, `self.max` tested inside the loop, and a swap where Rust moves a hole (kata 480) | — |
+| B-2026-11-08-11 | 2026-11-08 | parser | low | Rust's `mut arr: Vec<i32>` parameter has no `karac fix` edit even in a program written as Rust, where it always means an owned copy (`arr: own Vec[i32]` + `let mut arr = arr;`), and the one error is reported four times | — |
+| B-2026-11-08-12 | 2026-11-08 | ownership | low | `karac check` refuses `let (at, _) = v[i..j].iter().enumerate().min_by_key(..).unwrap(); v.remove(at);`: it keeps the range slice `v[i..j]` borrowed through the tuple pattern's `_`, so a later `mut ref` use of `v` is E-conflict; `.unwrap().0`, or `v.iter()` without the range, checks, and __mir-run accepts the program | — |
+| B-2026-11-08-13 | 2026-11-08 | typecheck | low | `karac fix` rewrites Rust's `if let Some(&i) = pos[d].last()` to `if let Some(i) = ...`, which changes `i` from a copied usize into a borrow of `pos[d]`, so the later `pos[d].pop()` is refused (E0516) with no fix; the meaning-keeping edit is `pos[d].last().cloned()` | — |
+| B-2026-11-08-14 | 2026-11-08 | mir-llvm | medium | Read-only iteration of a field of a `shared` struct that is not declared `mut` pays a run-time borrow flag (acquire + release through the thread-local list) per loan: the flag pass flags every non-Copy field because MIR does not record which fields are `mut` | — |
+| B-2026-11-08-15 | 2026-11-08 | typecheck | low | `s.split_whitespace().rev()` (and `s.split(" ").rev()`) is refused with a bare "no method 'rev' on type 'StrWords'": the string-splitting iterators are not double-ended, though Rust's `split_whitespace` is, and the diagnostic gives no hint or fix | — |
+| B-2026-11-08-16 | 2026-11-08 | typecheck+cli | low | A `usize` length from a Rust template (`let n = n as usize; Vec::with_capacity(n * (n + 1) / 2)`) is refused as an implicit `usize` to `i64` coercion whose message says to write `as i64`, but `karac fix` has no edit for it | — |
 
 ### Relocated
 
