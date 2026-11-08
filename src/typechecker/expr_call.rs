@@ -173,6 +173,34 @@ impl<'a> super::TypeChecker<'a> {
                     segments[0]
                 ))
             }
+            // `Ok[i64, String](3)`: the brackets were dropped without a
+            // word, so the `Ok`'s error type stayed unsolved
+            // (B-2026-11-08-23). The type goes on the receiver.
+            ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } if segments.len() == 1 && matches!(segments[0].as_str(), "Ok" | "Err" | "Some") => {
+                let shown: Vec<String> = ga
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArg::Type(t) => Some(crate::formatter::render_type_expr(t)),
+                        _ => None,
+                    })
+                    .collect();
+                let ty = if segments[0] == "Some" {
+                    "Option"
+                } else {
+                    "Result"
+                };
+                Some(format!(
+                    "a variant takes its types from the enum, so write `{ty}[{}].{}(..)`, \
+                     or annotate the binding (`let x: {ty}[{}] = {}(..);`)",
+                    shown.join(", "),
+                    segments[0],
+                    shown.join(", "),
+                    segments[0],
+                ))
+            }
             ExprKind::Index { object, index } => match &object.kind {
                 ExprKind::Identifier(name) if name == "size_of" || name == "align_of" => {
                     expr_as_type_expr(index).map(|t| {

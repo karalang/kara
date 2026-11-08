@@ -1,0 +1,8 @@
+// iterators.md § collect: `Result[C, E]` gathers `Result[T, E]` items, the
+// same `E`; items whose error is an `i64` do not collect into a
+// `Result[Vec[i64], String]` (B-2026-11-08-23).
+fn main() {
+    let words: Vec[String] = ["ab".to_string()];
+    let r: Result[Vec[i64], String] = words.iter().map(|w| if w.len() > 3 { Ok(1) } else { Err(5) }).collect();
+    println(r.is_ok());
+}

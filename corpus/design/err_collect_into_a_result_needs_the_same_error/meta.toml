@@ -1,0 +1,9 @@
+source = "B-2026-11-08-23"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "inference", "iterators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "iterators.md § collect: Result[C, E] gathers Result[T, E] items with the same E; Err(5) items into a Result[Vec[i64], String] are refused (they were accepted). The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,9 @@
+source = "B-2026-11-08-23"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "iterators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "iterators.md § collect: Result[C, E] implements FromIterator for Result[T, E] items, so the collect's target fixes the closure's Ok(..) error type. Two words collect into a Vec of 2 and a SortedMap of 2; \"x\" does not parse, so the third collect stops at its Err (\"bad x\"); \"ab\".len() is 2."

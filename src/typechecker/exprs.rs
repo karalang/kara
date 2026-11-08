@@ -6375,14 +6375,29 @@ impl<'a> super::TypeChecker<'a> {
         let [offer] = offered.as_slice() else {
             return;
         };
-        if offer.len() != want.len()
-            || !offer
-                .iter()
-                .all(|t| type_is_fully_concrete(t) && !contains_type_param(t))
-        {
+        if offer.len() != want.len() {
             return;
         }
-        for (w, o) in want.iter().zip(offer) {
+        // A parameter of the impl its target does not fix (`Result[C, E]`'s
+        // `FromIterator[Result[T, E]]` leaves `T`) is open: the item's own
+        // part answers it, and `E` still reaches a closure's `Ok(..)`
+        // (B-2026-11-08-23).
+        let mut open = Vec::new();
+        for t in offer {
+            super::expr_method_call::collect_type_param_names(t, &mut open);
+        }
+        let fresh: HashMap<String, SubstValue> = open
+            .into_iter()
+            .map(|n| (n, SubstValue::Type(self.env.fresh_type_var())))
+            .collect();
+        let offer: Vec<Type> = offer
+            .iter()
+            .map(|t| substitute_type_params(t, &fresh))
+            .collect();
+        if offer.iter().any(contains_type_param) {
+            return;
+        }
+        for (w, o) in want.iter().zip(&offer) {
             unify_types(
                 w,
                 o,
@@ -6669,6 +6684,26 @@ impl<'a> super::TypeChecker<'a> {
         while let (Type::Named { name: a, args: ca }, Type::Named { name: b, args: wa }) = (c, w) {
             if a != b || !(a == "Option" || a == "Result") || ca.is_empty() || wa.is_empty() {
                 break;
+            }
+            // `Result[C, E]` gathers `Result[T, E]` items: the same `E`
+            // (iterators.md § collect). `Err(5)` items into a
+            // `Result[Vec[i64], String]` were accepted (B-2026-11-08-23).
+            if a == "Result" {
+                if let (Some(ce), Some(we)) = (ca.get(1), wa.get(1)) {
+                    let we = self.read_as_value(we);
+                    if *ce != we && type_is_fully_concrete(&we) && !contains_type_param(&we) {
+                        return Some(format!(
+                            "trait bound `{type_name}: FromIterator[{}]` is not satisfied; \
+                             `{}` gathers `Result` items whose error is `{}`, and these \
+                             items' error is `{}`; convert it in the closure with \
+                             `.map_err(..)`",
+                            type_display(first),
+                            type_display(c),
+                            type_display(ce),
+                            type_display(&we),
+                        ));
+                    }
+                }
             }
             wrapper = Some(a.as_str());
             (c, w) = (&ca[0], &wa[0]);

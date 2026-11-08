@@ -35,6 +35,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   provided there. `karac check --target=wasm_wasi` passed such a program and
   `karac build` then failed in `wasm-ld` on internal runtime symbols; the
   refusal now names the call chain (B-2026-11-08-37).
+- `collect()` into a `Result[C, E]` refuses items whose error type is not
+  `E`: `Err(5)` items into a `Result[Vec[i64], String]` were accepted
+  (iterators.md § collect, B-2026-11-08-23).
 
 ### Added
 
@@ -144,6 +147,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   failed with "invalid MIR: binary operands of different types isize and
   i64"; the `isize` now widens, as does a `usize` beside a `u64`
   (B-2026-11-08-48).
+- **`collect()` into a `Result[C, E]` types a closure's `Ok(..)`.**
+  `let m: Result[Vec[i64], String] = xs.iter().map(|p| Ok(p.len())).collect();`
+  was refused as "cannot infer type parameter 'E'", with advice to annotate
+  a binding the closure does not have; the collect's `E` now reaches it
+  (B-2026-11-08-23).
 
 ### Performance
 
@@ -174,6 +182,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `Ok[i64, String](3)` is refused by `karac check` with the qualified form,
+  `Result[i64, String].Ok(..)`: a call takes no type arguments, and the
+  brackets were dropped without a word (B-2026-11-08-23).
 - **`Json.deserialize` errors name the field, what it wanted and what it
   found, and the line and byte column**, as `Json.parse` does:
   `title: expected a string, found 3 at line 1 column 11`, and

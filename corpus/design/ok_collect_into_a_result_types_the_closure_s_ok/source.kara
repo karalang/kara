@@ -1,0 +1,28 @@
+// iterators.md § collect: `Result[C, E]` gathers `Result[T, E]` items with
+// the same `E`, so the collect's target types a closure's `Ok(..)`
+// (B-2026-11-08-23).
+fn lengths(words: Vec[String]) -> Result[Vec[i64], String] {
+    words.iter().map(|w| Ok(w.len())).collect()
+}
+
+fn main() {
+    let words: Vec[String] = ["ab".to_string(), "c".to_string()];
+    let m: Result[Vec[i64], String] = words.iter().map(|w| Ok(w.len())).collect();
+    println(m.unwrap().len());
+    let pairs: Result[SortedMap[String, i64], String] =
+        words.iter().map(|w| Ok((w.to_string(), w.len()))).collect();
+    println(pairs.unwrap().len());
+    let nums: Vec[String] = ["4".to_string(), "x".to_string()];
+    let parsed: Result[Vec[i64], String] = nums
+        .iter()
+        .map(|p| {
+            let n = i64.parse(p).map_err(|_| f"bad {p}")?;
+            Ok(n)
+        })
+        .collect();
+    match parsed {
+        Ok(v) => println(v.len()),
+        Err(e) => println(e),
+    }
+    println(lengths(words).unwrap()[0]);
+}

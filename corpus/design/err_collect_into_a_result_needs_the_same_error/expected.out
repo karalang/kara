@@ -1,0 +1,1 @@
+ERROR at line 6: gathers `Result` items whose error is `String`, and these items' error is `i64`
