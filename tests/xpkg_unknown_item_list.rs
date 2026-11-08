@@ -56,7 +56,10 @@ fn an_unknown_dependency_item_lists_only_its_pub_names() {
     let _ = std::fs::remove_dir_all(&root);
     assert!(all.contains("error[E0113]"), "{all}");
     assert!(all.contains("available: version, shout"), "{all}");
-    assert!(!all.contains("clean"), "a package-internal fn is listed: {all}");
+    assert!(
+        !all.contains("clean"),
+        "a package-internal fn is listed: {all}"
+    );
 }
 
 #[test]
