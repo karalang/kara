@@ -1,0 +1,9 @@
+source = "B-2026-11-08-10"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "perf"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/collections.md: `PriorityQueue.new()` pops the smallest first, `max_first()` the largest. The sift loops moved onto a slice view of the backing vector (B-2026-11-08-10); a `String` element checks the generic path keeps every element alive across the swaps."

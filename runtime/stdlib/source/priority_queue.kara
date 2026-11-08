@@ -147,16 +147,7 @@ impl[T: Ord] PriorityQueue[T] {
     // Sift the element at `start` up toward the root until the heap
     // property holds above it.
     fn sift_up(mut ref self, start: i64) {
-        let mut i = start;
-        while i > 0 {
-            let parent = (i - 1) / 2;
-            if self.outranks(i, parent) {
-                self.swap(i, parent);
-                i = parent;
-            } else {
-                return;
-            }
-        }
+        pq_sift_up(mut self.xs, 0, start, self.max);
     }
 
     // Sift the element at `start` down until the heap property holds
@@ -218,48 +209,9 @@ impl[T: Ord] PriorityQueue[T] {
     }
 
     // Floyd's pop, as Rust's `BinaryHeap::pop` and Python's `heapq` do
-    // it: walk the slot at `start` down to a leaf along the better child,
-    // one comparison a level, then sift the element carried there back
-    // up, no higher than `start`. The element swapped into the root comes
-    // from the bottom and usually belongs near it, so this compares about
-    // half as often as `sift_down`, which tests both children against the
-    // element at every level (B-2026-11-04-55, kata 1046). On a tie the
-    // right child is taken, as `heapq` takes it. Each direction has its
-    // own loop, so the comparison is not behind a test of `max` a level,
-    // and the child is picked by adding the comparison, which compiles to
-    // a conditional move rather than a branch on random keys.
+    // it: see `pq_sift_to_bottom`.
     fn sift_down_to_bottom(mut ref self, start: i64) {
-        let n = self.xs.len();
-        let mut i = start;
-        let mut c = 2 * i + 1;
-        if self.max {
-            while c + 1 < n {
-                c = c + (self.xs[c] <= self.xs[c + 1]) as i64;
-                self.xs.swap(i, c);
-                i = c;
-                c = 2 * i + 1;
-            }
-        } else {
-            while c + 1 < n {
-                c = c + (self.xs[c] >= self.xs[c + 1]) as i64;
-                self.xs.swap(i, c);
-                i = c;
-                c = 2 * i + 1;
-            }
-        }
-        if c + 1 == n {
-            self.xs.swap(i, c);
-            i = c;
-        }
-        while i > start {
-            let parent = (i - 1) / 2;
-            if self.outranks(i, parent) {
-                self.swap(i, parent);
-                i = parent;
-            } else {
-                return;
-            }
-        }
+        pq_sift_to_bottom(mut self.xs, start, self.max);
     }
 
     // Drain into a vector in pop order: ascending for a smallest-first
@@ -277,6 +229,75 @@ impl[T: Ord] PriorityQueue[T] {
         }
         out
     }
+}
+
+// The sift loops work on a slice view of the backing vector rather than
+// on `self.xs`: a slice's pointer and length are values, so a store into an
+// element cannot change them and they stay in registers, where through
+// `self` they were reloaded every level and each index was checked against
+// the reloaded length (B-2026-11-08-10, kata 480). Each direction has its
+// own loop, so `max` is tested once, not once a level.
+
+// Sift the element at `from` up toward `start` until the heap property
+// holds above it.
+fn pq_sift_up[T: Ord](xs: mut Slice[T], start: i64, from: i64, max: bool) {
+    let mut i = from;
+    if max {
+        while i > start {
+            let parent = (i - 1) / 2;
+            if xs[i] > xs[parent] {
+                xs.swap(i, parent);
+                i = parent;
+            } else {
+                return;
+            }
+        }
+    } else {
+        while i > start {
+            let parent = (i - 1) / 2;
+            if xs[i] < xs[parent] {
+                xs.swap(i, parent);
+                i = parent;
+            } else {
+                return;
+            }
+        }
+    }
+}
+
+// Floyd's pop, as Rust's `BinaryHeap::pop` and Python's `heapq` do it:
+// walk the slot at `start` down to a leaf along the better child, one
+// comparison a level, then sift the element carried there back up, no
+// higher than `start`. The element swapped into the root comes from the
+// bottom and usually belongs near it, so this compares about half as often
+// as `sift_down`, which tests both children against the element at every
+// level (B-2026-11-04-55, kata 1046). On a tie the right child is taken, as
+// `heapq` takes it. The child is picked by adding the comparison, which
+// compiles to a conditional move rather than a branch on random keys.
+fn pq_sift_to_bottom[T: Ord](xs: mut Slice[T], start: i64, max: bool) {
+    let n = xs.len();
+    let mut i = start;
+    let mut c = 2 * i + 1;
+    if max {
+        while c + 1 < n {
+            c = c + (xs[c] <= xs[c + 1]) as i64;
+            xs.swap(i, c);
+            i = c;
+            c = 2 * i + 1;
+        }
+    } else {
+        while c + 1 < n {
+            c = c + (xs[c] >= xs[c + 1]) as i64;
+            xs.swap(i, c);
+            i = c;
+            c = 2 * i + 1;
+        }
+    }
+    if c + 1 == n {
+        xs.swap(i, c);
+        i = c;
+    }
+    pq_sift_up(mut xs, start, i, max);
 }
 
 // "Every collection implements FromIterator" (docs/library/collections.md,

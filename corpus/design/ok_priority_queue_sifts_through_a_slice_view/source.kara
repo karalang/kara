@@ -1,0 +1,29 @@
+// A `PriorityQueue` of a non-`Copy` element, both directions, built by
+// `push` and by `from` (docs/library/collections.md): pop order is
+// smallest first for `new`, largest first for `max_first`.
+fn main() {
+    let words = ["pear", "fig", "apple", "kiwi", "date", "banana", "cherry", "fig"];
+    let mut lo: PriorityQueue[String] = PriorityQueue.new();
+    let mut hi: PriorityQueue[String] = PriorityQueue.max_first();
+    for w in words.iter() {
+        lo.push(w.to_string());
+        hi.push(w.to_string());
+    }
+    let mut out: Vec[String] = Vec.new();
+    while let Some(w) = lo.pop() {
+        out.push(w);
+    }
+    println(out.join(" "));
+    out.clear();
+    while let Some(w) = hi.pop() {
+        out.push(w);
+    }
+    println(out.join(" "));
+    let nums: Vec[i64] = [5, 3, 9, 1, 7, 3, 8, 2, 6, 4, 0];
+    let q = PriorityQueue.from(nums);
+    println(q.into_sorted_vec());
+    let mut m: PriorityQueue[i64] = PriorityQueue.max_first_from([5, 3, 9, 1, 7]);
+    m.push(10);
+    println(m.peek());
+    println(m.into_sorted_vec());
+}

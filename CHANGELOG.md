@@ -241,6 +241,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   slot and an entry only where the tag matches. Kata 454 on x86: about
   620 ms to 520 ms (Rust 411 ms), branch mispredicts 8.2M to 4.1M; kata
   219: 760 ms to 690 ms (B-2026-11-08-8).
+- **`PriorityQueue`'s sift loops work on a slice view of the heap.** The
+  vector's pointer and length stay in registers rather than being reloaded
+  from the queue every level, and a direction's loop no longer tests it
+  each level. A push-and-pop loop over 400,000 `i64`s: 268M instructions
+  to 213M; kata 480: 4.92G to 4.36G (B-2026-11-08-10).
 
 ### Diagnostics
 
