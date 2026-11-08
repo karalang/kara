@@ -4945,8 +4945,18 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     None
                 };
+                // A binding whose literal no use has fixed yet is fixed by
+                // the parameter's type the call solves (`max(b, y)` with
+                // `y: i32`; design.md § Type inference, B-2026-11-07-57).
+                // Only a by-value `T`: a borrowed one would take the
+                // reference for the number (`take(mut x)`).
                 let inferred = match &seeded_slot {
                     Some(slot) => self.check_expr(&arg.value, slot),
+                    None if matches!(arg.value.kind, ExprKind::Identifier(_))
+                        && matches!(formal_param_ty, Type::TypeParam(_)) =>
+                    {
+                        self.infer_expr_open(&arg.value)
+                    }
                     None => self.infer_expr(&arg.value),
                 };
                 self.borrow_context = saved_borrow_ctx;

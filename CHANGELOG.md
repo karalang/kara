@@ -60,6 +60,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `let`; an argument, a struct field or the caller's own `Array[i64, M]`
   fixes it too. One nothing fixes is refused at the call once the body has
   been checked (B-2026-11-07-9).
+- **A value assigned to a binding, or a generic call's argument, fixes the
+  binding's literal.** `let mut b = 0; b = y;` and `max(b, y)` with
+  `y: i32` made `b` an `i64`, and a function returning `i32` then refused
+  it as a narrowing (B-2026-11-07-57).
 
 ### Performance
 

@@ -1,0 +1,9 @@
+source = "B-2026-11-07-57"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "numerics", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: a literal starts as a type variable any later use may fix. `b = y` fixes `b` to i32 (7); `max(b, y)` fixes it as a generic call's argument (max(0, -3) = 0, max(0, 12) = 12); `best = max(best, x)` over a Vec[u8] makes `best` a u8 (200); and `b = y` with `y: u8` makes the 250 a u8, so `wrapping_add(10)` wraps to 4."

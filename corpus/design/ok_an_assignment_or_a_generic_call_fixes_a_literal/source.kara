@@ -1,0 +1,41 @@
+// design.md § Type inference: a literal's type variable is fixed by any later
+// use, including a value assigned to its binding and a generic call's
+// argument (B-2026-11-07-57).
+fn assigned(y: i32) -> i32 {
+    let mut b = 0;
+    b = y;
+    b
+}
+
+fn through_max(y: i32) -> i32 {
+    let mut b = 0;
+    b = max(b, y);
+    b
+}
+
+fn as_argument(y: i32) -> i32 {
+    let b = 0;
+    max(b, y)
+}
+
+fn widest(xs: Vec[u8]) -> u8 {
+    let mut best = 0;
+    for x in xs {
+        best = max(best, x);
+    }
+    best
+}
+
+fn wraps(y: u8) -> u8 {
+    let mut b = 250;
+    b = y;
+    b.wrapping_add(10)
+}
+
+fn main() {
+    println(assigned(7));
+    println(through_max(-3));
+    println(as_argument(12));
+    println(widest([3, 200, 17]));
+    println(wraps(250));
+}

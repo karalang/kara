@@ -7406,6 +7406,41 @@ impl<'a> super::TypeChecker<'a> {
     /// use that solves it. The value's own unbound parameters (`T` of
     /// `Err("bad")`) are opened too, so the two unify; the value is then
     /// checked against the solved slot as before.
+    /// The type of an assignment's target binding `target` (typed `t`) once
+    /// the value assigned to it has had its say: a literal no use has fixed
+    /// yet takes the value's number type, read through any borrow (`b = y`
+    /// with `y: i32` or `ref i32`); anything else settles it to its default
+    /// (B-2026-11-07-57).
+    fn fix_literal_from_assigned(&mut self, target: &Expr, t: &Type, value: &Expr) -> Type {
+        let Some((id, kind)) = self.unbound_literal_var(t) else {
+            return t.clone();
+        };
+        let mark = (self.errors.len(), self.warnings.len());
+        let value_ty = self.infer_expr_open(value);
+        self.errors.truncate(mark.0);
+        self.warnings.truncate(mark.1);
+        let mut have = self.resolved_now(&value_ty);
+        while let Type::Ref(inner) | Type::MutRef(inner) = have {
+            have = *inner;
+        }
+        let same_kind_var = self
+            .unbound_literal_var(&have)
+            .is_some_and(|(_, k)| k == kind);
+        if same_kind_var || (super::inference::literal_takes(kind, &have) && have != Type::Error) {
+            super::inference::unify_types(
+                &Type::TypeVar(id),
+                &have,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
+            return self.resolved_now(t);
+        }
+        let settled = self.settle_literals(t);
+        self.record_expr_type(&target.span, &settled);
+        self.record_node_type(target.id, &settled);
+        settled
+    }
+
     fn solve_open_slot_from(&mut self, value: &Expr, slot: Type) -> Type {
         let no_names: HashMap<super::types::TypeVarId, String> = HashMap::new();
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
@@ -7419,7 +7454,10 @@ impl<'a> super::TypeChecker<'a> {
             )
         };
         let slot = resolve(self, &slot);
-        if !super::exprs::contains_type_var(&slot) {
+        // A target's literal the value already met (`fix_literal_from_assigned`)
+        // stays open for the value's own literal, which inferred bare here
+        // would settle to its default (`b = 5`).
+        if !super::exprs::contains_type_var(&slot) || self.unbound_literal_var(&slot).is_some() {
             return slot;
         }
         let mark = (self.errors.len(), self.warnings.len());
@@ -11453,7 +11491,15 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.index_set_target = Some(SpanKey::from_span(&target.span));
                 }
-                let target_ty = self.infer_expr(target);
+                // A binding whose literal no use has fixed yet is fixed by
+                // the value assigned to it (`b = y` with `y: i32`; design.md
+                // § Type inference, B-2026-11-07-57).
+                let target_ty = if matches!(target.kind, ExprKind::Identifier(_)) {
+                    let t = self.infer_expr_open(target);
+                    self.fix_literal_from_assigned(target, &t, value)
+                } else {
+                    self.infer_expr(target)
+                };
                 self.index_set_target = saved_set;
                 self.assigning_lhs = saved;
                 self.check_assignment_target_is_place(target, Some(value));
