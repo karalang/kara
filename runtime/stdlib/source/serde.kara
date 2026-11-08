@@ -661,9 +661,12 @@ pub struct JsonDeserializer {
     first: Vec[bool],
     /// The next scalar is a map key, which JSON writes as a string.
     in_key: bool,
+    /// The field each open struct is reading ("" before its first), the
+    /// path an error names (B-2026-11-08-27).
+    path: Vec[String],
     /// The positions `deserialize_mark` handed out: `pos`, the depth of
-    /// `first`, and `in_key`.
-    marks: Vec[(i64, i64, bool)],
+    /// `first`, `in_key`, and the depth of `path`.
+    marks: Vec[(i64, i64, bool, i64)],
 }
 
 impl JsonDeserializer {
@@ -673,6 +676,7 @@ impl JsonDeserializer {
             pos: 0,
             first: Vec.new(),
             in_key: false,
+            path: Vec.new(),
             marks: Vec.new(),
         }
     }
@@ -686,8 +690,95 @@ impl JsonDeserializer {
         Ok(())
     }
 
+    /// Where `pos` is: the 1-based line and byte column on it, as
+    /// `Json.parse` reports them (json.md, `JsonError`).
+    fn place(ref self) -> (i64, i64) {
+        let mut line = 1;
+        let mut column = 1;
+        let mut i = 0;
+        while i < self.pos and i < self.chars.len() {
+            let c = self.chars[i];
+            if c == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += c.len_utf8();
+            }
+            i += 1;
+        }
+        (line, column)
+    }
+
+    /// `msg`, prefixed with the field path being read and followed by the
+    /// line and column (B-2026-11-08-27).
     fn fail(ref self, msg: String) -> DeserializeError {
-        DeserializeError.new(f"{msg} at character {self.pos}")
+        let (line, column) = self.place();
+        let mut at = String.new();
+        for f in self.path.iter() {
+            if not f.is_empty() {
+                if not at.is_empty() {
+                    at.push('.');
+                }
+                at.push_str(f);
+            }
+        }
+        if at.is_empty() {
+            DeserializeError.new(f"{msg} at line {line} column {column}")
+        } else {
+            DeserializeError.new(f"{at}: {msg} at line {line} column {column}")
+        }
+    }
+
+    /// What the next value is, for a message: its number, or its kind.
+    fn found(ref self) -> String {
+        match self.peek() {
+            None => "the end of the text".to_string(),
+            Some('"') => "a string".to_string(),
+            Some('{') => "an object".to_string(),
+            Some('[') => "an array".to_string(),
+            Some('t') | Some('f') => "a boolean".to_string(),
+            Some('n') => "null".to_string(),
+            Some(c) => {
+                let mut text = String.new();
+                let mut i = self.pos;
+                while i < self.chars.len() {
+                    let d = self.chars[i];
+                    if (d >= '0' and d <= '9') or d == '-' or d == '+' or d == '.' or d == 'e' or d == 'E' {
+                        text.push(d);
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if text.is_empty() {
+                    f"`{c}`"
+                } else {
+                    text
+                }
+            }
+        }
+    }
+
+    /// The error where `want` belongs and the text holds another kind of
+    /// value, or none: `expected a string, found 3`, `expected value`.
+    fn mismatch(mut ref self, want: String) -> DeserializeError {
+        self.ws();
+        match self.peek() {
+            None | Some('}') | Some(']') | Some(',') | Some(':') => self.fail("expected value".to_string()),
+            _ => {
+                let what = self.found();
+                self.fail(f"expected {want}, found {what}")
+            }
+        }
+    }
+
+    /// Past `open`, or the error for the value that is there instead.
+    fn open(mut ref self, open: char, want: String) -> Result[(), DeserializeError] {
+        if self.eat(open) {
+            Ok(())
+        } else {
+            Err(self.mismatch(want))
+        }
     }
 
     fn peek(ref self) -> Option[char] {
@@ -737,8 +828,9 @@ impl JsonDeserializer {
         Ok(())
     }
 
-    /// A number's text, quoted when it is a map key.
-    fn number(mut ref self) -> Result[String, DeserializeError] {
+    /// A number's text, quoted when it is a map key; `want` names it for an
+    /// error.
+    fn number(mut ref self, want: String) -> Result[String, DeserializeError] {
         if self.in_key {
             return self.string();
         }
@@ -754,7 +846,7 @@ impl JsonDeserializer {
             }
         }
         if text.is_empty() {
-            return Err(self.fail("expected a number"));
+            return Err(self.mismatch(want));
         }
         Ok(text)
     }
@@ -782,7 +874,7 @@ impl JsonDeserializer {
     }
 
     fn string(mut ref self) -> Result[String, DeserializeError] {
-        self.expect('"')?;
+        self.open('"', "a string".to_string())?;
         let mut out = String.new();
         loop {
             let c = match self.peek() {
@@ -860,7 +952,7 @@ impl JsonDeserializer {
             Some('f') => self.word("false")?,
             Some('n') => self.word("null")?,
             _ => {
-                self.number()?;
+                self.number("a value".to_string())?;
             }
         }
         Ok(())
@@ -889,14 +981,16 @@ impl Deserializer for JsonDeserializer {
         if self.peek() == Some('t') {
             self.word("true")?;
             Ok(true)
-        } else {
+        } else if self.peek() == Some('f') {
             self.word("false")?;
             Ok(false)
+        } else {
+            Err(self.mismatch("a boolean".to_string()))
         }
     }
 
     fn deserialize_i64(mut ref self) -> Result[i64, DeserializeError] {
-        let text = self.number()?;
+        let text = self.number("an integer".to_string())?;
         match i64.parse(text) {
             Ok(v) => Ok(v),
             Err(_) => Err(self.fail(f"`{text}` is not an integer")),
@@ -904,7 +998,7 @@ impl Deserializer for JsonDeserializer {
     }
 
     fn deserialize_u64(mut ref self) -> Result[u64, DeserializeError] {
-        let text = self.number()?;
+        let text = self.number("an unsigned integer".to_string())?;
         match u64.parse(text) {
             Ok(v) => Ok(v),
             Err(_) => Err(self.fail(f"`{text}` is not an unsigned integer")),
@@ -917,7 +1011,7 @@ impl Deserializer for JsonDeserializer {
             self.word("null")?;
             return Ok(0.0 / 0.0);
         }
-        let text = self.number()?;
+        let text = self.number("a number".to_string())?;
         match f64.parse(text) {
             Ok(v) => Ok(v),
             Err(_) => Err(self.fail(f"`{text}` is not a number")),
@@ -938,7 +1032,7 @@ impl Deserializer for JsonDeserializer {
     }
 
     fn deserialize_seq_begin(mut ref self) -> Result[(), DeserializeError] {
-        self.expect('[')?;
+        self.open('[', "an array".to_string())?;
         self.first.push(true);
         Ok(())
     }
@@ -948,7 +1042,7 @@ impl Deserializer for JsonDeserializer {
     }
 
     fn deserialize_map_begin(mut ref self) -> Result[(), DeserializeError] {
-        self.expect('{')?;
+        self.open('{', "an object".to_string())?;
         self.first.push(true);
         Ok(())
     }
@@ -965,18 +1059,22 @@ impl Deserializer for JsonDeserializer {
     }
 
     fn deserialize_struct_begin(mut ref self, name: String) -> Result[(), DeserializeError] {
-        self.expect('{')?;
+        self.open('{', "an object".to_string())?;
         self.first.push(true);
+        self.path.push(String.new());
         Ok(())
     }
 
     fn deserialize_field(mut ref self) -> Result[Option[String], DeserializeError] {
         if not self.next_in('}')? {
+            self.path.pop();
             return Ok(None);
         }
         self.ws();
         let name = self.string()?;
         self.expect(':')?;
+        let n = self.path.len();
+        self.path[n - 1] = name.clone();
         Ok(Some(name))
     }
 
@@ -1001,15 +1099,18 @@ impl Deserializer for JsonDeserializer {
     }
 
     fn deserialize_mark(mut ref self) -> i64 {
-        self.marks.push((self.pos, self.first.len(), self.in_key));
+        self.marks.push((self.pos, self.first.len(), self.in_key, self.path.len()));
         self.marks.len() - 1
     }
 
     fn deserialize_reset(mut ref self, mark: i64) {
-        let (pos, depth, in_key) = self.marks[mark];
+        let (pos, depth, in_key, fields) = self.marks[mark];
         self.pos = pos;
         while self.first.len() > depth {
             self.first.pop();
+        }
+        while self.path.len() > fields {
+            self.path.pop();
         }
         self.in_key = in_key;
     }

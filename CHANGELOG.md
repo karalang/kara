@@ -145,6 +145,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- **`Json.deserialize` errors name the field, what it wanted and what it
+  found, and the line and byte column**, as `Json.parse` does:
+  `title: expected a string, found 3 at line 1 column 11`, and
+  `expected value at line 2 column 12` where no value starts. They read
+  `expected '"' at character 10` before; a service that returns the
+  message to its client now tells it which field was wrong
+  (B-2026-11-08-27).
 - A narrowing refused because a binding's literal kept its default `i64`
   (`let mut b = 0; b += y;` returned as `i32`) names the binding and offers
   its annotation, `let mut b: i32 = 0`, as a machine fix, in place of

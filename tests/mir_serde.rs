@@ -268,7 +268,7 @@ fn main() {
          true\n\
          null\n\
          a\tbA\n\
-         trailing characters at character 3\n",
+         trailing characters at line 1 column 4\n",
     );
 }
 
@@ -298,7 +298,12 @@ fn main() {
     }
 }
 "#;
-    assert_runs(src, "ann 41 true\nexpected '\"' at character 9\n");
+    // The error names the field, what it wanted and found, and the line
+    // and byte column, as `Json.parse` does (B-2026-11-08-27).
+    assert_runs(
+        src,
+        "ann 41 true\nname: expected a string, found 3 at line 1 column 10\n",
+    );
 }
 
 /// The derived code names no format: a format of the program's own, here a
