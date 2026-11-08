@@ -85,11 +85,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | effect | 29 |
 | runtime | 28 |
 | codegen | 22 |
-| resolver | 16 |
+| resolver | 17 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
-| resolve | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-08). Do not edit this block by hand; edit the ledger and regenerate._
@@ -135,7 +134,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-55 | 2026-11-08 | typecheck | low | RULING WANTED (Str vs String): `["inc", "dec"].contains(cmd)` with `cmd: Str`, and `names.contains(s)` on a `Vec[String]`, are refused "expected 'ref String', found 'Str'" with a `.to_string()` fix, while `Map[String, _].contains_key(s)` takes the view and `let cmds: Vec[Str] = [..]; cmds.contains(cmd)` works | — |
 | B-2026-11-08-57 | 2026-11-08 | typecheck+cli | low | An unannotated array or `Vec` literal's element type is not fixed by where the binding goes: `let mut cnt = [0; 26]; ..; cnt` returned as `Array[i32, 26]`, and `let mut ans = Vec.filled(n, 0); dfs(.., mut ans)` into `ans: mut ref Vec[i32]`, are refused, and the binding annotation the message itself names gets no machine fix | — |
 | B-2026-11-08-58 | 2026-11-08 | typecheck | medium | A closure returning `Some((Vec.new(), x))` to a generic `Fn(S) -> Option[(S, O)]` leaves `O` uninferred, and with the state unannotated reports two unifiable function types as a mismatch: `.scan(Vec.new(), |seen, x| Some((Vec.new(), seen.len())))` is refused 'expected Fn(Vec[?T3], ref i64) -> Option[(Vec[?T3], OutV)], found Fn(Vec[i64], ref i64) -> Option[(Vec[i64], OutV)]' and 'cannot infer type parameter OutV' | — |
-| B-2026-11-08-59 | 2026-11-08 | resolve | low | An undefined `Deque`, `ArrayDeque`, `deque` or `Queue` gets no suggestion, though `HashMap`, `HashSet`, `BTreeMap` and `BinaryHeap` are each pointed at Kāra's name and a typo like `VecDequ` gets 'did you mean VecDeque': `let mut q: Deque[i64] = Deque.new();` says only 'undefined name Deque' / 'undefined type Deque' | — |
+| B-2026-11-08-59 | 2026-11-08 | resolver | low | An undefined `Deque`, `ArrayDeque`, `deque` or `Queue` gets no suggestion, though `HashMap`, `HashSet`, `BTreeMap` and `BinaryHeap` are each pointed at Kāra's name and a typo like `VecDequ` gets 'did you mean VecDeque': `let mut q: Deque[i64] = Deque.new();` says only 'undefined name Deque' / 'undefined type Deque' | — |
 
 ### Relocated
 
