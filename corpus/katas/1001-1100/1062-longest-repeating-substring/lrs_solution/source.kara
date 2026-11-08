@@ -10,10 +10,7 @@ impl Solution {
         let bytes = s.bytes();
         let n = bytes.len();
         let mut dp = Vec.filled(n + 1, Vec.filled(n + 1, 0i32));
-        // Rust infers `best: i32` from the return; an assignment does not
-        // yet fix a Kāra literal's type (kara B-2026-11-07-57), so the type
-        // is written.
-        let mut best: i32 = 0;
+        let mut best = 0;
         for i in 1..=n {
             for j in (i + 1)..=n {
                 if bytes[i - 1] == bytes[j - 1] {

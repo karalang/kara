@@ -1,0 +1,92 @@
+// LeetCode #1067: Digit Count in Range -- the last digit and the rest:
+// each number from 1 to `n` is a part before its last digit and a last
+// digit. Every part from 1 to `n / 10 - 1` comes with all ten last
+// digits, and `n / 10` itself with the last digits up to `n % 10`, so the
+// parts hold `d` ten times the count up to `n / 10 - 1`, found the same
+// way, and `n % 10 + 1` times `n / 10`'s own; and a last digit is `d`
+// once in every ten numbers from `d` (from 10 when `d` is 0). O(log^2 n).
+
+fn own(d: i64, x: i64) -> i64 {
+    let mut count = 0;
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == d {
+            count += 1;
+        }
+        rest /= 10;
+    }
+    count
+}
+
+fn count_to(d: i64, n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let (part, last) = (n / 10, n % 10);
+    let parts = 10 * count_to(d, part - 1) + (last + 1) * own(d, part);
+    let lasts = if d == 0 { n / 10 } else if n >= d { (n - d) / 10 + 1 } else { 0 };
+    parts + lasts
+}
+
+fn digits_count(d: i64, low: i64, high: i64) -> i64 {
+    count_to(d, high) - count_to(d, low - 1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples: Vec[(i64, i64, i64)] = [
+        (1, 1, 13),
+        (3, 100, 250),
+        (0, 1, 10),
+        (0, 1, 100),
+        (0, 100, 100),
+        (7, 77, 77),
+        (5, 123456, 654321),
+        (0, 1000, 1999),
+        (9, 1, 200000000),
+        (0, 1, 200000000),
+    ];
+    for (d, low, high) in examples.iter() {
+        println(f"d = {d}, [{low}, {high}] -> {digits_count(d, low, high)}");
+    }
+    let mut seed = 1067;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let d = next_random(mut seed) % 10;
+        let low = next_random(mut seed) % 10000 + 1;
+        let high = low + next_random(mut seed) % 2000;
+        let answer = digits_count(d, low, high);
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"3000 ranges below 12000: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for _ in 0..300 {
+        let d = next_random(mut seed) % 10;
+        let a = (next_random(mut seed) * 32768 + next_random(mut seed)) % 200000000 + 1;
+        let b = (next_random(mut seed) * 32768 + next_random(mut seed)) % 200000000 + 1;
+        let answer = digits_count(d, a.min(b), a.max(b));
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"300 ranges up to 200000000: sum {sum}, checksum {check}");
+    // every digit over the largest range, over each power of ten, and over
+    // each number of nine nines and below
+    let every: Vec[i64] = (0..10).map(|d| digits_count(d, 1, 200000000)).collect();
+    println(f"1 to 200000000, each digit: {every}");
+    let zeros: Vec[i64] = (1..9).map(|k| digits_count(0, 1, 10.pow(k as u32))).collect();
+    println(f"0 from 1 to each power of ten: {zeros}");
+    let ones: Vec[i64] = (1..9).map(|k| digits_count(1, 10.pow((k - 1) as u32), 10.pow(k as u32) - 1)).collect();
+    println(f"1 over each length of number: {ones}");
+    let single: Vec[i64] = (0..10).map(|d| digits_count(d, 199999990, 199999990)).collect();
+    println(f"199999990 alone, each digit: {single}");
+}

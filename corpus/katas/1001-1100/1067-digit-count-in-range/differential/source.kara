@@ -1,0 +1,322 @@
+// LeetCode #1067: Digit Count in Range -- the differential.
+//
+// The six arms against the statement read literally, on 2000 problems,
+// with six properties:
+//
+// P1  the answer is the statement read literally: every number of the
+//     range taken apart digit by digit, and the digits equal to `d` counted
+// P2  the range cut in two answers the sum of its halves
+// P3  the ten digits' counts over the range add up to the number of digits
+//     written in it
+// P4  every number of the range with each digit appended answers ten times
+//     the count, and one more for each number of the range
+// P5  the range widened by one number at the top answers the count and
+//     that number's own digits equal to `d`, and a single number up to
+//     200000000 answers its own digits equal to `d`
+// P6  each arm agrees with at least three of the other five
+
+// ---- digit_count.kara: the ★ arm: place by place
+fn star_count_to(d: i64, n: i64) -> i64 {
+    let mut total = 0;
+    let mut p = 1;
+    while p <= n {
+        let above = n / (p * 10);
+        let digit = n / p % 10;
+        let below = n % p;
+        if d == 0 {
+            if above == 0 {
+                break;
+            }
+            total += (above - 1) * p;
+        } else {
+            total += above * p;
+        }
+        if digit > d {
+            total += p;
+        } else if digit == d {
+            total += below + 1;
+        }
+        p *= 10;
+    }
+    total
+}
+
+fn star_arm(d: i64, low: i64, high: i64) -> i64 {
+    star_count_to(d, high) - star_count_to(d, low - 1)
+}
+
+// ---- digit_count_dp.kara: digit dynamic programming
+fn dp_walk(digits: Slice[i64], d: i64, at: i64, count: i64, held: bool, begun: bool, memo: mut ref Vec[i64]) -> i64 {
+    if at == digits.len() {
+        return count;
+    }
+    let key = at * (digits.len() + 1) + count;
+    if not held and begun and memo[key] >= 0 {
+        return memo[key];
+    }
+    let top = if held { digits[at] } else { 9 };
+    let mut total = 0;
+    for x in 0..=top {
+        let now = begun or x != 0;
+        let next = if now and x == d { count + 1 } else { count };
+        total += dp_walk(digits, d, at + 1, next, held and x == top, now, mut memo);
+    }
+    if not held and begun {
+        memo[key] = total;
+    }
+    total
+}
+
+fn dp_count_to(d: i64, n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let mut memo: Vec[i64] = Vec.filled(digits.len() * (digits.len() + 1), -1);
+    dp_walk(digits, d, 0, 0, true, false, mut memo)
+}
+
+fn dp_arm(d: i64, low: i64, high: i64) -> i64 {
+    dp_count_to(d, high) - dp_count_to(d, low - 1)
+}
+
+// ---- digit_count_recursive.kara: the last digit and the rest
+fn rec_own(d: i64, x: i64) -> i64 {
+    let mut count = 0;
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == d {
+            count += 1;
+        }
+        rest /= 10;
+    }
+    count
+}
+
+fn rec_count_to(d: i64, n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let (part, last) = (n / 10, n % 10);
+    let parts = 10 * rec_count_to(d, part - 1) + (last + 1) * rec_own(d, part);
+    let lasts = if d == 0 { n / 10 } else if n >= d { (n - d) / 10 + 1 } else { 0 };
+    parts + lasts
+}
+
+fn recursive_arm(d: i64, low: i64, high: i64) -> i64 {
+    rec_count_to(d, high) - rec_count_to(d, low - 1)
+}
+
+// ---- digit_count_blocks.kara: by length, then in blocks from the top
+fn blocks_count_to(d: i64, n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let digits: Vec[i64] = n.to_string().chars().map(|c| c.to_digit(10).unwrap() as i64).collect();
+    let len = digits.len();
+    let mut total = 0;
+    for l in 1..len {
+        let lead = if d == 0 { 0 } else { 10.pow((l - 1) as u32) };
+        total += lead + (l - 1) * 9 * 10.pow((l - 1) as u32) / 10;
+    }
+    let mut seen = 0;
+    for at in 0..len {
+        let k = len - 1 - at;
+        let block = 10.pow(k as u32);
+        let inside = k * block / 10;
+        let first = if at == 0 { 1 } else { 0 };
+        for x in first..digits[at] {
+            let here = if x == d { 1 } else { 0 };
+            total += block * (seen + here) + inside;
+        }
+        if digits[at] == d {
+            seen += 1;
+        }
+    }
+    total + seen
+}
+
+fn blocks_arm(d: i64, low: i64, high: i64) -> i64 {
+    blocks_count_to(d, high) - blocks_count_to(d, low - 1)
+}
+
+// ---- digit_count_string.kara: place by place over the decimal string
+fn string_count_to(d: i64, n: i64) -> i64 {
+    let s = n.to_string();
+    let len = s.len();
+    let mut total = 0;
+    for i in 0..len {
+        let before = if i == 0 { 0 } else { i64.parse(s[0..i]).unwrap() };
+        let after = if i + 1 == len { 0 } else { i64.parse(s[i + 1..len]).unwrap() };
+        let digit = i64.parse(s[i..i + 1]).unwrap();
+        let p = 10.pow((len - 1 - i) as u32);
+        if d == 0 {
+            if before == 0 {
+                continue;
+            }
+            total += (before - 1) * p;
+        } else {
+            total += before * p;
+        }
+        if digit > d {
+            total += p;
+        } else if digit == d {
+            total += after + 1;
+        }
+    }
+    total
+}
+
+fn string_arm(d: i64, low: i64, high: i64) -> i64 {
+    string_count_to(d, high) - string_count_to(d, low - 1)
+}
+
+// ---- digit_count_solution.kara: LeetCode's Rust template
+struct Solution {}
+
+impl Solution {
+    pub fn digits_count(d: i32, low: i32, high: i32) -> i32 {
+        Solution.count(d, high) - Solution.count(d, low - 1)
+    }
+
+    fn count(d: i32, n: i32) -> i32 {
+        let mut res: i32 = 0;
+        let mut p: i32 = 1;
+        while p <= n {
+            let (a, b) = (n / p, n % p);
+            res += (a + 9 - d) / 10 * p;
+            if a % 10 == d {
+                res += b + 1;
+            }
+            if d == 0 {
+                res -= p;
+            }
+            p *= 10;
+        }
+        res
+    }
+}
+
+fn solution_arm(d: i64, low: i64, high: i64) -> i64 {
+    Solution.digits_count(d as i32, low as i32, high as i32) as i64
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(a: i64, d: i64, low: i64, high: i64) -> i64 {
+    match a {
+        0 => star_arm(d, low, high),
+        1 => dp_arm(d, low, high),
+        2 => recursive_arm(d, low, high),
+        3 => blocks_arm(d, low, high),
+        4 => string_arm(d, low, high),
+        _ => solution_arm(d, low, high),
+    }
+}
+
+// The digits of `x` equal to `d`, and how many digits it has.
+fn digits_of(d: i64, x: i64) -> (i64, i64) {
+    let mut equal = 0;
+    let mut written = 0;
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == d {
+            equal += 1;
+        }
+        written += 1;
+        rest /= 10;
+    }
+    (equal, written)
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, d: i64, low: i64, high: i64, seed: mut ref i64) {
+    // every random choice drawn before any arm answers, so the problems
+    // are the same whatever an arm gets wrong
+    let cut = low + next_random(mut seed) % (high - low + 1);
+    let single = (next_random(mut seed) * 32768 + next_random(mut seed)) % 200000000 + 1;
+    // the statement read literally
+    let mut want = 0;
+    let mut written = 0;
+    for x in low..=high {
+        let (equal, length) = digits_of(d, x);
+        want += equal;
+        written += length;
+    }
+    let (next_own, _) = digits_of(d, high + 1);
+    let (single_own, _) = digits_of(d, single);
+    let answers: Vec[i64] = (0..6).map(|a| arm(a, d, low, high)).collect();
+    for a in 0..6 {
+        let answer = answers[a];
+        let what = f"arm {a}, d = {d}, [{low}, {high}] -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let halves = if cut == high { answer } else { arm(a, d, low, cut) + arm(a, d, cut + 1, high) };
+        expect(mut t, 2, halves == answer, f"P2 {what}: cut after {cut} -> {halves}");
+        let every: i64 = (0..10).map(|e| arm(a, e, low, high)).sum();
+        expect(mut t, 3, every == written, f"P3 {what}: the ten digits -> {every}, written {written}");
+        let longer = arm(a, d, 10 * low, 10 * high + 9);
+        expect(mut t, 4, longer == 10 * answer + (high - low + 1), f"P4 {what}: a digit appended -> {longer}");
+        let wider = arm(a, d, low, high + 1);
+        expect(mut t, 5, wider == answer + next_own, f"P5 {what}: to {high + 1} -> {wider}");
+        let alone = arm(a, d, single, single);
+        expect(mut t, 5, alone == single_own, f"P5 {what}: {single} alone -> {alone}, not {single_own}");
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems: 1000 ranges below 200, and 1000 of up to 1000
+    // numbers from below 3000
+    let mut seed = 10671;
+    for i in 0..2000 {
+        let d = next_random(mut seed) % 10;
+        let (low, high) = if i < 1000 {
+            let a = next_random(mut seed) % 199 + 1;
+            let b = next_random(mut seed) % 199 + 1;
+            (a.min(b), a.max(b))
+        } else {
+            let low = next_random(mut seed) % 3000 + 1;
+            (low, low + next_random(mut seed) % 1000)
+        };
+        check_case(mut t, d, low, high, mut seed);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
