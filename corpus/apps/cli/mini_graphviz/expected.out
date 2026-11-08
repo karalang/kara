@@ -1,0 +1,425 @@
+== mini_graphviz
+> begin legend graph name=Legend comment=How\sto\sread\sthe\smap graph.rankdir=LR node.tooltip=see\sC:\docs\
+> node ok label=healthy color=green
+> node warn label=degraded color=orange
+> node down label=<<b>down</b>> color=red
+> edge ok warn style=dashed
+> end
+  built legend: 4 body lines
+> print legend
+  warning: script.txt:11: expect syntax error scanning invalid quoted string: 'see C:\\docs\\'
+  // How to read the map
+  graph Legend {
+  	graph [rankdir=LR]
+  	node [tooltip="see C:\docs\"]
+  	ok [label=healthy color=green]
+  	warn [label=degraded color=orange]
+  	down [label=<<b>down</b>> color=red]
+  	ok -- warn [style=dashed]
+  }
+> begin fleet digraph name=fleet\smap comment=Generated\sfrom\sthe\sinventory graph.rankdir=LR graph.splines=ortho node.shape=box node.fontname=Helvetica edge.arrowsize=0.7
+> node gateway label=API\sgateway
+> node auth label=auth-service tier=1
+> node orders label=Orders tier=2 color=blue
+> node 42 label=answer
+> node -1.5 label=negative
+> node .5 label=half
+> node 7. label=trailing\sdot
+> node 1e3 label=not\sa\sDOT\snumber
+> node Node label=a\skeyword\sin\sany\scase
+> node subgraph label=lower\scase\skeyword
+> node café label=accented
+> node _private
+> node "quoted" label=say\s"hi"
+> node back\"slash label=already\sescaped
+> node two\\\"slashes label=even\sbackslashes
+> node trailing\ label=odd\sbackslash\sat\sthe\send
+  warning: script.txt:29: expect syntax error scanning invalid quoted string: 'trailing\\'
+> node it's\ label=a\squote\stoo
+  warning: script.txt:30: expect syntax error scanning invalid quoted string: "it's\\"
+> node ends\\ label=even\sbackslashes\sat\sthe\send
+> node line\N label=a\snewline\sat\sthe\send
+> node <tag> label=an\sHTML-like\sname
+> node !<tag> label=nohtml
+> node %C:\temp label=escaped
+> node db label=Postgres\\lprimary\\l shape=cylinder
+> node cache label=Redis shape=cylinder style=filled fillcolor=!<lightgrey>
+> edge gateway auth label=checks\stoken
+> edge gateway orders weight=2
+> edge orders db:w label=writes
+> edge orders:out:e cache:in:w label=reads
+> edge orders:p1:e:extra db
+> edge !<tag> db
+> edge !<tag>:<port> db
+> edge %a\b db
+> edge "x":"y" db
+> edges auth db auth cache
+> edges gateway
+  error: script.txt:48: usage: edges TAIL HEAD [TAIL HEAD ...]
+> attr rank=same nodesep=0.3
+> attr graph label=Fleet\smap fontsize=20
+> attr Node shape=ellipse
+> attr edge
+> attr cluster color=red
+  error: script.txt:53: attr statement must target graph, node, or edge: 'cluster'
+> attr node bad
+  error: script.txt:54: bad attribute bad
+> subgraph name=cluster_data graph.label=Data\sstores graph.style=filled node.style=filled
+> node db
+> node cache
+> subgraph name=cluster_cold comment=Cold\sstorage graph.label=Archive
+> node archive label=S3\sbucket
+> edge db archive label=nightly
+> end
+> attr color=lightgrey
+> end
+> subgraph
+> node queue
+> edge orders queue
+> end
+> include legend
+  error: script.txt:68: <graphviz.graphs.Digraph object> cannot add subgraph of different kind: <graphviz.graphs.Graph object>
+> end
+  built fleet: 55 body lines
+> print fleet
+  // Generated from the inventory
+  digraph "fleet map" {
+  	graph [rankdir=LR splines=ortho]
+  	node [fontname=Helvetica shape=box]
+  	edge [arrowsize=0.7]
+  	gateway [label="API gateway"]
+  	auth [label="auth-service" tier=1]
+  	orders [label=Orders color=blue tier=2]
+  	42 [label=answer]
+  	-1.5 [label=negative]
+  	.5 [label=half]
+  	7. [label="trailing dot"]
+  	"1e3" [label="not a DOT number"]
+  	"Node" [label="a keyword in any case"]
+  	"subgraph" [label="lower case keyword"]
+  	"café" [label=accented]
+  	_private
+  	"\"quoted\"" [label="say \"hi\""]
+  	"back\"slash" [label="already escaped"]
+  	"two\\\"slashes" [label="even backslashes"]
+  	"trailing\" [label="odd backslash at the end"]
+  	"it's\" [label="a quote too"]
+  	"ends\\" [label="even backslashes at the end"]
+  	line
+   [label="a newline at the end"]
+  	<tag> [label="an HTML-like name"]
+  	"<tag>" [label=nohtml]
+  	"C:\\temp" [label=escaped]
+  	db [label="Postgres\\lprimary\\l" shape=cylinder]
+  	cache [label=Redis fillcolor="<lightgrey>" shape=cylinder style=filled]
+  	gateway -> auth [label="checks token"]
+  	gateway -> orders [weight=2]
+  	orders -> db:w [label=writes]
+  	orders:out:e -> cache:in:w [label=reads]
+  	orders:p1:e:extra -> db
+  	"<tag>" -> db
+  	<tag>:<port> -> db
+  	"a\\b" -> db
+  	"\"x\"":"\"y\"" -> db
+  	auth -> db
+  	auth -> cache
+  	nodesep=0.3 rank=same
+  	graph [fontsize=20 label="Fleet map"]
+  	Node [shape=ellipse]
+  	subgraph cluster_data {
+  		graph [label="Data stores" style=filled]
+  		node [style=filled]
+  		db
+  		cache
+  		// Cold storage
+  		subgraph cluster_cold {
+  			graph [label=Archive]
+  			archive [label="S3 bucket"]
+  			db -> archive [label=nightly]
+  		}
+  		color=lightgrey
+  	}
+  	{
+  		queue
+  		orders -> queue
+  	}
+  }
+> copy fleet fleet_v2
+> clear fleet_v2 keep
+> print fleet_v2
+  // Generated from the inventory
+  digraph "fleet map" {
+  	graph [rankdir=LR splines=ortho]
+  	node [fontname=Helvetica shape=box]
+  	edge [arrowsize=0.7]
+  }
+> copy fleet fleet_v3
+> clear fleet_v3
+> print fleet_v3
+  // Generated from the inventory
+  digraph "fleet map" {
+  }
+> begin strictly digraph strict name=strict
+> node a
+> edge a b
+> edge a b
+> end
+  built strictly: 3 body lines
+> print strictly
+  strict digraph "strict" {
+  	a
+  	a -> b
+  	a -> b
+  }
+> begin undirected graph
+> node a
+> node b label=
+> edge a b
+> include strictly
+  error: script.txt:90: <graphviz.graphs.Graph object> cannot add subgraph of different kind: <graphviz.graphs.Digraph object>
+> include legend
+  warning: script.txt:91: expect syntax error scanning invalid quoted string: 'see C:\\docs\\'
+> end
+  built undirected: 12 body lines
+> print undirected
+  graph {
+  	a
+  	b [label=""]
+  	a -- b
+  	// How to read the map
+  	subgraph Legend {
+  		graph [rankdir=LR]
+  		node [tooltip="see C:\docs\"]
+  		ok [label=healthy color=green]
+  		warn [label=degraded color=orange]
+  		down [label=<<b>down</b>> color=red]
+  		ok -- warn [style=dashed]
+  	}
+  }
+> begin with_strict digraph
+> include strictly
+  error: script.txt:95: subgraphs cannot be strict
+> include fleet
+> include legend
+  error: script.txt:97: <graphviz.graphs.Digraph object> cannot add subgraph of different kind: <graphviz.graphs.Graph object>
+> end
+  built with_strict: 61 body lines
+> print with_strict
+  digraph {
+  	// Generated from the inventory
+  	subgraph "fleet map" {
+  		graph [rankdir=LR splines=ortho]
+  		node [fontname=Helvetica shape=box]
+  		edge [arrowsize=0.7]
+  		gateway [label="API gateway"]
+  		auth [label="auth-service" tier=1]
+  		orders [label=Orders color=blue tier=2]
+  		42 [label=answer]
+  		-1.5 [label=negative]
+  		.5 [label=half]
+  		7. [label="trailing dot"]
+  		"1e3" [label="not a DOT number"]
+  		"Node" [label="a keyword in any case"]
+  		"subgraph" [label="lower case keyword"]
+  		"café" [label=accented]
+  		_private
+  		"\"quoted\"" [label="say \"hi\""]
+  		"back\"slash" [label="already escaped"]
+  		"two\\\"slashes" [label="even backslashes"]
+  		"trailing\" [label="odd backslash at the end"]
+  		"it's\" [label="a quote too"]
+  		"ends\\" [label="even backslashes at the end"]
+  		line
+   [label="a newline at the end"]
+  		<tag> [label="an HTML-like name"]
+  		"<tag>" [label=nohtml]
+  		"C:\\temp" [label=escaped]
+  		db [label="Postgres\\lprimary\\l" shape=cylinder]
+  		cache [label=Redis fillcolor="<lightgrey>" shape=cylinder style=filled]
+  		gateway -> auth [label="checks token"]
+  		gateway -> orders [weight=2]
+  		orders -> db:w [label=writes]
+  		orders:out:e -> cache:in:w [label=reads]
+  		orders:p1:e:extra -> db
+  		"<tag>" -> db
+  		<tag>:<port> -> db
+  		"a\\b" -> db
+  		"\"x\"":"\"y\"" -> db
+  		auth -> db
+  		auth -> cache
+  		nodesep=0.3 rank=same
+  		graph [fontsize=20 label="Fleet map"]
+  		Node [shape=ellipse]
+  		subgraph cluster_data {
+  			graph [label="Data stores" style=filled]
+  			node [style=filled]
+  			db
+  			cache
+  			// Cold storage
+  			subgraph cluster_cold {
+  				graph [label=Archive]
+  				archive [label="S3 bucket"]
+  				db -> archive [label=nightly]
+  			}
+  			color=lightgrey
+  		}
+  		{
+  			queue
+  			orders -> queue
+  		}
+  	}
+  }
+> node outside
+  error: script.txt:102: node needs an open graph
+> end
+  error: script.txt:103: end needs an open graph
+> include legend
+  error: script.txt:104: include needs an open graph
+> begin late graph
+> begin again graph
+  error: script.txt:106: begin inside late
+> print fleet
+  error: script.txt:107: print inside late
+> copy fleet nope
+  error: script.txt:108: copy inside late
+> clear fleet
+  error: script.txt:109: clear inside late
+> save fleet fleet.gv
+  error: script.txt:110: save inside late
+> attr
+> edge a
+  error: script.txt:112: usage: edge TAIL HEAD [K=V ...]
+> edges a b c
+  error: script.txt:113: usage: edges TAIL HEAD [TAIL HEAD ...]
+> node
+  error: script.txt:114: usage: node NAME [K=V ...]
+> node x bad
+  error: script.txt:115: bad attribute bad
+> node x label
+  error: script.txt:116: bad attribute label
+> include
+  error: script.txt:117: usage: include KEY
+> include nosuch
+  error: script.txt:118: no graph nosuch
+> end
+  built late: 0 body lines
+> begin late digraph
+  error: script.txt:120: graph late exists
+> begin bad graph shape=box
+  error: script.txt:121: bad option shape=box
+> begin bad graph name=a name=b
+  error: script.txt:122: repeated option name
+> begin bad graph nodes.shape=box
+  error: script.txt:123: bad option nodes.shape=box
+> begin bad tree
+  error: script.txt:124: usage: begin KEY graph|digraph [OPTION ...]
+> begin
+  error: script.txt:125: usage: begin KEY graph|digraph [OPTION ...]
+> begin fleet graph
+  error: script.txt:126: graph fleet exists
+> print nosuch
+  error: script.txt:127: no graph nosuch
+> print
+  error: script.txt:128: usage: print KEY
+> copy nosuch x
+  error: script.txt:129: no graph nosuch
+> copy fleet
+  error: script.txt:130: usage: copy KEY NEW
+> copy fleet legend
+  error: script.txt:131: graph legend exists
+> clear nosuch
+  error: script.txt:132: no graph nosuch
+> clear fleet all
+  error: script.txt:133: usage: clear KEY [keep]
+> save nosuch x.gv
+  error: script.txt:134: no graph nosuch
+> save fleet ../escape.gv
+  error: script.txt:135: bad file name ../escape.gv
+> save fleet Fleet.gv
+  error: script.txt:136: bad file name Fleet.gv
+> save fleet
+  error: script.txt:137: usage: save KEY FILE
+> render fleet
+  error: script.txt:138: unknown command render
+> save fleet fleet.gv
+  saved out/fleet.gv: 62 lines, 1635 bytes
+  // Generated from the inventory
+  digraph "fleet map" {
+  	graph [rankdir=LR splines=ortho]
+  	node [fontname=Helvetica shape=box]
+  	edge [arrowsize=0.7]
+  	gateway [label="API gateway"]
+  	auth [label="auth-service" tier=1]
+  	orders [label=Orders color=blue tier=2]
+  	42 [label=answer]
+  	-1.5 [label=negative]
+  	.5 [label=half]
+  	7. [label="trailing dot"]
+  	"1e3" [label="not a DOT number"]
+  	"Node" [label="a keyword in any case"]
+  	"subgraph" [label="lower case keyword"]
+  	"café" [label=accented]
+  	_private
+  	"\"quoted\"" [label="say \"hi\""]
+  	"back\"slash" [label="already escaped"]
+  	"two\\\"slashes" [label="even backslashes"]
+  	"trailing\" [label="odd backslash at the end"]
+  	"it's\" [label="a quote too"]
+  	"ends\\" [label="even backslashes at the end"]
+  	line
+   [label="a newline at the end"]
+  	<tag> [label="an HTML-like name"]
+  	"<tag>" [label=nohtml]
+  	"C:\\temp" [label=escaped]
+  	db [label="Postgres\\lprimary\\l" shape=cylinder]
+  	cache [label=Redis fillcolor="<lightgrey>" shape=cylinder style=filled]
+  	gateway -> auth [label="checks token"]
+  	gateway -> orders [weight=2]
+  	orders -> db:w [label=writes]
+  	orders:out:e -> cache:in:w [label=reads]
+  	orders:p1:e:extra -> db
+  	"<tag>" -> db
+  	<tag>:<port> -> db
+  	"a\\b" -> db
+  	"\"x\"":"\"y\"" -> db
+  	auth -> db
+  	auth -> cache
+  	nodesep=0.3 rank=same
+  	graph [fontsize=20 label="Fleet map"]
+  	Node [shape=ellipse]
+  	subgraph cluster_data {
+  		graph [label="Data stores" style=filled]
+  		node [style=filled]
+  		db
+  		cache
+  		// Cold storage
+  		subgraph cluster_cold {
+  			graph [label=Archive]
+  			archive [label="S3 bucket"]
+  			db -> archive [label=nightly]
+  		}
+  		color=lightgrey
+  	}
+  	{
+  		queue
+  		orders -> queue
+  	}
+  }
+> save undirected undirected.gv
+  saved out/undirected.gv: 14 lines, 271 bytes
+  graph {
+  	a
+  	b [label=""]
+  	a -- b
+  	// How to read the map
+  	subgraph Legend {
+  		graph [rankdir=LR]
+  		node [tooltip="see C:\docs\"]
+  		ok [label=healthy color=green]
+  		warn [label=degraded color=orange]
+  		down [label=<<b>down</b>> color=red]
+  		ok -- warn [style=dashed]
+  	}
+  }
+== end
+  8 graphs built

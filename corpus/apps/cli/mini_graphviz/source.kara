@@ -1,0 +1,732 @@
+// mini_graphviz: the source-building side of the Python `graphviz`
+// package. Graphs and digraphs are assembled a statement at a time, with
+// the package's quoting of DOT identifiers, attribute lists, clusters and
+// nested subgraphs, copies, clears and saved `.gv` files.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+
+// ------------------------------------------------------------ text
+
+/// A script word as text: `\s` is a space and `\N` a newline; any other
+/// character, a backslash included, is itself.
+fn text(word: Str) -> String {
+    word.replace("\\s", " ").replace("\\N", "\n")
+}
+
+/// A name or value as the package sees it: the text, and whether it is a
+/// `nohtml` string, which is never taken for an HTML-like label.
+#[derive(Clone)]
+struct Val {
+    s: String,
+    nohtml: bool,
+}
+
+fn plain(s: Str) -> Val {
+    Val { s: s.to_string(), nohtml: false }
+}
+
+/// A first `!` makes the rest nohtml; a first `%` makes it
+/// `escape(rest)`, every backslash doubled, also nohtml.
+fn value(word: Str) -> Val {
+    if word.starts_with("!") {
+        Val { s: text(word[1..]), nohtml: true }
+    } else if word.starts_with("%") {
+        Val { s: text(word[1..]).replace("\\", "\\\\"), nohtml: true }
+    } else {
+        plain(text(word))
+    }
+}
+
+/// Python's `repr` of a string, for the characters the script uses.
+fn py_repr(s: Str) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ------------------------------------------------------------ quoting
+
+/// A Python `$` also matches before a final newline.
+fn without_final_newline(s: Str) -> Str {
+    if s.ends_with("\n") {
+        s[0..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+fn is_digits(s: Str) -> bool {
+    not s.is_empty() and s.chars().all(|c| c >= '0' and c <= '9')
+}
+
+/// `[a-zA-Z_][a-zA-Z0-9_]*`
+fn is_name(s: Str) -> bool {
+    let mut first = true;
+    for c in s.chars() {
+        let letter = c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
+        let digit = c >= '0' and c <= '9';
+        if not (letter or (digit and not first)) {
+            return false;
+        }
+        first = false;
+    }
+    not first
+}
+
+/// `-?(\.[0-9]+|[0-9]+(\.[0-9]*)?)`
+fn is_number(s: Str) -> bool {
+    let t = if s.starts_with("-") { s[1..] } else { s };
+    if t.starts_with(".") {
+        return is_digits(t[1..]);
+    }
+    match t.find(".") {
+        Some(i) => {
+            let rest = t[i + 1..];
+            is_digits(t[0..i]) and (rest.is_empty() or is_digits(rest))
+        }
+        None => is_digits(t),
+    }
+}
+
+fn is_id(s: Str) -> bool {
+    let core = without_final_newline(s);
+    is_name(core) or is_number(core)
+}
+
+fn is_keyword(s: Str) -> bool {
+    let lower = s.to_lowercase();
+    ["node", "edge", "graph", "digraph", "subgraph", "strict"].contains(lower.as_str())
+}
+
+/// `<.*>$`, the dot matching newlines too.
+fn is_html(s: Str) -> bool {
+    s.starts_with("<") and (s.ends_with(">") or s.ends_with(">\n"))
+}
+
+/// Whether the run of backslashes at the end, or before a final newline,
+/// is odd.
+fn odd_final_backslashes(s: Str) -> bool {
+    let mut n = 0;
+    for c in without_final_newline(s).chars().rev() {
+        if c != '\\' {
+            break;
+        }
+        n += 1;
+    }
+    n % 2 == 1
+}
+
+fn push_backslashes(out: mut ref String, n: i64) {
+    for _ in 0..n {
+        out.push('\\');
+    }
+}
+
+/// Each `"`, with the backslashes before it, becomes the run (one
+/// backslash fewer if it is odd) and `\"`.
+fn escape_quotes(s: Str) -> String {
+    let mut out = String.new();
+    let mut run = 0;
+    for c in s.chars() {
+        if c == '\\' {
+            run += 1;
+            continue;
+        }
+        if c == '"' {
+            push_backslashes(mut out, run - run % 2);
+            out.push_str("\\\"");
+        } else {
+            push_backslashes(mut out, run);
+            out.push(c);
+        }
+        run = 0;
+    }
+    push_backslashes(mut out, run);
+    out
+}
+
+/// The package's `quote`: a DOT identifier, quoted when it has to be.
+fn quote(v: Val, warnings: mut ref Vec[String]) -> String {
+    let s = v.s.as_str();
+    if is_html(s) and not v.nohtml {
+        return v.s.clone();
+    }
+    if not is_id(s) or is_keyword(s) {
+        if odd_final_backslashes(s) {
+            warnings.push(f"expect syntax error scanning invalid quoted string: {py_repr(s)}");
+        }
+        return f"\"{escape_quotes(s)}\"";
+    }
+    v.s.clone()
+}
+
+/// `node[:port[:compass]]`, the parts as plain strings.
+fn quote_edge(v: Val, warnings: mut ref Vec[String]) -> String {
+    let s = v.s.as_str();
+    let Some(i) = s.find(":") else {
+        return quote(v, mut warnings);
+    };
+    let mut parts: Vec[String] = [quote(plain(s[0..i]), mut warnings)];
+    let rest = s[i + 1..];
+    if not rest.is_empty() {
+        match rest.find(":") {
+            Some(j) => {
+                parts.push(quote(plain(rest[0..j]), mut warnings));
+                let compass = rest[j + 1..];
+                if not compass.is_empty() {
+                    parts.push(compass.to_string());
+                }
+            }
+            None => parts.push(quote(plain(rest), mut warnings)),
+        }
+    }
+    parts.join(":")
+}
+
+/// `label=v` first when there is a label, then each attribute in key
+/// order, keys and values quoted.
+fn a_list(label: Option[Val], attrs: SortedMap[String, Val], warnings: mut ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    if let Some(l) = label {
+        parts.push(f"label={quote(l, mut warnings)}");
+    }
+    for (k, v) in attrs.iter() {
+        let key = quote(plain(k), mut warnings);
+        parts.push(f"{key}={quote(v, mut warnings)}");
+    }
+    parts.join(" ")
+}
+
+fn attr_list(label: Option[Val], attrs: SortedMap[String, Val], warnings: mut ref Vec[String]) -> String {
+    let content = a_list(label, attrs, mut warnings);
+    if content.is_empty() {
+        String.new()
+    } else {
+        f" [{content}]"
+    }
+}
+
+// ------------------------------------------------------------ graphs
+
+#[derive(Clone)]
+struct Graph {
+    directed: bool,
+    strict: bool,
+    // An empty name or comment is none, as the package's `if self.name`
+    // reads it.
+    name: Val,
+    comment: String,
+    graph_attr: SortedMap[String, Val],
+    node_attr: SortedMap[String, Val],
+    edge_attr: SortedMap[String, Val],
+    // Verbatim source lines, each ending with a newline.
+    body: Vec[String],
+}
+
+impl Graph {
+    fn class_name(ref self) -> Str {
+        if self.directed { "Digraph" } else { "Graph" }
+    }
+
+    /// The source's lines, as the package's `__iter__` yields them; as a
+    /// subgraph, with a `subgraph` head and never strict.
+    fn lines(ref self, subgraph: bool, warnings: mut ref Vec[String]) -> Result[Vec[String], String] {
+        let mut out: Vec[String] = Vec.new();
+        if not self.comment.is_empty() {
+            out.push(f"// {self.comment}\n");
+        }
+        if subgraph and self.strict {
+            return Err("subgraphs cannot be strict");
+        }
+        let name = if self.name.s.is_empty() {
+            String.new()
+        } else {
+            f"{quote(self.name, mut warnings)} "
+        };
+        if subgraph {
+            if name.is_empty() {
+                out.push("{\n");
+            } else {
+                out.push(f"subgraph {name}{{\n");
+            }
+        } else {
+            let strict = if self.strict { "strict " } else { "" };
+            let kind = if self.directed { "digraph" } else { "graph" };
+            out.push(f"{strict}{kind} {name}{{\n");
+        }
+        let none: Option[Val] = None;
+        for (kw, attrs) in [("graph", self.graph_attr.clone()), ("node", self.node_attr.clone()), ("edge", self.edge_attr.clone())].iter() {
+            if not attrs.is_empty() {
+                out.push(f"\t{kw}{attr_list(none, attrs, mut warnings)}\n");
+            }
+        }
+        for line in self.body.iter() {
+            out.push(line.clone());
+        }
+        out.push("}\n");
+        Ok(out)
+    }
+
+    fn source(ref self, warnings: mut ref Vec[String]) -> Result[String, String] {
+        Ok(self.lines(false, warnings)?.join(""))
+    }
+
+    /// The package's `subgraph(other)`: the other graph's lines, each
+    /// indented by a tab.
+    fn add_subgraph(mut ref self, other: Graph, warnings: mut ref Vec[String]) -> Result[(), String] {
+        if other.directed != self.directed {
+            return Err(f"<graphviz.graphs.{self.class_name()} object> cannot add subgraph of different kind: <graphviz.graphs.{other.class_name()} object>");
+        }
+        let lines = other.lines(true, warnings)?;
+        for line in lines.iter() {
+            self.body.push(f"\t{line}");
+        }
+        Ok(())
+    }
+
+    fn clear(mut ref self, keep_attrs: bool) {
+        if not keep_attrs {
+            self.graph_attr.clear();
+            self.node_attr.clear();
+            self.edge_attr.clear();
+        }
+        self.body.clear();
+    }
+}
+
+// ------------------------------------------------------------ the script
+
+/// `K=V` words as a dict sorted by key; a repeated key keeps its last value.
+fn pairs(words: Slice[String]) -> Result[SortedMap[String, Val], String] {
+    let mut out: SortedMap[String, Val] = SortedMap.new();
+    for w in words.iter() {
+        let Some(i) = w.find("=") else {
+            return Err(f"bad attribute {w}");
+        };
+        out.insert(text(w[0..i]), value(w[i + 1..]));
+    }
+    Ok(out)
+}
+
+/// The options of `begin` and `subgraph`, as a graph of the given kind.
+fn options(words: Slice[String], directed: bool, allow_strict: bool) -> Result[Graph, String] {
+    let mut g = Graph {
+        directed,
+        strict: false,
+        name: plain(""),
+        comment: String.new(),
+        graph_attr: SortedMap.new(),
+        node_attr: SortedMap.new(),
+        edge_attr: SortedMap.new(),
+        body: Vec.new(),
+    };
+    let mut named = false;
+    let mut commented = false;
+    for w in words.iter() {
+        if w == "strict" and allow_strict {
+            g.strict = true;
+            continue;
+        }
+        let Some(i) = w.find("=") else {
+            return Err(f"bad option {w}");
+        };
+        let k = w[0..i];
+        let v = value(w[i + 1..]);
+        if k == "name" or k == "comment" {
+            if (k == "name" and named) or (k == "comment" and commented) {
+                return Err(f"repeated option {k}");
+            }
+            if k == "name" {
+                named = true;
+                g.name = v;
+            } else {
+                commented = true;
+                g.comment = v.s;
+            }
+            continue;
+        }
+        let Some(d) = k.find(".") else {
+            return Err(f"bad option {w}");
+        };
+        let key = text(k[d + 1..]);
+        match k[0..d] {
+            "graph" => { g.graph_attr.insert(key, v); }
+            "node" => { g.node_attr.insert(key, v); }
+            "edge" => { g.edge_attr.insert(key, v); }
+            _ => return Err(f"bad option {w}"),
+        };
+    }
+    Ok(g)
+}
+
+fn is_file_name(s: Str) -> bool {
+    if not s.ends_with(".gv") {
+        return false;
+    }
+    let stem = s[0..s.len() - 3];
+    not stem.is_empty() and stem.chars().all(|c| c == '_' or (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9'))
+}
+
+/// A graph open for statements: a top-level one under its key, or a
+/// subgraph (an empty key).
+struct Frame {
+    key: String,
+    g: Graph,
+}
+
+struct Player {
+    docs: Map[String, Graph],
+    stack: Vec[Frame],
+}
+
+impl Player {
+    /// The index of the innermost open graph.
+    fn open(ref self, cmd: Str) -> Result[i64, String] {
+        if self.stack.is_empty() {
+            return Err(f"{cmd} needs an open graph");
+        }
+        Ok(self.stack.len() - 1)
+    }
+
+    fn doc(ref self, key: Str) -> Result[ref Graph, String] {
+        match self.docs.get(key) {
+            Some(g) => Ok(g),
+            None => Err(f"no graph {key}"),
+        }
+    }
+
+    fn run(mut ref self, words: Slice[String], warnings: mut ref Vec[String]) -> Result[Vec[String], String] {
+        let cmd = words[0].as_str();
+        let none: Vec[String] = Vec.new();
+        match cmd {
+            "begin" => {
+                if not self.stack.is_empty() {
+                    return Err(f"begin inside {self.stack[0].key}");
+                }
+                if words.len() < 3 or not ["graph", "digraph"].contains(words[2].as_str()) {
+                    return Err("usage: begin KEY graph|digraph [OPTION ...]");
+                }
+                if self.docs.contains_key(words[1]) {
+                    return Err(f"graph {words[1]} exists");
+                }
+                let g = options(words[3..], words[2] == "digraph", true)?;
+                self.stack.push(Frame { key: words[1].clone(), g });
+                Ok(none)
+            }
+            "subgraph" => {
+                let i = self.open(cmd)?;
+                let g = options(words[1..], self.stack[i].g.directed, false)?;
+                self.stack.push(Frame { key: String.new(), g });
+                Ok(none)
+            }
+            "end" => {
+                if words.len() != 1 {
+                    return Err("usage: end");
+                }
+                let i = self.open(cmd)?;
+                let Some(f) = self.stack.pop() else {
+                    return Err("end needs an open graph");
+                };
+                if i > 0 {
+                    self.stack[i - 1].g.add_subgraph(f.g, warnings)?;
+                    return Ok(none);
+                }
+                let n = f.g.body.len();
+                self.docs.insert(f.key.clone(), f.g);
+                Ok([f"  built {f.key}: {n} body lines"])
+            }
+            "node" => {
+                let i = self.open(cmd)?;
+                if words.len() < 2 {
+                    return Err("usage: node NAME [K=V ...]");
+                }
+                let mut attrs = pairs(words[2..])?;
+                let label = attrs.remove("label");
+                let name = quote(value(words[1]), mut warnings);
+                let list = attr_list(label, attrs, mut warnings);
+                self.stack[i].g.body.push(f"\t{name}{list}\n");
+                Ok(none)
+            }
+            "edge" => {
+                let i = self.open(cmd)?;
+                if words.len() < 3 {
+                    return Err("usage: edge TAIL HEAD [K=V ...]");
+                }
+                let mut attrs = pairs(words[3..])?;
+                let label = attrs.remove("label");
+                let tail = quote_edge(value(words[1]), mut warnings);
+                let head = quote_edge(value(words[2]), mut warnings);
+                let list = attr_list(label, attrs, mut warnings);
+                let op = if self.stack[i].g.directed { "->" } else { "--" };
+                self.stack[i].g.body.push(f"\t{tail} {op} {head}{list}\n");
+                Ok(none)
+            }
+            "edges" => {
+                let i = self.open(cmd)?;
+                let ends = words[1..];
+                if ends.is_empty() or ends.len() % 2 == 1 {
+                    return Err("usage: edges TAIL HEAD [TAIL HEAD ...]");
+                }
+                let op = if self.stack[i].g.directed { "->" } else { "--" };
+                let mut k = 0;
+                while k < ends.len() {
+                    let tail = quote_edge(value(ends[k]), mut warnings);
+                    let head = quote_edge(value(ends[k + 1]), mut warnings);
+                    self.stack[i].g.body.push(f"\t{tail} {op} {head}\n");
+                    k += 2;
+                }
+                Ok(none)
+            }
+            "attr" => {
+                let i = self.open(cmd)?;
+                let mut rest = words[1..];
+                let mut kw: Option[String] = None;
+                if not rest.is_empty() and not rest[0].contains("=") {
+                    kw = Some(rest[0].clone());
+                    rest = rest[1..];
+                }
+                let attrs = pairs(rest)?;
+                if let Some(ref k) = kw {
+                    if not ["graph", "node", "edge"].contains(k.to_lowercase().as_str()) {
+                        return Err(f"attr statement must target graph, node, or edge: {py_repr(k)}");
+                    }
+                }
+                if attrs.is_empty() {
+                    return Ok(none);
+                }
+                let none_label: Option[Val] = None;
+                let line = match kw {
+                    None => f"\t{a_list(none_label, attrs, mut warnings)}\n",
+                    Some(k) => f"\t{k}{attr_list(none_label, attrs, mut warnings)}\n",
+                };
+                self.stack[i].g.body.push(line);
+                Ok(none)
+            }
+            "include" => {
+                let i = self.open(cmd)?;
+                if words.len() != 2 {
+                    return Err("usage: include KEY");
+                }
+                let other = self.doc(words[1])?.clone();
+                self.stack[i].g.add_subgraph(other, warnings)?;
+                Ok(none)
+            }
+            "print" | "copy" | "clear" | "save" => {
+                if not self.stack.is_empty() {
+                    return Err(f"{cmd} inside {self.stack[0].key}");
+                }
+                self.built(cmd, words, warnings)
+            }
+            _ => Err(f"unknown command {cmd}"),
+        }
+    }
+
+    /// `print`, `copy`, `clear` and `save`, on built graphs.
+    fn built(mut ref self, cmd: Str, words: Slice[String], warnings: mut ref Vec[String]) -> Result[Vec[String], String] {
+        let none: Vec[String] = Vec.new();
+        match cmd {
+            "print" => {
+                if words.len() != 2 {
+                    return Err("usage: print KEY");
+                }
+                let src = self.doc(words[1])?.source(warnings)?;
+                let parts: Vec[Str] = src.split("\n").collect();
+                let mut out: Vec[String] = Vec.new();
+                for p in parts[0..parts.len() - 1].iter() {
+                    out.push(f"  {p}");
+                }
+                Ok(out)
+            }
+            "copy" => {
+                if words.len() != 3 {
+                    return Err("usage: copy KEY NEW");
+                }
+                let g = self.doc(words[1])?.clone();
+                if self.docs.contains_key(words[2]) {
+                    return Err(f"graph {words[2]} exists");
+                }
+                self.docs.insert(words[2].clone(), g);
+                Ok(none)
+            }
+            "clear" => {
+                let keep = words.len() == 3 and words[2] == "keep";
+                if not (words.len() == 2 or keep) {
+                    return Err("usage: clear KEY [keep]");
+                }
+                self.doc(words[1])?;
+                if let Some(g) = self.docs.get_mut(words[1]) {
+                    g.clear(keep);
+                }
+                Ok(none)
+            }
+            _ => {
+                if words.len() != 3 {
+                    return Err("usage: save KEY FILE");
+                }
+                let g = self.doc(words[1])?;
+                if not is_file_name(words[2]) {
+                    return Err(f"bad file name {words[2]}");
+                }
+                let src = g.source(warnings)?;
+                let path = f"data/out/{words[2]}";
+                fs.write(path, src).map_err(|e| f"cannot write {path}: {e}")?;
+                let back = fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")?;
+                let lines: Vec[Str] = back.split("\n").collect();
+                let n = lines.len() - 1;
+                let mut out: Vec[String] = [f"  saved out/{words[2]}: {n} lines, {back.len()} bytes"];
+                for l in lines[0..n].iter() {
+                    out.push(f"  {l}");
+                }
+                Ok(out)
+            }
+        }
+    }
+}
+
+fn play(script: Str) {
+    let mut player = Player { docs: Map.new(), stack: Vec.new() };
+    println("== mini_graphviz");
+    for (i, line) in script.split("\n").enumerate() {
+        let words: Vec[String] = line.split_whitespace().map(|w| w.to_string()).collect();
+        if words.is_empty() or words[0].starts_with("#") {
+            continue;
+        }
+        println(f"> {words.join(" ")}");
+        let mut warnings: Vec[String] = Vec.new();
+        let result = player.run(words, warnings);
+        for w in warnings.iter() {
+            println(f"  warning: script.txt:{i + 1}: {w}");
+        }
+        match result {
+            Ok(lines) => {
+                for l in lines.iter() {
+                    println(l);
+                }
+            }
+            Err(e) => println(f"  error: script.txt:{i + 1}: {e}"),
+        }
+    }
+    println("== end");
+    println(f"  {player.docs.len()} graphs built");
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/out").map_err(|e| f"cannot create data/out: {e}")?;
+    write_data()?;
+    let text = fs.read_to_string("data/script.txt").map_err(|e| f"cannot read data/script.txt: {e}")?;
+    play(text);
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/script.txt", file_0())?;
+    Ok(())
+}
+
+// data/script.txt
+fn file_0() -> String {
+    """
+232041207365727669636520666c656574277320646570656e64656e6379206d61702e20605c736020696e206120776f
+726420697320612073706163652c20605c4e6020610a23206e65776c696e653b20612076616c7565207374617274696e
+67207769746820602160206973206e6f68746d6c2c206f6e65207374617274696e672077697468206025602069730a23
+20657363617065642e0a0a626567696e206c6567656e64206772617068206e616d653d4c6567656e6420636f6d6d656e
+743d486f775c73746f5c73726561645c737468655c736d61702067726170682e72616e6b6469723d4c52206e6f64652e
+746f6f6c7469703d7365655c73433a5c646f63735c0a6e6f6465206f6b206c6162656c3d6865616c74687920636f6c6f
+723d677265656e0a6e6f6465207761726e206c6162656c3d646567726164656420636f6c6f723d6f72616e67650a6e6f
+646520646f776e206c6162656c3d3c3c623e646f776e3c2f623e3e20636f6c6f723d7265640a65646765206f6b207761
+726e207374796c653d6461736865640a656e640a7072696e74206c6567656e640a0a626567696e20666c656574206469
+6772617068206e616d653d666c6565745c736d617020636f6d6d656e743d47656e6572617465645c7366726f6d5c7374
+68655c73696e76656e746f72792067726170682e72616e6b6469723d4c522067726170682e73706c696e65733d6f7274
+686f206e6f64652e73686170653d626f78206e6f64652e666f6e746e616d653d48656c76657469636120656467652e61
+72726f7773697a653d302e370a6e6f64652067617465776179206c6162656c3d4150495c73676174657761790a6e6f64
+652061757468206c6162656c3d617574682d7365727669636520746965723d310a6e6f6465206f7264657273206c6162
+656c3d4f726465727320746965723d3220636f6c6f723d626c75650a6e6f6465203432206c6162656c3d616e73776572
+0a6e6f6465202d312e35206c6162656c3d6e656761746976650a6e6f6465202e35206c6162656c3d68616c660a6e6f64
+6520372e206c6162656c3d747261696c696e675c73646f740a6e6f646520316533206c6162656c3d6e6f745c73615c73
+444f545c736e756d6265720a6e6f6465204e6f6465206c6162656c3d615c736b6579776f72645c73696e5c73616e795c
+73636173650a6e6f6465207375626772617068206c6162656c3d6c6f7765725c73636173655c736b6579776f72640a6e
+6f646520636166c3a9206c6162656c3d616363656e7465640a6e6f6465205f707269766174650a6e6f6465202271756f
+74656422206c6162656c3d7361795c73226869220a6e6f6465206261636b5c22736c617368206c6162656c3d616c7265
+6164795c73657363617065640a6e6f64652074776f5c5c5c22736c6173686573206c6162656c3d6576656e5c73626163
+6b736c61736865730a6e6f646520747261696c696e675c206c6162656c3d6f64645c736261636b736c6173685c736174
+5c737468655c73656e640a6e6f646520697427735c206c6162656c3d615c7371756f74655c73746f6f0a6e6f64652065
+6e64735c5c206c6162656c3d6576656e5c736261636b736c61736865735c7361745c737468655c73656e640a6e6f6465
+206c696e655c4e206c6162656c3d615c736e65776c696e655c7361745c737468655c73656e640a6e6f6465203c746167
+3e206c6162656c3d616e5c7348544d4c2d6c696b655c736e616d650a6e6f646520213c7461673e206c6162656c3d6e6f
+68746d6c0a6e6f64652025433a5c74656d70206c6162656c3d657363617065640a6e6f6465206462206c6162656c3d50
+6f7374677265735c5c6c7072696d6172795c5c6c2073686170653d63796c696e6465720a6e6f6465206361636865206c
+6162656c3d52656469732073686170653d63796c696e646572207374796c653d66696c6c65642066696c6c636f6c6f72
+3d213c6c69676874677265793e0a6564676520676174657761792061757468206c6162656c3d636865636b735c73746f
+6b656e0a656467652067617465776179206f7264657273207765696768743d320a65646765206f72646572732064623a
+77206c6162656c3d7772697465730a65646765206f72646572733a6f75743a652063616368653a696e3a77206c616265
+6c3d72656164730a65646765206f72646572733a70313a653a65787472612064620a6564676520213c7461673e206462
+0a6564676520213c7461673e3a3c706f72743e2064620a656467652025615c622064620a65646765202278223a227922
+2064620a6564676573206175746820646220617574682063616368650a656467657320676174657761790a6174747220
+72616e6b3d73616d65206e6f64657365703d302e330a61747472206772617068206c6162656c3d466c6565745c736d61
+7020666f6e7473697a653d32300a61747472204e6f64652073686170653d656c6c697073650a6174747220656467650a
+6174747220636c757374657220636f6c6f723d7265640a61747472206e6f6465206261640a7375626772617068206e61
+6d653d636c75737465725f646174612067726170682e6c6162656c3d446174615c7373746f7265732067726170682e73
+74796c653d66696c6c6564206e6f64652e7374796c653d66696c6c65640a6e6f64652064620a6e6f6465206361636865
+0a7375626772617068206e616d653d636c75737465725f636f6c6420636f6d6d656e743d436f6c645c7373746f726167
+652067726170682e6c6162656c3d417263686976650a6e6f64652061726368697665206c6162656c3d53335c73627563
+6b65740a656467652064622061726368697665206c6162656c3d6e696768746c790a656e640a6174747220636f6c6f72
+3d6c69676874677265790a656e640a73756267726170680a6e6f64652071756575650a65646765206f72646572732071
+756575650a656e640a696e636c756465206c6567656e640a656e640a7072696e7420666c6565740a0a2320436f706965
+732c20636c6561727320616e64206f74686572206772617068732e0a636f707920666c65657420666c6565745f76320a
+636c65617220666c6565745f7632206b6565700a7072696e7420666c6565745f76320a636f707920666c65657420666c
+6565745f76330a636c65617220666c6565745f76330a7072696e7420666c6565745f76330a0a626567696e2073747269
+63746c79206469677261706820737472696374206e616d653d7374726963740a6e6f646520610a65646765206120620a
+65646765206120620a656e640a7072696e74207374726963746c790a626567696e20756e646972656374656420677261
+70680a6e6f646520610a6e6f64652062206c6162656c3d0a65646765206120620a696e636c756465207374726963746c
+790a696e636c756465206c6567656e640a656e640a7072696e7420756e64697265637465640a626567696e2077697468
+5f73747269637420646967726170680a696e636c756465207374726963746c790a696e636c75646520666c6565740a69
+6e636c756465206c6567656e640a656e640a7072696e7420776974685f7374726963740a0a23204d697374616b65732e
+0a6e6f6465206f7574736964650a656e640a696e636c756465206c6567656e640a626567696e206c6174652067726170
+680a626567696e20616761696e2067726170680a7072696e7420666c6565740a636f707920666c656574206e6f70650a
+636c65617220666c6565740a7361766520666c65657420666c6565742e67760a617474720a6564676520610a65646765
+732061206220630a6e6f64650a6e6f64652078206261640a6e6f64652078206c6162656c0a696e636c7564650a696e63
+6c756465206e6f737563680a656e640a626567696e206c61746520646967726170680a626567696e2062616420677261
+70682073686170653d626f780a626567696e20626164206772617068206e616d653d61206e616d653d620a626567696e
+20626164206772617068206e6f6465732e73686170653d626f780a626567696e2062616420747265650a626567696e0a
+626567696e20666c6565742067726170680a7072696e74206e6f737563680a7072696e740a636f7079206e6f73756368
+20780a636f707920666c6565740a636f707920666c656574206c6567656e640a636c656172206e6f737563680a636c65
+617220666c65657420616c6c0a73617665206e6f7375636820782e67760a7361766520666c656574202e2e2f65736361
+70652e67760a7361766520666c65657420466c6565742e67760a7361766520666c6565740a72656e64657220666c6565
+740a0a7361766520666c65657420666c6565742e67760a7361766520756e646972656374656420756e64697265637465
+642e67760a
+"""
+}
