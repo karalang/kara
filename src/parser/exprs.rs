@@ -2917,7 +2917,8 @@ impl super::Parser {
                 kind: ExprKind::Block(block),
             }
         } else {
-            self.parse_expression()?
+            let body = self.parse_expression()?;
+            self.closure_assignment_body(body, &body_start)
         };
         // The tokens the body took: a method call's own span is its
         // receiver's, too short to wrap.
@@ -2934,6 +2935,88 @@ impl super::Parser {
                 body: Box::new(body),
             },
         })
+    }
+
+    /// `|v| *v += 1` is Rust's spelling. Assignment is a statement
+    /// (design.md § Assignment), a `match` arm's body the one place it
+    /// stands alone, and a closure's body is an expression, so a closure
+    /// that assigns takes a block. The parser used to stop at the operator
+    /// with "Expected `)`, found `+=`". Name it, read the assignment as the
+    /// block's one statement so the rest of the file still parses, and
+    /// offer the braces as the fix (B-2026-11-08-68).
+    fn closure_assignment_body(&mut self, body: Expr, body_start: &Span) -> Expr {
+        let op = match self.peek_token_ref() {
+            Token::Equal => "=",
+            Token::PlusEqual => "+=",
+            Token::MinusEqual => "-=",
+            Token::StarEqual => "*=",
+            Token::SlashEqual => "/=",
+            Token::PercentEqual => "%=",
+            Token::AmpEqual => "&=",
+            Token::PipeEqual => "|=",
+            Token::CaretEqual => "^=",
+            Token::LessLessEqual => "<<=",
+            Token::GreaterGreaterEqual => ">>=",
+            _ => return body,
+        };
+        let op_span = self.current_span();
+        self.error(&format!(
+            "a closure's body is an expression, and `{op}` is an assignment, a statement \
+             (design.md § Assignment): an assignment as the whole body is Rust syntax -- \
+             write the body as a block, `|..| {{ .. {op} ..; }}`"
+        ));
+        let compound = if self.eat(&Token::Equal) {
+            None
+        } else {
+            self.try_compound_op()
+        };
+        let Some(value) = self.parse_expression() else {
+            return Expr {
+                id: crate::ids::NodeId::DUMMY,
+                span: body.span,
+                kind: ExprKind::Error,
+            };
+        };
+        let extent = self.span_from(body_start);
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&op_span),
+            vec![
+                crate::resolver::TextEdit {
+                    offset: extent.offset,
+                    length: 0,
+                    replacement: "{ ".to_string(),
+                },
+                crate::resolver::TextEdit {
+                    offset: extent.offset + extent.length,
+                    length: 0,
+                    replacement: "; }".to_string(),
+                },
+            ],
+        );
+        let kind = match compound {
+            None => StmtKind::Assign {
+                target: body,
+                value,
+            },
+            Some(op) => StmtKind::CompoundAssign {
+                target: body,
+                op,
+                value,
+            },
+        };
+        Expr {
+            id: crate::ids::NodeId::DUMMY,
+            span: extent,
+            kind: ExprKind::Block(Block {
+                stmts: vec![Stmt {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: extent,
+                    kind,
+                }],
+                final_expr: None,
+                span: extent,
+            }),
+        }
     }
 
     fn parse_paren_or_tuple(&mut self) -> Option<Expr> {
