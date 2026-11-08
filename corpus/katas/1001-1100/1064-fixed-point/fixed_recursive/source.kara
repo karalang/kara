@@ -1,0 +1,85 @@
+// LeetCode #1064: Fixed Point -- divide and conquer: at the middle of
+// `lo..hi`, a number below its index rules out the left half, and
+// otherwise the left half is searched first and the middle is the answer
+// only if the left half has none. O(log n).
+
+fn search(arr: Slice[i64], lo: i64, hi: i64) -> i64 {
+    if lo >= hi {
+        return -1;
+    }
+    let mid = lo + (hi - lo) / 2;
+    if arr[mid] < mid {
+        return search(arr, mid + 1, hi);
+    }
+    let left = search(arr, lo, mid);
+    if left != -1 {
+        left
+    } else if arr[mid] == mid {
+        mid
+    } else {
+        -1
+    }
+}
+
+fn fixed_point(arr: Slice[i64]) -> i64 {
+    search(arr, 0, arr.len())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` distinct numbers in ascending order, from `-start` up, each the last
+// plus 1 to `gap`.
+fn random_sorted(n: i64, start: i64, gap: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut x = next_random(mut seed) % (2 * start + 1) - start;
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        arr.push(x);
+        x += 1 + next_random(mut seed) % gap;
+    }
+    arr
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples: Vec[Vec[i64]] = [[-10, -5, 0, 3, 7], [0, 2, 5, 8, 17], [-10, -5, 3, 4, 7, 9], [0], [5], [-1, 1], [-3, -2, 2, 3], [1, 2, 3, 4], [-1000000000, 1, 1000000000], [-5, -3, -1, 1, 3, 5]];
+    for arr in examples.iter() {
+        println(f"{arr} -> {fixed_point(arr)}");
+    }
+    let mut seed = 1064;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let arr = random_sorted(n, next_random(mut seed) % 6, next_random(mut seed) % 3 + 1, mut seed);
+        let answer = fixed_point(arr);
+        sum += answer;
+        check = (check * 31 + answer + 1) % 1000000007;
+    }
+    println(f"3000 arrays of 1 to 12 numbers: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 251 + 50;
+        let arr = random_sorted(n, next_random(mut seed) % 200, next_random(mut seed) % 4 + 1, mut seed);
+        let answer = fixed_point(arr);
+        sum += answer;
+        check = (check * 31 + answer + 1) % 1000000007;
+    }
+    println(f"300 arrays of 50 to 300 numbers: sum {sum}, checksum {check}");
+    // the longest arrays: 10000 numbers, each its own index, one past it,
+    // reaching its index only at the end, and far apart
+    let own: Vec[i64] = (0..10000).collect();
+    let past: Vec[i64] = (0..10000).map(|i| i + 1).collect();
+    let last: Vec[i64] = (0..10000).map(|i| 2 * i - 9999).collect();
+    let apart: Vec[i64] = (0..10000).map(|i| i * 200000 - 999999999).collect();
+    println(f"10000 own: {fixed_point(own)}");
+    println(f"10000 one past: {fixed_point(past)}");
+    println(f"10000 meeting at the end: {fixed_point(last)}");
+    println(f"10000 far apart: {fixed_point(apart)}");
+    println(f"10000 random: {fixed_point(random_sorted(10000, 5000, 2, mut seed))}");
+}
