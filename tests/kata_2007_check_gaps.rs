@@ -5,6 +5,11 @@
 //!   §5.10), but MIR typed the loop's counter, and the literal start, as
 //!   the reference, so both backends refused it ("scalar constant of a
 //!   non-scalar type"). The counter is now the integer.
+//! - LeetCode's Rust template takes `changed: Vec<i32>` and changes it with
+//!   `let mut changed = changed; changed.sort();`, Rust's way of changing
+//!   an owned argument. The fix for the write declared the parameter
+//!   `mut ref`, which changes the caller's value and needs `mut` at every
+//!   call; it now declares it `own`, which keeps Rust's meaning.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -56,4 +61,15 @@ fn kata_2007_range_loop_up_to_a_ref_bound_runs() {
     assert!(!first.contains("error"), "{first}");
     assert!(clean, "{text}");
     assert_eq!(out, "33\n");
+}
+
+#[test]
+fn kata_2007_let_mut_rebinding_a_bare_param_becomes_own() {
+    let src = "fn sorted(xs: Vec[i64]) -> Vec[i64] {\n    let mut xs = xs;\n    xs.sort();\n    xs\n}\n\nfn main() {\n    let v = [3, 1, 2];\n    println(f\"{sorted(v.iter().map(|x| x * 2).collect())}\");\n    println(f\"{sorted(v.clone())}\");\n}";
+    let (first, text, clean, out) = mend(&scratch("let_mut_rebinding"), src);
+    assert!(first.contains("Rust's `let mut xs = xs;`"), "{first}");
+    assert!(text.contains("fn sorted(xs: own Vec[i64])"), "{text}");
+    assert!(!text.contains("mut ref"), "{text}");
+    assert!(clean, "{text}");
+    assert_eq!(out, "[2, 4, 6]\n[1, 2, 3]\n");
 }

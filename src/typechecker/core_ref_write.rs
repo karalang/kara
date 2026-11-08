@@ -998,6 +998,19 @@ impl Walk<'_, '_> {
         self.tc.is_copy_type_during_check(t)
     }
 
+    /// Whether `name` is a bare (D5-borrowing) parameter that can be
+    /// redeclared, as opposed to one written `ref T`.
+    fn is_bare_param(&self, name: &str) -> bool {
+        let Some(b) = self.lookup(name) else {
+            return false;
+        };
+        matches!(b.1, Origin::Param)
+            && b.2
+                .as_ref()
+                .and_then(|fix| self.params_by_fix.get(&fix.span.offset))
+                .is_some_and(|(p, bare)| *bare && p == name)
+    }
+
     fn origin_of(&self, name: &str) -> Origin {
         self.lookup(name).map_or(Origin::Owned, |b| b.1)
     }
@@ -1019,6 +1032,21 @@ impl Walk<'_, '_> {
                 let (origin, fix) = match &value.kind {
                     ExprKind::Identifier(_) if *is_mut && self.holds_a_copy(value) => {
                         (Origin::Owned, None)
+                    }
+                    // Rust's `let mut x = x;` over a bare parameter `x` is
+                    // how Rust changes an owned argument: the edit that
+                    // keeps that meaning is `x: own T`, not `mut ref`, which
+                    // would change the caller's value (kata 2007).
+                    ExprKind::Identifier(n)
+                        if *is_mut
+                            && matches!(&pattern.kind, PatternKind::Binding(m) if m == n)
+                            && self.is_bare_param(n) =>
+                    {
+                        let fix = self.lookup(n).and_then(|b| b.2.clone()).map(|f| FixIt {
+                            replacement: "own ".to_string(),
+                            ..f
+                        });
+                        (Origin::Param, fix)
                     }
                     ExprKind::Identifier(n) => self
                         .lookup(n)
@@ -2229,6 +2257,20 @@ impl Walk<'_, '_> {
                     Some((p, bare)) => (p.as_str(), *bare),
                     None => (name, false),
                 };
+                let owns = self
+                    .lookup(name)
+                    .and_then(|b| b.2.as_ref())
+                    .is_some_and(|f| f.replacement == "own ");
+                if owns && param == name {
+                    return format!(
+                        "`{name}` is bound from the bare parameter `{name}`, which borrows \
+                         (design.md § Parameter modes), so {action} cannot modify it \
+                         (core-semantics.md §5.9). Rust's `let mut {name} = {name};` changes \
+                         an owned argument: declare it `{name}: own ...`, or `{name}: mut \
+                         ref ...` with its call sites marked `mut` to change the caller's \
+                         value"
+                    );
+                }
                 let what = if bare {
                     "a bare parameter, which borrows (design.md § Parameter modes)"
                 } else {
