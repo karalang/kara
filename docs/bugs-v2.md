@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 193 |
+| diagnostics | 194 |
 | false-positive | 157 |
 | perf | 124 |
 | missing-feature | 111 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 141 |
 | cli | 86 |
 | ownership | 63 |
-| parser | 50 |
+| parser | 51 |
 | interp | 39 |
 | effect | 29 |
 | runtime | 28 |
@@ -124,6 +124,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-67 | 2026-11-08 | mir | low | Assigning the `ref i32` a `SortedMap` walk yields to an `i64` local, `cur = d`, is refused E0509 "a view ... is stored in an escaping closure, a `shared` value or a channel", though `cur` is a plain local | — |
 | B-2026-11-08-72 | 2026-11-08 | mir-llvm | low | Kata 540's binary search divides `(low + high) / 2` and tests `mid % 2 == 1` as signed `i64`s, 3 instructions a step more than Rust's `usize` (8.08G against 6.21G on x86, 1.53x on the M5), though the loop keeps both indices non-negative | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
+| B-2026-11-08-68 | 2026-11-08 | parser | medium | A closure whose whole body is an assignment (Rust's `m.entry(k).and_modify(|v| *v += 1)`, `.for_each(|x| last = *x)`) stops the parser at the operator with "Expected `)`, found `+=`", and `karac fix` has nothing to apply | — |
 
 ### Relocated
 
