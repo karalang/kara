@@ -3816,6 +3816,19 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     self.check_assignable(expected_ret, &t, span);
                 }
+                // A number the slot's return type takes in (an unsuffixed
+                // literal, kept at its default `i64`, for `Fn() -> i32`; an
+                // `i32` widened for `Fn() -> i64`) is returned as that
+                // type, as a fn's tail and its `return`s are returned as its declared
+                // type.
+                // Typed as the body's own number, the closure returned an
+                // `i64` where its callers read an `i32` or an `f32`
+                // (B-2026-11-08-65).
+                let want = resolve_type_var_top(expected_ret, &self.env.substitutions);
+                let number = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+                if number(&want) && number(&body_ty) && body_ty != want {
+                    body_ty = want;
+                }
                 self.leave_closure_d5_params(saved_d5);
                 self.local_scope.pop();
                 let actual = self.closure_type_with_capture_inference(

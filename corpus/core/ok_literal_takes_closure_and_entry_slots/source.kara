@@ -1,0 +1,55 @@
+// A number literal takes the type of the slot it is checked against where
+// that slot is a closure's return type or a map entry's value: `|| 5` for a
+// `Fn() -> i32` returns an `i32`, `|| 6` for a `Fn() -> f64` returns
+// `6.0`, and `m.entry(k).or_insert(0)` on a `Map[i32, i32]` stores an
+// `i32`. A narrower number a closure returns is widened to the slot's type.
+
+fn call(f: Fn() -> f32) -> f32 {
+    f()
+}
+
+fn main() {
+    let a: Fn() -> i32 = || 54321;
+    let b: Fn() -> f64 = || 6;
+    let c: Fn() -> f64 = || { 7 };
+    let d: Fn() -> u8 = || 200;
+    let e: Fn() -> f32 = || {
+        return 12;
+    };
+    let small: i32 = 40000;
+    let wide: Fn() -> i64 = || small;
+    let byte: u8 = 250;
+    let real: Fn() -> f64 = || byte;
+    let twice: Fn(i32) -> i64 = |x| x * 2;
+    println(f"{a()} {b()} {c()} {d()} {e()} {wide()} {real()} {twice(70000)} {call(|| 3)}");
+
+    let none: Option[f32] = None;
+    let mut late: Option[f32] = None;
+    late.get_or_insert_with(|| 9);
+    println(f"{none.unwrap_or_else(|| 8)} {late.unwrap()}");
+
+    let mut counts: Map[i32, i32] = Map.new();
+    for k in [1, 2, 1, 1] {
+        *counts.entry(k as i32).or_insert(0) += 1;
+    }
+    let mut sorted: SortedMap[i32, i32] = SortedMap.new();
+    for k in [3, 3, 4] {
+        *sorted.entry(k as i32).or_insert(0) += 1;
+    }
+    let mut weights: Map[i64, f32] = Map.new();
+    weights.entry(1).or_insert(5);
+    weights.entry(2).or_insert_with(|| 6);
+    let held = weights.entry(3);
+    held.or_insert(7);
+    let mut sum = 0.0;
+    for k in 1..4 {
+        if let Some(w) = weights.get(k) {
+            sum += w;
+        }
+    }
+    let one = counts.get(1).unwrap_or(0);
+    let two = counts.get(2).unwrap_or(0);
+    let three = sorted.get(3).unwrap_or(0);
+    let four = sorted.get(4).unwrap_or(0);
+    println(f"{one} {two} {three} {four} {sum}");
+}

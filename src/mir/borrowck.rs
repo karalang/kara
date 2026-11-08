@@ -2720,6 +2720,8 @@ fn main() -> () {
             "par_real_clients",
             // `Vec.rotate_left` and `Map.get` are the library's.
             "ok_ref_number_as_native_argument",
+            // `Option.get_or_insert_with` is option.kara's (B-2026-11-08-65).
+            "ok_literal_takes_closure_and_entry_slots",
             // A `ref` binding over an owned local is a view, and a `match`
             // of such results a reference, in the check the build runs with
             // the library (core semantics §4.6, B-2026-10-28-25).

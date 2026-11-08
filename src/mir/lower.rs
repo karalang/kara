@@ -22556,6 +22556,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ("Sender" | "Channel", "send" | "try_send") | ("Option", "replace") => {
                     targs.first().copied()
                 }
+                // `Entry[K, V].or_insert(default: V)` (B-2026-11-08-65).
+                ("Entry", "or_insert") => targs.get(1).copied(),
                 _ => None,
             };
             return slot.map(|t| vec![t]);
@@ -25760,9 +25762,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // The key is passed as the map's key type, as `insert`'s is:
                 // a `ref` key is a borrow of the argument, not the value a
                 // loop binding holds (B-2026-11-08-19).
-                let key_t = match mk {
-                    HK::Intrinsic { args: ta, .. } => self.tys().tcx().list(ta).first().copied(),
-                    _ => None,
+                let (key_t, val_t) = match mk {
+                    HK::Intrinsic { args: ta, .. } => {
+                        let ta = self.tys().tcx().list(ta);
+                        (ta.first().copied(), ta.get(1).copied())
+                    }
+                    _ => (None, None),
                 };
                 let recv = self.recv_place(map, true)?;
                 let mut rest = Vec::new();
@@ -25775,7 +25780,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     } else if let (0, Some(kt)) = (i, key_t) {
                         rest.push(self.arg_operand(&a.value, kt)?);
                     } else {
-                        rest.push(self.expr_operand(&a.value)?);
+                        // The value is stored at the map's value type: a
+                        // literal the checker left at its default `i64`
+                        // is a constant of that type, a narrower number
+                        // widened, as `insert`'s is (B-2026-11-08-65).
+                        let op = self.expr_operand(&a.value)?;
+                        rest.push(match val_t {
+                            Some(vt) => self.widen(op, vt),
+                            None => op,
+                        });
                     }
                 }
                 let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
