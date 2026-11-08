@@ -1,0 +1,334 @@
+// LeetCode #1073: Adding Two Negabinary Numbers -- the differential: copies
+// of the six arms checked against the statement read literally (the two
+// values added as integers and the sum written back in base -2) and
+// against each other, on 2000 problems.
+
+// ---- negabinary.kara ----
+
+fn star_add_negabinary(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    let mut digits: Vec[i64] = Vec.new();
+    while i >= 0 or j >= 0 or carry != 0 {
+        let mut s = carry;
+        if i >= 0 {
+            s += a[i];
+            i -= 1;
+        }
+        if j >= 0 {
+            s += b[j];
+            j -= 1;
+        }
+        digits.push(s & 1);
+        carry = -(s >> 1);
+    }
+    while digits.len() > 1 and digits[digits.len() - 1] == 0 {
+        digits.pop();
+    }
+    digits.reverse();
+    digits
+}
+
+// ---- negabinary_table.kara ----
+
+fn table_add_negabinary(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let n = a.len().max(b.len());
+    let mut digits: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let mut k = 0;
+    while k < n or carry != 0 {
+        let x = if k < a.len() { a[a.len() - 1 - k] } else { 0 };
+        let y = if k < b.len() { b[b.len() - 1 - k] } else { 0 };
+        let (digit, next) = match x + y + carry {
+            -1 => (1, 1),
+            0 => (0, 0),
+            1 => (1, 0),
+            2 => (0, -1),
+            _ => (1, -1),
+        };
+        digits.push(digit);
+        carry = next;
+        k += 1;
+    }
+    while digits.len() > 1 and digits.last() == Some(0) {
+        digits.pop();
+    }
+    digits.iter().rev().collect()
+}
+
+// ---- negabinary_normalize.kara ----
+
+fn normalize_add_negabinary(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let mut places: Vec[i64] = Vec.filled(a.len().max(b.len()), 0);
+    for (k, d) in a.iter().rev().enumerate() {
+        places[k] += d;
+    }
+    for (k, d) in b.iter().rev().enumerate() {
+        places[k] += d;
+    }
+    let mut k = 0;
+    while k < places.len() {
+        if places[k] >= 2 or places[k] < 0 {
+            if k + 1 == places.len() {
+                places.push(0);
+            }
+            if places[k] >= 2 {
+                places[k] -= 2;
+                places[k + 1] -= 1;
+            } else {
+                places[k] += 2;
+                places[k + 1] += 1;
+            }
+        }
+        k += 1;
+    }
+    while places.len() > 1 and places[places.len() - 1] == 0 {
+        places.pop();
+    }
+    places.reverse();
+    places
+}
+
+// ---- negabinary_recursive.kara ----
+
+fn recursive_add_from(a: Vec[i64], b: Vec[i64], k: i64, carry: i64, low_first: mut ref Vec[i64]) {
+    if k >= a.len() and k >= b.len() and carry == 0 {
+        return;
+    }
+    let mut s = carry;
+    if k < a.len() {
+        s += a[a.len() - 1 - k];
+    }
+    if k < b.len() {
+        s += b[b.len() - 1 - k];
+    }
+    low_first.push(s & 1);
+    recursive_add_from(a, b, k + 1, -(s >> 1), mut low_first);
+}
+
+fn recursive_add_negabinary(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let mut low_first: Vec[i64] = Vec.new();
+    recursive_add_from(a, b, 0, 0, mut low_first);
+    while low_first.len() > 1 and low_first[low_first.len() - 1] == 0 {
+        low_first.pop();
+    }
+    low_first.reverse();
+    low_first
+}
+
+// ---- negabinary_pairs.kara ----
+
+fn pairs_digit(x: Vec[i64], k: i64) -> i64 {
+    if k < x.len() { x[x.len() - 1 - k] } else { 0 }
+}
+
+fn pairs_add_negabinary(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let n = a.len().max(b.len());
+    let mut low_first: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let mut k = 0;
+    while k < n or carry != 0 {
+        let t = pairs_digit(a, k) - 2 * pairs_digit(a, k + 1) + pairs_digit(b, k) - 2 * pairs_digit(b, k + 1) + carry;
+        carry = (t + 2).div_euclid(4);
+        let pair = t - 4 * carry;
+        let (lo, hi) = match pair {
+            -2 => (0, 1),
+            -1 => (1, 1),
+            0 => (0, 0),
+            _ => (1, 0),
+        };
+        low_first.push(lo);
+        low_first.push(hi);
+        k += 2;
+    }
+    while low_first.len() > 1 and low_first[low_first.len() - 1] == 0 {
+        low_first.pop();
+    }
+    low_first.reverse();
+    low_first
+}
+
+// ---- negabinary_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn add_negabinary(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+        let mut i = arr1.len() as i32 - 1;
+        let mut j = arr2.len() as i32 - 1;
+        let mut carry: i32 = 0;
+        let mut ans: Vec[i32] = Vec.new();
+        while i >= 0 or j >= 0 or carry != 0 {
+            let mut x = carry;
+            if i >= 0 {
+                x += arr1[i as usize];
+                i -= 1;
+            }
+            if j >= 0 {
+                x += arr2[j as usize];
+                j -= 1;
+            }
+            ans.push(x & 1);
+            carry = -(x >> 1);
+        }
+        while ans.len() > 1 and *ans.last().unwrap() == 0 {
+            ans.pop();
+        }
+        ans.reverse();
+        ans
+    }
+}
+
+fn solution_add_negabinary(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let arr1: Vec[i32] = a.iter().map(|d| *d as i32).collect();
+    let arr2: Vec[i32] = b.iter().map(|d| *d as i32).collect();
+    Solution.add_negabinary(arr1, arr2).iter().map(|d| *d as i64).collect()
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// The value of digits in base -2, most significant first.
+fn value(digits: Vec[i64]) -> i64 {
+    let mut v = 0;
+    for d in digits.iter() {
+        v = v * -2 + d;
+    }
+    v
+}
+
+// The digits in base -2 of `v`: the remainder that is 0 or 1, then the
+// rest divided by -2, until nothing is left.
+fn digits_of(v: i64) -> Vec[i64] {
+    let mut rest = v;
+    let mut low_first: Vec[i64] = Vec.new();
+    while rest != 0 {
+        let r = rest.rem_euclid(2);
+        low_first.push(r);
+        rest = (rest - r) / -2;
+    }
+    if low_first.is_empty() {
+        return [0];
+    }
+    low_first.reverse();
+    low_first
+}
+
+fn literally(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    digits_of(value(a) + value(b))
+}
+
+fn arm(w: i64, a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    match w {
+        0 => star_add_negabinary(a, b),
+        1 => table_add_negabinary(a, b),
+        2 => normalize_add_negabinary(a, b),
+        3 => recursive_add_negabinary(a, b),
+        4 => pairs_add_negabinary(a, b),
+        _ => solution_add_negabinary(a, b),
+    }
+}
+
+// ---- the properties -------------------------------------------------------
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn show(digits: Vec[i64]) -> String {
+    let mut out = String.new();
+    for d in digits.iter() {
+        out.push_str(f"{d}");
+    }
+    out
+}
+
+fn check_case(t: mut ref Tally, a: Vec[i64], b: Vec[i64], c: Vec[i64]) {
+    let want = literally(a, b);
+    let answers: Vec[Vec[i64]] = (0..6).map(|w| arm(w, a, b)).collect();
+    // `a` times -2 is `a` moved up a place, and -a is that plus `a`
+    let mut doubled = a.clone();
+    if doubled != [0] {
+        doubled.push(0);
+    }
+    for w in 0..6 {
+        let answer = answers[w].clone();
+        let what = f"arm {w}, {show(a)} + {show(b)} -> {show(answer)}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {show(want)}");
+        let swapped = arm(w, b, a);
+        expect(mut t, 2, swapped == answer, f"P2 {what}: swapped -> {show(swapped)}");
+        let plus_zero = arm(w, a, [0]);
+        expect(mut t, 3, plus_zero == a, f"P3 {what}: a + 0 -> {show(plus_zero)}");
+        let left = arm(w, answer, c);
+        let right = arm(w, a, arm(w, b, c));
+        expect(mut t, 4, left == right, f"P4 {what}: (a + b) + {show(c)} -> {show(left)}, a + (b + c) -> {show(right)}");
+        let negated = arm(w, a, doubled);
+        let zero = arm(w, a, negated);
+        expect(mut t, 5, zero == [0], f"P5 {what}: a + -a -> {show(zero)}");
+        let agree = (0..6).filter(|o| o != w and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    let mut fold = want.len();
+    for d in want.iter() {
+        fold = (fold * 31 + d + 1) % 1000000007;
+    }
+    t.check = (t.check * 31 + fold) % 1000000007;
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a number of 1 to `longest` digits with no leading zero
+fn random_number(longest: i64, seed: mut ref i64) -> Vec[i64] {
+    let n = next_random(mut seed) % longest + 1;
+    if n == 1 {
+        return [next_random(mut seed) % 2];
+    }
+    let mut digits = [1];
+    for _ in 1..n {
+        digits.push(next_random(mut seed) % 2);
+    }
+    digits
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems of three numbers each: 1000 up to 6 digits and 1000 up
+    // to 24, one time in four the second the first's negation so the sum
+    // is 0. Every choice is drawn before any arm answers.
+    let mut seed = 10731;
+    for i in 0..2000 {
+        let longest = if i < 1000 { 6 } else { 24 };
+        let a = random_number(longest, mut seed);
+        let mut b = random_number(longest, mut seed);
+        let c = random_number(longest, mut seed);
+        if next_random(mut seed) % 4 == 0 {
+            b = digits_of(-value(a));
+        }
+        check_case(mut t, a, b, c);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

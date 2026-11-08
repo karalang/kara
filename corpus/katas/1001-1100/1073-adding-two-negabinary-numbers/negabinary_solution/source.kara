@@ -1,0 +1,121 @@
+// LeetCode #1073: Adding Two Negabinary Numbers -- LeetCode's Rust template,
+// written as Rust writes it and carried to Kāra by `karac fix`: the digits
+// added from the low end with `i32` indices counting down past zero, the
+// carry `-(x >> 1)`, the leading zeros popped and the digits reversed.
+// O(n1 + n2).
+
+struct Solution {}
+
+impl Solution {
+    pub fn add_negabinary(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+        let mut i = arr1.len() as i32 - 1;
+        let mut j = arr2.len() as i32 - 1;
+        let mut carry: i32 = 0;
+        let mut ans: Vec[i32] = Vec.new();
+        while i >= 0 or j >= 0 or carry != 0 {
+            let mut x = carry;
+            if i >= 0 {
+                x += arr1[i as usize];
+                i -= 1;
+            }
+            if j >= 0 {
+                x += arr2[j as usize];
+                j -= 1;
+            }
+            ans.push(x & 1);
+            carry = -(x >> 1);
+        }
+        while ans.len() > 1 and *ans.last().unwrap() == 0 {
+            ans.pop();
+        }
+        ans.reverse();
+        ans
+    }
+}
+
+fn add_negabinary(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let arr1: Vec[i32] = a.iter().map(|d| *d as i32).collect();
+    let arr2: Vec[i32] = b.iter().map(|d| *d as i32).collect();
+    Solution.add_negabinary(arr1, arr2).iter().map(|d| *d as i64).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a number of 1 to `longest` digits with no leading zero
+fn random_number(longest: i64, seed: mut ref i64) -> Vec[i64] {
+    let n = next_random(mut seed) % longest + 1;
+    if n == 1 {
+        return [next_random(mut seed) % 2];
+    }
+    let mut digits = [1];
+    for _ in 1..n {
+        digits.push(next_random(mut seed) % 2);
+    }
+    digits
+}
+
+fn show(digits: Vec[i64]) -> String {
+    let mut out = String.new();
+    for d in digits.iter() {
+        out.push_str(f"{d}");
+    }
+    out
+}
+
+fn checksum(digits: Vec[i64]) -> i64 {
+    let mut check = digits.len();
+    for d in digits.iter() {
+        check = (check * 31 + d + 1) % 1000000007;
+    }
+    check
+}
+
+fn main() {
+    let examples = [
+        ([1, 1, 1, 1, 1], [1, 0, 1]),
+        ([0], [0]),
+        ([0], [1]),
+        ([1], [1]),
+        ([1, 1], [1]),
+        ([1, 1, 0], [1, 1, 0]),
+        ([1, 0, 1, 0, 1], [1, 1, 1, 1]),
+        ([1, 1, 1], [1, 1, 1, 1, 1, 1]),
+        ([1, 0, 0, 0, 0, 0, 0, 1], [1, 1]),
+    ];
+    for (a, b) in examples.iter() {
+        println(f"{show(a)} + {show(b)} -> {show(add_negabinary(a, b))}");
+    }
+    let mut seed = 1073;
+    for (count, longest, label) in [(3000, 12, "3000 pairs up to 12 digits"), (300, 1000, "300 pairs up to 1000 digits")] {
+        let mut zeros = 0;
+        let mut digits = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let a = random_number(longest, mut seed);
+            let b = random_number(longest, mut seed);
+            let x = add_negabinary(a, b);
+            if x == [0] {
+                zeros += 1;
+            }
+            digits += x.len();
+            check = (check * 31 + checksum(x)) % 1000000007;
+        }
+        println(f"{label}: {zeros} zero, {digits} digits, checksum {check}");
+    }
+    let ones = Vec.filled(1000, 1);
+    let alternating: Vec[i64] = (0..1000).map(|k| (k + 1) % 2).collect();
+    let rest: Vec[i64] = ones[1..].to_vec();
+    let twice = add_negabinary(ones, ones);
+    println(f"1000 ones twice: {twice.len()} digits, checksum {checksum(twice)}");
+    let plus_one = add_negabinary(ones, [1]);
+    println(f"1000 ones and 1: {show(plus_one[0..8].to_vec())}.. {plus_one.len()} digits");
+    let mixed = add_negabinary(alternating, rest);
+    println(f"1010.. and 999 ones: {mixed.len()} digits, checksum {checksum(mixed)}");
+    let one_first = add_negabinary([1], ones);
+    println(f"1 and 1000 ones: {show(one_first[0..8].to_vec())}.. {one_first.len()} digits");
+}
