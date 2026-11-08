@@ -59,13 +59,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 175 |
-| false-positive | 146 |
+| false-positive | 148 |
 | perf | 119 |
 | missing-feature | 105 |
 | soundness | 52 |
 | miscompile | 42 |
 | run-vs-build | 27 |
-| other | 22 |
+| other | 23 |
 | codegen-gap | 22 |
 | crash | 15 |
 | leak | 4 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 274 |
+| typecheck | 276 |
 | mir-llvm | 147 |
-| mir | 132 |
+| mir | 133 |
 | cli | 79 |
 | ownership | 63 |
 | parser | 47 |
@@ -123,6 +123,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-16 | 2026-11-08 | typecheck+cli | low | A `usize` length from a Rust template (`let n = n as usize; Vec::with_capacity(n * (n + 1) / 2)`) is refused as an implicit `usize` to `i64` coercion whose message says to write `as i64`, but `karac fix` has no edit for it | — |
 | B-2026-11-08-20 | 2026-11-08 | typecheck | medium | A binding whose literal keeps `i64` because only an operator or a method receiver used it is refused far from the binding, with an `as` cast as the only advice: `let mut b = 0; b += y; b` in `-> i32` says 'implicit coercion from i64 to i32 would narrow ... write an explicit as i32' at the return, with no machine fix; the fix is the binding's annotation (`let mut b: i32 = 0`) | — |
 | B-2026-11-08-21 | 2026-11-08 | typecheck | medium | A binding's literal is not fixed by a collection literal it is an element of: `let p = 0; let v: Vec[i32] = [p, 1];` and `a.push([p, 1])` on a `Vec[Vec[i32]]` are refused 'implicit coercion from i64 to i32 would narrow', though `a.push(p)` on a `Vec[i32]` fixes `p` | — |
+| B-2026-11-08-22 | 2026-11-08 | typecheck | low | `m.get(k) == Some(3)` (Map[String, i64]) is refused with "cannot compare 'Option[ref i64]' and 'Option[i64]'", as are `it.peek() == Some('a')`, `fl.first() == Some(1.5)` and `bs.first() == Some(true)`; design.md §5 says a literal inside the constructor takes the element type the other side fixes, but the B-2026-11-07-54 fix promotes only string literals | — |
+| B-2026-11-08-23 | 2026-11-08 | typecheck | medium | `collect()` into an annotated `Result[Vec[i64], String]` does not fix the error type of the mapping closure's `Ok(..)`: `let m: Result[Vec[i64], String] = xs.iter().map(|p| Ok(p.len())).collect();` is refused "cannot infer type parameter 'E' of `Result[i64, E]` ... add a type annotation to the binding", though iterators.md gives `Result[C, E]: FromIterator[Result[T, E]]` with the same E, and the closure has no binding to annotate | — |
+| B-2026-11-08-24 | 2026-11-08 | mir | low | `Option`'s derived order puts `None` after every `Some(x)` (it is declared `Some(T), None`), so `sort()` on a `Vec[Option[T]]` puts `None` last; the review-thread ruling (core-types.md 0ec0d51d29) is `None` < `Some(x)` and `Ok(x)` < `Err(e)`, as Rust, Haskell and OCaml order them | — |
 
 ### Relocated
 

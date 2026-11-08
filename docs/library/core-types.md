@@ -6,7 +6,7 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 
 ## `Option[T]`
 
-**Ordering.** Where `T` is ordered, `None` is less than every `Some(x)`, and two `Some`s compare by their values, so `sort()` puts `None` first. Where the types are comparable, `Ok(x)` is less than every `Err(e)`, and two `Ok`s or two `Err`s compare by their values. This is the order Rust, Haskell and OCaml give (review-thread ruling 2026-11-08; 0.8.1 and earlier put `None` last, B-2026-11-08-23).
+**Ordering.** Where `T` is ordered, `None` is less than every `Some(x)`, and two `Some`s compare by their values, so `sort()` puts `None` first. Where the types are comparable, `Ok(x)` is less than every `Err(e)`, and two `Ok`s or two `Err`s compare by their values. This is the order Rust, Haskell and OCaml give (review-thread ruling 2026-11-08; 0.8.1 and earlier put `None` last, B-2026-11-08-24).
 
 | Method | Signature | Notes |
 |---|---|---|
