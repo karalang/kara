@@ -3109,6 +3109,26 @@ impl super::Parser {
             return Some(lit);
         }
 
+        // Any other Rust macro call, `name!(..)` with the `!` abutting the
+        // name: reported here, where the name is an operand, and read past
+        // as one, so an operator after it goes on parsing. Left to `expect`,
+        // `if format!(..) != format!(..) {` stopped at the first call: the
+        // second was never reported, and the `!=` desynchronised the rest,
+        // whose cascade fix put a `;` after the function's tail (kata 1071).
+        if self.check(&Token::Bang) {
+            let bang = self.current_span();
+            if let Some(macro_name) = self.macro_call_name_before_bang(&bang) {
+                self.report_macro_call(&macro_name, bang);
+                self.advance();
+                self.skip_bracketed_group();
+                return Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind: ExprKind::Error,
+                });
+            }
+        }
+
         // The pre-sigil label spelling `outer: loop { .. }`. Labels are now
         // written `'outer` (design review 2026-10-07 § 5); diagnose with the
         // rewrite and parse the construct the author meant.

@@ -1,0 +1,9 @@
+source = "B-2026-11-08-48"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-08-48: a `ref i64` read as its value where a library native takes the number (§5.10): `\"ab\".repeat(n)`, `s.substring(n)`, `s.substring(0, n)`, `w.rotate_left(n)`, `w.swap(i, j)` with `n` from `.iter().map(|n| ..)` or `(i, j)` over `pairs.iter()`. Before the fix the native got the address: the interpreter stopped with `expected a library value, found Int`, and the LLVM backend panicked in int_arg (src/backend/mir/call.rs) at compile time."

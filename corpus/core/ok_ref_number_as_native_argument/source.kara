@@ -1,0 +1,29 @@
+// A `ref` to a `Copy` value is read as the value wherever the value is
+// expected, an argument included (core semantics §5.10). A library native
+// that takes a number reads it so too: `n` below is a `ref i64` (a closure
+// over `.iter()`, or a tuple part bound over a `ref`), and each call gets
+// the number. Kata 1071 met `"A".repeat(n)`: the native was handed the
+// address, which the interpreter refused and the LLVM backend panicked on.
+
+fn main() {
+    let counts = [3, 1, 0];
+    let runs: Vec[String] = counts.iter().map(|n| "ab".repeat(n)).collect();
+    let tails: Vec[String] = counts.iter().map(|n| "abcd".substring(n)).collect();
+    let heads: Vec[String] = counts.iter().map(|n| "abcd".substring(0, n)).collect();
+    let v = [5, 6, 7, 8];
+    let turned: Vec[Vec[i64]] = counts.iter().map(|n| {
+        let mut w = v.clone();
+        w.rotate_left(n);
+        w
+    }).collect();
+    let pairs = [(0, 3), (1, 2)];
+    let mut w = v.clone();
+    for (i, j) in pairs.iter() {
+        w.swap(i, j);
+    }
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(3, 30);
+    let found: Vec[i64] = counts.iter().map(|n| m.get(n).unwrap_or(-1)).collect();
+    println(f"{runs} {tails} {heads}");
+    println(f"{turned} {w} {found}");
+}

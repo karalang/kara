@@ -2637,6 +2637,8 @@ fn main() -> () {
             "log_transparent",
             // `std.net`'s sockets are the library's.
             "par_real_clients",
+            // `Vec.rotate_left` and `Map.get` are the library's.
+            "ok_ref_number_as_native_argument",
             // A `ref` binding over an owned local is a view, and a `match`
             // of such results a reference, in the check the build runs with
             // the library (core semantics §4.6, B-2026-10-28-25).

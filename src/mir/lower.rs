@@ -25874,6 +25874,45 @@ impl<'l, 'a> Bx<'l, 'a> {
                             }
                         }
                     }
+                    // Any other `ref` to a number, `bool` or `char` that a
+                    // native takes as a value is read through, as the value
+                    // itself goes: `"ab".repeat(n)`, `s.substring(0, n)` or
+                    // `w.rotate_left(n)` with `n: ref i64` from
+                    // `.iter().map(|n| ..)`. It reached the native as its
+                    // address, which the interpreter refused and the LLVM
+                    // backend panicked on (kata 1071). A container that
+                    // holds references, or a slot typed `ref`, takes it as
+                    // it is.
+                    if !stores {
+                        if let HK::Ref(t) | HK::MutRef(t) = self.tys().tcx().kind(at) {
+                            let scalar = matches!(
+                                self.tys().tcx().kind(t),
+                                HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char
+                            );
+                            let holds_refs = match self.tys().tcx().kind(base) {
+                                HK::Intrinsic { args, .. } => {
+                                    self.tys().tcx().list(args).into_iter().any(|t| {
+                                        matches!(
+                                            self.tys().tcx().kind(t),
+                                            HK::Ref(_) | HK::MutRef(_)
+                                        )
+                                    })
+                                }
+                                HK::Str | HK::StaticStr => false,
+                                _ => true,
+                            };
+                            let ref_slot = self
+                                .lib_param_tys(base, method)
+                                .and_then(|s| s.get(rest.len()).copied())
+                                .is_some_and(|s| {
+                                    matches!(self.tys().tcx().kind(s), HK::Ref(_) | HK::MutRef(_))
+                                });
+                            if scalar && !holds_refs && !ref_slot {
+                                rest.push(self.owned_operand(&a.value, t)?);
+                                continue;
+                            }
+                        }
+                    }
                     // A `ref` to a `Copy` value or handle that a call
                     // returns (`v.push(m.get(k).unwrap())`), stored into a
                     // container of owned elements, is read through: the
