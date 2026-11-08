@@ -1,0 +1,40 @@
+// design.md §8 Literals: an operator operand fixes a binding's literal when
+// the other operand's type does not widen into the default i64 (u64, usize,
+// i128, u128); beside one that does, the literal keeps i64 (B-2026-11-08-18).
+fn less_two(i: u64) -> u64 {
+    let k = 2;
+    i - k
+}
+
+fn isqrt(n: usize) -> usize {
+    let mut k = 1;
+    while k * k <= n {
+        k += 1;
+    }
+    k - 1
+}
+
+fn big(i: i128) -> i128 {
+    let k = 3;
+    k * i
+}
+
+fn total(xs: Vec[u128]) -> u128 {
+    let mut s = 0;
+    for x in xs {
+        s = s + x;
+    }
+    s
+}
+
+fn main() {
+    println(less_two(18446744073709551615));
+    println(isqrt(1000000));
+    println(big(56713727820156410577229101238628035242));
+    println(total([18446744073709551615, 18446744073709551615]));
+    // Beside a u8 the literal keeps i64 and the u8 widens.
+    let byte: u8 = 97;
+    let mut h = 2166136261;
+    h = (h ^ byte) * 16777619 & 4294967295;
+    println(h);
+}

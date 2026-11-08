@@ -2765,6 +2765,7 @@ impl<'a> super::TypeChecker<'a> {
         // (an impl method, a trait default body) does not inherit them.
         let saved_iter_lets = std::mem::take(&mut self.iter_lets);
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
+        let saved_literal_lets = std::mem::take(&mut self.literal_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_closure_lets = std::mem::take(&mut self.current_fn_closure_lets);
         let markers: rustc_hash::FxHashMap<String, Span> = f
@@ -2872,6 +2873,7 @@ impl<'a> super::TypeChecker<'a> {
         self.iter_lets = saved_iter_lets;
         self.explain_str_lit_lets();
         self.str_lit_lets = saved_str_lit_lets;
+        self.literal_lets = saved_literal_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_frozen_lets = saved_frozen_lets;
@@ -11020,9 +11022,11 @@ impl<'a> super::TypeChecker<'a> {
                     if ty.is_none() {
                         self.note_iter_let(name, pattern.span, &value.span, &expected_ty);
                         self.note_str_lit_let(name, pattern.span, value, &expected_ty);
+                        self.note_literal_let(name, pattern.span, value, &expected_ty);
                     } else {
                         self.iter_lets.remove(name.as_str());
                         self.str_lit_lets.remove(name.as_str());
+                        self.literal_lets.remove(name.as_str());
                     }
                 }
                 // design.md § "The index operator (`expr[i]`)" — a `let`

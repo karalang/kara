@@ -1,0 +1,9 @@
+source = "B-2026-11-08-18"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "numerics", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §8 Literals (7a4e06ce1c): an operator operand fixes a binding's literal when the other side's type does not widen into i64. `k` takes u64 beside `i` (u64::MAX - 2), usize in Rust's `while k * k <= n` (isqrt of 10^6 is 1000), i128 in `k * i` (3 times 2^127/3 rounded), and `s` takes u128 beside the u128 elements (2 * u64::MAX); beside the u8 `byte` the FNV `h` keeps i64 (3826002220). Values from Python."

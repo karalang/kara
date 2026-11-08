@@ -9995,6 +9995,83 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Note `let name = <integer literal>` with no annotation (see
+    /// `TypeChecker::literal_lets`).
+    pub(super) fn note_literal_let(
+        &mut self,
+        name: &str,
+        name_span: Span,
+        value: &Expr,
+        ty: &Type,
+    ) {
+        let id = match self.unbound_literal_var(ty) {
+            Some((id, inference::LiteralKind::Int))
+                if Self::is_int_literal_operator_tree(value) =>
+            {
+                id
+            }
+            _ => {
+                self.literal_lets.remove(name);
+                return;
+            }
+        };
+        let n = Self::int_literal_operator_tree_value(value);
+        self.literal_lets
+            .insert(name.to_string(), (name_span, id, n));
+    }
+
+    /// design.md §8 Literals: a binding whose literal kept its default
+    /// `i64` because only an operator or a method used it is refused where
+    /// it meets a narrower type, far from the `let`. The annotation that
+    /// makes it that type, `: <target>` on the binding the refused value
+    /// reads, is the fix (B-2026-11-08-20).
+    fn literal_let_annotation(
+        &self,
+        expr: &Expr,
+        source: &Type,
+        target: &Type,
+    ) -> Option<(String, FixIt)> {
+        if *source != Type::Int(IntSize::I64) {
+            return None;
+        }
+        fn names<'e>(e: &'e Expr, out: &mut Vec<&'e str>) {
+            match &e.kind {
+                ExprKind::Identifier(n) => out.push(n.as_str()),
+                ExprKind::Unary { operand, .. } => names(operand, out),
+                ExprKind::Binary { left, right, .. } => {
+                    names(left, out);
+                    names(right, out);
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        names(expr, &mut found);
+        found.into_iter().find_map(|name| {
+            let (span, id, value) = self.literal_lets.get(name)?;
+            if self.resolved_now(&Type::TypeVar(*id)) != *source {
+                return None;
+            }
+            let fits = match (value, Self::int_literal_range(target)) {
+                (Some(v), Some((lo, hi))) => *v >= lo && *v <= hi,
+                _ => true,
+            };
+            fits.then(|| {
+                (
+                    name.to_string(),
+                    FixIt {
+                        span: Span {
+                            offset: span.offset + span.length,
+                            length: 0,
+                            ..*span
+                        },
+                        replacement: format!(": {}", type_display(target)),
+                    },
+                )
+            })
+        })
+    }
+
     /// B-2026-07-09-7 variable half (design decision (B)): reject an implicit
     /// NARROWING or SIGN-CHANGING integer coercion at a check-mode boundary
     /// (`let`/arg/return/struct-field — every position funnels through
@@ -10086,6 +10163,24 @@ impl<'a> super::TypeChecker<'a> {
                     return;
                 }
             }
+        }
+        if let Some((name, fix)) = self.literal_let_annotation(expr, &source, &target) {
+            self.type_error_with_fix_it(
+                format!(
+                    "implicit coercion from '{}' to '{}' would narrow or change sign: `{name}` \
+                     is an '{}' because its literal kept the default, since an operator or a \
+                     method does not fix a literal's type (design.md §8 Literals); declare it \
+                     `{name}: {}`",
+                    type_display(&source),
+                    type_display(&target),
+                    type_display(&source),
+                    type_display(&target),
+                ),
+                expr.span,
+                TypeErrorKind::TypeMismatch,
+                fix,
+            );
+            return;
         }
         self.type_error(
             format!(

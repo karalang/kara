@@ -4147,6 +4147,36 @@ impl<'a> super::TypeChecker<'a> {
                         && Self::int_literal_operator_tree_value(lit_side).is_some_and(|v| {
                             Self::int_literal_range(&other).is_some_and(|(lo, hi)| v < lo || v > hi)
                         });
+                    // Beside an integer type that does not widen into the
+                    // default (`u64`, `usize`, `i128`, `u128`), the binding's
+                    // literal takes that type instead: `i - k` with
+                    // `let k = 2;` and `i: u64` (design.md §8 Literals,
+                    // B-2026-11-08-18).
+                    let lit_kind = if ll.is_some() { ll } else { rl }.map(|(_, k)| k);
+                    let takes_other = lit_kind == Some(LiteralKind::Int)
+                        && is_integer(&other)
+                        && !super::types::int_coercion_is_widening(
+                            &other,
+                            &Type::Int(super::types::IntSize::I64),
+                        )
+                        && other != Type::Int(super::types::IntSize::I64);
+                    if !is_literal_tree(lit_side) && takes_other {
+                        super::inference::unify_types(
+                            &Type::TypeVar(l),
+                            &other,
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        );
+                        let ty = if ll.is_some() {
+                            &mut *left_ty
+                        } else {
+                            &mut *right_ty
+                        };
+                        *ty = self.resolved_now(ty);
+                        self.record_expr_type(&lit_side.span, ty);
+                        self.record_node_type(lit_side.id, ty);
+                        return None;
+                    }
                     if !is_literal_tree(lit_side) || unfit {
                         let ty = if ll.is_some() {
                             &mut *left_ty

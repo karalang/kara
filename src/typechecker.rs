@@ -3932,6 +3932,11 @@ pub struct TypeChecker<'a> {
     /// `Str` names the binding, and `karac fix` writes `: Str` on it when
     /// it only ever holds literals (B-2026-10-24-33).
     pub(super) str_lit_lets: FxHashMap<String, StrLitLet>,
+    /// `let x = 0` with no annotation, by name: the bound name's span, the
+    /// literal's type variable and its value. A narrowing refused at a use
+    /// of `x` after the variable kept its default names the binding and
+    /// offers its annotation (B-2026-11-08-20).
+    pub(super) literal_lets: FxHashMap<String, (Span, TypeVarId, Option<i128>)>,
     /// The spans of identifiers that read a [`StrLitLet`] binding.
     pub(super) str_lit_let_uses: FxHashMap<SpanKey, String>,
     /// The uses reported for a [`StrLitLet`] that is offered `: Str`.
@@ -4335,6 +4340,7 @@ impl<'a> TypeChecker<'a> {
             iter_lets: FxHashMap::default(),
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
+            literal_lets: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,

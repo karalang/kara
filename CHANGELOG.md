@@ -27,6 +27,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- **An operator fixes a binding's literal beside a type that does not widen
+  into `i64`** (design.md §8 Literals). `let k = 2; i - k` with `i: u64`,
+  and Rust's `let mut k = 1; while k * k <= n` over a `usize`, were refused
+  as mixing `u64` (or `usize`, `i128`, `u128`) with `i64`; the literal now
+  takes that type. Beside a type that widens (`u8` through `i32`) it keeps
+  `i64`, as before (B-2026-11-08-18).
 - **A number literal takes the type a later use gives it** (design.md § Type
   inference). `let x = 5; take_i32(x);` makes `x` an `i32`, the literals
   pushed onto a `Vec.new()` take the element type of the parameter it is
@@ -83,6 +89,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A narrowing refused because a binding's literal kept its default `i64`
+  (`let mut b = 0; b += y;` returned as `i32`) names the binding and offers
+  its annotation, `let mut b: i32 = 0`, as a machine fix, in place of
+  `as i32` at the use (B-2026-11-08-20).
 - Comparing an `Option[ref T]` with an `Option[T]` whose `T` is not `Copy`
   now offers `.cloned()` as the fix, after the view and `as_slice` fixes
   (B-2026-11-07-54).
