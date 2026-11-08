@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 169 |
 | false-positive | 144 |
-| perf | 110 |
+| perf | 112 |
 | missing-feature | 104 |
 | soundness | 52 |
 | miscompile | 42 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 268 |
-| mir-llvm | 138 |
+| mir-llvm | 140 |
 | mir | 132 |
 | cli | 78 |
 | ownership | 62 |
@@ -113,10 +113,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-42 | 2026-11-07 | parser | low | A `Self { x: x }` struct literal in a method body is `expected ; after this expression statement` at `Self`, and `karac fix` inserts the `;` (`Self; { x }`), which then fails as `expected P, found i64`; it should say to write the type's name (`P { x }`) | — |
 | B-2026-11-07-43 | 2026-11-07 | typecheck | low | Two obvious repairs have no machine fix: a function whose last statement is `a + b;` under `-> i64` (fix: drop the `;`), and `?` in a `fn main()` returning `()` (fix: `fn main() -> Result[(), AnyError]` with `Ok(())`); the second's message also names no remedy | — |
 | B-2026-11-07-44 | 2026-11-07 | cli | low | `karac fmt` moves comments off the item they annotate: a `// first` after a parameter lands after the fn's `{` (where it reads as a comment on the body), a `/* second */` after a parameter moves into the body, and a `// one` after a call argument goes to the end of the statement; design.md § Canonical formatting says comments travel with their item | — |
-| B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
-| B-2026-11-07-55 | 2026-11-07 | mir-llvm | medium | Katas 100, 101 and 113 (recursive `shared` tree code) run about 1.5x slower on the M5 at karac 97681763d than at 6697158fa while checked Rust held steady: 100 98.0 -> 153.5 ms, 101 131.3 -> 205.3, 113 200.3 -> 300.0; the window includes the LLVM 22 move (6dcdc1a604); x86 not yet measured | — |
 | B-2026-11-07-57 | 2026-11-07 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3): `let mut b = 0; b = y; b` and `b += y` with `y: i32` in a fn returning `i32`, and `let b = 0; max(b, y)`, are refused 'implicit coercion from i64 to i32 would narrow' | — |
 | B-2026-11-08-1 | 2026-11-08 | mir-llvm | medium | The overflow-safe midpoint `lo + (hi - lo) / 2` keeps its signed division: halving (B-2026-11-06-8) does not see `hi - lo` as non-negative under the loop's `lo < hi`, so kata 1064's binary search runs 1.6x rustc -O -C overflow-checks=on | — |
+| B-2026-11-08-3 | 2026-11-08 | mir-llvm | low | Kata 277's bench runs 1.83x Rust's instructions at karac's default O2 (3.19G vs 1.74G, x86 callgrind) and 0.62x at O3 (1.08G): O2 misses the verify loop's simplification once the candidate is the planted celebrity | — |
 
 ### Relocated
 
@@ -823,10 +822,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-47 | typecheck | low | `karac explain E0517` prints the TYPE_MISMATCH class text ("Operand, argument, or return-value type doesn't match ...") for the write-through-a-borro… | e2e61a6643 |
 | B-2026-11-07-48 | cli | medium | The v0.8.0 Linux release binaries need glibc 2.39 (karac, karac_jit_runner and kara-lsp import pidfd_spawnp/pidfd_getpid@GLIBC_2.39 and __isoc23_strt… | 533b9ea5e9 |
 | B-2026-11-07-49 | cli | low | README.md's Install section still says prebuilt binaries "arrive with the 0.8.0 beta | 533b9ea5e9 |
+| B-2026-11-07-50 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither… | c1efb60ae8 |
 | B-2026-11-07-51 | typecheck | medium | `match (self, other)` in a `ref self` (or `mut ref self`) method is refused as "cannot move a non-`Copy` value out of a borrowed place", though the s… | 255b769106 |
 | B-2026-11-07-52 | typecheck | low | `impl Ord for T` with no `impl PartialOrd for T` is refused ("impl Ord for Value requires impl PartialOrd for Value") with no `karac fix` edit, thoug… | 255b769106 |
 | B-2026-11-07-53 | resolver | low | `Dict[String, i64]` / `Dict.new()` (Python's `typing.Dict`) is "undefined type 'Dict', did you mean 'Div'?"; `HashMap`, `BTreeMap` and `HashSet` alre… | 255b769106 |
 | B-2026-11-07-54 | typecheck | low | `opt == Some("")` with `opt: Option[Str]` is refused ("cannot compare 'Option[Str]' and 'Option[String]'") though `let a: Option[Str] = Some("")` is… | 670fbcb5ec |
+| B-2026-11-07-55 | mir-llvm | medium | Katas 100 and 101 (recursive `shared` tree code) ran about 1.5x slower on the M5 at karac 97681763d than at 6697158fa while checked Rust held steady… | b5581f4232 |
 | B-2026-11-07-56 | interp+mir-llvm | medium | A method called straight on a constant whose value is a bare literal reads it at i64, not its declared type (corrected: not only wide ones; `CC.leadi… | a3a7d1eeb0 |
 
 </details>
