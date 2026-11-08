@@ -1,0 +1,16 @@
+0,1,0 1,1,1 0,1,0 target 0 -> 4
+1,-1 -1,1 target 0 -> 5
+904 target 0 -> 0
+5 target 5 -> 1
+1,2 3,4 target 10 -> 1
+1,1,1 1,1,1 target 2 -> 7
+-1,1,-1 1,-1,1 -1,1,-1 target 0 -> 20
+2,-2,2,-2 target 0 -> 4
+1000 -1000 1000 target 1000 -> 3
+3000 matrices up to 5 by 5: answers sum 20532, checksum 525075603
+20 matrices up to 30 by 30: answers sum 16553, checksum 507845900
+30 by 30 of zeros, target 0: 216225
+30 by 30 of ones, target 1: 900
+30 by 30 of ones, target 30: 3464
+30 by 30 of alternating signs, target 0: 158625
+1 by 100 of 1000 and -1000, target 1000: 1275

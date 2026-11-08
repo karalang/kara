@@ -1,0 +1,104 @@
+// LeetCode #1074: Number of Submatrices That Sum to Target -- in iterators:
+// for each pair of rows the band's column sums zipped from the rows between
+// them, their running totals folded into a list, and every pair of totals
+// `target` apart counted with a filter. O(m^2 n^2).
+
+fn band_count(column: Vec[i64], target: i64) -> i64 {
+    let totals = column.iter().fold([0], |acc, v| {
+        let mut acc = acc;
+        acc.push(acc[acc.len() - 1] + v);
+        acc
+    });
+    (1..totals.len()).map(|j| (0..j).filter(|i| totals[j] - totals[i] == target).count()).sum()
+}
+
+fn num_submatrix_sum_target(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let m = matrix.len();
+    (0..m)
+        .map(|top| {
+            let mut column = Vec.filled(matrix[0].len(), 0);
+            (top..m)
+                .map(|bottom| {
+                    column = column.iter().zip(matrix[bottom].iter()).map(|(a, b)| a + b).collect();
+                    band_count(column.clone(), target)
+                })
+                .sum()
+        })
+        .sum()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_matrix(rows: i64, cols: i64, spread: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let m = next_random(mut seed) % rows + 1;
+    let n = next_random(mut seed) % cols + 1;
+    let mut matrix = Vec.new();
+    for _ in 0..m {
+        let mut row = Vec.new();
+        for _ in 0..n {
+            row.push(next_random(mut seed) % (2 * spread + 1) - spread);
+        }
+        matrix.push(row);
+    }
+    matrix
+}
+
+fn show(matrix: Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    for (i, row) in matrix.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        for (j, v) in row.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            out.push_str(f"{v}");
+        }
+    }
+    out
+}
+
+fn main() {
+    let examples = [
+        ([[0, 1, 0], [1, 1, 1], [0, 1, 0]], 0),
+        ([[1, -1], [-1, 1]], 0),
+        ([[904]], 0),
+        ([[5]], 5),
+        ([[1, 2], [3, 4]], 10),
+        ([[1, 1, 1], [1, 1, 1]], 2),
+        ([[-1, 1, -1], [1, -1, 1], [-1, 1, -1]], 0),
+        ([[2, -2, 2, -2]], 0),
+        ([[1000], [-1000], [1000]], 1000),
+    ];
+    for (matrix, target) in examples.iter() {
+        println(f"{show(matrix)} target {target} -> {num_submatrix_sum_target(matrix, target)}");
+    }
+    let mut seed = 1074;
+    for (count, size, spread, label) in [(3000, 5, 2, "3000 matrices up to 5 by 5"), (20, 30, 3, "20 matrices up to 30 by 30")] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let matrix = random_matrix(size, size, spread, mut seed);
+            let target = next_random(mut seed) % (2 * spread + 1) - spread;
+            let x = num_submatrix_sum_target(matrix, target);
+            total += x;
+            check = (check * 31 + x) % 1000000007;
+        }
+        println(f"{label}: answers sum {total}, checksum {check}");
+    }
+    let zeros: Vec[Vec[i64]] = (0..30).map(|_| Vec.filled(30, 0)).collect();
+    let ones: Vec[Vec[i64]] = (0..30).map(|_| Vec.filled(30, 1)).collect();
+    let signs: Vec[Vec[i64]] = (0..30).map(|r| (0..30).map(|c| if (r + c) % 2 == 0 { 1 } else { -1 }).collect()).collect();
+    let wide: Vec[Vec[i64]] = [(0..100).map(|c| if c % 2 == 0 { 1000 } else { -1000 }).collect()];
+    println(f"30 by 30 of zeros, target 0: {num_submatrix_sum_target(zeros, 0)}");
+    println(f"30 by 30 of ones, target 1: {num_submatrix_sum_target(ones, 1)}");
+    println(f"30 by 30 of ones, target 30: {num_submatrix_sum_target(ones, 30)}");
+    println(f"30 by 30 of alternating signs, target 0: {num_submatrix_sum_target(signs, 0)}");
+    println(f"1 by 100 of 1000 and -1000, target 1000: {num_submatrix_sum_target(wide, 1000)}");
+}

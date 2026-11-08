@@ -1,0 +1,345 @@
+// LeetCode #1074: Number of Submatrices That Sum to Target -- the
+// differential: copies of the six arms checked against the statement read
+// literally (every submatrix's cells added up one by one) and against each
+// other, on 2000 problems.
+
+// ---- submatrix_sum.kara ----
+
+fn star_count(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let m = matrix.len();
+    let n = matrix[0].len();
+    let mut count = 0;
+    for top in 0..m {
+        let mut column = Vec.filled(n, 0);
+        for bottom in top..m {
+            for c in 0..n {
+                column[c] += matrix[bottom][c];
+            }
+            let mut seen: Map[i64, i64] = Map.new();
+            seen.insert(0, 1);
+            let mut total = 0;
+            for c in 0..n {
+                total += column[c];
+                count += seen.get(total - target).unwrap_or(0);
+                let k = seen.get(total).unwrap_or(0) + 1;
+                seen.insert(total, k);
+            }
+        }
+    }
+    count
+}
+
+// ---- submatrix_sum_brute.kara ----
+
+fn brute_count(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let m = matrix.len();
+    let n = matrix[0].len();
+    // corner[r][c] is the sum of the rows above r and the columns left of c
+    let mut corner = Vec.new();
+    for _ in 0..m + 1 {
+        corner.push(Vec.filled(n + 1, 0));
+    }
+    for r in 0..m {
+        for c in 0..n {
+            corner[r + 1][c + 1] = corner[r][c + 1] + corner[r + 1][c] - corner[r][c] + matrix[r][c];
+        }
+    }
+    let mut count = 0;
+    for r1 in 0..m {
+        for r2 in r1 + 1..m + 1 {
+            for c1 in 0..n {
+                for c2 in c1 + 1..n + 1 {
+                    if corner[r2][c2] - corner[r1][c2] - corner[r2][c1] + corner[r1][c1] == target {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+// ---- submatrix_sum_columns.kara ----
+
+fn columns_count(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let m = matrix.len();
+    let n = matrix[0].len();
+    let mut left: Vec[Vec[i64]] = Vec.new();
+    for row in matrix.iter() {
+        let mut sums = [0];
+        for v in row.iter() {
+            sums.push(sums[sums.len() - 1] + v);
+        }
+        left.push(sums);
+    }
+    let mut count = 0;
+    for c1 in 0..n {
+        for c2 in c1 + 1..n + 1 {
+            let mut seen: Map[i64, i64] = Map.new();
+            seen.insert(0, 1);
+            let mut total = 0;
+            for r in 0..m {
+                total += left[r][c2] - left[r][c1];
+                if let Some(k) = seen.get(total - target) {
+                    count += k;
+                }
+                *seen.entry(total).or_insert(0) += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- submatrix_sum_sorted.kara ----
+
+fn sorted_count(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let m = matrix.len();
+    let n = matrix[0].len();
+    let mut corner = Vec.new();
+    corner.push(Vec.filled(n + 1, 0));
+    for r in 0..m {
+        let mut sums = Vec.filled(n + 1, 0);
+        for c in 0..n {
+            sums[c + 1] = sums[c] + corner[r][c + 1] - corner[r][c] + matrix[r][c];
+        }
+        corner.push(sums);
+    }
+    let mut count = 0;
+    for top in 0..m {
+        for bottom in top + 1..m + 1 {
+            let mut seen: SortedMap[i64, i64] = SortedMap.new();
+            seen.insert(0, 1);
+            for c in 1..n + 1 {
+                let strip = corner[bottom][c] - corner[top][c];
+                count += seen.get(strip - target).unwrap_or(0);
+                let k = seen.get(strip).unwrap_or(0);
+                seen.insert(strip, k + 1);
+            }
+        }
+    }
+    count
+}
+
+// ---- submatrix_sum_iter.kara ----
+
+fn iter_band_count(column: Vec[i64], target: i64) -> i64 {
+    let totals = column.iter().fold([0], |acc, v| {
+        let mut acc = acc;
+        acc.push(acc[acc.len() - 1] + v);
+        acc
+    });
+    (1..totals.len()).map(|j| (0..j).filter(|i| totals[j] - totals[i] == target).count()).sum()
+}
+
+fn iter_count(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let m = matrix.len();
+    (0..m)
+        .map(|top| {
+            let mut column = Vec.filled(matrix[0].len(), 0);
+            (top..m)
+                .map(|bottom| {
+                    column = column.iter().zip(matrix[bottom].iter()).map(|(a, b)| a + b).collect();
+                    iter_band_count(column.clone(), target)
+                })
+                .sum()
+        })
+        .sum()
+}
+
+// ---- submatrix_sum_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn num_submatrix_sum_target(matrix: Vec[Vec[i32]], target: i32) -> i32 {
+        let m = matrix.len();
+        let n = matrix[0].len();
+        let mut prefix = Vec.filled(m, Vec.filled(n + 1, 0));
+        for i in 0..m {
+            for j in 0..n {
+                prefix[i][j + 1] = prefix[i][j] + matrix[i][j];
+            }
+        }
+        let mut ans: i32 = 0;
+        for c1 in 0..n {
+            for c2 in c1..n {
+                let mut count: Map[i32, i32] = Map.new();
+                count.insert(0, 1);
+                let mut sum = 0;
+                for r in 0..m {
+                    sum += prefix[r][c2 + 1] - prefix[r][c1];
+                    ans += *count.get((sum - target)).unwrap_or(0);
+                    *count.entry(sum).or_insert(0) += 1;
+                }
+            }
+        }
+        ans
+    }
+}
+
+fn solution_count(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let grid: Vec[Vec[i32]] = matrix.iter().map(|row| row.iter().map(|v| *v as i32).collect()).collect();
+    Solution.num_submatrix_sum_target(grid, target as i32) as i64
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// Every submatrix, its cells added up one by one.
+fn literally(matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    let m = matrix.len();
+    let n = matrix[0].len();
+    let mut count = 0;
+    for r1 in 0..m {
+        for r2 in r1..m {
+            for c1 in 0..n {
+                for c2 in c1..n {
+                    let mut sum = 0;
+                    for r in r1..r2 + 1 {
+                        for c in c1..c2 + 1 {
+                            sum += matrix[r][c];
+                        }
+                    }
+                    if sum == target {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+fn arm(w: i64, matrix: Vec[Vec[i64]], target: i64) -> i64 {
+    match w {
+        0 => star_count(matrix, target),
+        1 => brute_count(matrix, target),
+        2 => columns_count(matrix, target),
+        3 => sorted_count(matrix, target),
+        4 => iter_count(matrix, target),
+        _ => solution_count(matrix, target),
+    }
+}
+
+// ---- the properties -------------------------------------------------------
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn show(matrix: Vec[Vec[i64]]) -> String {
+    let rows: Vec[String] = matrix
+        .iter()
+        .map(|row| {
+            let cells: Vec[String] = row.iter().map(|v| f"{v}").collect();
+            cells.join(",")
+        })
+        .collect();
+    rows.join(" ")
+}
+
+fn transposed(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    (0..matrix[0].len()).map(|c| matrix.iter().map(|row| row[c]).collect()).collect()
+}
+
+// turned half a turn: the rows in reverse, each read right to left
+fn turned(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    matrix.iter().rev().map(|row| row.iter().rev().collect()).collect()
+}
+
+fn negated(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    matrix.iter().map(|row| row.iter().map(|v| -v).collect()).collect()
+}
+
+fn check_case(t: mut ref Tally, matrix: Vec[Vec[i64]], target: i64) {
+    let want = literally(matrix, target);
+    let answers: Vec[i64] = (0..6).map(|w| arm(w, matrix, target)).collect();
+    let whole: i64 = matrix.iter().map(|row| row.iter().sum()).sum();
+    let reach: i64 = matrix.iter().map(|row| row.iter().map(|v| v.abs()).sum()).sum();
+    for w in 0..6 {
+        let answer = answers[w];
+        let what = f"arm {w}, {show(matrix)} target {target} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let across = arm(w, transposed(matrix), target);
+        expect(mut t, 2, across == answer, f"P2 {what}: transposed -> {across}");
+        let round = arm(w, turned(matrix), target);
+        expect(mut t, 3, round == answer, f"P3 {what}: turned -> {round}");
+        let below = arm(w, negated(matrix), -target);
+        expect(mut t, 4, below == answer, f"P4 {what}: negated -> {below}");
+        let at_whole = arm(w, matrix, whole);
+        let past = arm(w, matrix, reach + 1);
+        expect(mut t, 5, at_whole >= 1 and past == 0, f"P5 {what}: target {whole} -> {at_whole}, target {reach + 1} -> {past}");
+        let agree = (0..6).filter(|o| o != w and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want + 1) % 1000000007;
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_matrix(size: i64, spread: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let m = next_random(mut seed) % size + 1;
+    let n = next_random(mut seed) % size + 1;
+    let mut matrix = Vec.new();
+    for _ in 0..m {
+        let mut row = Vec.new();
+        for _ in 0..n {
+            row.push(next_random(mut seed) % (2 * spread + 1) - spread);
+        }
+        matrix.push(row);
+    }
+    matrix
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems: 1000 matrices up to 4 by 4 and 1000 up to 8 by 8, cells
+    // from -2 to 2. One time in two the target is the sum of a submatrix
+    // drawn at random, otherwise a number from -4 to 4. Every choice is
+    // drawn before any arm answers.
+    let mut seed = 10741;
+    for i in 0..2000 {
+        let size = if i < 1000 { 4 } else { 8 };
+        let matrix = random_matrix(size, 2, mut seed);
+        let mut target = next_random(mut seed) % 9 - 4;
+        if next_random(mut seed) % 2 == 0 {
+            let m = matrix.len();
+            let n = matrix[0].len();
+            let r1 = next_random(mut seed) % m;
+            let r2 = r1 + next_random(mut seed) % (m - r1);
+            let c1 = next_random(mut seed) % n;
+            let c2 = c1 + next_random(mut seed) % (n - c1);
+            target = 0;
+            for r in r1..r2 + 1 {
+                for c in c1..c2 + 1 {
+                    target += matrix[r][c];
+                }
+            }
+        }
+        check_case(mut t, matrix, target);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
