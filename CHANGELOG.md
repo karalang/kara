@@ -264,6 +264,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   § Effect-driven target gating, the section that states the rule, and
   offers binding a provider only for a resource one can be bound for: not
   `ProcessTable`, `Heap` or the hardware (B-2026-11-08-39).
+- A program's own `struct Response { status: i64, body: String, headers:
+  Vec[(String, String)] }`, the shape io.md documents for sending headers,
+  no longer draws a `prelude_shadow` warning saying the servers' built-in
+  paths no longer apply: they serve it (B-2026-11-08-26).
 
 ### Tooling
 
