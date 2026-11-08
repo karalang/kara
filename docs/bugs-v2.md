@@ -140,8 +140,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-47 | 2026-11-08 | typecheck | low | A sequence has no `split` by a predicate: Rust's `line.split(|&ch| ch == '#')` over a `&Vec<char>` is refused "no method 'split' on type 'Vec'" with no fix and no other spelling named, and draws two cascade errors on the closures that read the pieces | — |
 | B-2026-11-08-48 | 2026-11-08 | mir | medium | An `isize` operand beside an `i64` passes `karac check` and the MIR builder then refuses the program: `fn f(i: isize, k: i64) -> i64 { i - k }` is 'invalid MIR: binary operands of different types isize and i64' | — |
 | B-2026-11-08-49 | 2026-11-08 | typecheck+cli | low | `karac fix` half-rewrites `usize` to `i64`: the 'usize mixes with i64' fix retypes a nested `fn dfs(u: usize, p: usize, adj: ref Vec[Vec[usize]])`'s parameters and one `let n = n as usize`, but leaves the callers' `e[1] as usize` pushes and `usize.MAX`, so a Rust template that checked up to that round ends with mismatches the fix created | — |
-| B-2026-11-08-50 | 2026-11-08 | mir+mir-llvm | high | A `ref` number passed to a library native reaches it as its address: `"A".repeat(n)` with `n` a `ref i64` from `.iter().map(|n| ..)` stops the interpreter with "expected a library value, found Int(999)" and panics the LLVM backend at compile time; `substring` and `rotate_left` fail the same way | — |
-| B-2026-11-08-51 | 2026-11-08 | parser | medium | Two `format!` calls in one condition (`if format!(..) != format!(..) {`) end the condition at the first call's name: only that call is reported, the `!=` throws the rest of the function out of step ("expected `;`", "Expected expression, found `}`", top-level statements), and karac fix puts a `;` after the function's tail expression | — |
 
 ### Relocated
 
@@ -877,6 +875,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-34 | cli | low | `karac doc` renders wrong signatures and drops members: generic arguments vanish (`-> Result`, field `Vec`, `SortedMap`, `fn add_to(s: mut ref S, ..)… | a165a62532 |
 | B-2026-11-08-35 | resolver | low | E0113 for an unknown item in a dependency lists non-importable names as available: `import textkit.nope` says "available: Table, Store, Counter, MemS… | 380985f138 |
 | B-2026-11-08-36 | typecheck+interp+mir-llvm | high | A `fold` closure whose parameters are annotated bare (`\|acc: Vec[i64], row: Vec[i64]\|`) checks, but the program fails on both backends: the interpret… | 1740abdd1 |
+| B-2026-11-08-50 | mir+mir-llvm | high | A `ref` number passed to a library native reaches it as its address: `"A".repeat(n)` with `n` a `ref i64` from `.iter().map(\|n\| ..)` stops the interp… | 9671efaf31 |
+| B-2026-11-08-51 | parser | medium | Two `format!` calls in one condition (`if format!(..) != format!(..) {`) end the condition at the first call's name: only that call is reported, the… | 9671efaf31 |
 
 </details>
 
