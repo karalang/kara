@@ -1,0 +1,24 @@
+fn step[S, O](s: own S, g: Fn(S) -> Option[(S, O)]) -> O {
+    let (_, o) = g(s).unwrap();
+    o
+}
+
+fn main() {
+    let start: Vec[i64] = [4];
+    let n = step(start, |seen| Some((Vec.new(), seen.len())));
+    println(f"{n}");
+    let words: Vec[String] = ["a", "b"];
+    let t = step(words, |seen| Some((Vec.new(), f"{seen.len()} words")));
+    println(t);
+    let xs: Vec[i64] = [3, 1, 4, 1, 5];
+    let out: Vec[i64] = xs.iter().scan(Vec.new(), |seen, x| {
+        if x > 3 {
+            Some((Vec.new(), seen.len()))
+        } else {
+            let mut s = seen.clone();
+            s.push(x);
+            Some((s, 0))
+        }
+    }).collect();
+    println(f"{out}");
+}

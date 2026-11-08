@@ -2901,9 +2901,42 @@ impl<'a> super::TypeChecker<'a> {
                             || (payload_is_unsuffixed_int && !slot_unsolved)
                             || payload_needs_slot
                         {
-                            self.check_expr(&args[0].value, &slot);
-                            self.record_expr_type(&expr.span, expected);
-                            return expected.clone();
+                            let payload = self.check_expr(&args[0].value, &slot);
+                            // A slot that is still open in part (`(Vec[i64],
+                            // O)` for a closure checked against a generic
+                            // `Fn(S) -> Option[(S, O)]`) is the payload's
+                            // type where the payload fixes it, or the call's
+                            // unification would never see `O` solved
+                            // (B-2026-11-08-58).
+                            let slot_now = super::inference::resolve_type_vars(
+                                &slot,
+                                &self.env.substitutions,
+                                &HashMap::new(),
+                                &self.env.const_substitutions,
+                                &HashMap::new(),
+                            );
+                            let ty = match (ctor, expected) {
+                                _ if expectation_is_concrete(&slot_now)
+                                    || matches!(payload, Type::Error | Type::Never) =>
+                                {
+                                    expected.clone()
+                                }
+                                ("Some", _) => Type::Named {
+                                    name: "Option".to_string(),
+                                    args: vec![payload],
+                                },
+                                ("Ok", Type::Named { args: ta, .. }) => Type::Named {
+                                    name: "Result".to_string(),
+                                    args: vec![payload, ta[1].clone()],
+                                },
+                                ("Err", Type::Named { args: ta, .. }) => Type::Named {
+                                    name: "Result".to_string(),
+                                    args: vec![ta[0].clone(), payload],
+                                },
+                                _ => expected.clone(),
+                            };
+                            self.record_expr_type(&expr.span, &ty);
+                            return ty;
                         }
                     }
                 }

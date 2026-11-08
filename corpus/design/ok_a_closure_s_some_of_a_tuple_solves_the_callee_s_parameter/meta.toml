@@ -1,0 +1,9 @@
+source = "B-2026-11-08-58"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "closures", "iterators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: a closure's body fixes the callee's type parameters its slot names. Some((Vec.new(), seen.len())) returned to Fn(S) -> Option[(S, O)] gives O = i64 (seen holds one item, so 1), and a String for the second call. The scan resets its state at each item above 3 and yields the count kept so far (2 before 4, 1 before 5), else 0."

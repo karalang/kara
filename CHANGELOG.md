@@ -238,6 +238,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Vec`'s pushes do: `let mut d = SortedMap.new(); d.insert(1, 2);
   m(d);` into `d: SortedMap[i32, i64]` was refused as 'found
   SortedMap[i64, i64]' (design.md §8, B-2026-11-08-42).
+- **A closure returning `Some((Vec.new(), x))` solves the callee's type
+  parameters.** `step(v, |seen| Some((Vec.new(), seen.len())))` over
+  `g: Fn(S) -> Option[(S, O)]`, and the same `scan` state reset, were refused
+  as "cannot infer type parameter 'O'" (B-2026-11-08-58).
 
 ### Performance
 
