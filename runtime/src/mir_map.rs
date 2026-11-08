@@ -14,6 +14,11 @@
 use crate::alloc::{karac_free, karac_realloc_or_panic};
 use crate::lean_vec::LeanVec;
 
+/// `n` rounded up to a multiple of 8.
+const fn round8(n: usize) -> usize {
+    (n + 7) & !7
+}
+
 pub type HashFn = unsafe extern "C" fn(*const u8) -> u64;
 pub type EqFn = unsafe extern "C" fn(*const u8, *const u8) -> bool;
 pub type CmpFn = unsafe extern "C" fn(*const u8, *const u8) -> i32;
@@ -55,16 +60,29 @@ pub struct MirMap {
     /// `walk_reciprocal`, whose test proves the one correction it needs.
     perm_m: std::sync::atomic::AtomicUsize,
     cap: usize,
-    /// Each slot's hash, for the hashed kinds.
-    hashes: LeanVec<u64>,
-    /// An open-addressing table of the live slots, by hash, for the
-    /// hashed kinds: a power of two long (or empty), at most half full
-    /// counting [`TOMB`]s, probed linearly. A cell holds a slot in its low
-    /// half and the top half of the slot's hash in its high half, so a
-    /// probe reads neither `hashes` nor `buf` for a key it passes over.
-    index: LeanVec<u64>,
-    /// The cells of `index` that are not [`EMPTY`].
+    /// A hashed table: each slot's hash is kept after the entries, in the
+    /// same block as `buf` ([`MirMap::hashes`]), at `round8(cap *
+    /// entry_size)`. One block rather than two (B-2026-11-08-7).
+    hashed: bool,
+    /// `buf` is the room for [`INLINE_SLOTS`] entries (and their hashes)
+    /// allocated with the header, so a small table is one allocation
+    /// (B-2026-11-08-7); it moves to a block of its own when it grows.
+    data_inline: bool,
+    /// `cells` (the index, below) is the room for [`INLINE_CELLS`] cells
+    /// allocated with the header, rather than a block of its own.
+    cells_inline: bool,
+    /// That room for cells, after the header and its inline entries.
+    inline_cells: *mut u64,
+    // `cells` / `ncells` above are the index itself, for the hashed kinds:
+    // an open-addressing table of the live slots by hash, a power of two
+    // long (or empty), at most half full counting [`TOMB`]s, probed
+    // linearly. A cell holds a slot in its low half and the top half of
+    // the slot's hash in its high half, so a probe reads neither the
+    // hashes nor `buf` for a key it passes over.
+    /// The cells of the index that are not [`EMPTY`].
     index_used: usize,
+    /// Which slots are holes: empty while there are none (so a table that
+    /// never loses an entry never allocates it), else one per slot.
     dead: LeanVec<bool>,
     /// A Fenwick tree over `cap` slots counting the live ones, kept only
     /// while there are holes: index to slot and back in `O(log n)`. Built
@@ -92,6 +110,18 @@ pub struct MirMap {
 }
 
 const NO_PAIR: u64 = u64::MAX;
+
+/// The entries a table holds in the header's own allocation, when they
+/// fit [`INLINE_DATA_MAX`] bytes.
+const INLINE_SLOTS: usize = 4;
+const INLINE_DATA_MAX: usize = 256;
+/// The index cells the header's allocation holds: the index a table of up
+/// to [`INLINE_SLOTS`] entries needs (`index_reserve` keeps it at most
+/// half full).
+const INLINE_CELLS: usize = 8;
+/// Where the inline entries start: past the header, at an alignment
+/// `malloc`'s covers for any entry.
+const INLINE_AT: usize = (std::mem::size_of::<MirMap>() + 15) & !15;
 
 const LIVE_OK: u8 = 0;
 const LIVE_STALE: u8 = 1;
@@ -143,14 +173,15 @@ impl MirMap {
     /// # Safety
     /// `key` is a key of the table's type and `eq` its equality.
     unsafe fn find_slot(&self, hv: u64, key: *const u8, eq: EqFn) -> Option<usize> {
-        if self.index.is_empty() {
+        if self.ncells == 0 {
             return None;
         }
-        let mask = self.index.len() - 1;
+        let mask = self.ncells - 1;
         let mut i = Self::home(hv, mask);
         let tag = hv >> 32;
         loop {
-            let c = self.index[i];
+            // SAFETY: `i <= mask < ncells`.
+            let c = unsafe { *self.cells.add(i) };
             match cell_slot(c) {
                 EMPTY => return None,
                 TOMB => {}
@@ -169,7 +200,7 @@ impl MirMap {
 
     /// Room in `index` for one more slot.
     fn index_reserve(&mut self) {
-        if (self.index_used + 1) * 2 > self.index.len() {
+        if (self.index_used + 1) * 2 > self.ncells {
             let want = ((self.len() + 1) * 4).next_power_of_two().max(8);
             self.reindex(want);
         }
@@ -177,31 +208,101 @@ impl MirMap {
 
     /// Rebuilds `index` with `cells` cells over the live slots.
     fn reindex(&mut self, cells: usize) {
-        self.index.clear();
-        self.index.resize(cells, EMPTY);
-        self.cells = self.index.as_ptr();
-        self.ncells = cells;
+        if cells != self.ncells {
+            self.free_cells();
+            if cells <= INLINE_CELLS {
+                self.cells = self.inline_cells;
+                self.cells_inline = true;
+            } else {
+                self.cells = karac_realloc_or_panic(std::ptr::null_mut(), cells * 8)
+                    .cast::<u64>()
+                    .cast_const();
+                self.cells_inline = false;
+            }
+            self.ncells = cells;
+        }
+        // SAFETY: `cells` holds `ncells` cells.
+        unsafe { std::slice::from_raw_parts_mut(self.cells.cast_mut(), cells) }.fill(EMPTY);
         self.index_used = 0;
-        for sl in 0..self.hashes.len() {
-            if !self.dead[sl] {
-                self.index_place(self.hashes[sl], sl);
+        if !self.hashed {
+            return;
+        }
+        for sl in 0..self.slots {
+            if !self.is_dead(sl) {
+                self.index_place(self.hash_at(sl), sl);
             }
         }
     }
 
+    /// Frees the index's block, if it has one of its own, and leaves it
+    /// empty.
+    fn free_cells(&mut self) {
+        if !self.cells_inline && self.ncells != 0 {
+            // SAFETY: a block `reindex` allocated.
+            unsafe { free(self.cells.cast_mut().cast()) };
+        }
+        self.cells = std::ptr::null();
+        self.ncells = 0;
+        self.cells_inline = false;
+    }
+
+    /// The index cell `i < ncells`.
+    fn cell_at(&self, i: usize) -> u64 {
+        // SAFETY: the caller's bound.
+        unsafe { *self.cells.add(i) }
+    }
+
+    fn set_cell(&mut self, i: usize, c: u64) {
+        // SAFETY: as `cell_at`; the table is held `&mut`.
+        unsafe { *self.cells.cast_mut().add(i) = c };
+    }
+
+    /// Where the slots' hashes start, after `cap` entries.
+    fn hashes(&self) -> *mut u64 {
+        // SAFETY: inside the block `buf` heads, for a hashed table.
+        unsafe {
+            self.buf
+                .add(round8(self.cap * self.entry_size))
+                .cast::<u64>()
+        }
+    }
+
+    fn hash_at(&self, sl: usize) -> u64 {
+        // SAFETY: `sl < slots <= cap` at every caller.
+        unsafe { *self.hashes().add(sl) }
+    }
+
+    fn set_hash(&mut self, sl: usize, hv: u64) {
+        // SAFETY: as `hash_at`.
+        unsafe { *self.hashes().add(sl) = hv };
+    }
+
+    fn is_dead(&self, sl: usize) -> bool {
+        self.holes > 0 && self.dead[sl]
+    }
+
+    /// Marks slot `sl` a hole, recording which slots are holes from the
+    /// first.
+    fn mark_dead(&mut self, sl: usize) {
+        if self.dead.is_empty() {
+            self.dead.resize(self.slots, false);
+        }
+        self.dead[sl] = true;
+    }
+
     /// Records slot `sl` (hash `hv`) in `index`, which has room.
     fn index_place(&mut self, hv: u64, sl: usize) {
-        let mask = self.index.len() - 1;
+        let mask = self.ncells - 1;
         let mut i = Self::home(hv, mask);
         loop {
-            match cell_slot(self.index[i]) {
+            match cell_slot(self.cell_at(i)) {
                 EMPTY => {
-                    self.index[i] = cell(hv, sl);
+                    self.set_cell(i, cell(hv, sl));
                     self.index_used += 1;
                     return;
                 }
                 TOMB => {
-                    self.index[i] = cell(hv, sl);
+                    self.set_cell(i, cell(hv, sl));
                     return;
                 }
                 _ => i = (i + 1) & mask,
@@ -211,16 +312,16 @@ impl MirMap {
 
     /// Forgets slot `sl` (hash `hv`) in `index`.
     fn index_take(&mut self, hv: u64, sl: usize) {
-        let mask = self.index.len() - 1;
+        let mask = self.ncells - 1;
         let mut i = Self::home(hv, mask);
-        while cell_slot(self.index[i]) != sl as u64 {
+        while cell_slot(self.cell_at(i)) != sl as u64 {
             debug_assert!(
-                cell_slot(self.index[i]) != EMPTY,
+                cell_slot(self.cell_at(i)) != EMPTY,
                 "a live slot is missing from the index"
             );
             i = (i + 1) & mask;
         }
-        self.index[i] = TOMB;
+        self.set_cell(i, TOMB);
     }
 
     /// The walk-order words for the current length, brought up to date
@@ -230,7 +331,7 @@ impl MirMap {
         use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
         let n = self.len();
         if self.perm_len.load(Acquire) != n {
-            let (a, c) = if self.hashes.is_empty() {
+            let (a, c) = if !self.hashed || self.slots == 0 {
                 (1, 0)
             } else if self.unkeyed {
                 karac_hash::walk_perm_by(n as u64, karac_hash::hash_u64_unkeyed)
@@ -396,18 +497,17 @@ impl MirMap {
             if w != r {
                 // SAFETY: both slots are below `slots`; `w < r`.
                 unsafe { std::ptr::copy(self.slot_ptr(r), self.slot_ptr(w), es) };
-                self.hashes[w] = self.hashes[r];
+                let hv = self.hash_at(r);
+                self.set_hash(w, hv);
             }
             w += 1;
         }
         self.slots = w;
         self.holes = 0;
-        self.hashes.truncate(w);
         self.dead.clear();
-        self.dead.resize(w, false);
         self.live.get_mut().clear();
         self.stale_live();
-        let cells = self.index.len().max(8);
+        let cells = self.ncells.max(8);
         self.reindex(cells);
     }
 
@@ -415,13 +515,29 @@ impl MirMap {
         if self.slots < self.cap {
             return;
         }
-        let cap = (self.cap * 2).max(4);
-        let old = if self.cap == 0 {
-            std::ptr::null_mut()
+        let cap = (self.cap * 2).max(INLINE_SLOTS);
+        let es = self.entry_size;
+        let (old_at, new_at) = (round8(self.cap * es), round8(cap * es));
+        let hashes = if self.hashed { self.slots * 8 } else { 0 };
+        let size = (new_at + if self.hashed { cap * 8 } else { 0 }).max(1);
+        if self.cap == 0 || self.data_inline {
+            let buf = karac_realloc_or_panic(std::ptr::null_mut(), size);
+            // SAFETY: the old room holds `slots` entries and their hashes;
+            // the new block has room for `cap` of each.
+            if self.cap != 0 {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(self.buf, buf, self.slots * es);
+                    std::ptr::copy_nonoverlapping(self.buf.add(old_at), buf.add(new_at), hashes);
+                }
+            }
+            self.buf = buf;
+            self.data_inline = false;
         } else {
-            self.buf
-        };
-        self.buf = karac_realloc_or_panic(old, cap * self.entry_size.max(1));
+            self.buf = karac_realloc_or_panic(self.buf, size);
+            // SAFETY: the hashes move up past the larger entry room, inside
+            // the block (`copy` allows the overlap).
+            unsafe { std::ptr::copy(self.buf.add(old_at), self.buf.add(new_at), hashes) };
+        }
         self.cap = cap;
         if self.holes > 0 {
             self.stale_live();
@@ -614,13 +730,24 @@ pub unsafe extern "C" fn karac_mir_map_insert_hv(
 /// reaches a panic, which keeps std's panic hook and backtrace symbolizer
 /// in every binary with a table (B-2026-10-29-41).
 fn empty(entry_size: usize) -> *mut MirMap {
-    let h = karac_realloc_or_panic(std::ptr::null_mut(), std::mem::size_of::<MirMap>())
-        .cast::<MirMap>();
-    // SAFETY: a fresh allocation of a `MirMap`'s size, aligned as `malloc`
-    // aligns, which is at least a `MirMap`'s alignment.
+    // The header, then room for `INLINE_SLOTS` entries and their hashes
+    // when they are small, then room for `INLINE_CELLS` index cells: a
+    // small table is this one allocation (B-2026-11-08-7).
+    let data = round8(INLINE_SLOTS * entry_size);
+    let inline = data <= INLINE_DATA_MAX;
+    let cells_at = INLINE_AT + if inline { data + INLINE_SLOTS * 8 } else { 0 };
+    let base = karac_realloc_or_panic(std::ptr::null_mut(), cells_at + INLINE_CELLS * 8);
+    let h = base.cast::<MirMap>();
+    // SAFETY: a fresh allocation of more than a `MirMap`'s size, aligned as
+    // `malloc` aligns, which is at least a `MirMap`'s alignment (and an
+    // entry's, at `INLINE_AT`); the inline rooms are inside it.
     unsafe {
         h.write(MirMap {
-            buf: std::ptr::null_mut(),
+            buf: if inline {
+                base.add(INLINE_AT)
+            } else {
+                std::ptr::null_mut()
+            },
             entry_size,
             slots: 0,
             holes: 0,
@@ -630,9 +757,11 @@ fn empty(entry_size: usize) -> *mut MirMap {
             perm_a: std::sync::atomic::AtomicUsize::new(1),
             perm_c: std::sync::atomic::AtomicUsize::new(0),
             perm_m: std::sync::atomic::AtomicUsize::new(0),
-            cap: 0,
-            hashes: LeanVec::new(),
-            index: LeanVec::new(),
+            cap: if inline { INLINE_SLOTS } else { 0 },
+            hashed: false,
+            data_inline: inline,
+            cells_inline: false,
+            inline_cells: base.add(cells_at).cast::<u64>(),
             index_used: 0,
             dead: LeanVec::new(),
             live: std::cell::UnsafeCell::new(LeanVec::new()),
@@ -700,6 +829,11 @@ unsafe fn insert(
         }
         &mut **hp
     };
+    if hash.is_some() && !m.hashed {
+        // A table is hashed from its first entry, before its room has any.
+        debug_assert!(m.slots == 0);
+        m.hashed = true;
+    }
     m.grow();
     if hash.is_some() {
         m.index_reserve();
@@ -719,7 +853,9 @@ unsafe fn insert(
         std::ptr::copy_nonoverlapping(entry, m.slot_ptr(at), es);
     }
     m.slots += 1;
-    m.dead.push(false);
+    if !m.dead.is_empty() {
+        m.dead.push(false);
+    }
     if m.holes > 0 {
         m.add_live(at, 1);
     }
@@ -730,7 +866,7 @@ unsafe fn insert(
             crate::fatal::write_stderr(b"panic: a hashed table of 2^32 entries\n");
             std::process::abort()
         }
-        m.hashes.push(hv);
+        m.set_hash(at, hv);
         m.index_place(hv, at);
     }
     at
@@ -905,7 +1041,7 @@ unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
     m.forget();
     // SAFETY: as above.
     unsafe { std::ptr::copy_nonoverlapping(m.slot_ptr(s), out, es) };
-    if m.hashes.is_empty() {
+    if !m.hashed {
         // SAFETY: as above; a sorted table has no holes.
         unsafe {
             if s + 1 < m.slots {
@@ -913,23 +1049,20 @@ unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
             }
         }
         m.slots -= 1;
-        m.dead.pop();
         return;
     }
-    let hv = m.hashes[s];
+    let hv = m.hash_at(s);
     m.index_take(hv, s);
     if s + 1 == m.slots && m.holes == 0 {
         m.slots -= 1;
-        m.hashes.pop();
-        m.dead.pop();
         return;
     }
     if m.holes == 0 {
-        m.dead[s] = true;
+        m.mark_dead(s);
         m.holes = 1;
         m.stale_live();
     } else {
-        m.dead[s] = true;
+        m.mark_dead(s);
         m.holes += 1;
         m.add_live(s, -1);
     }
@@ -953,10 +1086,7 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
     // SAFETY: the caller's contract.
     let m = unsafe { &mut *h };
     m.slots = 0;
-    m.hashes.clear();
-    m.index.clear();
-    m.cells = std::ptr::null();
-    m.ncells = 0;
+    m.free_cells();
     m.index_used = 0;
     m.dead.clear();
     m.holes = 0;
@@ -976,10 +1106,11 @@ pub unsafe extern "C" fn karac_mir_map_free(h: *mut MirMap) {
     }
     // SAFETY: the caller's contract; the table came from `empty`.
     unsafe {
-        if (*h).cap != 0 {
+        if (*h).cap != 0 && !(*h).data_inline {
             // `buf` came from `karac_realloc_or_panic`.
             free((*h).buf.cast());
         }
+        (*h).free_cells();
         std::ptr::drop_in_place(h);
         karac_free(h.cast());
     }
@@ -1000,6 +1131,112 @@ mod tests {
     unsafe extern "C" fn eq(a: *const u8, b: *const u8) -> bool {
         // SAFETY: as above.
         unsafe { (a as *const i64).read_unaligned() == (b as *const i64).read_unaligned() }
+    }
+
+    unsafe extern "C" fn cmp(a: *const u8, b: *const u8) -> i32 {
+        // SAFETY: as above.
+        let (a, b) = unsafe {
+            (
+                (a as *const i64).read_unaligned(),
+                (b as *const i64).read_unaligned(),
+            )
+        };
+        a.cmp(&b) as i32
+    }
+
+    /// An `es`-byte entry: the key, then bytes that name it.
+    fn entry(k: i64, es: usize) -> Vec<u8> {
+        let mut e = k.to_le_bytes().to_vec();
+        e.extend((8..es).map(|j| (k as u8).wrapping_mul(31).wrapping_add(j as u8)));
+        e
+    }
+
+    /// A table whose entries live with its header (small entries) or in
+    /// a block of their own (large ones), hashed or sorted, keeps every
+    /// entry's bytes as it grows out of the header's room, loses entries,
+    /// is cleared and filled again (B-2026-11-08-7).
+    #[test]
+    fn entries_survive_the_header_room_growth_and_clear() {
+        for es in [8usize, 24, 64, 65, 200] {
+            for sorted in [false, true] {
+                let mut h: *mut MirMap = std::ptr::null_mut();
+                let (hf, ef, cf) = if sorted {
+                    (None, None, Some(cmp as CmpFn))
+                } else {
+                    (Some(hash as HashFn), Some(eq as EqFn), None)
+                };
+                for round in 0..3i64 {
+                    let mut model: Vec<i64> = Vec::new();
+                    for n in 0..40i64 {
+                        // Keys out of order, so a sorted table shifts.
+                        let k = (n * 17 + round) % 97;
+                        if model.contains(&k) {
+                            continue;
+                        }
+                        let e = entry(k, es);
+                        // SAFETY: a live (or null) table of `es`-byte entries.
+                        unsafe { karac_mir_map_insert(&mut h, es as u64, e.as_ptr(), hf, cf) };
+                        model.push(k);
+                        if sorted {
+                            model.sort();
+                        }
+                        if n % 3 == 2 {
+                            let i = (n as usize * 7) % model.len();
+                            let mut out = vec![0u8; es];
+                            // SAFETY: as above.
+                            unsafe { karac_mir_map_remove(h, i as i64, out.as_mut_ptr()) };
+                            assert_eq!(out, entry(model.remove(i), es));
+                        }
+                        for (i, k) in model.iter().enumerate() {
+                            // SAFETY: as above.
+                            unsafe {
+                                let at = karac_mir_map_at(h, i as i64);
+                                assert_eq!(std::slice::from_raw_parts(at, es), &entry(*k, es)[..]);
+                                let key = k.to_le_bytes();
+                                let f = karac_mir_map_find(h, key.as_ptr(), hf, ef, cf);
+                                assert_eq!(f as usize, i, "es {es} sorted {sorted} key {k}");
+                            }
+                        }
+                        let gone = 1000i64.to_le_bytes();
+                        // SAFETY: as above.
+                        let f = unsafe { karac_mir_map_find(h, gone.as_ptr(), hf, ef, cf) };
+                        assert_eq!(f, -1);
+                    }
+                    // SAFETY: as above.
+                    unsafe {
+                        assert_eq!(karac_mir_map_len(h) as usize, model.len());
+                        karac_mir_map_clear(h);
+                        assert_eq!(karac_mir_map_len(h), 0);
+                    }
+                }
+                // SAFETY: as above.
+                unsafe { karac_mir_map_free(h) };
+            }
+        }
+    }
+
+    /// A small table is one allocation, its entries and index in the
+    /// header's room; a table that never loses an entry records no holes.
+    #[test]
+    fn a_small_table_lives_in_its_header() {
+        let mut h: *mut MirMap = std::ptr::null_mut();
+        for k in 0..4i64 {
+            // SAFETY: a live (or null) table of `i64` entries.
+            unsafe { karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None) };
+        }
+        // SAFETY: as above.
+        let m = unsafe { &*h };
+        let base = h as usize;
+        assert!(m.data_inline && m.cells_inline);
+        assert_eq!(m.buf as usize, base + INLINE_AT);
+        assert!(m.dead.is_empty());
+        let k = 4i64;
+        // SAFETY: as above.
+        unsafe {
+            karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None);
+            assert!(!(*h).data_inline && !(*h).cells_inline);
+            karac_mir_map_free(h);
+        }
     }
 
     /// Removing from a hashed table keeps indices dense and in insertion

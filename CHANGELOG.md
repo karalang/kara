@@ -122,6 +122,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   and gave back a run-time flag all the same. Kata 1506's read-only walk
   over `children` went from about 270 ms to 160 ms on x86
   (B-2026-11-08-14).
+- **A small `Map` or `Set` is one allocation.** The table's header, room
+  for its first four entries and their hashes, and its index are allocated
+  together; a table that grows moves its entries and hashes to one block,
+  and the record of removed slots is allocated only once one is removed.
+  A table used to make five allocations for its first entry. Kata 491 on
+  x86: 13.06M allocations to 5.59M (Rust: 5.60M), 5.38G instructions to
+  4.07G, 0.45 s to 0.35 s (B-2026-11-08-7).
 
 ### Diagnostics
 
