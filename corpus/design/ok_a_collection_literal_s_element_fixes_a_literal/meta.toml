@@ -1,0 +1,9 @@
+source = "B-2026-11-08-21"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "numerics", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §8 Literals: an annotation or an argument fixes a literal's type, here through a sequence literal the binding is an element of. `p` is fixed to i32 by `[p, 1]` under `Vec[i32]` (total 8); `q` by the argument `[q, q]` to a `Vec[i32]` parameter (500); `r` by `Vec[r, 100]` under `Vec[u8]`, so `200.wrapping_add(100)` wraps to 44; `f` by `[f, 0.5]` under `Vec[f32]` (3.0); and `prev`, assigned an i32 and pushed as an element of a `Vec[i32]` row, is an i32 (kata 2015's shape)."

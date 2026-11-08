@@ -1,0 +1,34 @@
+// design.md §8 Literals: an annotation or an argument fixes a literal's type,
+// through a sequence literal the binding is an element of (B-2026-11-08-21).
+fn total(v: Vec[i32]) -> i32 {
+    let mut t: i32 = 0;
+    for x in v {
+        t += x;
+    }
+    t
+}
+
+fn rows(pairs: Vec[(i32, i32)]) -> Vec[Vec[i32]] {
+    let mut out: Vec[Vec[i32]] = Vec.new();
+    let mut prev = 0;
+    for (pos, h) in pairs {
+        out.push([prev, pos, h]);
+        prev = pos;
+    }
+    out
+}
+
+fn main() {
+    let p = 7;
+    let v: Vec[i32] = [p, 1];
+    println(total(v));
+    let q = 250;
+    println(total([q, q]));
+    let r = 200;
+    let bytes: Vec[u8] = Vec[r, 100];
+    println(bytes[0].wrapping_add(bytes[1]));
+    let f = 2.5;
+    let halves: Vec[f32] = [f, 0.5];
+    println(halves[0] + halves[1]);
+    println(rows([(1, 10), (4, 20)]));
+}

@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 180 |
-| false-positive | 151 |
+| false-positive | 152 |
 | perf | 119 |
 | missing-feature | 109 |
 | soundness | 52 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 286 |
+| typecheck | 287 |
 | mir-llvm | 153 |
 | mir | 134 |
 | cli | 83 |
@@ -142,6 +142,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-39 | 2026-11-08 | effect | low | The E0411 target-gate message cites a section that does not exist ("design.md § Cross-target Compilation"; the rule is §16 "Effect-driven target gating") and offers "bind a provider for 'ProcessTable'", which has no provider trait to bind (io.md has none, and no fake is planned) | — |
 | B-2026-11-08-40 | 2026-11-08 | cli | medium | `karac::run_playground` (the playground, and the book test's only gate for `kara,run` blocks) runs a program that `karac check` and kara-lsp refuse: the book's ch14 TaskGroup example (`for handle in handles { total = total + handle.join(); }`) is E0515 on the CLI and in the editor, yet tests/book_snippets.rs passes it because a Run block never goes through `check_source` | — |
 | B-2026-11-08-41 | 2026-11-08 | typecheck+resolver | low | Some diagnostics print two headers on one line: `error[typecheck]: f.kara:2:1: error[E_SECRET_TRAIT_FORBIDDEN]: cannot implement ...` and `error[resolve]: f.kara:2:1: error[E_MODULE_BINDING_NAMING]: module-level binding name ...`, where every other error has one `error[CODE]:` prefix | — |
+| B-2026-11-08-42 | 2026-11-08 | typecheck | medium | A literal inserted into a `Map` or `SortedMap` is not fixed by the parameter the map is handed to: `let mut d = SortedMap.new(); d.insert(1, 2); m(d);` with `fn m(d: SortedMap[i32, i64])` is refused 'expected SortedMap[i32, i64], found SortedMap[i64, i64]', though the same with `Vec.new()`, `push` and a `Vec[i32]` parameter is accepted | — |
 
 ### Relocated
 

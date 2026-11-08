@@ -64,6 +64,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   binding's literal.** `let mut b = 0; b = y;` and `max(b, y)` with
   `y: i32` made `b` an `i64`, and a function returning `i32` then refused
   it as a narrowing (B-2026-11-07-57).
+- **A binding used as an element of a number collection literal takes its
+  element type.** `let p = 0; let v: Vec[i32] = [p, 1];` and
+  `out.push([prev, pos])` into a `Vec[Vec[i32]]` made `p` and `prev` an
+  `i64` and refused them as a narrowing (B-2026-11-08-21).
 
 ### Performance
 

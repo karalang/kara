@@ -565,6 +565,48 @@ impl<'a> super::TypeChecker<'a> {
     /// already do for the scalar half, and both load-bearing: a `Slice[T]`
     /// parameter materializes the literal as a Vec buffer, and the slice
     /// header is synthesized at the call boundary.
+    /// design.md §8 Literals: an annotation or an argument fixes a literal's
+    /// type, including through a sequence literal it is an element of. A
+    /// numeric element type is left to the adoption path below, which infers
+    /// the elements bare and would settle a binding's literal to its default
+    /// first (`let p = 0; let v: Vec[i32] = [p, 1];`), so such a binding is
+    /// fixed to the element type here (B-2026-11-08-21).
+    fn fix_element_literals(&mut self, expr: &Expr, expected: &Type) {
+        let items = match &expr.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Vec" => items,
+            _ => return,
+        };
+        let element = match Self::peel_borrow(expected) {
+            Type::Named { name, args }
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+            {
+                args[0].clone()
+            }
+            Type::Slice { element, .. } => (**element).clone(),
+            _ => return,
+        };
+        if !matches!(element, Type::Int(_) | Type::UInt(_) | Type::Float(_)) {
+            return;
+        }
+        for item in items {
+            if !matches!(item.kind, ExprKind::Identifier(_)) {
+                continue;
+            }
+            let t = self.infer_expr_open(item);
+            if let Some((id, kind)) = self.unbound_literal_var(&t) {
+                if inference::literal_takes(kind, &element) {
+                    unify_types(
+                        &Type::TypeVar(id),
+                        &element,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                }
+            }
+        }
+    }
+
     fn contextual_sequence_element_pushdown(expr: &Expr, expected: &Type) -> Option<(Type, Type)> {
         // Pairs the dedicated `Array`-expected arms above own outright.
         let already_handled = matches!(
@@ -3534,6 +3576,7 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, &recorded);
             return recorded;
         }
+        self.fix_element_literals(expr, expected);
         if let Some(coerced) = self.try_apply_into_coercion(expr, expected) {
             return coerced;
         }
