@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 182 |
+| diagnostics | 183 |
 | false-positive | 153 |
 | perf | 119 |
 | missing-feature | 110 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 291 |
+| typecheck | 292 |
 | mir-llvm | 154 |
 | mir | 135 |
-| cli | 83 |
+| cli | 84 |
 | ownership | 63 |
 | parser | 47 |
 | interp | 39 |
@@ -139,6 +139,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-46 | 2026-11-08 | typecheck | low | Rust's `match ans.last_mut() { Some(last) if last[1] == prev && last[2] == avg => last[1] = pos, _ => ans.push(..) }` gets `no method 'last_mut' on type 'Vec': write through an index instead` with no machine fix, though the index form it describes is mechanical for this shape | — |
 | B-2026-11-08-47 | 2026-11-08 | typecheck | low | A sequence has no `split` by a predicate: Rust's `line.split(|&ch| ch == '#')` over a `&Vec<char>` is refused "no method 'split' on type 'Vec'" with no fix and no other spelling named, and draws two cascade errors on the closures that read the pieces | — |
 | B-2026-11-08-48 | 2026-11-08 | mir | medium | An `isize` operand beside an `i64` passes `karac check` and the MIR builder then refuses the program: `fn f(i: isize, k: i64) -> i64 { i - k }` is 'invalid MIR: binary operands of different types isize and i64' | — |
+| B-2026-11-08-49 | 2026-11-08 | typecheck+cli | low | `karac fix` half-rewrites `usize` to `i64`: the 'usize mixes with i64' fix retypes a nested `fn dfs(u: usize, p: usize, adj: ref Vec[Vec[usize]])`'s parameters and one `let n = n as usize`, but leaves the callers' `e[1] as usize` pushes and `usize.MAX`, so a Rust template that checked up to that round ends with mismatches the fix created | — |
 
 ### Relocated
 
