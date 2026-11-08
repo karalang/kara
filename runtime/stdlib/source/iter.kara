@@ -18,12 +18,14 @@ trait Iterator {
 
     fn next(mut ref self) -> Option[Self.Item];
 
-    /// The number of items.
+    /// The number of items. The count steps without an overflow test: a
+    /// walk of 2^63 items would take centuries, and the test would keep a
+    /// filtered count from being a branch-free add (`IterFilter.count`).
     fn count(own self) -> i64 {
         let mut it = self;
         let mut n = 0;
         while let Some(_) = it.next() {
-            n = n + 1;
+            n = n.wrapping_add(1);
         }
         n
     }
@@ -546,6 +548,19 @@ impl[I: Iterator, F: MutFn(I.Item) -> bool] Iterator for IterFilter[I, F] {
             }
         }
         None
+    }
+
+    /// Adds each answer of the predicate rather than branching on it, as
+    /// Rust's `Filter::count` does: over a mix of answers, a branch per
+    /// item mispredicts (kata 520's `chars().filter(..).count()` ran 1.85x
+    /// Rust's time with the same instructions).
+    fn count(own self) -> i64 {
+        let mut it = self;
+        let mut n = 0;
+        while let Some(x) = it.it.next() {
+            n = n.wrapping_add((it.pred)(x) as i64);
+        }
+        n
     }
 }
 
