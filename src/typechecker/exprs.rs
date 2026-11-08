@@ -1400,17 +1400,26 @@ impl<'a> super::TypeChecker<'a> {
         let weak_store = self.weak_store_actual.take();
         // A result whose type only the context decides (`collect`'s `C`)
         // takes the context's type, so the call's type argument is solved.
+        // Lent to a borrowed slot, `collect()` builds the value the borrow
+        // is of (core-semantics §4.1): at a `mut ref` parameter that value
+        // is the temporary the borrow is of (§5.5), never the borrow itself
+        // (B-2026-11-08-43).
+        let target = if is_bare_collect(expr) {
+            Self::peel_borrow(expected)
+        } else {
+            expected
+        };
         if self.library_methods_from_source {
             if let Type::TypeVar(_) = resolve_type_var_top(&ty, &self.env.substitutions) {
-                if !matches!(expected, Type::TypeVar(_) | Type::Error)
+                if !matches!(target, Type::TypeVar(_) | Type::Error)
                     && unify_types(
                         &ty,
-                        expected,
+                        target,
                         &mut self.env.substitutions,
                         &mut self.env.const_substitutions,
                     )
                 {
-                    ty = expected.clone();
+                    ty = target.clone();
                 }
             }
             // A method's own parameter that only its result names (`collect`'s
@@ -1418,7 +1427,7 @@ impl<'a> super::TypeChecker<'a> {
             if matches!(expr.kind, ExprKind::MethodCall { .. })
                 && !expr.id.is_dummy()
                 && self.mentions_foreign_param(&ty)
-                && !self.mentions_foreign_param(expected)
+                && !self.mentions_foreign_param(target)
             {
                 let scope = self
                     .node_generic_frames
@@ -1426,7 +1435,7 @@ impl<'a> super::TypeChecker<'a> {
                     .cloned()
                     .unwrap_or_default();
                 let mut bound = std::collections::HashMap::new();
-                super::bind_params(&ty, expected, &scope, &mut bound);
+                super::bind_params(&ty, target, &scope, &mut bound);
                 // The receiver's own nodes that still name the parameter
                 // take what the context bound it to: `[None].to_vec()` into
                 // a `Vec[Option[String]]` builds a `[None]` of
@@ -1477,7 +1486,7 @@ impl<'a> super::TypeChecker<'a> {
         // against; typed HIR records the context's type instead.
         if (self.mentions_foreign_param(&ty)
             || self.is_underdetermined_variant(expr, &ty, expected))
-            && !self.mentions_foreign_param(expected)
+            && !self.mentions_foreign_param(target)
         {
             // A closure keeps its own parameter types where they are known:
             // an annotated bare parameter borrows (`|v: Vec[i64]|` takes a
@@ -1489,7 +1498,7 @@ impl<'a> super::TypeChecker<'a> {
                 let merged = self.merge_closure_foreign_params(&ty, expected);
                 self.record_node_type(expr.id, &merged);
             } else {
-                self.record_node_type(expr.id, expected);
+                self.record_node_type(expr.id, target);
             }
         } else if self.mentions_foreign_param(&ty) && self.mentions_foreign_param(expected) {
             // Each side knows part of it: a closure `|e| Err(e.len())`

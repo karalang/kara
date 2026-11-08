@@ -1,0 +1,1 @@
+ERROR at line 6: a reference to a temporary outlives its statement; bind the temporary to a variable first

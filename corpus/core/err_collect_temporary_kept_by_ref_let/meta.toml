@@ -1,0 +1,12 @@
+source = "core-semantics §5.5"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["borrows", "temporaries", "iterators"]
+class = "a"
+expected_from = "spec"
+rules = ["5.5"]
+backends = []
+env = {}
+note = "the expected.out wording of an error pin is guidance, not a byte oracle. Before B-2026-11-08-43 the `collect()` was typed as the borrow itself, so this checked clean and the interpreter stopped on `deref of non-reference Box`; `let r: ref Vec[i64] = make();` was already refused."
+bucket = "a:refused"

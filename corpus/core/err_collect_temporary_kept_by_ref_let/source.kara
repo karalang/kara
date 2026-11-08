@@ -1,0 +1,8 @@
+// A `collect()` checked against a `ref` binding builds a temporary that is
+// dropped at the `;`, as a call returning the `Vec` does (core-semantics
+// §5.5): the binding would outlive it.
+fn main() {
+    let v = [1, 2, 3];
+    let q: ref Vec[i64] = v.iter().map(|x| x + 1).collect();
+    println(q.len());
+}

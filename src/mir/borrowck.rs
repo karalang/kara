@@ -2710,6 +2710,7 @@ fn main() -> () {
             "ok_closure_literal_solves_callee_param",
             // `map`, `collect` and `fold` are iter.kara's.
             "ok_annotated_closure_param_borrows_from_owned_slot",
+            "ok_collect_temporary_lent_to_mut_ref",
             // `std.log` is spliced from the library with `std.json`.
             "log_custom_backend",
             "log_filtering",
@@ -2753,6 +2754,9 @@ fn main() -> () {
             "ok_fold_tuple_reads_a_borrowed_scalar_as_its_value",
             // A `Str`'s range index is the library's (B-2026-11-08-66).
             "ok_a_slice_rebinds_to_its_own_reslice",
+            // A `collect()` kept by a `ref` binding is refused by the
+            // checker's temporary rule (§5.5, B-2026-11-08-43).
+            "err_collect_temporary_kept_by_ref_let",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

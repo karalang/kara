@@ -1,0 +1,20 @@
+// A `collect()` handed to a `mut ref` parameter builds a temporary that
+// lives to the end of the statement and is lent to the callee
+// (core-semantics §5.5): the callee writes it, and it is dropped at the `;`.
+fn total(xs: mut ref Vec[i64]) -> i64 {
+    xs.push(1);
+    xs.len()
+}
+
+fn shout(words: mut ref Vec[String]) -> String {
+    words.push("end".to_string());
+    words.join(" ")
+}
+
+fn main() {
+    let v = [1, 2, 3];
+    println(total(mut v.iter().map(|x| x * 2).collect()));
+    println(total(mut (0..3).collect()));
+    let names = ["ab", "cd"];
+    println(shout(mut names.iter().map(|s| s.to_uppercase()).collect()));
+}

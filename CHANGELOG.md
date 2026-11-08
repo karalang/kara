@@ -45,6 +45,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `run` are unchanged. A program's own `enum CliError` or `struct Parser`
   no longer draws a `prelude_shadow` warning on every command
   (B-2026-11-08-29).
+- A bare `collect()` kept by a `ref` or `mut ref` binding
+  (`let q: ref Vec[i64] = it.collect();`) is refused as a reference to a
+  temporary that outlives its statement (core-semantics §5.5), as
+  `let q: ref Vec[i64] = make();` already was. It was accepted and the
+  interpreter then stopped on `deref of non-reference` (B-2026-11-08-43).
 
 ### Added
 
@@ -185,6 +190,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   editor), and an atomic operation without the deprecated `MemoryOrdering`
   argument was refused. The book's chapter 14 atomics example drops the
   orderings (B-2026-11-08-40).
+- **A `collect()` passed to a `mut ref` parameter is lent as a
+  temporary.** `total(mut v.iter().map(f).collect())` was handed over as if
+  the collection were the reference: the interpreter stopped on `deref of
+  non-reference` and a compiled binary segfaulted. The collection now lives
+  to the end of the statement and is dropped there (core-semantics §5.5,
+  B-2026-11-08-43).
 
 ### Performance
 

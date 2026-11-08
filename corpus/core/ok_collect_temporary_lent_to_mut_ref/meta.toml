@@ -1,0 +1,12 @@
+source = "core-semantics §5.5"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["borrows", "temporaries", "iterators"]
+class = "a"
+expected_from = "spec"
+rules = ["5.5"]
+backends = []
+env = {}
+note = "A bare `collect()` passed for a `mut ref Vec` parameter was typed as the borrow itself, so the value was handed over as if it were a reference: the interpreter stopped on `deref of non-reference Box` and a compiled binary segfaulted (B-2026-11-08-43). The `Vec[String]` arm owns heap data, so the ASan lane's LeakSanitizer sees the temporary dropped."
+bucket = "a"
