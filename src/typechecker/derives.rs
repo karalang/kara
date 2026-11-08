@@ -2283,6 +2283,16 @@ impl super::env::TypeEnv {
             Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
                 self.type_supports_partial_eq(&args[0])
             }
+            // A map compares its keys' values, a set its elements, order
+            // playing no part (docs/library/collections.md § Common traits,
+            // B-2026-11-08-82). The keys and elements are `Eq` by the
+            // collections' own bounds.
+            Type::Named { name, args } if (name == "Map" || name == "SortedMap") && args.len() == 2 => {
+                self.type_supports_partial_eq(&args[1])
+            }
+            Type::Named { name, args } if (name == "Set" || name == "SortedSet") && args.len() == 1 => {
+                true
+            }
             Type::Named { name, args } => {
                 // A user-provided `impl Eq for Name` is sufficient — the
                 // lowering pass dispatches `==`/`!=` through it. Falls back
@@ -2362,6 +2372,13 @@ impl super::env::TypeEnv {
             // walks the contents to match the interpreter (B-2026-06-20-15).
             Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
                 self.type_supports_eq(&args[0])
+            }
+            // B-2026-11-08-82, as in `type_supports_partial_eq`.
+            Type::Named { name, args } if (name == "Map" || name == "SortedMap") && args.len() == 2 => {
+                self.type_supports_eq(&args[1])
+            }
+            Type::Named { name, args } if (name == "Set" || name == "SortedSet") && args.len() == 1 => {
+                true
             }
             // A derive on a generic type holds for the arguments that have the
             // trait: `#[derive(Eq)] struct Pair[T]` is not `Eq` at `Pair[f64]`

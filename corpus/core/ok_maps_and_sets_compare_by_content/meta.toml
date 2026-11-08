@@ -1,0 +1,11 @@
+source = "corpus/core/ok_maps_and_sets_compare_by_content"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["map", "set", "eq"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "B-2026-11-08-82: docs/library/collections.md § Common traits (7908341b95), Map/SortedMap are PartialEq when V is and Set/SortedSet always, order-independent; a struct holding one derives PartialEq. Expected output worked by hand. Measured the same under KARAC_HASH_SEED 1, 7 and 99."

@@ -10841,6 +10841,37 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.seq_eq(span, l, r, t, elem, dest)
             }
             HK::Slice { elem, .. } => self.seq_eq(span, l, r, t, elem, dest),
+            // Two maps or two sets, order playing no part: the library's
+            // `map_eq` and its kin (B-2026-11-08-82).
+            HK::Intrinsic { kind, args } => {
+                let helper = match kind {
+                    IntrinsicKind::Map => "map_eq",
+                    IntrinsicKind::SortedMap => "sorted_map_eq",
+                    IntrinsicKind::Set => "set_eq",
+                    IntrinsicKind::SortedSet => "sorted_set_eq",
+                    IntrinsicKind::Vec | IntrinsicKind::VecDeque => unreachable!(),
+                };
+                let Some(d) = self.lcx.defs.lookup(0, helper) else {
+                    return self.unsupported(span, "comparing this type");
+                };
+                let inst_args = self.tys().tcx().list(args).to_vec();
+                let lo = self.ref_to(l, t);
+                let ro = self.ref_to(r, t);
+                let name = self.lcx.instance(d, inst_args.clone());
+                let func = self.fn_operand(&name, d, inst_args);
+                let next = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::Call {
+                        func,
+                        args: vec![lo, ro],
+                        destination: dest,
+                        target: Some(next),
+                        unwind: UnwindAction::Abort,
+                    },
+                    next,
+                );
+                Ok(())
+            }
             HK::Adt { .. } | HK::Shared { .. } if self.total_float_wrapper(t).is_some() => {
                 let (ot, [_, equal, _]) = self.ordering_ty(span)?;
                 let o = self.temp(ot);
@@ -27660,6 +27691,10 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "vec_contains_slice",
     "deque_contains_str",
     "deque_contains_slice",
+    "map_eq",
+    "sorted_map_eq",
+    "set_eq",
+    "sorted_set_eq",
 ];
 
 /// The names the library text `lib` declares at its top level.

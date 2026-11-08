@@ -1,0 +1,64 @@
+// Maps and sets compare by content, order playing no part
+// (docs/library/collections.md § Common traits, B-2026-11-08-82): maps
+// built in different insertion orders, a SortedSet and a SortedMap, a
+// struct deriving PartialEq over a Map, nested maps, and assert_eq.
+#[derive(PartialEq, Debug)]
+struct Inventory {
+    name: String,
+    stock: Map[String, i64],
+}
+
+fn main() {
+    let mut a: Map[String, i64] = Map.new();
+    let mut b: Map[String, i64] = Map.new();
+    for (k, v) in [("apple", 3), ("pear", 5), ("plum", 7), ("fig", 1)] {
+        a.insert(k.to_string(), v);
+    }
+    for (k, v) in [("fig", 1), ("plum", 7), ("apple", 3), ("pear", 5)] {
+        b.insert(k.to_string(), v);
+    }
+    println(f"{a == b} {a != b}");
+    b.insert("fig".to_string(), 2);
+    println(f"{a == b} {a != b}");
+    b.remove("fig");
+    println(a == b);
+    let mut s: Set[i64] = Set.new();
+    let mut t: Set[i64] = Set.new();
+    for x in [5, 1, 4] {
+        s.insert(x);
+    }
+    for x in [4, 5, 1] {
+        t.insert(x);
+    }
+    println(f"{s == t}");
+    t.insert(9);
+    println(f"{s == t}");
+    let mut ss: SortedSet[String] = SortedSet.new();
+    let mut st: SortedSet[String] = SortedSet.new();
+    ss.insert("b".to_string());
+    ss.insert("a".to_string());
+    st.insert("a".to_string());
+    st.insert("b".to_string());
+    println(ss == st);
+    let mut sm: SortedMap[i64, Vec[String]] = SortedMap.new();
+    let mut sn: SortedMap[i64, Vec[String]] = SortedMap.new();
+    sm.insert(2, ["x".to_string()]);
+    sm.insert(1, Vec.new());
+    sn.insert(1, Vec.new());
+    sn.insert(2, ["x".to_string()]);
+    println(sm == sn);
+    sn.insert(2, ["y".to_string()]);
+    println(sm == sn);
+    let i = Inventory { name: "shop".to_string(), stock: a.clone() };
+    let j = Inventory { name: "shop".to_string(), stock: a };
+    println(i == j);
+    let empty_a: Map[String, f64] = Map.new();
+    let empty_b: Map[String, f64] = Map.new();
+    println(empty_a == empty_b);
+    let mut nested: Map[String, Set[i64]] = Map.new();
+    nested.insert("k".to_string(), s.clone());
+    let mut nested2: Map[String, Set[i64]] = Map.new();
+    nested2.insert("k".to_string(), s);
+    println(nested == nested2);
+    assert_eq(nested, nested2);
+}

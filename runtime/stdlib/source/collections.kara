@@ -1839,6 +1839,53 @@ fn deque_contains_slice[T: PartialEq](d: ref VecDeque[Vec[T]], x: Slice[T]) -> b
     false
 }
 
+// `a == b` on two maps or two sets: the MIR builder calls one of these
+// (docs/library/collections.md § Common traits, B-2026-11-08-82). Two maps
+// are equal when they hold the same keys and each key's values are equal,
+// two sets when they hold the same elements; order plays no part.
+
+fn map_eq[K: Hash + Eq, V: PartialEq](a: ref Map[K, V], b: ref Map[K, V]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (k, v) in a.iter() {
+        match b.get(k) {
+            Some(w) => {
+                if v != w {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
+fn sorted_map_eq[K: Ord, V: PartialEq](a: ref SortedMap[K, V], b: ref SortedMap[K, V]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (k, v) in a.iter() {
+        match b.get(k) {
+            Some(w) => {
+                if v != w {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
+fn set_eq[T: Hash + Eq](a: ref Set[T], b: ref Set[T]) -> bool {
+    a.len() == b.len() and a.iter().all(|x| b.contains(x))
+}
+
+fn sorted_set_eq[T: Ord](a: ref SortedSet[T], b: ref SortedSet[T]) -> bool {
+    a.len() == b.len() and a.iter().all(|x| b.contains(x))
+}
+
 // `v.extend(items)` from a source that is not a `Vec`, slice or array: the
 // MIR builder calls one of these (docs/library/collections.md, `extend`
 // takes any `IntoIterator[Item = T]`). Each item moves onto the end in order.

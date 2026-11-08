@@ -62,6 +62,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- **`Map`, `SortedMap`, `Set` and `SortedSet` compare with `==`.** Two
+  maps are equal when they hold the same keys with equal values, two sets
+  when they hold the same elements, whatever the insertion or iteration
+  order; a struct holding one can derive `PartialEq` (and `Eq`)
+  (docs/library/collections.md § Common traits; B-2026-11-08-82). They
+  were refused, with a hint to derive `PartialEq` on the library type; a
+  refusal on a library or built-in type no longer suggests a derive.
 - **`contains` and `binary_search` on a sequence of `String` or `Vec[T]`
   take the element's view.** `["inc", "dec"].contains(cmd)` with `cmd: Str`,
   `names.contains(s)` on a `Vec[String]` and `rows.contains(w[1..3])` on a

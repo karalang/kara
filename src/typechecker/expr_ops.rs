@@ -5089,6 +5089,16 @@ impl<'a> super::TypeChecker<'a> {
                     // the desugaring".
                     match self.comparison_impl_written_but_undispatched(cmp_left, true) {
                         Some(msg) => self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp),
+                        None if !self.program_declares(cmp_left) => {
+                            // A library or built-in type takes no derive
+                            // from the program (B-2026-11-08-82).
+                            let msg = format!(
+                                "type '{}' does not implement PartialEq, so == and != \
+                                 do not apply to it",
+                                type_display(cmp_left)
+                            );
+                            self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp)
+                        }
                         None => {
                             let msg = format!(
                                 "type '{}' does not implement PartialEq; add \
@@ -5145,11 +5155,21 @@ impl<'a> super::TypeChecker<'a> {
                         self.comparison_impl_written_but_undispatched(cmp_left, false)
                             .or_else(|| self.ordering_unsupported_because_generic(cmp_left))
                             .unwrap_or_else(|| {
-                                format!(
-                                    "type '{}' does not implement PartialOrd; add \
-                                 #[derive(PartialOrd)] to use <, <=, >, or >=",
-                                    type_display(cmp_left)
-                                )
+                                if self.program_declares(cmp_left) {
+                                    format!(
+                                        "type '{}' does not implement PartialOrd; add \
+                                     #[derive(PartialOrd)] to use <, <=, >, or >=",
+                                        type_display(cmp_left)
+                                    )
+                                } else {
+                                    // A library or built-in type takes no
+                                    // derive from the program (B-2026-11-08-82).
+                                    format!(
+                                        "type '{}' does not implement PartialOrd, so <, <=, \
+                                         > and >= do not apply to it",
+                                        type_display(cmp_left)
+                                    )
+                                }
                             }),
                         *span,
                         TypeErrorKind::InvalidBinaryOp,
@@ -5212,11 +5232,21 @@ impl<'a> super::TypeChecker<'a> {
                         self.comparison_impl_written_but_undispatched(cmp_left, false)
                             .or_else(|| self.ordering_unsupported_because_generic(cmp_left))
                             .unwrap_or_else(|| {
-                                format!(
-                                    "type '{}' does not implement PartialOrd; add \
-                                 #[derive(PartialOrd)] to use <, <=, >, or >=",
-                                    type_display(cmp_left)
-                                )
+                                if self.program_declares(cmp_left) {
+                                    format!(
+                                        "type '{}' does not implement PartialOrd; add \
+                                     #[derive(PartialOrd)] to use <, <=, >, or >=",
+                                        type_display(cmp_left)
+                                    )
+                                } else {
+                                    // A library or built-in type takes no
+                                    // derive from the program (B-2026-11-08-82).
+                                    format!(
+                                        "type '{}' does not implement PartialOrd, so <, <=, \
+                                         > and >= do not apply to it",
+                                        type_display(cmp_left)
+                                    )
+                                }
                             }),
                         *span,
                         TypeErrorKind::InvalidBinaryOp,

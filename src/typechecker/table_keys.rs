@@ -416,6 +416,31 @@ impl<'a> super::TypeChecker<'a> {
         Some(derive_line(span, &["PartialEq"]))
     }
 
+    /// Whether the program's own source declares the type `ty` names, so
+    /// that a `#[derive(..)]` written there could apply to it. A library
+    /// or built-in type (`Map[K, V]`, `Option[T]`) and a type with no
+    /// declaration (a tuple, a function) cannot take one (B-2026-11-08-82).
+    pub(super) fn program_declares(&self, ty: &Type) -> bool {
+        let name = match ty {
+            Type::Ref(inner) | Type::MutRef(inner) => return self.program_declares(inner),
+            Type::Named { name, .. } | Type::Shared(name) => name,
+            _ => return false,
+        };
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let library = library.min(crate::prelude::gated_span_base(0));
+        self.program.items.iter().any(|item| {
+            let declared = match item {
+                Item::StructDef(s) => &s.name == name,
+                Item::EnumDef(e) => &e.name == name,
+                Item::UnionDef(u) => &u.name == name,
+                Item::DistinctType(d) => &d.name == name,
+                _ => false,
+            };
+            let span = item.span();
+            declared && span.length > 0 && span.offset < library
+        })
+    }
+
     /// The declaration of the non-generic struct or enum `ty` names, in the
     /// program's own source: its span, its field (or payload) types and
     /// the traits it derives.
