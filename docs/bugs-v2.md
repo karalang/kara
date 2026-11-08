@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 193 |
-| false-positive | 156 |
+| false-positive | 157 |
 | perf | 121 |
 | missing-feature | 111 |
 | soundness | 53 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 301 |
 | mir-llvm | 157 |
-| mir | 140 |
+| mir | 141 |
 | cli | 86 |
 | ownership | 63 |
 | parser | 50 |
@@ -124,6 +124,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
 | B-2026-11-08-63 | 2026-11-08 | typecheck+mir | low | A constant whose value is computed from another constant is refused as a pattern: `const AA: i64 = 5; const BB: i64 = AA + 1;` then `match 6 { BB => .. }` says 'this range pattern bound is not lowered yet', though a constant in a pattern is its value (design.md § Pattern matching) and `BB` checks and prints 6 anywhere else | — |
 | B-2026-11-08-64 | 2026-11-08 | typecheck | low | A mutating method on a read-only Slice binding (`let mut b = s.bytes(); b.swap(i, j)`, also sort, reverse, fill, sort_by, sort_by_key, split_at_mut) says only 'Slice.swap() requires a mutable slice (`mut Slice[T]`)', with no hint or fix; an index assignment through the same binding names `.to_vec()` but is reported twice | — |
+| B-2026-11-08-67 | 2026-11-08 | mir | low | Assigning the `ref i32` a `SortedMap` walk yields to an `i64` local, `cur = d`, is refused E0509 "a view ... is stored in an escaping closure, a `shared` value or a channel", though `cur` is a plain local | — |
 
 ### Relocated
 
