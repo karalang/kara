@@ -46,4 +46,8 @@ fn main() {
     let owned = "set".to_string();
     let cmds = ["inc", "set"];
     println(f"{cmds.contains(owned)} {owned}");
+
+    // An `Array` searches through the same view.
+    let fixed: Array[String, 2] = ["dec".to_string(), "inc".to_string()];
+    println(f"{fixed.contains(probe[1..4])} {fixed.contains("inc")} {fixed.binary_search("inc")}");
 }
