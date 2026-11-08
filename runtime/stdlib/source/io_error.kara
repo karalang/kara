@@ -1,0 +1,34 @@
+// `IoError`'s and `VarError`'s `Display`, as Kāra, for the MIR pipeline
+// (io.md § Errors, B-2026-11-08-30): a short phrase a program's user reads,
+// `Other`'s message as it is. `Debug` stays derived and names the variant.
+//
+// The baked `../io_error.kara` and `../var_error.kara` state the same impls
+// for the checker; the MIR builder lowers no baked impl, so a call resolved
+// to one of those runs this one, as `alloc_error.kara` does for
+// `AllocError`.
+
+impl Display for IoError {
+    fn to_string(ref self) -> String {
+        match self {
+            IoError.NotFound => "not found",
+            IoError.PermissionDenied => "permission denied",
+            IoError.AlreadyExists => "already exists",
+            IoError.InvalidInput => "invalid input",
+            IoError.UnexpectedEof => "unexpected end of file",
+            IoError.InvalidUtf8 => "invalid UTF-8",
+            IoError.Interrupted => "interrupted",
+            IoError.Unsupported => "unsupported",
+            IoError.ProviderUnavailable => "provider unavailable",
+            IoError.Other(msg) => msg.clone(),
+        }
+    }
+}
+
+impl Display for VarError {
+    fn to_string(ref self) -> String {
+        match self {
+            VarError.NotPresent => "environment variable not found",
+            VarError.NotUnicode => "environment variable is not valid unicode",
+        }
+    }
+}

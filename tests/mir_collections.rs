@@ -682,7 +682,11 @@ fn main() {
 
 #[test]
 fn var_error_into_io_error_agrees_on_both_backends() {
-    agrees(VAR_ERROR_INTO, "InvalidUtf8\nNotFound\nInvalidUtf8\n", 0);
+    agrees(
+        VAR_ERROR_INTO,
+        "invalid UTF-8\nnot found\ninvalid UTF-8\n",
+        0,
+    );
 }
 
 /// An `Atomic[T]` operand that is a bare literal is a `T`: `new`, `store`,

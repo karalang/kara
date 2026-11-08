@@ -1623,6 +1623,9 @@ impl<'a> Lcx<'a> {
         // one of the same type is named apart (B-2026-10-27-10).
         let mut inherent = FxHashSet::default();
         let mut trait_methods = Vec::new();
+        // How many impls of one trait for one type this program has lowered
+        // so far, which numbers the next one's methods apart.
+        let mut impls_seen: FxHashMap<Vec<String>, usize> = FxHashMap::default();
         for item in &program.items {
             let externs: Vec<&ast::ExternFunction> = match item {
                 // A `host fn` is called the same way: its host provides the
@@ -1779,15 +1782,26 @@ impl<'a> Lcx<'a> {
                     // The second and later impls of one trait for one type
                     // are named apart: `impl From[A]` and `impl From[B]`,
                     // or two `impl From` told apart by their parameters
-                    // (B-2026-11-04-47).
+                    // (B-2026-11-04-47). The count is of the impls lowered
+                    // here, not the definition's `#k`: a library source's
+                    // re-statement of a baked impl (`impl Display for
+                    // IoError`, the baked `impl Display#0` and the source's
+                    // `#1`) is the only one with a body, and keeps the plain
+                    // name the backends look a type's `to_string` up by
+                    // (B-2026-11-08-30).
                     let impl_suffix = b
                         .trait_name
                         .as_ref()
                         .filter(|t| t.generic_args.is_some() || target.is_some() || prim.is_some())
                         .and(impl_path.last())
                         .and_then(|l| l.rsplit_once('#'))
-                        .filter(|(_, k)| *k != "0")
-                        .map(|(_, k)| format!("#{k}"));
+                        .and_then(|(label, _)| {
+                            let mut key = impl_path[..impl_path.len() - 1].to_vec();
+                            key.push(label.to_string());
+                            let n = impls_seen.entry(key).or_default();
+                            *n += 1;
+                            (*n > 1).then(|| format!("#{}", *n - 1))
+                        });
                     let impl_params = b.generic_params.as_ref().map_or(0, |g| g.params.len());
                     let impl_arg_pos = impl_arg_positions(b);
                     for it in &b.items {

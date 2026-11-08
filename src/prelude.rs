@@ -896,6 +896,10 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/stdlib/source/alloc_error.kara"),
     ),
     (
+        "source/io_error.kara",
+        include_str!("../runtime/stdlib/source/io_error.kara"),
+    ),
+    (
         "source/ordering.kara",
         include_str!("../runtime/stdlib/source/ordering.kara"),
     ),

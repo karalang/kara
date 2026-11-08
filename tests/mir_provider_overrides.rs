@@ -337,7 +337,7 @@ fn provider_file_system_override_takes_path_operations() {
     let (interp, built) = interp_and_build(dir.path(), FILE_SYSTEM_PATHS, "");
     assert_eq!(
         interp.0,
-        "saved true true false\nread hello kprov-a.txt\nerr NotFound\nafter 3 false\ntrue on disk\n"
+        "saved true true false\nread hello kprov-a.txt\nerr not found\nafter 3 false\ntrue on disk\n"
     );
     if let Some(built) = built {
         assert_eq!(built, interp);
@@ -456,7 +456,7 @@ fn provider_file_system_override_takes_file_handles() {
     assert_eq!(
         interp,
         (
-            "close 1\nwrote Ok(5)\nerr NotFound\nread 5 104 true false\nclose 2\ntotal Ok(5)\nlate err ProviderUnavailable\nend\n".to_string(),
+            "close 1\nwrote Ok(5)\nerr not found\nread 5 104 true false\nclose 2\ntotal Ok(5)\nlate err provider unavailable\nend\n".to_string(),
             String::new()
         )
     );
@@ -538,7 +538,7 @@ fn provider_file_reaches_its_own_provider_inside_a_nested_override() {
     assert_eq!(
         interp,
         (
-            "err Other(outer refuses bad)\nerr Other(outer is read-only)\nouter reads 1\npeek outer file 0\ninner reads 11\npeek inner file 0\nvec built\ninner closes 12\ninner closes 13\ninner closes 11\ninner done\nouter closes 1\nend\n".to_string(),
+            "err outer refuses bad\nerr outer is read-only\nouter reads 1\npeek outer file 0\ninner reads 11\npeek inner file 0\nvec built\ninner closes 12\ninner closes 13\ninner closes 11\ninner done\nouter closes 1\nend\n".to_string(),
             String::new()
         )
     );
@@ -649,7 +649,7 @@ fn provider_buffered_files_reach_the_provider() {
     assert_eq!(
         interp,
         (
-            "line [alpha]\nline [beta]\nline [gamma]\n6 [alpha] 11 [beta|gamma]\nflush true\ndropping\nclose 4: 3 bytes [abc]\nclose 3: 21 bytes [hello buffered world|]\nclose 2: 17 bytes [alpha|beta\r|gamma]\nclose 1: 17 bytes [alpha|beta\r|gamma]\nlate err ProviderUnavailable\nlate write true\nlate flush err ProviderUnavailable\nend\n".to_string(),
+            "line [alpha]\nline [beta]\nline [gamma]\n6 [alpha] 11 [beta|gamma]\nflush true\ndropping\nclose 4: 3 bytes [abc]\nclose 3: 21 bytes [hello buffered world|]\nclose 2: 17 bytes [alpha|beta\r|gamma]\nclose 1: 17 bytes [alpha|beta\r|gamma]\nlate err provider unavailable\nlate write true\nlate flush err provider unavailable\nend\n".to_string(),
             String::new()
         )
     );
@@ -765,7 +765,7 @@ fn provider_block_files_end_on_every_exit() {
     assert_eq!(
         interp,
         (
-            "close 1\nwrote 5\nread 5 104\nos read 4 100\nos write 1\nclose 2\nclose 21\nclose 11\nearly err NotFound\nkept 3\nlate err ProviderUnavailable\nlate err ProviderUnavailable\nlate err ProviderUnavailable\nend\n".to_string(),
+            "close 1\nwrote 5\nread 5 104\nos read 4 100\nos write 1\nclose 2\nclose 21\nclose 11\nearly err not found\nkept 3\nlate err provider unavailable\nlate err provider unavailable\nlate err provider unavailable\nend\n".to_string(),
             String::new()
         )
     );

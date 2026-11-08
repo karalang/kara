@@ -200,6 +200,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   status 141, as the JIT and a built binary do (io.md): the interpreter
   ignored the closed pipe, ran every remaining iteration and exited 0
   (B-2026-11-08-28).
+- **`IoError` and `VarError` display as phrases** (io.md § Errors):
+  `f"lgrep: nope: {e}"` prints `lgrep: nope: not found`, not `NotFound`, and
+  `fn main() -> Result[(), IoError]` exits with `Error: not found`.
+  `VarError` reads `environment variable not found`. Both now derive
+  `Debug`, so `dbg(IoError.NotFound)` shows the variant where it was refused.
+  `AllocError`'s exit from `main` printed its variant too and now prints its
+  phrase (B-2026-11-08-30).
 
 ### Performance
 

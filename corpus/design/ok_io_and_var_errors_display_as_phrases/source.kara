@@ -1,0 +1,24 @@
+fn main() {
+    let errs: Vec[IoError] = [
+        IoError.NotFound,
+        IoError.PermissionDenied,
+        IoError.AlreadyExists,
+        IoError.InvalidInput,
+        IoError.UnexpectedEof,
+        IoError.InvalidUtf8,
+        IoError.Interrupted,
+        IoError.Unsupported,
+        IoError.ProviderUnavailable,
+        IoError.Other("disk full".to_string()),
+    ];
+    for e in errs {
+        println(f"{e}");
+    }
+    println(IoError.UnexpectedEof.to_string());
+    println(f"{VarError.NotPresent}");
+    println(VarError.NotUnicode.to_string());
+    match fs.read_to_string("/nonexistent/kara-io-error-pin") {
+        Ok(_) => println("read?"),
+        Err(e) => println(f"lgrep: nope: {e}"),
+    }
+}

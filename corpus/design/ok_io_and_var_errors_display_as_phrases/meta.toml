@@ -1,0 +1,9 @@
+source = "B-2026-11-08-30"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "io", "display"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "io.md § Errors: an IoError displays as a short lowercase phrase (Other's message as it is) and a VarError as `environment variable not found` / `environment variable is not valid unicode`, through an f-string and through `.to_string()` alike."

@@ -3,12 +3,11 @@
 // CR-202 slice 6.1j. Error type returned by I/O standard library
 // functions. Lives in the prelude so it does not need an import.
 //
-// `#[derive(Display)]` (phase-8 entry-point contract Slice C): renders
-// each variant by name (`NotFound`, `Other(<msg>)`, …) via the
-// payload-enum Display path landed in Slice A. Required so a
-// `fn main() -> Result[(), IoError]` (e.g. `examples/word_count.kara`)
-// satisfies the entry-point `E: Display` bound and the runtime can
-// print a returned `Err(e)` as `Error: {e}`.
+// `Display` is written out (below) and `Debug` derived: a program's user
+// reads the Display, as `lgrep: nope: not found` or a `main() ->
+// Result[(), IoError]`'s `Error: {e}` line, so it is a short phrase, and
+// `Debug` names the variant (io.md § Errors, B-2026-11-08-30). The MIR
+// pipeline runs `source/io_error.kara`'s copy of the impl.
 //
 // `InvalidInput` (an argument the operation refuses: a negative length,
 // a negative `SeekFrom.Start`, an `OpenOptions` combination that opens
@@ -19,7 +18,7 @@
 // variant by NAME, so the order here is the documented one, not a runtime
 // code.
 
-#[derive(Display)]
+#[derive(Debug)]
 enum IoError {
     NotFound,
     PermissionDenied,
@@ -31,4 +30,21 @@ enum IoError {
     Unsupported,
     ProviderUnavailable,
     Other(String),
+}
+
+impl Display for IoError {
+    fn to_string(ref self) -> String {
+        match self {
+            NotFound => "not found",
+            PermissionDenied => "permission denied",
+            AlreadyExists => "already exists",
+            InvalidInput => "invalid input",
+            UnexpectedEof => "unexpected end of file",
+            InvalidUtf8 => "invalid UTF-8",
+            Interrupted => "interrupted",
+            Unsupported => "unsupported",
+            ProviderUnavailable => "provider unavailable",
+            Other(msg) => msg.clone(),
+        }
+    }
 }
