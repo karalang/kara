@@ -1,0 +1,15 @@
+const AA: i64 = 5;
+const BB: i64 = (AA + 1) * 2 - 6;
+const NEG: i64 = -AA;
+fn main() {
+    const MOD: i64 = 7;
+    const MOD_UP: i64 = MOD + 1;
+    for x in [6, -5, 8, 3] {
+        match x {
+            BB => println("bb"),
+            NEG => println("neg"),
+            MOD_UP => println("m2"),
+            _ => println("other"),
+        }
+    }
+}

@@ -17177,6 +17177,48 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// is open, `None` when it is not a constant the builder can read. A
     /// named bound is a constant or an integer type's limit (design.md
     /// § Range patterns).
+    /// The integer value of a constant's initializer built from integer
+    /// literals, other module constants and arithmetic, as the checker's
+    /// constant evaluator computes it (`const BB: i64 = AA + 1;`). `None`
+    /// for anything else, or a step that overflows.
+    fn fold_const_int(&self, e: &'a Expr, depth: u32) -> Option<i128> {
+        use crate::ast::{BinOp as AB, UnaryOp as AU};
+        if depth > 64 {
+            return None;
+        }
+        match &e.kind {
+            ExprKind::Integer(v, _) => Some(*v),
+            ExprKind::CharLit(c) => Some(*c as i128),
+            ExprKind::Identifier(name) => {
+                let d = self.lcx.defs.lookup(0, name)?;
+                let v = self.lcx.consts.get(&d).copied()?;
+                self.fold_const_int(v, depth + 1)
+            }
+            ExprKind::Unary {
+                op: AU::Neg,
+                operand,
+            } => self.fold_const_int(operand, depth + 1)?.checked_neg(),
+            ExprKind::Binary { op, left, right } => {
+                let l = self.fold_const_int(left, depth + 1)?;
+                let r = self.fold_const_int(right, depth + 1)?;
+                match op {
+                    AB::Add => l.checked_add(r),
+                    AB::Sub => l.checked_sub(r),
+                    AB::Mul => l.checked_mul(r),
+                    AB::Div => l.checked_div(r),
+                    AB::Mod => l.checked_rem(r),
+                    AB::BitAnd => Some(l & r),
+                    AB::BitOr => Some(l | r),
+                    AB::BitXor => Some(l ^ r),
+                    AB::Shl => u32::try_from(r).ok().and_then(|r| l.checked_shl(r)),
+                    AB::Shr => u32::try_from(r).ok().and_then(|r| l.checked_shr(r)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn range_bound(
         &mut self,
         b: Option<&'a crate::ast::RangeBound>,
@@ -17198,12 +17240,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                         .lookup(0, name)
                         .and_then(|d| self.lcx.consts.get(&d).copied());
                     match value {
-                        Some(v) => match self.expr_operand(v)? {
-                            Operand::Const(Const {
-                                kind: ConstKind::Scalar(x),
-                                ..
-                            }) => Some(Some(x)),
-                            _ => None,
+                        // A constant computed from others (`const BB: i64 =
+                        // AA + 1;`) is its value too (design.md § Pattern
+                        // matching; B-2026-11-08-63).
+                        Some(v) => match self.fold_const_int(v, 0) {
+                            Some(x) => Some(Some(x as u128)),
+                            None => match self.expr_operand(v)? {
+                                Operand::Const(Const {
+                                    kind: ConstKind::Scalar(x),
+                                    ..
+                                }) => Some(Some(x)),
+                                _ => None,
+                            },
                         },
                         None => None,
                     }

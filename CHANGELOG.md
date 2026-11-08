@@ -103,6 +103,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A constant computed from another constant matches as a pattern:
+  `const BB: i64 = AA + 1;` then `match x { BB => .. }` was refused with
+  "this range pattern bound is not lowered yet", though a constant in a
+  pattern is its value (design.md § Pattern matching, B-2026-11-08-63).
 - **A method returning `Self` in an impl of a `shared struct` is the
   handle type at its call.** `let y: Node = Node.new(2);` was refused
   "expected 'Node', found 'Node'" (B-2026-11-08-70).

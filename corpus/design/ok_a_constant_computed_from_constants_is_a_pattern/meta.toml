@@ -1,0 +1,9 @@
+source = "B-2026-11-08-63"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "patterns"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Pattern matching: a constant in a pattern is its value. BB = (5 + 1) * 2 - 6 = 6, NEG = -5, and the block constant MOD_UP = 7 + 1 = 8, so 6, -5, 8 and 3 print bb, neg, m2 and other. A constant computed from another constant was refused with \"this range pattern bound is not lowered yet\" before the fix."
