@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1501-1600/1505-minimum-possible-integer-after-at-most-k-adjacent-swaps-on-digits/swaps_iter.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "mirror"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the kata's Python mirror, which every arm matches on __mir-run, as the kata README records it"
+bucket = "check-refuses:E_CROSS_BORROW_CONFLICT"
+classified_with = "1dce193ad+local"
+extracted_src = "dee32f1c"

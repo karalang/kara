@@ -1,0 +1,11 @@
+4321, k = 4 -> 1342
+100, k = 1 -> 010
+36789, k = 1000 -> 36789
+22, k = 22 -> 22
+9438957234785635408, k = 23 -> 0345989723478563548
+5, k = 0 -> 5
+54321, k = 10 -> 12345
+1032, k = 2 -> 0123
+3000 numbers of 1 to 8 digits, k up to 30: checksum 638914239
+300 numbers of 1 to 200 digits, k up to 3000: checksum 108639728
+3 numbers of 1 to 1500 digits, k up to 1000000: checksum 262145062

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1501-1600/1505-minimum-possible-integer-after-at-most-k-adjacent-swaps-on-digits/bench/swaps.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1505 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "e-differs:stdout"
+classified_with = "1dce193ad+local"
+extracted_src = "f42ee836"

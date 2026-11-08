@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/1501-1600/1505-minimum-possible-integer-after-at-most-k-adjacent-swaps-on-digits/swaps_solution.kara"
+dedup_of = []
+tags = []
+class = "e"
+bucket = "b-fix-incomplete:E0516"
+classified_with = "1dce193ad+local"
+extracted_src = "42d61379"

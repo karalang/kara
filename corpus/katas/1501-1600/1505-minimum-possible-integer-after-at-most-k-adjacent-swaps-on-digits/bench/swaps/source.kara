@@ -1,0 +1,84 @@
+// LeetCode #1505: Minimum Possible Integer After at Most K Adjacent Swaps On
+// Digits -- the benchmark, the same algorithm as swaps.kara. Greedily, each place takes the smallest digit whose
+// nearest copy can be brought there with the swaps left. Bringing the copy
+// at original index i costs i less the digits already taken from before
+// it, which a Fenwick tree counts. O(10 n log n).
+
+fn taken_before(tree: Vec[i64], i: i64) -> i64 {
+    let mut s = 0;
+    let mut at = i;
+    while at > 0 {
+        s += tree[at];
+        at -= at & -at;
+    }
+    s
+}
+
+fn take(tree: mut ref Vec[i64], i: i64) {
+    let mut at = i + 1;
+    while at < tree.len() {
+        tree[at] += 1;
+        at += at & -at;
+    }
+}
+
+fn min_integer(num: String, k: i64) -> String {
+    let digits = num.bytes().to_vec();
+    let n = digits.len();
+    let mut where: Vec[Vec[i64]] = Vec.filled(10, Vec.new());
+    for i in 0..n {
+        where[digits[i] as i64 - 48].push(i);
+    }
+    let mut head = Vec.filled(10, 0);
+    let mut tree = Vec.filled(n + 1, 0);
+    let mut left = k;
+    let mut out = String.new();
+    for _ in 0..n {
+        for d in 0..10 {
+            if head[d] < where[d].len() {
+                let i = where[d][head[d]];
+                let cost = i - taken_before(tree, i);
+                if cost <= left {
+                    left -= cost;
+                    head[d] += 1;
+                    take(mut tree, i);
+                    out.push((48 + d) as u8 as char);
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, x: i64) -> i64 {
+    (check * 31 + x + 1) % 1000000007
+}
+
+// Built once, then each number answered.
+fn main() {
+    let mut seed = 1505;
+    let mut cases: Vec[(String, i64)] = Vec.new();
+    for c in 0..60 {
+        let digits = c % 10 + 1;
+        let mut num = String.new();
+        for _ in 0..30000 {
+            num.push((48 + next_random(mut seed) % digits) as u8 as char);
+        }
+        cases.push((num, next_random(mut seed) * (c % 7 + 1) * 50));
+    }
+    let mut check = 0;
+    for (num, k) in cases.iter() {
+        for b in min_integer(num.clone(), k).bytes().iter() {
+            check = mix(check, *b as i64 - 48);
+        }
+    }
+    println(f"60 numbers of 30000 digits: checksum {check}");
+}
