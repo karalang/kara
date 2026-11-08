@@ -36,7 +36,7 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `karac build` then failed in `wasm-ld` on internal runtime symbols; the
   refusal now names the call chain (B-2026-11-08-37).
 
-### Changed
+### Added
 
 - **A block may declare a constant.** `const MOD: i64 = 1_000_000_007;` as
   the first line of a function body, the way a Rust solution writes it, was
@@ -44,6 +44,8 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   shadows like a `let`; its initializer names constants only, and naming a
   local is refused with that reason (design.md § Constants,
   B-2026-11-08-60).
+
+### Changed
 
 - **`contains` and `binary_search` on a sequence of `String` or `Vec[T]`
   take the element's view.** `["inc", "dec"].contains(cmd)` with `cmd: Str`,
