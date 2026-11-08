@@ -246,6 +246,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from the queue every level, and a direction's loop no longer tests it
   each level. A push-and-pop loop over 400,000 `i64`s: 268M instructions
   to 213M; kata 480: 4.92G to 4.36G (B-2026-11-08-10).
+- **`skip(k)` and `nth(k)` jump over a `Vec` or a slice.** The skipped
+  items are stepped past with `advance_by`, which the `Vec` and slice
+  iterators now do by moving their index, as a range already did; a
+  `skip(i * n).take(n)` row walk was quadratic. 50,000 rows of
+  `v.iter().skip(i).take(1).sum()`: over 120 s to 0.3 s under the
+  interpreter (B-2026-11-08-52).
 
 ### Diagnostics
 

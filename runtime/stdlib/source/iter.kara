@@ -54,17 +54,17 @@ trait Iterator {
         true
     }
 
-    /// The item at index `n`, counting from 0.
+    /// The item at index `n`, counting from 0. The items before it are
+    /// stepped past with `advance_by`.
     fn nth(own self, n: i64) -> Option[Self.Item] {
-        let mut it = self;
-        let mut i = 0;
-        while let Some(x) = it.next() {
-            if i == n {
-                return Some(x);
-            }
-            i = i + 1;
+        if n < 0 {
+            return None;
         }
-        None
+        let mut it = self;
+        if not it.advance_by(n) {
+            return None;
+        }
+        it.next()
     }
 
     /// At most `n` items.
@@ -426,10 +426,14 @@ struct IterSkip[I] {
 impl[I: Iterator] Iterator for IterSkip[I] {
     type Item = I.Item;
 
+    // The skipped items are stepped past in one `advance_by`, which an
+    // iterator over a range, a `Vec` or a slice does by moving its index
+    // rather than by walking (B-2026-11-08-52).
     fn next(mut ref self) -> Option[I.Item] {
-        while self.left > 0 {
-            self.left = self.left - 1;
-            if self.it.next().is_none() {
+        if self.left > 0 {
+            let n = self.left;
+            self.left = 0;
+            if not self.it.advance_by(n) {
                 return None;
             }
         }

@@ -1,0 +1,26 @@
+// `skip(k)` and `nth(k)` over a `Vec`, a slice or a mutable iterator step
+// past k items by moving the index (docs/library/iterators.md): the items
+// they yield are the ones walking would, and running out yields nothing.
+fn main() {
+    let v: Vec[i64] = (0..50000).collect();
+    let mut total = 0;
+    for i in 0..50000 {
+        total += v.iter().skip(i).take(1).sum();
+    }
+    println(total);
+    let s = v.as_slice();
+    println(s.iter().skip(49998).sum());
+    println(v.iter().nth(7));
+    println(v.iter().nth(50000));
+    println(v.iter().nth(-1));
+    println(v.iter().skip(60000).count());
+    println(v.iter().skip(0).take(2).sum());
+    let mut w = [1, 2, 3, 4];
+    for x in w.iter_mut().skip(2) {
+        *x = *x * 10;
+    }
+    println(w);
+    let m: Vec[i64] = [1, 2, 3].iter().map(|x| x * 2).skip(1).collect();
+    println(m);
+    println((0..10).skip(3).nth(2));
+}

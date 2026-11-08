@@ -24,6 +24,20 @@ impl[T] Iterator for VecIter[T] {
         self.front = i + 1;
         self.v.get(i)
     }
+
+    /// Steps past `n` items by moving the index; `false` if fewer were
+    /// left, which are then all consumed (B-2026-11-08-52).
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if n > self.back - self.front {
+            self.front = self.back;
+            return false;
+        }
+        self.front = self.front + n;
+        true
+    }
 }
 
 /// The elements of a `Vec`, front to back, each borrowed to be changed in
@@ -44,6 +58,20 @@ impl[T] Iterator for VecIterMut[T] {
         let i = self.front;
         self.front = i + 1;
         Some(mut self.v[i])
+    }
+
+    /// Steps past `n` items by moving the index; `false` if fewer were
+    /// left, which are then all consumed (B-2026-11-08-52).
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if n > self.back - self.front {
+            self.front = self.back;
+            return false;
+        }
+        self.front = self.front + n;
+        true
     }
 }
 
@@ -90,6 +118,20 @@ impl[T] Iterator for SliceIter[T] {
         self.front = i + 1;
         self.s.get(i)
     }
+
+    /// Steps past `n` items by moving the index; `false` if fewer were
+    /// left, which are then all consumed (B-2026-11-08-52).
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if n > self.back - self.front {
+            self.front = self.back;
+            return false;
+        }
+        self.front = self.front + n;
+        true
+    }
 }
 
 impl[T] DoubleEndedIterator for SliceIter[T] {
@@ -120,6 +162,20 @@ impl[T] Iterator for SliceIterMut[T] {
         let i = self.front;
         self.front = i + 1;
         Some(mut self.s[i])
+    }
+
+    /// Steps past `n` items by moving the index; `false` if fewer were
+    /// left, which are then all consumed (B-2026-11-08-52).
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if n > self.back - self.front {
+            self.front = self.back;
+            return false;
+        }
+        self.front = self.front + n;
+        true
     }
 }
 

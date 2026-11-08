@@ -1,0 +1,9 @@
+source = "B-2026-11-08-52"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iterators", "perf"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/iterators.md: `skip(n)` drops the first n items, `nth(n)` is the item at index n. The sum of item i over i in 0..50000 is 49999*50000/2 = 1249975000; the last two of 0..49999 sum to 99997. Before the fix each `skip(i)` walked i items, so the first loop was quadratic (over 120 s under the interpreter)."
