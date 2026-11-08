@@ -718,16 +718,18 @@ fn build(
                 &hot_swap,
             ),
         }
-        .map_err(|e| format!("llvm: {e}"))
+        .map_err(|e| format!("error[mir]: llvm: {e}"))
         .and_then(|()| {
             let mut t = std::time::Instant::now();
             let r = crate::backend::driver::link_executable(&obj.to_string_lossy(), exe);
             crate::mir::lower::phase_time("link", &mut t);
-            r
+            // A link failure is the system linker's, not the compiler's
+            // (B-2026-11-07-50).
+            r.map_err(|e| format!("error[link]: {e}"))
         });
         let _ = std::fs::remove_file(&obj);
         if let Err(e) = built {
-            fail(format!("error[mir]: {e}"));
+            fail(e);
         }
         match output {
             OutputMode::Text => println!("Built: {exe}"),

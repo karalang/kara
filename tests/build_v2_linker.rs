@@ -1,13 +1,11 @@
 //! `karac build` with no C linker on PATH names the program it could not
-//! run and what to install (B-2026-11-07-50).
+//! run and what to install, as a link error (B-2026-11-07-50).
+#![cfg(feature = "llvm")]
 
 use std::process::Command;
 
 #[test]
 fn build_v2_names_a_missing_linker() {
-    if !cfg!(feature = "llvm") {
-        return;
-    }
     let dir = std::env::temp_dir().join(format!("karac-build-v2-linker-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let empty = dir.join("bin");
@@ -29,8 +27,9 @@ fn build_v2_names_a_missing_linker() {
     }
     assert!(!out.status.success(), "the build must fail: {err}");
     assert!(
-        err.contains("karac build needs a C linker: could not run `cc` (not found on PATH)")
-            && err.contains("build-essential"),
+        err.contains(
+            "error[link]: karac build needs a C linker: could not run `cc` (not found on PATH)"
+        ) && err.contains("build-essential"),
         "{err}"
     );
 }
