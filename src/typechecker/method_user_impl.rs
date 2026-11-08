@@ -1033,13 +1033,24 @@ impl<'a> super::TypeChecker<'a> {
             // case). The signature display includes the receiver-then-args
             // tuple plus return type so the programmer can tell the
             // candidates apart at a glance.
+            // A generic trait is named with its arguments, the one form
+            // that picks between two instances of it (design.md §9 UFCS,
+            // B-2026-11-08-77).
             let candidate_lines: Vec<String> = candidates
                 .iter()
                 .map(|(imp, sig)| {
-                    let dispatcher = imp
-                        .trait_name
-                        .clone()
-                        .unwrap_or_else(|| imp.target_type.clone());
+                    let dispatcher = match &imp.trait_name {
+                        Some(t) if !imp.trait_args.is_empty() => format!(
+                            "{t}[{}]",
+                            imp.trait_args
+                                .iter()
+                                .map(type_display)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        Some(t) => t.clone(),
+                        None => imp.target_type.clone(),
+                    };
                     let params_display = std::iter::once(type_name.clone())
                         .chain(sig.params.iter().map(type_display))
                         .collect::<Vec<_>>()

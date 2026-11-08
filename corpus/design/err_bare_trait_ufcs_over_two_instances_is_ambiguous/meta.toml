@@ -1,0 +1,9 @@
+source = "B-2026-11-08-77"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "traits", "generics", "ufcs"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "the expected.out wording of an error pin is guidance, not a byte oracle. design.md §9 UFCS (ruling 4c798a759c): the expected type does not choose between instances. The diagnostic used to list `Conv.conv(N)` twice, a form that is itself refused."

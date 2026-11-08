@@ -1,0 +1,9 @@
+source = "B-2026-11-08-77"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "traits", "generics", "ufcs"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §9 UFCS (ruling 4c798a759c): `Conv[String].conv(n)` selects the impl by the trait's arguments. N(3): `Conv[String]` gives n3, `Conv[f64]` 3/2 = 1.5; `Scale[i64].scale(mut n, 4)` makes n 12, `Scale[f64].scale(mut n, 0.5)` makes it 6 and returns 6.0; W has one `Conv` instance, so both `Conv[String].conv(w)` and `w.conv()` give `wide`. The qualified form was refused with \"no method 'conv' on `Conv[…]`\" plus a spurious move error."

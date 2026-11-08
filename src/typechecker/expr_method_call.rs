@@ -1812,6 +1812,9 @@ impl<'a> super::TypeChecker<'a> {
                 return t;
             }
         }
+        if let Some(t) = self.try_ufcs_trait_instance(object, method, args, span, args_close_span) {
+            return t;
+        }
         // Comptime stdlib modules (substrate 3): `ast.expr(s)` /
         // `compiler.error(msg)` parse as method calls on the lowercase module
         // identifier. Route them to the comptime-module typing (which gates on

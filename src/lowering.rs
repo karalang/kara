@@ -3447,8 +3447,12 @@ pub fn rewrite_ufcs_call(expr: &mut Expr, ufcs: &FxHashMap<SpanKey, String>) {
     let self_span = expr.span;
     if let Some(name) = ufcs.get(&SpanKey::from_span(&self_span)) {
         match &mut expr.kind {
+            // `Conv[String].conv(n)` names its trait with arguments
+            // (B-2026-11-08-77).
             ExprKind::MethodCall { object, args, .. }
-                if matches!(&object.kind, ExprKind::Identifier(n) if n == name)
+                if (matches!(&object.kind, ExprKind::Identifier(n) if n == name)
+                    || matches!(&object.kind, ExprKind::Path { segments, generic_args: Some(_) }
+                        if matches!(segments.as_slice(), [n] if n == name)))
                     && !args.is_empty() =>
             {
                 let recv = args.remove(0);

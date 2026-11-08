@@ -1,0 +1,29 @@
+// design.md §9 UFCS: bare `Conv.conv(n)` is ambiguous when two instances of
+// the trait apply, whatever type the result is checked against; the
+// diagnostic lists `Conv[String].conv(..)` and `Conv[f64].conv(..)`
+// (B-2026-11-08-77).
+trait Conv[T] {
+    fn conv(self) -> T;
+}
+
+struct N {
+    n: i64,
+}
+
+impl Conv[String] for N {
+    fn conv(self) -> String {
+        f"n{self.n}"
+    }
+}
+
+impl Conv[f64] for N {
+    fn conv(self) -> f64 {
+        self.n as f64 / 2.0
+    }
+}
+
+fn main() {
+    let n = N { n: 3 };
+    let s: String = Conv.conv(n);
+    println(s);
+}

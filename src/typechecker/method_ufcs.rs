@@ -33,6 +33,56 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
         args_close_span: &Span,
     ) -> Option<Type> {
+        self.try_ufcs_method_of(name, None, method, args, span, args_close_span)
+    }
+
+    /// `Conv[String].conv(n)`: a generic trait named with its arguments,
+    /// which pick the one impl of that instance (design.md §9 UFCS,
+    /// B-2026-11-08-77). `None` unless `object` is a trait so named.
+    pub(super) fn try_ufcs_trait_instance(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+        args_close_span: &Span,
+    ) -> Option<Type> {
+        let ExprKind::Path {
+            segments,
+            generic_args: Some(generic_args),
+        } = &object.kind
+        else {
+            return None;
+        };
+        let [name] = segments.as_slice() else {
+            return None;
+        };
+        if self.local_scope.lookup(name).is_some()
+            || !self.env.traits.contains_key(name.as_str())
+            || self.env.structs.contains_key(name.as_str())
+            || self.env.enums.contains_key(name.as_str())
+        {
+            return None;
+        }
+        let trait_args: Vec<Type> = generic_args
+            .iter()
+            .filter_map(|a| match a {
+                GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
+                _ => None,
+            })
+            .collect();
+        self.try_ufcs_method_of(name, Some(trait_args), method, args, span, args_close_span)
+    }
+
+    fn try_ufcs_method_of(
+        &mut self,
+        name: &str,
+        trait_args: Option<Vec<Type>>,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+        args_close_span: &Span,
+    ) -> Option<Type> {
         if self.local_scope.lookup(name).is_some() {
             return None;
         }
@@ -99,9 +149,12 @@ impl<'a> super::TypeChecker<'a> {
         }
         let errors = self.errors.len();
         let saved = self.env.ufcs_trait.take();
+        let saved_args = self.env.ufcs_trait_args.take();
+        self.env.ufcs_trait_args = trait_name.as_ref().and(trait_args);
         self.env.ufcs_trait = trait_name.map(|t| (t, method.to_string()));
         let ret = self.infer_method_call(&recv.value, method, rest, span, args_close_span);
         self.env.ufcs_trait = saved;
+        self.env.ufcs_trait_args = saved_args;
         // The name as written: `lowering` matches it against the callee.
         self.ufcs_calls
             .insert(SpanKey::from_span(span), alias.to_string());

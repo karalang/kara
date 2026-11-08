@@ -1,0 +1,63 @@
+// design.md §9 UFCS: a generic trait implemented twice for one type is
+// named with its arguments, `Conv[String].conv(n)`, which picks that
+// instance's impl, `mut ref self` methods included (B-2026-11-08-77).
+trait Conv[T] {
+    fn conv(self) -> T;
+}
+
+trait Scale[T] {
+    fn scale(mut ref self, by: T) -> T;
+}
+
+struct N {
+    n: i64,
+}
+
+impl Conv[String] for N {
+    fn conv(self) -> String {
+        f"n{self.n}"
+    }
+}
+
+impl Conv[f64] for N {
+    fn conv(self) -> f64 {
+        self.n as f64 / 2.0
+    }
+}
+
+impl Scale[i64] for N {
+    fn scale(mut ref self, by: i64) -> i64 {
+        self.n = self.n * by;
+        self.n
+    }
+}
+
+impl Scale[f64] for N {
+    fn scale(mut ref self, by: f64) -> f64 {
+        self.n = (self.n as f64 * by) as i64;
+        self.n as f64
+    }
+}
+
+struct W {
+    name: String,
+}
+
+impl Conv[String] for W {
+    fn conv(self) -> String {
+        self.name.clone()
+    }
+}
+
+fn main() {
+    let mut n = N { n: 3 };
+    let s: String = Conv[String].conv(n);
+    let f = Conv[f64].conv(n);
+    println(f"{s} {f}");
+    println(Scale[i64].scale(mut n, 4));
+    println(Scale[f64].scale(mut n, 0.5));
+    let w = W { name: "wide".to_string() };
+    println(Conv[String].conv(w));
+    println(w.conv());
+    println(n.n);
+}

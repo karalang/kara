@@ -447,6 +447,10 @@ pub struct TypeEnv {
     /// method lookup sees only that trait's impls, so neither an inherent
     /// method nor another trait's hides it (B-2026-10-28-17).
     pub ufcs_trait: Option<(String, String)>,
+    /// The trait's arguments when the UFCS call names them,
+    /// `Conv[String].conv(n)`: only the impl of that instance answers
+    /// (design.md §9 UFCS, B-2026-11-08-77).
+    pub ufcs_trait_args: Option<Vec<Type>>,
     /// Which generic-param positions of a named type are Shape-kinded
     /// (declared `...S` on the struct/enum). Sparse — only types with at
     /// least one shape-variadic param have an entry; the Vec is
@@ -637,6 +641,7 @@ impl TypeEnv {
             enums: FxHashMap::default(),
             user_type_decl_spans: FxHashMap::default(),
             ufcs_trait: None,
+            ufcs_trait_args: None,
             shape_param_positions: FxHashMap::default(),
             generic_defaults: FxHashMap::default(),
             unions: FxHashMap::default(),
@@ -900,7 +905,13 @@ impl TypeEnv {
     /// names a trait ([`Self::ufcs_trait`]).
     fn ufcs_admits(&self, imp: &ImplInfo, method: &str) -> bool {
         match &self.ufcs_trait {
-            Some((t, m)) if m == method => imp.trait_name.as_deref() == Some(t.as_str()),
+            Some((t, m)) if m == method => {
+                imp.trait_name.as_deref() == Some(t.as_str())
+                    && self
+                        .ufcs_trait_args
+                        .as_ref()
+                        .is_none_or(|args| imp.trait_args == *args)
+            }
             _ => true,
         }
     }

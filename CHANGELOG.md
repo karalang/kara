@@ -215,6 +215,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   non-reference` and a compiled binary segfaulted. The collection now lives
   to the end of the statement and is dropped there (core-semantics §5.5,
   B-2026-11-08-43).
+- **A generic trait implemented twice is called by naming its arguments.**
+  With `impl Conv[String] for N` and `impl Conv[f64] for N`,
+  `Conv[String].conv(n)` was refused ("no method 'conv' on `Conv[…]`", plus
+  a spurious move of `n`), and the ambiguity diagnostic for `n.conv()`
+  suggested `Conv.conv(N)` twice, a form that is itself ambiguous. The
+  qualified form now picks that instance's impl, and the diagnostic lists
+  `Conv[String].conv(N)` and `Conv[f64].conv(N)` (design.md §9 UFCS,
+  B-2026-11-08-77).
 - **`karac run --interp prog | head -1` stops when `head` does**, with
   status 141, as the JIT and a built binary do (io.md): the interpreter
   ignored the closed pipe, ran every remaining iteration and exited 0
