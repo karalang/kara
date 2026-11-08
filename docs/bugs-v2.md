@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 196 |
 | false-positive | 161 |
 | perf | 125 |
-| missing-feature | 112 |
+| missing-feature | 113 |
 | soundness | 53 |
 | miscompile | 45 |
 | run-vs-build | 29 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 307 |
+| typecheck | 308 |
 | mir-llvm | 160 |
 | mir | 143 |
 | cli | 86 |
@@ -129,7 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-78 | 2026-11-08 | typecheck+mir | medium | `#[derive(Serialize, Deserialize)]` on a struct with a tuple field (`pair: (i64, bool)`) fails: alone it is refused at check with an internal message (E_COMPTIME_PANIC "derive `derive_serialize` could not be compiled: 6399:13 in `derive_serialize`: the method call `.name` with no resolved callee is not lowered yet"), and inside a larger program check passes and every run lane fails with "error[mir]: typecheck: 18:1: no method 'serialize' on type '(i64, bool)'" | — |
 | B-2026-11-08-79 | 2026-11-08 | typecheck | low | `Json.deserialize(text)` takes `text: String`, so a `Str` (a line from `text.lines()`, a slice) is refused ("expected 'ref String', found 'Str'") and needs `.to_string()`; `Json.parse(text: Str)` takes the view, and strings.md's reading methods all take `Str` | — |
 | B-2026-11-08-80 | 2026-11-08 | mir | low | A missing field in `Json.deserialize` is reported by its Kāra name, not its JSON key: a `#[serde(rename: "userName")] name: String` field absent from the input gives "missing field `name`", though the sender never sees a `name` key | — |
-| B-2026-11-08-81 | 2026-11-08 | runtime | medium | `s.chars().last()` walks the whole string: `StrChars` and `StrViewChars` take `Iterator.last`'s default rather than reading from the back, so kata 2030's string arm (its stack kept as a `String`, the top read with `chars().last()`) is quadratic | — |
+| B-2026-11-08-82 | 2026-11-08 | typecheck | medium | Map, SortedMap, Set and SortedSet do not implement PartialEq/Eq, and the refusal suggests `#[derive(PartialEq)]` on a std type | — |
 
 ### Relocated
 
@@ -907,6 +907,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-70 | typecheck | medium | A call to a method returning `Self` in an impl of a `shared struct` is refused against any annotation: `let y: Node = Node.new(2);` and `Some(Node.ne… | a4aa93dce |
 | B-2026-11-08-71 | mir-llvm | low | Kata 520's `word.chars().filter(\|c\| c.is_ascii_uppercase()).count()` branches on each char's answer and overflow-tests the count, where Rust's `Filte… | b8e953e4f9 |
 | B-2026-11-08-68 | parser | medium | A closure whose whole body is an assignment (Rust's `m.entry(k).and_modify(\|v\| *v += 1)`, `.for_each(\|x\| last = *x)`) stops the parser at the operato… | 5fe8006173 |
+| B-2026-11-08-81 | runtime | medium | `s.chars().last()` walks the whole string: `StrChars` and `StrViewChars` take `Iterator.last`'s default rather than reading from the back, so kata 20… | 89d9feafb3 |
 
 </details>
 
