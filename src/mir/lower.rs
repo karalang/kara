@@ -22556,7 +22556,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ("Sender" | "Channel", "send" | "try_send") | ("Option", "replace") => {
                     targs.first().copied()
                 }
-                // `Entry[K, V].or_insert(default: V)` (B-2026-11-08-65).
+                // `Entry[K, V].or_insert(default: V)` (B-2026-11-08-69).
                 ("Entry", "or_insert") => targs.get(1).copied(),
                 _ => None,
             };
@@ -25783,7 +25783,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         // The value is stored at the map's value type: a
                         // literal the checker left at its default `i64`
                         // is a constant of that type, a narrower number
-                        // widened, as `insert`'s is (B-2026-11-08-65).
+                        // widened, as `insert`'s is (B-2026-11-08-69).
                         let op = self.expr_operand(&a.value)?;
                         rest.push(match val_t {
                             Some(vt) => self.widen(op, vt),

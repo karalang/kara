@@ -1,4 +1,4 @@
-source = "B-2026-11-08-65"
+source = "B-2026-11-08-69"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -6,4 +6,4 @@ tags = ["closure", "numerics", "collections"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "B-2026-11-08-65: a number literal takes the type of a closure's return slot (`let a: Fn() -> i32 = || 54321`, `|| 6` for `Fn() -> f64`, a `return 12;` for `Fn() -> f32`) and of a map entry's value (`m.entry(k).or_insert(0)` on `Map[i32, i32]`, `or_insert(5)` and `or_insert_with(|| 6)` on `Map[i64, f32]`); a narrower number a closure returns is widened to its slot. Before the fix the closure kept the literal's default `i64` (the interpreter printed `5` for an `f32`, a build read garbage), and `entry_or_insert` stored an 8-byte `i64` into a 4-byte value (ASan stack-buffer-overflow; a build of kata 1074's Rust-template arm counted wrongly)."
+note = "B-2026-11-08-69: a number literal takes the type of a closure's return slot (`let a: Fn() -> i32 = || 54321`, `|| 6` for `Fn() -> f64`, a `return 12;` for `Fn() -> f32`) and of a map entry's value (`m.entry(k).or_insert(0)` on `Map[i32, i32]`, `or_insert(5)` and `or_insert_with(|| 6)` on `Map[i64, f32]`); a narrower number a closure returns is widened to its slot. Before the fix the closure kept the literal's default `i64` (the interpreter printed `5` for an `f32`, a build read garbage), and `entry_or_insert` stored an 8-byte `i64` into a 4-byte value (ASan stack-buffer-overflow; a build of kata 1074's Rust-template arm counted wrongly)."

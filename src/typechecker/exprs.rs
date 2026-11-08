@@ -3823,7 +3823,7 @@ impl<'a> super::TypeChecker<'a> {
                 // type.
                 // Typed as the body's own number, the closure returned an
                 // `i64` where its callers read an `i32` or an `f32`
-                // (B-2026-11-08-65).
+                // (B-2026-11-08-69).
                 let want = resolve_type_var_top(expected_ret, &self.env.substitutions);
                 let number = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
                 if number(&want) && number(&body_ty) && body_ty != want {

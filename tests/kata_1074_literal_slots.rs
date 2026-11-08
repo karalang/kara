@@ -1,6 +1,6 @@
 //! Kata 1074's Rust-template arm: `*count.entry(sum).or_insert(0) += 1` on
 //! a `Map[i32, i32]`. A number literal takes the type of a closure's return
-//! slot and of a map entry's value (B-2026-11-08-65). The closure used to
+//! slot and of a map entry's value (B-2026-11-08-69). The closure used to
 //! keep the literal's default `i64` (the interpreter printed `5` for an
 //! `f32`, a build read garbage), and `entry_or_insert` stored an 8-byte
 //! value into a 4-byte slot (ASan stack-buffer-overflow). The program is the
