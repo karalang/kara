@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 190 |
+| diagnostics | 191 |
 | false-positive | 154 |
 | perf | 121 |
 | missing-feature | 110 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 296 |
+| typecheck | 297 |
 | mir-llvm | 157 |
 | mir | 137 |
-| cli | 85 |
+| cli | 86 |
 | ownership | 63 |
 | parser | 50 |
 | interp | 39 |
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-59 | 2026-11-08 | resolver | low | An undefined `Deque`, `ArrayDeque`, `deque` or `Queue` gets no suggestion, though `HashMap`, `HashSet`, `BTreeMap` and `BinaryHeap` are each pointed at Kāra's name and a typo like `VecDequ` gets 'did you mean VecDeque': `let mut q: Deque[i64] = Deque.new();` says only 'undefined name Deque' / 'undefined type Deque' | — |
 | B-2026-11-08-60 | 2026-11-08 | parser | medium | A `const` declared inside a function body (`const MOD: i64 = 1_000_000_007;`, the usual first line of a LeetCode Rust solution) is a parse error that says 'const is a reserved keyword and cannot be used as an identifier; write `r#const`', advice that does not apply, with no fix; design.md § Constants does not say whether a block may declare one | — |
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
+| B-2026-11-08-62 | 2026-11-08 | typecheck+cli | medium | A copy of a defaulted literal binding gets no annotation fix: `let mut carry = 0; let mut x = carry; x += d; out.push(x & 1)` with `out: Vec[i32]` is refused with only 'write an explicit as i32', so karac fix has nothing to apply (remainder of B-2026-11-08-20) | — |
 
 ### Relocated
 
