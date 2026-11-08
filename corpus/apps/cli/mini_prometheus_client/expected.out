@@ -1,0 +1,752 @@
+== mini_prometheus_client
+> counter http_requests_total labels=method,path,code : HTTP requests\sseen, by method and path.
+  defined counter http_requests
+> counter http_requests labels=method : a second counter named the same
+  error: script.txt:5: Duplicated timeseries in CollectorRegistry: {'http_requests', 'http_requests_created', 'http_requests_total'}
+> gauge http_requests_total : a gauge may take the name the counter dropped
+  error: script.txt:6: Duplicated timeseries in CollectorRegistry: {'http_requests_total'}
+> histogram request_latency unit=seconds labels=method buckets=0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5 : Time to first byte.
+  defined histogram request_latency_seconds
+> summary payload labels=route unit=bytes : Request body sizes.
+  defined summary payload_bytes
+> gauge in_flight : Requests being served right now.
+  defined gauge in_flight
+> gauge queue_depth ns=jobs sub=email : Messages waiting
+  defined gauge jobs_email_queue_depth
+> info build : Build facts.
+  defined info build
+> enum worker_state labels=worker states=starting,idle,busy,draining : What each worker is doing.
+  defined enum worker_state
+> counter job:errors labels=queue : Failed jobs by queue (a recording-rule style name).
+  defined counter job:errors
+> inc http_requests@GET,/,200
+> inc http_requests@GET,/,200 2
+> inc http_requests@POST,/upload,201 1.5
+> inc http_requests@GET,/missing,404
+> inc http_requests@GET,/
+  error: script.txt:20: Incorrect label count
+> inc http_requests@GET,/,200,extra
+  error: script.txt:21: Incorrect label count
+> inc http_requests
+  error: script.txt:22: counter metric is missing label values
+> inc http_requests@GET,/,200 -1
+  error: script.txt:23: Counters can only be incremented by non-negative amounts.
+> inc http_requests@GET,/,200 ten
+  error: script.txt:24: bad number ten
+> inc http_requests@GET,/,200 1 2
+  error: script.txt:25: usage: inc TARGET [AMOUNT]
+> inc nosuch@GET 1
+  error: script.txt:26: no metric nosuch
+> set http_requests@GET,/,200 3
+  error: script.txt:27: counter http_requests has no set
+> set in_flight 3
+> inc in_flight
+> dec in_flight 2.5
+> set http_requests_total 7
+  error: script.txt:31: no metric http_requests_total
+> set jobs_email_queue_depth 12
+> inc jobs_email_queue_depth 0.1
+> inc jobs_email_queue_depth 0.2
+> observe request_latency_seconds@GET 0.003
+> observe request_latency_seconds@GET 0.01
+> observe request_latency_seconds@GET 0.0101
+> observe request_latency_seconds@GET 0.3
+> observe request_latency_seconds@GET 7
+> observe request_latency_seconds@POST 0.75
+> observe request_latency_seconds 0.2
+  error: script.txt:41: histogram metric is missing label values
+> observe payload_bytes@/upload 2048
+> observe payload_bytes@/upload 512
+> observe payload_bytes@/login 96
+> set build version=1.4.2 commit=0a1b2c3 branch=main
+> set build note=line\none\stwo quote="yes" path=C:\\tmp
+> state worker_state@w1 busy
+> state worker_state@w2 idle
+> state worker_state@w3 sleeping
+  error: script.txt:49: 'sleeping' is not in list
+> state worker_state busy
+  error: script.txt:50: stateset metric is missing label values
+> inc job:errors@mail
+> inc job:errors@sms 4
+> inc http_requests@GET,/search?q=a\,b,200
+> inc http_requests@GET,/two\swords,200
+> inc http_requests@PUT,line\nbreak,500
+> inc http_requests@PUT,back\\slash,500
+> inc http_requests@PUT,"quoted",500
+> inc http_requests@GET,bad\escape,500
+  error: script.txt:60: bad escape in GET,bad\escape,500
+> expose
+  # HELP http_requests_total HTTP requests seen, by method and path.
+  # TYPE http_requests_total counter
+  http_requests_total{code="200",method="GET",path="/"} 3.0
+  http_requests_total{code="201",method="POST",path="/upload"} 1.5
+  http_requests_total{code="404",method="GET",path="/missing"} 1.0
+  http_requests_total{code="200",method="GET",path="/search?q=a,b"} 1.0
+  http_requests_total{code="200",method="GET",path="/two words"} 1.0
+  http_requests_total{code="500",method="PUT",path="line\nbreak"} 1.0
+  http_requests_total{code="500",method="PUT",path="back\\slash"} 1.0
+  http_requests_total{code="500",method="PUT",path="\"quoted\""} 1.0
+  # HELP request_latency_seconds Time to first byte.
+  # TYPE request_latency_seconds histogram
+  request_latency_seconds_bucket{le="0.005",method="GET"} 1.0
+  request_latency_seconds_bucket{le="0.01",method="GET"} 2.0
+  request_latency_seconds_bucket{le="0.025",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.05",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.1",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.25",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.5",method="GET"} 4.0
+  request_latency_seconds_bucket{le="1.0",method="GET"} 4.0
+  request_latency_seconds_bucket{le="2.5",method="GET"} 4.0
+  request_latency_seconds_bucket{le="+Inf",method="GET"} 5.0
+  request_latency_seconds_count{method="GET"} 5.0
+  request_latency_seconds_sum{method="GET"} 7.3231
+  request_latency_seconds_bucket{le="0.005",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.01",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.025",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.05",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.1",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.25",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.5",method="POST"} 0.0
+  request_latency_seconds_bucket{le="1.0",method="POST"} 1.0
+  request_latency_seconds_bucket{le="2.5",method="POST"} 1.0
+  request_latency_seconds_bucket{le="+Inf",method="POST"} 1.0
+  request_latency_seconds_count{method="POST"} 1.0
+  request_latency_seconds_sum{method="POST"} 0.75
+  # HELP payload_bytes Request body sizes.
+  # TYPE payload_bytes summary
+  payload_bytes_count{route="/upload"} 2.0
+  payload_bytes_sum{route="/upload"} 2560.0
+  payload_bytes_count{route="/login"} 1.0
+  payload_bytes_sum{route="/login"} 96.0
+  # HELP in_flight Requests being served right now.
+  # TYPE in_flight gauge
+  in_flight 1.5
+  # HELP jobs_email_queue_depth Messages waiting
+  # TYPE jobs_email_queue_depth gauge
+  jobs_email_queue_depth 12.299999999999999
+  # HELP build_info Build facts.
+  # TYPE build_info gauge
+  build_info{note="line\none two",path="C:\\tmp",quote="\"yes\""} 1.0
+  # HELP worker_state What each worker is doing.
+  # TYPE worker_state gauge
+  worker_state{worker="w1",worker_state="starting"} 0.0
+  worker_state{worker="w1",worker_state="idle"} 0.0
+  worker_state{worker="w1",worker_state="busy"} 1.0
+  worker_state{worker="w1",worker_state="draining"} 0.0
+  worker_state{worker="w2",worker_state="starting"} 0.0
+  worker_state{worker="w2",worker_state="idle"} 1.0
+  worker_state{worker="w2",worker_state="busy"} 0.0
+  worker_state{worker="w2",worker_state="draining"} 0.0
+  worker_state{worker="w3",worker_state="starting"} 1.0
+  worker_state{worker="w3",worker_state="idle"} 0.0
+  worker_state{worker="w3",worker_state="busy"} 0.0
+  worker_state{worker="w3",worker_state="draining"} 0.0
+  # HELP job:errors_total Failed jobs by queue (a recording-rule style name).
+  # TYPE job:errors_total counter
+  job:errors_total{queue="mail"} 1.0
+  job:errors_total{queue="sms"} 4.0
+> expose openmetrics
+  # HELP http_requests HTTP requests seen, by method and path.
+  # TYPE http_requests counter
+  http_requests_total{code="200",method="GET",path="/"} 3.0
+  http_requests_total{code="201",method="POST",path="/upload"} 1.5
+  http_requests_total{code="404",method="GET",path="/missing"} 1.0
+  http_requests_total{code="200",method="GET",path="/search?q=a,b"} 1.0
+  http_requests_total{code="200",method="GET",path="/two words"} 1.0
+  http_requests_total{code="500",method="PUT",path="line\nbreak"} 1.0
+  http_requests_total{code="500",method="PUT",path="back\\slash"} 1.0
+  http_requests_total{code="500",method="PUT",path="\"quoted\""} 1.0
+  # HELP request_latency_seconds Time to first byte.
+  # TYPE request_latency_seconds histogram
+  # UNIT request_latency_seconds seconds
+  request_latency_seconds_bucket{le="0.005",method="GET"} 1.0
+  request_latency_seconds_bucket{le="0.01",method="GET"} 2.0
+  request_latency_seconds_bucket{le="0.025",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.05",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.1",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.25",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.5",method="GET"} 4.0
+  request_latency_seconds_bucket{le="1.0",method="GET"} 4.0
+  request_latency_seconds_bucket{le="2.5",method="GET"} 4.0
+  request_latency_seconds_bucket{le="+Inf",method="GET"} 5.0
+  request_latency_seconds_count{method="GET"} 5.0
+  request_latency_seconds_sum{method="GET"} 7.3231
+  request_latency_seconds_bucket{le="0.005",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.01",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.025",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.05",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.1",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.25",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.5",method="POST"} 0.0
+  request_latency_seconds_bucket{le="1.0",method="POST"} 1.0
+  request_latency_seconds_bucket{le="2.5",method="POST"} 1.0
+  request_latency_seconds_bucket{le="+Inf",method="POST"} 1.0
+  request_latency_seconds_count{method="POST"} 1.0
+  request_latency_seconds_sum{method="POST"} 0.75
+  # HELP payload_bytes Request body sizes.
+  # TYPE payload_bytes summary
+  # UNIT payload_bytes bytes
+  payload_bytes_count{route="/upload"} 2.0
+  payload_bytes_sum{route="/upload"} 2560.0
+  payload_bytes_count{route="/login"} 1.0
+  payload_bytes_sum{route="/login"} 96.0
+  # HELP in_flight Requests being served right now.
+  # TYPE in_flight gauge
+  in_flight 1.5
+  # HELP jobs_email_queue_depth Messages waiting
+  # TYPE jobs_email_queue_depth gauge
+  jobs_email_queue_depth 12.299999999999999
+  # HELP build Build facts.
+  # TYPE build info
+  build_info{note="line\none two",path="C:\\tmp",quote="\"yes\""} 1.0
+  # HELP worker_state What each worker is doing.
+  # TYPE worker_state stateset
+  worker_state{worker="w1",worker_state="starting"} 0.0
+  worker_state{worker="w1",worker_state="idle"} 0.0
+  worker_state{worker="w1",worker_state="busy"} 1.0
+  worker_state{worker="w1",worker_state="draining"} 0.0
+  worker_state{worker="w2",worker_state="starting"} 0.0
+  worker_state{worker="w2",worker_state="idle"} 1.0
+  worker_state{worker="w2",worker_state="busy"} 0.0
+  worker_state{worker="w2",worker_state="draining"} 0.0
+  worker_state{worker="w3",worker_state="starting"} 1.0
+  worker_state{worker="w3",worker_state="idle"} 0.0
+  worker_state{worker="w3",worker_state="busy"} 0.0
+  worker_state{worker="w3",worker_state="draining"} 0.0
+  # HELP job:errors Failed jobs by queue (a recording-rule style name).
+  # TYPE job:errors counter
+  job_errors_total{queue="mail"} 1.0
+  job_errors_total{queue="sms"} 4.0
+  # EOF
+> parallel 1000 inc http_requests@GET,/,200
+  ran 1000 times on 4 workers
+> parallel 400 observe request_latency_seconds@GET 0.04
+  ran 400 times on 4 workers
+> parallel 250 observe payload_bytes@/upload 1024
+  ran 250 times on 4 workers
+> parallel 64 dec in_flight 0.125
+  ran 64 times on 4 workers
+> parallel 10 inc http_requests@GET,/,200 -2
+  error: script.txt:70: Counters can only be incremented by non-negative amounts. (10 times)
+> parallel 3 state worker_state@w4 busy
+  ran 3 times on 4 workers
+> parallel 0 inc in_flight
+  error: script.txt:72: bad count 0
+> parallel 5 expose
+  error: script.txt:73: usage: parallel N COMMAND ...
+> counter 9lives : starts with a digit
+  error: script.txt:76: invalid metric name 9lives
+> counter bad-name : has a dash
+  error: script.txt:77: invalid metric name bad-name
+> gauge ok_name labels=le : le is fine outside a histogram
+  defined gauge ok_name
+> histogram hist_le labels=le : le is reserved here
+  error: script.txt:79: Reserved label methe fric name: le
+> summary sum_q labels=quantile : and quantile here
+  error: script.txt:80: Reserved label methe fric name: quantile
+> gauge reserved labels=__name : two underscores are reserved
+  error: script.txt:81: Reserved label metric name: __name
+> gauge spaced labels=a,b-c : a dash
+  error: script.txt:82: Invalid label metric name: b-c
+> gauge empty_label labels= : an empty label name
+  error: script.txt:83: Invalid label metric name: 
+> histogram unsorted buckets=1,0.5,2 : out of order
+  error: script.txt:84: Buckets not in sorted order
+> histogram one_bucket buckets=+Inf : only the implied bucket
+  error: script.txt:85: Must have at least two buckets
+> histogram same_bucket buckets=1,1,2 : equal bounds are sorted
+  defined histogram same_bucket
+> histogram neg_buckets buckets=-1,0,1 : no sum when a bound is negative
+  defined histogram neg_buckets
+> histogram bad_bucket buckets=1,two : not a number
+  error: script.txt:88: bad number two
+> histogram big buckets=1000000,1234567,10000000,100000000000,1e+22 : Go-style exponents in le
+  defined histogram big
+> info build_unit unit=bytes : an info cannot have a unit
+  error: script.txt:90: Metric name is of a type that cannot have a unit: build_unit_bytes
+> enum flag states= : one state, the empty text
+  defined enum flag
+> enum flag2 : no states
+  error: script.txt:92: No states provided for Enum metric: flag2
+> enum job:phase states=queued,running : a colon in the state label
+  defined enum job:phase
+> enum mode labels=mode states=a,b : the name is a label too
+  error: script.txt:94: Overlapping labels for Enum metric: mode
+> enum color states=red,green
+  defined enum color
+> gauge gauge_opts buckets=1,2 : only a histogram has buckets
+  error: script.txt:96: gauge has no option buckets
+> gauge twice unit=a unit=b
+  error: script.txt:97: repeated option unit
+> gauge noeq unit
+  error: script.txt:98: bad option unit
+> counter
+  error: script.txt:99: usage: counter NAME [OPTION=VALUE ...] [: HELP]
+> counter : help but no name
+  error: script.txt:100: usage: counter NAME [OPTION=VALUE ...] [: HELP]
+> hist undefined_kind
+  error: script.txt:101: unknown command hist
+> counter c_total : the total is dropped
+  defined counter c
+> counter c : and c is taken
+  error: script.txt:103: Duplicated timeseries in CollectorRegistry: {'c', 'c_created', 'c_total'}
+> gauge c_total : so is c_total
+  error: script.txt:104: Duplicated timeseries in CollectorRegistry: {'c_total'}
+> counter cache:hits_total : colon in a counter name
+  defined counter cache:hits
+> set ok_name@x NaN
+> set ok_name@y +Inf
+> set ok_name@z -Inf
+> set ok_name@w -0.0
+> set ok_name@v 1e-7
+> set ok_name@u 123456789012
+> inc c NaN
+> inc c -0.0
+> observe neg_buckets -2
+> observe neg_buckets NaN
+> observe neg_buckets 0.5
+> observe same_bucket 1
+> observe big 1234567
+> observe big 2e20
+> set reserved 1
+  error: script.txt:122: no metric reserved
+> inc color
+  error: script.txt:123: enum color has no inc
+> reset c
+> state color green
+> state job:phase running
+> info odd_keys : keys the library does not check
+  defined info odd_keys
+> set odd_keys a-b=1 9x=2 __k=3 le=4 a-b=5
+> info deploy labels=region : Where it runs.
+  defined info deploy
+> set deploy@eu version=2 region=eu
+  error: script.txt:132: Overlapping labels for Info metric, metric: ('region',) child: {'version': '2', 'region': 'eu'}
+> set deploy@eu version=2 tier=gold
+> set deploy tier=gold
+  error: script.txt:134: info metric is missing label values
+> set deploy@us tier=silver bad
+  error: script.txt:135: bad pair bad
+> reset http_requests
+  error: script.txt:136: counter metric is missing label values
+> reset http_requests@GET,/,200
+> reset in_flight
+  error: script.txt:138: gauge in_flight has no reset
+> remove http_requests@GET,/missing,404
+> remove http_requests@GET
+  error: script.txt:140: Incorrect label count (expected 3, got ('GET',))
+> remove http_requests
+  error: script.txt:141: Incorrect label count (expected 3, got ())
+> remove in_flight
+  error: script.txt:142: No label names were set when constructing gauge:in_flight
+> remove in_flight@x
+  error: script.txt:143: No label names were set when constructing gauge:in_flight
+> clear job:errors
+> clear in_flight
+> unregister payload_bytes
+> unregister payload_bytes
+  error: script.txt:147: no metric payload_bytes
+> summary payload labels=route unit=bytes : Back, empty.
+  defined summary payload_bytes
+> target service=api region=eu-west\s1
+> gauge target_info : clashes with the target series
+  error: script.txt:150: Duplicated timeseries in CollectorRegistry: {'target_info'}
+> target
+> gauge target_info : free again
+  defined gauge target_info
+> target service=api
+  error: script.txt:153: CollectorRegistry already contains a target_info metric
+> unregister target_info
+> target service=api
+> expose
+  # HELP target_info Target metadata
+  # TYPE target_info gauge
+  target_info{service="api"} 1.0
+  # HELP http_requests_total HTTP requests seen, by method and path.
+  # TYPE http_requests_total counter
+  http_requests_total{code="200",method="GET",path="/"} 0.0
+  http_requests_total{code="201",method="POST",path="/upload"} 1.5
+  http_requests_total{code="200",method="GET",path="/search?q=a,b"} 1.0
+  http_requests_total{code="200",method="GET",path="/two words"} 1.0
+  http_requests_total{code="500",method="PUT",path="line\nbreak"} 1.0
+  http_requests_total{code="500",method="PUT",path="back\\slash"} 1.0
+  http_requests_total{code="500",method="PUT",path="\"quoted\""} 1.0
+  # HELP request_latency_seconds Time to first byte.
+  # TYPE request_latency_seconds histogram
+  request_latency_seconds_bucket{le="0.005",method="GET"} 1.0
+  request_latency_seconds_bucket{le="0.01",method="GET"} 2.0
+  request_latency_seconds_bucket{le="0.025",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.05",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.1",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.25",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.5",method="GET"} 404.0
+  request_latency_seconds_bucket{le="1.0",method="GET"} 404.0
+  request_latency_seconds_bucket{le="2.5",method="GET"} 404.0
+  request_latency_seconds_bucket{le="+Inf",method="GET"} 405.0
+  request_latency_seconds_count{method="GET"} 405.0
+  request_latency_seconds_sum{method="GET"} 23.323099999999673
+  request_latency_seconds_bucket{le="0.005",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.01",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.025",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.05",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.1",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.25",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.5",method="POST"} 0.0
+  request_latency_seconds_bucket{le="1.0",method="POST"} 1.0
+  request_latency_seconds_bucket{le="2.5",method="POST"} 1.0
+  request_latency_seconds_bucket{le="+Inf",method="POST"} 1.0
+  request_latency_seconds_count{method="POST"} 1.0
+  request_latency_seconds_sum{method="POST"} 0.75
+  # HELP in_flight Requests being served right now.
+  # TYPE in_flight gauge
+  in_flight -6.5
+  # HELP jobs_email_queue_depth Messages waiting
+  # TYPE jobs_email_queue_depth gauge
+  jobs_email_queue_depth 12.299999999999999
+  # HELP build_info Build facts.
+  # TYPE build_info gauge
+  build_info{note="line\none two",path="C:\\tmp",quote="\"yes\""} 1.0
+  # HELP worker_state What each worker is doing.
+  # TYPE worker_state gauge
+  worker_state{worker="w1",worker_state="starting"} 0.0
+  worker_state{worker="w1",worker_state="idle"} 0.0
+  worker_state{worker="w1",worker_state="busy"} 1.0
+  worker_state{worker="w1",worker_state="draining"} 0.0
+  worker_state{worker="w2",worker_state="starting"} 0.0
+  worker_state{worker="w2",worker_state="idle"} 1.0
+  worker_state{worker="w2",worker_state="busy"} 0.0
+  worker_state{worker="w2",worker_state="draining"} 0.0
+  worker_state{worker="w3",worker_state="starting"} 1.0
+  worker_state{worker="w3",worker_state="idle"} 0.0
+  worker_state{worker="w3",worker_state="busy"} 0.0
+  worker_state{worker="w3",worker_state="draining"} 0.0
+  worker_state{worker="w4",worker_state="starting"} 0.0
+  worker_state{worker="w4",worker_state="idle"} 0.0
+  worker_state{worker="w4",worker_state="busy"} 1.0
+  worker_state{worker="w4",worker_state="draining"} 0.0
+  # HELP job:errors_total Failed jobs by queue (a recording-rule style name).
+  # TYPE job:errors_total counter
+  # HELP ok_name le is fine outside a histogram
+  # TYPE ok_name gauge
+  ok_name{le="x"} NaN
+  ok_name{le="y"} +Inf
+  ok_name{le="z"} -Inf
+  ok_name{le="w"} -0.0
+  ok_name{le="v"} 1e-07
+  ok_name{le="u"} 1.23456789012e+11
+  # HELP same_bucket equal bounds are sorted
+  # TYPE same_bucket histogram
+  same_bucket_bucket{le="1.0"} 1.0
+  same_bucket_bucket{le="1.0"} 1.0
+  same_bucket_bucket{le="2.0"} 1.0
+  same_bucket_bucket{le="+Inf"} 1.0
+  same_bucket_count 1.0
+  same_bucket_sum 1.0
+  # HELP neg_buckets no sum when a bound is negative
+  # TYPE neg_buckets histogram
+  neg_buckets_bucket{le="-1.0"} 1.0
+  neg_buckets_bucket{le="0.0"} 1.0
+  neg_buckets_bucket{le="1.0"} 2.0
+  neg_buckets_bucket{le="+Inf"} 2.0
+  neg_buckets_count 2.0
+  # HELP big Go-style exponents in le
+  # TYPE big histogram
+  big_bucket{le="1e+06"} 0.0
+  big_bucket{le="1.234567e+06"} 1.0
+  big_bucket{le="1e+07"} 1.0
+  big_bucket{le="1e+11"} 1.0
+  big_bucket{le="1e+22"} 2.0
+  big_bucket{le="+Inf"} 2.0
+  big_count 2.0
+  big_sum 2.0000000000000125e+20
+  # HELP flag one state, the empty text
+  # TYPE flag gauge
+  flag{flag=""} 1.0
+  # HELP job:phase a colon in the state label
+  # TYPE job:phase gauge
+  job:phase{job_phase="queued"} 0.0
+  job:phase{job_phase="running"} 1.0
+  # HELP color 
+  # TYPE color gauge
+  color{color="red"} 0.0
+  color{color="green"} 1.0
+  # HELP c_total the total is dropped
+  # TYPE c_total counter
+  c_total 0.0
+  # HELP cache:hits_total colon in a counter name
+  # TYPE cache:hits_total counter
+  cache:hits_total 0.0
+  # HELP odd_keys_info keys the library does not check
+  # TYPE odd_keys_info gauge
+  odd_keys_info{_x="2",__k="3",a_b="5",le="4"} 1.0
+  # HELP deploy_info Where it runs.
+  # TYPE deploy_info gauge
+  deploy_info{region="eu",tier="gold",version="2"} 1.0
+  # HELP payload_bytes Back, empty.
+  # TYPE payload_bytes summary
+> expose openmetrics
+  # HELP target Target metadata
+  # TYPE target info
+  target_info{service="api"} 1.0
+  # HELP http_requests HTTP requests seen, by method and path.
+  # TYPE http_requests counter
+  http_requests_total{code="200",method="GET",path="/"} 0.0
+  http_requests_total{code="201",method="POST",path="/upload"} 1.5
+  http_requests_total{code="200",method="GET",path="/search?q=a,b"} 1.0
+  http_requests_total{code="200",method="GET",path="/two words"} 1.0
+  http_requests_total{code="500",method="PUT",path="line\nbreak"} 1.0
+  http_requests_total{code="500",method="PUT",path="back\\slash"} 1.0
+  http_requests_total{code="500",method="PUT",path="\"quoted\""} 1.0
+  # HELP request_latency_seconds Time to first byte.
+  # TYPE request_latency_seconds histogram
+  # UNIT request_latency_seconds seconds
+  request_latency_seconds_bucket{le="0.005",method="GET"} 1.0
+  request_latency_seconds_bucket{le="0.01",method="GET"} 2.0
+  request_latency_seconds_bucket{le="0.025",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.05",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.1",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.25",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.5",method="GET"} 404.0
+  request_latency_seconds_bucket{le="1.0",method="GET"} 404.0
+  request_latency_seconds_bucket{le="2.5",method="GET"} 404.0
+  request_latency_seconds_bucket{le="+Inf",method="GET"} 405.0
+  request_latency_seconds_count{method="GET"} 405.0
+  request_latency_seconds_sum{method="GET"} 23.323099999999673
+  request_latency_seconds_bucket{le="0.005",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.01",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.025",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.05",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.1",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.25",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.5",method="POST"} 0.0
+  request_latency_seconds_bucket{le="1.0",method="POST"} 1.0
+  request_latency_seconds_bucket{le="2.5",method="POST"} 1.0
+  request_latency_seconds_bucket{le="+Inf",method="POST"} 1.0
+  request_latency_seconds_count{method="POST"} 1.0
+  request_latency_seconds_sum{method="POST"} 0.75
+  # HELP in_flight Requests being served right now.
+  # TYPE in_flight gauge
+  in_flight -6.5
+  # HELP jobs_email_queue_depth Messages waiting
+  # TYPE jobs_email_queue_depth gauge
+  jobs_email_queue_depth 12.299999999999999
+  # HELP build Build facts.
+  # TYPE build info
+  build_info{note="line\none two",path="C:\\tmp",quote="\"yes\""} 1.0
+  # HELP worker_state What each worker is doing.
+  # TYPE worker_state stateset
+  worker_state{worker="w1",worker_state="starting"} 0.0
+  worker_state{worker="w1",worker_state="idle"} 0.0
+  worker_state{worker="w1",worker_state="busy"} 1.0
+  worker_state{worker="w1",worker_state="draining"} 0.0
+  worker_state{worker="w2",worker_state="starting"} 0.0
+  worker_state{worker="w2",worker_state="idle"} 1.0
+  worker_state{worker="w2",worker_state="busy"} 0.0
+  worker_state{worker="w2",worker_state="draining"} 0.0
+  worker_state{worker="w3",worker_state="starting"} 1.0
+  worker_state{worker="w3",worker_state="idle"} 0.0
+  worker_state{worker="w3",worker_state="busy"} 0.0
+  worker_state{worker="w3",worker_state="draining"} 0.0
+  worker_state{worker="w4",worker_state="starting"} 0.0
+  worker_state{worker="w4",worker_state="idle"} 0.0
+  worker_state{worker="w4",worker_state="busy"} 1.0
+  worker_state{worker="w4",worker_state="draining"} 0.0
+  # HELP job:errors Failed jobs by queue (a recording-rule style name).
+  # TYPE job:errors counter
+  # HELP ok_name le is fine outside a histogram
+  # TYPE ok_name gauge
+  ok_name{le="x"} NaN
+  ok_name{le="y"} +Inf
+  ok_name{le="z"} -Inf
+  ok_name{le="w"} -0.0
+  ok_name{le="v"} 1e-07
+  ok_name{le="u"} 1.23456789012e+11
+  # HELP same_bucket equal bounds are sorted
+  # TYPE same_bucket histogram
+  same_bucket_bucket{le="1.0"} 1.0
+  same_bucket_bucket{le="1.0"} 1.0
+  same_bucket_bucket{le="2.0"} 1.0
+  same_bucket_bucket{le="+Inf"} 1.0
+  same_bucket_count 1.0
+  same_bucket_sum 1.0
+  # HELP neg_buckets no sum when a bound is negative
+  # TYPE neg_buckets histogram
+  neg_buckets_bucket{le="-1.0"} 1.0
+  neg_buckets_bucket{le="0.0"} 1.0
+  neg_buckets_bucket{le="1.0"} 2.0
+  neg_buckets_bucket{le="+Inf"} 2.0
+  neg_buckets_count 2.0
+  # HELP big Go-style exponents in le
+  # TYPE big histogram
+  big_bucket{le="1e+06"} 0.0
+  big_bucket{le="1.234567e+06"} 1.0
+  big_bucket{le="1e+07"} 1.0
+  big_bucket{le="1e+11"} 1.0
+  big_bucket{le="1e+22"} 2.0
+  big_bucket{le="+Inf"} 2.0
+  big_count 2.0
+  big_sum 2.0000000000000125e+20
+  # HELP flag one state, the empty text
+  # TYPE flag stateset
+  flag{flag=""} 1.0
+  # HELP job:phase a colon in the state label
+  # TYPE job:phase stateset
+  job_phase{job_phase="queued"} 0.0
+  job_phase{job_phase="running"} 1.0
+  # HELP color 
+  # TYPE color stateset
+  color{color="red"} 0.0
+  color{color="green"} 1.0
+  # HELP c the total is dropped
+  # TYPE c counter
+  c_total 0.0
+  # HELP cache:hits colon in a counter name
+  # TYPE cache:hits counter
+  cache_hits_total 0.0
+  # HELP odd_keys keys the library does not check
+  # TYPE odd_keys info
+  odd_keys_info{_x="2",__k="3",a_b="5",le="4"} 1.0
+  # HELP deploy Where it runs.
+  # TYPE deploy info
+  deploy_info{region="eu",tier="gold",version="2"} 1.0
+  # HELP payload_bytes Back, empty.
+  # TYPE payload_bytes summary
+  # UNIT payload_bytes bytes
+  # EOF
+> expose json
+  error: script.txt:158: usage: expose [openmetrics]
+> write service.prom
+  wrote out/service.prom: 125 lines, 5241 bytes
+  # HELP target_info Target metadata
+  # TYPE target_info gauge
+  target_info{service="api"} 1.0
+  # HELP http_requests_total HTTP requests seen, by method and path.
+  # TYPE http_requests_total counter
+  http_requests_total{code="200",method="GET",path="/"} 0.0
+  http_requests_total{code="201",method="POST",path="/upload"} 1.5
+  http_requests_total{code="200",method="GET",path="/search?q=a,b"} 1.0
+  http_requests_total{code="200",method="GET",path="/two words"} 1.0
+  http_requests_total{code="500",method="PUT",path="line\nbreak"} 1.0
+  http_requests_total{code="500",method="PUT",path="back\\slash"} 1.0
+  http_requests_total{code="500",method="PUT",path="\"quoted\""} 1.0
+  # HELP request_latency_seconds Time to first byte.
+  # TYPE request_latency_seconds histogram
+  request_latency_seconds_bucket{le="0.005",method="GET"} 1.0
+  request_latency_seconds_bucket{le="0.01",method="GET"} 2.0
+  request_latency_seconds_bucket{le="0.025",method="GET"} 3.0
+  request_latency_seconds_bucket{le="0.05",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.1",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.25",method="GET"} 403.0
+  request_latency_seconds_bucket{le="0.5",method="GET"} 404.0
+  request_latency_seconds_bucket{le="1.0",method="GET"} 404.0
+  request_latency_seconds_bucket{le="2.5",method="GET"} 404.0
+  request_latency_seconds_bucket{le="+Inf",method="GET"} 405.0
+  request_latency_seconds_count{method="GET"} 405.0
+  request_latency_seconds_sum{method="GET"} 23.323099999999673
+  request_latency_seconds_bucket{le="0.005",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.01",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.025",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.05",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.1",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.25",method="POST"} 0.0
+  request_latency_seconds_bucket{le="0.5",method="POST"} 0.0
+  request_latency_seconds_bucket{le="1.0",method="POST"} 1.0
+  request_latency_seconds_bucket{le="2.5",method="POST"} 1.0
+  request_latency_seconds_bucket{le="+Inf",method="POST"} 1.0
+  request_latency_seconds_count{method="POST"} 1.0
+  request_latency_seconds_sum{method="POST"} 0.75
+  # HELP in_flight Requests being served right now.
+  # TYPE in_flight gauge
+  in_flight -6.5
+  # HELP jobs_email_queue_depth Messages waiting
+  # TYPE jobs_email_queue_depth gauge
+  jobs_email_queue_depth 12.299999999999999
+  # HELP build_info Build facts.
+  # TYPE build_info gauge
+  build_info{note="line\none two",path="C:\\tmp",quote="\"yes\""} 1.0
+  # HELP worker_state What each worker is doing.
+  # TYPE worker_state gauge
+  worker_state{worker="w1",worker_state="starting"} 0.0
+  worker_state{worker="w1",worker_state="idle"} 0.0
+  worker_state{worker="w1",worker_state="busy"} 1.0
+  worker_state{worker="w1",worker_state="draining"} 0.0
+  worker_state{worker="w2",worker_state="starting"} 0.0
+  worker_state{worker="w2",worker_state="idle"} 1.0
+  worker_state{worker="w2",worker_state="busy"} 0.0
+  worker_state{worker="w2",worker_state="draining"} 0.0
+  worker_state{worker="w3",worker_state="starting"} 1.0
+  worker_state{worker="w3",worker_state="idle"} 0.0
+  worker_state{worker="w3",worker_state="busy"} 0.0
+  worker_state{worker="w3",worker_state="draining"} 0.0
+  worker_state{worker="w4",worker_state="starting"} 0.0
+  worker_state{worker="w4",worker_state="idle"} 0.0
+  worker_state{worker="w4",worker_state="busy"} 1.0
+  worker_state{worker="w4",worker_state="draining"} 0.0
+  # HELP job:errors_total Failed jobs by queue (a recording-rule style name).
+  # TYPE job:errors_total counter
+  # HELP ok_name le is fine outside a histogram
+  # TYPE ok_name gauge
+  ok_name{le="x"} NaN
+  ok_name{le="y"} +Inf
+  ok_name{le="z"} -Inf
+  ok_name{le="w"} -0.0
+  ok_name{le="v"} 1e-07
+  ok_name{le="u"} 1.23456789012e+11
+  # HELP same_bucket equal bounds are sorted
+  # TYPE same_bucket histogram
+  same_bucket_bucket{le="1.0"} 1.0
+  same_bucket_bucket{le="1.0"} 1.0
+  same_bucket_bucket{le="2.0"} 1.0
+  same_bucket_bucket{le="+Inf"} 1.0
+  same_bucket_count 1.0
+  same_bucket_sum 1.0
+  # HELP neg_buckets no sum when a bound is negative
+  # TYPE neg_buckets histogram
+  neg_buckets_bucket{le="-1.0"} 1.0
+  neg_buckets_bucket{le="0.0"} 1.0
+  neg_buckets_bucket{le="1.0"} 2.0
+  neg_buckets_bucket{le="+Inf"} 2.0
+  neg_buckets_count 2.0
+  # HELP big Go-style exponents in le
+  # TYPE big histogram
+  big_bucket{le="1e+06"} 0.0
+  big_bucket{le="1.234567e+06"} 1.0
+  big_bucket{le="1e+07"} 1.0
+  big_bucket{le="1e+11"} 1.0
+  big_bucket{le="1e+22"} 2.0
+  big_bucket{le="+Inf"} 2.0
+  big_count 2.0
+  big_sum 2.0000000000000125e+20
+  # HELP flag one state, the empty text
+  # TYPE flag gauge
+  flag{flag=""} 1.0
+  # HELP job:phase a colon in the state label
+  # TYPE job:phase gauge
+  job:phase{"job:phase"="queued"} 0.0
+  job:phase{"job:phase"="running"} 1.0
+  # HELP color 
+  # TYPE color gauge
+  color{color="red"} 0.0
+  color{color="green"} 1.0
+  # HELP c_total the total is dropped
+  # TYPE c_total counter
+  c_total 0.0
+  # HELP cache:hits_total colon in a counter name
+  # TYPE cache:hits_total counter
+  cache:hits_total 0.0
+  # HELP odd_keys_info keys the library does not check
+  # TYPE odd_keys_info gauge
+  odd_keys_info{"9x"="2","__k"="3","a-b"="5",le="4"} 1.0
+  # HELP deploy_info Where it runs.
+  # TYPE deploy_info gauge
+  deploy_info{region="eu",tier="gold",version="2"} 1.0
+  # HELP payload_bytes Back, empty.
+  # TYPE payload_bytes summary
+> write ../escape.prom
+  error: script.txt:160: bad file name ../escape.prom
+> write
+  error: script.txt:161: usage: write FILE
+> frobnicate now
+  error: script.txt:162: unknown command frobnicate
+== end
+  19 metrics registered

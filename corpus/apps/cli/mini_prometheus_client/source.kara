@@ -1,0 +1,1116 @@
+// mini_prometheus_client: the instrumentation side of Prometheus, in the
+// shape of the Python client. A registry holds counters, gauges, summaries,
+// histograms, infos and enums, each with optional labels, and exposes them
+// in the Prometheus text format, in OpenMetrics, and in a `.prom` file
+// written the way the node exporter's textfile collector reads it. The
+// `parallel` command updates the registry from four worker tasks at once,
+// so it sits behind a mutex.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+import std.sync.{Mutex, Atomic};
+
+const WORKERS: i64 = 4;
+
+const DEFAULT_BUCKETS: Array[f64, 14] = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0];
+
+// ------------------------------------------------------------ words
+
+fn joined(parts: Slice[String], sep: Str) -> String {
+    let mut out = String.new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+    }
+    out
+}
+
+// Splits at commas that are not escaped, then decodes each part's escapes:
+// `\\`, `\n`, `\s` (a space) and `\,`.
+fn split_escaped(word: Str) -> Result[Vec[String], String] {
+    let mut parts: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut escaped = false;
+    for c in word.chars() {
+        if escaped {
+            match c {
+                '\\' => cur.push('\\'),
+                'n' => cur.push('\n'),
+                's' => cur.push(' '),
+                ',' => cur.push(','),
+                _ => return Err(f"bad escape in {word}"),
+            }
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == ',' {
+            parts.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    if escaped {
+        return Err(f"bad escape in {word}");
+    }
+    parts.push(cur);
+    Ok(parts)
+}
+
+// One text: its escapes decoded, a bare comma kept.
+fn text(word: Str) -> Result[String, String] {
+    Ok(joined(split_escaped(word)?, ","))
+}
+
+fn all_digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|b| b >= b'0' and b <= b'9')
+}
+
+// `-?D(.D)?([eE][+-]?D)?`, or `+Inf`, `-Inf`, `NaN`.
+fn number(word: Str) -> Result[f64, String] {
+    match word {
+        "+Inf" => return Ok(f64.INFINITY),
+        "-Inf" => return Ok(f64.NEG_INFINITY),
+        "NaN" => return Ok(f64.NAN),
+        _ => {}
+    }
+    let bad = f"bad number {word}";
+    let body = word.strip_prefix("-") ?? word;
+    let (mantissa, exponent) = match body.find("e").or(body.find("E")) {
+        Some(at) => (body[..at], Some(body[at + 1..])),
+        None => (body, None),
+    };
+    let ok_mantissa = match mantissa.split_once(".") {
+        Some((whole, frac)) => all_digits(whole) and all_digits(frac),
+        None => all_digits(mantissa),
+    };
+    let ok_exponent = match exponent {
+        Some(e) => {
+            let digits = match e.strip_prefix("+") {
+                Some(d) => d,
+                None => e.strip_prefix("-") ?? e,
+            };
+            all_digits(digits)
+        }
+        None => true,
+    };
+    if not ok_mantissa or not ok_exponent {
+        return Err(bad);
+    }
+    f64.parse(word).map_err(|_| bad)
+}
+
+// Python's repr of a short text list, as the library's messages print it.
+fn py_str(s: Str) -> String {
+    f"'{s}'"
+}
+
+fn py_tuple(items: Slice[String]) -> String {
+    let parts: Vec[String] = items.iter().map(|s| py_str(s)).collect();
+    if parts.len() == 1 {
+        f"({parts[0]},)"
+    } else {
+        f"({joined(parts, ", ")})"
+    }
+}
+
+fn py_dict(pairs: Slice[(String, String)]) -> String {
+    let parts: Vec[String] = pairs.iter().map(|(k, v)| f"{py_str(k)}: {py_str(v)}").collect();
+    "{" + joined(parts, ", ") + "}"
+}
+
+// ------------------------------------------------------------ values
+
+// The library's floatToGoString: Python's repr, except the infinities and
+// NaN, and Go's exponent form for a positive value with more than six
+// digits before the point.
+fn go_float(d: f64) -> String {
+    if d.is_nan() {
+        return "NaN".to_string();
+    }
+    if d == f64.INFINITY {
+        return "+Inf".to_string();
+    }
+    if d == f64.NEG_INFINITY {
+        return "-Inf".to_string();
+    }
+    let s = f"{d}";
+    let Some(dot) = s.find(".") else {
+        return s;
+    };
+    if d <= 0.0 or dot <= 6 {
+        return s;
+    }
+    let mut mantissa = f"{s[..1]}.{s[1..dot]}{s[dot + 1..]}";
+    while mantissa.ends_with("0") or mantissa.ends_with(".") {
+        mantissa.pop();
+    }
+    let exp = dot - 1;
+    if exp < 10 { f"{mantissa}e+0{exp}" } else { f"{mantissa}e+{exp}" }
+}
+
+// `\` -> `\\` and newline -> `\n`, and `"` -> `\"` when `quote` is set.
+fn escape(s: Str, quote: bool) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '"' if quote => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn is_letter(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// `[a-zA-Z_][a-zA-Z0-9_]*`
+fn is_label_name(s: Str) -> bool {
+    s.len() > 0 and s.chars().enumerate().all(|(i, c)| is_letter(c) or c == '_' or (i > 0 and is_digit(c)))
+}
+
+// `[a-zA-Z_:][a-zA-Z0-9_:]*`
+fn is_metric_name(s: Str) -> bool {
+    s.len() > 0 and s.chars().enumerate().all(|(i, c)| is_letter(c) or c == '_' or c == ':' or (i > 0 and is_digit(c)))
+}
+
+// Every character outside a label name's alphabet becomes `_`.
+fn underscored(s: Str) -> String {
+    s.chars().enumerate().map(|(i, c)| if is_letter(c) or c == '_' or (i > 0 and is_digit(c)) { c } else { '_' }).collect()
+}
+
+// How a label name is written: as it is when it follows the label rule,
+// else with underscores (`expose`) or quoted (the file).
+fn label_name(s: Str, quoted: bool) -> String {
+    if is_label_name(s) and not s.starts_with("__") {
+        s.to_string()
+    } else if quoted {
+        f"\"{escape(s, true)}\""
+    } else {
+        underscored(s)
+    }
+}
+
+// ------------------------------------------------------------ metrics
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Counter,
+    Gauge,
+    Summary,
+    Histogram,
+    Info,
+    Enum,
+}
+
+impl Kind {
+    fn parse(word: Str) -> Option[Kind] {
+        match word {
+            "counter" => Some(Kind.Counter),
+            "gauge" => Some(Kind.Gauge),
+            "summary" => Some(Kind.Summary),
+            "histogram" => Some(Kind.Histogram),
+            "info" => Some(Kind.Info),
+            "enum" => Some(Kind.Enum),
+            _ => None,
+        }
+    }
+
+    fn word(self) -> Str {
+        match self {
+            Kind.Counter => "counter",
+            Kind.Gauge => "gauge",
+            Kind.Summary => "summary",
+            Kind.Histogram => "histogram",
+            Kind.Info => "info",
+            Kind.Enum => "enum",
+        }
+    }
+
+    // The type the library names: the OpenMetrics one.
+    fn library(self) -> Str {
+        match self {
+            Kind.Enum => "stateset",
+            _ => self.word(),
+        }
+    }
+
+    fn options(self) -> Vec[Str] {
+        let mut out: Vec[Str] = ["labels", "unit", "ns", "sub"];
+        match self {
+            Kind.Histogram => out.push("buckets"),
+            Kind.Enum => out.push("states"),
+            _ => {}
+        }
+        out
+    }
+
+    // The series-name suffixes a metric of this type takes in the registry.
+    fn suffixes(self) -> Vec[Str] {
+        match self {
+            Kind.Counter => ["_total", "_created"],
+            Kind.Summary => ["_sum", "_count", "_created"],
+            Kind.Histogram => ["_bucket", "_sum", "_count", "_created"],
+            Kind.Info => ["_info"],
+            _ => Vec.new(),
+        }
+    }
+}
+
+// One set of label values and what has been recorded for it.
+struct Series {
+    values: Vec[String],
+    value: f64,         // a counter's or gauge's value, a summary's count
+    sum: f64,           // a summary's or histogram's sum
+    buckets: Vec[f64],  // a histogram's count per bound, not cumulative
+    pairs: Vec[(String, String)],  // an info's pairs
+    state: i64,         // an enum's state
+}
+
+impl Series {
+    fn new(values: own Vec[String], bounds: i64) -> Series {
+        Series { values: values, value: 0.0, sum: 0.0, buckets: Vec.filled(bounds, 0.0), pairs: Vec.new(), state: 0 }
+    }
+}
+
+struct Metric {
+    kind: Kind,
+    name: String,  // the full name
+    doc: String,
+    unit: String,
+    labelnames: Vec[String],
+    bounds: Vec[f64],
+    states: Vec[String],
+    children: Vec[Series],  // in the order they were created
+}
+
+struct Sample {
+    name: String,
+    labels: Vec[(String, String)],
+    value: f64,
+}
+
+impl Metric {
+    // The library's `str(metric)`.
+    fn display(self) -> String {
+        f"{self.kind.library()}:{self.name}"
+    }
+
+    fn series_names(self) -> Vec[String] {
+        let mut out = [self.name.clone()].to_vec();
+        for s in self.kind.suffixes() {
+            out.push(f"{self.name}{s}");
+        }
+        out
+    }
+
+    // The child for `values`, created at zero on first use; `None` asks
+    // for the metric itself, which only an unlabelled metric can update.
+    fn child(mut ref self, values: own Option[Vec[String]]) -> Result[i64, String] {
+        let Some(values) = values else {
+            if not self.labelnames.is_empty() {
+                return Err(f"{self.kind.library()} metric is missing label values");
+            }
+            return Ok(0);
+        };
+        if self.labelnames.is_empty() {
+            return Err(f"No label names were set when constructing {self.display()}");
+        }
+        if values.len() != self.labelnames.len() {
+            return Err("Incorrect label count".to_string());
+        }
+        if let Some(i) = self.children.iter().position(|c| c.values == values) {
+            return Ok(i);
+        }
+        let n = self.bounds.len();
+        self.children.push(Series.new(values, n));
+        Ok(self.children.len() - 1)
+    }
+
+    // Each child's samples, its label values first.
+    fn samples(self) -> Vec[Sample] {
+        let mut out: Vec[Sample] = Vec.new();
+        for c in self.children.iter() {
+            let base: Vec[(String, String)] = self.labelnames.iter().zip(c.values.iter()).map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut add = |suffix: Str, extra: Vec[(String, String)], value: f64| {
+                let mut labels = base.clone();
+                for (k, v) in extra.iter() {
+                    match labels.iter().position(|(lk, _)| lk == k) {
+                        Some(i) => labels[i] = (k.clone(), v.clone()),
+                        None => labels.push((k.clone(), v.clone())),
+                    }
+                }
+                out.push(Sample { name: f"{self.name}{suffix}", labels: labels, value: value });
+            };
+            match self.kind {
+                Kind.Counter => add("_total", Vec.new(), c.value),
+                Kind.Gauge => add("", Vec.new(), c.value),
+                Kind.Summary => {
+                    add("_count", Vec.new(), c.value);
+                    add("_sum", Vec.new(), c.sum);
+                }
+                Kind.Histogram => {
+                    let mut acc = 0.0;
+                    for (i, b) in self.bounds.iter().enumerate() {
+                        acc += c.buckets[i];
+                        add("_bucket", [("le".to_string(), go_float(b))].to_vec(), acc);
+                    }
+                    add("_count", Vec.new(), acc);
+                    if self.bounds[0] >= 0.0 {
+                        add("_sum", Vec.new(), c.sum);
+                    }
+                }
+                Kind.Info => add("_info", c.pairs.clone(), 1.0),
+                Kind.Enum => {
+                    for (i, s) in self.states.iter().enumerate() {
+                        let on = if i == c.state { 1.0 } else { 0.0 };
+                        add("", [(self.name.clone(), s.clone())].to_vec(), on);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+// ------------------------------------------------------------ registry
+
+enum Format {
+    Text,
+    OpenMetrics,
+    File,
+}
+
+struct Registry {
+    metrics: Vec[Metric],          // in the order they were registered
+    taken: SortedSet[String],      // every series name a metric or the target holds
+    target: Vec[(String, String)], // the target info; empty when unset
+}
+
+// A text-format or OpenMetrics family: what goes in its HELP, TYPE and
+// UNIT lines, and its samples.
+struct Family {
+    name: String,
+    kind: String,
+    doc: String,
+    unit: String,
+    samples: Vec[Sample],
+}
+
+fn sample_line(s: ref Sample, format: Format) -> String {
+    let mut labels = s.labels.clone();
+    labels.sort_by(|a, b| a.0.cmp(b.0));
+    let quoted = match format {
+        Format.File => true,
+        _ => false,
+    };
+    let parts: Vec[String] = labels.iter().map(|(k, v)| f"{label_name(k, quoted)}=\"{escape(v, true)}\"").collect();
+    let name = match format {
+        Format.OpenMetrics => underscored(s.name),
+        _ => s.name.clone(),
+    };
+    let labelstr = if parts.is_empty() { String.new() } else { "{" + joined(parts, ",") + "}" };
+    f"{name}{labelstr} {go_float(s.value)}"
+}
+
+impl Registry {
+    fn new() -> Registry {
+        Registry { metrics: Vec.new(), taken: SortedSet.new(), target: Vec.new() }
+    }
+
+    fn find(self, name: Str) -> Option[i64] {
+        self.metrics.iter().position(|m| m.name == name)
+    }
+
+    fn register(mut ref self, m: own Metric) -> Result[(), String] {
+        let names = m.series_names();
+        let clash: Vec[String] = names.iter().filter(|n| self.taken.contains(n)).map(|n| py_str(n)).collect();
+        if not clash.is_empty() {
+            let mut sorted = clash;
+            sorted.sort();
+            return Err("Duplicated timeseries in CollectorRegistry: {" + joined(sorted, ", ") + "}");
+        }
+        for n in names.into_iter() {
+            self.taken.insert(n);
+        }
+        self.metrics.push(m);
+        Ok(())
+    }
+
+    fn unregister(mut ref self, at: i64) {
+        let m = self.metrics.remove(at);
+        for n in m.series_names() {
+            self.taken.remove(n);
+        }
+    }
+
+    fn set_target(mut ref self, pairs: own Vec[(String, String)]) -> Result[(), String] {
+        if not pairs.is_empty() {
+            if self.target.is_empty() and self.taken.contains("target_info") {
+                return Err("CollectorRegistry already contains a target_info metric".to_string());
+            }
+            self.taken.insert("target_info".to_string());
+        } else if not self.target.is_empty() {
+            self.taken.remove("target_info");
+        }
+        self.target = pairs;
+        Ok(())
+    }
+
+    // The families as the library collects them, named for `format`.
+    fn families(self, format: Format) -> Vec[Family] {
+        let om = match format {
+            Format.OpenMetrics => true,
+            _ => false,
+        };
+        let mut out: Vec[Family] = Vec.new();
+        if not self.target.is_empty() {
+            let sample = Sample { name: "target_info".to_string(), labels: self.target.clone(), value: 1.0 };
+            let (name, kind) = if om { ("target", "info") } else { ("target_info", "gauge") };
+            out.push(Family { name: name.to_string(), kind: kind.to_string(), doc: "Target metadata".to_string(), unit: String.new(), samples: [sample] });
+        }
+        for m in self.metrics.iter() {
+            let (name, kind) = if om {
+                (m.name.clone(), m.kind.library())
+            } else {
+                match m.kind {
+                    Kind.Counter => (f"{m.name}_total", "counter"),
+                    Kind.Info => (f"{m.name}_info", "gauge"),
+                    Kind.Enum => (m.name.clone(), "gauge"),
+                    _ => (m.name.clone(), m.kind.word()),
+                }
+            };
+            out.push(Family { name: name, kind: kind.to_string(), doc: m.doc.clone(), unit: m.unit.clone(), samples: m.samples() });
+        }
+        out
+    }
+
+    fn expose(self, format: Format) -> Vec[String] {
+        let om = match format {
+            Format.OpenMetrics => true,
+            _ => false,
+        };
+        let mut lines: Vec[String] = Vec.new();
+        for f in self.families(format).iter() {
+            lines.push(f"# HELP {f.name} {escape(f.doc, om)}");
+            lines.push(f"# TYPE {f.name} {f.kind}");
+            if om and not f.unit.is_empty() {
+                lines.push(f"# UNIT {f.name} {f.unit}");
+            }
+            for s in f.samples.iter() {
+                lines.push(sample_line(s, format));
+            }
+        }
+        if om {
+            lines.push("# EOF".to_string());
+        }
+        lines
+    }
+}
+
+// ------------------------------------------------------------ commands
+
+fn pairs_of(words: Slice[String]) -> Result[Vec[(String, String)], String] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for w in words.iter() {
+        let Some((k, v)) = w.split_once("=") else {
+            return Err(f"bad pair {w}");
+        };
+        let v = text(v)?;
+        match out.iter().position(|(ok, _)| ok == k) {
+            Some(i) => out[i].1 = v,
+            None => out.push((k.to_string(), v)),
+        }
+    }
+    Ok(out)
+}
+
+fn full_name(kind: Kind, name: Str, ns: Str, sub: Str, unit: Str) -> Result[String, String] {
+    let mut full = String.new();
+    if not ns.is_empty() {
+        full.push_str(f"{ns}_");
+    }
+    if not sub.is_empty() {
+        full.push_str(f"{sub}_");
+    }
+    full.push_str(name);
+    if kind == Kind.Counter {
+        if let Some(stem) = full.strip_suffix("_total") {
+            full = stem.to_string();
+        }
+    }
+    if not unit.is_empty() and not full.ends_with(f"_{unit}") {
+        full.push_str(f"_{unit}");
+    }
+    if not unit.is_empty() and (kind == Kind.Info or kind == Kind.Enum) {
+        return Err(f"Metric name is of a type that cannot have a unit: {full}");
+    }
+    Ok(full)
+}
+
+fn define(reg: mut ref Registry, kind: Kind, words: Slice[String]) -> Result[String, String] {
+    if words.len() < 2 or words[1] == ":" {
+        return Err(f"usage: {kind.word()} NAME [OPTION=VALUE ...] [: HELP]");
+    }
+    let name = words[1].clone();
+    let allowed = kind.options();
+    let mut opts: SortedMap[String, String] = SortedMap.new();
+    let mut at = 2;
+    while at < words.len() and words[at] != ":" {
+        let w = words[at].as_str();
+        let Some((key, value)) = w.split_once("=") else {
+            return Err(f"bad option {w}");
+        };
+        if not allowed.contains(key) {
+            return Err(f"{kind.word()} has no option {key}");
+        }
+        if opts.contains_key(key) {
+            return Err(f"repeated option {key}");
+        }
+        opts.insert(key.to_string(), value.to_string());
+        at += 1;
+    }
+    let mut help: Vec[String] = Vec.new();
+    for w in words.iter().skip(at + 1) {
+        help.push(text(w)?);
+    }
+    let doc = joined(help, " ");
+    let labelnames: Vec[String] = match opts.get("labels") {
+        Some(l) => l.split(",").map(|s| s.to_string()).collect(),
+        None => Vec.new(),
+    };
+    let mut bounds: Vec[f64] = DEFAULT_BUCKETS.to_vec();
+    if let Some(b) = opts.get("buckets") {
+        bounds = Vec.new();
+        for w in b.split(",") {
+            bounds.push(number(w)?);
+        }
+    }
+    let states: Vec[String] = match opts.get("states") {
+        Some(s) => s.split(",").map(|s| s.to_string()).collect(),
+        None => Vec.new(),
+    };
+
+    // The library's checks, in its order.
+    if kind == Kind.Enum {
+        if labelnames.contains(name) {
+            return Err(f"Overlapping labels for Enum metric: {name}");
+        }
+        if states.is_empty() {
+            return Err(f"No states provided for Enum metric: {name}");
+        }
+    }
+    if kind == Kind.Histogram {
+        for i in 1..bounds.len() {
+            if bounds[i - 1] > bounds[i] {
+                return Err("Buckets not in sorted order".to_string());
+            }
+        }
+        if bounds.is_empty() or bounds[bounds.len() - 1] != f64.INFINITY {
+            bounds.push(f64.INFINITY);
+        }
+        if bounds.len() < 2 {
+            return Err("Must have at least two buckets".to_string());
+        }
+    } else {
+        bounds = Vec.new();
+    }
+    let ns = opts.get("ns").cloned() ?? String.new();
+    let sub = opts.get("sub").cloned() ?? String.new();
+    let unit = opts.get("unit").cloned() ?? String.new();
+    let full = full_name(kind, name, ns, sub, unit)?;
+    for l in labelnames.iter() {
+        if not is_label_name(l) {
+            return Err(f"Invalid label metric name: {l}");
+        }
+        if l.starts_with("__") {
+            return Err(f"Reserved label metric name: {l}");
+        }
+        if (kind == Kind.Histogram and l == "le") or (kind == Kind.Summary and l == "quantile") {
+            return Err(f"Reserved label methe fric name: {l}");
+        }
+    }
+    if not is_metric_name(full) {
+        return Err(f"invalid metric name {full}");
+    }
+    let mut m = Metric {
+        kind: kind,
+        name: full.clone(),
+        doc: doc,
+        unit: unit,
+        labelnames: labelnames,
+        bounds: bounds,
+        states: states,
+        children: Vec.new(),
+    };
+    if m.labelnames.is_empty() {
+        let n = m.bounds.len();
+        m.children.push(Series.new(Vec.new(), n));
+    }
+    reg.register(m)?;
+    Ok(f"  defined {kind.word()} {full}")
+}
+
+// `NAME` or `NAME@v1,v2,...`: the metric's place and the values, if any.
+fn target(reg: ref Registry, word: Str) -> Result[(i64, Option[Vec[String]]), String] {
+    let (name, rest) = match word.split_once("@") {
+        Some((n, r)) => (n, Some(r)),
+        None => (word, None),
+    };
+    let Some(at) = reg.find(name) else {
+        return Err(f"no metric {name}");
+    };
+    let values = match rest {
+        Some(r) => Some(split_escaped(r)?),
+        None => None,
+    };
+    Ok((at, values))
+}
+
+// `cmd.to_string()` is `karac fix`'s spelling while B-2026-11-08-55 waits
+// on a ruling about a `Str` against a list of literals.
+fn is_update(cmd: Str) -> bool {
+    ["inc", "dec", "set", "observe", "state", "reset"].contains(cmd.to_string())
+}
+
+fn has_update(kind: Kind, cmd: Str) -> bool {
+    match cmd {
+        "inc" => kind == Kind.Counter or kind == Kind.Gauge,
+        "dec" => kind == Kind.Gauge,
+        "set" => kind == Kind.Gauge or kind == Kind.Info,
+        "observe" => kind == Kind.Histogram or kind == Kind.Summary,
+        "state" => kind == Kind.Enum,
+        "reset" => kind == Kind.Counter,
+        _ => false,
+    }
+}
+
+fn update(reg: mut ref Registry, words: Slice[String]) -> Result[(), String] {
+    let cmd = words[0].as_str();
+    if words.len() < 2 {
+        return Err(f"usage: {cmd} TARGET ...");
+    }
+    let (at, values) = target(reg, words[1])?;
+    let m = mut ref reg.metrics[at];
+    if not has_update(m.kind, cmd) {
+        return Err(f"{m.kind.word()} {m.name} has no {cmd}");
+    }
+    let args = words[2..];
+    if cmd == "inc" or cmd == "dec" {
+        if args.len() > 1 {
+            return Err(f"usage: {cmd} TARGET [AMOUNT]");
+        }
+        let amount = if args.is_empty() { 1.0 } else { number(args[0])? };
+        let i = m.child(values)?;
+        if cmd == "dec" {
+            m.children[i].value -= amount;
+        } else if m.kind == Kind.Counter and amount < 0.0 {
+            return Err("Counters can only be incremented by non-negative amounts.".to_string());
+        } else {
+            m.children[i].value += amount;
+        }
+    } else if cmd == "set" and m.kind == Kind.Info {
+        let pairs = pairs_of(args)?;
+        if values.is_none() and not m.labelnames.is_empty() {
+            return Err("info metric is missing label values".to_string());
+        }
+        let i = m.child(values)?;
+        let overlap = pairs.iter().any(|(k, _)| m.labelnames.contains(k));
+        if overlap {
+            return Err(f"Overlapping labels for Info metric, metric: {py_tuple(m.labelnames)} child: {py_dict(pairs)}");
+        }
+        m.children[i].pairs = pairs;
+    } else if cmd == "set" or cmd == "observe" {
+        if args.len() != 1 {
+            return Err(f"usage: {cmd} TARGET VALUE");
+        }
+        let value = number(args[0])?;
+        let i = m.child(values)?;
+        if cmd == "set" {
+            m.children[i].value = value;
+        } else if m.kind == Kind.Summary {
+            m.children[i].value += 1.0;
+            m.children[i].sum += value;
+        } else {
+            m.children[i].sum += value;
+            if let Some(b) = m.bounds.iter().position(|b| value <= b) {
+                m.children[i].buckets[b] += 1.0;
+            }
+        }
+    } else if cmd == "state" {
+        if args.len() != 1 {
+            return Err("usage: state TARGET STATE".to_string());
+        }
+        let i = m.child(values)?;
+        let Some(s) = m.states.iter().position(|s| s == args[0]) else {
+            return Err(f"{py_str(args[0])} is not in list");
+        };
+        m.children[i].state = s;
+    } else {
+        if not args.is_empty() {
+            return Err("usage: reset TARGET".to_string());
+        }
+        if values.is_none() and not m.labelnames.is_empty() {
+            return Err("counter metric is missing label values".to_string());
+        }
+        let i = m.child(values)?;
+        m.children[i].value = 0.0;
+    }
+    Ok(())
+}
+
+fn remove(reg: mut ref Registry, words: Slice[String]) -> Result[(), String] {
+    if words.len() != 2 {
+        return Err("usage: remove TARGET".to_string());
+    }
+    let (at, values) = target(reg, words[1])?;
+    let m = mut ref reg.metrics[at];
+    let values = values ?? Vec.new();
+    if m.labelnames.is_empty() {
+        return Err(f"No label names were set when constructing {m.display()}");
+    }
+    if values.len() != m.labelnames.len() {
+        return Err(f"Incorrect label count (expected {m.labelnames.len()}, got {py_tuple(values)})");
+    }
+    m.children.retain(|c| c.values != values);
+    Ok(())
+}
+
+// ------------------------------------------------------------ the pool
+
+sync struct Shared {
+    registry: Mutex[Registry],
+    failed: Atomic[i64],
+    first_error: Mutex[Option[String]],
+}
+
+fn worker(shared: Shared, words: own Vec[String], runs: i64) {
+    for _ in 0..runs {
+        let result = {
+            let g = shared.registry.lock();
+            update(mut g.value, words)
+        };
+        if let Err(e) = result {
+            shared.failed.fetch_add(1);
+            let mut g = shared.first_error.lock();
+            if g.value.is_none() {
+                g.value = Some(e);
+            }
+        }
+    }
+}
+
+// Runs an update `n` times, split over the workers.
+fn parallel(shared: Shared, n: i64, words: Slice[String]) -> Result[String, String] {
+    shared.failed.store(0);
+    {
+        let mut g = shared.first_error.lock();
+        g.value = None;
+    }
+    {
+        let workers = TaskGroup.new();
+        for k in 0..WORKERS {
+            let runs = n / WORKERS + if k < n % WORKERS { 1 } else { 0 };
+            let cmd = words.to_vec();
+            workers.spawn(|| worker(shared, cmd, runs));
+        }
+    }   // the group joins its workers here
+    let failed = shared.failed.load();
+    if failed == 0 {
+        return Ok(f"  ran {n} times on {WORKERS} workers");
+    }
+    let g = shared.first_error.lock();
+    let e = g.value.clone() ?? String.new();
+    if failed == n {
+        Err(f"{e} ({n} times)")
+    } else {
+        Err(f"{e} ({failed} of {n} times)")
+    }
+}
+
+// ------------------------------------------------------------ the script
+
+fn is_file_name(s: Str) -> bool {
+    let Some(stem) = s.strip_suffix(".prom") else {
+        return false;
+    };
+    stem.len() > 0 and stem.bytes().iter().all(|b| (b >= b'a' and b <= b'z') or (b >= b'0' and b <= b'9') or b == b'_')
+}
+
+fn write(reg: ref Registry, file: Str) -> Result[Vec[String], String] {
+    let path = f"data/out/{file}";
+    let tmp = f"{path}.tmp";
+    let mut body = String.new();
+    for line in reg.expose(Format.File).iter() {
+        body.push_str(line);
+        body.push('\n');
+    }
+    fs.write(tmp, body).map_err(|e| f"cannot write {tmp}: {e}")?;
+    fs.rename(tmp, path).map_err(|e| f"cannot rename {tmp}: {e}")?;
+    let back = fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")?;
+    let lines: Vec[Str] = back.split("\n").collect();
+    let n = lines.len() - 1;
+    let mut out = [f"  wrote out/{file}: {n} lines, {back.len()} bytes"].to_vec();
+    for line in lines[..n].iter() {
+        out.push(f"  {line}");
+    }
+    Ok(out)
+}
+
+fn command(shared: Shared, words: Slice[String]) -> Result[Vec[String], String] {
+    let cmd = words[0].as_str();
+    if let Some(kind) = Kind.parse(cmd) {
+        let g = shared.registry.lock();
+        return Ok([define(mut g.value, kind, words)?].to_vec());
+    }
+    if is_update(cmd) {
+        let g = shared.registry.lock();
+        update(mut g.value, words)?;
+        return Ok(Vec.new());
+    }
+    match cmd {
+        "remove" => {
+            let g = shared.registry.lock();
+            remove(mut g.value, words)?;
+            Ok(Vec.new())
+        }
+        "clear" | "unregister" => {
+            if words.len() != 2 {
+                return Err(f"usage: {cmd} NAME");
+            }
+            let g = shared.registry.lock();
+            let (at, values) = target(g.value, words[1])?;
+            if values.is_some() {
+                return Err(f"usage: {cmd} NAME");
+            }
+            if cmd == "unregister" {
+                g.value.unregister(at);
+            } else if not g.value.metrics[at].labelnames.is_empty() {
+                g.value.metrics[at].children.clear();
+            }
+            Ok(Vec.new())
+        }
+        "target" => {
+            let pairs = pairs_of(words[1..])?;
+            let g = shared.registry.lock();
+            g.value.set_target(pairs)?;
+            Ok(Vec.new())
+        }
+        "expose" => {
+            let format = if words.len() == 1 {
+                Format.Text
+            } else if words.len() == 2 and words[1] == "openmetrics" {
+                Format.OpenMetrics
+            } else {
+                return Err("usage: expose [openmetrics]".to_string());
+            };
+            let g = shared.registry.lock();
+            Ok(g.value.expose(format).iter().map(|l| f"  {l}").collect())
+        }
+        "write" => {
+            if words.len() != 2 {
+                return Err("usage: write FILE".to_string());
+            }
+            if not is_file_name(words[1]) {
+                return Err(f"bad file name {words[1]}");
+            }
+            let g = shared.registry.lock();
+            write(g.value, words[1])
+        }
+        "parallel" => {
+            if words.len() < 3 or not is_update(words[2]) {
+                return Err("usage: parallel N COMMAND ...".to_string());
+            }
+            let w = words[1].as_str();
+            if not all_digits(w) or w.len() > 6 or w.starts_with("0") {
+                return Err(f"bad count {w}");
+            }
+            let n = i64.parse(w).map_err(|_| f"bad count {w}")?;
+            Ok([parallel(shared, n, words[2..])?].to_vec())
+        }
+        _ => Err(f"unknown command {cmd}"),
+    }
+}
+
+fn play(script: Str) {
+    let shared = Shared {
+        registry: Mutex.new(Registry.new()),
+        failed: Atomic.new(0),
+        first_error: Mutex.new(None),
+    };
+    println("== mini_prometheus_client");
+    for (i, line) in script.split("\n").enumerate() {
+        let words: Vec[String] = line.split_whitespace().map(|w| w.to_string()).collect();
+        if words.is_empty() or words[0].starts_with("#") {
+            continue;
+        }
+        println(f"> {joined(words, " ")}");
+        match command(shared, words) {
+            Ok(lines) => {
+                for l in lines.iter() {
+                    println(l);
+                }
+            }
+            Err(e) => println(f"  error: script.txt:{i + 1}: {e}"),
+        }
+    }
+    println("== end");
+    let g = shared.registry.lock();
+    println(f"  {g.value.metrics.len()} metrics registered");
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/out").map_err(|e| f"cannot create data/out: {e}")?;
+    write_data()?;
+    let text = fs.read_to_string("data/script.txt").map_err(|e| f"cannot read data/script.txt: {e}")?;
+    play(text);
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/script.txt", file_0())?;
+    Ok(())
+}
+
+// data/script.txt
+fn file_0() -> String {
+    """
+2320546865206d657472696373206f66206120736d616c6c2077656220736572766963652e204e616d65732061726520
+66756c6c206e616d65733a206120636f756e74657227730a2320605f746f74616c602069732064726f707065642c2061
+20756e697420697320617070656e6465642c206e735f20616e64207375625f206172652070726570656e6465642e0a0a
+636f756e74657220687474705f72657175657374735f746f74616c206c6162656c733d6d6574686f642c706174682c63
+6f6465203a20485454502072657175657374735c737365656e2c206279206d6574686f6420616e6420706174682e0a63
+6f756e74657220687474705f7265717565737473206c6162656c733d6d6574686f64203a2061207365636f6e6420636f
+756e746572206e616d6564207468652073616d650a676175676520687474705f72657175657374735f746f74616c203a
+2061206761756765206d61792074616b6520746865206e616d652074686520636f756e7465722064726f707065640a68
+6973746f6772616d20726571756573745f6c6174656e637920756e69743d7365636f6e6473206c6162656c733d6d6574
+686f64206275636b6574733d302e3030352c302e30312c302e3032352c302e30352c302e312c302e32352c302e352c31
+2c322e35203a2054696d6520746f20666972737420627974652e0a73756d6d617279207061796c6f6164206c6162656c
+733d726f75746520756e69743d6279746573203a205265717565737420626f64792073697a65732e0a67617567652069
+6e5f666c69676874203a205265717565737473206265696e6720736572766564207269676874206e6f772e0a67617567
+652071756575655f6465707468206e733d6a6f6273207375623d656d61696c203a204d65737361676573207761697469
+6e670a696e666f206275696c64203a204275696c642066616374732e0a656e756d20776f726b65725f7374617465206c
+6162656c733d776f726b6572207374617465733d7374617274696e672c69646c652c627573792c647261696e696e6720
+3a2057686174206561636820776f726b657220697320646f696e672e0a636f756e746572206a6f623a6572726f727320
+6c6162656c733d7175657565203a204661696c6564206a6f6273206279207175657565202861207265636f7264696e67
+2d72756c65207374796c65206e616d65292e0a0a2320557064617465732e0a696e6320687474705f7265717565737473
+404745542c2f2c3230300a696e6320687474705f7265717565737473404745542c2f2c32303020320a696e6320687474
+705f726571756573747340504f53542c2f75706c6f61642c32303120312e350a696e6320687474705f72657175657374
+73404745542c2f6d697373696e672c3430340a696e6320687474705f7265717565737473404745542c2f0a696e632068
+7474705f7265717565737473404745542c2f2c3230302c65787472610a696e6320687474705f72657175657374730a69
+6e6320687474705f7265717565737473404745542c2f2c323030202d310a696e6320687474705f726571756573747340
+4745542c2f2c3230302074656e0a696e6320687474705f7265717565737473404745542c2f2c323030203120320a696e
+63206e6f737563684047455420310a73657420687474705f7265717565737473404745542c2f2c32303020330a736574
+20696e5f666c6967687420330a696e6320696e5f666c696768740a64656320696e5f666c6967687420322e350a736574
+20687474705f72657175657374735f746f74616c20370a736574206a6f62735f656d61696c5f71756575655f64657074
+682031320a696e63206a6f62735f656d61696c5f71756575655f646570746820302e310a696e63206a6f62735f656d61
+696c5f71756575655f646570746820302e320a6f62736572766520726571756573745f6c6174656e63795f7365636f6e
+64734047455420302e3030330a6f62736572766520726571756573745f6c6174656e63795f7365636f6e647340474554
+20302e30310a6f62736572766520726571756573745f6c6174656e63795f7365636f6e64734047455420302e30313031
+0a6f62736572766520726571756573745f6c6174656e63795f7365636f6e64734047455420302e330a6f627365727665
+20726571756573745f6c6174656e63795f7365636f6e64734047455420370a6f62736572766520726571756573745f6c
+6174656e63795f7365636f6e647340504f535420302e37350a6f62736572766520726571756573745f6c6174656e6379
+5f7365636f6e647320302e320a6f627365727665207061796c6f61645f6279746573402f75706c6f616420323034380a
+6f627365727665207061796c6f61645f6279746573402f75706c6f6164203531320a6f627365727665207061796c6f61
+645f6279746573402f6c6f67696e2039360a736574206275696c642076657273696f6e3d312e342e3220636f6d6d6974
+3d30613162326333206272616e63683d6d61696e0a736574206275696c64206e6f74653d6c696e655c6e6f6e655c7374
+776f2071756f74653d227965732220706174683d433a5c5c746d700a737461746520776f726b65725f73746174654077
+3120627573790a737461746520776f726b65725f73746174654077322069646c650a737461746520776f726b65725f73
+7461746540773320736c656570696e670a737461746520776f726b65725f737461746520627573790a696e63206a6f62
+3a6572726f7273406d61696c0a696e63206a6f623a6572726f727340736d7320340a0a23204c6162656c2076616c7565
+73207769746820657363617065733a206120636f6d6d612c20612073706163652c2061206e65776c696e652c20612062
+61636b736c6173682c20612071756f74652e0a696e6320687474705f7265717565737473404745542c2f736561726368
+3f713d615c2c622c3230300a696e6320687474705f7265717565737473404745542c2f74776f5c73776f7264732c3230
+300a696e6320687474705f7265717565737473405055542c6c696e655c6e627265616b2c3530300a696e632068747470
+5f7265717565737473405055542c6261636b5c5c736c6173682c3530300a696e6320687474705f726571756573747340
+5055542c2271756f746564222c3530300a696e6320687474705f7265717565737473404745542c6261645c6573636170
+652c3530300a0a6578706f73650a6578706f7365206f70656e6d6574726963730a0a23204d616e792075706461746573
+2066726f6d20666f757220776f726b6572207461736b73206174206f6e63652e0a706172616c6c656c20313030302069
+6e6320687474705f7265717565737473404745542c2f2c3230300a706172616c6c656c20343030206f62736572766520
+726571756573745f6c6174656e63795f7365636f6e64734047455420302e30340a706172616c6c656c20323530206f62
+7365727665207061796c6f61645f6279746573402f75706c6f616420313032340a706172616c6c656c20363420646563
+20696e5f666c6967687420302e3132350a706172616c6c656c20313020696e6320687474705f72657175657374734047
+45542c2f2c323030202d320a706172616c6c656c203320737461746520776f726b65725f737461746540773420627573
+790a706172616c6c656c203020696e6320696e5f666c696768740a706172616c6c656c2035206578706f73650a0a2320
+4e616d65732c206c6162656c7320616e64206f7074696f6e7320746865206c69627261727920726566757365732e0a63
+6f756e74657220396c69766573203a20737461727473207769746820612064696769740a636f756e746572206261642d
+6e616d65203a20686173206120646173680a6761756765206f6b5f6e616d65206c6162656c733d6c65203a206c652069
+732066696e65206f757473696465206120686973746f6772616d0a686973746f6772616d20686973745f6c65206c6162
+656c733d6c65203a206c6520697320726573657276656420686572650a73756d6d6172792073756d5f71206c6162656c
+733d7175616e74696c65203a20616e64207175616e74696c6520686572650a6761756765207265736572766564206c61
+62656c733d5f5f6e616d65203a2074776f20756e64657273636f726573206172652072657365727665640a6761756765
+20737061636564206c6162656c733d612c622d63203a206120646173680a676175676520656d7074795f6c6162656c20
+6c6162656c733d203a20616e20656d707479206c6162656c206e616d650a686973746f6772616d20756e736f72746564
+206275636b6574733d312c302e352c32203a206f7574206f66206f726465720a686973746f6772616d206f6e655f6275
+636b6574206275636b6574733d2b496e66203a206f6e6c792074686520696d706c696564206275636b65740a68697374
+6f6772616d2073616d655f6275636b6574206275636b6574733d312c312c32203a20657175616c20626f756e64732061
+726520736f727465640a686973746f6772616d206e65675f6275636b657473206275636b6574733d2d312c302c31203a
+206e6f2073756d207768656e206120626f756e64206973206e656761746976650a686973746f6772616d206261645f62
+75636b6574206275636b6574733d312c74776f203a206e6f742061206e756d6265720a686973746f6772616d20626967
+206275636b6574733d313030303030302c313233343536372c31303030303030302c3130303030303030303030302c31
+652b3232203a20476f2d7374796c65206578706f6e656e747320696e206c650a696e666f206275696c645f756e697420
+756e69743d6279746573203a20616e20696e666f2063616e6e6f742068617665206120756e69740a656e756d20666c61
+67207374617465733d203a206f6e652073746174652c2074686520656d70747920746578740a656e756d20666c616732
+203a206e6f207374617465730a656e756d206a6f623a7068617365207374617465733d7175657565642c72756e6e696e
+67203a206120636f6c6f6e20696e20746865207374617465206c6162656c0a656e756d206d6f6465206c6162656c733d
+6d6f6465207374617465733d612c62203a20746865206e616d652069732061206c6162656c20746f6f0a656e756d2063
+6f6c6f72207374617465733d7265642c677265656e0a67617567652067617567655f6f707473206275636b6574733d31
+2c32203a206f6e6c79206120686973746f6772616d20686173206275636b6574730a676175676520747769636520756e
+69743d6120756e69743d620a6761756765206e6f657120756e69740a636f756e7465720a636f756e746572203a206865
+6c7020627574206e6f206e616d650a6869737420756e646566696e65645f6b696e640a636f756e74657220635f746f74
+616c203a2074686520746f74616c2069732064726f707065640a636f756e7465722063203a20616e6420632069732074
+616b656e0a676175676520635f746f74616c203a20736f20697320635f746f74616c0a636f756e746572206361636865
+3a686974735f746f74616c203a20636f6c6f6e20696e206120636f756e746572206e616d650a0a23204f64642076616c
+7565732e0a736574206f6b5f6e616d654078204e614e0a736574206f6b5f6e616d654079202b496e660a736574206f6b
+5f6e616d65407a202d496e660a736574206f6b5f6e616d654077202d302e300a736574206f6b5f6e616d654076203165
+2d370a736574206f6b5f6e616d654075203132333435363738393031320a696e632063204e614e0a696e632063202d30
+2e300a6f627365727665206e65675f6275636b657473202d320a6f627365727665206e65675f6275636b657473204e61
+4e0a6f627365727665206e65675f6275636b65747320302e350a6f6273657276652073616d655f6275636b657420310a
+6f6273657276652062696720313233343536370a6f6273657276652062696720326532300a7365742072657365727665
+6420310a696e6320636f6c6f720a726573657420630a737461746520636f6c6f7220677265656e0a7374617465206a6f
+623a70686173652072756e6e696e670a696e666f206f64645f6b657973203a206b65797320746865206c696272617279
+20646f6573206e6f7420636865636b0a736574206f64645f6b65797320612d623d312039783d32205f5f6b3d33206c65
+3d3420612d623d350a0a2320496e666f206c6162656c732c206f7665726c617070696e67206c6162656c732c20726573
+65742c2072656d6f76652c20636c6561722c20756e72656769737465722e0a696e666f206465706c6f79206c6162656c
+733d726567696f6e203a2057686572652069742072756e732e0a736574206465706c6f794065752076657273696f6e3d
+3220726567696f6e3d65750a736574206465706c6f794065752076657273696f6e3d3220746965723d676f6c640a7365
+74206465706c6f7920746965723d676f6c640a736574206465706c6f7940757320746965723d73696c76657220626164
+0a726573657420687474705f72657175657374730a726573657420687474705f7265717565737473404745542c2f2c32
+30300a726573657420696e5f666c696768740a72656d6f766520687474705f7265717565737473404745542c2f6d6973
+73696e672c3430340a72656d6f766520687474705f7265717565737473404745540a72656d6f766520687474705f7265
+7175657374730a72656d6f766520696e5f666c696768740a72656d6f766520696e5f666c6967687440780a636c656172
+206a6f623a6572726f72730a636c65617220696e5f666c696768740a756e7265676973746572207061796c6f61645f62
+797465730a756e7265676973746572207061796c6f61645f62797465730a73756d6d617279207061796c6f6164206c61
+62656c733d726f75746520756e69743d6279746573203a204261636b2c20656d7074792e0a7461726765742073657276
+6963653d61706920726567696f6e3d65752d776573745c73310a6761756765207461726765745f696e666f203a20636c
+617368657320776974682074686520746172676574207365726965730a7461726765740a676175676520746172676574
+5f696e666f203a206672656520616761696e0a74617267657420736572766963653d6170690a756e7265676973746572
+207461726765745f696e666f0a74617267657420736572766963653d6170690a6578706f73650a6578706f7365206f70
+656e6d6574726963730a6578706f7365206a736f6e0a777269746520736572766963652e70726f6d0a7772697465202e
+2e2f6573636170652e70726f6d0a77726974650a66726f626e6963617465206e6f770a
+"""
+}
