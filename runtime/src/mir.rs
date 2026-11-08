@@ -1421,6 +1421,12 @@ pub unsafe extern "C" fn karac_mir_str_find(
     let s = unsafe { text(s, sn) };
     let at = if c >= 0 {
         char::from_u32(c as u32).and_then(|c| s.find(c))
+    } else if nn == 1 {
+        // A one-byte needle is an ASCII char: `find` by char is a memchr,
+        // where a `&str` needle builds a two-way searcher on every call
+        // (kata 591's `find(">")`, a third of its instructions).
+        // SAFETY: as above, and `nn == 1`.
+        s.find(char::from(unsafe { *needle }))
     } else {
         // SAFETY: as above.
         s.find(unsafe { text(needle, nn) })
