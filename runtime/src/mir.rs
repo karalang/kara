@@ -2766,6 +2766,10 @@ const MERGE_BLOCK: usize = 1024;
 /// interpreter's `SMALL_RUN` and the emitted sort do.
 const SMALL_RUN: usize = 4;
 
+/// At most this many elements are one insertion sort, with no scratch
+/// buffer, as the interpreter's `SMALL_SORT` and the emitted sort do.
+const SMALL_SORT: usize = 20;
+
 /// The bottom-up merge of [`merge_sort`], between `buf` and one scratch
 /// buffer: widths 1, 2, 4, ..., the right element first only when
 /// strictly less. Past [`MERGE_BLOCK`] elements, every width below it runs
@@ -2781,6 +2785,11 @@ unsafe fn merge_passes<const N: usize>(
     size: usize,
     cmp: &mut dyn FnMut(*const u8, *const u8) -> i32,
 ) {
+    if n <= SMALL_SORT {
+        // SAFETY: the caller's contract.
+        unsafe { insertion(buf, 0, n, size, cmp) };
+        return;
+    }
     // A `LeanVec`, not `vec!`, whose capacity check keeps a Rust panic in
     // every binary that sorts (B-2026-11-04-31).
     let mut scratch = LeanVec::<u8>::with_capacity(n.saturating_mul(size));
@@ -2807,6 +2816,39 @@ unsafe fn merge_passes<const N: usize>(
     }
     // SAFETY: as above.
     unsafe { merge_widths::<N>(buf, tmp, n, size, MERGE_BLOCK, n, cmp) };
+}
+
+/// Insertion-sorts elements `from..n` of `size` bytes at `buf`: each in
+/// turn moves left past each it is strictly less than.
+///
+/// # Safety
+/// `buf` holds `n` elements of `size` bytes.
+unsafe fn insertion(
+    buf: *mut u8,
+    from: usize,
+    n: usize,
+    size: usize,
+    cmp: &mut dyn FnMut(*const u8, *const u8) -> i32,
+) {
+    if from + 1 >= n {
+        return;
+    }
+    // SAFETY: every index passed is below `n`, in a buffer of `n`.
+    let at = |i: usize| unsafe { buf.add(i * size) };
+    let mut room = LeanVec::<u8>::with_capacity(size);
+    let x = room.as_mut_ptr();
+    for k in from + 1..n {
+        // SAFETY: indices below `n`; `x` holds one element.
+        unsafe {
+            std::ptr::copy_nonoverlapping(at(k), x, size);
+            let mut j = k;
+            while j > from && cmp(x, at(j - 1)) < 0 {
+                std::ptr::copy_nonoverlapping(at(j - 1), at(j), size);
+                j -= 1;
+            }
+            std::ptr::copy_nonoverlapping(x, at(j), size);
+        }
+    }
 }
 
 /// The passes of widths `width`, `2 * width`, ... below `limit` over the
@@ -2875,22 +2917,8 @@ unsafe fn merge_widths<const N: usize>(
             unsafe { std::ptr::copy_nonoverlapping(at(tmp, lo), at(buf, lo), SMALL_RUN * size) };
             lo += SMALL_RUN;
         }
-        if lo + 1 < n {
-            let mut x = LeanVec::<u8>::with_capacity(size);
-            for k in lo + 1..n {
-                // SAFETY: indices below `n`; `x` holds one element.
-                unsafe {
-                    let x = x.as_mut_ptr();
-                    std::ptr::copy_nonoverlapping(at(buf, k), x, size);
-                    let mut j = k;
-                    while j > lo && cmp(x, at(buf, j - 1)) < 0 {
-                        std::ptr::copy_nonoverlapping(at(buf, j - 1), at(buf, j), size);
-                        j -= 1;
-                    }
-                    std::ptr::copy_nonoverlapping(x, at(buf, j), size);
-                }
-            }
-        }
+        // SAFETY: `lo..n` is in `buf`.
+        unsafe { insertion(buf, lo, n, size, cmp) };
         width = SMALL_RUN;
     }
     while width < limit {

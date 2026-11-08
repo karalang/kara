@@ -1123,6 +1123,12 @@ pub const PART_GATE: usize = 64;
 /// power of two dividing [`MERGE_BLOCK`].
 pub const SMALL_RUN: usize = 4;
 
+/// A merge sort of at most this many elements is one insertion sort
+/// ([`Interp::merge_order`]), as Rust's stable sort is: no scratch buffer
+/// and no merges. The compiled sort and runtime/src/mir.rs `SMALL_SORT`
+/// make the same calls.
+pub const SMALL_SORT: usize = 20;
+
 /// A table's removed-entry slots ([`Interp::table_holes`]).
 #[derive(Default)]
 struct Holes {
@@ -3960,7 +3966,8 @@ impl<'a> Interp<'a> {
     /// A stable merge sort of `0..n` under `cmp`, which may call into the
     /// program; the result lists the old index of each new position.
     ///
-    /// Bottom-up: runs of [`SMALL_RUN`] are sorted ([`Interp::small_runs`]),
+    /// At most [`SMALL_SORT`] elements are insertion sorted
+    /// ([`Interp::insertion`]). Longer, bottom-up: runs of [`SMALL_RUN`] are sorted ([`Interp::small_runs`]),
     /// then merged at widths 4, 8, ... ([`Interp::merge_pass`]). Past
     /// [`MERGE_BLOCK`] elements, every width below it
     /// runs one block at a time before the wider passes. Those merges are
@@ -3975,6 +3982,10 @@ impl<'a> Interp<'a> {
         cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
     ) -> R<Vec<usize>> {
         let mut order: Vec<usize> = (0..n).collect();
+        if n <= SMALL_SORT {
+            self.insertion(&mut order, 0, n, cmp)?;
+            return Ok(order);
+        }
         let mut width;
         if n > MERGE_BLOCK {
             for b in (0..n).step_by(MERGE_BLOCK) {
@@ -4017,10 +4028,22 @@ impl<'a> Interp<'a> {
             order[lo..lo + SMALL_RUN].copy_from_slice(&sorted);
             lo += SMALL_RUN;
         }
-        for k in lo + 1..to {
+        self.insertion(order, lo, to, cmp)
+    }
+
+    /// Insertion-sorts `order[from..to]`: each element in turn moves left
+    /// past each it is strictly less than.
+    fn insertion(
+        &mut self,
+        order: &mut [usize],
+        from: usize,
+        to: usize,
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<()> {
+        for k in from + 1..to {
             let x = order[k];
             let mut j = k;
-            while j > lo && cmp(self, x, order[j - 1])?.is_lt() {
+            while j > from && cmp(self, x, order[j - 1])?.is_lt() {
                 order[j] = order[j - 1];
                 j -= 1;
             }

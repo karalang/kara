@@ -1,10 +1,11 @@
 # The merge schedule every backend runs (src/mir/interp.rs `merge_order`):
-# runs of four by a network, then merges from both ends at once, redone
+# at most SMALL_SORT = 20 elements, one insertion sort; longer, runs of
+# four by a network, then merges from both ends at once, redone
 # from the front when the two ends cross. Prints what
 # tests/mir_sort_network_merge.rs expects of its comparators that are not
 # an order (B-2026-11-06-34), and, on stderr, how many merges crossed.
 import sys
-MB=1024; RUN=4
+MB=1024; RUN=4; SMALL_SORT=20
 cross=[0]
 def sort4(v,cmp):
     c1=cmp(v[1],v[0]); c2=cmp(v[3],v[2])
@@ -17,6 +18,8 @@ def sort4(v,cmp):
 def small(o,f,t,cmp):
     lo=f
     while lo+RUN<=t: o[lo:lo+4]=sort4(o[lo:lo+4],cmp); lo+=4
+    ins(o,lo,t,cmp)
+def ins(o,lo,t,cmp):
     for k in range(lo+1,t):
         x=o[k]; j=k
         while j>lo and cmp(x,o[j-1]): o[j]=o[j-1]; j-=1
@@ -42,6 +45,7 @@ def mpass(o,f,t,w,cmp):
     return out
 def morder(n,cmp):
     o=list(range(n))
+    if n<=SMALL_SORT: ins(o,0,n,cmp); return o
     if n>MB:
         for b in range(0,n,MB):
             e=min(b+MB,n); small(o,b,e,cmp); w=RUN

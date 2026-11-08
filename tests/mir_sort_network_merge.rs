@@ -129,6 +129,10 @@ fn main() {
 /// merge then cross (tests/fixtures/sort_schedule/mirror.py counts 1577
 /// such merges at 3000 elements), so each result must still hold every
 /// element once, and the calls and the order they leave are the mirror's.
+/// Up to twenty elements the sort is one insertion sort, so the first four
+/// rows changed with it; the schedule is unspecified (docs/library/
+/// collections.md, 88642fa4dd), and these rows pin only that the backends
+/// and the mirror agree.
 #[test]
 fn sort_with_a_comparator_that_is_not_an_order_keeps_every_element() {
     const SRC: &str = r#"fn make(n: i64) -> Vec[(i64, i64)] {
@@ -184,10 +188,10 @@ fn main() {
     prints(
         "odd",
         SRC,
-        "4 5 true true true 23727946 443644662 80096956
-5 8 true true true 209244624 245210733 957049113
-9 28 true true true 961620668 842084806 192583270
-16 81 true true true 352976404 576779294 777535843
+        "4 5 true true true 79527016 22497916 80096956
+5 7 true true true 466060576 483068626 484298656
+9 15 true true true 29582221 927007762 148559832
+16 29 true true true 635204191 960773541 785102681
 37 252 true true true 179233396 705144046 458562116
 100 966 true true true 526375996 820085617 163361742
 1025 17412 true true true 466234892 107918771 928861898

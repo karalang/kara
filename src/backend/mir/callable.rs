@@ -1167,6 +1167,16 @@ impl<'ctx> Cx<'ctx, '_> {
         b.build_conditional_branch(first, ins, w_head).map_err(e)?;
         b.position_at_end(ins);
         b.build_store(v_lo, zero).map_err(e)?;
+        // At most SMALL_SORT elements (a whole sort: `limit` is `n`) are
+        // one insertion run and no merges (interp.rs `merge_order`).
+        let small_sort = i64t.const_int(crate::mir::interp::SMALL_SORT as u64, false);
+        let small = b
+            .build_int_compare(IntPredicate::ULE, limit, small_sort, "")
+            .map_err(e)?;
+        let run_len = b
+            .build_select(small, n, run, "")
+            .map_err(e)?
+            .into_int_value();
         b.build_unconditional_branch(g_head).map_err(e)?;
         // while lo + 4 <= n: the network, out through `scratch` and back.
         b.position_at_end(g_head);
@@ -1175,6 +1185,8 @@ impl<'ctx> Cx<'ctx, '_> {
         let whole = b
             .build_int_compare(IntPredicate::ULE, end, n, "")
             .map_err(e)?;
+        let not_small = b.build_not(small, "").map_err(e)?;
+        let whole = b.build_and(whole, not_small, "").map_err(e)?;
         b.build_conditional_branch(whole, g_body, r_head)
             .map_err(e)?;
         b.position_at_end(g_body);
@@ -1222,12 +1234,12 @@ impl<'ctx> Cx<'ctx, '_> {
         // for k in lo + 1 .. min(lo + RUN, n)
         b.position_at_end(k_head);
         let (lo, k) = (ld(v_lo)?, ld(v_k)?);
-        let hi = umin(b.build_int_add(lo, run, "").map_err(e)?, n)?;
+        let hi = umin(b.build_int_add(lo, run_len, "").map_err(e)?, n)?;
         let r_next = bb("ins.run.next");
         b.build_conditional_branch(lt(k, hi)?, k_body, r_next)
             .map_err(e)?;
         b.position_at_end(r_next);
-        b.build_store(v_lo, b.build_int_add(lo, run, "").map_err(e)?)
+        b.build_store(v_lo, b.build_int_add(lo, run_len, "").map_err(e)?)
             .map_err(e)?;
         b.build_unconditional_branch(r_head).map_err(e)?;
         b.position_at_end(k_body);
@@ -1271,7 +1283,8 @@ impl<'ctx> Cx<'ctx, '_> {
         b.build_unconditional_branch(k_head).map_err(e)?;
         // The merges start past the sorted runs.
         b.position_at_end(ins_done);
-        b.build_store(v_w, run).map_err(e)?;
+        let w0 = b.build_select(small, limit, run, "").map_err(e)?;
+        b.build_store(v_w, w0).map_err(e)?;
         b.build_unconditional_branch(w_head).map_err(e)?;
         // while width < limit
         b.position_at_end(w_head);
@@ -1444,7 +1457,11 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The body of a [`Shim::MergeSort`]: one scratch buffer, then the
-    /// interpreter's schedule (src/mir/interp.rs `merge_order`). Past
+    /// interpreter's schedule (src/mir/interp.rs `merge_order`). At most
+    /// `SMALL_SORT` elements are one insertion sort in place, with no
+    /// scratch: kata 56 sorts 16 intervals a call, a million times, and
+    /// spent 92 instructions an element and a `malloc` a call where Rust's
+    /// insertion sort spends about half. Past
     /// `MERGE_BLOCK` elements, the widths below it run block by block,
     /// then the wider passes over the whole buffer.
     fn build_merge_sort(
@@ -1459,6 +1476,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let i8t = self.llcx.i8_type();
         let f = self.cur_fn()?;
         let bb = |name: &str| self.llcx.append_basic_block(f, name);
+        let (insert, in_place) = (bb("sort.few"), bb("sort.in_place"));
         let (setup, small, blocks, head, each, wide, free, done) = (
             bb("sort"),
             bb("sort.small"),
@@ -1478,7 +1496,34 @@ impl<'ctx> Cx<'ctx, '_> {
         let short = b
             .build_int_compare(IntPredicate::ULT, n, i64t.const_int(2, false), "")
             .map_err(e)?;
-        b.build_conditional_branch(short, done, setup).map_err(e)?;
+        b.build_conditional_branch(short, done, insert).map_err(e)?;
+        // At most SMALL_SORT elements sort in place, with no scratch.
+        b.position_at_end(insert);
+        let few = b
+            .build_int_compare(
+                IntPredicate::ULE,
+                n,
+                i64t.const_int(crate::mir::interp::SMALL_SORT as u64, false),
+                "",
+            )
+            .map_err(e)?;
+        b.build_conditional_branch(few, in_place, setup)
+            .map_err(e)?;
+        b.position_at_end(in_place);
+        b.build_call(
+            widths,
+            &[
+                buf.into(),
+                buf.into(),
+                n.into(),
+                ctx.into(),
+                one.into(),
+                n.into(),
+            ],
+            "",
+        )
+        .map_err(e)?;
+        b.build_unconditional_branch(done).map_err(e)?;
         b.position_at_end(setup);
         let room = b.build_int_mul(n, sz, "").map_err(e)?;
         let tmp = b
