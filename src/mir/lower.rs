@@ -3306,6 +3306,7 @@ fn par_joins(rr: &ResolveResult) -> FxHashMap<SymbolId, Vec<SymbolId>> {
 
 // ── bodies ──────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 enum ScopeEntry<'a> {
     Drop(Place),
     Defer(&'a Block),
@@ -5140,41 +5141,58 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.exit_entries(&entries, false)
     }
 
+    /// Where a call in the sequence can take a cancel exit (§11.9), each
+    /// entry runs with the entries still to run standing as the innermost
+    /// scope, so that exit runs those and not the ones already run
+    /// (B-2026-11-08-25).
     fn exit_entries(&mut self, entries: &[ScopeEntry<'a>], error: bool) -> R<()> {
-        for e in entries.iter().rev() {
-            match e {
-                ScopeEntry::Drop(p) => {
-                    let next = self.b.new_block();
-                    self.goto_with(
-                        TerminatorKind::Drop {
-                            place: p.clone(),
-                            target: next,
-                            unwind: UnwindAction::Abort,
-                        },
-                        next,
-                    );
-                }
-                ScopeEntry::Defer(body) => self.defer_body(body)?,
-                ScopeEntry::ErrDefer(body, None) if error => self.defer_body(body)?,
-                // A cancelled task returns no error for the binding to name.
-                ScopeEntry::ErrDefer(body, Some((name, node))) if error && !self.in_cancel_exit => {
-                    self.errdefer_bound(body, name, *node)?
-                }
-                ScopeEntry::ErrDefer(..) => {}
-                ScopeEntry::Storage(l) => {
-                    let bb = self.cur;
-                    self.b.push(bb, StatementKind::StorageDead(*l));
-                }
-                ScopeEntry::Unreverse(v, mt, native) => self.reverse_vec(*v, *mt, native),
-                ScopeEntry::FsExit(id, r) => {
-                    let t = self.unit();
-                    let u = self.temp(t);
-                    self.call_native(
-                        &format!("{r}.exit"),
-                        vec![Operand::Copy(Place::local(*id))],
-                        Place::local(u),
-                    );
-                }
+        let cancellable = !self.in_cancel_exit && self.lcx.cancel_at.is_some();
+        for (k, e) in entries.iter().enumerate().rev() {
+            if cancellable {
+                self.scopes.push(entries[..k].to_vec());
+            }
+            let r = self.exit_entry(e, error);
+            if cancellable {
+                self.scopes.pop();
+            }
+            r?;
+        }
+        Ok(())
+    }
+
+    fn exit_entry(&mut self, e: &ScopeEntry<'a>, error: bool) -> R<()> {
+        match e {
+            ScopeEntry::Drop(p) => {
+                let next = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::Drop {
+                        place: p.clone(),
+                        target: next,
+                        unwind: UnwindAction::Abort,
+                    },
+                    next,
+                );
+            }
+            ScopeEntry::Defer(body) => self.defer_body(body)?,
+            ScopeEntry::ErrDefer(body, None) if error => self.defer_body(body)?,
+            // A cancelled task returns no error for the binding to name.
+            ScopeEntry::ErrDefer(body, Some((name, node))) if error && !self.in_cancel_exit => {
+                self.errdefer_bound(body, name, *node)?
+            }
+            ScopeEntry::ErrDefer(..) => {}
+            ScopeEntry::Storage(l) => {
+                let bb = self.cur;
+                self.b.push(bb, StatementKind::StorageDead(*l));
+            }
+            ScopeEntry::Unreverse(v, mt, native) => self.reverse_vec(*v, *mt, native),
+            ScopeEntry::FsExit(id, r) => {
+                let t = self.unit();
+                let u = self.temp(t);
+                self.call_native(
+                    &format!("{r}.exit"),
+                    vec![Operand::Copy(Place::local(*id))],
+                    Place::local(u),
+                );
             }
         }
         Ok(())
@@ -5222,17 +5240,23 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Run the exit sequence of every scope above `depth`, innermost first,
-    /// without popping them (an early exit).
+    /// without popping them (an early exit). Each scope's sequence runs with
+    /// it and the scopes inside it set aside, so the cancel exit (§11.9) of
+    /// a call in it drops only the scopes the exit has not reached yet, not
+    /// again the ones it already dropped (B-2026-11-08-25).
     fn exit_to(&mut self, depth: usize, error: bool) -> R<()> {
-        let mut i = self.scopes.len();
-        while i > depth {
-            i -= 1;
-            let entries = std::mem::take(&mut self.scopes[i]);
-            let r = self.exit_entries(&entries, error);
-            self.scopes[i] = entries;
-            r?;
+        let mut left = Vec::new();
+        let mut r = Ok(());
+        while self.scopes.len() > depth {
+            let entries = self.scopes.pop().expect("scope underflow");
+            r = self.exit_entries(&entries, error);
+            left.push(entries);
+            if r.is_err() {
+                break;
+            }
         }
-        Ok(())
+        self.scopes.extend(left.into_iter().rev());
+        r
     }
 
     // ── functions ───────────────────────────────────────────────────
