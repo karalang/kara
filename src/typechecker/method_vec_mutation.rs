@@ -794,6 +794,10 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(arg.kind, ExprKind::Tuple(_)) {
             self.check_tuple_literal_element(arg, &slot, &ty);
         }
+        // An unannotated collection's element takes a `Copy` reference's
+        // value, before the slot is read as `ref T` (design.md §8,
+        // B-2026-11-08-19).
+        self.solve_collection_var_by_value(elem, &ty);
         ty
     }
 

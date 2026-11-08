@@ -1,0 +1,42 @@
+// design.md §8: an unannotated collection's element or key, first solved
+// from a `ref T` with `T: Copy` at a by-value slot (push, insert, entry, a
+// literal element), is solved to `T`; the reference is read as its value.
+// So a loop over `nums.iter()` builds collections of values, and the loop's
+// per-item copy is not lent past its iteration.
+fn main() {
+    let nums: Vec[i64] = [3, 1, 3, 2];
+    let mut count = Map.new();
+    for x in nums.iter() {
+        *count.entry(x).or_insert(0) += 1;
+    }
+    let mut v = Vec.new();
+    for x in nums.iter() {
+        v.push(x);
+    }
+    let mut d = VecDeque.new();
+    for x in nums.iter() {
+        d.push_back(x);
+    }
+    let mut s = Set.new();
+    for x in nums.iter() {
+        s.insert(x);
+    }
+    let mut at = Map.new();
+    for (i, x) in nums.iter().enumerate() {
+        at.insert(x, i);
+    }
+    let mut pairs = Vec.new();
+    for x in nums.iter() {
+        let pair = [x, x];
+        pairs.push(pair);
+    }
+    let mut total = 0;
+    for y in v.iter() {
+        total += y;
+    }
+    for p in pairs.iter() {
+        total += p[0] + p[1];
+    }
+    println(f"{count.len()} {count[1]} {count[2]} {count[3]}");
+    println(f"{v.len()} {d.len()} {s.len()} {at[3]} {total}");
+}

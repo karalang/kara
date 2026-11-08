@@ -3508,6 +3508,10 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-07-9: the same for a call's `const` parameters only its
     /// result names, judged with them.
     pub(super) unsolved_call_consts: Vec<(Span, Vec<(types::ConstVarId, String)>)>,
+    /// B-2026-11-08-19: the variables standing for an unannotated
+    /// collection's element, key or value (`Vec.new()`'s `T`). The first
+    /// `ref T` with `T: Copy` that solves one solves it to `T` (design.md §8).
+    pub(super) collection_vars: FxHashSet<types::TypeVarId>,
     /// `Atomic.new(v)` arguments still a variable at the call, judged at the
     /// end against library/concurrency.md's five (B-2026-11-07-21).
     pub(super) pending_atomic_inners: Vec<(Span, Type, Option<String>)>,
@@ -4245,6 +4249,7 @@ impl<'a> TypeChecker<'a> {
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
             unsolved_call_consts: Vec::new(),
+            collection_vars: FxHashSet::default(),
             pending_atomic_inners: Vec::new(),
             atomic_generic_params: FxHashMap::default(),
             call_site_callers: FxHashMap::default(),
@@ -7586,6 +7591,11 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        // An unannotated collection's element or key takes a `Copy`
+        // reference's value (design.md §8, B-2026-11-08-19).
+        if self.solve_collection_var_by_value(expected, found) {
+            return true;
+        }
         // B-2026-10-27-14: an operator's result on a `T: Add` is the bound's
         // `T.Output`, which the `TypeParam` wildcard of `types_compatible`
         // would take for a `T`.

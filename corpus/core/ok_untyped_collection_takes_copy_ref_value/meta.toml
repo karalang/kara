@@ -1,0 +1,12 @@
+source = "design.md §8 (a collection's element type is not solved to a ref of a Copy type)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["inference", "iterators", "collections"]
+class = "a"
+expected_from = "spec"
+rules = ["5.10"]
+backends = []
+env = {}
+note = "B-2026-11-08-19: an unannotated Vec, VecDeque, Set or Map filled from `nums.iter()` by push, insert, entry or a literal element holds i64 values. Before, push and insert solved the element to `ref i64` and refused the loop's per-item copy (E0516), and entry passed the value while its slot said ref."
+bucket = "a"

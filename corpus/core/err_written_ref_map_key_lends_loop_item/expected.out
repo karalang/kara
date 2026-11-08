@@ -1,0 +1,1 @@
+ERROR at line 6: cannot write to `x` while `count` still holds a borrow of it (core-semantics.md §5.6) [E0516]

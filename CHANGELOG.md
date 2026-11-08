@@ -42,6 +42,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   not fit the type it is fixed to is now refused at the literal
   (`let a = 300; let b: u8 = a;`), and arithmetic in the narrower type traps
   on overflow there (B-2026-11-07-3).
+- **An unannotated collection filled from references to a `Copy` type holds
+  the values** (design.md §8). `let mut m = Map.new(); for x in nums.iter()
+  { m.insert(x, 1) }` builds a `Map[i64, i64]`, as do `push`, `entry` and a
+  literal element such as `[x, x]`; 0.8.1 refused `push` and `insert` there
+  because the loop's per-item copy was lent past its iteration, and compiled
+  `entry` with a reference slot fed a value. A written `Map[ref i64, V]` or
+  `Vec[ref i64]` keeps its references (B-2026-11-08-19).
 
 ### Wrong behaviour fixed
 
@@ -74,6 +81,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   element type.** `let p = 0; let v: Vec[i32] = [p, 1];` and
   `out.push([prev, pos])` into a `Vec[Vec[i32]]` made `p` and `prev` an
   `i64` and refused them as a narrowing (B-2026-11-08-21).
+- **A borrowed number passed for a wider parameter is read, then widened.**
+  `take(x)` with `x: ref u8` from a slice iterator and `take(x: i64)`
+  passed the reference's address in a compiled program and stopped the
+  interpreter on `Add on Int and Ref`; it now adds the value
+  (B-2026-11-08-31).
 
 ### Performance
 

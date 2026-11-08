@@ -9,7 +9,9 @@
 //!
 //! An unannotated `let chain = [k];` over `ref i64` elements is a
 //! `Vec[ref i64]`, refused with no fix where a `Vec[i64]` is wanted; the
-//! fix now annotates the `let` (B-2026-11-07-31).
+//! fix annotated the `let` (B-2026-11-07-31). Since design.md §8
+//! (B-2026-11-08-19) such a literal is a `Vec[i64]` as written, so both
+//! programs check with no fix.
 
 use std::process::{Command, Output, Stdio};
 
@@ -118,12 +120,30 @@ fn a_use_past_a_returning_branch_does_not_keep_the_clone() {
     );
 }
 
-#[test]
-fn an_unannotated_list_of_copy_refs_is_annotated() {
-    fixed_to("r2", "fn chains(order: Vec[i64]) -> Vec[Vec[i64]] {\n    let mut out: Vec[Vec[i64]] = Vec.new();\n    for k in order.iter() {\n        let chain = [k];\n        out.push(chain);\n    }\n    out\n}\n\nfn main() {\n    println(chains([1, 2]).len());\n}\n", "let chain: Vec[i64] = [k];", "", "2\n");
+/// `src` checks clean as written and prints `out` under `__mir-run`.
+fn accepted_as_written(tag: &str, src: &str, out: &str) {
+    let path = std::env::temp_dir().join(format!(
+        "karac-into-iter-ref-list-{tag}-{}.kara",
+        std::process::id()
+    ));
+    std::fs::write(&path, src).expect("write");
+    let check = karac(&["check"], &path);
+    let run = karac(&["__mir-run"], &path);
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        check.status.success(),
+        "{tag}: refused:\n{}",
+        String::from_utf8_lossy(&check.stdout)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), out, "{tag}");
 }
 
 #[test]
-fn an_unannotated_mut_list_of_copy_refs_is_annotated() {
-    fixed_to("r2b", "struct Unit { chain: Vec[i64] }\nfn main() {\n    let order: Vec[i64] = [3, 1, 2];\n    let mut units: Vec[Unit] = Vec.new();\n    for k in order.iter() {\n        let mut chain = [k];\n        chain.insert(0, k);\n        units.push(Unit { chain: chain });\n    }\n    println(units[2].chain.len());\n}\n", "let mut chain: Vec[i64] = [k];", "", "2\n");
+fn an_unannotated_list_of_copy_refs_is_a_list_of_values() {
+    accepted_as_written("r2", "fn chains(order: Vec[i64]) -> Vec[Vec[i64]] {\n    let mut out: Vec[Vec[i64]] = Vec.new();\n    for k in order.iter() {\n        let chain = [k];\n        out.push(chain);\n    }\n    out\n}\n\nfn main() {\n    println(chains([1, 2]).len());\n}\n", "2\n");
+}
+
+#[test]
+fn an_unannotated_mut_list_of_copy_refs_is_a_list_of_values() {
+    accepted_as_written("r2b", "struct Unit { chain: Vec[i64] }\nfn main() {\n    let order: Vec[i64] = [3, 1, 2];\n    let mut units: Vec[Unit] = Vec.new();\n    for k in order.iter() {\n        let mut chain = [k];\n        chain.insert(0, k);\n        units.push(Unit { chain: chain });\n    }\n    println(units[2].chain.len());\n}\n", "2\n");
 }

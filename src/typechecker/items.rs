@@ -7640,6 +7640,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         if !vars.is_empty() {
             vars.sort_by(|a, b| a.1.cmp(&b.1));
+            self.note_collection_vars(&ty);
             self.unsolved_call_vars.push((value.span, vars.clone()));
             // The initializer's own node takes the opened type, so the type
             // the body solves is what the call's arguments are read off

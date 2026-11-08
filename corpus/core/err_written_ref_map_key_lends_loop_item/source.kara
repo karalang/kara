@@ -1,0 +1,10 @@
+// design.md §8: a WRITTEN `Map[ref i64, V]` keeps its references, so the
+// loop's per-item copy is lent into the map past its iteration (§5.6).
+fn main() {
+    let nums: Vec[i64] = [1, 1, 2];
+    let mut count: Map[ref i64, i64] = Map.new();
+    for x in nums.iter() {
+        *count.entry(x).or_insert(0) += 1;
+    }
+    println(f"{count.len()}");
+}

@@ -25648,15 +25648,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                     unreachable!()
                 };
                 let mt = self.expr_ty(map)?;
-                let (_, mbase) = self.strip_ty_full(mt);
+                let (mk, mbase) = self.strip_ty_full(mt);
+                // The key is passed as the map's key type, as `insert`'s is:
+                // a `ref` key is a borrow of the argument, not the value a
+                // loop binding holds (B-2026-11-08-19).
+                let key_t = match mk {
+                    HK::Intrinsic { args: ta, .. } => self.tys().tcx().list(ta).first().copied(),
+                    _ => None,
+                };
                 let recv = self.recv_place(map, true)?;
                 let mut rest = Vec::new();
-                for a in key.iter().chain(args) {
+                for (i, a) in key.iter().chain(args).enumerate() {
                     if self.is_fn_typed(a.value.id)
                         || matches!(a.value.kind, ExprKind::Closure { .. })
                     {
                         let (op, _) = self.fn_value(&a.value)?;
                         rest.push(op);
+                    } else if let (0, Some(kt)) = (i, key_t) {
+                        rest.push(self.arg_operand(&a.value, kt)?);
                     } else {
                         rest.push(self.expr_operand(&a.value)?);
                     }

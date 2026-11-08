@@ -155,6 +155,9 @@ impl<'a> super::TypeChecker<'a> {
         if allow_borrowed && self.is_key_view(&pre_slot, &arg_ty) {
             return;
         }
+        // An unannotated map's key or value takes a `Copy` reference's
+        // value (design.md §8, B-2026-11-08-19).
+        self.solve_collection_var_by_value(slot, &arg_ty);
         unify_types(
             slot,
             &arg_ty,

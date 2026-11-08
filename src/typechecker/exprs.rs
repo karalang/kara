@@ -5111,6 +5111,11 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     t => t,
                 };
+                // An unannotated collection's element or key takes a
+                // `Copy` reference's value (B-2026-11-08-19).
+                if self.solve_collection_var_by_value(sub_param_ty, arg_ty) {
+                    continue;
+                }
                 unify_types(
                     sub_param_ty,
                     arg_ty,
@@ -5665,6 +5670,7 @@ impl<'a> super::TypeChecker<'a> {
         });
         self.aliased_call_vars.extend(aliased);
         if !late.is_empty() {
+            self.note_collection_vars(&ret);
             self.unsolved_call_vars.push((*record_subs_for_span, late));
         }
 
@@ -6087,6 +6093,74 @@ impl<'a> super::TypeChecker<'a> {
     /// `collect` into a written collection is such a later use: it solves
     /// what its items left open, so `.map(|_| Vec.new()).collect()` into a
     /// `Vec[Vec[String]]` fixes the inner `Vec`'s parameter.
+    /// B-2026-11-08-19: records the variables `ty`, a collection's type,
+    /// holds as its own arguments ([`Self::collection_vars`]).
+    pub(super) fn note_collection_vars(&mut self, ty: &Type) {
+        let ty = self.resolved_now(ty);
+        let t = match &ty {
+            Type::Ref(i) | Type::MutRef(i) => i.as_ref(),
+            t => t,
+        };
+        if let Type::Named { name, args } = t {
+            if matches!(
+                name.as_str(),
+                "Vec" | "VecDeque" | "Map" | "Set" | "SortedMap" | "SortedSet"
+            ) {
+                for a in args {
+                    if let Type::TypeVar(id) = a {
+                        self.collection_vars.insert(*id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// B-2026-11-08-19 (design.md §8): when `slot` is a variable standing
+    /// for an unannotated collection's element, key or value, and `value`
+    /// is a `ref T` with `T: Copy`, the variable is solved to `T` and the
+    /// reference is read as its value. True when it solved one.
+    /// An unannotated collection literal whose elements are references to a
+    /// `Copy` type holds their values (design.md §8, B-2026-11-08-19).
+    pub(super) fn literal_element_by_value(&mut self, elem: Type) -> Type {
+        match self.resolved_now(&elem) {
+            Type::Ref(inner)
+                if !contains_type_var(&inner) && self.is_copy_type_during_check(&inner) =>
+            {
+                *inner
+            }
+            _ => elem,
+        }
+    }
+
+    pub(super) fn solve_collection_var_by_value(&mut self, slot: &Type, value: &Type) -> bool {
+        // A slot this already solved takes the same reference again: the
+        // `entry` key is inferred against its slot, then checked against it.
+        if let Type::TypeVar(id) = slot {
+            if self.collection_vars.contains(id) && self.env.substitutions.contains_key(id) {
+                let solved = self.resolved_now(slot);
+                let value = self.resolved_now(value);
+                return matches!(&value, Type::Ref(inner) if **inner == solved);
+            }
+        }
+        let Type::TypeVar(id) =
+            super::inference::resolve_type_var_top(slot, &self.env.substitutions)
+        else {
+            return false;
+        };
+        if !self.collection_vars.contains(&id) {
+            return false;
+        }
+        let value = self.resolved_now(value);
+        let Type::Ref(inner) = &value else {
+            return false;
+        };
+        if contains_type_var(inner) || !self.is_copy_type_during_check(inner) {
+            return false;
+        }
+        self.env.substitutions.insert(id, inner.as_ref().clone());
+        true
+    }
+
     pub(super) fn report_unsolved_call_vars(&mut self) {
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
         // B-2026-11-07-9: a `const` parameter no later use fixed.
@@ -13391,6 +13465,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let first_ty = self.infer_collection_elements(elements);
+                    let first_ty = self.literal_element_by_value(first_ty);
                     self.record_collection_literal(expr, "Vec", elements);
                     Type::Named {
                         name: "Vec".to_string(),
@@ -13431,6 +13506,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     "Vec" => {
                         let first_ty = self.infer_collection_elements(items);
+                        let first_ty = self.literal_element_by_value(first_ty);
                         self.record_collection_literal(expr, "Vec", items);
                         Type::Named {
                             name: "Vec".to_string(),
@@ -13439,6 +13515,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     "Set" => {
                         let first_ty = self.infer_collection_elements(items);
+                        let first_ty = self.literal_element_by_value(first_ty);
                         self.record_collection_literal(expr, "Set", items);
                         // Its hasher comes from where the set goes, as
                         // `Set.new()`'s does (B-2026-10-25-31).
