@@ -3411,7 +3411,71 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             ));
         }
     }
-    out
+    out.into_iter()
+        .map(|block| hoist_embedded_code(&block))
+        .collect()
+}
+
+/// A message that opens with its own `error[E_NAME]: ` (the spec's symbolic
+/// code, written into the text by the phase that makes it) is printed with
+/// that code as its one header, `error[E_NAME]: f.kara:2:1: cannot ...`,
+/// as the book quotes it, where it used to follow the phase's header
+/// (`error[typecheck]: f.kara:2:1: error[E_NAME]: ...`, B-2026-11-08-41).
+fn hoist_embedded_code(block: &str) -> String {
+    let (first, rest) = match block.split_once('\n') {
+        Some((f, r)) => (f, Some(r)),
+        None => (block, None),
+    };
+    let Some((head, code, message)) = split_embedded_code_line(first) else {
+        return block.to_string();
+    };
+    let line = format!(
+        "{head_sev}[{code}]{tail}: {message}",
+        head_sev = &head[..head.find('[').unwrap_or(0)],
+        tail = &head[head.find("]").map_or(head.len(), |i| i + 1)..],
+    );
+    match rest {
+        Some(r) => format!("{line}\n{r}"),
+        None => line,
+    }
+}
+
+/// `(header, code, message)` of a rendered first line
+/// `sev[label]: file:line:col: error[E_NAME]: message`, when it has one.
+fn split_embedded_code_line(line: &str) -> Option<(&str, &str, &str)> {
+    let at = line.find(": error[E_")?;
+    let head = &line[..at];
+    if !head.contains("]: ") {
+        return None;
+    }
+    let after = &line[at + ": error[".len()..];
+    let close = after.find("]: ")?;
+    let code = &after[..close];
+    if !code
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
+        return None;
+    }
+    Some((head, code, &after[close + "]: ".len()..]))
+}
+
+/// A diagnostic message without the `error[E_NAME]: ` it opens with, and
+/// that code: the JSON carries the code in `symbol` and the message
+/// without it (B-2026-11-08-41).
+pub(crate) fn strip_embedded_code(message: &str) -> (Option<&str>, &str) {
+    if let Some(after) = message.strip_prefix("error[E_") {
+        if let Some(close) = after.find("]: ") {
+            let code = &message["error[".len().."error[E_".len() + close];
+            if code
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            {
+                return (Some(code), &after[close + "]: ".len()..]);
+            }
+        }
+    }
+    (None, message)
 }
 
 /// core-semantics.md §12 (D6): a call through a non-escaping function-typed

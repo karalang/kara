@@ -77,7 +77,11 @@ fn main() {{ println(A {{}}.run()); println(B {{}}.run()); }}
 "
     );
     let err = check("index", &src);
-    let want = "main.kara:11:23: error[E_INDEX_MOVE_NON_COPY]";
-    assert_eq!(err.matches(want).count(), 1, "{err}");
+    assert_eq!(
+        err.matches("error[E_INDEX_MOVE_NON_COPY]: ").count(),
+        1,
+        "{err}"
+    );
+    assert_eq!(err.matches("main.kara:11:23: ").count(), 1, "{err}");
     assert!(err.contains("1 error(s) found."), "{err}");
 }

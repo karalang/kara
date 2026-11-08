@@ -4367,7 +4367,10 @@ fn main() {
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{err}");
-    assert!(err.contains("8:13: error[E_INDEX_MOVE_NON_COPY]"), "{err}");
+    assert!(
+        err.contains("error[E_INDEX_MOVE_NON_COPY]: ") && err.contains(":8:13: "),
+        "{err}"
+    );
     assert!(
         err.contains("9:5: `Names` implements `Index` but not `IndexMut`"),
         "{err}"

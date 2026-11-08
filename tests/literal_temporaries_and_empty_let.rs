@@ -69,7 +69,8 @@ fn an_unannotated_let_of_an_empty_list_literal_is_named_and_fixed() {
     let err = String::from_utf8_lossy(&check.stderr).to_string();
     assert!(!check.status.success(), "{err}");
     assert!(
-        err.contains(":2:17: error[E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION]: cannot infer the element type of the empty list literal `[]`"),
+        (err.contains("error[E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION]: ")
+            && err.contains(":2:17: cannot infer the element type of the empty list literal `[]`")),
         "{err}"
     );
     assert!(!err.contains("not lowered yet"), "{err}");

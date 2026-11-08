@@ -40,7 +40,8 @@ fn log_init_refuses_a_backend_that_holds_a_shared_value() {
     );
     assert!(!ok);
     for want in [
-        "main.kara:5:13: error[E_NOT_CROSS_TASK]: `B: CrossTask` is not satisfied: `B` cannot cross a task boundary",
+        "error[E_NOT_CROSS_TASK]: ",
+        "main.kara:5:13: `B: CrossTask` is not satisfied: `B` cannot cross a task boundary",
         "note: type `B` reaches `Box` at field 'b'",
         "help: declare `Box` as a `sync` type to allow cross-task sharing",
     ] {
@@ -81,7 +82,7 @@ fn a_cross_task_bound_is_computed_from_the_type() {
         .collect();
     assert_eq!(errors.len(), 1, "{err}");
     assert!(
-        errors[0].contains("main.kara:8:9: error[E_NOT_CROSS_TASK]: `T: CrossTask` is not satisfied: `Option[Cell]` cannot cross a task boundary"),
+        (errors[0].contains("error[E_NOT_CROSS_TASK]: ") && errors[0].contains("main.kara:8:9: `T: CrossTask` is not satisfied: `Option[Cell]` cannot cross a task boundary")),
         "{err}"
     );
 }

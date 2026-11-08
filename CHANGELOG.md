@@ -274,6 +274,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   Vec[(String, String)] }`, the shape io.md documents for sending headers,
   no longer draws a `prelude_shadow` warning saying the servers' built-in
   paths no longer apply: they serve it (B-2026-11-08-26).
+- An error whose message carried its own `error[E_NAME]:` printed two
+  headers on one line (`error[typecheck]: f.kara:2:1: error[E_SECRET_TRAIT_FORBIDDEN]: ...`).
+  That code is now the one header, `error[E_SECRET_TRAIT_FORBIDDEN]: f.kara:2:1: ...`,
+  and `--output=json` gives it as `symbol`, with the message after it
+  (B-2026-11-08-41).
 
 ### Tooling
 

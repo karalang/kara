@@ -86,7 +86,7 @@ fn main() { println(f([1, 2].into_iter())); }
     let (hits, _) = errors_with(
         "assoc",
         src,
-        "E_UNKNOWN_ASSOC_TYPE_BINDING]: `Elem` is not an associated type of trait `Iterator`",
+        "`Elem` is not an associated type of trait `Iterator`",
     );
     assert_eq!(hits, vec![(1, 18)]);
 }

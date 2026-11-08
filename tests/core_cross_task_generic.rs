@@ -47,7 +47,8 @@ fn a_task_capturing_an_unbounded_type_parameter_is_refused_at_the_generic() {
     let (ok, err) = check("row", ROW);
     assert!(!ok);
     for want in [
-        "main.kara:5:30: error[E_NOT_CROSS_TASK]: capture of `x` by the task passed to `TaskGroup.spawn` (type `U`) cannot cross a task boundary",
+        "error[E_NOT_CROSS_TASK]: ",
+        "main.kara:5:30: capture of `x` by the task passed to `TaskGroup.spawn` (type `U`) cannot cross a task boundary",
         "note: type parameter `U` is not bounded by `CrossTask`, so a caller may give it a `shared` value",
         "help: declare `U: CrossTask` where `U` is declared",
     ] {
@@ -77,7 +78,7 @@ fn karac_fix_writes_the_bound_and_the_shared_argument_is_then_refused_at_the_cal
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!out.status.success());
     assert!(
-        err.contains("main.kara:8:21: error[E_NOT_CROSS_TASK]: `U: CrossTask` is not satisfied: `Cell` cannot cross a task boundary"),
+        (err.contains("error[E_NOT_CROSS_TASK]: ") && err.contains("main.kara:8:21: `U: CrossTask` is not satisfied: `Cell` cannot cross a task boundary")),
         "{err}"
     );
 }
@@ -101,8 +102,10 @@ fn a_task_result_and_a_channel_send_of_a_type_parameter_need_the_bound() {
     );
     assert!(!ok);
     for want in [
-        "main.kara:4:20: error[E_NOT_CROSS_TASK]: capture of `x` by the task passed to `TaskGroup.spawn` (type `U`)",
-        "main.kara:9:1: error[E_NOT_CROSS_TASK]: value sent across a channel (type `V`) cannot cross a task boundary",
+        "error[E_NOT_CROSS_TASK]: ",
+        "main.kara:4:20: capture of `x` by the task passed to `TaskGroup.spawn` (type `U`)",
+        "error[E_NOT_CROSS_TASK]: ",
+        "main.kara:9:1: value sent across a channel (type `V`) cannot cross a task boundary",
     ] {
         assert!(err.contains(want), "want {want:?} in\n{err}");
     }

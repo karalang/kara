@@ -18967,12 +18967,12 @@ fn run_value_corrupting_cast_aborts() {
         "a value-corrupting cast must abort `karac run`; stdout={stdout} stderr={stderr}",
     );
     assert!(
-        stderr.contains("error[typecheck]") && stderr.contains("E_INT_AS_CHAR"),
-        "expected a hard error[typecheck]/E_INT_AS_CHAR, not a warning: {stderr}",
+        stderr.contains("error[E_INT_AS_CHAR]"),
+        "expected a hard error[E_INT_AS_CHAR], not a warning: {stderr}",
     );
     assert!(
-        !stderr.contains("warning[typecheck]"),
-        "the cast must NOT downgrade to warning[typecheck]: {stderr}",
+        !stderr.contains("warning[typecheck]") && !stderr.contains("warning[E_INT_AS_CHAR]"),
+        "the cast must NOT downgrade to a warning: {stderr}",
     );
     // The program must not execute — no placeholder output, nothing past
     // the cast.

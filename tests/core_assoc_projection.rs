@@ -91,10 +91,11 @@ fn a_projection_two_bounds_declare_is_ambiguous() {
     let (ok, _, err) = karac("ambiguous", "check", src);
     assert!(!ok);
     assert!(
-        err.contains(
-            "error[E_AMBIGUOUS_ASSOC_TYPE]: `T.Output` is ambiguous: `Add` and `Mul` on 'T' \
-             each declare `Output`"
-        ),
+        err.contains("error[E_AMBIGUOUS_ASSOC_TYPE]: ")
+            && err.contains(
+                "`T.Output` is ambiguous: `Add` and `Mul` on 'T' \
+                 each declare `Output`"
+            ),
         "{err}"
     );
     assert!(
@@ -106,7 +107,7 @@ fn a_projection_two_bounds_declare_is_ambiguous() {
         "{err}"
     );
     assert_eq!(
-        err.matches("error[typecheck]").count(),
+        err.matches("error[E_AMBIGUOUS_ASSOC_TYPE]").count(),
         3,
         "once each: {err}"
     );

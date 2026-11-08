@@ -1478,8 +1478,14 @@ impl DiagnosticJson {
     }
 
     fn add(&mut self, d: DiagEntry<'_>) {
+        // The spec's symbolic code a message opens with goes in `symbol`,
+        // and the message without it (B-2026-11-08-41).
+        let (symbol, message) = super::strip_embedded_code(d.message);
+        let symbol = symbol
+            .map(|s| format!("\"symbol\":{},", json_string(s)))
+            .unwrap_or_default();
         let mut entry = format!(
-            "{{\"id\":{},\"severity\":{},\"primary\":true,\"phase\":{},\"code\":{},\"category\":{},\"concept\":{},{},\"message\":{}",
+            "{{\"id\":{},\"severity\":{},\"primary\":true,\"phase\":{},\"code\":{},{symbol}\"category\":{},\"concept\":{},{},\"message\":{}",
             json_string(d.id),
             json_string(d.severity),
             json_string(d.phase),
@@ -1492,7 +1498,7 @@ impl DiagnosticJson {
                 d.lint_name
             )),
             span_to_json(d.span, d.filename),
-            json_string(d.message),
+            json_string(message),
         );
         // Unified `hints` array: combines the (existing) `suggestion`
         // description entry and any signature-from-call-site stub-diff

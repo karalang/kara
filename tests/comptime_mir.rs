@@ -174,7 +174,8 @@ fn main() {
         let (code, stderr) = karac(cmd, "error", src);
         assert_ne!(code, 0, "{cmd}: {stderr}");
         assert!(
-            stderr.contains(":3:9: error[E_COMPTIME_ERROR]: value too large"),
+            (stderr.contains("error[E_COMPTIME_ERROR]: ")
+                && stderr.contains(":3:9: value too large")),
             "{cmd}: {stderr}"
         );
     }
@@ -194,7 +195,8 @@ fn main() {
     let (code, stderr) = karac("check", "panic", panics);
     assert_ne!(code, 0, "{stderr}");
     assert!(
-        stderr.contains(":6:13: error[E_COMPTIME_PANIC]: `comptime` evaluation panicked"),
+        (stderr.contains("error[E_COMPTIME_PANIC]: ")
+            && stderr.contains(":6:13: `comptime` evaluation panicked")),
         "{stderr}"
     );
     let spins = r#"comptime fn spin() -> i64 {
@@ -210,7 +212,7 @@ fn main() {
     let (code, stderr) = karac("check", "spin", spins);
     assert_ne!(code, 0, "{stderr}");
     assert!(
-        stderr.contains(":7:13: error[E_COMPTIME_ITER_LIMIT_EXCEEDED]"),
+        (stderr.contains("error[E_COMPTIME_ITER_LIMIT_EXCEEDED]: ") && stderr.contains(":7:13")),
         "{stderr}"
     );
 }
@@ -224,7 +226,8 @@ fn main() { println("x"); }
     let (code, stderr) = karac("check", "site", src);
     assert_ne!(code, 0, "{stderr}");
     assert!(
-        stderr.contains(":2:1: error[E_COMPTIME_ERROR]: derive(Message): `Color` is an enum"),
+        (stderr.contains("error[E_COMPTIME_ERROR]: ")
+            && stderr.contains(":2:1: derive(Message): `Color` is an enum")),
         "{stderr}"
     );
 }
