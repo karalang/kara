@@ -246,8 +246,12 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok((at, hv))
     }
 
-    /// The linear probe of `MirMap::find_slot` for the scalar `key` (hash
-    /// `hv`) in the hashed table `h`: where its entry is, or null.
+    /// The grouped probe of `MirMap::find_slot` for the scalar `key` (hash
+    /// `hv`) in the hashed table `h`: where its entry is, or null. The index
+    /// is control bytes (the top seven bits of a live slot's hash) read
+    /// eight at a time as a word, then 4-byte slots; a slot and its entry
+    /// are read only where a byte matches the key's tag, and a group with
+    /// an empty byte ends the probe (B-2026-11-08-8).
     fn probe(
         &mut self,
         h: PointerValue<'ctx>,
@@ -255,109 +259,148 @@ impl<'ctx> Cx<'ctx, '_> {
         hv: IntValue<'ctx>,
         t: Table,
     ) -> R<PointerValue<'ctx>> {
+        const LSB: u64 = 0x0101_0101_0101_0101;
+        const MSB: u64 = 0x8080_8080_8080_8080;
         let i64t = self.llcx.i64_type();
         let f = self.cur_fn()?;
         let block = |name| self.llcx.append_basic_block(f, name);
-        let (hdr, start, head, test, cmp, step, miss, done) = (
+        let (hdr, start, head, cand, next, after, step, miss, done) = (
             block("probe.live"),
             block("probe.start"),
             block("probe"),
-            block("probe.tag"),
             block("probe.key"),
             block("probe.next"),
+            block("probe.empty"),
+            block("probe.step"),
             block("probe.miss"),
             block("probe.done"),
         );
-        let null = self.builder.build_is_null(h, "").map_err(e)?;
-        self.builder
-            .build_conditional_branch(null, miss, hdr)
-            .map_err(e)?;
-        self.builder.position_at_end(hdr);
+        let b = &self.builder;
+        let null = b.build_is_null(h, "").map_err(e)?;
+        b.build_conditional_branch(null, miss, hdr).map_err(e)?;
+        b.position_at_end(hdr);
         let n = self.map_word(h, 5)?;
         let empty = self.is_zero(n)?;
-        self.builder
-            .build_conditional_branch(empty, miss, start)
-            .map_err(e)?;
-        self.builder.position_at_end(start);
-        let cells = self.map_ptr_word(h, 4)?;
+        let b = &self.builder;
+        b.build_conditional_branch(empty, miss, start).map_err(e)?;
+        b.position_at_end(start);
+        let ctrl = self.map_ptr_word(h, 4)?;
         let buf = self.map_ptr_word(h, 0)?;
-        let es = self.map_word(h, 1)?;
-        let mask = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
-        let mixed = self
-            .builder
+        // The entry's size is the type's: no load of the header's word.
+        let es = self.i64(self.layout(t.entry)?.size.max(1));
+        let b = &self.builder;
+        let mask = b.build_int_sub(n, self.i64(1), "").map_err(e)?;
+        let mixed = b
             .build_int_mul(hv, self.i64(0x9E37_79B9_7F4A_7C15), "")
             .map_err(e)?;
-        let mixed = self
-            .builder
+        let mixed = b
             .build_right_shift(mixed, self.i64(32), false, "")
             .map_err(e)?;
-        let home = self.builder.build_and(mixed, mask, "").map_err(e)?;
+        let home = b.build_and(mixed, mask, "").map_err(e)?;
+        let tag = b
+            .build_right_shift(hv, self.i64(57), false, "")
+            .map_err(e)?;
+        let tags = b.build_int_mul(tag, self.i64(LSB), "").map_err(e)?;
+        let slots_at = b.build_int_add(n, self.i64(8), "").map_err(e)?;
+        // SAFETY of the pointer: the slots follow the `ncells + 8` control
+        // bytes in the index's block.
+        let slots = unsafe { b.build_in_bounds_gep(self.llcx.i8_type(), ctrl, &[slots_at], "") }
+            .map_err(e)?;
         let want = self.load(key, t.key)?.into_int_value();
-        self.builder.build_unconditional_branch(head).map_err(e)?;
-        self.builder.position_at_end(head);
-        let i = self.builder.build_phi(i64t, "").map_err(e)?;
-        let iv = i.as_basic_value().into_int_value();
-        // SAFETY of the read: `i` stays under `ncells` by the mask.
-        let cp = unsafe { self.builder.build_in_bounds_gep(i64t, cells, &[iv], "") }.map_err(e)?;
-        let c = self
-            .builder
-            .build_load(i64t, cp, "")
+        let cttz = inkwell::intrinsics::Intrinsic::find("llvm.cttz")
+            .ok_or("no intrinsic llvm.cttz")?
+            .get_declaration(&self.module, &[i64t.into()])
+            .ok_or("llvm.cttz has no declaration")?;
+        let b = &self.builder;
+        b.build_unconditional_branch(head).map_err(e)?;
+        // head: the group at `pos`, and the bytes in it that match the tag.
+        b.position_at_end(head);
+        let pos = b.build_phi(i64t, "").map_err(e)?;
+        let stride = b.build_phi(i64t, "").map_err(e)?;
+        let posv = pos.as_basic_value().into_int_value();
+        let stridev = stride.as_basic_value().into_int_value();
+        // SAFETY of the read: the control bytes run 8 past the last cell.
+        let gp =
+            unsafe { b.build_in_bounds_gep(self.llcx.i8_type(), ctrl, &[posv], "") }.map_err(e)?;
+        let g = b.build_load(i64t, gp, "").map_err(e)?.into_int_value();
+        g.as_instruction()
+            .ok_or("a load")?
+            .set_alignment(1)
+            .map_err(e)?;
+        let x = b.build_xor(g, tags, "").map_err(e)?;
+        let lo = b.build_int_sub(x, self.i64(LSB), "").map_err(e)?;
+        let nx = b.build_not(x, "").map_err(e)?;
+        let m0 = b.build_and(lo, nx, "").map_err(e)?;
+        let m0 = b.build_and(m0, self.i64(MSB), "").map_err(e)?;
+        let any = b
+            .build_int_compare(IntPredicate::NE, m0, self.i64(0), "")
+            .map_err(e)?;
+        b.build_conditional_branch(any, cand, after).map_err(e)?;
+        // cand: the first matching byte's slot, and its entry's key.
+        b.position_at_end(cand);
+        let m = b.build_phi(i64t, "").map_err(e)?;
+        let mv = m.as_basic_value().into_int_value();
+        let tz = b
+            .build_call(
+                cttz,
+                &[mv.into(), self.llcx.bool_type().const_int(1, false).into()],
+                "",
+            )
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let byte = b.build_right_shift(tz, self.i64(3), false, "").map_err(e)?;
+        let i = b.build_int_add(posv, byte, "").map_err(e)?;
+        let i = b.build_and(i, mask, "").map_err(e)?;
+        // SAFETY of the read: `i < ncells`.
+        let sp =
+            unsafe { b.build_in_bounds_gep(self.llcx.i32_type(), slots, &[i], "") }.map_err(e)?;
+        let sl = b
+            .build_load(self.llcx.i32_type(), sp, "")
             .map_err(e)?
             .into_int_value();
-        let sl = self
-            .builder
-            .build_and(c, self.i64(0xFFFF_FFFF), "")
-            .map_err(e)?;
-        // `EMPTY` ends the probe; a `TOMB`, or a cell whose hash's top
-        // half differs, is passed over.
-        let stop = self
-            .builder
-            .build_int_compare(IntPredicate::EQ, sl, self.i64(0xFFFF_FFFF), "")
-            .map_err(e)?;
-        self.builder
-            .build_conditional_branch(stop, miss, test)
-            .map_err(e)?;
-        self.builder.position_at_end(test);
-        let x = self.builder.build_xor(c, hv, "").map_err(e)?;
-        let x = self
-            .builder
-            .build_right_shift(x, self.i64(32), false, "")
-            .map_err(e)?;
-        let same = self.is_zero(x)?;
-        let live = self
-            .builder
-            .build_int_compare(IntPredicate::NE, sl, self.i64(0xFFFF_FFFE), "")
-            .map_err(e)?;
-        let both = self.builder.build_and(same, live, "").map_err(e)?;
-        self.builder
-            .build_conditional_branch(both, cmp, step)
-            .map_err(e)?;
-        self.builder.position_at_end(cmp);
-        let off = self.builder.build_int_mul(sl, es, "").map_err(e)?;
+        let sl = b.build_int_z_extend(sl, i64t, "").map_err(e)?;
+        let off = b.build_int_mul(sl, es, "").map_err(e)?;
         // SAFETY of the pointer: a live slot is inside `buf`.
-        let at = unsafe {
-            self.builder
-                .build_in_bounds_gep(self.llcx.i8_type(), buf, &[off], "")
-        }
-        .map_err(e)?;
+        let at =
+            unsafe { b.build_in_bounds_gep(self.llcx.i8_type(), buf, &[off], "") }.map_err(e)?;
         let got = self.load(at, t.key)?.into_int_value();
-        let hit = self
-            .builder
+        let b = &self.builder;
+        let hit = b
             .build_int_compare(IntPredicate::EQ, got, want, "")
             .map_err(e)?;
-        self.builder
-            .build_conditional_branch(hit, done, step)
+        b.build_conditional_branch(hit, done, next).map_err(e)?;
+        // next: the following matching byte of the group.
+        b.position_at_end(next);
+        let m1 = b.build_int_sub(mv, self.i64(1), "").map_err(e)?;
+        let rest = b.build_and(mv, m1, "").map_err(e)?;
+        let more = b
+            .build_int_compare(IntPredicate::NE, rest, self.i64(0), "")
             .map_err(e)?;
-        self.builder.position_at_end(step);
-        let next = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
-        let next = self.builder.build_and(next, mask, "").map_err(e)?;
-        self.builder.build_unconditional_branch(head).map_err(e)?;
-        i.add_incoming(&[(&home, start), (&next, step)]);
-        self.builder.position_at_end(miss);
-        self.builder.build_unconditional_branch(done).map_err(e)?;
-        self.builder.position_at_end(done);
-        let phi = self.builder.build_phi(self.ptr_ty(), "").map_err(e)?;
-        phi.add_incoming(&[(&at, cmp), (&self.ptr_ty().const_null(), miss)]);
+        b.build_conditional_branch(more, cand, after).map_err(e)?;
+        m.add_incoming(&[(&m0, head), (&rest, next)]);
+        // after: a group with an empty byte ends the probe.
+        b.position_at_end(after);
+        let g1 = b.build_left_shift(g, self.i64(1), "").map_err(e)?;
+        let em = b.build_and(g, g1, "").map_err(e)?;
+        let em = b.build_and(em, self.i64(MSB), "").map_err(e)?;
+        let stop = b
+            .build_int_compare(IntPredicate::NE, em, self.i64(0), "")
+            .map_err(e)?;
+        b.build_conditional_branch(stop, miss, step).map_err(e)?;
+        b.position_at_end(step);
+        let stride2 = b.build_int_add(stridev, self.i64(8), "").map_err(e)?;
+        let pos2 = b.build_int_add(posv, stride2, "").map_err(e)?;
+        let pos2 = b.build_and(pos2, mask, "").map_err(e)?;
+        b.build_unconditional_branch(head).map_err(e)?;
+        pos.add_incoming(&[(&home, start), (&pos2, step)]);
+        stride.add_incoming(&[(&self.i64(0), start), (&stride2, step)]);
+        b.position_at_end(miss);
+        b.build_unconditional_branch(done).map_err(e)?;
+        b.position_at_end(done);
+        let phi = b.build_phi(self.ptr_ty(), "").map_err(e)?;
+        phi.add_incoming(&[(&at, cand), (&self.ptr_ty().const_null(), miss)]);
         Ok(phi.as_basic_value().into_pointer_value())
     }
 

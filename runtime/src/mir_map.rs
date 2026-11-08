@@ -39,9 +39,15 @@ pub struct MirMap {
     slots: usize,
     /// How many slots are holes (`dead` says which).
     holes: usize,
-    /// `index`'s cells and their number, kept in step with it for
-    /// compiled code (0 cells while it is empty).
-    cells: *const u64,
+    /// The index, for the hashed kinds (0 cells while it is empty): read
+    /// by compiled code, which probes it for a scalar key. `cells` points
+    /// at `ncells + GROUP` control bytes, the last [`GROUP`] mirroring the
+    /// first so a group can be read at any cell, and the `ncells` 4-byte
+    /// slots follow them. A control byte is [`CTRL_EMPTY`],
+    /// [`CTRL_DELETED`] or the top seven bits of a live slot's hash, so a
+    /// probe reads eight cells at a time and touches a slot or an entry
+    /// only where the tag matches (B-2026-11-08-8).
+    cells: *const u8,
     ncells: usize,
     /// The walk order of a hashed table ([`karac_mir_map_walk_entry`]): the
     /// `i`th entry of a walk is the entry at index `(perm_a * i + perm_c)
@@ -68,18 +74,13 @@ pub struct MirMap {
     /// allocated with the header, so a small table is one allocation
     /// (B-2026-11-08-7); it moves to a block of its own when it grows.
     data_inline: bool,
-    /// `cells` (the index, below) is the room for [`INLINE_CELLS`] cells
+    /// `cells` (the index) is the room for [`INLINE_CELLS`] cells
     /// allocated with the header, rather than a block of its own.
     cells_inline: bool,
     /// That room for cells, after the header and its inline entries.
-    inline_cells: *mut u64,
-    // `cells` / `ncells` above are the index itself, for the hashed kinds:
-    // an open-addressing table of the live slots by hash, a power of two
-    // long (or empty), at most half full counting [`TOMB`]s, probed
-    // linearly. A cell holds a slot in its low half and the top half of
-    // the slot's hash in its high half, so a probe reads neither the
-    // hashes nor `buf` for a key it passes over.
-    /// The cells of the index that are not [`EMPTY`].
+    inline_cells: *mut u8,
+    /// The index's cells that are not [`CTRL_EMPTY`], live or deleted: at
+    /// most 7/8 of them, so a probe always meets an empty one.
     index_used: usize,
     /// Which slots are holes: empty while there are none (so a table that
     /// never loses an entry never allocates it), else one per slot.
@@ -116,9 +117,8 @@ const NO_PAIR: u64 = u64::MAX;
 const INLINE_SLOTS: usize = 4;
 const INLINE_DATA_MAX: usize = 256;
 /// The index cells the header's allocation holds: the index a table of up
-/// to [`INLINE_SLOTS`] entries needs (`index_reserve` keeps it at most
-/// half full).
-const INLINE_CELLS: usize = 8;
+/// to seven entries needs (`index_reserve` keeps it at most 7/8 full).
+const INLINE_CELLS: usize = GROUP;
 /// Where the inline entries start: past the header, at an alignment
 /// `malloc`'s covers for any entry.
 const INLINE_AT: usize = (std::mem::size_of::<MirMap>() + 15) & !15;
@@ -147,19 +147,46 @@ const _: () = {
     assert!(std::mem::size_of::<std::sync::atomic::AtomicUsize>() == w);
 };
 
-/// An `index` cell that never held a slot: a probe stops here.
-const EMPTY: u64 = u32::MAX as u64;
-/// An `index` cell whose slot was removed: a probe goes on past it.
-const TOMB: u64 = (u32::MAX - 1) as u64;
+/// The control bytes a probe reads at once, as one word.
+pub const GROUP: usize = 8;
+/// The control byte of a cell that never held a slot: a probe stops at a
+/// group with one.
+pub const CTRL_EMPTY: u8 = 0xFF;
+/// The control byte of a cell whose slot was removed: a probe goes on.
+pub const CTRL_DELETED: u8 = 0x80;
+const LSB: u64 = 0x0101_0101_0101_0101;
+const MSB: u64 = 0x8080_8080_8080_8080;
 
-/// The `index` cell of slot `sl`, whose hash is `hv`.
-fn cell(hv: u64, sl: usize) -> u64 {
-    (hv & !0xFFFF_FFFF) | sl as u64
+/// A live cell's control byte: the top seven bits of its hash.
+pub fn ctrl_tag(hv: u64) -> u8 {
+    (hv >> 57) as u8
 }
 
-/// The slot an `index` cell holds, or [`EMPTY`] or [`TOMB`].
-fn cell_slot(c: u64) -> u64 {
-    c & 0xFFFF_FFFF
+/// The bytes of the group `g` that may equal `b`, as their top bits: every
+/// one that does, and rarely one more past it (the key decides).
+fn match_byte(g: u64, b: u8) -> u64 {
+    let x = g ^ LSB.wrapping_mul(b as u64);
+    x.wrapping_sub(LSB) & !x & MSB
+}
+
+/// The [`CTRL_EMPTY`] bytes of `g`: the only ones with both top bits set.
+fn match_empty(g: u64) -> u64 {
+    g & (g << 1) & MSB
+}
+
+/// The bytes of `g` that hold no live slot.
+fn match_free(g: u64) -> u64 {
+    g & MSB
+}
+
+/// The cell a group's matched top bit names, from the group's first cell.
+fn first_cell(pos: usize, m: u64, mask: usize) -> usize {
+    (pos + (m.trailing_zeros() / 8) as usize) & mask
+}
+
+/// The bytes an index of `n` cells takes: control bytes, then slots.
+fn index_bytes(n: usize) -> usize {
+    n + GROUP + 4 * n
 }
 
 impl MirMap {
@@ -177,31 +204,68 @@ impl MirMap {
             return None;
         }
         let mask = self.ncells - 1;
-        let mut i = Self::home(hv, mask);
-        let tag = hv >> 32;
+        let tag = ctrl_tag(hv);
+        let (mut pos, mut stride) = (Self::home(hv, mask), 0);
         loop {
-            // SAFETY: `i <= mask < ncells`.
-            let c = unsafe { *self.cells.add(i) };
-            match cell_slot(c) {
-                EMPTY => return None,
-                TOMB => {}
-                sl if c >> 32 == tag => {
-                    let sl = sl as usize;
-                    // SAFETY: the caller's contract; `sl < slots`.
-                    if unsafe { eq(self.slot_ptr(sl), key) } {
-                        return Some(sl);
-                    }
+            let g = self.group(pos);
+            let mut m = match_byte(g, tag);
+            while m != 0 {
+                let sl = self.slot_in(first_cell(pos, m, mask));
+                // SAFETY: the caller's contract; a tagged cell's slot is
+                // below `slots`.
+                if unsafe { eq(self.slot_ptr(sl), key) } {
+                    return Some(sl);
                 }
-                _ => {}
+                m &= m - 1;
             }
-            i = (i + 1) & mask;
+            if match_empty(g) != 0 {
+                return None;
+            }
+            stride += GROUP;
+            pos = (pos + stride) & mask;
+        }
+    }
+
+    /// The [`GROUP`] control bytes from cell `pos <= mask`, as a word.
+    fn group(&self, pos: usize) -> u64 {
+        // SAFETY: the control bytes run `GROUP` past the last cell.
+        u64::from_le_bytes(unsafe { self.cells.add(pos).cast::<[u8; GROUP]>().read_unaligned() })
+    }
+
+    /// The slots, after the control bytes.
+    fn slot_cells(&self) -> *mut u32 {
+        // SAFETY: inside the index's block; `ncells + GROUP` is a multiple
+        // of 8, so the slots are aligned.
+        unsafe { self.cells.cast_mut().add(self.ncells + GROUP).cast::<u32>() }
+    }
+
+    /// The slot cell `i < ncells` holds.
+    fn slot_in(&self, i: usize) -> usize {
+        // SAFETY: `i < ncells`.
+        unsafe { *self.slot_cells().add(i) as usize }
+    }
+
+    /// Sets cell `i`'s control byte, and its mirror past the last cell.
+    fn set_ctrl(&mut self, i: usize, c: u8) {
+        let mask = self.ncells - 1;
+        // SAFETY: both are control bytes of the index's block.
+        unsafe {
+            *self.cells.cast_mut().add(i) = c;
+            *self
+                .cells
+                .cast_mut()
+                .add((i.wrapping_sub(GROUP) & mask) + GROUP) = c;
         }
     }
 
     /// Room in `index` for one more slot.
     fn index_reserve(&mut self) {
-        if (self.index_used + 1) * 2 > self.ncells {
-            let want = ((self.len() + 1) * 4).next_power_of_two().max(8);
+        if (self.index_used + 1) * 8 > self.ncells * 7 {
+            // Twice as many cells as live slots once full, or the same
+            // number again when deleted cells filled it.
+            let want = ((self.len() + 1) * 8 / 7 + 1)
+                .next_power_of_two()
+                .max(INLINE_CELLS);
             self.reindex(want);
         }
     }
@@ -214,15 +278,15 @@ impl MirMap {
                 self.cells = self.inline_cells;
                 self.cells_inline = true;
             } else {
-                self.cells = karac_realloc_or_panic(std::ptr::null_mut(), cells * 8)
-                    .cast::<u64>()
-                    .cast_const();
+                self.cells =
+                    karac_realloc_or_panic(std::ptr::null_mut(), index_bytes(cells)).cast_const();
                 self.cells_inline = false;
             }
             self.ncells = cells;
         }
-        // SAFETY: `cells` holds `ncells` cells.
-        unsafe { std::slice::from_raw_parts_mut(self.cells.cast_mut(), cells) }.fill(EMPTY);
+        // SAFETY: the block holds `ncells + GROUP` control bytes.
+        unsafe { std::slice::from_raw_parts_mut(self.cells.cast_mut(), cells + GROUP) }
+            .fill(CTRL_EMPTY);
         self.index_used = 0;
         if !self.hashed {
             return;
@@ -244,17 +308,6 @@ impl MirMap {
         self.cells = std::ptr::null();
         self.ncells = 0;
         self.cells_inline = false;
-    }
-
-    /// The index cell `i < ncells`.
-    fn cell_at(&self, i: usize) -> u64 {
-        // SAFETY: the caller's bound.
-        unsafe { *self.cells.add(i) }
-    }
-
-    fn set_cell(&mut self, i: usize, c: u64) {
-        // SAFETY: as `cell_at`; the table is held `&mut`.
-        unsafe { *self.cells.cast_mut().add(i) = c };
     }
 
     /// Where the slots' hashes start, after `cap` entries.
@@ -293,35 +346,46 @@ impl MirMap {
     /// Records slot `sl` (hash `hv`) in `index`, which has room.
     fn index_place(&mut self, hv: u64, sl: usize) {
         let mask = self.ncells - 1;
-        let mut i = Self::home(hv, mask);
+        let (mut pos, mut stride) = (Self::home(hv, mask), 0);
         loop {
-            match cell_slot(self.cell_at(i)) {
-                EMPTY => {
-                    self.set_cell(i, cell(hv, sl));
+            let m = match_free(self.group(pos));
+            if m != 0 {
+                let i = first_cell(pos, m, mask);
+                // SAFETY: `i < ncells`.
+                if unsafe { *self.cells.add(i) } == CTRL_EMPTY {
                     self.index_used += 1;
-                    return;
                 }
-                TOMB => {
-                    self.set_cell(i, cell(hv, sl));
-                    return;
-                }
-                _ => i = (i + 1) & mask,
+                self.set_ctrl(i, ctrl_tag(hv));
+                // SAFETY: as above.
+                unsafe { *self.slot_cells().add(i) = sl as u32 };
+                return;
             }
+            stride += GROUP;
+            pos = (pos + stride) & mask;
         }
     }
 
     /// Forgets slot `sl` (hash `hv`) in `index`.
     fn index_take(&mut self, hv: u64, sl: usize) {
         let mask = self.ncells - 1;
-        let mut i = Self::home(hv, mask);
-        while cell_slot(self.cell_at(i)) != sl as u64 {
-            debug_assert!(
-                cell_slot(self.cell_at(i)) != EMPTY,
-                "a live slot is missing from the index"
-            );
-            i = (i + 1) & mask;
+        let tag = ctrl_tag(hv);
+        let (mut pos, mut stride) = (Self::home(hv, mask), 0);
+        loop {
+            let g = self.group(pos);
+            let mut m = match_byte(g, tag);
+            while m != 0 {
+                let i = first_cell(pos, m, mask);
+                // SAFETY: `i < ncells`.
+                if unsafe { *self.cells.add(i) } == tag && self.slot_in(i) == sl {
+                    self.set_ctrl(i, CTRL_DELETED);
+                    return;
+                }
+                m &= m - 1;
+            }
+            debug_assert!(match_empty(g) == 0, "a live slot is missing from the index");
+            stride += GROUP;
+            pos = (pos + stride) & mask;
         }
-        self.set_cell(i, TOMB);
     }
 
     /// The walk-order words for the current length, brought up to date
@@ -736,7 +800,7 @@ fn empty(entry_size: usize) -> *mut MirMap {
     let data = round8(INLINE_SLOTS * entry_size);
     let inline = data <= INLINE_DATA_MAX;
     let cells_at = INLINE_AT + if inline { data + INLINE_SLOTS * 8 } else { 0 };
-    let base = karac_realloc_or_panic(std::ptr::null_mut(), cells_at + INLINE_CELLS * 8);
+    let base = karac_realloc_or_panic(std::ptr::null_mut(), cells_at + index_bytes(INLINE_CELLS));
     let h = base.cast::<MirMap>();
     // SAFETY: a fresh allocation of more than a `MirMap`'s size, aligned as
     // `malloc` aligns, which is at least a `MirMap`'s alignment (and an
@@ -761,7 +825,7 @@ fn empty(entry_size: usize) -> *mut MirMap {
             hashed: false,
             data_inline: inline,
             cells_inline: false,
-            inline_cells: base.add(cells_at).cast::<u64>(),
+            inline_cells: base.add(cells_at),
             index_used: 0,
             dead: LeanVec::new(),
             live: std::cell::UnsafeCell::new(LeanVec::new()),
@@ -862,7 +926,7 @@ unsafe fn insert(
     if let Some(hv) = hash {
         // A slot must fit the low half of an `index` cell. Not `assert!`,
         // whose panic keeps std's panic hook in every binary with a table.
-        if at as u64 >= TOMB {
+        if at >= u32::MAX as usize {
             crate::fatal::write_stderr(b"panic: a hashed table of 2^32 entries\n");
             std::process::abort()
         }
@@ -1215,6 +1279,60 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn mix(k: *const u8) -> u64 {
+        // SAFETY: the keys are `i64`s.
+        let k = unsafe { (k as *const i64).read_unaligned() } as u64;
+        (k ^ (k >> 29)).wrapping_mul(0xBF58_476D_1CE4_E5B9) ^ k.rotate_left(41)
+    }
+
+    /// The grouped index finds every live key and no removed one through
+    /// growth, removals that leave deleted cells, and the rebuilds that
+    /// clear them, against a model (B-2026-11-08-8).
+    #[test]
+    fn the_grouped_index_matches_a_model() {
+        let mut h: *mut MirMap = std::ptr::null_mut();
+        let mut model: std::collections::BTreeSet<i64> = Default::default();
+        let mut rng = 99u64;
+        for step in 0..60_000 {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            let k = (rng % 20_000) as i64;
+            let kp = (&k as *const i64).cast();
+            // SAFETY: a live (or null) table of `i64` entries.
+            let at = unsafe { karac_mir_map_find(h, kp, Some(mix), Some(eq), None) };
+            assert_eq!(at >= 0, model.contains(&k), "step {step} key {k}");
+            if step % 3 == 0 && at >= 0 {
+                let mut out = 0i64;
+                // SAFETY: as above; `at` is an index of the table.
+                unsafe { karac_mir_map_remove(h, at, (&mut out as *mut i64).cast()) };
+                assert_eq!(out, k);
+                model.remove(&k);
+            } else if at < 0 {
+                // SAFETY: as above.
+                unsafe { karac_mir_map_insert(&mut h, 8, kp, Some(mix), None) };
+                model.insert(k);
+            }
+            if step % 5000 == 0 {
+                for q in 0..20_000i64 {
+                    // SAFETY: as above.
+                    let f = unsafe {
+                        karac_mir_map_find(h, (&q as *const i64).cast(), Some(mix), Some(eq), None)
+                    };
+                    assert_eq!(f >= 0, model.contains(&q), "step {step} probe {q}");
+                }
+                // SAFETY: as above.
+                let m = unsafe { &*h };
+                assert!(m.index_used * 8 <= m.ncells * 7);
+            }
+        }
+        // SAFETY: as above.
+        unsafe {
+            assert_eq!(karac_mir_map_len(h) as usize, model.len());
+            karac_mir_map_free(h);
+        }
+    }
+
     /// A small table is one allocation, its entries and index in the
     /// header's room; a table that never loses an entry records no holes.
     #[test]
@@ -1234,7 +1352,11 @@ mod tests {
         // SAFETY: as above.
         unsafe {
             karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None);
-            assert!(!(*h).data_inline && !(*h).cells_inline);
+            assert!(!(*h).data_inline && (*h).cells_inline);
+            for k in 5..8i64 {
+                karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None);
+            }
+            assert!(!(*h).cells_inline);
             karac_mir_map_free(h);
         }
     }

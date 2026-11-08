@@ -163,6 +163,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   A table used to make five allocations for its first entry. Kata 491 on
   x86: 13.06M allocations to 5.59M (Rust: 5.60M), 5.38G instructions to
   4.07G, 0.45 s to 0.35 s (B-2026-11-08-7).
+- **A `Map` or `Set` lookup reads eight index cells at a time.** The
+  index is now one control byte per cell (the top seven bits of the slot's
+  hash) read as a word, then 4-byte slots, kept up to 7/8 full; it was an
+  8-byte cell per slot kept at most half full, so a table of 200,000 keys
+  had an 8 MB index where it now has about 1.3 MB, and a lookup touches a
+  slot and an entry only where the tag matches. Kata 454 on x86: about
+  620 ms to 520 ms (Rust 411 ms), branch mispredicts 8.2M to 4.1M; kata
+  219: 760 ms to 690 ms (B-2026-11-08-8).
 
 ### Diagnostics
 
