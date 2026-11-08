@@ -6257,7 +6257,9 @@ fn check_write_through_a_read_only_slice() {
     // B-2026-10-15-61: `bytes()`, an unmarked range subscript and a
     // `Slice[T]` parameter are read-only views; writing an element needs a
     // `mut Slice[T]`. Both backends used to write into the source's buffer.
-    let expect = "read-only `Slice`, a view of another value's elements";
+    // One report each, from the core check, naming the binding
+    // (B-2026-11-08-64).
+    let expect = "a view of another value's elements, so an assignment through";
     rejected(
         "slice-write-bytes",
         r#"

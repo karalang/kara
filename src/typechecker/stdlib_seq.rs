@@ -1438,12 +1438,7 @@ impl<'a> super::TypeChecker<'a> {
             // time" rule is satisfied by construction rather than by proof.
             "split_at_mut" => {
                 if !mutable {
-                    self.type_error(
-                        "Slice.split_at_mut() requires a mutable slice (`mut Slice[T]`)"
-                            .to_string(),
-                        *span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    self.read_only_slice_method_error("split_at_mut", object, span);
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
@@ -1489,14 +1484,7 @@ impl<'a> super::TypeChecker<'a> {
             // Mutation methods (require mut Slice[T])
             "sort" | "reverse" => {
                 if !mutable {
-                    self.type_error(
-                        format!(
-                            "Slice.{}() requires a mutable slice (`mut Slice[T]`)",
-                            method
-                        ),
-                        *span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    self.read_only_slice_method_error(method, object, span);
                 }
                 if !args.is_empty() {
                     self.type_error(
@@ -1516,11 +1504,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "sort_by" => {
                 if !mutable {
-                    self.type_error(
-                        "Slice.sort_by() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        *span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    self.read_only_slice_method_error("sort_by", object, span);
                 }
                 if args.len() != 1 {
                     self.type_error(
@@ -1541,11 +1525,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "sort_by_key" => {
                 if !mutable {
-                    self.type_error(
-                        "Slice.sort_by_key() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        *span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    self.read_only_slice_method_error("sort_by_key", object, span);
                 }
                 if args.len() != 1 {
                     self.type_error(
@@ -1566,11 +1546,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "fill" => {
                 if !mutable {
-                    self.type_error(
-                        "Slice.fill() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        *span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    self.read_only_slice_method_error("fill", object, span);
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
@@ -1593,11 +1569,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "swap" => {
                 if !mutable {
-                    self.type_error(
-                        "Slice.swap() requires a mutable slice (`mut Slice[T]`)".to_string(),
-                        *span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    self.read_only_slice_method_error("swap", object, span);
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
@@ -2163,6 +2135,73 @@ impl<'a> super::TypeChecker<'a> {
                 *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
+        }
+    }
+
+    /// A method that changes a slice in place, called on a read-only
+    /// `Slice[T]`. A local bound from a view (`let mut b = s.bytes()`) is
+    /// one: `let mut` does not make the view writable, and the writer's
+    /// likely intent is an owned copy, so `.to_vec()` on its initializer is
+    /// the fix (B-2026-11-08-64; `core_ref_write` offers the same edit for
+    /// an assignment through it).
+    /// Note or forget `let name = <value>` in `read_only_slice_lets`.
+    pub(super) fn note_read_only_slice_let(&mut self, name: &str, value: &Expr, ty: &Type) {
+        let view = matches!(self.resolved_now(ty), Type::Slice { mutable: false, .. });
+        let postfix = match &value.kind {
+            ExprKind::Index { index, .. } => !matches!(index.kind, ExprKind::Range { .. }),
+            ExprKind::MethodCall { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Identifier(_) => true,
+            _ => false,
+        };
+        if view && postfix {
+            self.read_only_slice_lets
+                .insert(name.to_string(), value.span);
+        } else {
+            self.read_only_slice_lets.remove(name);
+        }
+    }
+
+    pub(super) fn read_only_slice_method_error(
+        &mut self,
+        method: &str,
+        object: &Expr,
+        span: &Span,
+    ) {
+        let ExprKind::Identifier(name) = &object.kind else {
+            self.type_error(
+                format!(
+                    "Slice.{method}() requires a mutable slice (`mut Slice[T]`); this one is a \
+                     read-only view (library/collections.md). Copy the elements with \
+                     `.to_vec()` to get a `Vec` of your own"
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return;
+        };
+        let message = format!(
+            "`{name}` is a read-only `Slice`, a view of another value's elements, so \
+             `{name}.{method}()` cannot change it: Slice.{method}() requires a mutable slice \
+             (`mut Slice[T]`), and `let mut` does not make a view writable \
+             (library/collections.md). Copy the elements with `.to_vec()` to get a `Vec` \
+             of your own"
+        );
+        match self.read_only_slice_lets.get(name.as_str()) {
+            Some(value) => {
+                let fix = super::FixIt {
+                    span: Span {
+                        offset: value.offset + value.length,
+                        length: 0,
+                        ..*value
+                    },
+                    replacement: ".to_vec()".to_string(),
+                };
+                self.type_error_with_fix_it(message, *span, TypeErrorKind::TypeMismatch, fix);
+            }
+            None => self.type_error(message, *span, TypeErrorKind::TypeMismatch),
         }
     }
 }

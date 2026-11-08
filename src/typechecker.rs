@@ -3994,6 +3994,12 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-08-53). A copy, `let y = x`, is
     /// noted with `x`'s entry, whose `root` names `x` as the binding to fix.
     pub(super) literal_lets: FxHashMap<String, LiteralLet>,
+    /// `let x = <view>` with no annotation whose value is a read-only
+    /// `Slice[T]` written as a postfix expression other than a range
+    /// subscript (`s.bytes()`), by name: the initializer's span, where
+    /// `.to_vec()` makes `x` a `Vec` of its own when a method that changes
+    /// a slice in place is called on it (B-2026-11-08-64).
+    pub(super) read_only_slice_lets: FxHashMap<String, Span>,
     /// The spans of identifiers that read a [`StrLitLet`] binding.
     pub(super) str_lit_let_uses: FxHashMap<SpanKey, String>,
     /// The uses reported for a [`StrLitLet`] that is offered `: Str`.
@@ -4403,6 +4409,7 @@ impl<'a> TypeChecker<'a> {
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
             literal_lets: FxHashMap::default(),
+            read_only_slice_lets: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,

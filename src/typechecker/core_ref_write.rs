@@ -1066,7 +1066,12 @@ impl Walk<'_, '_> {
                     {
                         (Origin::RefPattern, None)
                     }
-                    _ => (Origin::Owned, None),
+                    // A local bound from a read-only view (`let mut b =
+                    // s.bytes()`) is one; an assignment through it is
+                    // fixed by copying the view, `.to_vec()` on its
+                    // initializer (B-2026-11-08-64). A range subscript is
+                    // left alone: `mut v[a..b]` may be what was meant.
+                    _ => (Origin::Owned, self.to_vec_fix(value)),
                 };
                 self.bind(pattern, origin, fix);
                 let wrote = self.closure_writes.get(&value.span.offset).cloned();
@@ -2195,6 +2200,32 @@ impl Walk<'_, '_> {
         }
     }
 
+    /// `.to_vec()` after `value`, when it is a read-only `Slice[T]`
+    /// written as a postfix expression other than a range subscript.
+    fn to_vec_fix(&self, value: &Expr) -> Option<FixIt> {
+        let view = matches!(
+            self.node_types.get(&value.id),
+            Some((Type::Slice { mutable: false, .. }, _))
+        );
+        let postfix = match &value.kind {
+            ExprKind::Index { index, .. } => !matches!(index.kind, ExprKind::Range { .. }),
+            ExprKind::MethodCall { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Identifier(_) => true,
+            _ => false,
+        };
+        (view && postfix).then(|| FixIt {
+            span: Span {
+                offset: value.span.offset + value.span.length,
+                length: 0,
+                ..value.span
+            },
+            replacement: ".to_vec()".to_string(),
+        })
+    }
+
     /// The error for a write through `at`, the read-only step, worded by
     /// where the borrow came from so the fix can be named.
     fn read_only_message(&self, at: &Expr, action: &str) -> String {
@@ -2231,7 +2262,8 @@ impl Walk<'_, '_> {
                 let ty = type_display(&self.node_types[&at.id].0);
                 let action = action.replace("through it", &format!("through `{n}`"));
                 return format!(
-                    "`{n}` is a read-only `{ty}`, so {action} cannot modify it \
+                    "`{n}` is a read-only `{ty}`, a view of another value's elements, \
+                     so {action} cannot modify it \
                      (library/collections.md: changing a slice in place needs a \
                      `mut Slice[T]`). Write through the sequence itself, pass \
                      `mut v[a..b]` to a `mut Slice[T]` parameter, or copy the \

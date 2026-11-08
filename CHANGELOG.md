@@ -255,6 +255,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- **A method that changes a slice in place, called on a local bound from a
+  view, names the binding and carries `.to_vec()`.** `let mut b =
+  s.bytes(); b.sort()` said only "Slice.sort() requires a mutable slice";
+  it now says `let mut` does not make a view writable, and `karac fix`
+  writes `s.bytes().to_vec()`, as for `b[0] = 120`, which was reported
+  twice and is now reported once (B-2026-11-08-64).
+
 - **`karac fix` carries Rust's `Rc<RefCell<T>>` to a `shared struct`.**
   LeetCode's tree template stopped at "unknown module `std.rc`, did you mean
   `std.io`?". The `use std::rc::Rc;` line's fix now deletes it, declares

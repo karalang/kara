@@ -2807,6 +2807,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_iter_lets = std::mem::take(&mut self.iter_lets);
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
+        let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_closure_lets = std::mem::take(&mut self.current_fn_closure_lets);
         let markers: rustc_hash::FxHashMap<String, Span> = f
@@ -2915,6 +2916,7 @@ impl<'a> super::TypeChecker<'a> {
         self.explain_str_lit_lets();
         self.str_lit_lets = saved_str_lit_lets;
         self.literal_lets = saved_literal_lets;
+        self.read_only_slice_lets = saved_read_only_slice_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_frozen_lets = saved_frozen_lets;
@@ -6703,6 +6705,12 @@ impl<'a> super::TypeChecker<'a> {
     /// passes the question on to that object; a handle (`shared`, `Rc`,
     /// `Arc`) or a reference decides for itself and other checks own it.
     fn check_read_only_slice_write(&mut self, target: &Expr) {
+        // The core check reports the same write, naming the binding and
+        // carrying its fix; reporting it here too printed it twice
+        // (B-2026-11-08-64).
+        if self.cli_lint_overrides.strict_core {
+            return;
+        }
         let mut cur = target;
         loop {
             let object = match &cur.kind {
@@ -11068,7 +11076,9 @@ impl<'a> super::TypeChecker<'a> {
                         self.note_iter_let(name, pattern.span, &value.span, &expected_ty);
                         self.note_str_lit_let(name, pattern.span, value, &expected_ty);
                         self.note_literal_let(name, pattern.span, value, &expected_ty);
+                        self.note_read_only_slice_let(name, value, &expected_ty);
                     } else {
+                        self.read_only_slice_lets.remove(name.as_str());
                         self.iter_lets.remove(name.as_str());
                         self.str_lit_lets.remove(name.as_str());
                         self.literal_lets.remove(name.as_str());
