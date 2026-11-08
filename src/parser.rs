@@ -1006,6 +1006,7 @@ impl Parser {
             rust_box_new: std::mem::take(&mut self.rust_box_new),
             foreign_calls: std::mem::take(&mut self.foreign_calls),
             expr_stmt_semis: std::mem::take(&mut self.expr_stmt_semis),
+            rust_heap_ctor_sides: self.rust_heap_ctor_sides(),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             rust_reverse_wraps: self.rust_reverse_wraps(),
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
@@ -1022,8 +1023,131 @@ impl Parser {
         }
     }
 
-    /// Each `Reverse(` written as a heap's item: the argument of a `.push(`
-    /// or the payload of a `Some(` (kata 1057), and each `Reverse[` written
+    /// Which way each Rust heap constructor in [`Self::rust_heap_ctor`] pops,
+    /// told from the heap it builds (kata 2034): a program may hold a plain
+    /// `BinaryHeap` (largest first) beside a `BinaryHeap<Reverse<T>>`
+    /// (smallest first), so one program-wide answer reverses one of them.
+    /// The heap is the binding the constructor initializes: a field in a
+    /// struct literal (`max_heap: BinaryHeap::new()`), a `let` (`let mut h =
+    /// BinaryHeap::new()`, with or without a type), or an assignment
+    /// (`self.h = ..`). That name is reversed when it is declared
+    /// `NAME: BinaryHeap[Reverse[..]]` or something pushes `NAME.push(Reverse(
+    /// ..))`, and plain when it is declared `NAME: BinaryHeap[T]` with another
+    /// `T` or is pushed a bare item. A constructor whose name is neither
+    /// follows the program: smallest first when some heap's items are
+    /// wrapped in `Reverse` and no heap is known plain, largest first when
+    /// nothing is wrapped. A name with both, or an unnamed constructor in a
+    /// program with both kinds of heap, is unsure, and then no heap and no
+    /// `Reverse` in the program gets a fix (the resolver holds them back).
+    fn rust_heap_ctor_sides(&self) -> crate::ast::RustHeapSides {
+        let mut sides = crate::ast::RustHeapSides::default();
+        if self.rust_heap_ctor.is_empty() {
+            return sides;
+        }
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let name_at = |i: usize| match tok(i) {
+            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+        let opens = |i: usize| matches!(tok(i), Some(Token::LeftBracket | Token::LessThan));
+        let mut reversed: rustc_hash::FxHashSet<&str> = Default::default();
+        let mut plain: rustc_hash::FxHashSet<&str> = Default::default();
+        let mut pushed_bare: rustc_hash::FxHashSet<&str> = Default::default();
+        for i in 0..self.tokens.len() {
+            let Some(name) = name_at(i) else { continue };
+            if matches!(tok(i + 1), Some(Token::Colon))
+                && name_at(i + 2) == Some("BinaryHeap")
+                && opens(i + 3)
+            {
+                if name_at(i + 4) == Some("Reverse") && opens(i + 5) {
+                    reversed.insert(name);
+                } else {
+                    plain.insert(name);
+                }
+            }
+            if matches!(tok(i + 1), Some(Token::Dot))
+                && name_at(i + 2) == Some("push")
+                && matches!(tok(i + 3), Some(Token::LeftParen))
+            {
+                if name_at(i + 4) == Some("Reverse") && matches!(tok(i + 5), Some(Token::LeftParen))
+                {
+                    reversed.insert(name);
+                } else {
+                    pushed_bare.insert(name);
+                }
+            }
+        }
+        // The binding each constructor initializes.
+        let mut named: Vec<(usize, Option<&str>)> = Vec::new();
+        for (k, t) in self.tokens.iter().enumerate() {
+            if !self.rust_heap_ctor.contains_key(&t.span.offset) {
+                continue;
+            }
+            let name = match tok(k.wrapping_sub(1)) {
+                Some(Token::Colon) => name_at(k.wrapping_sub(2)),
+                Some(Token::Equal) => {
+                    // back to the statement's start: a `let` names its first
+                    // identifier, an assignment the one before `=`
+                    let mut j = k - 1;
+                    let mut at_let = None;
+                    while j > 0 {
+                        j -= 1;
+                        match tok(j) {
+                            Some(Token::Let) => {
+                                at_let = Some(j);
+                                break;
+                            }
+                            Some(Token::Semicolon | Token::LeftBrace | Token::RightBrace) => break,
+                            _ => {}
+                        }
+                    }
+                    match at_let {
+                        Some(l) if matches!(tok(l + 1), Some(Token::Mut)) => name_at(l + 2),
+                        Some(l) => name_at(l + 1),
+                        None => name_at(k.wrapping_sub(2)),
+                    }
+                }
+                _ => None,
+            };
+            named.push((t.span.offset, name));
+        }
+        let side = |name: Option<&str>| -> Option<bool> {
+            let name = name?;
+            let rev = reversed.contains(name);
+            let pl = plain.contains(name) || pushed_bare.contains(name);
+            match (rev, pl) {
+                (true, false) => Some(true),
+                (false, true) => Some(false),
+                _ => None,
+            }
+        };
+        let any_plain = named.iter().any(|(_, n)| side(*n) == Some(false));
+        let any_wrapped = !reversed.is_empty();
+        for (offset, name) in named {
+            let known = side(name);
+            let both = name.is_some_and(|n| {
+                reversed.contains(n) && (plain.contains(n) || pushed_bare.contains(n))
+            });
+            match known {
+                Some(true) => {
+                    sides.smallest.insert(offset);
+                }
+                Some(false) => {}
+                None if both || (any_wrapped && any_plain) => {
+                    sides.unsure.insert(offset);
+                }
+                None if any_wrapped => {
+                    sides.smallest.insert(offset);
+                }
+                None => {}
+            }
+        }
+        sides
+    }
+
+    /// Each `Reverse(` written as a heap's item: the argument of a `.push(`,
+    /// the payload of a `Some(` (kata 1057) or the pattern of a `let` (kata
+    /// 2034), and each `Reverse[` written
     /// as the item type of a `BinaryHeap[` (kata 2008). See
     /// [`crate::ast::Program::rust_reverse_wraps`].
     fn rust_reverse_wraps(&self) -> rustc_hash::FxHashMap<usize, crate::resolver::TextEdit> {
@@ -1039,7 +1163,11 @@ impl Parser {
             let in_type = matches!(tok(i + 1), Some(Token::LeftBracket))
                 && matches!(tok(i - 1), Some(Token::LeftBracket))
                 && ident(i - 2, "BinaryHeap");
-            if !in_type {
+            // `let Reverse(x) = heap.pop().unwrap();`, the item taken apart
+            // by a `let` (kata 2034): the edit writes `x`.
+            let let_bound = matches!(tok(i + 1), Some(Token::LeftParen))
+                && matches!(tok(i - 1), Some(Token::Let));
+            if !in_type && !let_bound {
                 if !matches!(tok(i + 1), Some(Token::LeftParen))
                     || !matches!(tok(i - 1), Some(Token::LeftParen))
                 {

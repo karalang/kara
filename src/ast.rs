@@ -786,6 +786,17 @@ pub type PatternBindingBorrowModesTable =
 /// without any `impl Drop` blocks.
 pub type DropMethodKeysTable = std::collections::HashMap<String, String>;
 
+/// The Rust heap constructors ([`Program::rust_heap_ctor`]) whose heap pops
+/// the smallest first, its items wrapped in `Reverse`, and those whose side
+/// cannot be told; the rest pop the largest first (kata 2034).
+#[derive(Debug, Clone, Default)]
+pub struct RustHeapSides {
+    /// Offsets of `BinaryHeap` whose fix is `PriorityQueue.new()` / `from`.
+    pub smallest: rustc_hash::FxHashSet<usize>,
+    /// Offsets of `BinaryHeap` that get no fix.
+    pub unsure: rustc_hash::FxHashSet<usize>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
@@ -903,6 +914,9 @@ pub struct Program {
     /// PARSER; the resolver reports it when nothing declares a `BinaryHeap`
     /// (B-2026-11-04-5).
     pub rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Which way each constructor in [`Self::rust_heap_ctor`] pops, told
+    /// from the heap it builds. Set by the PARSER (kata 2034).
+    pub rust_heap_ctor_sides: RustHeapSides,
     /// Rust's `std::cmp::Reverse` around a heap's item, `heap.push(Reverse(x))`
     /// or `Some(Reverse(p))`, keyed by the offset of `Reverse`, with the edit
     /// that writes `x` in its place. Set by the PARSER from the

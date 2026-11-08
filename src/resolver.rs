@@ -2280,11 +2280,35 @@ impl<'a> Resolver<'a> {
         if name != "BinaryHeap" {
             return false;
         }
-        let smallest = self.rust_heaps_pop_smallest();
+        // Which way this heap pops is told from the heap it builds, not the
+        // program: a plain heap can sit beside a `Reverse` one (kata 2034).
+        let sides = &self.program.rust_heap_ctor_sides;
+        let smallest = sides.smallest.contains(&span.offset);
+        if sides.unsure.contains(&span.offset) {
+            self.errors.push(ResolveError {
+                message: "`BinaryHeap` is Rust's heap, which pops the largest first; this \
+                          program wraps the items of some heap in `Reverse` to pop the smallest, \
+                          and which kind this one is cannot be told: Kāra's `PriorityQueue` \
+                          pops the smallest first, so a heap whose items are wrapped is \
+                          `PriorityQueue.new()` (and the `Reverse` goes) and a heap of bare items \
+                          is `PriorityQueue.max_first()`"
+                    .to_string(),
+                span,
+                kind: ResolveErrorKind::UndefinedName,
+                suggestion: Some("PriorityQueue".to_string()),
+                replacement: None,
+                stub_hint: None,
+            });
+            return true;
+        }
+        // One unsure heap holds back every heap's fix and every `Reverse`'s:
+        // a later round would read the program without the evidence those
+        // fixes remove, and guess.
         let replacement = self
             .program
             .rust_heap_ctor
             .get(&span.offset)
+            .filter(|_| sides.unsure.is_empty())
             .cloned()
             .map(|mut e| {
                 if smallest {
@@ -2298,7 +2322,7 @@ impl<'a> Resolver<'a> {
         if smallest {
             self.errors.push(ResolveError {
                 message: "`BinaryHeap` is Rust's heap, which pops the largest first, and this \
-                          program wraps its items in `Reverse` to pop the smallest; Kāra's \
+                          heap's items are wrapped in `Reverse` to pop the smallest; Kāra's \
                           `PriorityQueue` pops the smallest first, so `BinaryHeap.new()` is \
                           `PriorityQueue.new()` and the `Reverse` goes"
                     .to_string(),
@@ -2388,7 +2412,9 @@ impl<'a> Resolver<'a> {
     /// `Reverse` where [`Self::report_rust_reverse`] drops it: the heap then
     /// pops the smallest first, and its constructor is `PriorityQueue.new()`.
     fn rust_heaps_pop_smallest(&self) -> bool {
-        !self.program.rust_reverse_wraps.is_empty() && !self.program.rust_heap_ctor.is_empty()
+        !self.program.rust_reverse_wraps.is_empty()
+            && !self.program.rust_heap_ctor.is_empty()
+            && self.program.rust_heap_ctor_sides.unsure.is_empty()
     }
 
     fn error_undefined_type(&mut self, name: &str, span: Span) {
