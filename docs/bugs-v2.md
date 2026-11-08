@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 175 |
-| false-positive | 148 |
+| diagnostics | 177 |
+| false-positive | 149 |
 | perf | 119 |
 | missing-feature | 105 |
 | soundness | 52 |
 | miscompile | 42 |
-| run-vs-build | 27 |
-| other | 23 |
+| run-vs-build | 28 |
+| other | 24 |
 | codegen-gap | 22 |
 | crash | 15 |
 | leak | 4 |
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 276 |
-| mir-llvm | 147 |
-| mir | 133 |
+| typecheck | 278 |
+| mir-llvm | 148 |
+| mir | 134 |
 | cli | 79 |
 | ownership | 63 |
 | parser | 47 |
-| interp | 33 |
+| interp | 35 |
 | runtime | 28 |
 | effect | 28 |
 | codegen | 22 |
@@ -109,11 +109,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
 | B-2026-11-08-3 | 2026-11-08 | mir-llvm | low | Kata 277's bench runs 1.83x Rust's instructions at karac's default O2 (3.19G vs 1.74G, x86 callgrind) and 0.62x at O3 (1.08G): O2 misses the verify loop's simplification once the candidate is the planted celebrity | — |
 | B-2026-11-08-4 | 2026-11-08 | resolver | low | `karac fix` rewrites Rust's `BinaryHeap<Reverse<i32>>` in a type (a struct field) to `PriorityQueue[Release[i32]]`: the Reverse-around-heap-items fix covers `push(Reverse(x))` and `Some(Reverse(p))` but not the type argument, which takes the resolver's did-you-mean `Release`; it should be `PriorityQueue[i32]` | — |
-| B-2026-11-08-5 | 2026-11-08 | mir-llvm | low | Kata 481's bench calls karac_mir_vec_reserve on every entry to its inner push loop (66.3M calls): the presize lowering of a counting loop that refills an existing Vec reserves through the runtime with no inline len + n <= cap check, 2.47x checked Rust's instructions | — |
 | B-2026-11-08-6 | 2026-11-08 | mir-llvm | low | Iterating a String's chars costs 17 instructions a char against Rust's 11 when collected, 35 against 27 in a for loop: the inlined decode reloads the String's pointer and length each char, tests ASCII twice and checks the byte cursor for overflow (katas 459, 467, 484); 459's `cs[i] != cs[i - d]` loop also keeps two bounds checks and the `i - d` overflow check | — |
 | B-2026-11-08-7 | 2026-11-08 | mir-llvm | low | A Map or Set allocates five buffers for its first entry and frees five (the MirMap header, buf, hashes, index, dead): kata 491's bench makes 13.0M mallocs against Rust's 5.6M for the same 3.53M clones, and insert plus free are 47% of its instructions | — |
 | B-2026-11-08-8 | 2026-11-08 | mir-llvm | low | A Map lookup calls SipHash out of line, reloading the hash state from a global and checking the seed on every call, and probes its index one 8-byte cell at a time: kata 454 runs 1.03x Rust's instructions but 2.9x its branch mispredicts and 2.5x its data reads | — |
-| B-2026-11-08-9 | 2026-11-08 | mir-llvm | low | Dropping a shared-struct handle calls an out-of-line, self-recursive drop function even when the count does not reach zero (154M calls, 21% of kata 510's instructions), and each weak upgrade adds 2 to the count and then calls that drop to take 1 back | — |
 | B-2026-11-08-10 | 2026-11-08 | mir-llvm | low | PriorityQueue's sift loops (runtime/stdlib/priority_queue.kara) take 24-27 instructions a level against Rust BinaryHeap's 9-12: bounds checks on every access, the Vec header reloaded from self each level, `self.max` tested inside the loop, and a swap where Rust moves a hole (kata 480) | — |
 | B-2026-11-08-11 | 2026-11-08 | parser | low | Rust's `mut arr: Vec<i32>` parameter has no `karac fix` edit even in a program written as Rust, where it always means an owned copy (`arr: own Vec[i32]` + `let mut arr = arr;`), and the one error is reported four times | — |
 | B-2026-11-08-12 | 2026-11-08 | ownership | low | `karac check` refuses `let (at, _) = v[i..j].iter().enumerate().min_by_key(..).unwrap(); v.remove(at);`: it keeps the range slice `v[i..j]` borrowed through the tuple pattern's `_`, so a later `mut ref` use of `v` is E-conflict; `.unwrap().0`, or `v.iter()` without the range, checks, and __mir-run accepts the program | — |
@@ -126,6 +124,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-22 | 2026-11-08 | typecheck | low | `m.get(k) == Some(3)` (Map[String, i64]) is refused with "cannot compare 'Option[ref i64]' and 'Option[i64]'", as are `it.peek() == Some('a')`, `fl.first() == Some(1.5)` and `bs.first() == Some(true)`; design.md §5 says a literal inside the constructor takes the element type the other side fixes, but the B-2026-11-07-54 fix promotes only string literals | — |
 | B-2026-11-08-23 | 2026-11-08 | typecheck | medium | `collect()` into an annotated `Result[Vec[i64], String]` does not fix the error type of the mapping closure's `Ok(..)`: `let m: Result[Vec[i64], String] = xs.iter().map(|p| Ok(p.len())).collect();` is refused "cannot infer type parameter 'E' of `Result[i64, E]` ... add a type annotation to the binding", though iterators.md gives `Result[C, E]: FromIterator[Result[T, E]]` with the same E, and the closure has no binding to annotate | — |
 | B-2026-11-08-24 | 2026-11-08 | mir | low | `Option`'s derived order puts `None` after every `Some(x)` (it is declared `Some(T), None`), so `sort()` on a `Vec[Option[T]]` puts `None` last; the review-thread ruling (core-types.md 0ec0d51d29) is `None` < `Some(x)` and `Ok(x)` < `Err(e)`, as Rust, Haskell and OCaml order them | — |
+| B-2026-11-08-25 | 2026-11-08 | mir | high | A program that `karac check` passes fails on every run lane with the internal `error[mir]: borrow check patch: ... drop of _24 while it is borrowed [E0516]` when a function reached from a `Server.serve` handler matches `(k.as_str(), val)` with `val` an enum carrying a String payload and another arm returns early; the same function called from `main` or a TaskGroup task runs | — |
+| B-2026-11-08-26 | 2026-11-08 | typecheck | low | Declaring `struct Response { status: i64, body: String, headers: Vec[(String, String)] }`, the form io.md § HTTP server documents for sending headers, draws `warning[prelude_shadow]: declaration of 'Response' shadows the prelude type ...; built-in paths keyed on 'Response' no longer apply to this type`, which reads as if the server will stop using it, but the server sends its headers correctly | — |
+| B-2026-11-08-27 | 2026-11-08 | interp+mir-llvm | low | `Json.deserialize` errors give a byte offset and no field (`expected '"' at character 13`) where `Json.parse` on the same text gives `expected value at line 2 column 12`; a wrong-typed field (`{"title": 3}` into `title: String`) also reads `expected '"' at character 10`, naming neither the field nor the type | — |
+| B-2026-11-08-28 | 2026-11-08 | interp | low | `karac run --interp prog | head -1` keeps running after the pipe closes and exits 0, printing nothing more but running every remaining iteration (a 2,000,000-line loop: 2.1 s, then its trailing eprintln runs); the JIT and a built binary stop at once with status 141 as io.md specifies | — |
+| B-2026-11-08-29 | 2026-11-08 | typecheck | medium | The unimported, deferred `std.cli` parser's types sit in the prelude, so a program declaring its own `Parser`, `Arg`, `Args`, `CliError` or `SubcommandResult` gets `warning[prelude_shadow] ... built-in paths keyed on 'Parser' no longer apply to this type` on every check, run, build and test; deferred.md § std.cli says the module is imported (`import std.cli`, `cli.Parser`) and no library doc lists these names | — |
 
 ### Relocated
 
@@ -847,6 +850,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-56 | interp+mir-llvm | medium | A method called straight on a constant whose value is a bare literal reads it at i64, not its declared type (corrected: not only wide ones; `CC.leadi… | a3a7d1eeb0 |
 | B-2026-11-07-57 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3; corrected: the `b += y` shape is a deliberate… | b85cf41506 |
 | B-2026-11-08-1 | mir-llvm | medium | The overflow-safe midpoint `lo + (hi - lo) / 2` keeps its signed division: halving (B-2026-11-06-8) does not see `hi - lo` as non-negative under the… | a8696f186e |
+| B-2026-11-08-5 | mir-llvm | low | Kata 481's bench calls karac_mir_vec_reserve on every entry to its inner push loop (66.3M calls): the presize lowering of a counting loop that refill… | bfa904694f |
+| B-2026-11-08-9 | mir-llvm | low | Dropping a shared-struct handle calls an out-of-line, self-recursive drop function even when the count does not reach zero (154M calls, 21% of kata 5… | ca44c9a984 |
 | B-2026-11-08-17 | typecheck | low | A known unit variant (`None`) in a `match` arm over a scrutinee that already failed to type is also reported as `` `None` is Type-class but binding n… | 8b1e2b6970 |
 
 </details>
