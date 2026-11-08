@@ -3278,6 +3278,8 @@ A trait's methods are candidates exactly when the trait's name resolves at the c
 
 **UFCS.** `Trait.method(receiver, args)` calls the named trait's impl directly and skips lookup. It is resolved at compile time: the trait is fixed at the call site, the impl is selected from the trait and the receiver type, and the call is checked against that impl's signature and effects. UFCS is the fix the ambiguity diagnostic points at, and the way to reach a trait method that an inherent method hides.
 
+**A generic trait is named with its arguments.** When a type implements a generic trait more than once (`impl Conv[String] for i64` and `impl Conv[f64] for i64`), `Conv[String].conv(n)` names one impl, so the trait's arguments select it as the receiver type does. Bare `Conv.conv(n)` is ambiguous whenever more than one instance applies, whatever type the call's result is checked against, and the ambiguity diagnostic lists one qualified form per candidate (`Conv[String].conv(n)`, `Conv[f64].conv(n)`) (review-thread ruling 2026-11-08, B-2026-11-08-77).
+
 **No method found.** The error is "no method named `m` found on type `T`", with the most similar method names on `T` as suggestions.
 
 **Distinct types do not reach their base type's methods.** `distinct type UserId = i64` does not make `i64`'s methods available on `UserId`. That is the point of a distinct type ([§5 Distinct types](#distinct-types)).
