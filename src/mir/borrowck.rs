@@ -2754,6 +2754,9 @@ fn main() -> () {
             "ok_fold_tuple_reads_a_borrowed_scalar_as_its_value",
             // A `Str`'s range index is the library's (B-2026-11-08-66).
             "ok_a_slice_rebinds_to_its_own_reslice",
+            // `==` on a map or set calls the library's `map_eq` and its kin
+            // (B-2026-11-08-82).
+            "ok_maps_and_sets_compare_by_content",
             // A `collect()` kept by a `ref` binding is refused by the
             // checker's temporary rule (§5.5, B-2026-11-08-43).
             "err_collect_temporary_kept_by_ref_let",
