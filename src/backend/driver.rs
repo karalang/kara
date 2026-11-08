@@ -697,9 +697,7 @@ pub(crate) fn link_executable_impl(
         // can say why something survives dead-stripping (B-2026-10-30-37).
         let link_args = std::env::var("KARAC_LINK_ARGS").unwrap_or_default();
         cmd.args(link_args.split_whitespace());
-        let output = cmd
-            .output()
-            .map_err(|e| format!("Failed to invoke linker: {}", e))?;
+        let output = cmd.output().map_err(|e| linker_spawn_error("cc", &e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1210,9 +1208,7 @@ fn link_shared_library_unix(
     } else if cfg!(target_os = "linux") {
         cmd.arg("-Wl,--gc-sections");
     }
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to invoke linker: {e}"))?;
+    let output = cmd.output().map_err(|e| linker_spawn_error("cc", &e))?;
     if !output.status.success() {
         return Err(format!(
             "Linker failed: {}",
@@ -1220,6 +1216,21 @@ fn link_shared_library_unix(
         ));
     }
     Ok(())
+}
+
+/// The error for a linker `program` that could not be started: when it
+/// is not on PATH, what to install, as a newcomer meets it at their first
+/// `karac build` (B-2026-11-07-50).
+fn linker_spawn_error(program: &str, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        format!(
+            "karac build needs a C linker: could not run `{program}` (not found on PATH). \
+             Install build-essential (Debian/Ubuntu) or the Xcode command-line tools \
+             (macOS); `karac run` works without one."
+        )
+    } else {
+        format!("could not run the linker `{program}`: {e}")
+    }
 }
 
 /// System import libs the runtime archive references (from
