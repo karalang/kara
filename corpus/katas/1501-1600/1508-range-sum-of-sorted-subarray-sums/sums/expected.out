@@ -1,0 +1,9 @@
+[1, 2, 3, 4], 1 to 5 -> 13
+[1, 2, 3, 4], 3 to 4 -> 6
+[1, 2, 3, 4], 1 to 10 -> 50
+[7], 1 to 1 -> 7
+[5, 5, 5], 2 to 5 -> 30
+1000 numbers, 1 to 500500 -> 215202892
+3000 arrays of 1 to 8 numbers: checksum 13784840
+300 arrays of 1 to 100 numbers: checksum 34365928
+3 arrays of 1 to 1000 numbers: checksum 439201707
