@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 196 |
 | false-positive | 161 |
-| perf | 125 |
+| perf | 127 |
 | missing-feature | 113 |
 | soundness | 53 |
 | miscompile | 45 |
@@ -69,20 +69,20 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen-gap | 23 |
 | crash | 19 |
 | leak | 4 |
-| use-after-free | 1 |
+| use-after-free | 2 |
 
 ### By surface
 
 | surface | total |
 |---|---|
 | typecheck | 308 |
-| mir-llvm | 160 |
-| mir | 143 |
+| mir-llvm | 163 |
+| mir | 144 |
 | cli | 86 |
 | ownership | 63 |
 | parser | 51 |
 | interp | 39 |
-| runtime | 29 |
+| runtime | 30 |
 | effect | 29 |
 | codegen | 22 |
 | resolver | 18 |
@@ -130,6 +130,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-79 | 2026-11-08 | typecheck | low | `Json.deserialize(text)` takes `text: String`, so a `Str` (a line from `text.lines()`, a slice) is refused ("expected 'ref String', found 'Str'") and needs `.to_string()`; `Json.parse(text: Str)` takes the view, and strings.md's reading methods all take `Str` | — |
 | B-2026-11-08-80 | 2026-11-08 | mir | low | A missing field in `Json.deserialize` is reported by its Kāra name, not its JSON key: a `#[serde(rename: "userName")] name: String` field absent from the input gives "missing field `name`", though the sender never sees a `name` key | — |
 | B-2026-11-08-82 | 2026-11-08 | typecheck | medium | Map, SortedMap, Set and SortedSet do not implement PartialEq/Eq, and the refusal suggests `#[derive(PartialEq)]` on a std type | — |
+| B-2026-11-08-83 | 2026-11-08 | mir+mir-llvm | medium | A borrow of a `shared` field that stays live across a recursive call makes recursion quadratic in depth: the run-time flag table is a linear list, and every `shared enum` payload binding takes a flag although enum payloads are never `mut` | — |
+| B-2026-11-08-84 | 2026-11-08 | mir-llvm | high | Index assignment into a `Vec[dyn Trait]` (`xs[i] = v`) leaves a freed block in the slot on the LLVM backend: heap-use-after-free on the next call through it, a segfault or exit 101 in plain builds | — |
+| B-2026-11-08-85 | 2026-11-08 | mir-llvm+runtime | medium | `sort()` on a Vec of tuples runs about 3.3x Rust's stable `sort`: anything but a plain integer goes to the runtime's byte-wise `merge_sort` with the comparator called through a pointer, so katas 2015 and 2021 (sorted event triples and pairs) bench at 2.07x and 2.46x Rust under overflow checks while a Vec[i64] sort beats Rust | — |
 
 ### Relocated
 
