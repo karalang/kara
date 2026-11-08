@@ -10214,8 +10214,9 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// Note `let name = <integer literal>` with no annotation (see
-    /// `TypeChecker::literal_lets`).
+    /// Note `let name = <integer literal>` with no annotation, and
+    /// `let name = [<literal>; n]` / `Vec.filled(n, <literal>)`, whose
+    /// elements take the literal's type (see `TypeChecker::literal_lets`).
     pub(super) fn note_literal_let(
         &mut self,
         name: &str,
@@ -10223,52 +10224,183 @@ impl<'a> super::TypeChecker<'a> {
         value: &Expr,
         ty: &Type,
     ) {
-        let id = match self.unbound_literal_var(ty) {
-            Some((id, inference::LiteralKind::Int)) => id,
-            _ => {
-                self.literal_lets.remove(name);
-                return;
-            }
+        let end = |s: Span| Span {
+            offset: s.offset + s.length,
+            length: 0,
+            ..s
         };
-        if Self::is_int_literal_operator_tree(value) {
-            let n = Self::int_literal_operator_tree_value(value);
-            self.literal_lets
-                .insert(name.to_string(), (name_span, id, n, name.to_string()));
-            return;
+        let fill = match &value.kind {
+            ExprKind::RepeatLiteral { value: v, .. } => Some(&**v),
+            ExprKind::Call { callee, args }
+                if args.len() == 2
+                    && matches!(&callee.kind, ExprKind::Path { segments, .. }
+                        if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled") =>
+            {
+                Some(&args[1].value)
+            }
+            _ => None,
+        };
+        let entry = if let Some(lit) = fill {
+            let element = match resolve_type_var_top(ty, &self.env.substitutions) {
+                Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Array { element, .. } => Some((*element).clone()),
+                _ => None,
+            };
+            element.and_then(|el| self.literal_entry(lit, &el, end(lit.span), true, true, name))
+        } else {
+            self.literal_entry(value, ty, end(name_span), false, false, name)
+                .or_else(|| self.literal_copy(value, ty))
+        };
+        match entry {
+            Some(e) => {
+                self.literal_lets.insert(name.to_string(), e);
+            }
+            None => {
+                self.literal_lets.remove(name);
+            }
         }
-        // A copy of such a binding, `let x = carry`, shares its literal's
-        // variable, so a narrowing refused at `x` is fixed on `carry`
-        // (kata 1073: LeetCode's template copies its carry into the digit
-        // sum it pushes onto a `Vec[i32]`).
-        if let ExprKind::Identifier(source) = &value.kind {
-            if let Some(entry) = self.literal_lets.get(source.as_str()) {
-                if self.resolved_now(&Type::TypeVar(entry.1)) == Type::TypeVar(id) {
-                    let entry = entry.clone();
-                    self.literal_lets.insert(name.to_string(), entry);
-                    return;
+    }
+
+    /// Note `let (a, b, ..) = (<literal>, <literal>, ..)` with no
+    /// annotation: each name bound straight to a literal element, whose fix
+    /// is that literal's suffix (see `TypeChecker::literal_lets`).
+    pub(super) fn note_literal_tuple_let(&mut self, pattern: &Pattern, value: &Expr, ty: &Type) {
+        let PatternKind::Tuple(pats) = &pattern.kind else {
+            return;
+        };
+        let exprs = match &value.kind {
+            ExprKind::Tuple(exprs) if exprs.len() == pats.len() => Some(exprs),
+            _ => None,
+        };
+        let tys = match resolve_type_var_top(ty, &self.env.substitutions) {
+            Type::Tuple(tys) if tys.len() == pats.len() => Some(tys),
+            _ => None,
+        };
+        for (i, p) in pats.iter().enumerate() {
+            let PatternKind::Binding(name) = &p.kind else {
+                continue;
+            };
+            let entry = match (exprs, &tys) {
+                (Some(exprs), Some(tys)) => {
+                    let lit = &exprs[i];
+                    let at = Span {
+                        offset: lit.span.offset + lit.span.length,
+                        length: 0,
+                        ..lit.span
+                    };
+                    self.literal_entry(lit, &tys[i], at, true, false, name)
+                }
+                _ => None,
+            };
+            match entry {
+                Some(e) => {
+                    self.literal_lets.insert(name.clone(), e);
+                }
+                None => {
+                    self.literal_lets.remove(name.as_str());
                 }
             }
         }
-        self.literal_lets.remove(name);
+    }
+
+    /// The [`LiteralLet`] for `value` typed `ty`, when `value` is an
+    /// unsuffixed integer literal (or an operator tree of them) whose
+    /// variable nothing has fixed yet.
+    fn literal_entry(
+        &self,
+        value: &Expr,
+        ty: &Type,
+        at: Span,
+        suffix: bool,
+        element: bool,
+        root: &str,
+    ) -> Option<super::LiteralLet> {
+        if !Self::is_int_literal_operator_tree(value) {
+            return None;
+        }
+        // A tuple's or a fill's literal is settled when the aggregate is
+        // built, so it is already the default `i64` here rather than a
+        // variable a later use could still fix.
+        let var = match self.unbound_literal_var(ty) {
+            Some((var, inference::LiteralKind::Int)) => Some(var),
+            Some(_) => return None,
+            None if suffix
+                && resolve_type_var_top(ty, &self.env.substitutions) == Type::Int(IntSize::I64) =>
+            {
+                None
+            }
+            None => return None,
+        };
+        // A suffix goes on a single literal only: on `1 + 2` it would type
+        // one operand, not the tree.
+        let single = match &value.kind {
+            ExprKind::Integer(_, None) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => {
+                matches!(operand.kind, ExprKind::Integer(_, None))
+            }
+            _ => false,
+        };
+        if suffix && !single {
+            return None;
+        }
+        Some(super::LiteralLet {
+            at,
+            suffix,
+            element,
+            var,
+            value: Self::int_literal_operator_tree_value(value),
+            root: root.to_string(),
+        })
+    }
+
+    /// A copy of a literal binding, `let x = carry`, shares its literal's
+    /// variable, so a narrowing refused at `x` is fixed on `carry` (kata
+    /// 1073: LeetCode's template copies its carry into the digit sum it
+    /// pushes onto a `Vec[i32]`). The copy's entry is the source's.
+    fn literal_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
+        let ExprKind::Identifier(source) = &value.kind else {
+            return None;
+        };
+        let Some((id, inference::LiteralKind::Int)) = self.unbound_literal_var(ty) else {
+            return None;
+        };
+        let entry = self.literal_lets.get(source.as_str())?;
+        let var = entry.var?;
+        (self.resolved_now(&Type::TypeVar(var)) == Type::TypeVar(id)).then(|| entry.clone())
     }
 
     /// design.md §8 Literals: a binding whose literal kept its default
     /// `i64` because only an operator or a method used it is refused where
     /// it meets a narrower type, far from the `let`. The annotation that
     /// makes it that type, `: <target>` on the binding the refused value
-    /// reads, is the fix (B-2026-11-08-20).
-    fn literal_let_annotation(
+    /// reads, is the fix (B-2026-11-08-20); for a tuple element or a fill's
+    /// element, whose literal is inline, the literal's suffix
+    /// (B-2026-11-08-53). Returns the binding's name, the fix, and the
+    /// advice for the message.
+    pub(super) fn literal_let_annotation(
         &self,
         expr: &Expr,
         source: &Type,
         target: &Type,
-    ) -> Option<(String, FixIt)> {
-        if *source != Type::Int(IntSize::I64) {
+    ) -> Option<(String, FixIt, String)> {
+        if *source != Type::Int(IntSize::I64) || !matches!(target, Type::Int(_) | Type::UInt(_)) {
             return None;
         }
-        fn names<'e>(e: &'e Expr, out: &mut Vec<&'e str>) {
+        // The names the value reads, each with whether it is read as an
+        // element (`v[i]`).
+        fn names<'e>(e: &'e Expr, out: &mut Vec<(&'e str, bool)>) {
             match &e.kind {
-                ExprKind::Identifier(n) => out.push(n.as_str()),
+                ExprKind::Identifier(n) => out.push((n.as_str(), false)),
+                ExprKind::Index { object, .. } => {
+                    if let ExprKind::Identifier(n) = &object.kind {
+                        out.push((n.as_str(), true));
+                    }
+                }
                 ExprKind::Unary { operand, .. } => names(operand, out),
                 ExprKind::Binary { left, right, .. } => {
                     names(left, out);
@@ -10279,26 +10411,43 @@ impl<'a> super::TypeChecker<'a> {
         }
         let mut found = Vec::new();
         names(expr, &mut found);
-        found.into_iter().find_map(|name| {
-            let (span, id, value, name) = self.literal_lets.get(name)?;
-            if self.resolved_now(&Type::TypeVar(*id)) != *source {
+        found.into_iter().find_map(|(name, indexed)| {
+            let entry = self.literal_lets.get(name)?;
+            let name = entry.root.as_str();
+            if entry.element != indexed
+                || entry.var.is_some_and(|v| self.resolved_now(&Type::TypeVar(v)) != *source)
+            {
                 return None;
             }
-            let fits = match (value, Self::int_literal_range(target)) {
-                (Some(v), Some((lo, hi))) => *v >= lo && *v <= hi,
+            let fits = match (entry.value, Self::int_literal_range(target)) {
+                (Some(v), Some((lo, hi))) => v >= lo && v <= hi,
                 _ => true,
+            };
+            let t = type_display(target);
+            let (replacement, why) = if entry.suffix {
+                let lit = entry
+                    .value
+                    .map_or_else(|| format!("with the suffix `{t}`"), |v| format!("`{v}{t}`"));
+                let whose = if entry.element {
+                    format!("the elements of `{name}` are 'i64' because the literal it is filled with")
+                } else {
+                    format!("`{name}` is an 'i64' because the literal it is bound to")
+                };
+                (t.clone(), format!("{whose} took the default (design.md §8 Literals); write that literal {lit}"))
+            } else {
+                (
+                    format!(": {t}"),
+                    format!("`{name}` is an 'i64' because its literal kept the default, since an operator or a method does not fix a literal's type (design.md §8 Literals); declare it `{name}: {t}`"),
+                )
             };
             fits.then(|| {
                 (
                     name.to_string(),
                     FixIt {
-                        span: Span {
-                            offset: span.offset + span.length,
-                            length: 0,
-                            ..*span
-                        },
-                        replacement: format!(": {}", type_display(target)),
+                        span: entry.at,
+                        replacement,
                     },
+                    why,
                 )
             })
         })
@@ -10445,15 +10594,10 @@ impl<'a> super::TypeChecker<'a> {
                 return;
             }
         }
-        if let Some((name, fix)) = self.literal_let_annotation(expr, &source, &target) {
+        if let Some((_, fix, why)) = self.literal_let_annotation(expr, &source, &target) {
             self.type_error_with_fix_it(
                 format!(
-                    "implicit coercion from '{}' to '{}' would narrow or change sign: `{name}` \
-                     is an '{}' because its literal kept the default, since an operator or a \
-                     method does not fix a literal's type (design.md §8 Literals); declare it \
-                     `{name}: {}`",
-                    type_display(&source),
-                    type_display(&target),
+                    "implicit coercion from '{}' to '{}' would narrow or change sign: {why}",
                     type_display(&source),
                     type_display(&target),
                 ),

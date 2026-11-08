@@ -3105,6 +3105,7 @@ impl<'a> super::TypeChecker<'a> {
         // it keeps this position in the first-match-wins chain and the
         // block order within it.
         if let Some(t) = self.try_nominal_tail_method(
+            object,
             method,
             args,
             span,

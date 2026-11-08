@@ -169,6 +169,7 @@ impl<'a> super::TypeChecker<'a> {
     /// name belongs to some later link in the `infer_method_call` chain.
     pub(super) fn try_scalar_primitive_method(
         &mut self,
+        object: &Expr,
         method: &str,
         args: &[CallArg],
         span: &Span,
@@ -842,15 +843,24 @@ impl<'a> super::TypeChecker<'a> {
             if is_bare_num_lit {
                 self.record_promoted_literal(arg, receiver_for_lookup);
             } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
-                self.type_error(
-                    format!(
-                        "`{method}` expects an argument of type `{}`, got `{}`",
-                        type_display(receiver_for_lookup),
-                        type_display(&arg_ty)
-                    ),
-                    arg.span,
-                    TypeErrorKind::TypeMismatch,
+                let message = format!(
+                    "`{method}` expects an argument of type `{}`, got `{}`",
+                    type_display(receiver_for_lookup),
+                    type_display(&arg_ty)
                 );
+                // A receiver whose literal kept the default `i64` beside a
+                // narrower argument: the fix is the literal's type, at its
+                // binding (B-2026-11-08-53).
+                let resolved_arg = self.resolved_now(&arg_ty);
+                match self.literal_let_annotation(object, receiver_for_lookup, &resolved_arg) {
+                    Some((_, fix, why)) => self.type_error_with_fix_it(
+                        format!("{message}: {why}"),
+                        arg.span,
+                        TypeErrorKind::TypeMismatch,
+                        fix,
+                    ),
+                    None => self.type_error(message, arg.span, TypeErrorKind::TypeMismatch),
+                }
                 return Some(Type::Error);
             }
             self.record_expr_type(args_close_span, receiver_for_lookup);

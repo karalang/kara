@@ -33,8 +33,10 @@ impl<'a> super::TypeChecker<'a> {
     /// `Some(Type::Error)` when it claims the name but the call is
     /// ill-formed and a diagnostic has been emitted), and `None` to fall
     /// through to `dispatch_user_impl_method`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn try_nominal_tail_method(
         &mut self,
+        object: &Expr,
         method: &str,
         args: &[CallArg],
         span: &Span,
@@ -204,6 +206,7 @@ impl<'a> super::TypeChecker<'a> {
         // surface. Extracted to `method_numeric.rs`; it keeps this position in
         // the first-match-wins chain and the block order within it.
         if let Some(t) = self.try_scalar_primitive_method(
+            object,
             method,
             args,
             span,

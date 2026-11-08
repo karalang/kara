@@ -11073,6 +11073,16 @@ impl<'a> super::TypeChecker<'a> {
                         self.str_lit_lets.remove(name.as_str());
                         self.literal_lets.remove(name.as_str());
                     }
+                } else if let PatternKind::Tuple(pats) = &pattern.kind {
+                    if ty.is_none() {
+                        self.note_literal_tuple_let(pattern, value, &expected_ty);
+                    } else {
+                        for p in pats {
+                            if let PatternKind::Binding(name) = &p.kind {
+                                self.literal_lets.remove(name.as_str());
+                            }
+                        }
+                    }
                 }
                 // design.md § "The index operator (`expr[i]`)" — a `let`
                 // initializer is the canonical value position, so a non-`Copy`

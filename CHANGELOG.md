@@ -231,6 +231,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`let mut b = 0; b += y;` returned as `i32`) names the binding and offers
   its annotation, `let mut b: i32 = 0`, as a machine fix, in place of
   `as i32` at the use (B-2026-11-08-20).
+- The same refusal from a literal bound in a tuple (`let mut (l, res) =
+  (0, 0)`) or filling an array or vector (`[0; 101]`, `Vec.filled(n, 0)`,
+  read back as `v[i]`), and a `min` / `max` argument refused beside such a
+  receiver (`res.max(x as i32)`), now offer the literal's suffix, `0i32`
+  (B-2026-11-08-53).
 - Comparing an `Option[ref T]` with an `Option[T]` whose `T` is not `Copy`
   now offers `.cloned()` as the fix, after the view and `as_slice` fixes
   (B-2026-11-07-54).

@@ -943,6 +943,30 @@ pub(crate) struct StrLitLet {
     uses: Vec<usize>,
 }
 
+/// Where a binding's integer type comes from an unsuffixed literal that
+/// may keep the default `i64` (see `TypeChecker::literal_lets`).
+#[derive(Debug, Clone)]
+pub(crate) struct LiteralLet {
+    /// The end of the bound name (`: T` goes there) or of the literal (a
+    /// `T` suffix goes there).
+    pub(crate) at: Span,
+    /// Whether the fix is the literal's suffix rather than the binding's
+    /// annotation: a tuple element's or a fill's literal is inline
+    /// (design.md §8 Literal suffixes).
+    pub(crate) suffix: bool,
+    /// Whether the literal is the element of a fill, so a use reads it as
+    /// `v[i]` rather than `v`.
+    pub(crate) element: bool,
+    /// The literal's type variable, while nothing has settled it (a tuple's
+    /// or a fill's literal is settled to `i64` when the aggregate is built),
+    /// and its value.
+    pub(crate) var: Option<TypeVarId>,
+    pub(crate) value: Option<i128>,
+    /// The binding to fix: the literal's own, or for a copy (`let y = x`)
+    /// the one it copies.
+    pub(crate) root: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeErrorKind {
     TypeMismatch,
@@ -3962,12 +3986,14 @@ pub struct TypeChecker<'a> {
     /// `Str` names the binding, and `karac fix` writes `: Str` on it when
     /// it only ever holds literals (B-2026-10-24-33).
     pub(super) str_lit_lets: FxHashMap<String, StrLitLet>,
-    /// `let x = 0` with no annotation, by name: the bound name's span, the
-    /// literal's type variable and its value. A narrowing refused at a use
-    /// of `x` after the variable kept its default names the binding and
-    /// offers its annotation (B-2026-11-08-20). A copy, `let y = x`, is
-    /// noted too, with `x`'s entry and `x` as the binding to annotate.
-    pub(super) literal_lets: FxHashMap<String, (Span, TypeVarId, Option<i128>, String)>,
+    /// `let x = 0` with no annotation, by name, and the literals a binding's
+    /// type comes from in `let (a, b) = (0, 0)` and `let v = [0; n]` /
+    /// `Vec.filled(n, 0)`. A narrowing or a `min`/`max` argument refused at
+    /// a use after the literal kept its default names the binding and
+    /// offers its annotation or the literal's suffix (B-2026-11-08-20,
+    /// B-2026-11-08-53). A copy, `let y = x`, is
+    /// noted with `x`'s entry, whose `root` names `x` as the binding to fix.
+    pub(super) literal_lets: FxHashMap<String, LiteralLet>,
     /// The spans of identifiers that read a [`StrLitLet`] binding.
     pub(super) str_lit_let_uses: FxHashMap<SpanKey, String>,
     /// The uses reported for a [`StrLitLet`] that is offered `: Str`.
