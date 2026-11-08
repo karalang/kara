@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 193 |
 | false-positive | 157 |
-| perf | 121 |
+| perf | 124 |
 | missing-feature | 111 |
 | soundness | 53 |
 | miscompile | 45 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 301 |
-| mir-llvm | 157 |
+| mir-llvm | 160 |
 | mir | 141 |
 | cli | 86 |
 | ownership | 63 |
@@ -107,7 +107,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
-| B-2026-11-08-3 | 2026-11-08 | mir-llvm | low | Kata 277's bench runs 1.83x Rust's instructions at karac's default O2 (3.19G vs 1.74G, x86 callgrind) and 0.62x at O3 (1.08G): O2 misses the verify loop's simplification once the candidate is the planted celebrity | — |
 | B-2026-11-08-10 | 2026-11-08 | mir-llvm | low | PriorityQueue's sift loops (runtime/stdlib/priority_queue.kara) take 24-27 instructions a level against Rust BinaryHeap's 9-12: bounds checks on every access, the Vec header reloaded from self each level, `self.max` tested inside the loop, and a swap where Rust moves a hole (kata 480) | — |
 | B-2026-11-08-28 | 2026-11-08 | interp | low | `karac run --interp prog | head -1` keeps running after the pipe closes and exits 0, printing nothing more but running every remaining iteration (a 2,000,000-line loop: 2.1 s, then its trailing eprintln runs); the JIT and a built binary stop at once with status 141 as io.md specifies | — |
 | B-2026-11-08-30 | 2026-11-08 | interp+mir-llvm | low | `IoError` and `VarError` display as their variant names (`PermissionDenied`, `NotPresent`, `Other(disk full)`), and `IoError` has no `Debug` (`dbg(IoError.NotFound)` is refused); io.md (8b7176574f) rules Display as readable phrases (`not found`, `permission denied`, ..., `Other`'s message as it is; VarError `environment variable not found`) and Debug as the variant | — |
@@ -124,6 +123,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-63 | 2026-11-08 | typecheck+mir | low | A constant whose value is computed from another constant is refused as a pattern: `const AA: i64 = 5; const BB: i64 = AA + 1;` then `match 6 { BB => .. }` says 'this range pattern bound is not lowered yet', though a constant in a pattern is its value (design.md § Pattern matching) and `BB` checks and prints 6 anywhere else | — |
 | B-2026-11-08-64 | 2026-11-08 | typecheck | low | A mutating method on a read-only Slice binding (`let mut b = s.bytes(); b.swap(i, j)`, also sort, reverse, fill, sort_by, sort_by_key, split_at_mut) says only 'Slice.swap() requires a mutable slice (`mut Slice[T]`)', with no hint or fix; an index assignment through the same binding names `.to_vec()` but is reported twice | — |
 | B-2026-11-08-67 | 2026-11-08 | mir | low | Assigning the `ref i32` a `SortedMap` walk yields to an `i64` local, `cur = d`, is refused E0509 "a view ... is stored in an escaping closure, a `shared` value or a channel", though `cur` is a plain local | — |
+| B-2026-11-08-72 | 2026-11-08 | mir-llvm | low | Kata 540's binary search divides `(low + high) / 2` and tests `mid % 2 == 1` as signed `i64`s, 3 instructions a step more than Rust's `usize` (8.08G against 6.21G on x86, 1.53x on the M5), though the loop keeps both indices non-negative | — |
+| B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
 
 ### Relocated
 
@@ -845,6 +846,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-56 | interp+mir-llvm | medium | A method called straight on a constant whose value is a bare literal reads it at i64, not its declared type (corrected: not only wide ones; `CC.leadi… | a3a7d1eeb0 |
 | B-2026-11-07-57 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3; corrected: the `b += y` shape is a deliberate… | b85cf41506 |
 | B-2026-11-08-1 | mir-llvm | medium | The overflow-safe midpoint `lo + (hi - lo) / 2` keeps its signed division: halving (B-2026-11-06-8) does not see `hi - lo` as non-negative under the… | a8696f186e |
+| B-2026-11-08-3 | mir-llvm | low | Kata 277's bench runs 1.83x Rust's instructions at karac's default O2 (3.19G vs 1.74G, x86 callgrind) and 0.62x at O3 (1.08G): O2 misses the verify l… | 03e9186ea3 |
 | B-2026-11-08-4 | resolver | low | `karac fix` rewrites Rust's `BinaryHeap<Reverse<i32>>` in a type (a struct field) to `PriorityQueue[Release[i32]]`: the Reverse-around-heap-items fix… | cdb6382000 |
 | B-2026-11-08-5 | mir-llvm | low | Kata 481's bench calls karac_mir_vec_reserve on every entry to its inner push loop (66.3M calls): the presize lowering of a counting loop that refill… | bfa904694f |
 | B-2026-11-08-6 | mir-llvm | low | Iterating a String's chars costs 17 instructions a char against Rust's 11 when collected, 35 against 27 in a for loop: the inlined decode reloads the… | d026b1bc15 |
@@ -895,6 +897,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-66 | mir | low | `rest = rest[1..]` on a `Slice[T]` local is refused E0516 ("cannot assign to `rest` while .. | 76bc1b9842 |
 | B-2026-11-08-69 | typecheck+mir | high | A number literal checked against a closure's return type or a map entry's value keeps its default `i64`: `let g: Fn() -> i32 = \|\| 5` returns an `i64`… | 1de47226fa |
 | B-2026-11-08-70 | typecheck | medium | A call to a method returning `Self` in an impl of a `shared struct` is refused against any annotation: `let y: Node = Node.new(2);` and `Some(Node.ne… | a4aa93dce |
+| B-2026-11-08-71 | mir-llvm | low | Kata 520's `word.chars().filter(\|c\| c.is_ascii_uppercase()).count()` branches on each char's answer and overflow-tests the count, where Rust's `Filte… | b8e953e4f9 |
 
 </details>
 
