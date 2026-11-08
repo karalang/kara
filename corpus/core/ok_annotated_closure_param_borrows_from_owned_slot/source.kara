@@ -1,0 +1,26 @@
+// An annotated bare closure parameter borrows (core semantics §4.1,
+// design.md § Parameter modes): `|v: Vec[i64]|` takes a `ref Vec[i64]`.
+// Handed to a slot that passes its argument owned, the closure is called
+// with a borrow of it, whatever the body's tail is. A tail whose type the
+// slot settles (`collect()`) used to give the closure the slot's owned
+// parameter type while its body took a borrow (B-2026-11-08-36).
+
+fn apply(f: Fn(own Vec[i64]) -> Vec[i64]) -> Vec[i64] {
+    f([1, 2, 3])
+}
+
+fn main() {
+    let a = apply(|v: Vec[i64]| v.iter().map(|x| x + 1).collect());
+    println(f"{a[0]} {a[2]}");
+
+    let f: Fn(own Vec[i64]) -> Vec[i64] = |v: Vec[i64]| v.iter().map(|x| x * 2).collect();
+    let b = f([4, 5]);
+    println(f"{b[0]} {b[1]}");
+
+    let rows: Vec[Vec[i64]] = [[1, 2], [3, 4]];
+    let total = rows
+        .iter()
+        .map(|r| r.clone())
+        .fold(Vec.filled(2, 0), |acc: Vec[i64], row: Vec[i64]| acc.iter().zip(row.iter()).map(|(x, y)| x + y).collect());
+    println(f"{total[0]} {total[1]}");
+}

@@ -873,6 +873,59 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A closure's synthesized type `ty` with each part that still names a
+    /// parameter taken from the slot's type `expected`, and every other part,
+    /// the closure's own parameter types above all, kept as written.
+    fn merge_closure_foreign_params(&self, ty: &Type, expected: &Type) -> Type {
+        let (Type::Function {
+            params,
+            return_type,
+            cross_task,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+            cross_task,
+        }) = ty
+        else {
+            return expected.clone();
+        };
+        let (Type::Function {
+            params: p2,
+            return_type: r2,
+            ..
+        }
+        | Type::OnceFunction {
+            params: p2,
+            return_type: r2,
+            ..
+        }) = expected
+        else {
+            return expected.clone();
+        };
+        if params.len() != p2.len() {
+            return expected.clone();
+        }
+        let params: Vec<Type> = params
+            .iter()
+            .zip(p2)
+            .map(|(x, y)| self.merge_foreign_params(x, y))
+            .collect();
+        let return_type = Box::new(self.merge_foreign_params(return_type, r2));
+        match ty {
+            Type::OnceFunction { .. } => Type::OnceFunction {
+                params,
+                return_type,
+                cross_task: *cross_task,
+            },
+            _ => Type::Function {
+                params,
+                return_type,
+                cross_task: *cross_task,
+            },
+        }
+    }
+
     /// Is `e` arithmetic whose leaves are all unsuffixed float literals?
     fn float_literal_arith(e: &Expr) -> bool {
         match &e.kind {
@@ -1426,7 +1479,18 @@ impl<'a> super::TypeChecker<'a> {
             || self.is_underdetermined_variant(expr, &ty, expected))
             && !self.mentions_foreign_param(expected)
         {
-            self.record_node_type(expr.id, expected);
+            // A closure keeps its own parameter types where they are known:
+            // an annotated bare parameter borrows (`|v: Vec[i64]|` takes a
+            // `ref Vec[i64]`) though the slot hands it on owned, and the
+            // body is built that way. Only the parts that still name a
+            // parameter (a `collect()` tail's target) come from the slot
+            // (B-2026-11-08-36).
+            if matches!(expr.kind, ExprKind::Closure { .. }) {
+                let merged = self.merge_closure_foreign_params(&ty, expected);
+                self.record_node_type(expr.id, &merged);
+            } else {
+                self.record_node_type(expr.id, expected);
+            }
         } else if self.mentions_foreign_param(&ty) && self.mentions_foreign_param(expected) {
             // Each side knows part of it: a closure `|e| Err(e.len())`
             // checked against `OnceFn(E) -> Result[T, F]` knows the error,

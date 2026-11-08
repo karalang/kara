@@ -1,0 +1,9 @@
+source = "B-2026-11-08-36"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-08-36: before the fix every call failed at run time on every backend (the interpreter: deref of non-reference Box; compiled: exit 101 with no message)."

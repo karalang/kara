@@ -2627,6 +2627,8 @@ fn main() -> () {
             "ok_error_anyerror",
             // `Result.or_else` is result.kara's.
             "ok_closure_literal_solves_callee_param",
+            // `map`, `collect` and `fold` are iter.kara's.
+            "ok_annotated_closure_param_borrows_from_owned_slot",
             // `std.log` is spliced from the library with `std.json`.
             "log_custom_backend",
             "log_filtering",
