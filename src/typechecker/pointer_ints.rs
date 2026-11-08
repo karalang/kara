@@ -55,6 +55,7 @@ impl<'a> super::TypeChecker<'a> {
         if !self.pointer_int_mixed {
             return;
         }
+        let errors_before = self.errors.len();
         // FFI items keep their pointer-sized integers: an `extern` function
         // or block, and a struct with a `#[repr(..)]` layout.
         let mut ffi: Vec<Span> = Vec::new();
@@ -151,6 +152,14 @@ impl<'a> super::TypeChecker<'a> {
                     replacement: "i64".to_string(),
                 },
             );
+        }
+        // A root fixed here makes each use's `as i64` redundant: the use
+        // keeps its error and its edit waits for a pass where nothing it
+        // reads from is being fixed (B-2026-11-08-16).
+        if self.errors.len() > errors_before {
+            for key in std::mem::take(&mut self.usize_use_site_fixes) {
+                self.error_fix_diffs.remove(&key);
+            }
         }
     }
 

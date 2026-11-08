@@ -2,7 +2,8 @@
 //! is wanted, as after a Rust template's `let n = n as usize;`, gets
 //! `as i64` as a machine fix (the operand parenthesized unless it is a
 //! postfix form); before, the message named the edit and `karac fix` had
-//! none. The fixed program checks.
+//! none. The fixed program checks. A use whose `usize` root is itself
+//! fixed to `i64` in the same pass gets no cast.
 
 use std::process::Command;
 
@@ -52,10 +53,31 @@ fn check_then_fix(tag: &str, src: &str, message: &str, fixed: &str) {
 
 #[test]
 fn a_usize_size_argument_is_fixed_with_as_i64() {
+    // The `usize` comes from a float, whose `as usize` has no `i64` fix, so
+    // the use is where the edit goes.
     check_then_fix(
         "capacity",
+        "fn sums(x: f64) -> i64 {\n    let n = x as usize;\n    let mut v: Vec[i64] = Vec.with_capacity(n * (n + 1) / 2);\n    let w: Vec[i64] = Vec.with_capacity(n);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4.0)); }\n",
+        "implicit coercion from 'usize' to 'i64' would change sign",
+        "fn sums(x: f64) -> i64 {\n    let n = x as usize;\n    let mut v: Vec[i64] = Vec.with_capacity((n * (n + 1) / 2) as i64);\n    let w: Vec[i64] = Vec.with_capacity(n as i64);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4.0)); }\n",
+    );
+}
+
+/// The Rust template's own shape, `let n = n as usize;` over an `i32`: the
+/// cast is fixed to `as i64`, so the uses need no cast of their own and get
+/// none (each would be left as a redundant `as i64` in parentheses).
+#[test]
+fn a_usize_use_takes_no_cast_when_its_root_is_fixed() {
+    check_then_fix(
+        "root",
         "fn sums(n: i32) -> i64 {\n    let n = n as usize;\n    let mut v: Vec[i64] = Vec.with_capacity(n * (n + 1) / 2);\n    let m = n;\n    let w: Vec[i64] = Vec.with_capacity(m);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4)); }\n",
         "implicit coercion from 'usize' to 'i64' would change sign",
-        "fn sums(n: i32) -> i64 {\n    let n = n as usize;\n    let mut v: Vec[i64] = Vec.with_capacity((n * (n + 1) / 2) as i64);\n    let m = n;\n    let w: Vec[i64] = Vec.with_capacity(m as i64);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4)); }\n",
+        "fn sums(n: i32) -> i64 {\n    let n = n as i64;\n    let mut v: Vec[i64] = Vec.with_capacity(n * (n + 1) / 2);\n    let m = n;\n    let w: Vec[i64] = Vec.with_capacity(m);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4)); }\n",
+    );
+    check_then_fix(
+        "param",
+        "fn sums(n: usize) -> i64 {\n    let v: Vec[i64] = Vec.with_capacity(n * 2);\n    v.len()\n}\nfn main() { println(sums(4)); }\n",
+        "implicit coercion from 'usize' to 'i64' would change sign",
+        "fn sums(n: i64) -> i64 {\n    let v: Vec[i64] = Vec.with_capacity(n * 2);\n    v.len()\n}\nfn main() { println(sums(4)); }\n",
     );
 }

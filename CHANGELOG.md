@@ -160,8 +160,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `if let Some(&i) = v.last()` is fixed with `.cloned()` on the scrutinee,
   keeping `i` a copy, where the fix used to drop the `&` and make `i` a
   borrow (B-2026-11-08-13). A `usize` size where an `i64` is wanted
-  (`Vec.with_capacity(n * (n + 1) / 2)` after `let n = n as usize;`) is
-  fixed with `as i64` (B-2026-11-08-16).
+  (`Vec.with_capacity(n * 2)` after `let n = x as usize;` over an `f64`) is
+  fixed with `as i64`; when the `usize` comes from a cast, type or suffix
+  that the same pass fixes to `i64`, the use is left alone
+  (B-2026-11-08-16).
 
 ### Tooling
 

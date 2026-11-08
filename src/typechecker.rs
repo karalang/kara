@@ -2934,6 +2934,12 @@ pub struct TypeChecker<'a> {
     /// Whether an `i64` met a `usize` or `isize` in a coercion or comparison
     /// error.
     pub(super) pointer_int_mixed: bool,
+    /// The `as i64` edits offered at a `usize` / `isize` use where an `i64`
+    /// is wanted (B-2026-11-08-16), by the use's span. Dropped when the same
+    /// check fixes a written root (`as usize`, a `usize` type or suffix) to
+    /// `i64`, which leaves each such cast redundant; a use whose root is not
+    /// fixed keeps its error and gets the edit on the next pass.
+    pub(super) usize_use_site_fixes: Vec<SpanKey>,
     /// Initializers `x as usize` of unannotated `let`s, whose binding is a
     /// `usize` that then meets `i64` (B-2026-11-06-3's remainder, kata 1058),
     /// and every other `as usize` the program writes: once the written
@@ -4135,6 +4141,7 @@ impl<'a> TypeChecker<'a> {
             written_pointer_ints: Default::default(),
             written_pointer_int_suffixes: Default::default(),
             pointer_int_mixed: false,
+            usize_use_site_fixes: Vec::new(),
             usize_cast_lets: Vec::new(),
             untargeted_parses: Vec::new(),
             fn_item_spans: FxHashSet::default(),

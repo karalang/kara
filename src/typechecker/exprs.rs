@@ -10326,6 +10326,8 @@ impl<'a> super::TypeChecker<'a> {
                 });
                 self.error_fix_diffs
                     .insert(SpanKey::from_span(&expr.span), edits);
+                self.usize_use_site_fixes
+                    .push(SpanKey::from_span(&expr.span));
                 self.type_error(
                     format!(
                         "implicit coercion from '{}' to 'i64' would change sign: sizes, lengths \
