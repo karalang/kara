@@ -719,7 +719,7 @@ pub(super) fn cmd_check_project(
         _ => None,
     };
     if let Some(list) = target_sweep {
-        check_target_sweep(&root, &lints, output, list, platforms);
+        check_target_sweep(&root, &mf, &lints, output, list, platforms);
         return;
     }
 
@@ -945,6 +945,7 @@ fn check_platform_sweep(
 /// is the pair a package with a platform split most wants verified.
 fn check_target_sweep(
     root: &std::path::Path,
+    mf: &manifest::Manifest,
     lints: &crate::lints::CliLintOverrides,
     output: OutputMode,
     targets: &[String],
@@ -973,79 +974,114 @@ fn check_target_sweep(
         targets
     };
     let mut failed: Vec<String> = Vec::new();
-    // JSON is one object for the whole sweep, as for a file: each target's
-    // own findings under `targets`, those on every target once under
-    // `shared_diagnostics`.
-    let mut json_runs: Vec<(String, usize, Vec<String>)> = Vec::new();
-    for (i, target) in targets.iter().enumerate() {
+    // Each target's check, run first and reported after, so a finding every
+    // target makes is reported once under "all targets" (design.md § 16
+    // Checking several targets: Deduplication), as for a file.
+    let mut runs: Vec<(String, TargetCheck)> = Vec::new();
+    for target in targets {
         if let Err(e) = crate::target::set_active_target(target) {
             eprintln!("error: {e}");
             process::exit(1);
         }
-        match output {
-            OutputMode::Jsonl => emit_jsonl_event(
-                "target_start",
-                &format!("\"target\":{}", json_string(target)),
-            ),
-            OutputMode::Json => {}
-            OutputMode::Text => {
-                if i > 0 {
-                    println!();
-                }
-                println!("── target: {target} ──");
-            }
-        }
         let platform = platforms
             .and_then(|p| p.first().copied())
             .unwrap_or_else(|| super::build_cmds::walk_platform_for_target(target));
-        let errors = match super::build_cmds::package_check_on(root, lints, platform) {
-            Ok(pc) => {
-                let errors = pc.error_count();
-                if let OutputMode::Json = output {
-                    json_runs.push((target.clone(), errors, package_check_json_entries(&pc)));
-                } else {
-                    render_package_check(&pc, output, errors, None);
-                }
-                errors
-            }
-            Err(e) => {
-                if let OutputMode::Json = output {
-                    let entry = format!(
-                        "{{\"severity\":\"error\",\"phase\":\"build\",\"concept\":\"compilation/pipeline\",\"message\":{}}}",
-                        json_string(&e)
-                    );
-                    json_runs.push((target.clone(), 1, vec![entry]));
-                } else {
-                    emit_build_error(&e, output);
-                }
-                1
-            }
-        };
-        if errors > 0 {
+        let run = check_package_for_target(root, mf, lints, platform);
+        if run.errors() > 0 {
             failed.push(target.clone());
         }
-        if let OutputMode::Jsonl = output {
-            emit_jsonl_event(
-                "target_complete",
-                &format!(
-                    "\"target\":{},\"success\":{},\"total_errors\":{}",
-                    json_string(target),
-                    errors == 0,
-                    errors,
-                ),
-            );
-        }
+        runs.push((target.clone(), run));
     }
-    if let OutputMode::Json = output {
-        let per_target: Vec<(&str, usize, &[String])> = json_runs
+    // The v2 check's findings that every target made.
+    let shared: Vec<String> = match runs.split_first() {
+        Some(((_, TargetCheck::V2 { blocks, .. }), rest)) if !rest.is_empty() => blocks
             .iter()
-            .map(|(t, n, e)| (t.as_str(), *n, &e[..]))
-            .collect();
-        let (blocks, shared) = split_target_json(&per_target);
-        print_stdout_line(&format!(
-            "{{\"targets\":[{blocks}],\"shared_diagnostics\":[{shared}],\"success\":{}}}",
-            failed.is_empty()
-        ));
+            .filter(|b| {
+                rest.iter().all(|(_, r)| match r {
+                    TargetCheck::V2 { blocks, .. } => blocks.contains(*b),
+                    _ => false,
+                })
+            })
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    };
+    match output {
+        // JSON is one object for the whole sweep, as for a file: each
+        // target's own findings under `targets`, those on every target once
+        // under `shared_diagnostics`.
+        OutputMode::Json => {
+            let json_runs: Vec<(String, usize, Vec<String>)> = runs
+                .iter()
+                .map(|(t, r)| (t.clone(), r.errors(), r.json_entries()))
+                .collect();
+            let per_target: Vec<(&str, usize, &[String])> = json_runs
+                .iter()
+                .map(|(t, n, e)| (t.as_str(), *n, &e[..]))
+                .collect();
+            let (blocks, shared) = split_target_json(&per_target);
+            print_stdout_line(&format!(
+                "{{\"targets\":[{blocks}],\"shared_diagnostics\":[{shared}],\"success\":{}}}",
+                failed.is_empty()
+            ));
+        }
+        OutputMode::Jsonl => {
+            for (target, run) in &runs {
+                emit_jsonl_event(
+                    "target_start",
+                    &format!("\"target\":{}", json_string(target)),
+                );
+                match run {
+                    TargetCheck::Package(pc, errors) => {
+                        render_package_check(pc, output, *errors, None)
+                    }
+                    TargetCheck::V2 { json, .. } => {
+                        for e in json {
+                            println!("{e}");
+                        }
+                    }
+                    TargetCheck::Refused(e) => emit_build_error(e, output),
+                }
+                emit_jsonl_event(
+                    "target_complete",
+                    &format!(
+                        "\"target\":{},\"success\":{},\"total_errors\":{}",
+                        json_string(target),
+                        run.errors() == 0,
+                        run.errors(),
+                    ),
+                );
+            }
+        }
+        OutputMode::Text => {
+            if !shared.is_empty() {
+                println!("── all targets ──");
+                for block in &shared {
+                    eprintln!("{block}");
+                }
+            }
+            for (i, (target, run)) in runs.iter().enumerate() {
+                if i > 0 || !shared.is_empty() {
+                    println!();
+                }
+                println!("── target: {target} ──");
+                match run {
+                    TargetCheck::Package(pc, errors) => {
+                        render_package_check(pc, output, *errors, None)
+                    }
+                    TargetCheck::V2 { blocks, errors, .. } => {
+                        let own: Vec<&String> =
+                            blocks.iter().filter(|b| !shared.contains(*b)).collect();
+                        for block in &own {
+                            eprintln!("{block}");
+                        }
+                        // As a file's target sweep words it.
+                        println!("{errors} error(s) under target '{target}'.");
+                    }
+                    TargetCheck::Refused(e) => emit_build_error(e, output),
+                }
+            }
+        }
     }
     if !failed.is_empty() {
         if let OutputMode::Text = output {
@@ -1061,6 +1097,97 @@ fn check_target_sweep(
     if let OutputMode::Text = output {
         println!("\nAll {} target(s) checked clean.", targets.len());
     }
+}
+
+/// One target's check of a package in a target sweep.
+enum TargetCheck {
+    /// The package check's own verdict: a parse, cycle or resolve refusal,
+    /// or what is left of a type refusal once the v2 check passed (its
+    /// module-boundary rules).
+    Package(Box<super::build_cmds::PackageCheck>, usize),
+    /// The v2 check of the combined source refused it: its findings, naming
+    /// the package's files, as text blocks and JSON entries.
+    V2 {
+        blocks: Vec<String>,
+        json: Vec<String>,
+        errors: usize,
+    },
+    /// The package could not be walked or combined.
+    Refused(String),
+}
+
+impl TargetCheck {
+    fn errors(&self) -> usize {
+        match self {
+            TargetCheck::Package(_, errors) => *errors,
+            TargetCheck::V2 { errors, .. } => *errors,
+            TargetCheck::Refused(_) => 1,
+        }
+    }
+
+    fn json_entries(&self) -> Vec<String> {
+        match self {
+            TargetCheck::Package(pc, _) => package_check_json_entries(pc),
+            TargetCheck::V2 { json, .. } => json.clone(),
+            TargetCheck::Refused(e) => vec![format!(
+                "{{\"severity\":\"error\",\"phase\":\"build\",\"concept\":\"compilation/pipeline\",\"message\":{}}}",
+                json_string(e)
+            )],
+        }
+    }
+}
+
+/// What `karac check` reports for a package under the active target: the
+/// v2 check of its combined source decides a type refusal, as `run` and
+/// `build` do and as a one-target check does (`cmd_check_project`), so a
+/// target sweep refuses nothing a one-target check passes (B-2026-11-08-38:
+/// the per-module typecheck refused `s.split(" ").count()`, whose library
+/// signature only the v2 check reads).
+fn check_package_for_target(
+    root: &std::path::Path,
+    mf: &manifest::Manifest,
+    lints: &crate::lints::CliLintOverrides,
+    platform: crate::walker::Platform,
+) -> TargetCheck {
+    let mut pc = match super::build_cmds::package_check_on(root, lints, platform) {
+        Ok(pc) => pc,
+        Err(e) => return TargetCheck::Refused(e),
+    };
+    if pc.refuses_only_by_type() {
+        let entry = &pc.tree.modules[pc.tree.root].file;
+        let filename = super::project_v2::shown(entry);
+        let combined = super::project_v2::source_files(&pc.tree, false).and_then(|files| {
+            super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "")
+        });
+        match combined {
+            Ok(a) => {
+                let mut pipeline =
+                    super::run_v2::v2_pipeline(&filename, &a.text, Some(mf), lints.clone());
+                pipeline.run_all_checks();
+                let errors = pipeline.total_errors();
+                if errors > 0 {
+                    return TargetCheck::V2 {
+                        blocks: render_text_diagnostics(&pipeline)
+                            .iter()
+                            .map(|b| a.remap_text(&filename, b))
+                            .collect(),
+                        json: collect_diagnostics(&pipeline)
+                            .entries
+                            .iter()
+                            .map(|d| a.remap_json_text(&filename, d))
+                            .collect(),
+                        errors,
+                    };
+                }
+                pc.past_the_v2_check();
+                pc.type_warnings.clear();
+            }
+            Err(e) if !pc.has_errors() => return TargetCheck::Refused(e.to_string()),
+            Err(_) => {}
+        }
+    }
+    let errors = pc.error_count();
+    TargetCheck::Package(Box::new(pc), errors)
 }
 
 /// Render one [`PackageCheck`] in the requested output mode. Split out of

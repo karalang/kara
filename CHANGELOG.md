@@ -168,6 +168,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   was refused as "cannot infer type parameter 'E'", with advice to annotate
   a binding the closure does not have; the collect's `E` now reaches it
   (B-2026-11-08-23).
+- **A package that declares several `[build] targets` is checked per target
+  by the check a one-target package gets.** `s.split(" ").count()` was
+  refused there as "no method 'count' on type 'Vec'", findings came without
+  snippets and repeated under each target; now a finding every target makes
+  is reported once under "all targets", as for a file (B-2026-11-08-38).
 
 ### Performance
 
