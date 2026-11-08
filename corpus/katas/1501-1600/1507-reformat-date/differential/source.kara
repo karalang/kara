@@ -1,0 +1,313 @@
+// LeetCode #1507: Reformat Date -- the differential.
+//
+// Four arms against the statement read literally, on 2000 dates, with six
+// properties.
+//
+// P1  the answer is the statement read literally: the day and month whose
+//     written form starts the date, and the year after them
+// P2  the answer is ten bytes: four digits, a dash, two, a dash, two
+// P3  the answer's fields, written back in the statement's form, are the
+//     date
+// P4  the next day's answer is larger, as a string
+// P5  the same day a year later changes only the answer's year
+// P6  each arm agrees with at least two of the other three
+
+// ---- reformat.kara: the ★ arm: split, take_while digits, position
+fn star_arm(date: String) -> String {
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let parts: Vec[String] = date.split(" ").map(|p| p.to_string()).collect();
+    let digits: String = parts[0].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let day = i64.parse(digits).unwrap();
+    let month = months.iter().position(|m| *m == parts[1]).unwrap() + 1;
+    f"{parts[2]}-{month:02}-{day:02}"
+}
+
+// ---- reformat_match.kara: a match on the month, the suffix stripped
+fn month_number(name: String) -> i64 {
+    match name.as_str() {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => 0,
+    }
+}
+
+fn match_arm(date: String) -> String {
+    let parts: Vec[String] = date.split(" ").map(|p| p.to_string()).collect();
+    let mut day_text = parts[0].clone();
+    for s in ["st", "nd", "rd", "th"].iter() {
+        if let Some(rest) = day_text.strip_suffix(*s) {
+            day_text = rest.to_string();
+        }
+    }
+    let day = i64.parse(day_text).unwrap();
+    f"{parts[2]}-{month_number(parts[1]):02}-{day:02}"
+}
+
+// ---- reformat_bytes.kara: one pass over the bytes
+fn month_of(a: u8, b: u8, c: u8) -> i64 {
+    let names: Vec[u8] = "JanFebMarAprMayJunJulAugSepOctNovDec".bytes().iter().collect();
+    for m in 0..12 {
+        if names[3 * m] == a and names[3 * m + 1] == b and names[3 * m + 2] == c {
+            return m + 1;
+        }
+    }
+    0
+}
+
+fn push_two(out: mut ref String, v: i64) {
+    out.push((48 + v / 10) as u8 as char);
+    out.push((48 + v % 10) as u8 as char);
+}
+
+fn bytes_arm(date: String) -> String {
+    let b: Vec[u8] = date.bytes().iter().collect();
+    let n = b.len();
+    let mut i = 0;
+    let mut day = 0;
+    while b[i] >= 48 and b[i] <= 57 {
+        day = day * 10 + (b[i] - 48);
+        i += 1;
+    }
+    // past the suffix and the space
+    i += 3;
+    let month = month_of(b[i], b[i + 1], b[i + 2]);
+    let mut out = String.new();
+    for k in n - 4..n {
+        out.push(b[k] as char);
+    }
+    out.push('-');
+    push_two(mut out, month);
+    out.push('-');
+    push_two(mut out, day);
+    out
+}
+
+// ---- reformat_solution.kara: LeetCode's Rust template through karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn reformat_date(date: String) -> String {
+        let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let parts: Vec[Str] = date.split(" ").collect();
+        let day: u32 = u32.parse(parts[0][..parts[0].len() - 2]).unwrap();
+        let month = months.iter().position(|m| m == parts[1]).unwrap() + 1;
+        f"{parts[2]}-{month:02}-{day:02}"
+    }
+}
+
+fn solution_arm(date: String) -> String {
+    Solution.reformat_date(date.clone())
+}
+
+// ---- the statement read literally ----------------------------------------
+
+fn suffix(day: i64) -> String {
+    if day == 1 or day == 21 or day == 31 {
+        "st"
+    } else if day == 2 or day == 22 {
+        "nd"
+    } else if day == 3 or day == 23 {
+        "rd"
+    } else {
+        "th"
+    }
+}
+
+fn month_name(month: i64) -> String {
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month].to_string()
+}
+
+fn write_date(day: i64, month: i64, year: i64) -> String {
+    f"{day}{suffix(day)} {month_name(month)} {year}"
+}
+
+fn literal(date: String) -> String {
+    for month in 0..12 {
+        for day in 1..32 {
+            let head = f"{day}{suffix(day)} {month_name(month)} ";
+            if date.starts_with(head) {
+                let year = date.strip_prefix(head).unwrap();
+                return f"{year}-{month + 1:02}-{day:02}";
+            }
+        }
+    }
+    ""
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn days_in(month: i64, year: i64) -> i64 {
+    let days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0);
+    if month == 1 and leap {
+        29
+    } else {
+        days[month]
+    }
+}
+
+fn next_day(day: i64, month: i64, year: i64) -> (i64, i64, i64) {
+    if day < days_in(month, year) {
+        (day + 1, month, year)
+    } else if month < 11 {
+        (1, month + 1, year)
+    } else {
+        (1, 0, year + 1)
+    }
+}
+
+fn well_formed(answer: String) -> bool {
+    let b = answer.bytes();
+    if b.len() != 10 {
+        return false;
+    }
+    for i in 0..10 {
+        let dash = i == 4 or i == 7;
+        let digit = b[i] >= 48 and b[i] <= 57;
+        if dash != (b[i] == 45) or dash == digit {
+            return false;
+        }
+    }
+    true
+}
+
+fn written_back(answer: String) -> String {
+    let fields: Vec[String] = answer.split("-").map(|f| f.to_string()).collect();
+    if fields.len() != 3 {
+        return "";
+    }
+    let year = i64.parse(fields[0].clone()).unwrap_or(-1);
+    let month = i64.parse(fields[1].clone()).unwrap_or(-1);
+    let day = i64.parse(fields[2].clone()).unwrap_or(-1);
+    if month < 1 or month > 12 or day < 1 or day > 31 {
+        return "";
+    }
+    write_date(day, month - 1, year)
+}
+
+fn same_but_year(moved: String, answer: String, year: i64) -> bool {
+    let a: String = moved.chars().take(4).collect();
+    let rest_moved: String = moved.chars().skip(4).collect();
+    let rest: String = answer.chars().skip(4).collect();
+    a == f"{year}" and rest_moved == rest
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, x: i64) -> i64 {
+    (check * 31 + x + 1) % 1000000007
+}
+
+fn arm(k: i64, date: String) -> String {
+    if k == 0 {
+        star_arm(date)
+    } else if k == 1 {
+        match_arm(date)
+    } else if k == 2 {
+        bytes_arm(date)
+    } else {
+        solution_arm(date)
+    }
+}
+
+fn arm_name(k: i64) -> String {
+    ["star", "match", "bytes", "solution"][k].to_string()
+}
+
+fn main() {
+    let arms = 4;
+    let problems = 2000;
+    let mut seed = 15070;
+    let mut check = 0;
+    let mut checks = 0;
+    let mut by_property: Vec[i64] = Vec.filled(7, 0);
+    let mut shown = 0;
+    for p in 0..problems {
+        // everything random is drawn first
+        let year = 1900 + next_random(mut seed) % 200;
+        let month = next_random(mut seed) % 12;
+        let day = 1 + next_random(mut seed) % days_in(month, year);
+        let date = write_date(day, month, year);
+        let (nd, nm, ny) = next_day(day, month, year);
+        let tomorrow = write_date(nd, nm, ny);
+        let leap_day = month == 1 and day == 29;
+        let later = write_date(day, month, year + 1);
+
+        let truth = literal(date.clone());
+        let mut answers: Vec[String] = Vec.new();
+        for k in 0..arms {
+            let answer = arm(k, date.clone());
+            let mut fails: Vec[i64] = Vec.filled(7, 0);
+            if answer != truth {
+                fails[1] += 1;
+            }
+            if not well_formed(answer.clone()) {
+                fails[2] += 1;
+            }
+            if written_back(answer.clone()) != date {
+                fails[3] += 1;
+            }
+            if arm(k, tomorrow.clone()) <= answer {
+                fails[4] += 1;
+            }
+            if not leap_day {
+                let moved = arm(k, later.clone());
+                if not same_but_year(moved, answer.clone(), year + 1) {
+                    fails[5] += 1;
+                }
+            }
+            answers.push(answer);
+            for q in 1..6 {
+                checks += 1;
+                if fails[q] > 0 {
+                    by_property[q] += 1;
+                    if shown < 10 {
+                        println(f"problem {p}, {arm_name(k)}: P{q}");
+                        shown += 1;
+                    }
+                }
+            }
+        }
+        for k in 0..arms {
+            let mut agree = 0;
+            for other in 0..arms {
+                if other != k and answers[other] == answers[k] {
+                    agree += 1;
+                }
+            }
+            checks += 1;
+            if agree < 2 {
+                by_property[6] += 1;
+                if shown < 10 {
+                    println(f"problem {p}, {arm_name(k)}: P6");
+                    shown += 1;
+                }
+            }
+        }
+        for b in answers[0].bytes() {
+            check = mix(check, b);
+        }
+    }
+    let failures = by_property.iter().sum();
+    println(f"{problems} problems: checksum {check}, {checks} checks over {arms} arms: {failures} failures");
+    if failures > 0 {
+        for q in 1..7 {
+            if by_property[q] > 0 {
+                println(f"P{q}: {by_property[q]}");
+            }
+        }
+    }
+}

@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/1501-1600/1507-reformat-date/reformat_iter.kara"
+dedup_of = []
+tags = []
+class = "e"
+bucket = "check-refuses:E0236"
+classified_with = "1dce193ad+local"
+extracted_src = "8ecf5182"
