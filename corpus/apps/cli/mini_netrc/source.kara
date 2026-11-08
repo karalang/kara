@@ -1,0 +1,592 @@
+// mini_netrc: Python's `netrc` module, the reader of the `.netrc` files
+// that ftp, curl, git and pip take their credentials from. Machines with a
+// login, account and password, a `default` entry, `macdef` macros, and the
+// module's own lexer with its quoting and comment rules.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+
+// ------------------------------------------------------------ text
+
+/// Python's `repr` of a string, for the characters the files use.
+fn py_repr(s: Str) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ------------------------------------------------------------ the lexer
+
+/// The module's `_netrclex`: a character at a time, counting the newlines
+/// it reads that way.
+struct Lexer {
+    chars: Vec[char],
+    pos: i64,
+    lineno: i64,
+    pushback: Vec[Option[String]],
+}
+
+fn is_space(c: char) -> bool {
+    c == '\n' or c == '\t' or c == '\r' or c == ' '
+}
+
+impl Lexer {
+    fn new(text: Str) -> Lexer {
+        // Python reads the file with universal newlines.
+        let text = text.replace("\r\n", "\n").replace("\r", "\n");
+        Lexer { chars: text.chars().collect(), pos: 0, lineno: 1, pushback: Vec.new() }
+    }
+
+    fn read_char(mut ref self) -> Option[char] {
+        if self.pos >= self.chars.len() {
+            return None;
+        }
+        let c = self.chars[self.pos];
+        self.pos += 1;
+        if c == '\n' {
+            self.lineno += 1;
+        }
+        Some(c)
+    }
+
+    /// The rest of the current line, its newline included, read whole: the
+    /// line number does not move.
+    fn readline(mut ref self) -> String {
+        let mut line = String.new();
+        while self.pos < self.chars.len() {
+            let c = self.chars[self.pos];
+            self.pos += 1;
+            line.push(c);
+            if c == '\n' {
+                break;
+            }
+        }
+        line
+    }
+
+    /// A backslash takes the next character as it is (nothing at the end).
+    fn escaped(mut ref self, c: char) -> Option[char] {
+        if c == '\\' { self.read_char() } else { Some(c) }
+    }
+
+    fn get_token(mut ref self) -> Option[String] {
+        if not self.pushback.is_empty() {
+            return self.pushback.remove(0);
+        }
+        while let Some(ch) = self.read_char() {
+            if is_space(ch) {
+                continue;
+            }
+            let mut token = String.new();
+            if ch == '"' {
+                while let Some(c) = self.read_char() {
+                    if c == '"' {
+                        return Some(token);
+                    }
+                    if let Some(x) = self.escaped(c) {
+                        token.push(x);
+                    }
+                }
+                return Some(token);
+            }
+            if let Some(x) = self.escaped(ch) {
+                token.push(x);
+            }
+            while let Some(c) = self.read_char() {
+                if is_space(c) {
+                    return Some(token);
+                }
+                if let Some(x) = self.escaped(c) {
+                    token.push(x);
+                }
+            }
+            return Some(token);
+        }
+        None
+    }
+
+    fn push_token(mut ref self, token: own Option[String]) {
+        self.pushback.push(token);
+    }
+}
+
+// ------------------------------------------------------------ the parser
+
+/// An entry's login, account and password.
+#[derive(Clone)]
+struct Auth {
+    login: String,
+    account: String,
+    password: String,
+}
+
+impl Auth {
+    fn repr(ref self) -> String {
+        f"({py_repr(self.login)}, {py_repr(self.account)}, {py_repr(self.password)})"
+    }
+}
+
+/// A parsed file: its entries and macros, in the order first seen.
+struct Netrc {
+    hosts: Vec[(String, Auth)],
+    macros: Vec[(String, Vec[String])],
+}
+
+fn parse_error(msg: Str, path: Str, lineno: i64) -> String {
+    f"NetrcParseError: {msg} ({path}, line {lineno})"
+}
+
+fn is_follower_end(tt: ref Option[String]) -> bool {
+    match tt {
+        None => true,
+        Some(t) => t == "machine" or t == "default" or t == "macdef",
+    }
+}
+
+impl Netrc {
+    fn host(ref self, name: Str) -> Option[Auth] {
+        self.hosts.iter().find(|(h, _)| h == name).map(|(_, a)| a.clone())
+    }
+
+    fn macro(ref self, name: Str) -> Option[Vec[String]] {
+        self.macros.iter().find(|(m, _)| m == name).map(|(_, lines)| lines.clone())
+    }
+
+    fn set_host(mut ref self, name: Str, auth: own Auth) {
+        match self.hosts.iter().position(|(h, _)| h == name) {
+            Some(i) => self.hosts[i].1 = auth,
+            None => self.hosts.push((name.to_string(), auth)),
+        }
+    }
+
+    fn set_macro(mut ref self, name: Str, lines: own Vec[String]) {
+        match self.macros.iter().position(|(m, _)| m == name) {
+            Some(i) => self.macros[i].1 = lines,
+            None => self.macros.push((name.to_string(), lines)),
+        }
+    }
+
+    fn parse(path: Str, text: Str) -> Result[Netrc, String] {
+        let mut n = Netrc { hosts: Vec.new(), macros: Vec.new() };
+        let mut lexer = Lexer.new(text);
+        loop {
+            let saved_lineno = lexer.lineno;
+            let Some(tt) = lexer.get_token() else {
+                break;
+            };
+            let entryname: Option[String] = if tt.starts_with("#") {
+                if lexer.lineno == saved_lineno and tt.len() == 1 {
+                    lexer.readline();
+                }
+                continue;
+            } else if tt == "machine" {
+                lexer.get_token()
+            } else if tt == "default" {
+                Some("default".to_string())
+            } else if tt == "macdef" {
+                let name = lexer.get_token().unwrap_or(String.new());
+                let mut lines: Vec[String] = Vec.new();
+                loop {
+                    let line = lexer.readline();
+                    if line.is_empty() {
+                        return Err(parse_error("Macro definition missing null line terminator.", path, lexer.lineno));
+                    }
+                    if line == "\n" {
+                        break;
+                    }
+                    lines.push(line);
+                }
+                n.set_macro(name, lines);
+                continue;
+            } else {
+                return Err(parse_error(f"bad toplevel token {py_repr(tt)}", path, lexer.lineno));
+            };
+            let name = match entryname {
+                Some(e) if not e.is_empty() => e,
+                _ => return Err(parse_error(f"missing {py_repr(tt)} name", path, lexer.lineno)),
+            };
+            let mut auth = Auth { login: String.new(), account: String.new(), password: String.new() };
+            n.set_host(name, auth.clone());
+            loop {
+                let prev_lineno = lexer.lineno;
+                let tt = lexer.get_token();
+                if let Some(ref t) = tt {
+                    if t.starts_with("#") {
+                        if lexer.lineno == prev_lineno {
+                            lexer.readline();
+                        }
+                        continue;
+                    }
+                }
+                if is_follower_end(tt) {
+                    n.set_host(name, auth.clone());
+                    lexer.push_token(tt);
+                    break;
+                }
+                let t = tt.unwrap_or(String.new());
+                if t == "login" or t == "user" {
+                    auth.login = lexer.get_token().unwrap_or(String.new());
+                } else if t == "account" {
+                    auth.account = lexer.get_token().unwrap_or(String.new());
+                } else if t == "password" {
+                    auth.password = lexer.get_token().unwrap_or(String.new());
+                } else {
+                    return Err(parse_error(f"bad follower token {py_repr(t)}", path, lexer.lineno));
+                }
+            }
+        }
+        Ok(n)
+    }
+
+    /// `authenticators(host)`: the host's entry, else `default`'s.
+    fn authenticators(ref self, host: Str) -> Option[Auth] {
+        self.host(host).or_else(|| self.host("default"))
+    }
+
+    /// The module's `repr`, in the format of a `.netrc` file.
+    fn repr(ref self) -> String {
+        let mut rep = String.new();
+        for (host, a) in self.hosts.iter() {
+            rep.push_str(f"machine {host}\n\tlogin {a.login}\n");
+            if not a.account.is_empty() {
+                rep.push_str(f"\taccount {a.account}\n");
+            }
+            rep.push_str(f"\tpassword {a.password}\n");
+        }
+        for (name, lines) in self.macros.iter() {
+            rep.push_str(f"macdef {name}\n");
+            for line in lines.iter() {
+                rep.push_str(line);
+            }
+            rep.push_str("\n");
+        }
+        rep
+    }
+}
+
+// ------------------------------------------------------------ the player
+
+struct Player {
+    parsed: Map[String, Netrc],
+}
+
+fn usage(cmd: Str) -> Option[String] {
+    match cmd {
+        "parse" => Some("usage: parse NAME"),
+        "dump" => Some("usage: dump NAME"),
+        "auth" => Some("usage: auth NAME HOST"),
+        "macro" => Some("usage: macro NAME MACRO"),
+        _ => None,
+    }
+}
+
+impl Player {
+    fn run(mut ref self, words: Slice[String]) -> Result[Vec[String], String] {
+        let cmd = words[0].as_str();
+        let Some(text) = usage(cmd) else {
+            return Err(f"unknown command {cmd}");
+        };
+        if words.len() != text.split_whitespace().count() - 1 {
+            return Err(text);
+        }
+        if cmd == "parse" {
+            let path = f"data/{words[1]}.netrc";
+            self.parsed.remove(words[1]);
+            let Ok(body) = fs.read_to_string(path) else {
+                return Err(f"no file {path}");
+            };
+            let n = Netrc.parse(path, body)?;
+            let line = f"parsed {path}: {n.hosts.len()} hosts, {n.macros.len()} macros";
+            self.parsed.insert(words[1].clone(), n);
+            return Ok([line]);
+        }
+        let Some(n) = self.parsed.get(words[1]) else {
+            return Err(f"{words[1]} is not parsed");
+        };
+        match cmd {
+            "dump" => {
+                let rep = n.repr();
+                let mut lines: Vec[String] = rep.split("\n").map(|l| f"| {l}").collect();
+                lines.pop();
+                Ok(lines)
+            }
+            "auth" => match n.authenticators(words[2]) {
+                Some(a) => Ok([a.repr()]),
+                None => Ok(["None".to_string()]),
+            },
+            _ => {
+                let Some(lines) = n.macro(words[2]) else {
+                    return Err(f"no macro {words[2]}");
+                };
+                let parts: Vec[String] = lines.iter().map(|l| py_repr(l)).collect();
+                Ok([f"[{parts.join(", ")}]"])
+            }
+        }
+    }
+}
+
+fn play(script: Str) {
+    let mut player = Player { parsed: Map.new() };
+    println("== mini_netrc");
+    for (i, line) in script.split("\n").enumerate() {
+        let words: Vec[String] = line.split_whitespace().map(|w| w.to_string()).collect();
+        if words.is_empty() or words[0].starts_with("#") {
+            continue;
+        }
+        println(f"> {words.join(" ")}");
+        match player.run(words) {
+            Ok(lines) => {
+                for l in lines.iter() {
+                    println(f"  {l}");
+                }
+            }
+            Err(e) => println(f"  error: script.txt:{i + 1}: {e}"),
+        }
+    }
+    println("== end");
+    println(f"  {player.parsed.len()} files parsed");
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data").map_err(|e| f"cannot create data: {e}")?;
+    write_data()?;
+    let text = fs.read_to_string("data/script.txt").map_err(|e| f"cannot read data/script.txt: {e}")?;
+    play(text);
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/after_macro.netrc", file_0())?;
+    put_bytes("data/bad_follower.netrc", file_1())?;
+    put_bytes("data/bad_toplevel.netrc", file_2())?;
+    put_bytes("data/comments.netrc", file_3())?;
+    put_bytes("data/crlf.netrc", file_4())?;
+    put_bytes("data/dangling.netrc", file_5())?;
+    put_bytes("data/deploy.netrc", file_6())?;
+    put_bytes("data/empty.netrc", file_7())?;
+    put_bytes("data/empty_name.netrc", file_8())?;
+    put_bytes("data/gap_comment.netrc", file_9())?;
+    put_bytes("data/late_login.netrc", file_10())?;
+    put_bytes("data/lone_hash_entry.netrc", file_11())?;
+    put_bytes("data/macros.netrc", file_12())?;
+    put_bytes("data/missing_name.netrc", file_13())?;
+    put_bytes("data/only_comments.netrc", file_14())?;
+    put_bytes("data/open_macro.netrc", file_15())?;
+    put_bytes("data/open_quote.netrc", file_16())?;
+    put_bytes("data/quoting.netrc", file_17())?;
+    put_bytes("data/script.txt", file_18())?;
+    Ok(())
+}
+
+// data/after_macro.netrc
+fn file_0() -> String {
+    """
+6d61636465662066697273742070757420612e7478740a70757420622e7478740a0a6d616368696e65206d2e6578616d
+706c652e6f7267206c6f67696e206d2070617373776f726420706d2066726f626e69636174650a
+"""
+}
+
+// data/bad_follower.netrc
+fn file_1() -> String {
+    """
+6d616368696e652061206c6f67696e20610a097061737377642070610a
+"""
+}
+
+// data/bad_toplevel.netrc
+fn file_2() -> String {
+    """
+706f72742032310a6d616368696e652061206c6f67696e20612070617373776f72642070610a
+"""
+}
+
+// data/comments.netrc
+fn file_3() -> String {
+    """
+23206465706c6f792063726564656e7469616c730a6d616368696e6520612e6578616d706c652e6f7267206c6f67696e
+20612070617373776f7264207061202320747261696c696e67206e6f74650a2320612077686f6c652d6c696e6520636f
+6d6d656e742072696768742061667465720a6d616368696e6520622e6578616d706c652e6f7267206c6f67696e206220
+70617373776f72642070620a2374696768742d636f6d6d656e740a6d616368696e6520632e6578616d706c652e6f7267
+206c6f67696e20632070617373776f72642070630a
+"""
+}
+
+// data/crlf.netrc
+fn file_4() -> String {
+    """
+6d616368696e6520772e6578616d706c652e6f72670d0a20206c6f67696e2077696e0d0a202070617373776f72642066
+616b652d77696e0d0a6d61636465662075706c6f61640d0a707574206275696c642e7a69700d0a6279650d0a0d0a6d61
+6368696e6520782e6578616d706c652e6f7267206c6f67696e20782070617373776f72642070780d0a
+"""
+}
+
+// data/dangling.netrc
+fn file_5() -> String {
+    """
+6d616368696e652061206c6f67696e20612070617373776f72640a
+"""
+}
+
+// data/deploy.netrc
+fn file_6() -> String {
+    """
+6d616368696e65206674702e6578616d706c652e6f7267206c6f67696e20616e6f6e796d6f75732070617373776f7264
+206775657374406578616d706c652e6f72670a6d616368696e65206275696c642e6578616d706c652e6f72670a096c6f
+67696e2063692d626f740a0970617373776f7264206e6f742d612d7265616c2d746f6b656e0a096163636f756e74206f
+70730a0a6d616368696e65206d6972726f722e6578616d706c652e6f72672075736572206d6972726f72207061737377
+6f72642066616b652d706173732d310a6d616364656620696e69740a6364202f7075620a62696e6172790a0a6d616368
+696e65206275696c642e6578616d706c652e6f7267206c6f67696e2063692d626f742d322070617373776f726420726f
+74617465642d66616b650a64656661756c74206c6f67696e20616e6f6e796d6f75732070617373776f726420616e6f6e
+406578616d706c652e6f72670a
+"""
+}
+
+// data/empty.netrc
+fn file_7() -> String {
+    """
+
+"""
+}
+
+// data/empty_name.netrc
+fn file_8() -> String {
+    """
+6d616368696e65202222206c6f67696e20612070617373776f72642070610a
+"""
+}
+
+// data/gap_comment.netrc
+fn file_9() -> String {
+    """
+6d616368696e6520612e6578616d706c652e6f7267206c6f67696e20612070617373776f72642070610a0a23206e6f74
+652061667465722061206761700a6d616368696e6520622e6578616d706c652e6f7267206c6f67696e20622070617373
+776f72642070620a
+"""
+}
+
+// data/late_login.netrc
+fn file_10() -> String {
+    """
+6d616368696e652061206c6f67696e20612070617373776f72642070610a6c6f67696e20620a
+"""
+}
+
+// data/lone_hash_entry.netrc
+fn file_11() -> String {
+    """
+6d616368696e652061206c6f67696e206120230a70617373776f72642070610a
+"""
+}
+
+// data/macros.netrc
+fn file_12() -> String {
+    """
+6d61636465662066697273742070757420612e7478740a70757420622e7478740a0a6d6163646566207365636f6e640a
+6c730a0a6d61636465662066697273740a67657420632e7478740a0a6d616368696e65206d2e6578616d706c652e6f72
+67206c6f67696e206d2070617373776f726420706d0a
+"""
+}
+
+// data/missing_name.netrc
+fn file_13() -> String {
+    """
+6d616368696e652061206c6f67696e20612070617373776f72642070610a6d616368696e650a
+"""
+}
+
+// data/only_comments.netrc
+fn file_14() -> String {
+    """
+23206e6f7468696e6720686572650a2020200a092320696e64656e7465640a
+"""
+}
+
+// data/open_macro.netrc
+fn file_15() -> String {
+    """
+6d6163646566206465706c6f790a70757420780a70757420790a
+"""
+}
+
+// data/open_quote.netrc
+fn file_16() -> String {
+    """
+6d616368696e652061206c6f67696e20612070617373776f726420226e6576657220636c6f7365640a
+"""
+}
+
+// data/quoting.netrc
+fn file_17() -> String {
+    """
+6d616368696e65206769742e6578616d706c652e6f7267206c6f67696e2022416461204c6f76656c6163652220706173
+73776f7264202274776f20776f726473220a6d616368696e6520712e6578616d706c652e6f7267206c6f67696e207361
+795c2068692070617373776f7264202261205c2271756f7465645c22206f6e65220a6d616368696e6520686173682e65
+78616d706c652e6f7267206c6f67696e20682070617373776f7264207061737323776f72640a6d616368696e65206c65
+61642e6578616d706c652e6f7267206c6f67696e206c2070617373776f726420236c656164696e670a6d616368696e65
+20656d7074792e6578616d706c652e6f7267206c6f67696e2022222070617373776f72642022220a6d616368696e6520
+7461622e6578616d706c652e6f7267096c6f67696e09740970617373776f726409700a6d616368696e65206261636b2e
+6578616d706c652e6f7267206c6f67696e20622070617373776f726420633a5c5c6469725c5c0a6d616368696e652075
+74662e6578616d706c652e6f7267206c6f67696e20752070617373776f72642070c3a4737377c3b672640a
+"""
+}
+
+// data/script.txt
+fn file_18() -> String {
+    """
+23205175657269657320616761696e737420746865202e6e657472632066696c657320756e64657220646174612f2e0a
+7061727365206465706c6f790a64756d70206465706c6f790a61757468206465706c6f79206674702e6578616d706c65
+2e6f72670a61757468206465706c6f79206275696c642e6578616d706c652e6f72670a61757468206465706c6f79206d
+6972726f722e6578616d706c652e6f72670a61757468206465706c6f7920756e6b6e6f776e2e6578616d706c652e6f72
+670a6d6163726f206465706c6f7920696e69740a6d6163726f206465706c6f79206e6f737563680a0a70617273652071
+756f74696e670a64756d702071756f74696e670a617574682071756f74696e67206769742e6578616d706c652e6f7267
+0a617574682071756f74696e6720712e6578616d706c652e6f72670a617574682071756f74696e6720686173682e6578
+616d706c652e6f72670a617574682071756f74696e67206c6561642e6578616d706c652e6f72670a617574682071756f
+74696e6720656d7074792e6578616d706c652e6f72670a617574682071756f74696e67207461622e6578616d706c652e
+6f72670a617574682071756f74696e67206261636b2e6578616d706c652e6f72670a617574682071756f74696e672075
+74662e6578616d706c652e6f72670a617574682071756f74696e67206e6f737563682e6578616d706c652e6f72670a0a
+706172736520636f6d6d656e74730a64756d7020636f6d6d656e74730a7061727365206761705f636f6d6d656e740a70
+617273652063726c660a64756d702063726c660a6d6163726f2063726c662075706c6f61640a7061727365206d616372
+6f730a64756d70206d6163726f730a6d6163726f206d6163726f732066697273740a6d6163726f206d6163726f732073
+65636f6e640a70617273652061667465725f6d6163726f0a706172736520656d7074790a64756d7020656d7074790a61
+75746820656d70747920616e7977686572650a7061727365206f6e6c795f636f6d6d656e74730a0a7061727365206261
+645f746f706c6576656c0a7061727365206c6174655f6c6f67696e0a61757468206c6174655f6c6f67696e20610a7061
+727365206261645f666f6c6c6f7765720a7061727365206d697373696e675f6e616d650a706172736520656d7074795f
+6e616d650a7061727365206f70656e5f6d6163726f0a7061727365206f70656e5f71756f74650a64756d70206f70656e
+5f71756f74650a70617273652064616e676c696e670a64756d702064616e676c696e670a7061727365206c6f6e655f68
+6173685f656e7472790a64756d70206c6f6e655f686173685f656e7472790a0a23204d697374616b65732e0a70617273
+65206e6f737563680a64756d70206e6f737563680a61757468206465706c6f790a61757468206e6f7375636820667470
+2e6578616d706c652e6f72670a6d6163726f206465706c6f790a70617273650a7061727365206120620a6c6f67696e20
+6465706c6f790a
+"""
+}

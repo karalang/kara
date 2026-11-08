@@ -1,0 +1,182 @@
+== mini_netrc
+> parse deploy
+  parsed data/deploy.netrc: 4 hosts, 1 macros
+> dump deploy
+  | machine ftp.example.org
+  | 	login anonymous
+  | 	password guest@example.org
+  | machine build.example.org
+  | 	login ci-bot-2
+  | 	password rotated-fake
+  | machine mirror.example.org
+  | 	login mirror
+  | 	password fake-pass-1
+  | machine default
+  | 	login anonymous
+  | 	password anon@example.org
+  | macdef init
+  | cd /pub
+  | binary
+  | 
+> auth deploy ftp.example.org
+  ('anonymous', '', 'guest@example.org')
+> auth deploy build.example.org
+  ('ci-bot-2', '', 'rotated-fake')
+> auth deploy mirror.example.org
+  ('mirror', '', 'fake-pass-1')
+> auth deploy unknown.example.org
+  ('anonymous', '', 'anon@example.org')
+> macro deploy init
+  ['cd /pub\n', 'binary\n']
+> macro deploy nosuch
+  error: script.txt:9: no macro nosuch
+> parse quoting
+  parsed data/quoting.netrc: 8 hosts, 0 macros
+> dump quoting
+  | machine git.example.org
+  | 	login Ada Lovelace
+  | 	password two words
+  | machine q.example.org
+  | 	login say hi
+  | 	password a "quoted" one
+  | machine hash.example.org
+  | 	login h
+  | 	password pass#word
+  | machine lead.example.org
+  | 	login l
+  | 	password #leading
+  | machine empty.example.org
+  | 	login 
+  | 	password 
+  | machine tab.example.org
+  | 	login t
+  | 	password p
+  | machine back.example.org
+  | 	login b
+  | 	password c:\dir\
+  | machine utf.example.org
+  | 	login u
+  | 	password pässwörd
+> auth quoting git.example.org
+  ('Ada Lovelace', '', 'two words')
+> auth quoting q.example.org
+  ('say hi', '', 'a "quoted" one')
+> auth quoting hash.example.org
+  ('h', '', 'pass#word')
+> auth quoting lead.example.org
+  ('l', '', '#leading')
+> auth quoting empty.example.org
+  ('', '', '')
+> auth quoting tab.example.org
+  ('t', '', 'p')
+> auth quoting back.example.org
+  ('b', '', 'c:\\dir\\')
+> auth quoting utf.example.org
+  ('u', '', 'pässwörd')
+> auth quoting nosuch.example.org
+  None
+> parse comments
+  parsed data/comments.netrc: 3 hosts, 0 macros
+> dump comments
+  | machine a.example.org
+  | 	login a
+  | 	password pa
+  | machine b.example.org
+  | 	login b
+  | 	password pb
+  | machine c.example.org
+  | 	login c
+  | 	password pc
+> parse gap_comment
+  error: script.txt:25: NetrcParseError: bad follower token 'note' (data/gap_comment.netrc, line 3)
+> parse crlf
+  parsed data/crlf.netrc: 2 hosts, 1 macros
+> dump crlf
+  | machine w.example.org
+  | 	login win
+  | 	password fake-win
+  | machine x.example.org
+  | 	login x
+  | 	password px
+  | macdef upload
+  | put build.zip
+  | bye
+  | 
+> macro crlf upload
+  ['put build.zip\n', 'bye\n']
+> parse macros
+  parsed data/macros.netrc: 1 hosts, 2 macros
+> dump macros
+  | machine m.example.org
+  | 	login m
+  | 	password pm
+  | macdef first
+  | get c.txt
+  | 
+  | macdef second
+  | ls
+  | 
+> macro macros first
+  ['get c.txt\n']
+> macro macros second
+  ['ls\n']
+> parse after_macro
+  error: script.txt:33: NetrcParseError: bad follower token 'frobnicate' (data/after_macro.netrc, line 2)
+> parse empty
+  parsed data/empty.netrc: 0 hosts, 0 macros
+> dump empty
+> auth empty anywhere
+  None
+> parse only_comments
+  error: script.txt:37: NetrcParseError: bad toplevel token 'indented' (data/only_comments.netrc, line 3)
+> parse bad_toplevel
+  error: script.txt:39: NetrcParseError: bad toplevel token 'port' (data/bad_toplevel.netrc, line 1)
+> parse late_login
+  parsed data/late_login.netrc: 1 hosts, 0 macros
+> auth late_login a
+  ('b', '', 'pa')
+> parse bad_follower
+  error: script.txt:42: NetrcParseError: bad follower token 'passwd' (data/bad_follower.netrc, line 2)
+> parse missing_name
+  error: script.txt:43: NetrcParseError: missing 'machine' name (data/missing_name.netrc, line 3)
+> parse empty_name
+  error: script.txt:44: NetrcParseError: missing 'machine' name (data/empty_name.netrc, line 1)
+> parse open_macro
+  error: script.txt:45: NetrcParseError: Macro definition missing null line terminator. (data/open_macro.netrc, line 2)
+> parse open_quote
+  parsed data/open_quote.netrc: 1 hosts, 0 macros
+> dump open_quote
+  | machine a
+  | 	login a
+  | 	password never closed
+  | 
+> parse dangling
+  parsed data/dangling.netrc: 1 hosts, 0 macros
+> dump dangling
+  | machine a
+  | 	login a
+  | 	password 
+> parse lone_hash_entry
+  parsed data/lone_hash_entry.netrc: 1 hosts, 0 macros
+> dump lone_hash_entry
+  | machine a
+  | 	login a
+  | 	password pa
+> parse nosuch
+  error: script.txt:54: no file data/nosuch.netrc
+> dump nosuch
+  error: script.txt:55: nosuch is not parsed
+> auth deploy
+  error: script.txt:56: usage: auth NAME HOST
+> auth nosuch ftp.example.org
+  error: script.txt:57: nosuch is not parsed
+> macro deploy
+  error: script.txt:58: usage: macro NAME MACRO
+> parse
+  error: script.txt:59: usage: parse NAME
+> parse a b
+  error: script.txt:60: usage: parse NAME
+> login deploy
+  error: script.txt:61: unknown command login
+== end
+  10 files parsed
