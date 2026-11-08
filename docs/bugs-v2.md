@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 196 |
-| false-positive | 161 |
+| false-positive | 162 |
 | perf | 127 |
 | missing-feature | 113 |
 | soundness | 53 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 308 |
+| typecheck | 309 |
 | mir-llvm | 163 |
 | mir | 144 |
 | cli | 86 |
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-83 | 2026-11-08 | mir+mir-llvm | medium | A borrow of a `shared` field that stays live across a recursive call makes recursion quadratic in depth: the run-time flag table is a linear list, and every `shared enum` payload binding takes a flag although enum payloads are never `mut` | — |
 | B-2026-11-08-84 | 2026-11-08 | mir-llvm | high | Index assignment into a `Vec[dyn Trait]` (`xs[i] = v`) leaves a freed block in the slot on the LLVM backend: heap-use-after-free on the next call through it, a segfault or exit 101 in plain builds | — |
 | B-2026-11-08-85 | 2026-11-08 | mir-llvm+runtime | medium | `sort()` on a Vec of tuples runs about 3.3x Rust's stable `sort`: anything but a plain integer goes to the runtime's byte-wise `merge_sort` with the comparator called through a pointer, so katas 2015 and 2021 (sorted event triples and pairs) bench at 2.07x and 2.46x Rust under overflow checks while a Vec[i64] sort beats Rust | — |
+| B-2026-11-08-86 | 2026-11-08 | typecheck | medium | A range of bare literals takes `i64` where it is written, so `(1..=5).collect()` (or `.filter(..)`, `.map(..)` first) into a `Vec[i32]` return or binding is refused with "`C: FromIterator[i64]` is not satisfied" and no fix, though design.md § Type inference lets a return or an annotation fix a literal's type | — |
 
 ### Relocated
 
