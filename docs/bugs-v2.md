@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 187 |
+| diagnostics | 188 |
 | false-positive | 153 |
 | perf | 120 |
 | missing-feature | 110 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 294 |
+| typecheck | 295 |
 | mir-llvm | 156 |
 | mir | 137 |
-| cli | 84 |
+| cli | 85 |
 | ownership | 63 |
 | parser | 49 |
 | interp | 39 |
@@ -132,6 +132,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-52 | 2026-11-08 | mir-llvm | low | `v.iter().skip(k)` walks the k skipped items one at a time, so a `skip(i * n).take(n)` row walk over a Vec is quadratic where Rust's slice iterator jumps | — |
 | B-2026-11-08-53 | 2026-11-08 | typecheck | low | `karac fix` drops a closure's `-> i32` and with it the type of the literal-typed tuple binding it returns, leaving `res.max(x as i32)` ("`max` expects an argument of type `i64`, got `i32`") and a narrowing at the caller with no fix and no binding named | — |
 | B-2026-11-08-55 | 2026-11-08 | typecheck | low | RULING WANTED (Str vs String): `["inc", "dec"].contains(cmd)` with `cmd: Str`, and `names.contains(s)` on a `Vec[String]`, are refused "expected 'ref String', found 'Str'" with a `.to_string()` fix, while `Map[String, _].contains_key(s)` takes the view and `let cmds: Vec[Str] = [..]; cmds.contains(cmd)` works | — |
+| B-2026-11-08-57 | 2026-11-08 | typecheck+cli | low | An unannotated array or `Vec` literal's element type is not fixed by where the binding goes: `let mut cnt = [0; 26]; ..; cnt` returned as `Array[i32, 26]`, and `let mut ans = Vec.filled(n, 0); dfs(.., mut ans)` into `ans: mut ref Vec[i32]`, are refused, and the binding annotation the message itself names gets no machine fix | — |
 
 ### Relocated
 
