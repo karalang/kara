@@ -457,6 +457,11 @@ impl super::Parser {
         {
             return;
         }
+        // `Self::f(..)` or another Rust path the parse could not take: the
+        // `::` is the error, and a `;` before it is no fix (kata 1067).
+        if self.check(&Token::ColonColon) {
+            return;
+        }
         // A statement that already failed to parse is not also missing its
         // `;`: the recovery stopped it early, so the next token is the error's.
         if self

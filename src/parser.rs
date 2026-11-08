@@ -419,7 +419,7 @@ pub struct Parser {
     /// The type name an `impl` block's methods are for (`P` in `impl P`,
     /// `Stack` in `impl[T] Stack[T]`), while its body parses: a Rust-style
     /// `Self { .. }` struct literal is named and rewritten to it
-    /// (B-2026-11-07-42).
+    /// (B-2026-11-07-42), and so is Rust's `Self::name(..)` path (kata 1067).
     pub(crate) impl_self_name: Option<String>,
     /// When set, `seq {` and `par {` at the current position read as the
     /// NAME `seq` / `par` followed by the body block, not as a `seq {}` /
@@ -2412,6 +2412,64 @@ impl Parser {
         for &seg in &segments[..segments.len() - 1] {
             self.tokens[seg + 1].token = Token::Dot;
         }
+    }
+
+    /// `Self::count(d, n)` inside `impl Solution`, the Rust template's call
+    /// of an associated function: Rust's `::` path through `Self`. Called at
+    /// `Self` when a `::` and a name follow. Reports the path once, with the
+    /// fix that writes the impl's type name and a `.` (`Solution.count`),
+    /// which needs no reading of `Self` in value position; outside an impl,
+    /// or for a target that is not a plain name, the fix is left out. The
+    /// `::` is rewritten to `.` so the parse goes on, and no "expected `;`"
+    /// follows at `Self`, whose fix used to write `Self;::count(..)`.
+    pub(crate) fn rewrite_rust_self_path(&mut self) {
+        let at = self.pos;
+        if !matches!(self.tokens.get(at).map(|t| &t.token), Some(Token::SelfType))
+            || !matches!(
+                self.tokens.get(at + 1).map(|t| &t.token),
+                Some(Token::ColonColon)
+            )
+        {
+            return;
+        }
+        let Some(Token::Identifier { name: member, .. }) =
+            self.tokens.get(at + 2).map(|t| t.token.clone())
+        else {
+            return;
+        };
+        let first = self.tokens[at].span;
+        let name_span = self.tokens[at + 2].span;
+        let whole = Span {
+            length: name_span.offset + name_span.length - first.offset,
+            ..first
+        };
+        match self.impl_self_name.clone() {
+            Some(ty) => {
+                self.error_at(
+                    &format!(
+                        "`Self::{member}` is Rust's `::` path -- Kāra names the type and \
+                         writes a path with `.`: `{ty}.{member}`"
+                    ),
+                    whole,
+                );
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&whole),
+                    crate::resolver::TextEdit {
+                        offset: first.offset,
+                        length: name_span.offset - first.offset,
+                        replacement: format!("{ty}."),
+                    },
+                );
+            }
+            None => self.error_at(
+                &format!(
+                    "`Self::{member}` is Rust's `::` path -- Kāra names the type and \
+                     writes a path with `.`: `T.{member}` for the type `T`"
+                ),
+                whole,
+            ),
+        }
+        self.tokens[at + 1].token = Token::Dot;
     }
 
     /// The source text at `offset .. offset + length`, when the parser was

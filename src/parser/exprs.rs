@@ -1813,6 +1813,7 @@ impl super::Parser {
                 })
             }
             Token::SelfType => {
+                self.rewrite_rust_self_path();
                 self.advance();
                 // Rust's `Self { x }` constructor. Kāra writes a struct
                 // literal with the type's name; in an `impl` the name is
