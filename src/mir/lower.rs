@@ -8432,7 +8432,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => return self.expr_operand(e),
         };
-        if inner != want {
+        // A reference to a number the slot widens is read too, and the
+        // caller widens the value: `add(total, b)` with `b: ref u8` for an
+        // `i64` parameter passed the reference (B-2026-11-08-31).
+        if inner != want && !(self.widening(inner, want).is_some() && self.lossless(inner, want)) {
             return self.expr_operand(e);
         }
         // A reference a call returns is read through its temporary.

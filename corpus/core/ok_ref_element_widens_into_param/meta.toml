@@ -1,0 +1,12 @@
+source = "design.md §5 (lossless widening); core-semantics §5.10"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["widening", "iterators"]
+class = "a"
+expected_from = "spec"
+rules = ["5.10"]
+backends = []
+env = {}
+note = "A `ref u8` (or `ref i32`) item of a slice iterator passed for an `i64` (or `f64`) parameter is read and widened. The compiled program passed the reference's address and the interpreter stopped on `Add on Int and Ref` (B-2026-11-08-31)."
+bucket = "a"

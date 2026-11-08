@@ -1,0 +1,41 @@
+// design.md §5, lossless widening is implicit at an argument; a `ref` to a
+// `Copy` value reads as the value (core-semantics §5.10). A `ref u8` item of
+// a slice iterator passed for an `i64` or `f64` parameter is the byte's
+// value, widened (B-2026-11-08-31).
+fn add(a: i64, x: i64) -> i64 {
+    a + x
+}
+
+fn half(x: f64) -> f64 {
+    x / 2.0
+}
+
+struct Acc {
+    total: i64,
+}
+
+impl Acc {
+    fn take(mut ref self, x: i64) {
+        self.total += x;
+    }
+}
+
+fn main() {
+    let s = "ab";
+    let mut total = 0;
+    for b in s.bytes().iter() {
+        total = add(total, b);
+    }
+    println(f"{total}");
+    let small: Vec[i32] = [3, 5];
+    let mut sum = 0.0;
+    for x in small.as_slice().iter() {
+        sum += half(x);
+    }
+    println(f"{sum}");
+    let mut acc = Acc { total: 0 };
+    for b in "AZ".bytes().iter() {
+        acc.take(b);
+    }
+    println(f"{acc.total}");
+}
