@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-44 | 2026-11-07 | cli | low | `karac fmt` moves comments off the item they annotate: a `// first` after a parameter lands after the fn's `{` (where it reads as a comment on the body), a `/* second */` after a parameter moves into the body, and a `// one` after a call argument goes to the end of the statement; design.md § Canonical formatting says comments travel with their item | — |
 | B-2026-11-07-50 | 2026-11-07 | cli | low | `karac build` with no C compiler on PATH prints only `error[mir]: Failed to invoke linker: No such file or directory (os error 2)`: it names neither the program it ran (`cc`) nor the fix (install build-essential / Xcode CLT), and it is tagged phase `mir` | — |
 | B-2026-11-07-55 | 2026-11-07 | mir-llvm | medium | Katas 100, 101 and 113 (recursive `shared` tree code) run about 1.5x slower on the M5 at karac 97681763d than at 6697158fa while checked Rust held steady: 100 98.0 -> 153.5 ms, 101 131.3 -> 205.3, 113 200.3 -> 300.0; the window includes the LLVM 22 move (6dcdc1a604); x86 not yet measured | — |
-| B-2026-11-07-56 | 2026-11-07 | interp+mir-llvm | medium | A method called straight on a wide constant reads it truncated to 64 bits: `BIG.to_string()` with `const BIG: i128 = 10**38` prints 687399551400673280, and `DEC_SIGN.to_string()` with `const DEC_SIGN: u64 = 0x8000000000000000` prints -9223372036854775808 | — |
 | B-2026-11-07-57 | 2026-11-07 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3): `let mut b = 0; b = y; b` and `b += y` with `y: i32` in a fn returning `i32`, and `let b = 0; max(b, y)`, are refused 'implicit coercion from i64 to i32 would narrow' | — |
 | B-2026-11-08-1 | 2026-11-08 | mir-llvm | medium | The overflow-safe midpoint `lo + (hi - lo) / 2` keeps its signed division: halving (B-2026-11-06-8) does not see `hi - lo` as non-negative under the loop's `lo < hi`, so kata 1064's binary search runs 1.6x rustc -O -C overflow-checks=on | — |
 
@@ -828,6 +827,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-52 | typecheck | low | `impl Ord for T` with no `impl PartialOrd for T` is refused ("impl Ord for Value requires impl PartialOrd for Value") with no `karac fix` edit, thoug… | 255b769106 |
 | B-2026-11-07-53 | resolver | low | `Dict[String, i64]` / `Dict.new()` (Python's `typing.Dict`) is "undefined type 'Dict', did you mean 'Div'?"; `HashMap`, `BTreeMap` and `HashSet` alre… | 255b769106 |
 | B-2026-11-07-54 | typecheck | low | `opt == Some("")` with `opt: Option[Str]` is refused ("cannot compare 'Option[Str]' and 'Option[String]'") though `let a: Option[Str] = Some("")` is… | 670fbcb5ec |
+| B-2026-11-07-56 | interp+mir-llvm | medium | A method called straight on a constant whose value is a bare literal reads it at i64, not its declared type (corrected: not only wide ones; `CC.leadi… | a3a7d1eeb0 |
 
 </details>
 
