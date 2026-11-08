@@ -1,0 +1,102 @@
+// LeetCode #1063: Number of Valid Subarrays -- a segment tree of minimums,
+// descended for each start to the first later number below it. O(n log n).
+
+struct MinTree {
+    size: i64,
+    mins: Vec[i64],
+}
+
+impl MinTree {
+    fn new(nums: Slice[i64]) -> MinTree {
+        let mut size = 1;
+        while size < nums.len() {
+            size *= 2;
+        }
+        let mut mins: Vec[i64] = Vec.filled(2 * size, i64.MAX);
+        for (i, x) in nums.iter().enumerate() {
+            mins[size + i] = x;
+        }
+        for v in (1..size).rev() {
+            mins[v] = mins[2 * v].min(mins[2 * v + 1]);
+        }
+        MinTree { size, mins }
+    }
+
+    // The first index at or after `from` holding a number below `limit`,
+    // or `size` if none does, searched in node `v` covering `lo..hi`.
+    fn first_below(self, v: i64, lo: i64, hi: i64, from: i64, limit: i64) -> i64 {
+        if hi <= from or self.mins[v] >= limit {
+            return self.size;
+        }
+        if hi - lo == 1 {
+            return lo;
+        }
+        let mid = (lo + hi) / 2;
+        let left = self.first_below(2 * v, lo, mid, from, limit);
+        if left < self.size {
+            return left;
+        }
+        self.first_below(2 * v + 1, mid, hi, from, limit)
+    }
+}
+
+fn valid_subarrays(nums: Slice[i64]) -> i64 {
+    let tree = MinTree.new(nums);
+    let mut count = 0;
+    for i in 0..nums.len() {
+        let end = tree.first_below(1, 0, tree.size, i + 1, nums[i]).min(nums.len());
+        count += end - i;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` numbers drawn from 0 to `k - 1`.
+fn random_array(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % k).collect()
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples: Vec[Vec[i64]] = [[1, 4, 2, 5, 3], [3, 2, 1], [2, 2, 2], [7], [1, 2], [2, 1], [0, 0, 1, 0], [5, 1, 5, 1, 5], [1, 3, 2, 4, 3, 5], [100000, 0, 100000]];
+    for nums in examples.iter() {
+        println(f"{nums} -> {valid_subarrays(nums)}");
+    }
+    let mut seed = 1063;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let k = next_random(mut seed) % 4 + 1;
+        let answer = valid_subarrays(random_array(n, k, mut seed));
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"3000 arrays of 1 to 12 numbers below 1 to 4: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for i in 0..300 {
+        let n = next_random(mut seed) % 251 + 50;
+        let answer = valid_subarrays(random_array(n, 2 + i * 7 % 100000, mut seed));
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"300 arrays of 50 to 300 numbers: sum {sum}, checksum {check}");
+    // the longest arrays: 2000 numbers rising, falling, equal, random, and
+    // a zigzag
+    let rising: Vec[i64] = (0..2000).collect();
+    let falling: Vec[i64] = (0..2000).map(|i| 2000 - i).collect();
+    let equal: Vec[i64] = Vec.filled(2000, 7);
+    let zigzag: Vec[i64] = (0..2000).map(|i| if i % 2 == 0 { i } else { 100000 - i }).collect();
+    println(f"2000 rising: {valid_subarrays(rising)}");
+    println(f"2000 falling: {valid_subarrays(falling)}");
+    println(f"2000 equal: {valid_subarrays(equal)}");
+    println(f"2000 random below 100001: {valid_subarrays(random_array(2000, 100001, mut seed))}");
+    println(f"2000 zigzag: {valid_subarrays(zigzag)}");
+}

@@ -1,0 +1,70 @@
+// LeetCode #1063: Number of Valid Subarrays -- the ★ arm. A subarray is
+// valid when its first number is its smallest, so the subarrays starting
+// at `i` are valid up to the first later number below `nums[i]`. Walking
+// left to right with a stack of the numbers that no later number has gone
+// below yet, each number ends one valid subarray for every start still on
+// the stack. O(n).
+
+fn valid_subarrays(nums: Slice[i64]) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut count = 0;
+    for x in nums.iter() {
+        while stack.last().is_some_and(|top| top > x) {
+            stack.pop();
+        }
+        stack.push(x);
+        count += stack.len();
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` numbers drawn from 0 to `k - 1`.
+fn random_array(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % k).collect()
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples: Vec[Vec[i64]] = [[1, 4, 2, 5, 3], [3, 2, 1], [2, 2, 2], [7], [1, 2], [2, 1], [0, 0, 1, 0], [5, 1, 5, 1, 5], [1, 3, 2, 4, 3, 5], [100000, 0, 100000]];
+    for nums in examples.iter() {
+        println(f"{nums} -> {valid_subarrays(nums)}");
+    }
+    let mut seed = 1063;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let k = next_random(mut seed) % 4 + 1;
+        let answer = valid_subarrays(random_array(n, k, mut seed));
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"3000 arrays of 1 to 12 numbers below 1 to 4: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for i in 0..300 {
+        let n = next_random(mut seed) % 251 + 50;
+        let answer = valid_subarrays(random_array(n, 2 + i * 7 % 100000, mut seed));
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"300 arrays of 50 to 300 numbers: sum {sum}, checksum {check}");
+    // the longest arrays: 2000 numbers rising, falling, equal, random, and
+    // a zigzag
+    let rising: Vec[i64] = (0..2000).collect();
+    let falling: Vec[i64] = (0..2000).map(|i| 2000 - i).collect();
+    let equal: Vec[i64] = Vec.filled(2000, 7);
+    let zigzag: Vec[i64] = (0..2000).map(|i| if i % 2 == 0 { i } else { 100000 - i }).collect();
+    println(f"2000 rising: {valid_subarrays(rising)}");
+    println(f"2000 falling: {valid_subarrays(falling)}");
+    println(f"2000 equal: {valid_subarrays(equal)}");
+    println(f"2000 random below 100001: {valid_subarrays(random_array(2000, 100001, mut seed))}");
+    println(f"2000 zigzag: {valid_subarrays(zigzag)}");
+}

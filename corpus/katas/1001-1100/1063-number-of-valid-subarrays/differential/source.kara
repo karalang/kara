@@ -1,0 +1,286 @@
+// LeetCode #1063: Number of Valid Subarrays -- the differential.
+//
+// The six arms against the statement read literally, on 2000 arrays, with
+// six properties:
+//
+// P1  the answer is the statement read literally: the pairs of a start and
+//     an end at or after it with no number between them, both included,
+//     below the number at the start
+// P2  the answer lies between the length and the length times the length
+//     plus one over two
+// P3  the numbers renamed by a strictly increasing map leave the answer
+// P4  a number below every one appended at the end raises the answer by
+//     one, and a number at most every one put in front raises it by the
+//     length plus one
+// P5  the array cut in two answers at least the halves' sum, and the array
+//     with every number raised above its largest, followed by the array
+//     itself, answers twice the array
+// P6  each arm agrees with at least three of the other five
+
+// ---- num_valid.kara: the ★ arm: the left-to-right stack of numbers
+fn star_arm(nums: Slice[i64]) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut count = 0;
+    for x in nums.iter() {
+        while stack.last().is_some_and(|top| top > x) {
+            stack.pop();
+        }
+        stack.push(x);
+        count += stack.len();
+    }
+    count
+}
+
+// ---- num_valid_brute.kara: every start extended until a number falls below it
+fn brute_arm(nums: Slice[i64]) -> i64 {
+    let mut count = 0;
+    for i in 0..nums.len() {
+        let mut j = i;
+        while j < nums.len() and nums[j] >= nums[i] {
+            count += 1;
+            j += 1;
+        }
+    }
+    count
+}
+
+// ---- num_valid_next.kara: the next smaller number from a stack of indices
+fn next_arm(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut count = 0;
+    for i in (0..n).rev() {
+        while let Some(top) = stack.last() {
+            if nums[top] >= nums[i] {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        let next = stack.last().unwrap_or(n);
+        count += next - i;
+        stack.push(i);
+    }
+    count
+}
+
+// ---- num_valid_jump.kara: the next smaller number by jumping along the links
+fn jump_arm(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut next: Vec[i64] = Vec.filled(n, n);
+    let mut count = 0;
+    for i in (0..n).rev() {
+        let mut j = i + 1;
+        while j < n and nums[j] >= nums[i] {
+            j = next[j];
+        }
+        next[i] = j;
+        count += j - i;
+    }
+    count
+}
+
+// ---- num_valid_tree.kara: a segment tree of minimums
+struct MinTree {
+    size: i64,
+    mins: Vec[i64],
+}
+
+impl MinTree {
+    fn new(nums: Slice[i64]) -> MinTree {
+        let mut size = 1;
+        while size < nums.len() {
+            size *= 2;
+        }
+        let mut mins: Vec[i64] = Vec.filled(2 * size, i64.MAX);
+        for (i, x) in nums.iter().enumerate() {
+            mins[size + i] = x;
+        }
+        for v in (1..size).rev() {
+            mins[v] = mins[2 * v].min(mins[2 * v + 1]);
+        }
+        MinTree { size, mins }
+    }
+
+    // The first index at or after `from` holding a number below `limit`,
+    // or `size` if none does, searched in node `v` covering `lo..hi`.
+    fn first_below(self, v: i64, lo: i64, hi: i64, from: i64, limit: i64) -> i64 {
+        if hi <= from or self.mins[v] >= limit {
+            return self.size;
+        }
+        if hi - lo == 1 {
+            return lo;
+        }
+        let mid = (lo + hi) / 2;
+        let left = self.first_below(2 * v, lo, mid, from, limit);
+        if left < self.size {
+            return left;
+        }
+        self.first_below(2 * v + 1, mid, hi, from, limit)
+    }
+}
+
+fn tree_arm(nums: Slice[i64]) -> i64 {
+    let tree = MinTree.new(nums);
+    let mut count = 0;
+    for i in 0..nums.len() {
+        let end = tree.first_below(1, 0, tree.size, i + 1, nums[i]).min(nums.len());
+        count += end - i;
+    }
+    count
+}
+
+// ---- num_valid_solution.kara: LeetCode's Rust template
+struct Solution {}
+
+impl Solution {
+    pub fn valid_subarrays(nums: Vec[i32]) -> i32 {
+        let mut stack: Vec[i32] = Vec.new();
+        // `: i32` until kara B-2026-11-07-57: Rust fixes the literal from
+        // the `+=` and the return, Kāra types it `i64` first.
+        let mut ans: i32 = 0;
+        for x in nums.iter() {
+            while let Some(top) = stack.last() {
+                if top > x {
+                    stack.pop();
+                } else {
+                    break;
+                }
+            }
+            stack.push(x);
+            ans += stack.len() as i32;
+        }
+        ans
+    }
+}
+
+fn solution_arm(nums: Slice[i64]) -> i64 {
+    let narrow: Vec[i32] = nums.iter().map(|x| x as i32).collect();
+    Solution.valid_subarrays(narrow)
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` numbers drawn from 0 to `k - 1`.
+fn random_array(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % k).collect()
+}
+
+fn arm(a: i64, nums: Slice[i64]) -> i64 {
+    match a {
+        0 => star_arm(nums),
+        1 => brute_arm(nums),
+        2 => next_arm(nums),
+        3 => jump_arm(nums),
+        4 => tree_arm(nums),
+        _ => solution_arm(nums),
+    }
+}
+
+// The pairs of a start and an end at or after it with no number between
+// them, both included, below the number at the start.
+fn read_literally(nums: Slice[i64]) -> i64 {
+    let mut count = 0;
+    for i in 0..nums.len() {
+        for j in i..nums.len() {
+            let mut valid = true;
+            for t in i..j + 1 {
+                if nums[t] < nums[i] {
+                    valid = false;
+                }
+            }
+            if valid {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, nums: Slice[i64], k: i64, seed: mut ref i64) {
+    // every random choice drawn before any arm answers, so the problems
+    // are the same whatever an arm gets wrong
+    let n = nums.len();
+    let mut names: Vec[i64] = Vec.new();
+    let mut name = next_random(mut seed) % 10;
+    for _ in 0..k {
+        names.push(name);
+        name += 1 + next_random(mut seed) % 5;
+    }
+    let cut = next_random(mut seed) % (n + 1);
+    let lowest = nums.iter().min().unwrap();
+    let largest = nums.iter().max().unwrap();
+    let below = lowest - 1 - next_random(mut seed) % 3;
+    let front = lowest - next_random(mut seed) % 3;
+    let renamed: Vec[i64] = nums.iter().map(|x| names[x]).collect();
+    let mut appended: Vec[i64] = nums.to_vec();
+    appended.push(below);
+    let mut fronted: Vec[i64] = [front];
+    fronted.extend(nums.iter());
+    let mut doubled: Vec[i64] = nums.iter().map(|x| x + largest + 1).collect();
+    doubled.extend(nums.iter());
+    let want = read_literally(nums);
+    let answers: Vec[i64] = (0..6).map(|a| arm(a, nums)).collect();
+    for a in 0..6 {
+        let answer = answers[a];
+        let what = f"arm {a}, {nums} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        expect(mut t, 2, answer >= n and answer <= n * (n + 1) / 2, f"P2 {what}");
+        let other = arm(a, renamed);
+        expect(mut t, 3, other == answer, f"P3 {what}: renamed {renamed} -> {other}");
+        let more = arm(a, appended);
+        expect(mut t, 4, more == answer + 1, f"P4 {what}: with {below} at the end -> {more}");
+        let first = arm(a, fronted);
+        expect(mut t, 4, first == answer + n + 1, f"P4 {what}: with {front} in front -> {first}");
+        let (left, right) = (arm(a, nums[0..cut]), arm(a, nums[cut..n]));
+        expect(mut t, 5, answer >= left + right, f"P5 {what}: cut at {cut} -> {left} {right}");
+        let twice = arm(a, doubled);
+        expect(mut t, 5, twice == 2 * answer, f"P5 {what}: raised then itself -> {twice}");
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 arrays: 1000 of 1 to 12 numbers below 1 to 4, and 1000 of 1 to
+    // 30 below 2 to 30
+    let mut seed = 10631;
+    for i in 0..2000 {
+        let (n, k) = if i < 1000 { (12, next_random(mut seed) % 4 + 1) } else { (30, next_random(mut seed) % 29 + 2) };
+        let nums = random_array(next_random(mut seed) % n + 1, k, mut seed);
+        check_case(mut t, nums, k, mut seed);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

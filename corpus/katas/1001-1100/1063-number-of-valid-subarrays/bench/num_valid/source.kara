@@ -1,0 +1,47 @@
+// LeetCode #1063: Number of Valid Subarrays -- the benchmark, the same
+// left-to-right stack as num_valid.kara.
+
+fn valid_subarrays(nums: Slice[i64]) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut count = 0;
+    for x in nums.iter() {
+        while stack.last().is_some_and(|top| top > x) {
+            stack.pop();
+        }
+        stack.push(x);
+        count += stack.len();
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` numbers drawn from 0 to `k - 1`.
+fn random_array(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % k).collect()
+}
+
+fn main() {
+    // 20 arrays of 100000 numbers below 2 to 685902, built once, then each
+    // answered on 50 of its suffixes
+    let mut seed = 1063;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for a in 0..20 {
+        arrays.push(random_array(100000, 2 + a * a * a * 100, mut seed));
+    }
+    let mut calls = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for nums in arrays.iter() {
+        for p in 0..50 {
+            let answer = valid_subarrays(nums[p * 100..]);
+            total += answer;
+            check = (check * 31 + answer) % 1000000007;
+            calls += 1;
+        }
+    }
+    println(f"{calls} calls: answers sum {total}, checksum {check}");
+}
