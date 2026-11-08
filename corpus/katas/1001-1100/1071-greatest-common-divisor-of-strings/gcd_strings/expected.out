@@ -1,0 +1,14 @@
+ABCABC ABC -> "ABC"
+ABABAB ABAB -> "AB"
+LEET CODE -> ""
+A A -> "A"
+AAAAAA AAAA -> "AA"
+ABAB ABA -> ""
+ABCABCABC ABCABC -> "ABC"
+TAUXXTAUXXTAUXXTAUXXTAUXX TAUXXTAUXXTAUXXTAUXXTAUXXTAUXXTAUXXTAUXXTAUXX -> "TAUXX"
+AA AB -> ""
+3000 pairs up to 24 letters: 2326 found, 9014 letters, checksum 709177253
+300 pairs up to 1000 letters: 210 found, 6812 letters, checksum 780199455
+1000 A's against 999, 600, 250 and 1: [1, 200, 250, 1]
+333 ABC's against 111, 222, 1 and 332: [333, 333, 3, 3]
+500 AB's against 499 and an AC: ""

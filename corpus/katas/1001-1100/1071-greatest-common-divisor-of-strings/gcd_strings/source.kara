@@ -1,0 +1,114 @@
+// LeetCode #1071: Greatest Common Divisor of Strings -- the ★ arm: two
+// strings are both made of copies of one string exactly when `a + b` and
+// `b + a` are the same, and then the longest such string is the prefix
+// whose length is the gcd of theirs. O(n1 + n2).
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn gcd_of_strings(a: String, b: String) -> String {
+    if a + b != b + a {
+        return String.new();
+    }
+    a.substring(0, gcd(a.len(), b.len()))
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'A' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+// Two strings over the first `k` letters: copies of one root of 1 to
+// `longest` letters, `most` copies at most each; then, one time in three,
+// one letter of the second changed, and one time in six a second of its
+// own.
+fn random_pair(longest: i64, most: i64, k: i64, seed: mut ref i64) -> (String, String) {
+    let root = random_word(next_random(mut seed) % longest + 1, k, mut seed);
+    let a = root.repeat(next_random(mut seed) % most + 1);
+    let mut b = root.repeat(next_random(mut seed) % most + 1);
+    let roll = next_random(mut seed) % 6;
+    if roll < 2 {
+        let at = next_random(mut seed) % b.len();
+        let letter = (b'A' + (next_random(mut seed) % k) as u8) as char;
+        b = f"{b.substring(0, at)}{letter}{b.substring(at + 1, b.len())}";
+    } else if roll == 2 {
+        b = random_word(next_random(mut seed) % (longest * most) + 1, k, mut seed);
+    }
+    (a, b)
+}
+
+// An answer folded to one number.
+fn checksum(s: String) -> i64 {
+    let mut check = s.len();
+    for c in s.bytes() {
+        check = (check * 31 + c) % 1000000007;
+    }
+    check
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples: Vec[(String, String)] = [
+        ("ABCABC", "ABC"),
+        ("ABABAB", "ABAB"),
+        ("LEET", "CODE"),
+        ("A", "A"),
+        ("AAAAAA", "AAAA"),
+        ("ABAB", "ABA"),
+        ("ABCABCABC", "ABCABC"),
+        ("TAUXXTAUXXTAUXXTAUXXTAUXX", "TAUXXTAUXXTAUXXTAUXXTAUXXTAUXXTAUXXTAUXXTAUXX"),
+        ("AA", "AB"),
+    ];
+    for (a, b) in examples.iter() {
+        println(f"{a} {b} -> \"{gcd_of_strings(a, b)}\"");
+    }
+    let mut seed = 1071;
+    let mut found = 0;
+    let mut letters = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let k = next_random(mut seed) % 3 + 1;
+        let (a, b) = random_pair(4, 6, k, mut seed);
+        let x = gcd_of_strings(a, b);
+        if x.len() > 0 {
+            found += 1;
+        }
+        letters += x.len();
+        check = (check * 31 + checksum(x)) % 1000000007;
+    }
+    println(f"3000 pairs up to 24 letters: {found} found, {letters} letters, checksum {check}");
+    found = 0;
+    letters = 0;
+    check = 0;
+    for _ in 0..300 {
+        let k = next_random(mut seed) % 4 + 1;
+        let (a, b) = random_pair(20, 50, k, mut seed);
+        let x = gcd_of_strings(a, b);
+        if x.len() > 0 {
+            found += 1;
+        }
+        letters += x.len();
+        check = (check * 31 + checksum(x)) % 1000000007;
+    }
+    println(f"300 pairs up to 1000 letters: {found} found, {letters} letters, checksum {check}");
+    // the longest: 1000 letters against shorter runs of the same roots
+    let a1000 = "A".repeat(1000);
+    let lengths: Vec[i64] = [999, 600, 250, 1].iter().map(|n| gcd_of_strings(a1000, "A".repeat(n)).len()).collect();
+    println(f"1000 A's against 999, 600, 250 and 1: {lengths}");
+    let abc = "ABC".repeat(333);
+    let roots: Vec[i64] = [111, 222, 1, 332].iter().map(|n| gcd_of_strings(abc, "ABC".repeat(n)).len()).collect();
+    println(f"333 ABC's against 111, 222, 1 and 332: {roots}");
+    let near = f"{"AB".repeat(499)}AC";
+    println(f"500 AB's against 499 and an AC: \"{gcd_of_strings("AB".repeat(500), near)}\"");
+}

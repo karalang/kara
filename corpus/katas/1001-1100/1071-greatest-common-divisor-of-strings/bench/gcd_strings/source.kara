@@ -1,0 +1,64 @@
+// LeetCode #1071: Greatest Common Divisor of Strings -- the benchmark, the
+// same concatenations compared as gcd_strings.kara over 20000 pairs built
+// once, each answered 50 times.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn gcd_of_strings(a: String, b: String) -> String {
+    if a + b != b + a {
+        return String.new();
+    }
+    a.substring(0, gcd(a.len(), b.len()))
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'A' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // 20000 pairs over 1 to 4 letters: copies of a root of 1 to 20 letters,
+    // up to 50 copies each; one in three with a letter of the second
+    // changed and one in six with a second of its own
+    let mut seed = 1071;
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    for _ in 0..20000 {
+        let k = next_random(mut seed) % 4 + 1;
+        let root = random_word(next_random(mut seed) % 20 + 1, k, mut seed);
+        let a = root.repeat(next_random(mut seed) % 50 + 1);
+        let mut b = root.repeat(next_random(mut seed) % 50 + 1);
+        let roll = next_random(mut seed) % 6;
+        if roll < 2 {
+            let at = next_random(mut seed) % b.len();
+            let letter = (b'A' + (next_random(mut seed) % k) as u8) as char;
+            b = f"{b.substring(0, at)}{letter}{b.substring(at + 1)}";
+        } else if roll == 2 {
+            b = random_word(next_random(mut seed) % 1000 + 1, k, mut seed);
+        }
+        pairs.push((a, b));
+    }
+    let mut found = 0;
+    let mut letters = 0;
+    let mut check = 0;
+    for _ in 0..50 {
+        for (a, b) in pairs.iter() {
+            let x = gcd_of_strings(a, b);
+            if x.len() > 0 {
+                found += 1;
+            }
+            letters += x.len();
+            check = (check * 31 + x.len()) % 1000000007;
+        }
+    }
+    println(f"1000000 calls: {found} found, {letters} letters, checksum {check}");
+}
