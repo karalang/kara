@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 173 |
+| diagnostics | 174 |
 | false-positive | 145 |
 | perf | 119 |
 | missing-feature | 105 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 271 |
+| typecheck | 272 |
 | mir-llvm | 147 |
 | mir | 132 |
 | cli | 79 |
@@ -128,6 +128,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-14 | 2026-11-08 | mir-llvm | medium | Read-only iteration of a field of a `shared` struct that is not declared `mut` pays a run-time borrow flag (acquire + release through the thread-local list) per loan: the flag pass flags every non-Copy field because MIR does not record which fields are `mut` | — |
 | B-2026-11-08-15 | 2026-11-08 | typecheck | low | `s.split_whitespace().rev()` (and `s.split(" ").rev()`) is refused with a bare "no method 'rev' on type 'StrWords'": the string-splitting iterators are not double-ended, though Rust's `split_whitespace` is, and the diagnostic gives no hint or fix | — |
 | B-2026-11-08-16 | 2026-11-08 | typecheck+cli | low | A `usize` length from a Rust template (`let n = n as usize; Vec::with_capacity(n * (n + 1) / 2)`) is refused as an implicit `usize` to `i64` coercion whose message says to write `as i64`, but `karac fix` has no edit for it | — |
+| B-2026-11-08-17 | 2026-11-08 | typecheck | low | A known unit variant (`None`) in a `match` arm over a scrutinee that already failed to type is also reported as `` `None` is Type-class but binding names must be Value-class ``, a second diagnostic on top of the real one | — |
 
 ### Relocated
 
