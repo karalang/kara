@@ -1,0 +1,10 @@
+[None, Some(1), Some(2)]
+true true true true
+true true
+Some(Some(7)) Some(None)
+None;Some(-1);Some(4);
+Some(None) Some(Some(2)) Some(Some(9))
+[(None, 2), (None, 5), (Some(1), 0)]
+[None, Some(None), Some(Some(1))]
+[Ok(3), Ok(5), Err(0), Err(1)]
+true

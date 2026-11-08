@@ -2663,6 +2663,9 @@ fn main() -> () {
             // the library's (B-2026-11-07-36, -54).
             "ok_par_parse_branches",
             "ok_compare_literal_in_some",
+            // `iter`, `max`, `SortedSet` and `PriorityQueue` are the
+            // library's (B-2026-11-08-24).
+            "ok_option_none_orders_first",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

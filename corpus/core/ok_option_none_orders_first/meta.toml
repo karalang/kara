@@ -1,0 +1,9 @@
+source = "B-2026-11-08-24"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ordering", "option", "result"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/core-types.md, Option and Result § Ordering: None < Some(x), Ok(x) < Err(e). Before B-2026-11-08-24's fix, Option's derived order followed its declaration (Some, None) and every line with a None put it last."

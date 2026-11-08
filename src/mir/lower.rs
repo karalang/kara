@@ -10616,11 +10616,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.assign(dr, Rvalue::Discriminant(r.clone()));
         let join = self.b.new_block();
         let switch = self.b.new_block();
-        // The variants' order is their indices' order.
+        // The variants' order is their indices' order, except `Option`'s:
+        // it is declared `Some(T), None`, and `None` is less than every
+        // `Some(x)` (docs/library/core-types.md § Ordering, B-2026-11-08-24),
+        // so its two indices compare the other way round.
+        let (first, second) = if adt.library_name() == Some("Option") && adt.variants.len() == 2 {
+            (dr, dl)
+        } else {
+            (dl, dr)
+        };
         self.cmp_places(
             span,
-            Place::local(dl),
-            Place::local(dr),
+            Place::local(first),
+            Place::local(second),
             isize_t,
             dest.clone(),
         )?;

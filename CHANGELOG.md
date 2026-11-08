@@ -27,6 +27,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- **`None` orders before every `Some(x)`.** `sort()` on a `Vec[Option[T]]`,
+  `<`, `cmp`, `min`/`max`, `SortedSet`/`SortedMap` keys and `PriorityQueue`
+  now put `None` first, as Rust, Haskell and OCaml do
+  (docs/library/core-types.md § Ordering). 0.8.1 put `None` last, after its
+  declaration order (B-2026-11-08-24). `Ok(x) < Err(e)` is unchanged.
+- **`karac fix` moves every `usize` to `i64` together.** When a program
+  mixes `usize` with `i64`, the casts (`e[1] as usize`) and `usize.MAX`
+  are rewritten along with the written `usize` types, so the fix no longer
+  leaves a value it did not retype feeding one it did (B-2026-11-08-49).
+
 - **An operator fixes a binding's literal beside a type that does not widen
   into `i64`** (design.md §8 Literals). `let k = 2; i - k` with `i: u64`,
   and Rust's `let mut k = 1; while k * k <= n` over a `usize`, were refused

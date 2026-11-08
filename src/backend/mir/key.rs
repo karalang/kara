@@ -1105,7 +1105,18 @@ impl<'ctx> Cx<'ctx, '_> {
                     let ta = self.tag_at(a, ty)?;
                     let tb = self.tag_at(b, ty)?;
                     let res = self.entry_slot(4, "ord")?;
-                    let o = self.ord_ints(ta, tb, false)?;
+                    // `Option` is declared `Some(T), None` and orders `None`
+                    // first (docs/library/core-types.md § Ordering,
+                    // B-2026-11-08-24): its two tags compare the other way
+                    // round, as the MIR builder's derived `cmp` does.
+                    let option = self.tys.tcx().adt_of(ty).is_some_and(|(adt, _)| {
+                        adt.library_name() == Some("Option") && adt.variants.len() == 2
+                    });
+                    let o = if option {
+                        self.ord_ints(tb, ta, false)?
+                    } else {
+                        self.ord_ints(ta, tb, false)?
+                    };
                     self.store(res, o.into())?;
                     let same = self.is_zero(o)?;
                     self.if_then(same, |cx| {

@@ -10747,7 +10747,14 @@ impl<'a> Interp<'a> {
             }
             (TyKind::Adt(_) | TyKind::Shared(_), Value::Variant(k, fs)) => {
                 let fs = each(self, fs, &|i| self.tys.field_ty(ty, Some(k), i));
-                Value::Variant(k, fs)
+                // `Option` is declared `Some(T), None` and orders `None`
+                // first (docs/library/core-types.md § Ordering,
+                // B-2026-11-08-24): its two variants' ranks swap, as the
+                // derived `cmp` the MIR builder writes swaps them.
+                let option = self.tys.tcx().adt_of(ty).is_some_and(|(adt, _)| {
+                    adt.library_name() == Some("Option") && adt.variants.len() == 2
+                });
+                Value::Variant(if option { 1 - k } else { k }, fs)
             }
             (_, f) => f,
         }
