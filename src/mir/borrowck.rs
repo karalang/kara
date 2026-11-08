@@ -1032,8 +1032,14 @@ impl Cx<'_> {
         if val.is_empty() {
             return;
         }
-        let targets: Vec<Local> = o
-            .get(r)
+        for t in self.store_targets(o, r, through_shared) {
+            self.hold(o, t, val);
+        }
+    }
+
+    /// The local places the reference held in `r` lets a store reach.
+    fn store_targets(&self, o: &Origins, r: Local, through_shared: bool) -> Vec<Local> {
+        o.get(r)
             .iter()
             .map(|li| &self.loans[li])
             .filter(|l| {
@@ -1042,16 +1048,58 @@ impl Cx<'_> {
                     && self.holds(&l.place)
             })
             .map(|l| l.place.local)
-            .collect();
-        // A value never holds a borrow of its own local.
-        for t in targets {
-            for li in val.iter() {
-                let own = self.loans[li].place.local == t
-                    && !self.loans[li].place.projection.contains(&ProjElem::Deref);
-                if !own {
-                    o.insert(t, li);
-                }
+            .collect()
+    }
+
+    /// Local `t` now holds `val`; a value never holds a borrow of its own
+    /// local.
+    fn hold(&self, o: &mut Origins, t: Local, val: &LoanSet) {
+        for li in val.iter() {
+            let own = self.loans[li].place.local == t
+                && !self.loans[li].place.projection.contains(&ProjElem::Deref);
+            if !own {
+                o.insert(t, li);
             }
+        }
+    }
+
+    /// What a callee given the reference in `r` may store `val` into. A
+    /// closure is the exception to `store_through`: its captures' types are
+    /// fixed when it is made, so a call stores nothing into the closure
+    /// itself. It stores into what the closure's `mut ref` captures borrow,
+    /// and into a capture it owns whose type holds borrows (§9.3;
+    /// B-2026-11-08-56). So `|x: Vec[i64]| total += x.len()` keeps none of
+    /// its arguments, and `|s: Str| keep.push(s)` puts `s`'s loans in
+    /// `keep`.
+    fn store_through_call(&self, o: &mut Origins, r: Local, val: &LoanSet, through_shared: bool) {
+        if val.is_empty() {
+            return;
+        }
+        let mut seen: Vec<Local> = Vec::new();
+        let mut work = self.store_targets(o, r, through_shared);
+        while let Some(t) = work.pop() {
+            if seen.contains(&t) {
+                continue;
+            }
+            seen.push(t);
+            let captures = place_ty(self.body, self.tys, &Place::local(t))
+                .ok()
+                .and_then(|pt| match self.tys.kind(pt.ty) {
+                    TyKind::Closure(_, ts) => Some(ts.to_vec()),
+                    _ => None,
+                });
+            let Some(captures) = captures else {
+                self.hold(o, t, val);
+                continue;
+            };
+            let owns_a_holder = captures.iter().any(|c| {
+                !matches!(self.tys.kind(*c), TyKind::Ref(_) | TyKind::MutRef(_))
+                    && holds_borrow(self.tys, *c)
+            });
+            if owns_a_holder {
+                self.hold(o, t, val);
+            }
+            work.extend(self.store_targets(o, t, false));
         }
     }
 
@@ -1239,7 +1287,7 @@ impl Cx<'_> {
                     self.operand_origins(&before, a, &mut others);
                 }
             }
-            self.store_through(o, p.local, &others, through_shared);
+            self.store_through_call(o, p.local, &others, through_shared);
         }
         let mut val = LoanSet::default();
         // A closure called through a reference: what the closure holds.
