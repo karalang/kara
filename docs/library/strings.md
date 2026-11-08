@@ -51,6 +51,7 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 | `rfind` | `fn rfind(self, pat: Str) -> Option[i64]` | Byte offset of the last match. An empty `pat` is found at the end |
 | `split_once` | `fn split_once(self, sep: Str) -> Option[(Str, Str)]` | The text before and after the first `sep`, both views into `self`; `None` when `sep` does not occur |
 | `rsplit_once` | `fn rsplit_once(self, sep: Str) -> Option[(Str, Str)]` | The same at the last `sep` |
+| `split_at` | `fn split_at(self, mid: i64) -> (Str, Str)` | The text before and after byte `mid`, both views into `self`. Panics if `mid` is past the end or falls inside a multi-byte code point, as `s[a..b]` does |
 | `strip_prefix` | `fn strip_prefix(self, prefix: Str) -> Option[Str]` | The text after `prefix`, a view into `self`; `None` when it does not start with `prefix` |
 | `strip_suffix` | `fn strip_suffix(self, suffix: Str) -> Option[Str]` | The text before `suffix`, a view into `self`; `None` when it does not end with `suffix` |
 | `split` | `fn split(self, sep: Str) -> impl Iterator[Item = Str]` | Lazy; each piece is a view into `self` |

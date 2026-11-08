@@ -755,6 +755,7 @@ const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[
     ("rfind", "the last match's byte offset"),
     ("split_once", "a `(Str, Str)` around the first match"),
     ("rsplit_once", "a `(Str, Str)` around the last match"),
+    ("split_at", "a `(Str, Str)` around a byte offset"),
     ("splitn", "at most n `Str` pieces"),
     // B-2026-10-15-10: `String`'s `Extend[char]` and `Extend[String]` impls,
     // in the Kāra library the v2 check and MIR read.

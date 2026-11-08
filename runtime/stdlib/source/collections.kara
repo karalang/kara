@@ -1162,6 +1162,13 @@ impl StringSlice {
         }
     }
 
+    /// The text before and after byte `mid`, both views into it. Panics
+    /// when `mid` is past the end or falls inside a multi-byte code point,
+    /// as `s[a..b]` does.
+    fn split_at(self, mid: i64) -> (Str, Str) {
+        (self[0..mid], self[mid..self.len()])
+    }
+
     /// The text after `prefix`, a view into it; `None` when the text does
     /// not start with `prefix`.
     fn strip_prefix(self, prefix: Str) -> Option[Str] {
@@ -1242,6 +1249,11 @@ impl String {
     /// `rsplit_once` of the text as a `Str`: both pieces are views into `self`.
     fn rsplit_once(ref self, sep: Str) -> Option[(Str, Str)] {
         self.as_str().rsplit_once(sep)
+    }
+
+    /// `split_at` of the text as a `Str`: both pieces are views into `self`.
+    fn split_at(ref self, mid: i64) -> (Str, Str) {
+        self.as_str().split_at(mid)
     }
 
     /// `strip_prefix` of the text as a `Str`: a view into `self`.

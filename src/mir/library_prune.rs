@@ -138,6 +138,9 @@ const ALWAYS_KEPT: &[&str] = &[
     "rotate_left",
     "rotate_right",
     "split",
+    // The interpreter and backend answer `Vec.split_at` by name; the name
+    // is `Str.split_at`'s too (kata 2023).
+    "split_at",
     "split_whitespace",
     "strip_prefix",
     "strip_suffix",
