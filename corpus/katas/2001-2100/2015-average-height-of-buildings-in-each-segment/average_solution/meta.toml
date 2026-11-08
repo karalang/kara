@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/2001-2100/2015-average-height-of-buildings-in-each-segment/average_solution.kara"
+dedup_of = []
+tags = ["lib:sortedmap"]
+class = "e"
+bucket = "check-refuses:E0200"
+classified_with = "95006f015"
+extracted_src = "79bdbf26"

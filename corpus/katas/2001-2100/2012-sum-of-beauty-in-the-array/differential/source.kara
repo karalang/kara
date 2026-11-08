@@ -1,0 +1,317 @@
+// LeetCode #2012: Sum of Beauty in the Array -- the differential.
+//
+// All six arms against the statement read literally, on 2000 problems, with
+// six properties.
+//
+// P1  the answer is the statement read literally: each middle index worth 2
+//     when every value before it is smaller and every value after it larger,
+//     otherwise 1 when its left neighbour is smaller and its right one larger
+// P2  the values reversed, each v turned into top + 1 - v, leave the answer
+// P3  every value raised by the same amount leaves the answer
+// P4  every value doubled leaves the answer
+// P5  a value above all the others appended adds what the old last value is
+//     now worth: 2 above everything before it, else 1 above its neighbour
+// P6  each arm agrees with at least three of the other five
+
+// ---- beauty.kara: the ★ arm: the smallest after, the largest before
+fn star_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut min_after = Vec.filled(n, 0);
+    min_after[n - 1] = nums[n - 1];
+    for i in (0..n - 1).rev() {
+        min_after[i] = min_after[i + 1].min(nums[i]);
+    }
+    let mut max_before = nums[0];
+    let mut total = 0;
+    for i in 1..n - 1 {
+        if max_before < nums[i] and nums[i] < min_after[i + 1] {
+            total += 2;
+        } else if nums[i - 1] < nums[i] and nums[i] < nums[i + 1] {
+            total += 1;
+        }
+        max_before = max_before.max(nums[i]);
+    }
+    total
+}
+
+// ---- beauty_brute.kara: every value before and after checked
+fn brute_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut total = 0;
+    for i in 1..n - 1 {
+        let mut ordered = true;
+        for j in 0..i {
+            if nums[j] >= nums[i] {
+                ordered = false;
+                break;
+            }
+        }
+        if ordered {
+            for k in i + 1..n {
+                if nums[k] <= nums[i] {
+                    ordered = false;
+                    break;
+                }
+            }
+        }
+        if ordered {
+            total += 2;
+        } else if nums[i - 1] < nums[i] and nums[i] < nums[i + 1] {
+            total += 1;
+        }
+    }
+    total
+}
+
+// ---- beauty_scan.kara: prefix maxima and suffix minima by scan
+fn scan_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let max_upto: Vec[i64] = nums.iter().scan(0, |m, x| {
+        let m = m.max(x);
+        Some((m, m))
+    }).collect();
+    let mut min_from: Vec[i64] = nums.iter().rev().scan(i64.MAX, |m, x| {
+        let m = m.min(x);
+        Some((m, m))
+    }).collect();
+    min_from.reverse();
+    (1..n - 1)
+        .map(|i| {
+            if max_upto[i - 1] < nums[i] and nums[i] < min_from[i + 1] {
+                2
+            } else if nums[i - 1] < nums[i] and nums[i] < nums[i + 1] {
+                1
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+// ---- beauty_sorted.kara: a SortedMap of the values after
+fn sorted_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut after: SortedMap[i64, i64] = SortedMap.new();
+    for k in 1..n {
+        *after.entry(nums[k]).or_insert(0) += 1;
+    }
+    let mut max_before = nums[0];
+    let mut total = 0;
+    for i in 1..n - 1 {
+        let left = after[nums[i]] - 1;
+        if left == 0 {
+            after.remove(nums[i]);
+        } else {
+            after.insert(nums[i], left);
+        }
+        let min_after = after.keys().next().cloned().unwrap();
+        if max_before < nums[i] and nums[i] < min_after {
+            total += 2;
+        } else if nums[i - 1] < nums[i] and nums[i] < nums[i + 1] {
+            total += 1;
+        }
+        max_before = max_before.max(nums[i]);
+    }
+    total
+}
+
+// ---- beauty_flags.kara: a flag from each side
+fn flags_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut above_before = Vec.filled(n, false);
+    let mut top = nums[0];
+    for i in 1..n {
+        above_before[i] = nums[i] > top;
+        top = top.max(nums[i]);
+    }
+    let mut below_after = Vec.filled(n, false);
+    let mut bottom = nums[n - 1];
+    for i in (0..n - 1).rev() {
+        below_after[i] = nums[i] < bottom;
+        bottom = bottom.min(nums[i]);
+    }
+    let mut total = 0;
+    for i in 1..n - 1 {
+        if above_before[i] and below_after[i] {
+            total += 2;
+        } else if nums[i - 1] < nums[i] and nums[i] < nums[i + 1] {
+            total += 1;
+        }
+    }
+    total
+}
+
+// ---- beauty_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn sum_of_beauties(nums: Vec[i32]) -> i32 {
+        let n = nums.len();
+        let mut pre = Vec.filled(n, 0i32);
+        let mut suf = Vec.filled(n, 0i32);
+        pre[0] = nums[0];
+        for i in 1..n {
+            pre[i] = pre[i - 1].max(nums[i]);
+        }
+        suf[n - 1] = nums[n - 1];
+        for i in (0..n - 1).rev() {
+            suf[i] = suf[i + 1].min(nums[i]);
+        }
+        let mut ans = 0;
+        for i in 1..n - 1 {
+            if pre[i - 1] < nums[i] and nums[i] < suf[i + 1] {
+                ans += 2;
+            } else if nums[i - 1] < nums[i] and nums[i] < nums[i + 1] {
+                ans += 1;
+            }
+        }
+        ans
+    }
+}
+
+fn rust_arm(nums: Vec[i64]) -> i64 {
+    Solution.sum_of_beauties(nums.iter().map(|x| x as i32).collect()) as i64
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut total = 0;
+    for i in 1..n - 1 {
+        let mut all_before_smaller = true;
+        for j in 0..i {
+            if not (nums[j] < nums[i]) {
+                all_before_smaller = false;
+            }
+        }
+        let mut all_after_larger = true;
+        for k in i + 1..n {
+            if not (nums[i] < nums[k]) {
+                all_after_larger = false;
+            }
+        }
+        if all_before_smaller and all_after_larger {
+            total += 2;
+        } else if nums[i - 1] < nums[i] and nums[i] < nums[i + 1] {
+            total += 1;
+        }
+    }
+    total
+}
+
+// what the last value is worth once a larger value follows it
+fn last_worth(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let last = nums[n - 1];
+    if nums.iter().take(n - 1).all(|v| v < last) {
+        2
+    } else if nums[n - 2] < last {
+        1
+    } else {
+        0
+    }
+}
+
+struct Problem {
+    nums: Vec[i64],
+    top: i64,
+    shift: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 10 + 3;
+    let top = next_random(mut seed) % 20 + 1;
+    let rise = next_random(mut seed) % 11;
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i > 0 and next_random(mut seed) % 10 < rise {
+            nums.push((nums[i - 1] + next_random(mut seed) % 3 + 1).min(top));
+        } else {
+            nums.push(next_random(mut seed) % top + 1);
+        }
+    }
+    let shift = next_random(mut seed) % 50;
+    Problem { nums, top, shift }
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_arm(nums),
+        1 => brute_arm(nums),
+        2 => scan_arm(nums),
+        3 => sorted_arm(nums),
+        4 => flags_arm(nums),
+        _ => rust_arm(nums),
+    }
+}
+
+fn main() {
+    let names = ["star", "brute", "scan", "sorted", "flags", "rust"];
+    let mut seed = 2012;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..2000 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let nums = prob.nums.clone();
+        let truth = literal(nums.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let mirrored: Vec[i64] = nums.iter().rev().map(|v| prob.top + 1 - v).collect();
+        let raised: Vec[i64] = nums.iter().map(|v| v + prob.shift).collect();
+        let doubled: Vec[i64] = nums.iter().map(|v| 2 * v).collect();
+        let mut longer = nums.clone();
+        longer.push(prob.top + 1);
+        let worth = last_worth(nums.clone());
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, nums.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, mirrored.clone()) == a,
+                answer(arm, raised.clone()) == a,
+                answer(arm, doubled.clone()) == a,
+                answer(arm, longer.clone()) == a + worth,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, nums {nums}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"2000 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

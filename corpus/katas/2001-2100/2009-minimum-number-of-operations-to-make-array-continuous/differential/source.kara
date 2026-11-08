@@ -1,0 +1,262 @@
+// LeetCode #2009: Minimum Number of Operations to Make Array Continuous --
+// the differential.
+//
+// Six arms against the statement read literally, on 1500 problems, with six
+// properties.
+//
+// P1  the answer is the statement read literally: every window
+//     [s, s + n - 1] that could hold the values, the fewest values outside it
+//     or repeated within it
+// P2  the values shuffled leave the answer
+// P3  every value raised by the same amount leaves the answer
+// P4  every value v turned into top + 1 - v leaves the answer
+// P5  a copy of a value already there, appended, raises the answer by 0 or 1
+// P6  each arm agrees with at least three of the other five
+
+// ---- continuous.kara: the ★ arm: sorted, deduplicated, two pointers
+fn star_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut values = nums.clone();
+    values.sort();
+    values.dedup();
+    let mut kept = 0;
+    let mut right = 0;
+    for left in 0..values.len() {
+        while right < values.len() and values[right] <= values[left] + n - 1 {
+            right += 1;
+        }
+        kept = kept.max(right - left);
+    }
+    n - kept
+}
+
+// ---- continuous_search.kara: sorted, deduplicated, partition_point
+fn search_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut values = nums.clone();
+    values.sort();
+    values.dedup();
+    let mut kept = 0;
+    for i in 0..values.len() {
+        let high = values[i] + n - 1;
+        let past = values.partition_point(|v| v <= high);
+        kept = kept.max(past - i);
+    }
+    n - kept
+}
+
+// ---- continuous_brute.kara: a Set, every value tried as the low end
+fn brute_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut distinct: Set[i64] = Set.new();
+    for x in nums {
+        distinct.insert(x);
+    }
+    let mut kept = 0;
+    for low in distinct.iter() {
+        let mut inside = 0;
+        for v in distinct.iter() {
+            if v >= low and v < low + n {
+                inside += 1;
+            }
+        }
+        kept = kept.max(inside);
+    }
+    n - kept
+}
+
+// ---- continuous_set.kara: a SortedSet counted with range_inclusive
+fn set_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut values: SortedSet[i64] = SortedSet.new();
+    for x in nums {
+        values.insert(x);
+    }
+    let mut kept = 0;
+    for low in values.iter() {
+        kept = kept.max(values.range_inclusive(low, low + n - 1).count());
+    }
+    n - kept
+}
+
+// ---- continuous_deque.kara: a VecDeque window over the sorted values
+fn deque_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut values = nums.clone();
+    values.sort();
+    let mut window: VecDeque[i64] = VecDeque.new();
+    let mut kept = 0;
+    for v in values {
+        if window.back().cloned() == Some(v) {
+            continue;
+        }
+        while let Some(low) = window.front() {
+            if low + n - 1 >= v {
+                break;
+            }
+            window.pop_front();
+        }
+        window.push_back(v);
+        kept = kept.max(window.len());
+    }
+    n - kept
+}
+
+// ---- continuous_solution.kara: LeetCode's Rust template, carried by karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn min_operations(nums: own Vec[i32]) -> i32 {
+        let mut nums = nums;
+        let n = nums.len();
+        nums.sort();
+        nums.dedup();
+        let mut kept = 0;
+        let mut j = 0;
+        for i in 0..nums.len() {
+            while j < nums.len() and (nums[j] as i64) < nums[i] + n {
+                j += 1;
+            }
+            kept = kept.max(j - i);
+        }
+        (n - kept) as i32
+    }
+}
+
+fn solution_arm(nums: Vec[i64]) -> i64 {
+    Solution.min_operations(nums.iter().map(|x| x as i32).collect()) as i64
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+// every window [s, s + n - 1] from below the smallest value to the largest;
+// a value is kept when it is the first copy of itself inside the window
+fn literal(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let low = nums.iter().min().cloned().unwrap();
+    let high = nums.iter().max().cloned().unwrap();
+    let mut best = n;
+    for s in low - n..=high {
+        let mut changed = 0;
+        for i in 0..n {
+            let x = nums[i];
+            let mut repeated = false;
+            for j in 0..i {
+                if nums[j] == x {
+                    repeated = true;
+                }
+            }
+            if x < s or x > s + n - 1 or repeated {
+                changed += 1;
+            }
+        }
+        best = best.min(changed);
+    }
+    best
+}
+
+struct Problem {
+    nums: Vec[i64],
+    top: i64,
+    perm: Vec[i64],
+    shift: i64,
+    copy: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 12 + 1;
+    let top = next_random(mut seed) % 30 + 1;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % top + 1);
+    }
+    let mut perm: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        perm.swap(i, j);
+    }
+    let shift = next_random(mut seed) % 50;
+    let copy = next_random(mut seed) % n;
+    Problem { nums, top, perm, shift, copy }
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_arm(nums),
+        1 => search_arm(nums),
+        2 => brute_arm(nums),
+        3 => set_arm(nums),
+        4 => deque_arm(nums),
+        _ => solution_arm(nums),
+    }
+}
+
+fn main() {
+    let names = ["star", "search", "brute", "set", "deque", "solution"];
+    let mut seed = 2009;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let nums = prob.nums.clone();
+        let truth = literal(nums.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let shuffled: Vec[i64] = prob.perm.iter().map(|i| nums[i]).collect();
+        let raised: Vec[i64] = nums.iter().map(|x| x + prob.shift).collect();
+        let turned: Vec[i64] = nums.iter().map(|x| prob.top + 1 - x).collect();
+        let mut longer = nums.clone();
+        longer.push(nums[prob.copy]);
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, nums.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let grown = answer(arm, longer.clone()) - a;
+            let verdicts = [
+                a == truth,
+                answer(arm, shuffled.clone()) == a,
+                answer(arm, raised.clone()) == a,
+                answer(arm, turned.clone()) == a,
+                grown == 0 or grown == 1,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, nums {nums}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

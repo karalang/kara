@@ -1,0 +1,263 @@
+// LeetCode #2005: Subtree Removal Game with Fibonacci Tree -- the
+// differential.
+//
+// Six arms against the game played literally, for every n from 1 to 100,
+// with six properties.
+//
+// P1  the answer is the game played out on the tree itself (n up to 6)
+// P2  the answer for n is the answer for n + 6
+// P3  the answer is the colon principle worked over the tree's own nodes
+//     (n up to 16)
+// P4  in every six consecutive n Bob wins exactly once
+// P5  LeetCode's examples: Alice wins at 3 and 2, Bob at 1
+// P6  each arm agrees with at least three of the other five
+
+// ---- fibtree.kara: the ★ arm
+fn star_arm(n: i64) -> bool {
+    // value[k] is order(k)'s value; value[0] is unused
+    let mut value = Vec.filled(n + 1, 0);
+    for k in 2..=n {
+        let left = if k >= 3 { value[k - 2] + 1 } else { 0 };
+        value[k] = left ^ (value[k - 1] + 1);
+    }
+    value[n] != 0
+}
+
+// ---- fibtree_mod.kara: the closed form
+fn mod_arm(n: i64) -> bool {
+    n % 6 != 1
+}
+
+// ---- fibtree_memo.kara: the recurrence top down, memoised
+fn value(k: i64, memo: mut ref Vec[Option[i64]]) -> i64 {
+    if k == 0 {
+        return -1;
+    }
+    if k == 1 {
+        return 0;
+    }
+    if let Some(v) = memo[k] {
+        return v;
+    }
+    let v = (value(k - 2, mut memo) + 1) ^ (value(k - 1, mut memo) + 1);
+    memo[k] = Some(v);
+    v
+}
+
+fn memo_arm(n: i64) -> bool {
+    let mut memo: Vec[Option[i64]] = Vec.filled(n + 1, None);
+    value(n, mut memo) != 0
+}
+
+// ---- fibtree_iter.kara: successors over pairs of values
+fn iter_arm(n: i64) -> bool {
+    let (_, last) = successors(Some((-1, 0)), |(a, b)| Some((b, (a + 1) ^ (b + 1))))
+        .nth(n - 1)
+        .unwrap();
+    last != 0
+}
+
+// ---- fibtree_nim.kara: the nim-sum digit by digit
+fn nim_sum(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    let mut sum = 0;
+    let mut place = 1;
+    while x > 0 or y > 0 {
+        if x % 2 != y % 2 {
+            sum += place;
+        }
+        x /= 2;
+        y /= 2;
+        place *= 2;
+    }
+    sum
+}
+
+fn nim_arm(n: i64) -> bool {
+    let mut value: Array[i64, 101] = [0; 101];
+    for k in 2..=n {
+        let left = if k >= 3 { value[k - 2] + 1 } else { 0 };
+        value[k] = nim_sum(left, value[k - 1] + 1);
+    }
+    value[n] != 0
+}
+
+// ---- fibtree_solution.kara: LeetCode's Rust template, carried by karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn find_game_winner(n: i32) -> bool {
+        let n = n as i64;
+        let mut g = Vec.filled(n + 1, 0i32);
+        for k in 2..=n {
+            let left = if k >= 3 { g[k - 2] + 1 } else { 0 };
+            g[k] = left ^ (g[k - 1] + 1);
+        }
+        g[n] != 0
+    }
+}
+
+fn solution_arm(n: i64) -> bool {
+    Solution.find_game_winner(n as i32)
+}
+
+// ---- the trees themselves ----------------------------------------------------
+
+// order(n) as nodes: `left[v]` and `right[v]` are v's children, -1 for none.
+// The root is node 0. Returns the node built, or -1 for order(0).
+fn build(n: i64, left: mut ref Vec[i64], right: mut ref Vec[i64]) -> i64 {
+    if n == 0 {
+        return -1;
+    }
+    let v = left.len();
+    left.push(-1);
+    right.push(-1);
+    if n >= 2 {
+        let l = build(n - 2, mut left, mut right);
+        let r = build(n - 1, mut left, mut right);
+        left[v] = l;
+        right[v] = r;
+    }
+    v
+}
+
+// every node below `v`, `v` included, as a bit mask
+fn below(v: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    if v == -1 {
+        return 0;
+    }
+    (1 << v) | below(left[v], left, right) | below(right[v], left, right)
+}
+
+// whether the player to move wins with the nodes in `present` left; the one
+// left with the root alone must delete it, and loses
+fn wins(present: i64, subtree: Vec[i64], memo: mut ref Map[i64, bool]) -> bool {
+    if let Some(w) = memo.get(present) {
+        return w;
+    }
+    let mut win = false;
+    for v in 1..subtree.len() {
+        if (present >> v) & 1 == 1 and not wins(present & ~subtree[v], subtree, mut memo) {
+            win = true;
+            break;
+        }
+    }
+    memo.insert(present, win);
+    win
+}
+
+fn literal(n: i64) -> bool {
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    build(n, mut left, mut right);
+    let subtree: Vec[i64] = (0..left.len()).map(|v| below(v, left, right)).collect();
+    let mut memo: Map[i64, bool] = Map.new();
+    wins(subtree[0], subtree, mut memo)
+}
+
+// Green Hackenbush value of the tree under `v`: the nim-sum over its
+// children of each child's value plus one
+fn hackenbush(v: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    let mut value = 0;
+    for c in [left[v], right[v]] {
+        if c != -1 {
+            value = value ^ (hackenbush(c, left, right) + 1);
+        }
+    }
+    value
+}
+
+fn colon(n: i64) -> bool {
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    let root = build(n, mut left, mut right);
+    hackenbush(root, left, right) != 0
+}
+
+// ---- the checks ---------------------------------------------------------------
+
+fn answer(arm: i64, n: i64) -> bool {
+    match arm {
+        0 => star_arm(n),
+        1 => mod_arm(n),
+        2 => memo_arm(n),
+        3 => iter_arm(n),
+        4 => nim_arm(n),
+        _ => solution_arm(n),
+    }
+}
+
+fn main() {
+    let names = ["star", "mod", "memo", "iter", "nim", "solution"];
+    let top = 100;
+    let mut truth: Vec[bool] = [false];
+    let mut colon_truth: Vec[bool] = [false];
+    let mut check = 0;
+    for n in 1..=top {
+        truth.push(if n <= 6 { literal(n) } else { false });
+        colon_truth.push(if n <= 16 { colon(n) } else { false });
+        let t = if truth[n] { 2 } else { 1 };
+        let c = if colon_truth[n] { 3 } else { 1 };
+        check = (check * 31 + t * c) % 1000000007;
+    }
+    let mut table: Vec[Vec[bool]] = Vec.new();
+    for arm in 0..6 {
+        let mut row = [false];
+        for n in 1..=top {
+            row.push(answer(arm, n));
+        }
+        table.push(row);
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    for arm in 0..6 {
+        let a = table[arm].clone();
+        let mut verdicts: Vec[(i64, i64, bool)] = Vec.new();
+        for n in 1..=top {
+            if n <= 6 {
+                verdicts.push((1, n, a[n] == truth[n]));
+            }
+            if n + 6 <= top {
+                verdicts.push((2, n, a[n] == a[n + 6]));
+            }
+            if n <= 16 {
+                verdicts.push((3, n, a[n] == colon_truth[n]));
+            }
+            if n + 5 <= top {
+                let bob = (n..n + 6).filter(|m| not a[m]).count();
+                verdicts.push((4, n, bob == 1));
+            }
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and table[other][n] == a[n] {
+                    same += 1;
+                }
+            }
+            verdicts.push((6, n, same >= 3));
+        }
+        verdicts.push((5, 3, a[3]));
+        verdicts.push((5, 1, not a[1]));
+        verdicts.push((5, 2, a[2]));
+        for (p, n, ok) in verdicts {
+            checks += 1;
+            if not ok {
+                by_property[p - 1] += 1;
+                if failures.len() < 10 {
+                    failures.push(f"arm {names[arm]}: P{p} fails at n = {n}, answer {a[n]}");
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"100 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for k in 0..6 {
+        if by_property[k] > 0 {
+            println(f"P{k + 1} {by_property[k]}");
+        }
+    }
+}

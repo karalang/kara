@@ -1,0 +1,88 @@
+// LeetCode #2018: Check if Word Can Be Placed In Crossword -- the ★ arm's
+// benchmark. Every row and every column is cut at its walls into runs; the
+// word fits a run exactly as long as it whose every cell is empty or holds
+// the word's letter there, read forwards or backwards.
+
+fn fits(segment: Vec[char], word: Vec[char]) -> bool {
+    let k = word.len();
+    if segment.len() != k {
+        return false;
+    }
+    let forward = (0..k).all(|i| segment[i] == ' ' or segment[i] == word[i]);
+    let backward = (0..k).all(|i| segment[i] == ' ' or segment[i] == word[k - 1 - i]);
+    forward or backward
+}
+
+fn place_word_in_crossword(board: Vec[Vec[char]], word: String) -> bool {
+    let word: Vec[char] = word.chars().collect();
+    let (m, n) = (board.len(), board[0].len());
+    let mut lines: Vec[Vec[char]] = board.clone();
+    for c in 0..n {
+        lines.push((0..m).map(|r| board[r][c]).collect());
+    }
+    for line in lines.iter() {
+        let mut segment: Vec[char] = Vec.new();
+        for i in 0..line.len() + 1 {
+            if i == line.len() or line[i] == '#' {
+                if fits(segment, word) {
+                    return true;
+                }
+                segment.clear();
+            } else {
+                segment.push(line[i]);
+            }
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 120 boards of 200 by 200, built once, each with its word: walls with
+    // odds 1 or 2 in 10, letters from the first 3 with odds 4 in 10, words of
+    // 10 to 19 letters; the ★ arm on each for 40 rounds
+    let mut seed = 2018;
+    let mut boards: Vec[Vec[Vec[char]]] = Vec.new();
+    let mut words: Vec[String] = Vec.new();
+    for b in 0..120 {
+        let walls = b % 2 + 1;
+        let mut board: Vec[Vec[char]] = Vec.new();
+        for _ in 0..200 {
+            let mut row: Vec[char] = Vec.new();
+            for _ in 0..200 {
+                if next_random(mut seed) % 10 < walls {
+                    row.push('#');
+                } else if next_random(mut seed) % 10 < 4 {
+                    row.push(('a' as i64 + next_random(mut seed) % 3) as u8 as char);
+                } else {
+                    row.push(' ');
+                }
+            }
+            board.push(row);
+        }
+        let mut word = String.new();
+        for _ in 0..b % 10 + 10 {
+            word.push(('a' as i64 + next_random(mut seed) % 3) as u8 as char);
+        }
+        boards.push(board);
+        words.push(word);
+    }
+    let mut calls = 0;
+    let mut placed = 0;
+    let mut check = 0;
+    for _ in 0..40 {
+        for b in 0..boards.len() {
+            let answer = place_word_in_crossword(boards[b], words[b]);
+            calls += 1;
+            if answer {
+                placed += 1;
+            }
+            check = (check * 2 + if answer { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: {placed} placed, checksum {check}");
+}

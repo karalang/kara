@@ -1,0 +1,381 @@
+// LeetCode #2030: Smallest K-Length Subsequence With Occurrences of a
+// Letter -- the differential. Copies of the six arms and the statement read
+// literally: every set of `k` positions tried, by a bitmask, the ones
+// holding at least `repetition` copies of `letter` kept, the smallest
+// string they spell taken. It checks 1500 problems of 1 to 10 letters from
+// the first 1 to 5 of the alphabet. Every random choice of a problem is
+// drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  with `repetition` one lower (when it is at least 2), the answer is no
+//     larger
+// P3  with `k` the whole length and `repetition` at most the copies there
+//     are, the answer is the string itself
+// P4  every character moved one up the alphabet, `letter` too, moves the
+//     answer one up
+// P5  the answer is a valid problem of its own, and asked for again from
+//     itself is the answer
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: a stack of bytes
+fn star_smallest_subsequence(s: String, k: i64, letter: char, repetition: i64) -> String {
+    let bytes = s.bytes();
+    let want = letter as u32 as u8;
+    let n = bytes.len();
+    let mut remain = bytes.iter().filter(|b| b == want).count();
+    let mut stack: Vec[u8] = Vec.new();
+    let mut have = 0;
+    for i in 0..n {
+        let c = bytes[i];
+        while stack.len() > 0
+            and stack[stack.len() - 1] > c
+            and stack.len() - 1 + n - i >= k
+            and (stack[stack.len() - 1] != want or have - 1 + remain >= repetition)
+        {
+            if stack.pop().unwrap() == want {
+                have -= 1;
+            }
+        }
+        if stack.len() < k {
+            if c == want {
+                stack.push(c);
+                have += 1;
+            } else if k - stack.len() > repetition - have {
+                stack.push(c);
+            }
+        }
+        if c == want {
+            remain -= 1;
+        }
+    }
+    String.from_utf8(stack).unwrap()
+}
+
+// ---- subseq_table.kara: each place from a next-occurrence table
+fn table_smallest_subsequence(s: String, k: i64, letter: char, repetition: i64) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut after = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        after[i] = after[i + 1] + if chars[i] == letter { 1 } else { 0 };
+    }
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..26 {
+        next.push(Vec.filled(n + 1, n));
+    }
+    for i in (0..n).rev() {
+        for c in 0..26 {
+            next[c][i] = next[c][i + 1];
+        }
+        next[chars[i] as i64 - 97][i] = i;
+    }
+    let mut out = String.new();
+    let mut start = 0;
+    let mut have = 0;
+    for j in 0..k {
+        let places = k - j;
+        let owed = (repetition - have).max(0);
+        for c in 0..26 {
+            let p = next[c][start];
+            if p > n - places {
+                continue;
+            }
+            let is_letter = (97 + c) as u8 as char == letter;
+            let still = if is_letter { (owed - 1).max(0) } else { owed };
+            if after[p + 1] >= still and places - 1 >= still {
+                out.push(chars[p]);
+                if is_letter {
+                    have += 1;
+                }
+                start = p + 1;
+                break;
+            }
+        }
+    }
+    out
+}
+
+// ---- subseq_lists.kara: each place from per-character position lists
+fn lists_smallest_subsequence(s: String, k: i64, letter: char, repetition: i64) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut positions: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..26 {
+        positions.push(Vec.new());
+    }
+    // `before[i]` copies of `letter` among the first `i` characters
+    let mut before = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        positions[chars[i] as i64 - 97].push(i);
+        before[i + 1] = before[i] + if chars[i] == letter { 1 } else { 0 };
+    }
+    let mut cursor = [0; 26];
+    let mut out = String.new();
+    let mut start = 0;
+    let mut have = 0;
+    for j in 0..k {
+        let places = k - j;
+        let owed = (repetition - have).max(0);
+        for c in 0..26 {
+            let list = ref positions[c];
+            while cursor[c] < list.len() and list[cursor[c]] < start {
+                cursor[c] += 1;
+            }
+            if cursor[c] == list.len() {
+                continue;
+            }
+            let p = list[cursor[c]];
+            if p > n - places {
+                continue;
+            }
+            let is_letter = chars[p] == letter;
+            let still = if is_letter { owed - 1 } else { owed };
+            let left = before[n] - before[p + 1];
+            if left >= still and places - 1 >= still {
+                out.push(chars[p]);
+                if is_letter {
+                    have += 1;
+                }
+                start = p + 1;
+                break;
+            }
+        }
+    }
+    out
+}
+
+// ---- subseq_string.kara: the stack kept as the answer String
+fn string_smallest_subsequence(s: String, k: i64, letter: char, repetition: i64) -> String {
+    let n = s.chars().count();
+    let mut remain = s.chars().filter(|c| c == letter).count();
+    let mut out = String.new();
+    let mut len = 0;
+    let mut have = 0;
+    for (i, c) in s.chars().enumerate() {
+        while let Some(top) = out.chars().last() {
+            let room = len - 1 + n - i >= k;
+            let spare = top != letter or have - 1 + remain >= repetition;
+            if top <= c or not room or not spare {
+                break;
+            }
+            out.pop();
+            len -= 1;
+            if top == letter {
+                have -= 1;
+            }
+        }
+        if len < k and (c == letter or k - len > repetition - have) {
+            out.push(c);
+            len += 1;
+            if c == letter {
+                have += 1;
+            }
+        }
+        if c == letter {
+            remain -= 1;
+        }
+    }
+    out
+}
+
+// ---- subseq_scan.kara: each place by scanning its window
+fn scan_smallest_subsequence(s: String, k: i64, letter: char, repetition: i64) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut after = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        after[i] = after[i + 1] + if chars[i] == letter { 1 } else { 0 };
+    }
+    let mut out = String.new();
+    let mut start = 0;
+    let mut have = 0;
+    for j in 0..k {
+        let places = k - j;
+        let owed = repetition - have;
+        let mut best = n;
+        for p in start..n - places + 1 {
+            let is_letter = chars[p] == letter;
+            let still = if is_letter { owed - 1 } else { owed };
+            if after[p + 1] >= still and places - 1 >= still and (best == n or chars[p] < chars[best]) {
+                best = p;
+            }
+        }
+        out.push(chars[best]);
+        if chars[best] == letter {
+            have += 1;
+        }
+        start = best + 1;
+    }
+    out
+}
+
+// ---- subseq_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn smallest_subsequence(s: String, k: i32, letter: char, repetition: i32) -> String {
+        let s: Vec[char] = s.chars().collect();
+        let n = s.len();
+        let k = k as i64;
+        let mut remain = s.iter().filter(|c| c == letter).count() as i32;
+        let mut stack: Vec[char] = Vec.new();
+        let mut have = 0;
+        for i in 0..n {
+            let c = s[i];
+            while let Some(top) = stack.last().cloned() {
+                if top > c and stack.len() - 1 + n - i >= k and (top != letter or have - 1 + remain >= repetition) {
+                    stack.pop();
+                    if top == letter {
+                        have -= 1;
+                    }
+                } else {
+                    break;
+                }
+            }
+            if stack.len() < k {
+                if c == letter {
+                    stack.push(c);
+                    have += 1;
+                } else if (k - stack.len()) as i32 > repetition - have {
+                    stack.push(c);
+                }
+            }
+            if c == letter {
+                remain -= 1;
+            }
+        }
+        stack.into_iter().collect()
+    }
+}
+
+fn rust_smallest_subsequence(s: String, k: i64, letter: char, repetition: i64) -> String {
+    Solution.smallest_subsequence(s.clone(), k as i32, letter, repetition as i32)
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(s: String, k: i64, letter: char, repetition: i64) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut best: Option[String] = None;
+    for mask in 0..(1 << n) {
+        let mut picked = String.new();
+        let mut copies = 0;
+        for i in 0..n {
+            if mask & (1 << i) != 0 {
+                picked.push(chars[i]);
+                if chars[i] == letter {
+                    copies += 1;
+                }
+            }
+        }
+        if picked.chars().count() != k or copies < repetition {
+            continue;
+        }
+        let better = match best {
+            Some(ref b) => picked < b,
+            None => true,
+        };
+        if better {
+            best = Some(picked);
+        }
+    }
+    best.unwrap()
+}
+
+fn answer(arm: i64, s: String, k: i64, letter: char, repetition: i64) -> String {
+    match arm {
+        0 => star_smallest_subsequence(s, k, letter, repetition),
+        1 => table_smallest_subsequence(s, k, letter, repetition),
+        2 => lists_smallest_subsequence(s, k, letter, repetition),
+        3 => string_smallest_subsequence(s, k, letter, repetition),
+        4 => scan_smallest_subsequence(s, k, letter, repetition),
+        _ => rust_smallest_subsequence(s, k, letter, repetition),
+    }
+}
+
+fn up(s: String) -> String {
+    s.chars().map(|c| (c as u32 + 1) as u8 as char).collect()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    s: String,
+    k: i64,
+    letter: char,
+    repetition: i64,
+}
+
+fn main() {
+    let names = ["star", "table", "lists", "string", "scan", "rust"];
+    let mut seed = 2030;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        let n = next_random(mut seed) % 10 + 1;
+        let a = next_random(mut seed) % 5 + 1;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((97 + next_random(mut seed) % a) as u8 as char);
+        }
+        let k = next_random(mut seed) % n + 1;
+        let letter = s.chars().nth(next_random(mut seed) % n).unwrap();
+        let copies = s.chars().filter(|c| c == letter).count();
+        let repetition = next_random(mut seed) % k.min(copies) + 1;
+        problems.push(Problem { s: s, k: k, letter: letter, repetition: repetition });
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let (s, k, letter, repetition) = (prob.s.clone(), prob.k, prob.letter, prob.repetition);
+        let n = s.chars().count();
+        let truth = literal(s.clone(), k, letter, repetition);
+        for b in truth.bytes().iter() {
+            check = (check * 31 + b as i64) % 1000000007;
+        }
+        let copies = s.chars().filter(|c| c == letter).count();
+        let got: Vec[String] = (0..6).map(|arm| answer(arm, s.clone(), k, letter, repetition)).collect();
+        for arm in 0..6 {
+            let a = got[arm].clone();
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let p2 = repetition < 2 or answer(arm, s.clone(), k, letter, repetition - 1) <= a;
+            let p3 = answer(arm, s.clone(), n, letter, repetition.min(copies)) == s;
+            let up_letter = (letter as u32 + 1) as u8 as char;
+            let p4 = answer(arm, up(s.clone()), k, up_letter, repetition) == up(a.clone());
+            // a string that is not itself a valid problem fails P5 rather than being asked
+            let kept = a.chars().filter(|c| c == letter).count();
+            let p5 = a.chars().count() == k and kept >= repetition and answer(arm, a.clone(), k, letter, repetition) == a;
+            let verdicts = [a == truth, p2, p3, p4, p5, same >= 3];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {s} {k} {letter} {repetition}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

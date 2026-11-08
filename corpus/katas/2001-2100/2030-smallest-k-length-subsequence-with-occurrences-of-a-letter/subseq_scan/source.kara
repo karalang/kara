@@ -1,0 +1,122 @@
+// LeetCode #2030: Smallest K-Length Subsequence With Occurrences of a
+// Letter -- each place of the answer found by scanning the window it can
+// come from: from just past the last place to the last index that leaves
+// room for the places after it. A character there counts only if enough
+// copies of `letter` lie past it for the ones still owed; the smallest
+// such, the first of equals, is taken. O(k (n - k)).
+
+fn smallest_subsequence(s: String, k: i64, letter: char, repetition: i64) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut after = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        after[i] = after[i + 1] + if chars[i] == letter { 1 } else { 0 };
+    }
+    let mut out = String.new();
+    let mut start = 0;
+    let mut have = 0;
+    for j in 0..k {
+        let places = k - j;
+        let owed = repetition - have;
+        let mut best = n;
+        for p in start..n - places + 1 {
+            let is_letter = chars[p] == letter;
+            let still = if is_letter { owed - 1 } else { owed };
+            if after[p + 1] >= still and places - 1 >= still and (best == n or chars[p] < chars[best]) {
+                best = p;
+            }
+        }
+        out.push(chars[best]);
+        if chars[best] == letter {
+            have += 1;
+        }
+        start = best + 1;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn fold(check: i64, text: String) -> i64 {
+    let mut check = check;
+    for b in text.bytes().iter() {
+        check = (check * 31 + b as i64) % 1000000007;
+    }
+    check
+}
+
+// `n` letters from the first `a` of the alphabet, each a step from the last
+// with odds `climb` in 10 of going up
+fn draw(n: i64, a: i64, climb: i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    let mut c = next_random(mut seed) % a;
+    for _ in 0..n {
+        let r = next_random(mut seed) % 10;
+        if r < climb {
+            c = (c + 1) % a;
+        } else if r < climb + 3 {
+            c = next_random(mut seed) % a;
+        }
+        out.push((97 + c) as u8 as char);
+    }
+    out
+}
+
+fn count_of(s: String, letter: char) -> i64 {
+    s.chars().filter(|c| c == letter).count()
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(String, i64, char, i64)] = [
+        ("leet", 3, 'e', 1),
+        ("leetcode", 4, 'e', 2),
+        ("bb", 2, 'b', 2),
+        ("aaabbbcccddd", 3, 'b', 2),
+        ("zyxwvutsrqponmlkjihgfedcba", 5, 'z', 1),
+        ("bacbacbac", 4, 'c', 3),
+        ("abcabcabc", 9, 'a', 3),
+        ("mississippi", 4, 's', 3),
+    ];
+    for (s, k, letter, repetition) in examples {
+        println(f"{s} {k} {letter} {repetition} -> {smallest_subsequence(s, k, letter, repetition)}");
+    }
+    // 3000 problems of 1 to 20 letters from the first 1 to 6 of the
+    // alphabet; the letters kept counted and the answers folded into a
+    // checksum
+    let mut seed = 2030;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 20 + 1;
+        let a = next_random(mut seed) % 6 + 1;
+        let climb = next_random(mut seed) % 6;
+        let s = draw(n, a, climb, mut seed);
+        let k = next_random(mut seed) % n + 1;
+        let letter = s.bytes()[next_random(mut seed) % n] as char;
+        let repetition = next_random(mut seed) % k.min(count_of(s, letter)) + 1;
+        let got = smallest_subsequence(s, k, letter, repetition);
+        total += count_of(got, letter);
+        check = fold(check, got);
+    }
+    println(f"3000 problems of up to 20 letters: {total} letters kept, checksum {check}");
+    // 6 problems of 2000 to 50000 letters, the most the constraints allow
+    total = 0;
+    check = 0;
+    for a in 0..6 {
+        let n = [50000, 50000, 50000, 50000, 2000, 2000][a];
+        let s = draw(n, [26, 3, 26, 2, 26, 5][a], [2, 5, 7, 4, 3, 6][a], mut seed);
+        let k = [49990, 20, 49900, 7, 1000, 1500][a];
+        let letter = s.bytes()[next_random(mut seed) % n] as char;
+        let repetition = k.min(count_of(s, letter)).min([5, 3, 49000, 7, 300, 900][a]);
+        let got = smallest_subsequence(s, k, letter, repetition);
+        total += count_of(got, letter);
+        check = fold(check, got);
+    }
+    println(f"6 problems of up to 50000 letters: {total} letters kept, checksum {check}");
+}

@@ -1,0 +1,64 @@
+// LeetCode #2011: Final Value of Variable After Performing Operations --
+// the table arm. A `Map` from each of the four operations to its step,
+// built once per call, and every operation looked up in it. O(n).
+
+fn final_value_after_operations(operations: Vec[String]) -> i64 {
+    let mut step: Map[String, i64] = Map.new();
+    step.insert("++X", 1);
+    step.insert("X++", 1);
+    step.insert("--X", -1);
+    step.insert("X--", -1);
+    let mut x = 0;
+    for op in operations {
+        x += step[op];
+    }
+    x
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, answer: i64) -> i64 {
+    (check * 31 + answer) % 1000000007
+}
+
+// `n` operations, each going up with probability `up` in 10
+fn random_operations(n: i64, up: i64, seed: mut ref i64) -> Vec[String] {
+    let forms = ["++X", "X++", "--X", "X--"];
+    let mut operations: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let down = if next_random(mut seed) % 10 < up { 0 } else { 2 };
+        operations.push(forms[down + next_random(mut seed) % 2].to_string());
+    }
+    operations
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[String]] = [
+        ["--X", "X++", "X++"],
+        ["++X", "++X", "X++"],
+        ["X++", "++X", "--X", "X--"],
+        ["X--"],
+        ["--X", "--X", "X--"],
+        ["++X", "--X", "++X", "--X", "X++"],
+    ];
+    for operations in examples.iter() {
+        println(f"{operations} -> {final_value_after_operations(operations)}");
+    }
+    let mut seed = 2011;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let up = next_random(mut seed) % 11;
+        let answer = final_value_after_operations(random_operations(n, up, mut seed));
+        sum += answer;
+        check = mix(check, answer);
+    }
+    println(f"3000 lists of 1 to 100 operations: sum {sum}, checksum {check}");
+}

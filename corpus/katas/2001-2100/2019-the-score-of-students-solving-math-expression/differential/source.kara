@@ -1,0 +1,492 @@
+// LeetCode #2019: The Score of Students Solving Math Expression -- the
+// differential.
+//
+// All six arms against the statement read literally, on 700 problems, with
+// six properties. A problem is an expression of 1 to 6 digits from 0 to 1-9
+// joined by `+` and `*`, and 1 to 8 answers, each with even odds a value
+// some bracketing gives, up to 1000, or a number from 0 to 1-30.
+//
+// P1  the score is the statement read literally: the right answer by every
+//     `*` applied left to right and then every `+`, and the wrong orders as
+//     every way to bracket the expression, values of any size kept
+// P2  the answers read in reverse order leave the score
+// P3  every answer listed twice doubles the score
+// P4  the expression written backwards leaves the score
+// P5  `*1` appended to the expression leaves the score
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: interval DP over sets
+fn star_score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    let chars: Vec[char] = s.chars().collect();
+    let digits: Vec[i64] = chars.iter().step_by(2).map(|c| c as i64 - '0' as i64).collect();
+    let ops: Vec[char] = chars.iter().skip(1).step_by(2).collect();
+    let n = digits.len();
+    // the right answer
+    let mut sum = 0;
+    let mut product = digits[0];
+    for i in 0..n - 1 {
+        if ops[i] == '+' {
+            sum += product;
+            product = digits[i + 1];
+        } else {
+            product *= digits[i + 1];
+        }
+    }
+    let correct = sum + product;
+    // values[i][j]: every value of digits i..=j under some order
+    let mut values: Vec[Vec[Set[i64]]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[Set[i64]] = Vec.new();
+        for j in 0..n {
+            let mut cell: Set[i64] = Set.new();
+            if i == j {
+                cell.insert(digits[i]);
+            }
+            row.push(cell);
+        }
+        values.push(row);
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            let mut cell: Set[i64] = Set.new();
+            for k in i..j {
+                for a in values[i][k].iter() {
+                    for b in values[k + 1][j].iter() {
+                        let v = if ops[k] == '+' { a + b } else { a * b };
+                        if v <= 1000 {
+                            cell.insert(v);
+                        }
+                    }
+                }
+            }
+            values[i][j] = cell;
+        }
+    }
+    let mut points = 0;
+    for answer in answers.iter() {
+        if answer == correct {
+            points += 5;
+        } else if values[0][n - 1].contains(answer) {
+            points += 2;
+        }
+    }
+    points
+}
+
+// ---- score_bits.kara: interval DP over 1001 flags
+fn bits_score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    let correct: i64 = s.split("+")
+        .map(|piece| piece.split("*").map(|d| i64.parse(d).unwrap()).product())
+        .sum();
+    let chars: Vec[char] = s.chars().collect();
+    let n = (chars.len() + 1) / 2;
+    let mut can: Vec[Vec[Vec[bool]]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[Vec[bool]] = Vec.new();
+        for _ in 0..n {
+            row.push(Vec.filled(1001, false));
+        }
+        row[i][chars[2 * i] as i64 - '0' as i64] = true;
+        can.push(row);
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            for k in i..j {
+                let plus = chars[2 * k + 1] == '+';
+                for a in 0..1001 {
+                    if not can[i][k][a] {
+                        continue;
+                    }
+                    for b in 0..1001 {
+                        if can[k + 1][j][b] {
+                            let v = if plus { a + b } else { a * b };
+                            if v > 1000 {
+                                break;
+                            }
+                            can[i][j][v] = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    answers.iter().map(|answer| {
+        if answer == correct {
+            5
+        } else if answer <= 1000 and can[0][n - 1][answer] {
+            2
+        } else {
+            0
+        }
+    }).sum()
+}
+
+// ---- score_memo.kara: top-down with a Map memo
+fn memo_values(i: i64, j: i64, digits: Vec[i64], ops: Vec[char], memo: mut ref Map[(i64, i64), Vec[i64]]) -> Vec[i64] {
+    if let Some(found) = memo.get((i, j)) {
+        return found.clone();
+    }
+    let mut seen: Set[i64] = Set.new();
+    if i == j {
+        seen.insert(digits[i]);
+    }
+    for k in i..j {
+        let left = memo_values(i, k, digits, ops, mut memo);
+        let right = memo_values(k + 1, j, digits, ops, mut memo);
+        for a in left.iter() {
+            for b in right.iter() {
+                let v = if ops[k] == '+' { a + b } else { a * b };
+                if v <= 1000 {
+                    seen.insert(v);
+                }
+            }
+        }
+    }
+    let mut found: Vec[i64] = seen.iter().collect();
+    found.sort();
+    memo.insert((i, j), found.clone());
+    found
+}
+
+fn memo_score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut ops: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c == '+' or c == '*' {
+            ops.push(c);
+        } else {
+            digits.push(c as i64 - '0' as i64);
+        }
+    }
+    let mut stack: Vec[i64] = [digits[0]];
+    for k in 0..ops.len() {
+        if ops[k] == '*' {
+            let top = stack.pop().unwrap();
+            stack.push(top * digits[k + 1]);
+        } else {
+            stack.push(digits[k + 1]);
+        }
+    }
+    let correct: i64 = stack.iter().sum();
+    let mut memo: Map[(i64, i64), Vec[i64]] = Map.new();
+    let possible = memo_values(0, digits.len() - 1, digits, ops, mut memo);
+    let mut points = 0;
+    for answer in answers.iter() {
+        if answer == correct {
+            points += 5;
+        } else if possible.binary_search(answer).is_ok() {
+            points += 2;
+        }
+    }
+    points
+}
+
+// ---- score_brute.kara: every order by plain recursion
+fn brute_all_values(digits: Vec[i64], ops: Vec[char]) -> Vec[i64] {
+    if digits.len() == 1 {
+        return [digits[0]];
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..ops.len() {
+        let left = brute_all_values(digits[0..k + 1].to_vec(), ops[0..k].to_vec());
+        let right = brute_all_values(digits[k + 1..].to_vec(), ops[k + 1..].to_vec());
+        for a in left.iter() {
+            for b in right.iter() {
+                let v = if ops[k] == '+' { a + b } else { a * b };
+                if v <= 1000 and not out.contains(v) {
+                    out.push(v);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn brute_evaluate(digits: Vec[i64], ops: Vec[char]) -> i64 {
+    if digits.len() == 1 {
+        return digits[0];
+    }
+    let k = match ops.iter().rposition(|op| op == '+') {
+        Some(k) => k,
+        None => ops.len() - 1,
+    };
+    let left = brute_evaluate(digits[0..k + 1].to_vec(), ops[0..k].to_vec());
+    let right = brute_evaluate(digits[k + 1..].to_vec(), ops[k + 1..].to_vec());
+    if ops[k] == '+' { left + right } else { left * right }
+}
+
+fn brute_score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    let chars: Vec[char] = s.chars().collect();
+    let digits: Vec[i64] = (0..chars.len()).step_by(2).map(|i| chars[i] as i64 - '0' as i64).collect();
+    let ops: Vec[char] = (1..chars.len()).step_by(2).map(|i| chars[i]).collect();
+    let correct = brute_evaluate(digits, ops);
+    let possible = brute_all_values(digits, ops);
+    answers.iter().map(|answer| if answer == correct { 5 } else if possible.contains(answer) { 2 } else { 0 }).sum()
+}
+
+// ---- score_sorted.kara: interval DP over SortedSets
+fn sorted_score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    let chars: Vec[char] = s.chars().collect();
+    let n = (chars.len() + 1) / 2;
+    let digit = |i: i64| chars[2 * i] as i64 - '0' as i64;
+    let (sum, term) = (1..n).fold((0, digit(0)), |(sum, term), i| {
+        if chars[2 * i - 1] == '+' { (sum + term, digit(i)) } else { (sum, term * digit(i)) }
+    });
+    let correct = sum + term;
+    let mut runs: Vec[Vec[SortedSet[i64]]] = (0..n).map(|_| (0..n).map(|_| SortedSet.new()).collect()).collect();
+    for i in 0..n {
+        runs[i][i].insert(digit(i));
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            for k in i..j {
+                let plus = chars[2 * k + 1] == '+';
+                let mut found: Vec[i64] = Vec.new();
+                for a in runs[i][k].iter() {
+                    for b in runs[k + 1][j].iter() {
+                        let v = if plus { a + b } else { a * b };
+                        if v > 1000 {
+                            break;
+                        }
+                        found.push(v);
+                    }
+                }
+                for v in found {
+                    runs[i][j].insert(v);
+                }
+            }
+        }
+    }
+    answers.iter().filter(|answer| answer != correct).filter(|answer| runs[0][n - 1].contains(answer)).count() * 2
+        + answers.iter().filter(|answer| answer == correct).count() * 5
+}
+
+// ---- score_solution.kara: LeetCode's Rust template after karac fix
+struct RustSolution {}
+
+impl RustSolution {
+    pub fn score_of_students(s: String, answers: Vec[i32]) -> i32 {
+        let b = s.bytes();
+        let n = (b.len() + 1) / 2;
+        let mut stack: Vec[i32] = [(b[0] - b'0') as i32];
+        for i in 1..n {
+            let d = (b[2 * i] - b'0') as i32;
+            if b[2 * i - 1] == b'*' {
+                let top = stack.pop().unwrap();
+                stack.push(top * d);
+            } else {
+                stack.push(d);
+            }
+        }
+        let correct: i32 = stack.iter().sum();
+        let mut dp: Vec[Vec[Set[i32]]] = Vec.filled(n, Vec.filled(n, Set.new()));
+        for i in 0..n {
+            dp[i][i].insert((b[2 * i] - b'0') as i32);
+        }
+        for len in 2..=n {
+            for i in 0..=n - len {
+                let j = i + len - 1;
+                let mut cur = Set.new();
+                for k in i..j {
+                    let op = b[2 * k + 1];
+                    for x in ref dp[i][k] {
+                        for y in ref dp[k + 1][j] {
+                            let v = if op == b'+' { x + y } else { x * y };
+                            if v <= 1000 {
+                                cur.insert(v);
+                            }
+                        }
+                    }
+                }
+                dp[i][j] = cur;
+            }
+        }
+        let mut ans = 0;
+        for a in ref answers {
+            if a == correct {
+                ans += 5;
+            } else if dp[0][n - 1].contains(a) {
+                ans += 2;
+            }
+        }
+        ans
+    }
+}
+
+fn rust_score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    RustSolution.score_of_students(s.clone(), answers.iter().map(|a| a as i32).collect()) as i64
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+// every value of the tokens under some bracketing, of any size
+fn literal_values(digits: Vec[i64], ops: Vec[char]) -> Set[i64] {
+    let mut out: Set[i64] = Set.new();
+    if digits.len() == 1 {
+        out.insert(digits[0]);
+        return out;
+    }
+    for k in 0..ops.len() {
+        let left = literal_values(digits[0..k + 1].to_vec(), ops[0..k].to_vec());
+        let right = literal_values(digits[k + 1..].to_vec(), ops[k + 1..].to_vec());
+        for a in left.iter() {
+            for b in right.iter() {
+                out.insert(if ops[k] == '+' { a + b } else { a * b });
+            }
+        }
+    }
+    out
+}
+
+fn literal(s: String, answers: Vec[i64]) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut ops: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c == '+' or c == '*' {
+            ops.push(c);
+        } else {
+            digits.push(c as i64 - '0' as i64);
+        }
+    }
+    let all = literal_values(digits.clone(), ops.clone());
+    // every `*`, left to right, then every `+`
+    let mut d = digits.clone();
+    let mut o = ops.clone();
+    while let Some(k) = o.iter().position(|op| op == '*') {
+        d[k] = d[k] * d[k + 1];
+        d.remove(k + 1);
+        o.remove(k);
+    }
+    let correct: i64 = d.iter().sum();
+    let mut points = 0;
+    for answer in answers.iter() {
+        if answer == correct {
+            points += 5;
+        } else if all.contains(answer) {
+            points += 2;
+        }
+    }
+    points
+}
+
+fn answer(arm: i64, s: String, answers: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_score_of_students(s, answers),
+        1 => bits_score_of_students(s, answers),
+        2 => memo_score_of_students(s, answers),
+        3 => brute_score_of_students(s, answers),
+        4 => sorted_score_of_students(s, answers),
+        _ => rust_score_of_students(s, answers),
+    }
+}
+
+struct Problem {
+    s: String,
+    answers: Vec[i64],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let count = next_random(mut seed) % 6 + 1;
+    let top = next_random(mut seed) % 9 + 1;
+    let times = next_random(mut seed) % 11;
+    let mut s = String.new();
+    for i in 0..count {
+        if i > 0 {
+            s.push(if next_random(mut seed) % 10 < times { '*' } else { '+' });
+        }
+        s.push(('0' as i64 + next_random(mut seed) % (top + 1)) as u8 as char);
+    }
+    // half the answers from the values a wrong order can give, up to 1000
+    let mut digits: Vec[i64] = Vec.new();
+    let mut ops: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c == '+' or c == '*' {
+            ops.push(c);
+        } else {
+            digits.push(c as i64 - '0' as i64);
+        }
+    }
+    let mut reachable: Vec[i64] = literal_values(digits, ops).iter().filter(|v| v <= 1000).collect();
+    reachable.sort();
+    let n = next_random(mut seed) % 8 + 1;
+    let range = next_random(mut seed) % 30 + 1;
+    let mut answers: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let pick = next_random(mut seed);
+        let small = next_random(mut seed) % (range + 1);
+        answers.push(if pick % 2 == 0 and reachable.len() > 0 { reachable[pick / 2 % reachable.len()] } else { small });
+    }
+    Problem { s: s, answers: answers }
+}
+
+fn main() {
+    let names = ["star", "bits", "memo", "brute", "sorted", "rust"];
+    let mut seed = 2019;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..700 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let s = prob.s.clone();
+        let answers = prob.answers.clone();
+        let truth = literal(s.clone(), answers.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let reversed: Vec[i64] = answers.iter().rev().cloned().collect();
+        let doubled: Vec[i64] = answers.iter().chain(answers.iter()).cloned().collect();
+        let backwards: String = s.chars().rev().collect();
+        let times_one = f"{s}*1";
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, s.clone(), answers.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, s.clone(), reversed.clone()) == a,
+                answer(arm, s.clone(), doubled.clone()) == 2 * a,
+                answer(arm, backwards.clone(), answers.clone()) == a,
+                answer(arm, times_one.clone(), answers.clone()) == a,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, \"{s}\", answers {answers}, score {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"700 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

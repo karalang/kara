@@ -1,0 +1,286 @@
+// LeetCode #2029: Stone Game IX -- the differential. Copies of the six
+// arms and the statement read literally: the game searched over every
+// stone each player could take, by the set of stones taken (a bitmask) and
+// the sum of their values, never by residues. It checks 1500 games of 1 to
+// 8 stones up to 30. Every random choice of a game is drawn before any arm
+// answers.
+//
+// P1  the answer is the statement read literally
+// P2  with a stone worth 3 appended, the answer is still the statement read
+//     literally
+// P3  with a stone worth 1 appended, the answer is still the statement read
+//     literally
+// P4  every stone worth 1 mod 3 raised by 1 and every one worth 2 mod 3
+//     lowered by 1, swapping the two residues, leaves the answer
+// P5  two stones worth 3 appended leave the answer
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: the residues counted, the rule on the parity of the 0s
+fn star_stone_game_ix(stones: Vec[i64]) -> bool {
+    let mut cnt = [0; 3];
+    for s in stones {
+        cnt[s % 3] += 1;
+    }
+    if cnt[0] % 2 == 0 {
+        cnt[1] >= 1 and cnt[2] >= 1
+    } else {
+        (cnt[1] - cnt[2]).abs() > 2
+    }
+}
+
+// ---- stones_play.kara: the forced order played out from both openings
+fn play_moves_after(first: i64, cnt: Array[i64, 3]) -> (i64, i64) {
+    let mut left = cnt;
+    left[first] -= 1;
+    let mut total = first;
+    let mut moves = 1;
+    loop {
+        // the residue that keeps the total off 0 mod 3
+        let next = total;
+        if left[next] == 0 {
+            break;
+        }
+        left[next] -= 1;
+        total = (total + next) % 3;
+        moves += 1;
+    }
+    (moves + left[0], left[1] + left[2])
+}
+
+fn play_stone_game_ix(stones: Vec[i64]) -> bool {
+    let mut cnt = [0; 3];
+    for s in stones {
+        cnt[s % 3] += 1;
+    }
+    for first in [1, 2] {
+        if cnt[first] > 0 {
+            let (moves, left) = play_moves_after(first, cnt);
+            // the player to make move `moves` (Bob on an odd one) is stuck
+            if moves % 2 == 1 and left > 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- stones_fold.kara: the residues counted by fold, the rule as a match
+fn fold_stone_game_ix(stones: Vec[i64]) -> bool {
+    let (zeros, ones, twos) = stones.iter().fold((0, 0, 0), |(z, o, t), s| match s % 3 {
+        0 => (z + 1, o, t),
+        1 => (z, o + 1, t),
+        _ => (z, o, t + 1),
+    });
+    match zeros % 2 {
+        0 => ones > 0 and twos > 0,
+        _ => ones > twos + 2 or twos > ones + 2,
+    }
+}
+
+// ---- stones_sorted.kara: a SortedMap tally, the forced runs counted
+fn sorted_run_length(a: i64, b: i64) -> i64 {
+    if b >= a - 1 {
+        2 * a - 1
+    } else {
+        2 * b + 2
+    }
+}
+
+fn sorted_stone_game_ix(stones: Vec[i64]) -> bool {
+    let mut tally: SortedMap[i64, i64] = SortedMap.new();
+    for s in stones {
+        *tally.entry(s % 3).or_insert(0) += 1;
+    }
+    let zeros = tally.get(0).cloned().unwrap_or(0);
+    let ones = tally.get(1).cloned().unwrap_or(0);
+    let twos = tally.get(2).cloned().unwrap_or(0);
+    let total = zeros + ones + twos;
+    for (a, b) in [(ones, twos), (twos, ones)] {
+        let moves = sorted_run_length(a, b) + zeros;
+        if a > 0 and moves % 2 == 1 and moves < total {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- stones_buckets.kara: the stones dealt into piles and taken off them
+fn buckets_play(piles: own Vec[Vec[i64]], first: i64) -> bool {
+    let mut piles = piles;
+    let mut total = piles[first].pop().unwrap() % 3;
+    let mut alice_moves = false;
+    loop {
+        if piles[total].pop().is_some() {
+            total = (total + total) % 3;
+        } else if piles[0].pop().is_none() {
+            // the player to move is stuck: she loses if any stone is left
+            let left = piles[1].len() + piles[2].len();
+            return not alice_moves and left > 0;
+        }
+        alice_moves = not alice_moves;
+    }
+}
+
+fn buckets_stone_game_ix(stones: Vec[i64]) -> bool {
+    let mut piles: Vec[Vec[i64]] = [Vec.new(), Vec.new(), Vec.new()];
+    for s in stones {
+        piles[s % 3].push(s);
+    }
+    (piles[1].len() > 0 and buckets_play(piles.clone(), 1)) or (piles[2].len() > 0 and buckets_play(piles.clone(), 2))
+}
+
+// ---- stones_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn stone_game_ix(stones: Vec[i32]) -> bool {
+        let mut cnt = [0; 3];
+        for s in ref stones {
+            cnt[(s % 3) as usize] += 1;
+        }
+        if cnt[0] % 2 == 0 {
+            cnt[1] >= 1 and cnt[2] >= 1
+        } else {
+            (cnt[1] - cnt[2]).abs() > 2
+        }
+    }
+}
+
+fn rust_stone_game_ix(stones: Vec[i64]) -> bool {
+    Solution.stone_game_ix(stones.iter().map(|x| x as i32).collect())
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+// Whether the player to move wins once the stones in `taken` are gone and
+// their values add up to `sum`. She loses if every move makes the sum a
+// multiple of 3; with no stones left, Alice (to move after an even count)
+// and Bob alike, Bob wins.
+fn mover_wins(stones: Vec[i64], taken: i64, sum: i64, memo: mut ref Map[i64, bool]) -> bool {
+    if let Some(w) = memo.get(taken) {
+        return *w;
+    }
+    let n = stones.len();
+    let mut count = 0;
+    for i in 0..n {
+        if taken & (1 << i) != 0 {
+            count += 1;
+        }
+    }
+    let wins = if count == n {
+        // all removed: Bob wins, so the mover wins only if she is Bob
+        count % 2 == 1
+    } else {
+        let mut any = false;
+        for i in 0..n {
+            if taken & (1 << i) == 0 and (sum + stones[i]) % 3 != 0 {
+                if not mover_wins(stones.clone(), taken | (1 << i), sum + stones[i], mut memo) {
+                    any = true;
+                }
+            }
+        }
+        any
+    };
+    memo.insert(taken, wins);
+    wins
+}
+
+fn literal(stones: Vec[i64]) -> bool {
+    let mut memo: Map[i64, bool] = Map.new();
+    mover_wins(stones, 0, 0, mut memo)
+}
+
+fn answer(arm: i64, stones: Vec[i64]) -> bool {
+    match arm {
+        0 => star_stone_game_ix(stones),
+        1 => play_stone_game_ix(stones),
+        2 => fold_stone_game_ix(stones),
+        3 => sorted_stone_game_ix(stones),
+        4 => buckets_stone_game_ix(stones),
+        _ => rust_stone_game_ix(stones),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "play", "fold", "sorted", "buckets", "rust"];
+    let mut seed = 2029;
+    let mut games: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..1500 {
+        let n = next_random(mut seed) % 8 + 1;
+        let zeros = next_random(mut seed) % 5;
+        let mut stones: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let v = if next_random(mut seed) % 10 < zeros {
+                3 * (next_random(mut seed) % 10 + 1)
+            } else {
+                next_random(mut seed) % 30 + 1
+            };
+            stones.push(v);
+        }
+        games.push(stones);
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for g in 0..games.len() {
+        let stones = games[g].clone();
+        let truth = literal(stones.clone());
+        check = (check * 31 + if truth { 1 } else { 2 }) % 1000000007;
+        let mut with_zero = stones.clone();
+        with_zero.push(3);
+        let mut with_one = stones.clone();
+        with_one.push(1);
+        let truth_zero = literal(with_zero.clone());
+        let truth_one = literal(with_one.clone());
+        let swapped: Vec[i64] = stones
+            .iter()
+            .map(|s| if s % 3 == 1 { s + 1 } else if s % 3 == 2 { s - 1 } else { s })
+            .collect();
+        let mut padded = stones.clone();
+        padded.push(3);
+        padded.push(3);
+        let got: Vec[bool] = (0..6).map(|arm| answer(arm, stones.clone())).collect();
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, with_zero.clone()) == truth_zero,
+                answer(arm, with_one.clone()) == truth_one,
+                answer(arm, swapped.clone()) == a,
+                answer(arm, padded.clone()) == a,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"game {g} arm {names[arm]}: P{q + 1} fails, {stones}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 games: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

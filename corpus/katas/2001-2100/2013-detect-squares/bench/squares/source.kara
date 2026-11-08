@@ -1,0 +1,74 @@
+// LeetCode #2013: Detect Squares -- the ★ arm's benchmark. The points
+// added are counted on a grid of 1001 by 1001 whose rows are filled in when
+// first used; each distinct point is also kept once in a list. A square through the query
+// point has a diagonal corner `(px, py)` with `|px - x| == |py - y| > 0`,
+// and its other two corners are then `(x, py)` and `(px, y)`, so a query
+// walks the distinct points and multiplies the three counts. O(1) per add,
+// O(distinct) per count.
+
+struct DetectSquares {
+    rows: Vec[Vec[i64]],
+    points: Vec[(i64, i64)],
+}
+
+impl DetectSquares {
+    fn new() -> DetectSquares {
+        DetectSquares { rows: Vec.filled(1001, Vec.new()), points: Vec.new() }
+    }
+
+    fn at(self, x: i64, y: i64) -> i64 {
+        if self.rows[x].is_empty() { 0 } else { self.rows[x][y] }
+    }
+
+    fn add(mut ref self, point: (i64, i64)) {
+        let (x, y) = point;
+        if self.rows[x].is_empty() {
+            self.rows[x] = Vec.filled(1001, 0);
+        }
+        if self.rows[x][y] == 0 {
+            self.points.push(point);
+        }
+        self.rows[x][y] += 1;
+    }
+
+    fn count(self, point: (i64, i64)) -> i64 {
+        let (x, y) = point;
+        let mut ways = 0;
+        for (px, py) in self.points {
+            if px != x and (px - x).abs() == (py - y).abs() {
+                ways += self.at(px, py) * self.at(x, py) * self.at(px, y);
+            }
+        }
+        ways
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 runs of 20000 operations, each on a 60 by 60 patch of the grid,
+    // one in three a count; the counts' answers summed
+    let mut seed = 2013;
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for r in 0..20 {
+        let mut squares = DetectSquares.new();
+        for _ in 0..20000 {
+            let base = (r % 10) * 90;
+            let point = (base + next_random(mut seed) % 60, base + next_random(mut seed) % 60);
+            if next_random(mut seed) % 3 == 0 {
+                let ways = squares.count(point);
+                calls += 1;
+                sum += ways;
+                check = (check * 31 + ways) % 1000000007;
+            } else {
+                squares.add(point);
+            }
+        }
+    }
+    println(f"{calls} counts: sum {sum}, checksum {check}");
+}

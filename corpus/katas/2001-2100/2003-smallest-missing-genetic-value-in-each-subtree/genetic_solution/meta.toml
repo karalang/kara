@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/2001-2100/2003-smallest-missing-genetic-value-in-each-subtree/genetic_solution.kara"
+dedup_of = []
+tags = []
+class = "e"
+bucket = "check-refuses:E0200"
+classified_with = "95006f015"
+extracted_src = "5db31e88"

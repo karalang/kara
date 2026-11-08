@@ -1,0 +1,491 @@
+// LeetCode #2014: Longest Subsequence Repeated k Times -- the differential.
+//
+// All six arms against the statement read literally, on 800 problems,
+// with six properties. A problem is a string of 2 to 11 letters from up to
+// 5 and a `k` with n < 8k.
+//
+// P1  the answer is the statement read literally: every subsequence of `s`
+//     tried, kept when written `k` times it is a subsequence of `s`, the
+//     longest and then the largest of those kept
+// P2  the answer written `k` times is a subsequence of `s`
+// P3  every letter moved the same number of places up the alphabet moves
+//     the answer's letters alike
+// P4  `k` raised by one never gives a longer answer, nor a larger one of
+//     the same length
+// P5  one more letter appended to `s` never gives a shorter answer, nor a
+//     smaller one of the same length
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: breadth-first, the last candidate found
+fn star_repeats(s: String, t: String, k: i64) -> bool {
+    let want: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    let mut found = 0;
+    for c in s.chars() {
+        if c == want[i] {
+            i += 1;
+            if i == want.len() {
+                found += 1;
+                if found == k {
+                    return true;
+                }
+                i = 0;
+            }
+        }
+    }
+    false
+}
+
+fn star_longest_subsequence_repeated_k(s: String, k: i64) -> String {
+    let mut counts = [0; 26];
+    for c in s.chars() {
+        counts[c as i64 - 'a' as i64] += 1;
+    }
+    let mut letters: Vec[char] = Vec.new();
+    for i in 0..26 {
+        if counts[i] >= k {
+            letters.push(('a' as i64 + i) as u8 as char);
+        }
+    }
+    let mut queue: VecDeque[String] = VecDeque.new();
+    queue.push_back(String.new());
+    let mut best = String.new();
+    while let Some(t) = queue.pop_front() {
+        for c in letters.iter() {
+            let mut next = t.clone();
+            next.push(c);
+            if star_repeats(s, next, k) {
+                best = next.clone();
+                queue.push_back(next);
+            }
+        }
+    }
+    best
+}
+
+// ---- longest_dfs.kara: depth-first from the longest length down
+fn dfs_repeats(s: String, t: String, k: i64) -> bool {
+    let want: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    let mut found = 0;
+    for c in s.chars() {
+        if c == want[i] {
+            i += 1;
+            if i == want.len() {
+                found += 1;
+                if found == k {
+                    return true;
+                }
+                i = 0;
+            }
+        }
+    }
+    false
+}
+
+// the largest `length`-letter string from the pool that repeats, grown
+// from `prefix`
+fn dfs_largest(s: String, k: i64, pool: mut ref Vec[i64], prefix: String, length: i64) -> Option[String] {
+    if prefix.len() == length {
+        return Some(prefix.clone());
+    }
+    for i in (0..26).rev() {
+        if pool[i] == 0 {
+            continue;
+        }
+        let mut next = prefix.clone();
+        next.push(('a' as i64 + i) as u8 as char);
+        if not dfs_repeats(s, next, k) {
+            continue;
+        }
+        pool[i] -= 1;
+        let found = dfs_largest(s, k, mut pool, next, length);
+        pool[i] += 1;
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+fn dfs_longest_subsequence_repeated_k(s: String, k: i64) -> String {
+    let mut pool: Vec[i64] = Vec.filled(26, 0);
+    for c in s.chars() {
+        pool[c as i64 - 'a' as i64] += 1;
+    }
+    for i in 0..26 {
+        pool[i] /= k;
+    }
+    let most = pool.iter().sum().min(7);
+    for length in (1..most + 1).rev() {
+        if let Some(found) = dfs_largest(s, k, mut pool, String.new(), length) {
+            return found;
+        }
+    }
+    String.new()
+}
+
+// ---- longest_table.kara: breadth-first, checked through a next-letter table
+fn table_next_table(s: String) -> Vec[Vec[i64]] {
+    let letters: Vec[char] = s.chars().collect();
+    let n = letters.len();
+    let mut next: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.filled(26, n));
+    for i in (0..n).rev() {
+        next[i] = next[i + 1].clone();
+        next[i][letters[i] as i64 - 'a' as i64] = i;
+    }
+    next
+}
+
+// whether `t` written `k` times is a subsequence of the string `next` was
+// built from
+fn table_repeats(next: Vec[Vec[i64]], t: Vec[i64], k: i64) -> bool {
+    let n = next.len() - 1;
+    let mut at = 0;
+    for _ in 0..k {
+        for c in t.iter() {
+            if at == n or next[at][c] == n {
+                return false;
+            }
+            at = next[at][c] + 1;
+        }
+    }
+    true
+}
+
+fn table_longest_subsequence_repeated_k(s: String, k: i64) -> String {
+    let next = table_next_table(s);
+    let mut counts = [0; 26];
+    for c in s.chars() {
+        counts[c as i64 - 'a' as i64] += 1;
+    }
+    let letters: Vec[i64] = (0..26).filter(|c| counts[c] >= k).collect();
+    let mut queue: VecDeque[Vec[i64]] = VecDeque.new();
+    queue.push_back(Vec.new());
+    let mut best: Vec[i64] = Vec.new();
+    while let Some(t) = queue.pop_front() {
+        for c in letters.iter() {
+            let mut grown = t.clone();
+            grown.push(c);
+            if table_repeats(next, grown, k) {
+                best = grown.clone();
+                queue.push_back(grown);
+            }
+        }
+    }
+    best.iter().map(|c| ('a' as i64 + c) as u8 as char).collect()
+}
+
+// ---- longest_levels.kara: a SortedSet per length, pruned by the tail
+fn levels_repeats(s: String, t: String, k: i64) -> bool {
+    let want: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    let mut found = 0;
+    for c in s.chars() {
+        if c == want[i] {
+            i += 1;
+            if i == want.len() {
+                found += 1;
+                if found == k {
+                    return true;
+                }
+                i = 0;
+            }
+        }
+    }
+    false
+}
+
+fn levels_longest_subsequence_repeated_k(s: String, k: i64) -> String {
+    let mut counts: Map[char, i64] = Map.new();
+    for c in s.chars() {
+        *counts.entry(c).or_insert(0) += 1;
+    }
+    let mut level: SortedSet[String] = SortedSet.new();
+    for (c, n) in counts {
+        if n >= k {
+            level.insert(f"{c}");
+        }
+    }
+    let letters: Vec[String] = level.iter().cloned().collect();
+    let mut best = String.new();
+    while let Some(last) = level.max() {
+        best = last.clone();
+        let mut grown: SortedSet[String] = SortedSet.new();
+        for t in level.iter() {
+            for c in letters.iter() {
+                let tail = f"{t.substring(1, t.len())}{c}";
+                if t.len() > 1 and not level.contains(tail) {
+                    continue;
+                }
+                let candidate = f"{t}{c}";
+                if levels_repeats(s, candidate, k) {
+                    grown.insert(candidate);
+                }
+            }
+        }
+        level = grown;
+    }
+    best
+}
+
+// ---- longest_perms.kara: every arrangement of the pool, max_by_key
+fn perms_repeats(s: String, t: String, k: i64) -> bool {
+    let want: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    let mut found = 0;
+    for c in s.chars() {
+        if c == want[i] {
+            i += 1;
+            if i == want.len() {
+                found += 1;
+                if found == k {
+                    return true;
+                }
+                i = 0;
+            }
+        }
+    }
+    false
+}
+
+// every arrangement of letters from the pool, grown from `prefix`
+fn perms_arrange(pool: mut ref Vec[i64], prefix: String, found: mut ref Set[String]) {
+    found.insert(prefix.clone());
+    for i in 0..26 {
+        if pool[i] > 0 {
+            pool[i] -= 1;
+            perms_arrange(mut pool, f"{prefix}{('a' as i64 + i) as u8 as char}", mut found);
+            pool[i] += 1;
+        }
+    }
+}
+
+fn perms_longest_subsequence_repeated_k(s: String, k: i64) -> String {
+    let mut pool: Vec[i64] = Vec.filled(26, 0);
+    for c in s.chars() {
+        pool[c as i64 - 'a' as i64] += 1;
+    }
+    let mut pool: Vec[i64] = pool.iter().map(|c| c / k).collect();
+    let mut found: Set[String] = Set.new();
+    perms_arrange(mut pool, String.new(), mut found);
+    found
+        .iter()
+        .filter(|t| t.is_empty() or perms_repeats(s, t, k))
+        .max_by_key(|t| (t.len(), t.clone()))
+        .cloned()
+        .unwrap_or(String.new())
+}
+
+// ---- longest_solution.kara: LeetCode's Rust template after karac fix
+struct RustSolution {}
+
+impl RustSolution {
+    pub fn longest_subsequence_repeated_k(s: String, k: i32) -> String {
+        let s = s.bytes();
+        let mut cnt = [0; 26];
+        for c in s {
+            cnt[(c - b'a') as usize] += 1;
+        }
+        let cand: Vec[u8] = (0..26u8).filter(|i| cnt[i as usize] >= k).map(|i| b'a' + i).collect();
+        let mut q: VecDeque[Vec[u8]] = VecDeque.new();
+        q.push_back(Vec.new());
+        let mut ans: Vec[u8] = Vec.new();
+        while let Some(cur) = q.pop_front() {
+            for c in ref cand {
+                let mut nxt = cur.clone();
+                nxt.push(c);
+                if RustSolution.check(s, nxt, k) {
+                    ans = nxt.clone();
+                    q.push_back(nxt);
+                }
+            }
+        }
+        String.from_utf8(ans).unwrap()
+    }
+
+    fn check(s: Slice[u8], t: Slice[u8], k: i32) -> bool {
+        let mut (i, cnt) = (0, 0);
+        for c in s {
+            if c == t[i] {
+                i += 1;
+                if i == t.len() {
+                    cnt += 1;
+                    if cnt == k {
+                        return true;
+                    }
+                    i = 0;
+                }
+            }
+        }
+        false
+    }
+}
+
+fn rust_longest_subsequence_repeated_k(s: Str, k: i64) -> String {
+    RustSolution.longest_subsequence_repeated_k(s.to_string(), k as i32)
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+// whether `a` is longer than `b`, or as long and larger
+fn ranks_above(a: String, b: String) -> bool {
+    a.len() > b.len() or (a.len() == b.len() and a > b)
+}
+
+fn is_subsequence(t: String, s: String) -> bool {
+    let want: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    for c in s.chars() {
+        if i < want.len() and c == want[i] {
+            i += 1;
+        }
+    }
+    i == want.len()
+}
+
+fn written(t: String, k: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..k {
+        out.push_str(t);
+    }
+    out
+}
+
+fn literal(s: String, k: i64) -> String {
+    let letters: Vec[char] = s.chars().collect();
+    let n = letters.len();
+    let mut best = String.new();
+    for mask in 1..(1 << n) {
+        let mut t = String.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                t.push(letters[i]);
+            }
+        }
+        if ranks_above(t, best) and is_subsequence(written(t, k), s) {
+            best = t;
+        }
+    }
+    best
+}
+
+fn shifted(s: String, d: i64) -> String {
+    s.chars().map(|c| (c as i64 + d) as u8 as char).collect()
+}
+
+fn answer(arm: i64, s: String, k: i64) -> String {
+    match arm {
+        0 => star_longest_subsequence_repeated_k(s, k),
+        1 => dfs_longest_subsequence_repeated_k(s, k),
+        2 => table_longest_subsequence_repeated_k(s, k),
+        3 => levels_longest_subsequence_repeated_k(s, k),
+        4 => perms_longest_subsequence_repeated_k(s, k),
+        _ => rust_longest_subsequence_repeated_k(s, k),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    s: String,
+    k: i64,
+    shift: i64,
+    extra: char,
+}
+
+// a string as the harness draws one: a pattern written out again and
+// again, some of its letters dropped, stray letters between
+fn draw(seed: mut ref i64) -> Problem {
+    let k = next_random(mut seed) % 4 + 2;
+    let n = next_random(mut seed) % (8 * k - 2).min(10) + 2;
+    let letters = next_random(mut seed) % 5 + 1;
+    let mut pattern: Vec[char] = Vec.new();
+    for _ in 0..next_random(mut seed) % 3 + 1 {
+        pattern.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+    }
+    let keep = next_random(mut seed) % 5 + 6;
+    let noise = next_random(mut seed) % 5;
+    let mut s = String.new();
+    let mut at = 0;
+    while s.len() < n {
+        if next_random(mut seed) % 10 < keep {
+            s.push(pattern[at]);
+        }
+        if s.len() < n and next_random(mut seed) % 10 < noise {
+            s.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+        }
+        at = (at + 1) % pattern.len();
+    }
+    let shift = next_random(mut seed) % 21;
+    let extra = ('a' as i64 + next_random(mut seed) % letters) as u8 as char;
+    Problem { s, k, shift, extra }
+}
+
+fn main() {
+    let names = ["star", "dfs", "table", "levels", "perms", "rust"];
+    let mut seed = 2014;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..800 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let s = prob.s.clone();
+        let k = prob.k;
+        let truth = literal(s, k);
+        check = (check * 31 + truth.len()) % 1000000007;
+        for c in truth.chars() {
+            check = (check * 31 + (c as i64)) % 1000000007;
+        }
+        let moved = shifted(s, prob.shift);
+        let longer = f"{s}{prob.extra}";
+        let mut got: Vec[String] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, s, k));
+        }
+        for arm in 0..6 {
+            let a = got[arm].clone();
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                is_subsequence(written(a, k), s),
+                answer(arm, moved, k) == shifted(a, prob.shift),
+                not ranks_above(answer(arm, s, k + 1), a),
+                not ranks_above(a, answer(arm, longer, k)),
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, s \"{s}\", k {k}, answer \"{a}\", literal \"{truth}\"");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"800 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

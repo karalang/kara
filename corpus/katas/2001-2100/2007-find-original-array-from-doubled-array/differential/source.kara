@@ -1,0 +1,370 @@
+// LeetCode #2007: Find Original Array From Doubled Array -- the
+// differential.
+//
+// Six arms against the statement read literally, on 1500 problems, with six
+// properties. Any order of the original is an answer, so every answer is
+// compared sorted.
+//
+// P1  the answer is the statement read literally: the half of the values
+//     whose doubles are exactly the other half, or [] when no half is
+// P2  the values shuffled leave the answer
+// P3  every value tripled triples the answer
+// P4  a non-empty answer, with each value's double added, is the input
+// P5  a pair (x, 2x) appended to an input that has an answer adds x to it
+// P6  each arm agrees with at least three of the other five
+
+// ---- doubled.kara: the ★ arm: counts walked upward
+fn star_arm(changed: Vec[i64]) -> Vec[i64] {
+    if changed.len() % 2 == 1 {
+        return Vec.new();
+    }
+    let top = changed.iter().max().unwrap();
+    let mut count = Vec.filled(top + 1, 0);
+    for x in changed {
+        count[x] += 1;
+    }
+    if count[0] % 2 == 1 {
+        return Vec.new();
+    }
+    let mut original: Vec[i64] = Vec.new();
+    for _ in 0..count[0] / 2 {
+        original.push(0);
+    }
+    for v in 1..=top {
+        let c = count[v];
+        if c == 0 {
+            continue;
+        }
+        if 2 * v > top or count[2 * v] < c {
+            return Vec.new();
+        }
+        count[2 * v] -= c;
+        for _ in 0..c {
+            original.push(v);
+        }
+    }
+    original
+}
+
+// ---- doubled_queue.kara: sorted, the doubles owed in a VecDeque
+fn queue_arm(changed: Vec[i64]) -> Vec[i64] {
+    let mut sorted = changed.clone();
+    sorted.sort();
+    let mut owed: VecDeque[i64] = VecDeque.new();
+    let mut original: Vec[i64] = Vec.new();
+    for x in sorted {
+        if owed.front().cloned() == Some(x) {
+            owed.pop_front();
+        } else {
+            owed.push_back(2 * x);
+            original.push(x);
+        }
+    }
+    if owed.len() > 0 {
+        return Vec.new();
+    }
+    original
+}
+
+// ---- doubled_map.kara: a SortedMap of counts walked upward
+fn map_arm(changed: Vec[i64]) -> Vec[i64] {
+    let mut count: SortedMap[i64, i64] = SortedMap.new();
+    for x in changed {
+        *count.entry(x).or_insert(0) += 1;
+    }
+    let keys: Vec[i64] = count.keys().collect();
+    let mut original: Vec[i64] = Vec.new();
+    for v in keys {
+        let c = count[v];
+        if c == 0 {
+            continue;
+        }
+        if v == 0 {
+            if c % 2 == 1 {
+                return Vec.new();
+            }
+            for _ in 0..c / 2 {
+                original.push(0);
+            }
+            continue;
+        }
+        let doubles = count.get(2 * v).unwrap_or(0);
+        if doubles < c {
+            return Vec.new();
+        }
+        count.insert(2 * v, doubles - c);
+        for _ in 0..c {
+            original.push(v);
+        }
+    }
+    original
+}
+
+// ---- doubled_pointers.kara: sorted, a second pointer finds each double
+fn pointers_arm(changed: Vec[i64]) -> Vec[i64] {
+    let n = changed.len();
+    if n % 2 == 1 {
+        return Vec.new();
+    }
+    let mut sorted = changed.clone();
+    sorted.sort();
+    let mut used = Vec.filled(n, false);
+    let mut original: Vec[i64] = Vec.new();
+    let mut j = 0;
+    for i in 0..n {
+        if used[i] {
+            continue;
+        }
+        used[i] = true;
+        let want = 2 * sorted[i];
+        j = j.max(i + 1);
+        while j < n and (used[j] or sorted[j] < want) {
+            j += 1;
+        }
+        if j == n or sorted[j] != want {
+            return Vec.new();
+        }
+        used[j] = true;
+        original.push(sorted[i]);
+    }
+    original
+}
+
+// ---- doubled_halves.kara: largest first, each takes its half
+fn halves_arm(changed: Vec[i64]) -> Vec[i64] {
+    if changed.len() % 2 == 1 {
+        return Vec.new();
+    }
+    let mut sorted = changed.clone();
+    sorted.sort();
+    let mut left: Map[i64, i64] = Map.new();
+    for x in sorted.iter() {
+        *left.entry(x).or_insert(0) += 1;
+    }
+    let mut original: Vec[i64] = Vec.new();
+    for x in sorted.iter().rev() {
+        if left[x] == 0 {
+            continue;
+        }
+        left[x] -= 1;
+        let half = x / 2;
+        if x % 2 == 1 or left.get(half).unwrap_or(0) == 0 {
+            return Vec.new();
+        }
+        left[half] -= 1;
+        original.push(half);
+    }
+    original
+}
+
+// ---- doubled_solution.kara: LeetCode's Rust template, carried by karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn find_original_array(changed: own Vec[i32]) -> Vec[i32] {
+        if changed.len() % 2 == 1 {
+            return Vec.new();
+        }
+        let mut changed = changed;
+        changed.sort();
+        let mut count: Map[i32, i32] = Map.new();
+        for x in ref changed {
+            *count.entry(x).or_insert(0) += 1;
+        }
+        let mut ans = Vec.with_capacity(changed.len() / 2);
+        for x in ref changed {
+            if *count.get(x).unwrap_or(0) == 0 {
+                continue;
+            }
+            *count.get_mut(x).unwrap() -= 1;
+            let d = count.entry(x * 2).or_insert(0);
+            if *d == 0 {
+                return Vec.new();
+            }
+            *d -= 1;
+            ans.push(x);
+        }
+        ans
+    }
+}
+
+fn solution_arm(changed: Vec[i64]) -> Vec[i64] {
+    Solution.find_original_array(changed.iter().map(|x| x as i32).collect())
+        .iter()
+        .map(|x| x as i64)
+        .collect()
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn sorted_copy(v: Vec[i64]) -> Vec[i64] {
+    let mut s = v.clone();
+    s.sort();
+    s
+}
+
+// every half of the positions tried; the original, if there is one, is the
+// same multiset whichever half finds it
+fn literal(changed: Vec[i64]) -> Vec[i64] {
+    let n = changed.len();
+    if n % 2 == 1 {
+        return Vec.new();
+    }
+    let whole = sorted_copy(changed);
+    for mask in 0..1 << n {
+        if mask.count_ones() != n / 2 {
+            continue;
+        }
+        let mut half: Vec[i64] = Vec.new();
+        let mut both: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                half.push(changed[i]);
+                both.push(changed[i]);
+                both.push(2 * changed[i]);
+            }
+        }
+        if sorted_copy(both) == whole {
+            return sorted_copy(half);
+        }
+    }
+    Vec.new()
+}
+
+struct Problem {
+    changed: Vec[i64],
+    perm: Vec[i64],
+    extra: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let pairs = next_random(mut seed) % 6;
+    let top = next_random(mut seed) % 11;
+    let mut changed: Vec[i64] = Vec.new();
+    for _ in 0..pairs {
+        let x = next_random(mut seed) % (top + 1);
+        changed.push(x);
+        changed.push(2 * x);
+    }
+    for i in (1..changed.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        changed.swap(i, j);
+    }
+    let nudge = next_random(mut seed) % 4;
+    if changed.len() > 0 and nudge == 0 {
+        let i = next_random(mut seed) % changed.len();
+        changed[i] += 1;
+    }
+    if nudge == 1 {
+        changed.push(next_random(mut seed) % (2 * top + 2));
+    }
+    if changed.len() == 0 {
+        changed.push(next_random(mut seed) % (top + 1));
+    }
+    let n = changed.len();
+    let mut perm: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        perm.swap(i, j);
+    }
+    let extra = next_random(mut seed) % (top + 1);
+    Problem { changed, perm, extra }
+}
+
+fn answer(arm: i64, changed: Vec[i64]) -> Vec[i64] {
+    let got = match arm {
+        0 => star_arm(changed),
+        1 => queue_arm(changed),
+        2 => map_arm(changed),
+        3 => pointers_arm(changed),
+        4 => halves_arm(changed),
+        _ => solution_arm(changed),
+    };
+    sorted_copy(got)
+}
+
+fn main() {
+    let names = ["star", "queue", "map", "pointers", "halves", "solution"];
+    let mut seed = 2007;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let changed = prob.changed.clone();
+        let truth = literal(changed.clone());
+        check = (check * 31 + truth.len()) % 1000000007;
+        for t in truth.iter() {
+            check = (check * 31 + t) % 1000000007;
+        }
+        let shuffled: Vec[i64] = prob.perm.iter().map(|i| changed[i]).collect();
+        let tripled: Vec[i64] = changed.iter().map(|x| 3 * x).collect();
+        let mut longer = changed.clone();
+        longer.push(prob.extra);
+        longer.push(2 * prob.extra);
+        let mut got: Vec[Vec[i64]] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, changed.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm].clone();
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let thrice: Vec[i64] = a.iter().map(|x| 3 * x).collect();
+            let mut rebuilt: Vec[i64] = Vec.new();
+            for x in a.iter() {
+                rebuilt.push(x);
+                rebuilt.push(2 * x);
+            }
+            let rebuilds = a.len() == 0 or sorted_copy(rebuilt) == sorted_copy(changed.clone());
+            let grows = if a.len() == 0 {
+                true
+            } else {
+                let mut more = a.clone();
+                more.push(prob.extra);
+                answer(arm, longer.clone()) == sorted_copy(more)
+            };
+            let verdicts = [
+                a == truth,
+                answer(arm, shuffled.clone()) == a,
+                answer(arm, tripled.clone()) == thrice,
+                rebuilds,
+                grows,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, changed {changed}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

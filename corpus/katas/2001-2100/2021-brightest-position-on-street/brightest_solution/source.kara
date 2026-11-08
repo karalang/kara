@@ -1,0 +1,85 @@
+// LeetCode #2021: Brightest Position on Street -- LeetCode's Rust template,
+// carried to Kāra by `karac fix`. A `BTreeMap` of changes in brightness,
+// walked in order.
+
+
+struct Solution {}
+
+impl Solution {
+    pub fn brightest_position(lights: Vec[Vec[i32]]) -> i32 {
+        let mut diff: SortedMap[i64, i32] = SortedMap.new();
+        for l in ref lights {
+            let (p, r) = (l[0] as i64, l[1] as i64);
+            *diff.entry(p - r).or_insert(0) += 1;
+            *diff.entry(p + r + 1).or_insert(0) -= 1;
+        }
+        let mut (cur, best, ans) = (0, 0, 0);
+        for (x, d) in diff.iter() {
+            cur += d;
+            if cur > best {
+                best = cur;
+                ans = x;
+            }
+        }
+        ans as i32
+    }
+}
+
+fn brightest_position(lights: Vec[(i64, i64)]) -> i64 {
+    let v: Vec[Vec[i32]] = lights.iter().map(|(p, r)| [p as i32, r as i32]).collect();
+    Solution.brightest_position(v)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` lamps at positions in `-spread..=spread` with ranges in `0..=reach`
+fn random_lights(count: i64, spread: i64, reach: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    (0..count).map(|_| {
+        let position = next_random(mut seed) % (2 * spread + 1) - spread;
+        (position, next_random(mut seed) % (reach + 1))
+    }).collect()
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[(i64, i64)]] = [
+        [(-3, 2), (1, 2), (3, 3)],
+        [(1, 0), (0, 1)],
+        [(1, 2)],
+        [(5, 0)],
+        [(0, 0), (0, 0), (10, 0)],
+        [(-100000000, 100000000), (100000000, 100000000)],
+        [(1, 1), (4, 1), (7, 1), (3, 0)],
+        [(10, 5), (-10, 5), (0, 4)],
+    ];
+    for lights in examples {
+        println(f"{lights} -> {brightest_position(lights)}");
+    }
+    let mut seed = 2021;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let count = next_random(mut seed) % 12 + 1;
+        let spread = next_random(mut seed) % 20 + 1;
+        let reach = next_random(mut seed) % 8;
+        let answer = brightest_position(random_lights(count, spread, reach, mut seed));
+        sum += answer;
+        check = (check * 31 + answer + 1000) % 1000000007;
+    }
+    println(f"3000 streets of up to 12 lamps: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for a in 0..5 {
+        let spread = [100000000, 1000, 50000000, 10, 100000000][a];
+        let reach = [100000000, 50, 1000000, 3, 0][a];
+        let answer = brightest_position(random_lights(2000, spread, reach, mut seed));
+        sum += answer;
+        check = (check * 31 + answer + 1000000000) % 1000000007;
+    }
+    println(f"5 streets of 2000 lamps: sum {sum}, checksum {check}");
+}

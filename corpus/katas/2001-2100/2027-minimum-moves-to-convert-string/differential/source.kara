@@ -1,0 +1,226 @@
+// LeetCode #2027: Minimum Moves to Convert String -- the differential.
+//
+// All six arms against the statement read literally, on 1500 problems, with
+// six properties. A problem is a string of 3 to 12 places, each `X` with
+// odds from 0 to 1.
+//
+// P1  the count is the statement read literally: the fewest moves, by a
+//     breadth-first search over the sets of places still `X`
+// P2  the string reversed leaves the count
+// P3  `OOO` added at both ends leaves the count
+// P4  the string, `OO` and the string again doubles the count
+// P5  the first `O` turned into an `X` raises the count by 0 or 1
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: a move at the leftmost X, a jump of three
+fn star_minimum_moves(s: String) -> i64 {
+    let key: Vec[char] = s.chars().collect();
+    let mut moves = 0;
+    let mut i = 0;
+    while i < key.len() {
+        if key[i] == 'X' {
+            moves += 1;
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    moves
+}
+
+// ---- moves_fold.kara: the greedy as a fold over enumerate()
+fn fold_minimum_moves(s: String) -> i64 {
+    let (moves, _) = s.chars().enumerate().fold((0, 0), |(moves, free), (i, c)| {
+        if c == 'X' and i >= free { (moves + 1, i + 3) } else { (moves, free) }
+    });
+    moves
+}
+
+// ---- moves_dp.kara: a table from the right
+fn dp_minimum_moves(s: String) -> i64 {
+    let bytes: Vec[u8] = s.bytes().to_vec();
+    let n = bytes.len();
+    let mut best: Vec[i64] = Vec.filled(n + 3, 0);
+    for i in (0..n).rev() {
+        best[i] = if bytes[i] == b'O' { best[i + 1] } else { 1 + best[i + 3] };
+    }
+    best[0]
+}
+
+// ---- moves_simulate.kara: the moves made on a Vec[char]
+fn simulate_minimum_moves(s: String) -> i64 {
+    let mut key: Vec[char] = s.chars().collect();
+    let mut moves = 0;
+    while key.contains('X') {
+        let at = key.iter().position(|c| c == 'X').unwrap();
+        for j in at..(at + 3).min(key.len()) {
+            key[j] = 'O';
+        }
+        moves += 1;
+    }
+    moves
+}
+
+// ---- moves_find.kara: find on the rest of the string
+fn find_minimum_moves(s: String) -> i64 {
+    let mut moves = 0;
+    let mut from = 0;
+    while from < s.len() {
+        match s[from..s.len()].find("X") {
+            Some(at) => {
+                moves += 1;
+                from += at + 3;
+            }
+            None => break,
+        }
+    }
+    moves
+}
+
+// ---- moves_solution.kara: LeetCode's Rust template after karac fix
+impl Solution {
+    pub fn minimum_moves(s: String) -> i32 {
+        let s = s.bytes();
+        let mut i: i64 = 0;
+        let mut ans = 0;
+        while i < s.len() {
+            if s[i] == b'X' {
+                ans += 1;
+                i += 3;
+            } else {
+                i += 1;
+            }
+        }
+        ans
+    }
+}
+
+struct Solution {}
+
+fn rust_minimum_moves(s: String) -> i64 {
+    Solution.minimum_moves(s.clone())
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(s: String) -> i64 {
+    // a state is the set of places still `X`, as bits; a move at `j` clears
+    // places `j`, `j + 1` and `j + 2`
+    let n = s.len();
+    let mut start = 0;
+    for (i, c) in s.chars().enumerate() {
+        if c == 'X' {
+            start += 1 << i;
+        }
+    }
+    let mut dist: Map[i64, i64] = Map.new();
+    dist.insert(start, 0);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(start);
+    while let Some(state) = queue.pop_front() {
+        let d = *dist.get(state).unwrap();
+        if state == 0 {
+            return d;
+        }
+        for j in 0..n - 2 {
+            let next = state - (state & (7 << j));
+            if not dist.contains_key(next) {
+                dist.insert(next, d + 1);
+                queue.push_back(next);
+            }
+        }
+    }
+    -1
+}
+
+fn answer(arm: i64, s: String) -> i64 {
+    match arm {
+        0 => star_minimum_moves(s),
+        1 => fold_minimum_moves(s),
+        2 => dp_minimum_moves(s),
+        3 => simulate_minimum_moves(s),
+        4 => find_minimum_moves(s),
+        _ => rust_minimum_moves(s),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> String {
+    let len = next_random(mut seed) % 10 + 3;
+    let share = next_random(mut seed) % 101;
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(if next_random(mut seed) % 100 < share { 'X' } else { 'O' });
+    }
+    s
+}
+
+fn main() {
+    let names = ["star", "fold", "dp", "simulate", "find", "rust"];
+    let mut seed = 2027;
+    let mut problems: Vec[String] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let s = problems[p].clone();
+        let truth = literal(s.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let reversed: String = s.chars().rev().collect();
+        let padded = f"OOO{s}OOO";
+        let twice = f"{s}OO{s}";
+        let raised: String = match s.find("O") {
+            Some(at) => f"{s[0..at]}X{s[at + 1..s.len()]}",
+            None => s.clone(),
+        };
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, s.clone()));
+        }
+        for arm in 0..6 {
+            let c = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == c {
+                    same += 1;
+                }
+            }
+            let up = answer(arm, raised.clone()) - c;
+            let verdicts = [
+                c == truth,
+                answer(arm, reversed.clone()) == c,
+                answer(arm, padded.clone()) == c,
+                answer(arm, twice.clone()) == 2 * c,
+                up == 0 or up == 1,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {s}, answer {c}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

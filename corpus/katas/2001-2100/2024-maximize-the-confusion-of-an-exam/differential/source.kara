@@ -1,0 +1,304 @@
+// LeetCode #2024: Maximize the Confusion of an Exam -- the differential.
+//
+// All six arms against the statement read literally, on 1500 problems, with
+// six properties. A problem is a key of 1 to 10 answers, each `T` or `F`, and
+// `k` from 1 to the key's length.
+//
+// P1  the answer is the statement read literally: every set of at most `k`
+//     answers flipped, the longest run of one answer in the key that results
+// P2  the key reversed leaves the answer
+// P3  every `T` swapped with `F` leaves the answer
+// P4  one more change lengthens the answer unless it is already the whole
+//     key: answer(k + 1) > answer(k), or answer(k) is n
+// P5  the answer is at least the longest run already there and at least
+//     k + 1 (when the key is that long), and at most the key's length
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: a sliding window for each answer
+fn star_longest_run(key: Vec[u8], c: u8, k: i64) -> i64 {
+    let mut best = 0;
+    let mut left = 0;
+    let mut other = 0;
+    for right in 0..key.len() {
+        if key[right] != c {
+            other += 1;
+        }
+        while other > k {
+            if key[left] != c {
+                other -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+fn star_max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    let key: Vec[u8] = answer_key.bytes().iter().collect();
+    star_longest_run(key, b'T', k).max(star_longest_run(key, b'F', k))
+}
+
+// ---- confuse_pair.kara: one window counting both answers
+fn pair_max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    let key: Vec[char] = answer_key.chars().collect();
+    let mut (t, f) = (0, 0);
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..key.len() {
+        if key[right] == 'T' {
+            t += 1;
+        } else {
+            f += 1;
+        }
+        while t.min(f) > k {
+            if key[left] == 'T' {
+                t -= 1;
+            } else {
+                f -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(t + f);
+    }
+    best
+}
+
+// ---- confuse_grow.kara: a window that never shrinks
+fn grow_max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    let key: Vec[u8] = answer_key.bytes().iter().collect();
+    let mut count = [0, 0];
+    let mut most = 0;
+    let mut left = 0;
+    for right in 0..key.len() {
+        let side = if key[right] == b'T' { 0 } else { 1 };
+        count[side] += 1;
+        most = most.max(count[side]);
+        if right - left + 1 > most + k {
+            let gone = if key[left] == b'T' { 0 } else { 1 };
+            count[gone] -= 1;
+            left += 1;
+        }
+    }
+    key.len() - left
+}
+
+// ---- confuse_prefix.kara: prefix counts and a binary search for the start
+fn prefix_leftmost(prefix: Vec[i64], right: i64, k: i64, of_t: bool) -> i64 {
+    // the number of the counted answer in key[left..=right] falls as left
+    // grows, so the starts that hold at most k of it are a suffix
+    let mut (lo, hi) = (0, right);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let ts = prefix[right + 1] - prefix[mid];
+        let counted = if of_t { ts } else { right + 1 - mid - ts };
+        if counted <= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn prefix_max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    let mut prefix: Vec[i64] = [0];
+    for c in answer_key.chars() {
+        prefix.push(prefix[prefix.len() - 1] + if c == 'T' { 1 } else { 0 });
+    }
+    let n = answer_key.len();
+    let mut best = 0;
+    for right in 0..n {
+        let start = prefix_leftmost(prefix, right, k, true).min(prefix_leftmost(prefix, right, k, false));
+        best = best.max(right - start + 1);
+    }
+    best
+}
+
+// ---- confuse_brute.kara: every start, the window grown until both counts pass k
+fn brute_max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    let key: Vec[char] = answer_key.chars().collect();
+    let mut best = 0;
+    for start in 0..key.len() {
+        let mut (t, f) = (0, 0);
+        for end in start..key.len() {
+            if key[end] == 'T' {
+                t += 1;
+            } else {
+                f += 1;
+            }
+            if t > k and f > k {
+                break;
+            }
+            best = best.max(end - start + 1);
+        }
+    }
+    best
+}
+
+// ---- confuse_solution.kara: LeetCode's Rust template after karac fix
+impl Solution {
+    pub fn max_consecutive_answers(answer_key: String, k: i32) -> i32 {
+        let s = answer_key.bytes();
+        let longest = |c: u8| {
+            let mut (l, cnt, res) = (0, 0, 0i32);
+            for r in 0..s.len() {
+                if s[r] != c {
+                    cnt += 1;
+                }
+                while cnt > k {
+                    if s[l] != c {
+                        cnt -= 1;
+                    }
+                    l += 1;
+                }
+                res = res.max((r - l + 1) as i32);
+            }
+            res
+        };
+        longest(b'T').max(longest(b'F'))
+    }
+}
+
+struct Solution {}
+
+fn rust_max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    Solution.max_consecutive_answers(answer_key.clone(), k as i32) as i64
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn longest_same(key: Vec[char]) -> i64 {
+    let mut best = 0;
+    let mut run = 0;
+    for i in 0..key.len() {
+        if i > 0 and key[i] == key[i - 1] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    best
+}
+
+fn literal(key: Vec[char], k: i64) -> i64 {
+    let n = key.len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut flips = 0;
+        let mut changed = key.clone();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                flips += 1;
+                changed[i] = if key[i] == 'T' { 'F' } else { 'T' };
+            }
+        }
+        if flips <= k {
+            best = best.max(longest_same(changed));
+        }
+    }
+    best
+}
+
+fn answer(arm: i64, key: String, k: i64) -> i64 {
+    match arm {
+        0 => star_max_consecutive_answers(key, k),
+        1 => pair_max_consecutive_answers(key, k),
+        2 => grow_max_consecutive_answers(key, k),
+        3 => prefix_max_consecutive_answers(key, k),
+        4 => brute_max_consecutive_answers(key, k),
+        _ => rust_max_consecutive_answers(key, k),
+    }
+}
+
+struct Problem {
+    key: Vec[char],
+    k: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 10 + 1;
+    let key: Vec[char] = (0..n).map(|_| if next_random(mut seed) % 2 == 0 { 'T' } else { 'F' }).collect();
+    let k = next_random(mut seed) % n + 1;
+    Problem { key: key, k: k }
+}
+
+fn text(key: Vec[char]) -> String {
+    let mut s = String.new();
+    for c in key.iter() {
+        s.push(c);
+    }
+    s
+}
+
+fn main() {
+    let names = ["star", "pair", "grow", "prefix", "brute", "rust"];
+    let mut seed = 2024;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let key = prob.key.clone();
+        let k = prob.k;
+        let n = key.len();
+        let truth = literal(key.clone(), k);
+        check = (check * 31 + truth) % 1000000007;
+        let already = longest_same(key.clone());
+        let plain = text(key.clone());
+        let reversed: Vec[char] = key.iter().rev().collect();
+        let swapped: Vec[char] = key.iter().map(|c| if c == 'T' { 'F' } else { 'T' }).collect();
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, plain.clone(), k));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let more = if k < n { answer(arm, plain.clone(), k + 1) } else { a };
+            let verdicts = [
+                a == truth,
+                answer(arm, text(reversed.clone()), k) == a,
+                answer(arm, text(swapped.clone()), k) == a,
+                more > a or a == n,
+                a >= already and a >= (k + 1).min(n) and a <= n,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {plain}, {k}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

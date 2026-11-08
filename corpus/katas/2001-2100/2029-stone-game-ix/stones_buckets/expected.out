@@ -1,0 +1,10 @@
+[2, 1] -> true
+[2] -> false
+[5, 1, 2, 4, 3] -> false
+[3, 6, 9] -> false
+[1, 1, 1, 1, 2] -> true
+[3, 1, 1, 1, 1, 2] -> true
+[1, 2, 3] -> false
+[7, 4, 1, 10, 3, 2] -> true
+3000 games of up to 20 stones: Alice wins 1858, checksum 398165155
+8 games of 100000 stones: Alice wins 7, checksum 429701021

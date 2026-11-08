@@ -1,0 +1,299 @@
+// LeetCode #2008: Maximum Earnings From Taxi -- the differential.
+//
+// Six arms against the statement read literally, on 1500 problems, with six
+// properties.
+//
+// P1  the answer is the statement read literally: every set of rides that
+//     never overlap (one may start where another ends), the best total
+// P2  the rides shuffled leave the answer
+// P3  the road lengthened at its start, every point moved along by the
+//     same amount, leaves the answer
+// P4  the road driven the other way, point p turned into n + 1 - p, leaves
+//     the answer
+// P5  one more ride never lowers the answer, and raises it by at most what
+//     that ride earns
+// P6  each arm agrees with at least three of the other five
+
+// ---- taxi.kara: the ★ arm: the best at each point
+fn star_arm(n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    let mut ending: Vec[Vec[(i64, i64)]] = Vec.filled(n + 1, Vec.new());
+    for (start, end, tip) in rides {
+        ending[end].push((start, end - start + tip));
+    }
+    let mut best = Vec.filled(n + 1, 0);
+    for p in 2..=n {
+        best[p] = best[p - 1];
+        for (start, earned) in ending[p] {
+            best[p] = best[p].max(best[start] + earned);
+        }
+    }
+    best[n]
+}
+
+// ---- taxi_sorted.kara: rides by end, binary search
+fn sorted_arm(n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    let mut by_end = rides.clone();
+    by_end.sort_by_key(|(_, end, _)| end);
+    let ends: Vec[i64] = by_end.iter().map(|(_, end, _)| end).collect();
+    let m = by_end.len();
+    let mut best = Vec.filled(m + 1, 0);
+    for i in 0..m {
+        let (start, end, tip) = by_end[i];
+        // the number of rides ending at or before `start`
+        let mut lo = 0;
+        let mut hi = i;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if ends[mid] <= start {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        best[i + 1] = best[i].max(best[lo] + end - start + tip);
+    }
+    best[m]
+}
+
+// ---- taxi_memo.kara: suffixes by start, memoised
+fn best_from(i: i64, by_start: Vec[(i64, i64, i64)], starts: Vec[i64], memo: mut ref Vec[Option[i64]]) -> i64 {
+    if i == by_start.len() {
+        return 0;
+    }
+    if let Some(b) = memo[i] {
+        return b;
+    }
+    let (start, end, tip) = by_start[i];
+    let next = starts.partition_point(|s| s < end);
+    let take = end - start + tip + best_from(next, by_start, starts, mut memo);
+    let skip = best_from(i + 1, by_start, starts, mut memo);
+    let b = take.max(skip);
+    memo[i] = Some(b);
+    b
+}
+
+fn memo_arm(n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    let mut by_start = rides.clone();
+    by_start.sort();
+    let starts: Vec[i64] = by_start.iter().map(|(start, _, _)| start).collect();
+    let mut memo: Vec[Option[i64]] = Vec.filled(by_start.len(), None);
+    best_from(0, by_start, starts, mut memo)
+}
+
+// ---- taxi_heap.kara: rides by start, a queue of trips under way
+fn heap_arm(n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    let mut by_start = rides.clone();
+    by_start.sort();
+    let mut under_way: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    let mut settled = 0;
+    for (start, end, tip) in by_start {
+        while let Some((done, earned)) = under_way.peek() {
+            if done > start {
+                break;
+            }
+            settled = settled.max(earned);
+            under_way.pop();
+        }
+        under_way.push((end, settled + end - start + tip));
+    }
+    while let Some((_, earned)) = under_way.pop() {
+        settled = settled.max(earned);
+    }
+    settled
+}
+
+// ---- taxi_map.kara: a SortedMap of best by end
+fn map_arm(n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    let mut by_end = rides.clone();
+    by_end.sort_by_key(|(_, end, _)| end);
+    let mut best: SortedMap[i64, i64] = SortedMap.new();
+    best.insert(0, 0);
+    let mut top = 0;
+    for (start, end, tip) in by_end {
+        let before = match best.range_inclusive(0, start).next_back() {
+            Some((_, b)) => b,
+            None => 0,
+        };
+        let total = before + end - start + tip;
+        if total > top {
+            top = total;
+            best.insert(end, top);
+        }
+    }
+    top
+}
+
+// ---- taxi_solution.kara: LeetCode's Rust template, carried by karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn max_taxi_earnings(n: i32, rides: own Vec[Vec[i32]]) -> i64 {
+        let mut rides = rides;
+        rides.sort_by_key(|r| r[0]);
+        let n = n as i64;
+        let mut dp = Vec.filled(n + 2, 0);
+        let mut j = 0;
+        for i in (1..=n).rev() {
+            dp[i] = dp[i + 1];
+            while j < rides.len() and rides[rides.len() - 1 - j][0] as i64 == i {
+                let r = ref rides[rides.len() - 1 - j];
+                let (end, tip) = (r[1] as i64, r[2] as i64);
+                dp[i] = dp[i].max(dp[end] + (end - i) + tip);
+                j += 1;
+            }
+        }
+        dp[1]
+    }
+}
+
+fn solution_arm(n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    let rides: Vec[Vec[i32]] = rides.iter().map(|(s, e, t)| [s as i32, e as i32, t as i32]).collect();
+    Solution.max_taxi_earnings(n as i32, rides)
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(rides: Vec[(i64, i64, i64)]) -> i64 {
+    let m = rides.len();
+    let mut best = 0;
+    for mask in 0..1 << m {
+        let mut chosen: Vec[(i64, i64, i64)] = Vec.new();
+        for i in 0..m {
+            if (mask >> i) & 1 == 1 {
+                chosen.push(rides[i]);
+            }
+        }
+        chosen.sort();
+        let mut ok = true;
+        let mut total = 0;
+        for i in 0..chosen.len() {
+            let (start, end, tip) = chosen[i];
+            if i > 0 and start < chosen[i - 1].1 {
+                ok = false;
+            }
+            total += end - start + tip;
+        }
+        if ok {
+            best = best.max(total);
+        }
+    }
+    best
+}
+
+struct Problem {
+    n: i64,
+    rides: Vec[(i64, i64, i64)],
+    perm: Vec[i64],
+    shift: i64,
+    extra: (i64, i64, i64),
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_ride(n: i64, span: i64, tip: i64, seed: mut ref i64) -> (i64, i64, i64) {
+    let length = next_random(mut seed) % span.min(n - 1) + 1;
+    let start = next_random(mut seed) % (n - length) + 1;
+    (start, start + length, next_random(mut seed) % (tip + 1))
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 14 + 2;
+    let m = next_random(mut seed) % 8 + 1;
+    let span = next_random(mut seed) % 6 + 1;
+    let tip = next_random(mut seed) % 5;
+    let mut rides: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..m {
+        rides.push(random_ride(n, span, tip, mut seed));
+    }
+    let mut perm: Vec[i64] = (0..m).collect();
+    for i in (1..m).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        perm.swap(i, j);
+    }
+    let shift = next_random(mut seed) % 5 + 1;
+    let extra = random_ride(n, span, tip, mut seed);
+    Problem { n, rides, perm, shift, extra }
+}
+
+fn answer(arm: i64, n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    match arm {
+        0 => star_arm(n, rides),
+        1 => sorted_arm(n, rides),
+        2 => memo_arm(n, rides),
+        3 => heap_arm(n, rides),
+        4 => map_arm(n, rides),
+        _ => solution_arm(n, rides),
+    }
+}
+
+fn main() {
+    let names = ["star", "sorted", "memo", "heap", "map", "solution"];
+    let mut seed = 2008;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let n = prob.n;
+        let rides = prob.rides.clone();
+        let truth = literal(rides.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let shuffled: Vec[(i64, i64, i64)] = prob.perm.iter().map(|i| rides[i]).collect();
+        let s = prob.shift;
+        let shifted: Vec[(i64, i64, i64)] = rides.iter().map(|(a, b, t)| (a + s, b + s, t)).collect();
+        let mirrored: Vec[(i64, i64, i64)] = rides.iter().map(|(a, b, t)| (n + 1 - b, n + 1 - a, t)).collect();
+        let mut longer = rides.clone();
+        longer.push(prob.extra);
+        let (xa, xb, xt) = prob.extra;
+        let gain = xb - xa + xt;
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, n, rides.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let more = answer(arm, n, longer.clone());
+            let verdicts = [
+                a == truth,
+                answer(arm, n, shuffled.clone()) == a,
+                answer(arm, n + s, shifted.clone()) == a,
+                answer(arm, n, mirrored.clone()) == a,
+                more >= a and more <= a + gain,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, n = {n} rides {rides}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

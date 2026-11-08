@@ -1,0 +1,267 @@
+// LeetCode #2028: Find Missing Observations -- the differential.
+//
+// All six arms against the statement read literally, on 1500 problems, with
+// six properties. A problem is 1 to 8 rolls, a mean from 1 to 6, and 1 to
+// 8 missing rolls. Any `n` rolls that bring the mean to `mean` are a right
+// answer, and the arms pick different ones, so each answer is judged, not
+// compared: it is right when it is empty and no `n` rolls fit, or when it
+// holds `n` rolls from 1 to 6 with the right total.
+//
+// P1  the answer is right by the statement read literally: whether some
+//     `n` rolls fit is found from the totals `n` dice can show, built one
+//     die at a time
+// P2  the rolls reversed: still right, and empty exactly when before
+// P3  the rolls with the answer added, asked for one more roll at the same
+//     mean, give exactly `[mean]`
+// P4  every roll `r` turned to `7 - r` and the mean to `7 - mean`: still
+//     right, and empty exactly when before
+// P5  every roll listed twice and twice as many missing: still right, and
+//     empty exactly when before
+// P6  each arm's verdict agrees with at least three of the other five
+
+// ---- the ★ arm: the needed total spread evenly
+fn star_missing_rolls(rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    let m = rolls.len();
+    let need = mean * (m + n) - rolls.iter().sum();
+    if need < n or need > 6 * n {
+        return Vec.new();
+    }
+    let (q, r) = (need / n, need % n);
+    (0..n).map(|i| if i < r { q + 1 } else { q }).collect()
+}
+
+// ---- observe_high.kara: each roll as high as the rest allow
+fn high_missing_rolls(rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    let total: i64 = rolls.iter().sum();
+    let mut need = mean * (rolls.len() + n) - total;
+    if need < n or need > 6 * n {
+        return Vec.new();
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for left in (0..n).rev() {
+        // `left` rolls come after this one, each at least 1
+        let roll = (need - left).min(6);
+        out.push(roll);
+        need -= roll;
+    }
+    out
+}
+
+// ---- observe_raise.kara: ones raised a pip at a time in turn
+fn raise_missing_rolls(rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    let have: i64 = rolls.iter().sum();
+    let need = mean * (rolls.len() + n) - have;
+    if need < n or need > 6 * n {
+        return Vec.new();
+    }
+    let mut out: Vec[i64] = Vec.filled(n, 1);
+    let mut left = need - n;
+    let mut i = 0;
+    while left > 0 {
+        if out[i] < 6 {
+            out[i] += 1;
+            left -= 1;
+        }
+        i = (i + 1) % n;
+    }
+    out
+}
+
+// ---- observe_lower.kara: sixes lowered from the last one back
+fn lower_missing_rolls(rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    let need = mean * (rolls.len() + n) - rolls.iter().fold(0, |acc, x| acc + x);
+    if not (n..=6 * n).contains(need) {
+        return Vec.new();
+    }
+    let mut out: Vec[i64] = Vec.filled(n, 6);
+    let mut surplus = 6 * n - need;
+    let mut i = n - 1;
+    while surplus > 0 {
+        let take = surplus.min(5);
+        out[i] -= take;
+        surplus -= take;
+        i -= 1;
+    }
+    out
+}
+
+// ---- observe_faces.kara: the even spread through a SortedMap of faces
+fn faces_missing_rolls(rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    let need = mean * (rolls.len() + n) - rolls.iter().sum();
+    if need < n or need > 6 * n {
+        return Vec.new();
+    }
+    let mut faces: SortedMap[i64, i64] = SortedMap.new();
+    faces.insert(need / n, n);
+    if need % n > 0 {
+        faces.insert(need / n, n - need % n);
+        faces.insert(need / n + 1, need % n);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for (face, count) in faces.iter() {
+        for _ in 0..count {
+            out.push(face);
+        }
+    }
+    out
+}
+
+// ---- observe_solution.kara: LeetCode's Rust template after karac fix
+impl Solution {
+    pub fn missing_rolls(rolls: Vec[i32], mean: i32, n: i32) -> Vec[i32] {
+        let m = rolls.len() as i32;
+        let need = mean * (m + n) - rolls.iter().sum();
+        if need < n or need > 6 * n {
+            return Vec.new();
+        }
+        let (q, r) = (need / n, need % n);
+        let mut ans = Vec.filled(n as i64, q);
+        for i in 0..r as usize {
+            ans[i] += 1;
+        }
+        ans
+    }
+}
+
+struct Solution {}
+
+fn rust_missing_rolls(rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    let v: Vec[i32] = rolls.iter().map(|x| x as i32).collect();
+    Solution.missing_rolls(v, mean as i32, n as i32).into_iter().map(|x| x as i64).collect()
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+// whether some `n` rolls bring the mean of `rolls` and them to `mean`: the
+// totals `n` dice can show, one die at a time
+fn fits(rolls: Vec[i64], mean: i64, n: i64) -> bool {
+    let need = mean * (rolls.len() + n);
+    let mut totals: Set[i64] = Set.new();
+    totals.insert(rolls.iter().sum());
+    for _ in 0..n {
+        let mut next: Set[i64] = Set.new();
+        for t in totals.iter() {
+            for face in 1..=6 {
+                next.insert(t + face);
+            }
+        }
+        totals = next;
+    }
+    totals.contains(need)
+}
+
+fn right(rolls: Vec[i64], mean: i64, n: i64, got: Vec[i64]) -> bool {
+    if got.is_empty() {
+        return not fits(rolls, mean, n);
+    }
+    let have: i64 = rolls.iter().sum();
+    let added: i64 = got.iter().sum();
+    got.len() == n and got.iter().all(|r| r >= 1 and r <= 6) and have + added == mean * (rolls.len() + n)
+}
+
+fn answer(arm: i64, rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    match arm {
+        0 => star_missing_rolls(rolls, mean, n),
+        1 => high_missing_rolls(rolls, mean, n),
+        2 => raise_missing_rolls(rolls, mean, n),
+        3 => lower_missing_rolls(rolls, mean, n),
+        4 => faces_missing_rolls(rolls, mean, n),
+        _ => rust_missing_rolls(rolls, mean, n),
+    }
+}
+
+struct Problem {
+    rolls: Vec[i64],
+    mean: i64,
+    n: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let m = next_random(mut seed) % 8 + 1;
+    let rolls: Vec[i64] = (0..m).map(|_| next_random(mut seed) % 6 + 1).collect();
+    let mean = next_random(mut seed) % 6 + 1;
+    let n = next_random(mut seed) % 8 + 1;
+    Problem { rolls: rolls, mean: mean, n: n }
+}
+
+fn main() {
+    let names = ["star", "high", "raise", "lower", "faces", "rust"];
+    let mut seed = 2028;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let rolls = prob.rolls.clone();
+        let (mean, n) = (prob.mean, prob.n);
+        let possible = fits(rolls.clone(), mean, n);
+        check = (check * 31 + if possible { 1 } else { 2 }) % 1000000007;
+        let reversed: Vec[i64] = rolls.iter().rev().cloned().collect();
+        let flipped: Vec[i64] = rolls.iter().map(|r| 7 - r).collect();
+        let mut twice = rolls.clone();
+        twice.extend(rolls.iter().cloned());
+        let mut got: Vec[Vec[i64]] = Vec.new();
+        let mut ok: Vec[bool] = Vec.new();
+        for arm in 0..6 {
+            let a = answer(arm, rolls.clone(), mean, n);
+            ok.push(right(rolls.clone(), mean, n, a.clone()));
+            got.push(a);
+        }
+        for arm in 0..6 {
+            let a = got[arm].clone();
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and ok[other] == ok[arm] and got[other].is_empty() == a.is_empty() {
+                    same += 1;
+                }
+            }
+            let a2 = answer(arm, reversed.clone(), mean, n);
+            let a4 = answer(arm, flipped.clone(), 7 - mean, n);
+            let a5 = answer(arm, twice.clone(), mean, 2 * n);
+            let p3 = if a.is_empty() {
+                true
+            } else {
+                let mut more = rolls.clone();
+                more.extend(a.iter().cloned());
+                answer(arm, more, mean, 1) == [mean]
+            };
+            let verdicts = [
+                ok[arm],
+                right(reversed.clone(), mean, n, a2.clone()) and a2.is_empty() == a.is_empty(),
+                p3,
+                right(flipped.clone(), 7 - mean, n, a4.clone()) and a4.is_empty() == a.is_empty(),
+                right(twice.clone(), mean, 2 * n, a5.clone()) and a5.is_empty() == a.is_empty(),
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {rolls}, {mean}, {n}, answer {a}, possible {possible}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

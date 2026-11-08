@@ -1,0 +1,255 @@
+// LeetCode #2017: Grid Game -- the differential.
+//
+// All six arms against the statement read literally, on 1500 problems, with
+// six properties. A problem is a grid of 2 rows of 1 to 10 columns of
+// points from 1 to 20.
+//
+// P1  the answer is the statement read literally: for each column the first
+//     robot can turn at, its path cleared, and every path of the second
+//     robot summed; the smallest over the first robot's turns of the
+//     largest over the second's
+// P2  the grid turned half round, top row read backwards as the bottom and
+//     the bottom backwards as the top, leaves the answer
+// P3  every point doubled doubles the answer
+// P4  the top left point changed leaves the answer: the first robot always
+//     takes it
+// P5  the bottom right point changed leaves the answer
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: one pass, the turning column moved along
+fn star_grid_game(grid: Vec[Vec[i64]]) -> i64 {
+    let mut top: i64 = grid[0].iter().sum();
+    let mut bottom = 0;
+    let mut best = i64.MAX;
+    for i in 0..grid[0].len() {
+        top -= grid[0][i];
+        best = best.min(top.max(bottom));
+        bottom += grid[1][i];
+    }
+    best
+}
+
+// ---- grid_prefix.kara: each row's prefix sums
+fn prefix_grid_game(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid[0].len();
+    let mut top: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut bottom: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        top[i + 1] = top[i] + grid[0][i];
+        bottom[i + 1] = bottom[i] + grid[1][i];
+    }
+    (0..n).map(|i| (top[n] - top[i + 1]).max(bottom[i])).min().unwrap()
+}
+
+// ---- grid_brute.kara: each turn's shares summed afresh
+fn brute_grid_game(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid[0].len();
+    let mut best = i64.MAX;
+    for turn in 0..n {
+        let mut top = 0;
+        for c in turn + 1..n {
+            top += grid[0][c];
+        }
+        let mut bottom = 0;
+        for c in 0..turn {
+            bottom += grid[1][c];
+        }
+        best = best.min(top.max(bottom));
+    }
+    best
+}
+
+// ---- grid_scan.kara: scan, zip and min
+fn iter_grid_game(grid: Vec[Vec[i64]]) -> i64 {
+    let mut after: Vec[i64] = grid[0].iter().rev().scan(0, |s, x| Some((s + x, s))).collect();
+    after.reverse();
+    let before: Vec[i64] = grid[1].iter().scan(0, |s, x| Some((s + x, s))).collect();
+    after.iter().zip(before.iter()).map(|(a, b)| a.max(b)).min().unwrap()
+}
+
+// ---- grid_game.kara: each turn played out
+fn game_best_path(grid: Vec[Vec[i64]]) -> i64 {
+    let mut upper = 0;
+    let mut lower = 0;
+    for c in 0..grid[0].len() {
+        upper += grid[0][c];
+        lower = lower.max(upper) + grid[1][c];
+    }
+    lower
+}
+
+fn game_grid_game(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid[0].len();
+    let mut best = i64.MAX;
+    for turn in 0..n {
+        let mut left = grid.clone();
+        for c in 0..turn + 1 {
+            left[0][c] = 0;
+        }
+        for c in turn..n {
+            left[1][c] = 0;
+        }
+        best = best.min(game_best_path(left));
+    }
+    best
+}
+
+// ---- grid_solution.kara: LeetCode's Rust template after karac fix
+struct RustSolution {}
+
+impl RustSolution {
+    pub fn grid_game(grid: Vec[Vec[i32]]) -> i64 {
+        let mut top: i64 = grid[0].iter().map(|x| x as i64).sum();
+        let mut bottom: i64 = 0;
+        let mut ans = i64.MAX;
+        for i in 0..grid[0].len() {
+            top -= grid[0][i];
+            ans = ans.min(top.max(bottom));
+            bottom += grid[1][i];
+        }
+        ans
+    }
+}
+
+fn rust_grid_game(grid: Vec[Vec[i64]]) -> i64 {
+    let grid: Vec[Vec[i32]] = grid.iter().map(|row| row.iter().map(|x| x as i32).collect()).collect();
+    RustSolution.grid_game(grid)
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid[0].len();
+    let mut best = i64.MAX;
+    for turn in 0..n {
+        let mut left = grid.clone();
+        for c in 0..n {
+            if c <= turn {
+                left[0][c] = 0;
+            }
+            if c >= turn {
+                left[1][c] = 0;
+            }
+        }
+        let mut most = 0;
+        for down in 0..n {
+            let mut got = 0;
+            for c in 0..n {
+                if c <= down {
+                    got += left[0][c];
+                }
+                if c >= down {
+                    got += left[1][c];
+                }
+            }
+            most = most.max(got);
+        }
+        best = best.min(most);
+    }
+    best
+}
+
+fn answer(arm: i64, grid: Vec[Vec[i64]]) -> i64 {
+    match arm {
+        0 => star_grid_game(grid),
+        1 => prefix_grid_game(grid),
+        2 => brute_grid_game(grid),
+        3 => iter_grid_game(grid),
+        4 => game_grid_game(grid),
+        _ => rust_grid_game(grid),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    grid: Vec[Vec[i64]],
+    corner: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 10 + 1;
+    let top = next_random(mut seed) % 20 + 1;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..2 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(next_random(mut seed) % top + 1);
+        }
+        grid.push(row);
+    }
+    let corner = next_random(mut seed) % 100 + 1;
+    Problem { grid, corner }
+}
+
+fn main() {
+    let names = ["star", "prefix", "brute", "iter", "game", "rust"];
+    let mut seed = 2017;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let grid = prob.grid.clone();
+        let n = grid[0].len();
+        let truth = literal(grid.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let turned: Vec[Vec[i64]] = [
+            grid[1].iter().rev().cloned().collect(),
+            grid[0].iter().rev().cloned().collect(),
+        ];
+        let doubled: Vec[Vec[i64]] = grid.iter().map(|row| row.iter().map(|v| 2 * v).collect()).collect();
+        let mut first = grid.clone();
+        first[0][0] = prob.corner;
+        let mut last = grid.clone();
+        last[1][n - 1] = prob.corner;
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, grid.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, turned.clone()) == a,
+                answer(arm, doubled.clone()) == 2 * a,
+                answer(arm, first.clone()) == a,
+                answer(arm, last.clone()) == a,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, grid {grid}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

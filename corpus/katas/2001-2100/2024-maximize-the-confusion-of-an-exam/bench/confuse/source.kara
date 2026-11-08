@@ -1,0 +1,63 @@
+// LeetCode #2024: Maximize the Confusion of an Exam -- the ★ arm. For each
+// answer `c`, the longest window holding at most `k` of the other answer is
+// a run of `c` after `k` changes: a sliding window grows on the right and
+// gives up its left end while it holds more than `k`. The longer of the
+// two. O(n).
+
+fn longest_run(key: Vec[u8], c: u8, k: i64) -> i64 {
+    let mut best = 0;
+    let mut left = 0;
+    let mut other = 0;
+    for right in 0..key.len() {
+        if key[right] != c {
+            other += 1;
+        }
+        while other > k {
+            if key[left] != c {
+                other -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+fn max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    let key: Vec[u8] = answer_key.bytes().iter().collect();
+    longest_run(key, b'T', k).max(longest_run(key, b'F', k))
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 keys of 100000 answers, `T` with 50 to 99 percent, and k from 1 to
+    // 10000, built once; the ★ arm on each for 5 rounds
+    let mut seed = 2024;
+    let mut keys: Vec[String] = Vec.new();
+    let mut ks: Vec[i64] = Vec.new();
+    for a in 0..20 {
+        let pct = [50, 70, 90, 97, 99][a % 5];
+        let mut key = String.new();
+        for _ in 0..100000 {
+            key.push(if next_random(mut seed) % 100 < pct { 'T' } else { 'F' });
+        }
+        keys.push(key);
+        ks.push([1, 10, 100, 1000, 10000][a / 4]);
+    }
+    let mut calls = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..5 {
+        for a in 0..20 {
+            let best = max_consecutive_answers(keys[a], ks[a]);
+            calls += 1;
+            total += best;
+            check = (check * 31 + best) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: total {total}, checksum {check}");
+}

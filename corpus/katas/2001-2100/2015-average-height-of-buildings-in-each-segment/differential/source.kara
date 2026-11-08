@@ -1,0 +1,340 @@
+// LeetCode #2015: Average Height of Buildings in Each Segment -- the
+// differential.
+//
+// Five arms against the statement read literally, on 1500 problems, with six
+// properties. A problem is 1 to 10 buildings on a street of up to 40
+// positions. The sixth arm, LeetCode's Rust template, does not check yet
+// and joins when it does.
+//
+// P1  the answer is the statement read literally: each unit stretch
+//     `[x, x + 1)` given the average of the buildings over it, stretches with
+//     none left out, and neighbours with the same average joined
+// P2  the buildings shuffled leave the answer
+// P3  every position moved along by the same amount moves every segment
+// P4  the street read the other way, position `p` turned into `100 - p`,
+//     turns the answer round
+// P5  every building listed twice leaves the answer
+// P6  each arm agrees with at least two of the other four
+
+// ---- the ★ arm: sorted events, a sweep
+fn star_average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut events: Vec[(i64, i64, i64)] = Vec.new();
+    for (start, end, height) in buildings.iter() {
+        events.push((start, height, 1));
+        events.push((end, -height, -1));
+    }
+    events.sort();
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    let mut sum = 0;
+    let mut count = 0;
+    let mut i = 0;
+    while i < events.len() {
+        let at = events[i].0;
+        while i < events.len() and events[i].0 == at {
+            sum += events[i].1;
+            count += events[i].2;
+            i += 1;
+        }
+        if count == 0 {
+            continue;
+        }
+        let next = events[i].0;
+        let average = sum / count;
+        let n = street.len();
+        if n > 0 and street[n - 1].1 == at and street[n - 1].2 == average {
+            street[n - 1].1 = next;
+        } else {
+            street.push((at, next, average));
+        }
+    }
+    street
+}
+
+// ---- average_map.kara: a SortedMap of changes
+fn map_average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut changes: SortedMap[i64, (i64, i64)] = SortedMap.new();
+    for (start, end, height) in buildings.iter() {
+        let (h, c) = changes.get(start).cloned().unwrap_or((0, 0));
+        changes.insert(start, (h + height, c + 1));
+        let (h, c) = changes.get(end).cloned().unwrap_or((0, 0));
+        changes.insert(end, (h - height, c - 1));
+    }
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    let mut sum = 0;
+    let mut count = 0;
+    let mut last = 0;
+    for (at, (h, c)) in changes.iter() {
+        if count > 0 {
+            let average = sum / count;
+            match street.pop() {
+                Some((left, right, a)) if right == last and a == average => street.push((left, at, a)),
+                Some(segment) => {
+                    street.push(segment);
+                    street.push((last, at, average));
+                }
+                None => street.push((last, at, average)),
+            }
+        }
+        sum += h;
+        count += c;
+        last = at;
+    }
+    street
+}
+
+// ---- average_diff.kara: compressed positions, difference arrays
+fn diff_average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut points: Vec[i64] = Vec.new();
+    for (start, end, _) in buildings.iter() {
+        points.push(start);
+        points.push(end);
+    }
+    points.sort();
+    points.dedup();
+    let m = points.len();
+    let mut heights: Vec[i64] = Vec.filled(m, 0);
+    let mut counts: Vec[i64] = Vec.filled(m, 0);
+    for (start, end, height) in buildings.iter() {
+        let a = points.binary_search(start).unwrap();
+        let b = points.binary_search(end).unwrap();
+        heights[a] += height;
+        counts[a] += 1;
+        heights[b] -= height;
+        counts[b] -= 1;
+    }
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    let mut sum = 0;
+    let mut count = 0;
+    for i in 0..m - 1 {
+        sum += heights[i];
+        count += counts[i];
+        if count == 0 {
+            continue;
+        }
+        let average = sum / count;
+        let joins = match street.last() {
+            Some((_, right, a)) => right == points[i] and a == average,
+            None => false,
+        };
+        if joins {
+            let (left, _, _) = street.pop().unwrap();
+            street.push((left, points[i + 1], average));
+        } else {
+            street.push((points[i], points[i + 1], average));
+        }
+    }
+    street
+}
+
+// ---- average_brute.kara: each stretch scans every building
+fn brute_average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut points: Vec[i64] = buildings.iter().flat_map(|(start, end, _)| [start, end].into_iter()).collect();
+    points.sort();
+    points.dedup();
+    let mut stretches: Vec[(i64, i64, i64)] = Vec.new();
+    for w in points.windows(2) {
+        let (left, right) = (w[0], w[1]);
+        let mut sum = 0;
+        let mut count = 0;
+        for (start, end, height) in buildings.iter() {
+            if start <= left and right <= end {
+                sum += height;
+                count += 1;
+            }
+        }
+        if count > 0 {
+            stretches.push((left, right, sum / count));
+        }
+    }
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    for (left, right, average) in stretches {
+        let n = street.len();
+        if n > 0 and street[n - 1].1 == left and street[n - 1].2 == average {
+            street[n - 1] = (street[n - 1].0, right, average);
+        } else {
+            street.push((left, right, average));
+        }
+    }
+    street
+}
+
+// ---- average_heap.kara: a PriorityQueue of the buildings standing
+fn heap_average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut by_start = buildings.clone();
+    by_start.sort();
+    let mut standing: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    let mut sum = 0;
+    let mut i = 0;
+    let mut at = 0;
+    while i < by_start.len() or not standing.is_empty() {
+        let mut next = match standing.peek() {
+            Some((end, _)) => end,
+            None => by_start[i].0,
+        };
+        if i < by_start.len() and by_start[i].0 < next {
+            next = by_start[i].0;
+        }
+        if not standing.is_empty() and next > at {
+            let average = sum / standing.len();
+            let n = street.len();
+            if n > 0 and street[n - 1].1 == at and street[n - 1].2 == average {
+                street[n - 1] = (street[n - 1].0, next, average);
+            } else {
+                street.push((at, next, average));
+            }
+        }
+        at = next;
+        while let Some((end, height)) = standing.peek() {
+            if end != at {
+                break;
+            }
+            sum -= height;
+            standing.pop();
+        }
+        while i < by_start.len() and by_start[i].0 == at {
+            let (_, end, height) = by_start[i];
+            standing.push((end, height));
+            sum += height;
+            i += 1;
+        }
+    }
+    street
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    for x in 0..200 {
+        let mut sum = 0;
+        let mut count = 0;
+        for (start, end, height) in buildings.iter() {
+            if start <= x and x < end {
+                sum += height;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            continue;
+        }
+        let average = sum / count;
+        let n = street.len();
+        if n > 0 and street[n - 1].1 == x and street[n - 1].2 == average {
+            street[n - 1] = (street[n - 1].0, x + 1, average);
+        } else {
+            street.push((x, x + 1, average));
+        }
+    }
+    street
+}
+
+fn answer(arm: i64, buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    match arm {
+        0 => star_average_height_of_buildings(buildings),
+        1 => map_average_height_of_buildings(buildings),
+        2 => diff_average_height_of_buildings(buildings),
+        3 => brute_average_height_of_buildings(buildings),
+        _ => heap_average_height_of_buildings(buildings),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    buildings: Vec[(i64, i64, i64)],
+    shuffled: Vec[(i64, i64, i64)],
+    shift: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 10 + 1;
+    let span = next_random(mut seed) % 30 + 1;
+    let long = next_random(mut seed) % 10 + 1;
+    let tall = next_random(mut seed) % 6 + 1;
+    let mut buildings: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..n {
+        let start = next_random(mut seed) % span;
+        let end = start + next_random(mut seed) % long + 1;
+        buildings.push((start, end, next_random(mut seed) % tall + 1));
+    }
+    let mut shuffled = buildings.clone();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        shuffled.swap(i, j);
+    }
+    let shift = next_random(mut seed) % 50;
+    Problem { buildings, shuffled, shift }
+}
+
+fn main() {
+    let names = ["star", "map", "diff", "brute", "heap"];
+    let mut seed = 2015;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let buildings = prob.buildings.clone();
+        let truth = literal(buildings.clone());
+        check = (check * 31 + truth.len()) % 1000000007;
+        for (left, right, average) in truth.iter() {
+            check = (check * 961 + left * 31 + right + average * 7) % 1000000007;
+        }
+        let d = prob.shift;
+        let moved: Vec[(i64, i64, i64)] = buildings.iter().map(|(s, e, h)| (s + d, e + d, h)).collect();
+        let mirrored: Vec[(i64, i64, i64)] = buildings.iter().map(|(s, e, h)| (100 - e, 100 - s, h)).collect();
+        let mut twice = buildings.clone();
+        twice.extend(buildings.iter().cloned());
+        let mut got: Vec[Vec[(i64, i64, i64)]] = Vec.new();
+        for arm in 0..5 {
+            got.push(answer(arm, buildings.clone()));
+        }
+        for arm in 0..5 {
+            let a = got[arm].clone();
+            let mut same = 0;
+            for other in 0..5 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let a_moved: Vec[(i64, i64, i64)] = a.iter().map(|(l, r, v)| (l + d, r + d, v)).collect();
+            let a_mirrored: Vec[(i64, i64, i64)] = a.iter().rev().map(|(l, r, v)| (100 - r, 100 - l, v)).collect();
+            let verdicts = [
+                a == truth,
+                answer(arm, prob.shuffled.clone()) == a,
+                answer(arm, moved.clone()) == a_moved,
+                answer(arm, mirrored.clone()) == a_mirrored,
+                answer(arm, twice.clone()) == a,
+                same >= 2,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, buildings {buildings}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

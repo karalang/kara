@@ -1,0 +1,107 @@
+// LeetCode #2031: Count Subarrays With More Ones Than Zeros -- a segment
+// tree kept bottom up in one array, its leaves the prefix sums 0 ..= 2n
+// (shifted by n). Each prefix sums the leaves below its own, walking the
+// range up from both ends, then adds itself to its leaf and the nodes above
+// it. O(n log n).
+
+const MOD: i64 = 1000000007;
+
+fn subarrays_more_ones(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut width = 1;
+    while width < 2 * n + 1 {
+        width *= 2;
+    }
+    let mut tree = Vec.filled(2 * width, 0);
+    let mut prefix = n;
+    let mut total = 0;
+    let mut step = 0;
+    loop {
+        // the leaves in [0, prefix)
+        let mut lo = width;
+        let mut hi = width + prefix;
+        let mut below = 0;
+        while lo < hi {
+            if lo % 2 == 1 {
+                below += tree[lo];
+                lo += 1;
+            }
+            if hi % 2 == 1 {
+                hi -= 1;
+                below += tree[hi];
+            }
+            lo /= 2;
+            hi /= 2;
+        }
+        total = (total + below) % MOD;
+        let mut at = width + prefix;
+        while at >= 1 {
+            tree[at] += 1;
+            at /= 2;
+        }
+        if step == n {
+            break;
+        }
+        prefix += if nums[step] == 1 { 1 } else { -1 };
+        step += 1;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, answer: i64) -> i64 {
+    (check * 31 + answer) % 1000000007
+}
+
+// `n` bits, each a 1 with odds `ones` in 10
+fn draw(n: i64, ones: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums = Vec.new();
+    for _ in 0..n {
+        nums.push(if next_random(mut seed) % 10 < ones { 1 } else { 0 });
+    }
+    nums
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [0, 1, 1, 0, 1],
+        [0],
+        [1],
+        [1, 1, 1],
+        [0, 0, 0, 0],
+        [1, 0, 1, 0, 1, 0],
+        [0, 1, 0, 1, 1, 1, 0],
+        [1, 1, 0, 0, 0, 1, 1, 1, 1, 0],
+    ];
+    for nums in examples {
+        println(f"{nums} -> {subarrays_more_ones(nums)}");
+    }
+    // 3000 arrays of 1 to 20 bits, the 1s at odds of their own; the answers
+    // summed and folded into a checksum
+    let mut seed = 2031;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 20 + 1;
+        let ones = next_random(mut seed) % 11;
+        let answer = subarrays_more_ones(draw(n, ones, mut seed));
+        total += answer;
+        check = mix(check, answer);
+    }
+    println(f"3000 arrays of up to 20 bits: {total} subarrays, checksum {check}");
+    // 6 arrays of 100000 bits, the most the constraints allow; all 1s gives
+    // 5000050000 subarrays, past the modulus
+    check = 0;
+    for a in 0..6 {
+        let answer = subarrays_more_ones(draw(100000, [5, 6, 10, 4, 8, 9][a], mut seed));
+        check = mix(check, answer);
+    }
+    println(f"6 arrays of 100000 bits: checksum {check}");
+}

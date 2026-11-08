@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2030-smallest-k-length-subsequence-with-occurrences-of-a-letter/bench/subseq.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 2030 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "95006f015"
+extracted_src = "5ffbbafd"

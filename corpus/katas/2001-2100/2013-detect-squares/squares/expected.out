@@ -1,0 +1,9 @@
+count (11, 10) -> 1
+count (14, 8) -> 0
+count (11, 10) -> 2
+count (3, 10) -> 0
+count (3, 2) -> 0
+count (19, 10) -> 0
+count (1000, 0) -> 1
+200 runs of 1 to 40 operations: sum 9756, checksum 721017270
+4 runs of 400 operations: sum 8843, checksum 785596642

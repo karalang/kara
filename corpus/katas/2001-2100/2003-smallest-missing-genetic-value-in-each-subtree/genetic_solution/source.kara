@@ -1,0 +1,128 @@
+// LeetCode #2003: Smallest Missing Genetic Value in Each Subtree -- LeetCode's
+// Rust template, carried to Kāra by `karac fix`. The ★ arm's walk up from the
+// node holding 1, with a nested recursive `fn` and `usize` indices.
+
+struct Solution {}
+
+fn dfs(u: i64, children: ref Vec[Vec[i64]], nums: ref Vec[i32], seen: mut ref Vec[bool], visited: mut ref Vec[bool]) {
+    visited[u] = true;
+    if (nums[u] as i64) < seen.len() {
+        seen[nums[u] as usize] = true;
+    }
+    for c in ref children[u] {
+        if not visited[c] {
+            dfs(c, children, nums, mut seen, mut visited);
+        }
+    }
+}
+
+impl Solution {
+    pub fn smallest_missing_value_subtree(parents: Vec[i32], nums: Vec[i32]) -> Vec[i32] {
+        let n = parents.len();
+        let mut ans = Vec.filled(n, 1);
+        let one = match nums.iter().position(|x| x == 1) {
+            Some(i) => i,
+            None => return ans,
+        };
+        let mut children = Vec.filled(n, Vec.new());
+        for i in 1..n {
+            children[parents[i] as usize].push(i);
+        }
+        let mut seen = Vec.filled(n + 2, false);
+        let mut visited = Vec.filled(n, false);
+        let mut missing = 1;
+        let mut u = one as i32;
+        while u != -1 {
+            dfs(u, children, nums, mut seen, mut visited);
+            while seen[missing] {
+                missing += 1;
+            }
+            ans[u as usize] = missing as i32;
+            u = parents[u as usize];
+        }
+        ans
+    }
+}
+
+fn smallest_missing(parents: ref Vec[i64], nums: ref Vec[i64]) -> Vec[i64] {
+    let p: Vec[i32] = parents.iter().map(|x| x as i32).collect();
+    let v: Vec[i32] = nums.iter().map(|x| x as i32).collect();
+    Solution.smallest_missing_value_subtree(p, v).iter().map(|x| x as i64).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` nodes, each parent among the `width` nodes before it; the values a
+// shuffle of 1..n + extra, the first n of them.
+fn random_tree(n: i64, width: i64, extra: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64]) {
+    let mut parents = [-1];
+    for i in 1..n {
+        let lo = 0.max(i - width);
+        parents.push(lo + next_random(mut seed) % (i - lo));
+    }
+    let mut values: Vec[i64] = (1..n + extra + 1).collect();
+    for i in (1..values.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        values.swap(i, j);
+    }
+    values.truncate(n);
+    (parents, values)
+}
+
+fn mix(check: i64, answer: i64) -> i64 {
+    (check * 31 + answer) % 1000000007
+}
+
+fn fold(answer: Vec[i64]) -> (i64, i64) {
+    let mut sum = 0;
+    let mut check = 0;
+    for a in answer {
+        sum += a;
+        check = mix(check, a);
+    }
+    (sum, check)
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], Vec[i64])] = [
+        ([-1, 0, 0, 2], [1, 2, 3, 4]),
+        ([-1, 0, 1, 0, 3, 3], [5, 4, 6, 2, 1, 3]),
+        ([-1, 2, 3, 0, 2, 4, 1], [2, 3, 4, 5, 6, 7, 8]),
+        ([-1], [1]),
+        ([-1], [7]),
+        ([-1, 0, 1, 2, 3], [5, 4, 3, 2, 1]),
+        ([-1, 0, 0, 0, 0], [3, 1, 2, 5, 4]),
+    ];
+    for (parents, nums) in examples.iter() {
+        println(f"{parents} {nums} -> {smallest_missing(parents, nums)}");
+    }
+    let mut seed = 2003;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let width = next_random(mut seed) % 4 + 1;
+        let extra = next_random(mut seed) % 3;
+        let (parents, nums) = random_tree(n, width, extra, mut seed);
+        let (s, c) = fold(smallest_missing(parents, nums));
+        sum += s;
+        check = mix(check, c);
+    }
+    println(f"2000 trees of 1 to 12 nodes: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for a in 0..8 {
+        let width = [1, 2, 5, 20000][a % 4];
+        let (parents, nums) = random_tree(20000, width, a % 2, mut seed);
+        let (s, c) = fold(smallest_missing(parents, nums));
+        sum += s;
+        check = mix(check, c);
+    }
+    println(f"8 trees of 20000 nodes: sum {sum}, checksum {check}");
+}

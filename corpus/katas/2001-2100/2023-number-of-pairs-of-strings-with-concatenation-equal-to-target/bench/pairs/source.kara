@@ -1,0 +1,60 @@
+// LeetCode #2023: Number of Pairs of Strings With Concatenation Equal to
+// Target -- the ★ arm. Count each string once in a `Map`, then cut the
+// target at every point: a cut into `a` and `b` gives `count(a) *
+// count(b)` pairs, or `count(a) * (count(a) - 1)` when `a` and `b` are the
+// same string, since a string cannot pair with itself. O(n L + L^2).
+
+fn num_of_pairs(nums: Vec[String], target: String) -> i64 {
+    let mut count: Map[String, i64] = Map.new();
+    for s in nums.iter() {
+        *count.entry(s.clone()).or_insert(0) += 1;
+    }
+    let mut pairs = 0;
+    for k in 1..target.len() {
+        let a = target[0..k];
+        let b = target[k..target.len()];
+        let ca = count.get(a).unwrap_or(0);
+        if a == b {
+            pairs += ca * (ca - 1);
+        } else {
+            pairs += ca * count.get(b).unwrap_or(0);
+        }
+    }
+    pairs
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 300 problems of 100 strings, built once: each string some copies of a
+    // block of 1 to 3 digits, up to 100 digits, and the target 2 or more
+    // copies, up to 100 digits; the ★ arm on each for 20 rounds
+    let mut seed = 2023;
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    let mut targets: Vec[String] = Vec.new();
+    for _ in 0..300 {
+        let block_len = next_random(mut seed) % 3 + 1;
+        let mut block = String.new();
+        for _ in 0..block_len {
+            block.push(('1' as i64 + next_random(mut seed) % 2) as u8 as char);
+        }
+        let nums: Vec[String] = (0..100).map(|_| block.repeat(next_random(mut seed) % (100 / block_len) + 1)).collect();
+        lists.push(nums);
+        targets.push(block.repeat(next_random(mut seed) % (100 / block_len - 1) + 2));
+    }
+    let mut calls = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..20 {
+        for p in 0..300 {
+            let pairs = num_of_pairs(lists[p], targets[p]);
+            calls += 1;
+            total += pairs;
+            check = (check * 31 + pairs) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: {total} pairs, checksum {check}");
+}

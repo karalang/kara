@@ -1,0 +1,119 @@
+// LeetCode #2015: Average Height of Buildings in Each Segment -- the
+// difference-array arm. The starts and ends sorted and deduplicated give
+// the positions where anything changes; each building adds its height and a
+// count of one at its start's index and takes them off at its end's, found
+// by `binary_search`; prefix sums over the two arrays give each stretch its
+// sum and count. O(n log n).
+
+fn average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut points: Vec[i64] = Vec.new();
+    for (start, end, _) in buildings.iter() {
+        points.push(start);
+        points.push(end);
+    }
+    points.sort();
+    points.dedup();
+    let m = points.len();
+    let mut heights: Vec[i64] = Vec.filled(m, 0);
+    let mut counts: Vec[i64] = Vec.filled(m, 0);
+    for (start, end, height) in buildings.iter() {
+        let a = points.binary_search(start).unwrap();
+        let b = points.binary_search(end).unwrap();
+        heights[a] += height;
+        counts[a] += 1;
+        heights[b] -= height;
+        counts[b] -= 1;
+    }
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    let mut sum = 0;
+    let mut count = 0;
+    for i in 0..m - 1 {
+        sum += heights[i];
+        count += counts[i];
+        if count == 0 {
+            continue;
+        }
+        let average = sum / count;
+        let joins = match street.last() {
+            Some((_, right, a)) => right == points[i] and a == average,
+            None => false,
+        };
+        if joins {
+            let (left, _, _) = street.pop().unwrap();
+            street.push((left, points[i + 1], average));
+        } else {
+            street.push((points[i], points[i + 1], average));
+        }
+    }
+    street
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, street: Vec[(i64, i64, i64)]) -> i64 {
+    let mut check = (check * 31 + street.len()) % 1000000007;
+    for (left, right, average) in street.iter() {
+        check = (check * 31 + left) % 1000000007;
+        check = (check * 31 + right) % 1000000007;
+        check = (check * 31 + average) % 1000000007;
+    }
+    check
+}
+
+// `n` buildings starting below `span`, each up to `long` long and up to
+// `tall` high
+fn random_buildings(n: i64, span: i64, long: i64, tall: i64, seed: mut ref i64) -> Vec[(i64, i64, i64)] {
+    let mut buildings: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..n {
+        let start = (next_random(mut seed) * 32768 + next_random(mut seed)) % span;
+        let end = start + next_random(mut seed) % long + 1;
+        buildings.push((start, end, next_random(mut seed) % tall + 1));
+    }
+    buildings
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[(i64, i64, i64)]] = [
+        [(1, 4, 2), (3, 9, 4)],
+        [(1, 3, 2), (2, 5, 3), (2, 8, 3)],
+        [(1, 2, 1), (5, 6, 1)],
+        [(0, 100000000, 100000)],
+        [(1, 5, 4), (5, 9, 4)],
+        [(1, 5, 4), (5, 9, 5), (3, 7, 1)],
+        [(2, 6, 3), (2, 6, 5), (2, 6, 1)],
+        [(4, 8, 2), (1, 3, 7), (3, 4, 7), (8, 9, 1), (6, 10, 1)],
+    ];
+    for buildings in examples {
+        println(f"{buildings} -> {average_height_of_buildings(buildings)}");
+    }
+    let mut seed = 2015;
+    let mut segments = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let span = next_random(mut seed) % 30 + 1;
+        let long = next_random(mut seed) % 10 + 1;
+        let tall = next_random(mut seed) % 6 + 1;
+        let street = average_height_of_buildings(random_buildings(n, span, long, tall, mut seed));
+        segments += street.len();
+        check = mix(check, street);
+    }
+    println(f"2000 streets of 1 to 12 buildings: {segments} segments, checksum {check}");
+    segments = 0;
+    check = 0;
+    for a in 0..4 {
+        let span = [1000, 100000, 99000000, 30000][a];
+        let long = [50, 1000, 1000000, 30000][a];
+        let tall = [3, 100000, 100, 2][a];
+        let street = average_height_of_buildings(random_buildings(2000, span, long, tall, mut seed));
+        segments += street.len();
+        check = mix(check, street);
+    }
+    println(f"4 streets of 2000 buildings: {segments} segments, checksum {check}");
+}

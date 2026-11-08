@@ -1,0 +1,49 @@
+// LeetCode #2028: Find Missing Observations -- the ★ arm. The `n` missing
+// rolls must add up to `need = mean * (m + n) - sum(rolls)`, which `n` dice
+// can show exactly when `n <= need <= 6 n`. Then spread it evenly: every
+// roll `need / n`, and the first `need % n` of them one more. O(m + n).
+
+fn missing_rolls(rolls: Vec[i64], mean: i64, n: i64) -> Vec[i64] {
+    let m = rolls.len();
+    let need = mean * (m + n) - rolls.iter().sum();
+    if need < n or need > 6 * n {
+        return Vec.new();
+    }
+    let (q, r) = (need / n, need % n);
+    (0..n).map(|i| if i < r { q + 1 } else { q }).collect()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 lists of 100000 rolls built once, each asked for 1 to 100000
+    // missing rolls at a mean from 2 to 5; the ★ arm on each for 50 rounds
+    let mut seed = 2028;
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    let mut means: Vec[i64] = Vec.new();
+    let mut ns: Vec[i64] = Vec.new();
+    for _ in 0..20 {
+        lists.push((0..100000).map(|_| next_random(mut seed) % 6 + 1).collect());
+        means.push(next_random(mut seed) % 4 + 2);
+        ns.push(next_random(mut seed) % 100000 + 1);
+    }
+    let mut calls = 0;
+    let mut rolls = 0;
+    let mut check = 0;
+    for _ in 0..50 {
+        for a in 0..20 {
+            let got = missing_rolls(lists[a], means[a], ns[a]);
+            calls += 1;
+            rolls += got.len();
+            if not got.is_empty() {
+                check = (check * 31 + got[0] * 7 + got[got.len() - 1]) % 1000000007;
+            } else {
+                check = (check * 31 + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"{calls} calls: {rolls} rolls, checksum {check}");
+}

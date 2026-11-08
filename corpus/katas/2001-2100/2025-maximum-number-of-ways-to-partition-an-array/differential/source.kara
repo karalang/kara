@@ -1,0 +1,305 @@
+// LeetCode #2025: Maximum Number of Ways to Partition an Array -- the
+// differential.
+//
+// All six arms against the statement read literally, on 1500 problems, with
+// six properties. A problem is 2 to 12 values from -r to r, r from 1 to 4,
+// and `k` from the same range.
+//
+// P1  the answer is the statement read literally: the array as it is and
+//     with each value in turn changed to `k`, each pivot's two sums added
+//     up afresh, the most balanced pivots any of them has
+// P2  the array reversed leaves the answer
+// P3  every value and `k` negated leave the answer
+// P4  every value and `k` doubled leave the answer
+// P5  the answer is at least the unchanged array's count and at most n - 1
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: two Maps of the pivots' differences, swept
+fn star_ways_to_partition(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let total: i64 = nums.iter().sum();
+    let mut d: Vec[i64] = Vec.new();
+    let mut left = 0;
+    for p in 1..n {
+        left += nums[p - 1];
+        d.push(left - (total - left));
+    }
+    let mut right: Map[i64, i64] = Map.new();
+    for x in d.iter() {
+        *right.entry(x).or_insert(0) += 1;
+    }
+    let mut best = right.get(0).unwrap_or(0);
+    let mut seen: Map[i64, i64] = Map.new();
+    for i in 0..n {
+        // the pivots p <= i are on `seen`, the pivots p > i on `right`
+        if i >= 1 {
+            let x = d[i - 1];
+            *right.entry(x).or_insert(0) -= 1;
+            *seen.entry(x).or_insert(0) += 1;
+        }
+        let delta = k - nums[i];
+        let ways = right.get(-delta).unwrap_or(0) + seen.get(delta).unwrap_or(0);
+        best = best.max(ways);
+    }
+    best
+}
+
+// ---- partition_brute.kara: every allowed array counted afresh
+fn brute_count_pivots(nums: Vec[i64]) -> i64 {
+    let total: i64 = nums.iter().sum();
+    let mut left = 0;
+    let mut ways = 0;
+    for p in 1..nums.len() {
+        left += nums[p - 1];
+        if left * 2 == total {
+            ways += 1;
+        }
+    }
+    ways
+}
+
+fn brute_ways_to_partition(nums: Vec[i64], k: i64) -> i64 {
+    let mut best = brute_count_pivots(nums);
+    let mut changed = nums.clone();
+    for i in 0..nums.len() {
+        changed[i] = k;
+        best = best.max(brute_count_pivots(changed));
+        changed[i] = nums[i];
+    }
+    best
+}
+
+// ---- partition_passes.kara: a pass from each end into one array
+fn passes_ways_to_partition(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let total: i64 = nums.iter().sum();
+    let mut d: Vec[i64] = Vec.filled(n, 0);
+    let mut left = 0;
+    for p in 1..n {
+        left += nums[p - 1];
+        d[p] = 2 * left - total;
+    }
+    let mut ways: Vec[i64] = Vec.filled(n, 0);
+    let mut behind: Map[i64, i64] = Map.new();
+    for i in 1..n {
+        *behind.entry(d[i]).or_insert(0) += 1;
+        ways[i] = behind.get(k - nums[i]).unwrap_or(0);
+    }
+    behind.clear();
+    for i in (0..n - 1).rev() {
+        *behind.entry(d[i + 1]).or_insert(0) += 1;
+        ways[i] += behind.get(nums[i] - k).unwrap_or(0);
+    }
+    let unchanged = d.iter().skip(1).filter(|x| *x == 0).count();
+    ways.iter().fold(unchanged, |best, w| best.max(w))
+}
+
+// ---- partition_search.kara: pivots by difference, partition_point
+fn search_at_or_before(pivots: Vec[i64], i: i64) -> i64 {
+    // the pivots are in order, so those <= i come first
+    pivots.partition_point(|p| p <= i)
+}
+
+fn search_ways_to_partition(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let total: i64 = nums.iter().sum();
+    let mut by_d: Map[i64, Vec[i64]] = Map.new();
+    let mut left = 0;
+    for p in 1..n {
+        left += nums[p - 1];
+        by_d.entry(2 * left - total).or_insert(Vec.new()).push(p);
+    }
+    let empty: Vec[i64] = Vec.new();
+    let mut best = by_d.get(0).map(|ps| ps.len()).unwrap_or(0);
+    for i in 0..n {
+        let delta = k - nums[i];
+        let before = search_at_or_before(by_d.get(delta).unwrap_or(empty), i);
+        let after = by_d.get(-delta).map(|ps| ps.len() - search_at_or_before(ps, i)).unwrap_or(0);
+        best = best.max(before + after);
+    }
+    best
+}
+
+// ---- partition_sorted.kara: SortedMaps, differences worked out on the way
+fn sorted_ways_to_partition(nums: Vec[i64], k: i64) -> i64 {
+    let total: i64 = nums.iter().sum();
+    let mut right: SortedMap[i64, i64] = SortedMap.new();
+    let mut prefix = 0;
+    for x in nums.iter().take(nums.len() - 1) {
+        prefix += x;
+        *right.entry(2 * prefix - total).or_insert(0) += 1;
+    }
+    let mut best = right.get(0).unwrap_or(0);
+    let mut left_side: SortedMap[i64, i64] = SortedMap.new();
+    let mut left = 0;
+    for (i, x) in nums.iter().enumerate() {
+        if i > 0 {
+            let moved = 2 * left - total;
+            *right.entry(moved).or_insert(0) -= 1;
+            *left_side.entry(moved).or_insert(0) += 1;
+        }
+        left += x;
+        let delta = k - x;
+        best = best.max(right.get(-delta).unwrap_or(0) + left_side.get(delta).unwrap_or(0));
+    }
+    best
+}
+
+// ---- partition_solution.kara: LeetCode's Rust template after karac fix
+impl Solution {
+    pub fn ways_to_partition(nums: Vec[i32], k: i32) -> i32 {
+        let n = nums.len();
+        let mut pre = Vec.filled(n + 1, 0);
+        for i in 0..n {
+            pre[i + 1] = pre[i] + nums[i];
+        }
+        let total = pre[n];
+        let mut right: Map[i64, i32] = Map.new();
+        for p in 1..n {
+            *right.entry(2 * pre[p] - total).or_insert(0) += 1;
+        }
+        let mut ans = *right.get(0).unwrap_or(0);
+        let mut left: Map[i64, i32] = Map.new();
+        for i in 0..n {
+            if i >= 1 {
+                let d = 2 * pre[i] - total;
+                *right.get_mut(d).unwrap() -= 1;
+                *left.entry(d).or_insert(0) += 1;
+            }
+            let delta = (k - nums[i]) as i64;
+            let ways = right.get(-delta).cloned().unwrap_or(0) + left.get(delta).cloned().unwrap_or(0);
+            ans = ans.max(ways);
+        }
+        ans
+    }
+}
+
+struct Solution {}
+
+fn rust_ways_to_partition(nums: Vec[i64], k: i64) -> i64 {
+    let v: Vec[i32] = nums.iter().map(|x| x as i32).collect();
+    Solution.ways_to_partition(v, k as i32) as i64
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn balanced(nums: Vec[i64]) -> i64 {
+    let mut ways = 0;
+    for p in 1..nums.len() {
+        let mut left = 0;
+        for i in 0..p {
+            left += nums[i];
+        }
+        let mut right = 0;
+        for i in p..nums.len() {
+            right += nums[i];
+        }
+        if left == right {
+            ways += 1;
+        }
+    }
+    ways
+}
+
+fn literal(nums: Vec[i64], k: i64) -> i64 {
+    let mut best = balanced(nums);
+    for i in 0..nums.len() {
+        let mut changed = nums.clone();
+        changed[i] = k;
+        best = best.max(balanced(changed));
+    }
+    best
+}
+
+fn answer(arm: i64, nums: Vec[i64], k: i64) -> i64 {
+    match arm {
+        0 => star_ways_to_partition(nums, k),
+        1 => brute_ways_to_partition(nums, k),
+        2 => passes_ways_to_partition(nums, k),
+        3 => search_ways_to_partition(nums, k),
+        4 => sorted_ways_to_partition(nums, k),
+        _ => rust_ways_to_partition(nums, k),
+    }
+}
+
+struct Problem {
+    nums: Vec[i64],
+    k: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 11 + 2;
+    let r = next_random(mut seed) % 4 + 1;
+    let nums: Vec[i64] = (0..n).map(|_| next_random(mut seed) % (2 * r + 1) - r).collect();
+    let k = next_random(mut seed) % (2 * r + 1) - r;
+    Problem { nums: nums, k: k }
+}
+
+fn main() {
+    let names = ["star", "brute", "passes", "search", "sorted", "rust"];
+    let mut seed = 2025;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let nums = prob.nums.clone();
+        let k = prob.k;
+        let truth = literal(nums.clone(), k);
+        check = (check * 31 + truth) % 1000000007;
+        let unchanged = balanced(nums.clone());
+        let reversed: Vec[i64] = nums.iter().rev().cloned().collect();
+        let negated: Vec[i64] = nums.iter().map(|x| -x).collect();
+        let doubled: Vec[i64] = nums.iter().map(|x| 2 * x).collect();
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, nums.clone(), k));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, reversed.clone(), k) == a,
+                answer(arm, negated.clone(), -k) == a,
+                answer(arm, doubled.clone(), 2 * k) == a,
+                a >= unchanged and a <= nums.len() - 1,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {nums}, {k}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

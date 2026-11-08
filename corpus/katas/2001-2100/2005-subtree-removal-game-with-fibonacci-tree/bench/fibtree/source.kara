@@ -1,0 +1,46 @@
+// LeetCode #2005: Subtree Removal Game with Fibonacci Tree -- the ★ arm's
+// benchmark.
+// Removing a node with its subtree is cutting the edge above it, so the game
+// is Green Hackenbush on a rooted tree, and the player left with the bare
+// root loses. By the colon principle a tree is worth the nim-sum, over the
+// root's children, of each child's value plus one. order(k) has order(k - 2)
+// and order(k - 1) below its root (order(0) is no tree at all), so its value
+// comes from the two before it, and Alice wins when it is not 0.
+
+fn find_game_winner(n: i64) -> bool {
+    // value[k] is order(k)'s value; value[0] is unused
+    let mut value = Vec.filled(n + 1, 0);
+    for k in 2..=n {
+        let left = if k >= 3 { value[k - 2] + 1 } else { 0 };
+        value[k] = left ^ (value[k - 1] + 1);
+    }
+    value[n] != 0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 500000 values of n from 1 to 100 drawn once, then the ★ arm on each, 10 rounds
+    let mut seed = 2005;
+    let mut queries: Vec[i64] = Vec.new();
+    for _ in 0..500000 {
+        queries.push(next_random(mut seed) % 100 + 1);
+    }
+    let mut calls = 0;
+    let mut alice = 0;
+    let mut check = 0;
+    for _ in 0..10 {
+        for n in queries.iter() {
+            let wins = find_game_winner(n);
+            calls += 1;
+            if wins {
+                alice += 1;
+            }
+            check = (check * 31 + if wins { n } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: Alice wins {alice}, checksum {check}");
+}

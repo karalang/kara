@@ -1,0 +1,393 @@
+// LeetCode #2003: Smallest Missing Genetic Value in Each Subtree -- the
+// differential.
+//
+// Five arms against the statement read literally, on 1500 problems, with six
+// properties. The sixth arm, LeetCode's Rust template, does not check yet
+// (B-2026-11-07-3) and joins when it does.
+//
+// P1  each answer is the statement read literally: the node's subtree
+//     collected by its own DFS, then the smallest positive value missing
+// P2  the nodes renumbered (the root kept at 0) renumber the answers
+// P3  a parent's answer is at least each child's
+// P4  a node off the chain from the node holding 1 to the root answers 1
+// P5  the root answers the smallest positive value missing from all of nums
+// P6  each arm agrees with at least two of the other four on every node
+
+// ---- genetic.kara: the ★ arm: marks up the chain from the node holding 1, recursively
+fn mark_star(u: i64, children: Vec[Vec[i64]], nums: Vec[i64], seen: mut ref Vec[bool], visited: mut ref Vec[bool]) {
+    visited[u] = true;
+    if nums[u] < seen.len() {
+        seen[nums[u]] = true;
+    }
+    for c in children[u] {
+        if not visited[c] {
+            mark_star(c, children, nums, mut seen, mut visited);
+        }
+    }
+}
+
+fn star_arm(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut answer = Vec.filled(n, 1);
+    let Some(one) = nums.iter().position(|v| v == 1) else {
+        return answer;
+    };
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 1..n {
+        children[parents[i]].push(i);
+    }
+    let mut seen = Vec.filled(n + 2, false);
+    let mut visited = Vec.filled(n, false);
+    let mut missing = 1;
+    let mut u = one;
+    while u != -1 {
+        mark_star(u, children, nums, mut seen, mut visited);
+        while seen[missing] {
+            missing += 1;
+        }
+        answer[u] = missing;
+        u = parents[u];
+    }
+    answer
+}
+
+// ---- genetic_stack.kara: the same walk with a stack and successors
+fn stack_arm(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut answer = Vec.filled(n, 1);
+    let Some(one) = nums.iter().position(|v| v == 1) else {
+        return answer;
+    };
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 1..n {
+        children[parents[i]].push(i);
+    }
+    let chain: Vec[i64] = successors(Some(one), |u| if parents[u] == -1 { None } else { Some(parents[u]) }).collect();
+    let mut seen = Vec.filled(n + 2, false);
+    let mut visited = Vec.filled(n, false);
+    let mut missing = 1;
+    for u in chain {
+        let mut stack = [u];
+        while let Some(v) = stack.pop() {
+            if visited[v] {
+                continue;
+            }
+            visited[v] = true;
+            if nums[v] <= n + 1 {
+                seen[nums[v]] = true;
+            }
+            stack.extend(children[v].iter().filter(|c| not visited[c]));
+        }
+        while seen[missing] {
+            missing += 1;
+        }
+        answer[u] = missing;
+    }
+    answer
+}
+
+// ---- genetic_merge.kara: sets merged smaller into larger
+fn merge_arm(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 1..n {
+        children[parents[i]].push(i);
+    }
+    let mut order = [0];
+    let mut head = 0;
+    while head < order.len() {
+        let u = order[head];
+        head += 1;
+        for c in children[u] {
+            order.push(c);
+        }
+    }
+    let mut sets: Vec[Option[Set[i64]]] = Vec.new();
+    for i in 0..n {
+        let mut own = Set.new();
+        own.insert(nums[i]);
+        sets.push(Some(own));
+    }
+    let mut answer = Vec.filled(n, 1);
+    for u in order.iter().rev() {
+        let mut best = 1;
+        let mut mine = sets[u].take().unwrap();
+        for c in children[u] {
+            best = best.max(answer[c]);
+            let mut theirs = sets[c].take().unwrap();
+            if theirs.len() > mine.len() {
+                swap(mut mine, mut theirs);
+            }
+            for v in theirs {
+                mine.insert(v);
+            }
+        }
+        while mine.contains(best) {
+            best += 1;
+        }
+        answer[u] = best;
+        sets[u] = Some(mine);
+    }
+    answer
+}
+
+// ---- genetic_euler.kara: preorder runs, no marks
+fn euler_arm(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut answer = Vec.filled(n, 1);
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 1..n {
+        children[parents[i]].push(i);
+    }
+    let mut tin = Vec.filled(n, 0);
+    let mut tout = Vec.filled(n, 0);
+    let mut clock = 0;
+    // (node, next child index)
+    let mut stack: Vec[(i64, i64)] = [(0, 0)];
+    tin[0] = 0;
+    while stack.len() > 0 {
+        let top = stack.len() - 1;
+        let (u, k) = stack[top];
+        if k < children[u].len() {
+            stack[top] = (u, k + 1);
+            let c = children[u][k];
+            clock += 1;
+            tin[c] = clock;
+            stack.push((c, 0));
+        } else {
+            tout[u] = clock;
+            stack.pop();
+        }
+    }
+    let mut at = Vec.filled(n + 2, -1);
+    let mut one = -1;
+    for i in 0..n {
+        if nums[i] <= n + 1 {
+            at[nums[i]] = tin[i];
+        }
+        if nums[i] == 1 {
+            one = i;
+        }
+    }
+    let mut missing = 1;
+    let mut u = one;
+    while u != -1 {
+        while at[missing] >= tin[u] and at[missing] <= tout[u] {
+            missing += 1;
+        }
+        answer[u] = missing;
+        u = parents[u];
+    }
+    answer
+}
+
+// ---- genetic_bfs.kara: BFS from each ancestor skipping the child it came from
+fn bfs_arm(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut answer = Vec.filled(n, 1);
+    let mut one = -1;
+    for i in 0..n {
+        if nums[i] == 1 {
+            one = i;
+        }
+    }
+    if one == -1 {
+        return answer;
+    }
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 1..n {
+        children[parents[i]].push(i);
+    }
+    let mut present: Set[i64] = Set.new();
+    let mut missing = 1;
+    let mut from = -1;
+    let mut u = one;
+    while u != -1 {
+        let mut queue: VecDeque[i64] = VecDeque.new();
+        queue.push_back(u);
+        while let Some(v) = queue.pop_front() {
+            present.insert(nums[v]);
+            for c in children[v] {
+                if c != from {
+                    queue.push_back(c);
+                }
+            }
+        }
+        while present.contains(missing) {
+            missing += 1;
+        }
+        answer[u] = missing;
+        from = u;
+        u = parents[u];
+    }
+    answer
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for u in 0..n {
+        // u's subtree: every node whose chain of parents reaches u
+        let mut values: Set[i64] = Set.new();
+        for v in 0..n {
+            let mut w = v;
+            while w != -1 and w != u {
+                w = parents[w];
+            }
+            if w == u {
+                values.insert(nums[v]);
+            }
+        }
+        let mut m = 1;
+        while values.contains(m) {
+            m += 1;
+        }
+        answer.push(m);
+    }
+    answer
+}
+
+fn answer(arm: i64, parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    match arm {
+        0 => star_arm(parents, nums),
+        1 => stack_arm(parents, nums),
+        2 => merge_arm(parents, nums),
+        3 => euler_arm(parents, nums),
+        _ => bfs_arm(parents, nums),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    parents: Vec[i64],
+    nums: Vec[i64],
+    perm: Vec[i64],
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 14 + 1;
+    let width = next_random(mut seed) % 5 + 1;
+    let extra = next_random(mut seed) % 3;
+    let mut parents = [-1];
+    for i in 1..n {
+        let lo = 0.max(i - width);
+        parents.push(lo + next_random(mut seed) % (i - lo));
+    }
+    let mut values: Vec[i64] = (1..n + extra + 1).collect();
+    for i in (1..values.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        values.swap(i, j);
+    }
+    values.truncate(n);
+    // a renumbering that keeps the root at 0
+    let mut perm: Vec[i64] = (0..n).collect();
+    for i in (2..n).rev() {
+        let j = 1 + next_random(mut seed) % i;
+        perm.swap(i, j);
+    }
+    Problem { parents, nums: values, perm }
+}
+
+fn main() {
+    let names = ["star", "stack", "merge", "euler", "bfs"];
+    let mut seed = 2003;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let n = prob.parents.len();
+        let truth = literal(prob.parents.clone(), prob.nums.clone());
+        for t in truth.iter() {
+            check = (check * 31 + t) % 1000000007;
+        }
+        let mut moved_parents = Vec.filled(n, -1);
+        let mut moved_nums = Vec.filled(n, 0);
+        for i in 0..n {
+            moved_parents[prob.perm[i]] = if i == 0 { -1 } else { prob.perm[prob.parents[i]] };
+            moved_nums[prob.perm[i]] = prob.nums[i];
+        }
+        let mut chain = Vec.filled(n, false);
+        let mut u = -1;
+        for i in 0..n {
+            if prob.nums[i] == 1 {
+                u = i;
+            }
+        }
+        while u != -1 {
+            chain[u] = true;
+            u = prob.parents[u];
+        }
+        let mut global = 1;
+        while prob.nums.contains(global) {
+            global += 1;
+        }
+        let mut got: Vec[Vec[i64]] = Vec.new();
+        for arm in 0..5 {
+            got.push(answer(arm, prob.parents.clone(), prob.nums.clone()));
+        }
+        for arm in 0..5 {
+            let a = got[arm].clone();
+            let moved = answer(arm, moved_parents.clone(), moved_nums.clone());
+            let mut renumbered = true;
+            let mut monotone = true;
+            let mut off_chain = true;
+            for i in 0..n {
+                if moved[prob.perm[i]] != a[i] {
+                    renumbered = false;
+                }
+                if i > 0 and a[prob.parents[i]] < a[i] {
+                    monotone = false;
+                }
+                if not chain[i] and a[i] != 1 {
+                    off_chain = false;
+                }
+            }
+            let mut agree = true;
+            for i in 0..n {
+                let mut same = 0;
+                for other in 0..5 {
+                    if other != arm and got[other][i] == a[i] {
+                        same += 1;
+                    }
+                }
+                if same < 2 {
+                    agree = false;
+                }
+            }
+            let verdicts = [a == truth, renumbered, monotone, off_chain, a[0] == global, agree];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{k + 1} fails, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

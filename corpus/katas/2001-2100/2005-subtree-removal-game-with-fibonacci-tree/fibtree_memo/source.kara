@@ -1,0 +1,58 @@
+// LeetCode #2005: Subtree Removal Game with Fibonacci Tree -- the memo arm.
+// The ★ arm's colon principle top down: order(k)'s value asked for
+// recursively, each answer kept in a `Vec[Option[i64]]` so that order(k)
+// is worked out once however many trees above it contain it. No tree at
+// all, order(0), is worth -1, so that "its value plus one" adds nothing.
+
+fn value(k: i64, memo: mut ref Vec[Option[i64]]) -> i64 {
+    if k == 0 {
+        return -1;
+    }
+    if k == 1 {
+        return 0;
+    }
+    if let Some(v) = memo[k] {
+        return v;
+    }
+    let v = (value(k - 2, mut memo) + 1) ^ (value(k - 1, mut memo) + 1);
+    memo[k] = Some(v);
+    v
+}
+
+fn find_game_winner(n: i64) -> bool {
+    let mut memo: Vec[Option[i64]] = Vec.filled(n + 1, None);
+    value(n, mut memo) != 0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples
+    for n in [3, 1, 2] {
+        println(f"n = {n} -> {find_game_winner(n)}");
+    }
+    // every n the constraints allow, A where Alice wins and B where Bob does
+    let mut line = String.new();
+    for n in 1..=100 {
+        line.push(if find_game_winner(n) { 'A' } else { 'B' });
+    }
+    println(f"{line}");
+    // random queries
+    let mut seed = 2005;
+    let mut alice = 0;
+    let mut check = 0;
+    for _ in 0..50000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let wins = find_game_winner(n);
+        if wins {
+            alice += 1;
+        }
+        check = (check * 31 + if wins { n } else { 0 }) % 1000000007;
+    }
+    println(f"50000 queries: Alice wins {alice}, checksum {check}");
+}

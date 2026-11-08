@@ -1,0 +1,10 @@
+leet 3 e 1 -> eet
+leetcode 4 e 2 -> ecde
+bb 2 b 2 -> bb
+aaabbbcccddd 3 b 2 -> abb
+zyxwvutsrqponmlkjihgfedcba 5 z 1 -> zdcba
+bacbacbac 4 c 3 -> accc
+abcabcabc 9 a 3 -> abcabcabc
+mississippi 4 s 3 -> isss
+3000 problems of up to 20 letters: 10650 letters kept, checksum 7823863
+6 problems of up to 50000 letters: 4347 letters kept, checksum 720247314

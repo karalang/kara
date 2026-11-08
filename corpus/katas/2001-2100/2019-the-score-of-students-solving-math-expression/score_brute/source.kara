@@ -1,0 +1,117 @@
+// LeetCode #2019: The Score of Students Solving Math Expression -- every
+// order of operations tried by plain recursion, with no memo: the values of
+// a run are its left part's joined to its right part's, over every operator
+// that could be applied last, each run worked out afresh wherever it occurs.
+// The right answer is the same recursion with `*` bound tighter: the
+// expression split at its last `+`, or else at its last `*`. O(3^n * 1000)
+// or so.
+
+fn all_values(digits: Vec[i64], ops: Vec[char]) -> Vec[i64] {
+    if digits.len() == 1 {
+        return [digits[0]];
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..ops.len() {
+        let left = all_values(digits[0..k + 1].to_vec(), ops[0..k].to_vec());
+        let right = all_values(digits[k + 1..].to_vec(), ops[k + 1..].to_vec());
+        for a in left.iter() {
+            for b in right.iter() {
+                let v = if ops[k] == '+' { a + b } else { a * b };
+                if v <= 1000 and not out.contains(v) {
+                    out.push(v);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn evaluate(digits: Vec[i64], ops: Vec[char]) -> i64 {
+    if digits.len() == 1 {
+        return digits[0];
+    }
+    let k = match ops.iter().rposition(|op| op == '+') {
+        Some(k) => k,
+        None => ops.len() - 1,
+    };
+    let left = evaluate(digits[0..k + 1].to_vec(), ops[0..k].to_vec());
+    let right = evaluate(digits[k + 1..].to_vec(), ops[k + 1..].to_vec());
+    if ops[k] == '+' { left + right } else { left * right }
+}
+
+fn score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    let chars: Vec[char] = s.chars().collect();
+    let digits: Vec[i64] = (0..chars.len()).step_by(2).map(|i| chars[i] as i64 - '0' as i64).collect();
+    let ops: Vec[char] = (1..chars.len()).step_by(2).map(|i| chars[i]).collect();
+    let correct = evaluate(digits, ops);
+    let possible = all_values(digits, ops);
+    answers.iter().map(|answer| if answer == correct { 5 } else if possible.contains(answer) { 2 } else { 0 }).sum()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` digits, each from `0..=top`, joined by `*` with odds `times` in 10
+// and `+` otherwise
+fn random_expression(count: i64, top: i64, times: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for i in 0..count {
+        if i > 0 {
+            s.push(if next_random(mut seed) % 10 < times { '*' } else { '+' });
+        }
+        s.push(('0' as i64 + next_random(mut seed) % (top + 1)) as u8 as char);
+    }
+    s
+}
+
+// `count` answers, each from `0..=top`
+fn random_answers(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..count).map(|_| next_random(mut seed) % (top + 1)).collect()
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(String, Vec[i64])] = [
+        ("7+3*1*2", [20, 13, 42]),
+        ("3+5*2", [13, 0, 10, 13, 13, 16, 16]),
+        ("6+0*1", [12, 9, 6, 4, 8, 6]),
+        ("1+2*3+4", [11, 13, 15, 21, 15, 0]),
+        ("9", [9, 0, 1000]),
+        ("9*9*9*9+1*0", [0, 1, 6561, 729, 6562]),
+        ("2*3+4*5", [26, 50, 70, 46, 9]),
+    ];
+    for (s, answers) in examples {
+        println(f"\"{s}\", {answers} -> {score_of_students(s, answers)}");
+    }
+    let mut seed = 2019;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1500 {
+        let count = next_random(mut seed) % 6 + 1;
+        let top = next_random(mut seed) % 9 + 1;
+        let times = next_random(mut seed) % 11;
+        let s = random_expression(count, top, times, mut seed);
+        let answers = random_answers(next_random(mut seed) % 8 + 1, next_random(mut seed) % 25 + 1, mut seed);
+        let points = score_of_students(s, answers);
+        total += points;
+        check = (check * 31 + points) % 1000000007;
+    }
+    println(f"1500 expressions of up to 6 digits: {total} points, checksum {check}");
+    total = 0;
+    check = 0;
+    for a in 0..6 {
+        let count = [11, 11, 10, 11, 9, 11][a];
+        let top = [9, 3, 5, 2, 9, 1][a];
+        let times = [5, 3, 7, 6, 4, 10][a];
+        let s = random_expression(count, top, times, mut seed);
+        let answers = random_answers(10000, [1000, 300, 1000, 200, 1000, 20][a], mut seed);
+        let points = score_of_students(s, answers);
+        total += points;
+        check = (check * 31 + points) % 1000000007;
+    }
+    println(f"6 expressions of up to 11 digits, 10000 answers each: {total} points, checksum {check}");
+}

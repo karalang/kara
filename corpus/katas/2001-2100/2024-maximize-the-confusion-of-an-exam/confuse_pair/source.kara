@@ -1,0 +1,86 @@
+// LeetCode #2024: Maximize the Confusion of an Exam -- one window for both
+// answers: it counts its `T`s and `F`s and gives up its left end while
+// even the smaller count is more than `k`, since then neither answer can
+// fill it. O(n).
+
+fn max_consecutive_answers(answer_key: String, k: i64) -> i64 {
+    let key: Vec[char] = answer_key.chars().collect();
+    let mut (t, f) = (0, 0);
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..key.len() {
+        if key[right] == 'T' {
+            t += 1;
+        } else {
+            f += 1;
+        }
+        while t.min(f) > k {
+            if key[left] == 'T' {
+                t -= 1;
+            } else {
+                f -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(t + f);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn key_of(seed: mut ref i64, len: i64, t_in_100: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(if next_random(mut seed) % 100 < t_in_100 { 'T' } else { 'F' });
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(String, i64)] = [
+        ("TTFF", 2),
+        ("TFFT", 1),
+        ("TTFTTFTT", 1),
+        ("T", 1),
+        ("TF", 1),
+        ("FFFTFFF", 1),
+        ("TFTFTFTF", 2),
+        ("TTTTFFFF", 3),
+    ];
+    for (key, k) in examples {
+        println(f"{key}, {k} -> {max_consecutive_answers(key, k)}");
+    }
+    // 3000 keys of 1 to 30 answers, each with its own share of `T`, and k
+    // from 1 to the length
+    let mut seed = 2024;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let len = next_random(mut seed) % 30 + 1;
+        let share = next_random(mut seed) % 101;
+        let key = key_of(mut seed, len, share);
+        let k = next_random(mut seed) % len + 1;
+        let best = max_consecutive_answers(key, k);
+        total += best;
+        check = (check * 31 + best) % 1000000007;
+    }
+    println(f"3000 keys of up to 30 answers: total {total}, checksum {check}");
+    // 6 keys of 1500 answers, with 5 to 95 in 100 `T`s and k from 1 to 300
+    total = 0;
+    check = 0;
+    for a in 0..6 {
+        let key = key_of(mut seed, 1500, [50, 5, 95, 30, 70, 50][a]);
+        let k = [1, 3, 10, 40, 100, 300][a];
+        let best = max_consecutive_answers(key, k);
+        total += best;
+        check = (check * 31 + best) % 1000000007;
+    }
+    println(f"6 keys of 1500 answers: total {total}, checksum {check}");
+}

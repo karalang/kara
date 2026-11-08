@@ -1,0 +1,88 @@
+// LeetCode #2003: Smallest Missing Genetic Value in Each Subtree -- the ★ arm's benchmark.
+// Only the ancestors of the node holding 1 can miss anything above 1. Walk
+// from that node to the root, marking each new subtree's values once (a
+// recursive DFS that skips nodes already visited), and move the smallest
+// missing value up as the marks grow.
+
+fn mark(u: i64, children: Vec[Vec[i64]], nums: Vec[i64], seen: mut ref Vec[bool], visited: mut ref Vec[bool]) {
+    visited[u] = true;
+    if nums[u] < seen.len() {
+        seen[nums[u]] = true;
+    }
+    for c in children[u] {
+        if not visited[c] {
+            mark(c, children, nums, mut seen, mut visited);
+        }
+    }
+}
+
+fn smallest_missing(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut answer = Vec.filled(n, 1);
+    let Some(one) = nums.iter().position(|v| v == 1) else {
+        return answer;
+    };
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 1..n {
+        children[parents[i]].push(i);
+    }
+    let mut seen = Vec.filled(n + 2, false);
+    let mut visited = Vec.filled(n, false);
+    let mut missing = 1;
+    let mut u = one;
+    while u != -1 {
+        mark(u, children, nums, mut seen, mut visited);
+        while seen[missing] {
+            missing += 1;
+        }
+        answer[u] = missing;
+        u = parents[u];
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` nodes, each parent among the `width` nodes before it; the values a
+// shuffle of 1..n + extra, the first n of them.
+fn random_tree(n: i64, width: i64, extra: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64]) {
+    let mut parents = [-1];
+    for i in 1..n {
+        let lo = 0.max(i - width);
+        parents.push(lo + next_random(mut seed) % (i - lo));
+    }
+    let mut values: Vec[i64] = (1..n + extra + 1).collect();
+    for i in (1..values.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        values.swap(i, j);
+    }
+    values.truncate(n);
+    (parents, values)
+}
+
+fn main() {
+    // 40 trees of 20000 nodes built once, then the ★ arm on each, 25 rounds
+    let mut seed = 2003;
+    let mut trees: Vec[(Vec[i64], Vec[i64])] = Vec.new();
+    for a in 0..40 {
+        let width = [2, 5, 50, 20000][a % 4];
+        trees.push(random_tree(20000, width, a % 2, mut seed));
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..25 {
+        for (parents, nums) in trees.iter() {
+            let answer = smallest_missing(parents, nums);
+            calls += 1;
+            for a in answer {
+                sum += a;
+                check = (check * 31 + a) % 1000000007;
+            }
+        }
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

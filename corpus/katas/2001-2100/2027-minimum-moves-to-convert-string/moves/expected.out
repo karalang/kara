@@ -1,0 +1,10 @@
+XXX -> 1
+XXOX -> 2
+OOOO -> 0
+XOXOXO -> 2
+OXOOX -> 2
+OXX -> 1
+XOO -> 1
+OOXOOOXXXXOX -> 3
+3000 strings of up to 30 places: 11454 moves, checksum 867607358
+6 strings of 1000 places: 1189 moves, checksum 477169849

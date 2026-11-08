@@ -1,0 +1,74 @@
+// LeetCode #2015: Average Height of Buildings in Each Segment -- the ★
+// arm's benchmark. Each building is two events; the events sorted, a sweep
+// applies every event at a position and describes the stretch up to the
+// next by the running sum over the running count, joining a stretch to the
+// last segment when it continues it with the same average.
+
+fn average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let mut events: Vec[(i64, i64, i64)] = Vec.new();
+    for (start, end, height) in buildings.iter() {
+        events.push((start, height, 1));
+        events.push((end, -height, -1));
+    }
+    events.sort();
+    let mut street: Vec[(i64, i64, i64)] = Vec.new();
+    let mut sum = 0;
+    let mut count = 0;
+    let mut i = 0;
+    while i < events.len() {
+        let at = events[i].0;
+        while i < events.len() and events[i].0 == at {
+            sum += events[i].1;
+            count += events[i].2;
+            i += 1;
+        }
+        if count == 0 {
+            continue;
+        }
+        let next = events[i].0;
+        let average = sum / count;
+        let n = street.len();
+        if n > 0 and street[n - 1].1 == at and street[n - 1].2 == average {
+            street[n - 1].1 = next;
+        } else {
+            street.push((at, next, average));
+        }
+    }
+    street
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 60 streets of 10000 buildings, positions up to 1000000, lengths and
+    // heights growing with the street, built once; the ★ arm on each for
+    // 5 rounds
+    let mut seed = 2015;
+    let mut streets: Vec[Vec[(i64, i64, i64)]] = Vec.new();
+    for s in 0..60 {
+        let mut buildings: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..10000 {
+            let start = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000;
+            let end = start + next_random(mut seed) % (100 * (s + 1)) + 1;
+            buildings.push((start, end, next_random(mut seed) % (s + 2) + 1));
+        }
+        streets.push(buildings);
+    }
+    let mut calls = 0;
+    let mut segments = 0;
+    let mut check = 0;
+    for _ in 0..5 {
+        for buildings in streets.iter() {
+            let street = average_height_of_buildings(buildings);
+            calls += 1;
+            segments += street.len();
+            for (left, right, average) in street.iter() {
+                check = (check * 31 + left + right * 7 + average * 13) % 1000000007;
+            }
+        }
+    }
+    println(f"{calls} calls: {segments} segments, checksum {check}");
+}

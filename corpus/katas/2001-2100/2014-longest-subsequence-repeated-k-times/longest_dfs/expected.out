@@ -1,0 +1,10 @@
+"letsleetcode", k = 2 -> "let"
+"bb", k = 2 -> "b"
+"ab", k = 2 -> ""
+"bbabbabbbbabaababab", k = 3 -> "bbbb"
+"zzzzzzzzzzzzzzz", k = 2 -> "zzzzzzz"
+"abcabcabcabc", k = 4 -> "abc"
+"cbacbacba", k = 3 -> "cba"
+"aabbaabb", k = 3 -> "b"
+2000 strings of 2 to 31 letters: total length 5691, checksum 628811794
+6 strings of 2000 letters: total length 18, checksum 95493118

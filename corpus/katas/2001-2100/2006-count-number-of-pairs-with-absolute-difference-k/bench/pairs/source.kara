@@ -1,0 +1,50 @@
+// LeetCode #2006: Count Number of Pairs With Absolute Difference K -- the ★
+// arm's benchmark. A count of each value seen so far in an array of 101;
+// each value pairs with every earlier one `k` below it and `k` above it.
+
+fn count_k_difference(nums: Vec[i64], k: i64) -> i64 {
+    let mut seen = Vec.filled(101, 0);
+    let mut pairs = 0;
+    for x in nums {
+        if x - k >= 1 {
+            pairs += seen[x - k];
+        }
+        if x + k <= 100 {
+            pairs += seen[x + k];
+        }
+        seen[x] += 1;
+    }
+    pairs
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20000 arrays of 200 values up to 100 built once, then the ★ arm on
+    // each for 25 rounds, k moving with the round
+    let mut seed = 2006;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20000 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..200 {
+            nums.push(next_random(mut seed) % 100 + 1);
+        }
+        arrays.push(nums);
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for r in 0..25 {
+        for a in 0..arrays.len() {
+            let k = (r * 37 + a) % 99 + 1;
+            let answer = count_k_difference(arrays[a], k);
+            calls += 1;
+            sum += answer;
+            check = (check * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

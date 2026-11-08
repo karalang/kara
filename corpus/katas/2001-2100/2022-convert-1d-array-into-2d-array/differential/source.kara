@@ -1,0 +1,210 @@
+// LeetCode #2022: Convert 1D Array Into 2D Array -- the differential.
+//
+// All six arms against the statement read literally, on 1500 problems, with
+// six properties. A problem is an array of 1 to 24 values up to 1-1000 and a
+// shape of 1 to 8 rows, the columns with even odds the ones that fit, when
+// some do, or 1 to 8.
+//
+// P1  the answer is the statement read literally: value `k` goes to row
+//     `k / n`, column `k % n`, and no grid when the array does not hold
+//     exactly `m * n` values
+// P2  a grid, its rows read one after another, is the array
+// P3  every value doubled doubles every cell
+// P4  the array reversed reverses the rows and each row
+// P5  the shape `(n, m)` gives a grid exactly when `(m, n)` does
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: each row a slice of the array
+fn star_construct_2d_array(original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    if original.len() != m * n {
+        return Vec.new();
+    }
+    (0..m).map(|i| original[i * n..(i + 1) * n].to_vec()).collect()
+}
+
+// ---- convert_index.kara: a grid of zeros filled cell by cell
+fn index_construct_2d_array(original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    if original.len() != m * n {
+        return Vec.new();
+    }
+    let mut grid: Vec[Vec[i64]] = Vec.filled(m, Vec.filled(n, 0));
+    for i in 0..m {
+        for j in 0..n {
+            grid[i][j] = original[i * n + j];
+        }
+    }
+    grid
+}
+
+// ---- convert_chunks.kara: chunks(n), each copied out
+fn chunks_construct_2d_array(original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    if original.len() != m * n {
+        return Vec.new();
+    }
+    original.chunks(n).iter().map(|row| row.to_vec()).collect()
+}
+
+// ---- convert_push.kara: one walk, rows pushed as they fill
+fn push_construct_2d_array(original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut row: Vec[i64] = Vec.new();
+    for v in original.iter() {
+        row.push(v);
+        if row.len() == n {
+            grid.push(row);
+            row = Vec.new();
+        }
+    }
+    if grid.len() != m or not row.is_empty() {
+        return Vec.new();
+    }
+    grid
+}
+
+// ---- convert_iter.kara: one iterator shared by the rows
+fn iter_construct_2d_array(original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    if original.iter().count() != m * n {
+        return Vec.new();
+    }
+    let mut values = original.iter();
+    (0..m).map(|_| values.by_ref().take(n).cloned().collect()).collect()
+}
+
+// ---- convert_solution.kara: LeetCode's Rust template after karac fix
+struct RustSolution {}
+
+impl RustSolution {
+    pub fn construct2_d_array(original: Vec[i32], m: i32, n: i32) -> Vec[Vec[i32]] {
+        if original.len() != (m * n) as i64 {
+            return Vec.new();
+        }
+        original.chunks(n as i64).iter().map(|row| row.to_vec()).collect()
+    }
+}
+
+fn rust_construct_2d_array(original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    let v: Vec[i32] = original.iter().map(|x| x as i32).collect();
+    RustSolution.construct2_d_array(v, m as i32, n as i32)
+        .into_iter()
+        .map(|row| row.into_iter().map(|x| x as i64).collect())
+        .collect()
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    if original.len() != m * n {
+        return grid;
+    }
+    for _ in 0..m {
+        grid.push(Vec.new());
+    }
+    for k in 0..original.len() {
+        grid[k / n].push(original[k]);
+    }
+    grid
+}
+
+fn answer(arm: i64, original: Vec[i64], m: i64, n: i64) -> Vec[Vec[i64]] {
+    match arm {
+        0 => star_construct_2d_array(original, m, n),
+        1 => index_construct_2d_array(original, m, n),
+        2 => chunks_construct_2d_array(original, m, n),
+        3 => push_construct_2d_array(original, m, n),
+        4 => iter_construct_2d_array(original, m, n),
+        _ => rust_construct_2d_array(original, m, n),
+    }
+}
+
+struct Problem {
+    original: Vec[i64],
+    m: i64,
+    n: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let len = next_random(mut seed) % 24 + 1;
+    let top = next_random(mut seed) % 1000 + 1;
+    let original: Vec[i64] = (0..len).map(|_| next_random(mut seed) % top + 1).collect();
+    let m = next_random(mut seed) % 8 + 1;
+    let fit = next_random(mut seed) % 2 == 0;
+    let other = next_random(mut seed) % 8 + 1;
+    let n = if fit and len % m == 0 { len / m } else { other };
+    Problem { original: original, m: m, n: n }
+}
+
+fn main() {
+    let names = ["star", "index", "chunks", "push", "iter", "rust"];
+    let mut seed = 2022;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let original = prob.original.clone();
+        let (m, n) = (prob.m, prob.n);
+        let truth = literal(original.clone(), m, n);
+        for row in truth.iter() {
+            for v in row.iter() {
+                check = (check * 31 + v) % 1000000007;
+            }
+        }
+        check = (check * 31 + truth.len()) % 1000000007;
+        let doubled: Vec[i64] = original.iter().map(|v| 2 * v).collect();
+        let reversed: Vec[i64] = original.iter().rev().cloned().collect();
+        let mut got: Vec[Vec[Vec[i64]]] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, original.clone(), m, n));
+        }
+        for arm in 0..6 {
+            let a = got[arm].clone();
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let flat: Vec[i64] = a.iter().flat_map(|row| row.iter().cloned()).collect();
+            let want_doubled: Vec[Vec[i64]] = a.iter().map(|row| row.iter().map(|v| 2 * v).collect()).collect();
+            let want_reversed: Vec[Vec[i64]] = a.iter().rev().map(|row| row.iter().rev().cloned().collect()).collect();
+            let verdicts = [
+                a == truth,
+                a.is_empty() or flat == original,
+                answer(arm, doubled.clone(), m, n) == want_doubled,
+                answer(arm, reversed.clone(), m, n) == want_reversed,
+                answer(arm, original.clone(), n, m).is_empty() == a.is_empty(),
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {original}, {m}, {n}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

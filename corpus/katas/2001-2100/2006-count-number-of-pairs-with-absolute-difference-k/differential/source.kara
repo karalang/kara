@@ -1,0 +1,243 @@
+// LeetCode #2006: Count Number of Pairs With Absolute Difference K -- the
+// differential.
+//
+// All six arms against the statement read literally, on 2000 problems, with
+// six properties.
+//
+// P1  the answer is the statement read literally: every pair i < j whose
+//     values differ by exactly k
+// P2  the values shuffled leave the answer
+// P3  every value raised by the same amount (staying within 1..=100) leaves
+//     the answer
+// P4  every value x turned into 101 - x leaves the answer
+// P5  one more value y appended adds the values already there at y - k and
+//     at y + k
+// P6  each arm agrees with at least three of the other five
+
+// ---- pairs.kara: the ★ arm: a count of each value seen so far
+fn star_arm(nums: Vec[i64], k: i64) -> i64 {
+    let mut seen = Vec.filled(101, 0);
+    let mut pairs = 0;
+    for x in nums {
+        if x - k >= 1 {
+            pairs += seen[x - k];
+        }
+        if x + k <= 100 {
+            pairs += seen[x + k];
+        }
+        seen[x] += 1;
+    }
+    pairs
+}
+
+// ---- pairs_brute.kara: every pair tried
+fn brute_arm(nums: Vec[i64], k: i64) -> i64 {
+    let mut pairs = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            if (nums[i] - nums[j]).abs() == k {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+
+// ---- pairs_map.kara: a Map of counts, each pair from its smaller end
+fn map_arm(nums: Vec[i64], k: i64) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    for x in nums {
+        *count.entry(x).or_insert(0) += 1;
+    }
+    let mut pairs = 0;
+    for (v, c) in count.iter() {
+        if let Some(above) = count.get(v + k) {
+            pairs += c * above;
+        }
+    }
+    pairs
+}
+
+// ---- pairs_sorted.kara: sorted, two pointers bounding the run k above
+fn sorted_arm(nums: Vec[i64], k: i64) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut pairs = 0;
+    let mut lo = 0;
+    let mut hi = 0;
+    for i in 0..n {
+        let target = sorted[i] + k;
+        while lo < n and sorted[lo] < target {
+            lo += 1;
+        }
+        while hi < n and sorted[hi] <= target {
+            hi += 1;
+        }
+        pairs += hi - lo;
+    }
+    pairs
+}
+
+// ---- pairs_iter.kara: enumerate, skip, filter, count, sum
+fn iter_arm(nums: Vec[i64], k: i64) -> i64 {
+    nums.iter()
+        .enumerate()
+        .map(|(i, x)| nums.iter().skip(i + 1).filter(|y| (x - y).abs() == k).count())
+        .sum()
+}
+
+// ---- pairs_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn count_k_difference(nums: Vec[i32], k: i32) -> i32 {
+        let mut cnt = [0i32; 101];
+        let mut ans: i32 = 0;
+        let k = k as usize;
+        for x in ref nums {
+            let x = x as usize;
+            if x > k {
+                ans += cnt[x - k];
+            }
+            if x + k <= 100 {
+                ans += cnt[x + k];
+            }
+            cnt[x] += 1;
+        }
+        ans
+    }
+}
+
+fn rust_arm(nums: Vec[i64], k: i64) -> i64 {
+    Solution.count_k_difference(nums.iter().map(|x| x as i32).collect(), k as i32) as i64
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(nums: Vec[i64], k: i64) -> i64 {
+    let mut pairs = 0;
+    for j in 0..nums.len() {
+        for i in 0..j {
+            let d = if nums[i] > nums[j] { nums[i] - nums[j] } else { nums[j] - nums[i] };
+            if d == k {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+
+struct Problem {
+    nums: Vec[i64],
+    k: i64,
+    perm: Vec[i64],
+    shift: i64,
+    extra: i64,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 25 + 1;
+    let top = if next_random(mut seed) % 4 == 0 { 100 } else { next_random(mut seed) % 12 + 1 };
+    let k = if top == 100 { next_random(mut seed) % 99 + 1 } else { next_random(mut seed) % 6 + 1 };
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % top + 1);
+    }
+    let mut perm: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        perm.swap(i, j);
+    }
+    let high = nums.iter().max().unwrap();
+    let shift = next_random(mut seed) % (101 - high);
+    let extra = next_random(mut seed) % top + 1;
+    Problem { nums, k, perm, shift, extra }
+}
+
+fn answer(arm: i64, nums: Vec[i64], k: i64) -> i64 {
+    match arm {
+        0 => star_arm(nums, k),
+        1 => brute_arm(nums, k),
+        2 => map_arm(nums, k),
+        3 => sorted_arm(nums, k),
+        4 => iter_arm(nums, k),
+        _ => rust_arm(nums, k),
+    }
+}
+
+fn main() {
+    let names = ["star", "brute", "map", "sorted", "iter", "rust"];
+    let mut seed = 2006;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..2000 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let nums = prob.nums.clone();
+        let k = prob.k;
+        let truth = literal(nums.clone(), k);
+        check = (check * 31 + truth) % 1000000007;
+        let shuffled: Vec[i64] = prob.perm.iter().map(|i| nums[i]).collect();
+        let shifted: Vec[i64] = nums.iter().map(|x| x + prob.shift).collect();
+        let reflected: Vec[i64] = nums.iter().map(|x| 101 - x).collect();
+        let mut longer = nums.clone();
+        longer.push(prob.extra);
+        let mut added = 0;
+        for x in nums.iter() {
+            if x == prob.extra - k or x == prob.extra + k {
+                added += 1;
+            }
+        }
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, nums.clone(), k));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, shuffled.clone(), k) == a,
+                answer(arm, shifted.clone(), k) == a,
+                answer(arm, reflected.clone(), k) == a,
+                answer(arm, longer.clone(), k) == a + added,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, nums {nums} k = {k}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"2000 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

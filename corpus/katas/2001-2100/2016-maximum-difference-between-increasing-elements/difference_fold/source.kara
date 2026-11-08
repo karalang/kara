@@ -1,0 +1,77 @@
+// LeetCode #2016: Maximum Difference Between Increasing Elements -- the fold
+// arm. The ★ arm's pass as a `fold` whose state is the pair (smallest so
+// far, best so far). O(n).
+
+fn maximum_difference(nums: Vec[i64]) -> i64 {
+    let (_, best) = nums.iter().skip(1).fold((nums[0], -1), |(smallest, best), x| {
+        let best = if x > smallest { best.max(x - smallest) } else { best };
+        (smallest.min(x), best)
+    });
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, answer: i64) -> i64 {
+    (check * 31 + answer + 1) % 1000000007
+}
+
+// `n` values from 1 to `top`, each a step down from the last with odds
+// `fall` in 10
+fn random_values(n: i64, top: i64, fall: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i > 0 and next_random(mut seed) % 10 < fall {
+            let step = next_random(mut seed) % 3;
+            nums.push((nums[i - 1] - step).max(1));
+        } else {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1);
+        }
+    }
+    nums
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [7, 1, 5, 4],
+        [9, 4, 3, 2],
+        [1, 5, 2, 10],
+        [5, 5],
+        [1, 2],
+        [1000000000, 1],
+        [3, 3, 3, 4],
+        [6, 1, 6, 1, 6],
+        [2, 9, 1, 8, 1, 7],
+    ];
+    for nums in examples {
+        println(f"{nums} -> {maximum_difference(nums)}");
+    }
+    let mut seed = 2016;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 11 + 2;
+        let top = next_random(mut seed) % 20 + 1;
+        let fall = next_random(mut seed) % 11;
+        let answer = maximum_difference(random_values(n, top, fall, mut seed));
+        sum += answer;
+        check = mix(check, answer);
+    }
+    println(f"3000 arrays of 2 to 12 values: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for a in 0..6 {
+        let top = [100, 1000000000, 1000, 1000000000, 50, 7][a];
+        let fall = [5, 9, 10, 8, 3, 0][a];
+        let answer = maximum_difference(random_values(1000, top, fall, mut seed));
+        sum += answer;
+        check = mix(check, answer);
+    }
+    println(f"6 arrays of 1000 values: sum {sum}, checksum {check}");
+}

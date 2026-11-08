@@ -1,0 +1,223 @@
+// LeetCode #2011: Final Value of Variable After Performing Operations --
+// the differential.
+//
+// Six arms against the statement read literally, on 1500 problems, with six
+// properties.
+//
+// P1  the answer is the statement read literally: each operation with its
+//     `X` taken out leaves its operator, `++` adding 1 and `--` taking 1
+// P2  the operations shuffled leave the answer
+// P3  each operation written in its other form (`X++` as `++X`, `--X` as
+//     `X--`) leaves the answer
+// P4  every `+` turned into `-` and every `-` into `+` negates the answer
+// P5  one more operation appended moves the answer by that operation's step
+// P6  each arm agrees with at least three of the other five
+
+// ---- final_value.kara: the ★ arm: a match on each operation
+fn star_arm(operations: Vec[String]) -> i64 {
+    let mut x = 0;
+    for op in operations {
+        match op.as_str() {
+            "++X" | "X++" => x += 1,
+            "--X" | "X--" => x -= 1,
+            _ => {}
+        }
+    }
+    x
+}
+
+// ---- final_value_count.kara: the operations with a `+` counted
+fn count_arm(operations: Vec[String]) -> i64 {
+    let ups = operations.iter().filter(|op| op.contains("+")).count();
+    ups - (operations.len() - ups)
+}
+
+// ---- final_value_middle.kara: the middle character read
+fn middle_arm(operations: Vec[String]) -> i64 {
+    let mut x = 0;
+    for op in operations {
+        if op.chars().nth(1) == Some('+') {
+            x += 1;
+        } else {
+            x -= 1;
+        }
+    }
+    x
+}
+
+// ---- final_value_fold.kara: each operation mapped to its step and summed
+fn fold_arm(operations: Vec[String]) -> i64 {
+    operations
+        .iter()
+        .map(|op| if op.starts_with("+") or op.ends_with("+") { 1 } else { -1 })
+        .sum()
+}
+
+// ---- final_value_map.kara: a Map from each operation to its step
+fn table_arm(operations: Vec[String]) -> i64 {
+    let mut step: Map[String, i64] = Map.new();
+    step.insert("++X", 1);
+    step.insert("X++", 1);
+    step.insert("--X", -1);
+    step.insert("X--", -1);
+    let mut x = 0;
+    for op in operations {
+        x += step[op];
+    }
+    x
+}
+
+// ---- final_value_solution.kara: LeetCode's Rust template, carried by karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn final_value_after_operations(operations: Vec[String]) -> i32 {
+        operations.iter().fold(0, |x, op| match op.as_str() {
+            "++X" | "X++" => x + 1,
+            _ => x - 1,
+        })
+    }
+}
+
+fn solution_arm(operations: Vec[String]) -> i64 {
+    Solution.final_value_after_operations(operations.clone())
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(operations: Vec[String]) -> i64 {
+    let mut x = 0;
+    for op in operations {
+        let operator = op.replace("X", "");
+        if operator == "++" {
+            x += 1;
+        }
+        if operator == "--" {
+            x -= 1;
+        }
+    }
+    x
+}
+
+// the same step written the other way round the `X`
+fn other_form(op: String) -> String {
+    if op.starts_with("X") {
+        let operator = op.replace("X", "");
+        f"{operator}X"
+    } else {
+        let operator = op.replace("X", "");
+        f"X{operator}"
+    }
+}
+
+fn negated(op: String) -> String {
+    op.chars().map(|c| if c == '+' { '-' } else if c == '-' { '+' } else { c }).collect()
+}
+
+fn step(op: String) -> i64 {
+    if op.contains("+") { 1 } else { -1 }
+}
+
+struct Problem {
+    operations: Vec[String],
+    perm: Vec[i64],
+    extra: String,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let forms = ["++X", "X++", "--X", "X--"];
+    let n = next_random(mut seed) % 20 + 1;
+    let up = next_random(mut seed) % 11;
+    let mut operations: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let down = if next_random(mut seed) % 10 < up { 0 } else { 2 };
+        operations.push(forms[down + next_random(mut seed) % 2].to_string());
+    }
+    let mut perm: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        perm.swap(i, j);
+    }
+    let extra = forms[next_random(mut seed) % 4].to_string();
+    Problem { operations, perm, extra }
+}
+
+fn answer(arm: i64, operations: Vec[String]) -> i64 {
+    match arm {
+        0 => star_arm(operations),
+        1 => count_arm(operations),
+        2 => middle_arm(operations),
+        3 => fold_arm(operations),
+        4 => table_arm(operations),
+        _ => solution_arm(operations),
+    }
+}
+
+fn main() {
+    let names = ["star", "count", "middle", "fold", "table", "solution"];
+    let mut seed = 2011;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let operations = prob.operations.clone();
+        let truth = literal(operations.clone());
+        check = (check * 31 + truth + 100) % 1000000007;
+        let shuffled: Vec[String] = prob.perm.iter().map(|i| operations[i].clone()).collect();
+        let flipped: Vec[String] = operations.iter().map(|op| other_form(op.clone())).collect();
+        let turned: Vec[String] = operations.iter().map(|op| negated(op.clone())).collect();
+        let mut longer = operations.clone();
+        longer.push(prob.extra.clone());
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, operations.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, shuffled.clone()) == a,
+                answer(arm, flipped.clone()) == a,
+                answer(arm, turned.clone()) == -a,
+                answer(arm, longer.clone()) == a + step(prob.extra.clone()),
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, operations {operations}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

@@ -1,0 +1,361 @@
+// LeetCode #2031: Count Subarrays With More Ones Than Zeros -- differential.
+// The six arms against the statement read literally: every subarray
+// tried, its 1s and 0s counted one by one. 1500 arrays of 1 to 12 bits,
+// the 1s at odds of their own, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the array reversed leaves the answer
+// P3  the answer, the answer for every bit flipped and the subarrays with
+//     as many 1s as 0s (counted literally) make up all n (n + 1) / 2
+// P4  with a 1 appended, the answer grows by the suffixes holding at least
+//     as many 1s as 0s, the empty one included (counted literally)
+// P5  the first 0 turned into a 1 raises the answer
+// P6  each arm agrees with at least three of the other five
+
+const MOD: i64 = 1000000007;
+
+// ---- the ★ arm: the prefix sums counted in an array, the count below moved a step at a time
+fn star_subarrays(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    // seen[n + p]: the prefixes so far whose sum is p
+    let mut seen = Vec.filled(2 * n + 1, 0);
+    let mut prefix = n;
+    seen[prefix] = 1;
+    let mut below = 0;
+    let mut total = 0;
+    for x in nums {
+        if x == 1 {
+            below += seen[prefix];
+            prefix += 1;
+        } else {
+            prefix -= 1;
+            below -= seen[prefix];
+        }
+        total = (total + below) % MOD;
+        seen[prefix] += 1;
+    }
+    total
+}
+
+// ---- subarrays_map.kara: the same counts in a Map
+fn map_subarrays(nums: Vec[i64]) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    let mut prefix = 0;
+    seen.insert(0, 1);
+    let mut below = 0;
+    let mut total = 0;
+    for x in nums {
+        if x == 1 {
+            below += seen.get(prefix).unwrap_or(0);
+            prefix += 1;
+        } else {
+            prefix -= 1;
+            below -= seen.get(prefix).unwrap_or(0);
+        }
+        total = (total + below) % MOD;
+        *seen.entry(prefix).or_insert(0) += 1;
+    }
+    total
+}
+
+// ---- subarrays_fenwick.kara: a Fenwick tree over the prefix sums
+struct Fenwick {
+    tree: Vec[i64],
+}
+
+impl Fenwick {
+    fn new(size: i64) -> Fenwick {
+        Fenwick { tree: Vec.filled(size + 1, 0) }
+    }
+
+    fn add(mut ref self, at: i64) {
+        let mut i = at;
+        while i < self.tree.len() {
+            self.tree[i] += 1;
+            i += i & -i;
+        }
+    }
+
+    // how many added at 1 ..= at
+    fn upto(self, at: i64) -> i64 {
+        let mut i = at;
+        let mut sum = 0;
+        while i > 0 {
+            sum += self.tree[i];
+            i -= i & -i;
+        }
+        sum
+    }
+}
+
+fn fenwick_subarrays(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut tree = Fenwick.new(2 * n + 1);
+    let mut prefix = n + 1;
+    tree.add(prefix);
+    let mut total = 0;
+    for x in nums {
+        prefix += if x == 1 { 1 } else { -1 };
+        total = (total + tree.upto(prefix - 1)) % MOD;
+        tree.add(prefix);
+    }
+    total
+}
+
+// ---- subarrays_merge.kara: rising pairs of prefix sums counted by merge sort
+// sorts `p[lo..hi]` and returns the rising pairs inside it
+fn merge_rising(p: mut ref Vec[i64], buf: mut ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    if hi - lo < 2 {
+        return 0;
+    }
+    let mid = (lo + hi) / 2;
+    let mut count = merge_rising(mut p, mut buf, lo, mid) + merge_rising(mut p, mut buf, mid, hi);
+    let mut i = lo;
+    let mut j = mid;
+    let mut k = lo;
+    while i < mid or j < hi {
+        if j == hi or (i < mid and p[i] < p[j]) {
+            buf[k] = p[i];
+            i += 1;
+        } else {
+            count += i - lo;
+            buf[k] = p[j];
+            j += 1;
+        }
+        k += 1;
+    }
+    for t in lo..hi {
+        p[t] = buf[t];
+    }
+    count
+}
+
+fn merge_subarrays(nums: Vec[i64]) -> i64 {
+    let mut p = merge_prefixes(nums);
+    let mut buf = Vec.filled(p.len(), 0);
+    let hi = p.len();
+    merge_rising(mut p, mut buf, 0, hi) % MOD
+}
+
+fn merge_prefixes(nums: Vec[i64]) -> Vec[i64] {
+    let mut p = Vec.new();
+    let mut sum = 0;
+    p.push(sum);
+    for x in nums {
+        sum += 2 * x - 1;
+        p.push(sum);
+    }
+    p
+}
+
+// ---- subarrays_segtree.kara: a segment tree kept bottom up
+fn segtree_subarrays(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut width = 1;
+    while width < 2 * n + 1 {
+        width *= 2;
+    }
+    let mut tree = Vec.filled(2 * width, 0);
+    let mut prefix = n;
+    let mut total = 0;
+    let mut step = 0;
+    loop {
+        // the leaves in [0, prefix)
+        let mut lo = width;
+        let mut hi = width + prefix;
+        let mut below = 0;
+        while lo < hi {
+            if lo % 2 == 1 {
+                below += tree[lo];
+                lo += 1;
+            }
+            if hi % 2 == 1 {
+                hi -= 1;
+                below += tree[hi];
+            }
+            lo /= 2;
+            hi /= 2;
+        }
+        total = (total + below) % MOD;
+        let mut at = width + prefix;
+        while at >= 1 {
+            tree[at] += 1;
+            at /= 2;
+        }
+        if step == n {
+            break;
+        }
+        prefix += if nums[step] == 1 { 1 } else { -1 };
+        step += 1;
+    }
+    total
+}
+
+// ---- subarrays_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn subarrays_with_more_ones_than_zeroes(nums: Vec[i32]) -> i32 {
+        const MOD: i64 = 1_000_000_007;
+        let n = nums.len();
+        let mut cnt = Vec.filled(2 * n + 1, 0);
+        let mut prefix = n;
+        cnt[prefix] = 1;
+        let mut ending: i64 = 0;
+        let mut ans: i64 = 0;
+        for x in nums.iter() {
+            if x == 1 {
+                ending += cnt[prefix];
+                prefix += 1;
+            } else {
+                prefix -= 1;
+                ending -= cnt[prefix];
+            }
+            ans = (ans + ending) % MOD;
+            cnt[prefix] += 1;
+        }
+        ans as i32
+    }
+}
+
+fn rust_subarrays(nums: Vec[i64]) -> i64 {
+    Solution.subarrays_with_more_ones_than_zeroes(nums.iter().map(|x| x as i32).collect()) as i64
+}
+
+// ---- the statement read literally
+
+fn literal(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut ones = 0;
+            let mut zeros = 0;
+            for t in i..j + 1 {
+                if nums[t] == 1 {
+                    ones += 1;
+                } else {
+                    zeros += 1;
+                }
+            }
+            if ones > zeros {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn balanced(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i..n {
+            let ones = nums[i..j + 1].iter().filter(|x| x == 1).count();
+            if 2 * ones == j + 1 - i {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// the suffixes of `nums`, the empty one included, holding at least as many
+// 1s as 0s
+fn leaning(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n + 1 {
+        let ones = nums[i..n].iter().filter(|x| x == 1).count();
+        if 2 * ones >= n - i {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_subarrays(nums),
+        1 => map_subarrays(nums),
+        2 => fenwick_subarrays(nums),
+        3 => merge_subarrays(nums),
+        4 => segtree_subarrays(nums),
+        _ => rust_subarrays(nums),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "map", "fenwick", "merge", "segtree", "rust"];
+    let mut seed = 2031;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..1500 {
+        let n = next_random(mut seed) % 12 + 1;
+        let ones = next_random(mut seed) % 11;
+        let mut nums = Vec.new();
+        for _ in 0..n {
+            nums.push(if next_random(mut seed) % 10 < ones { 1 } else { 0 });
+        }
+        arrays.push(nums);
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..arrays.len() {
+        let nums = arrays[p].clone();
+        let n = nums.len();
+        let truth = literal(nums.clone());
+        check = (check * 31 + truth) % MOD;
+        let reversed: Vec[i64] = nums.iter().rev().cloned().collect();
+        let flipped: Vec[i64] = nums.iter().map(|x| 1 - x).collect();
+        let mut longer = nums.clone();
+        longer.push(1);
+        let mut raised = nums.clone();
+        let first_zero = nums.iter().position(|x| x == 0);
+        if let Some(z) = first_zero {
+            raised[z] = 1;
+        }
+        let even = balanced(nums.clone());
+        let lean = leaning(nums.clone());
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, nums.clone())).collect();
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let p2 = answer(arm, reversed.clone()) == a;
+            let p3 = a + answer(arm, flipped.clone()) + even == n * (n + 1) / 2;
+            let p4 = answer(arm, longer.clone()) == a + lean;
+            let p5 = first_zero.is_none() or answer(arm, raised.clone()) > a;
+            let verdicts = [a == truth, p2, p3, p4, p5, same >= 3];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"array {p} arm {names[arm]}: P{q + 1} fails, {nums}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 arrays: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

@@ -1,0 +1,52 @@
+// LeetCode #2008: Maximum Earnings From Taxi -- the ★ arm's benchmark.
+// `best[p]` is the most earned on reaching point `p`: the best at `p - 1`,
+// or a ride ending at `p` on top of the best at its start. The rides are
+// grouped by where they end.
+
+fn max_taxi_earnings(n: i64, rides: Vec[(i64, i64, i64)]) -> i64 {
+    let mut ending: Vec[Vec[(i64, i64)]] = Vec.filled(n + 1, Vec.new());
+    for (start, end, tip) in rides {
+        ending[end].push((start, end - start + tip));
+    }
+    let mut best = Vec.filled(n + 1, 0);
+    for p in 2..=n {
+        best[p] = best[p - 1];
+        for (start, earned) in ending[p] {
+            best[p] = best[p].max(best[start] + earned);
+        }
+    }
+    best[n]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 80 roads of 10000 points and 5000 rides built once, then the ★ arm
+    // on each for 25 rounds, the road's empty tail shortened by the round
+    let mut seed = 2008;
+    let mut roads: Vec[Vec[(i64, i64, i64)]] = Vec.new();
+    for _ in 0..80 {
+        let mut rides: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..5000 {
+            let length = next_random(mut seed) % 100 + 1;
+            let start = next_random(mut seed) % (9900 - length) + 1;
+            rides.push((start, start + length, next_random(mut seed) % 1001));
+        }
+        roads.push(rides);
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for r in 0..25 {
+        for a in 0..roads.len() {
+            let answer = max_taxi_earnings(10000 - r * 4, roads[a]);
+            calls += 1;
+            sum += answer;
+            check = (check * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

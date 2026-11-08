@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2018-check-if-word-can-be-placed-in-crossword/bench/crossword.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 2018 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "95006f015"
+extracted_src = "e858d927"

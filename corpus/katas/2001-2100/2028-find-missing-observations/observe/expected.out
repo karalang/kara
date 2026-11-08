@@ -1,0 +1,10 @@
+[3, 2, 4, 3], 4, 2 -> 2 rolls adding to 12
+[1, 5, 6], 3, 4 -> 4 rolls adding to 9
+[1, 2, 3, 4], 6, 4 -> none
+[6, 6], 6, 3 -> 3 rolls adding to 18
+[1], 1, 1 -> 1 rolls adding to 1
+[6, 6, 6], 1, 2 -> none
+[4, 5, 6, 2, 3, 6, 5, 4, 6, 4, 5, 1, 6, 3, 1, 4, 5, 5, 3, 2, 3, 5, 3, 2, 1, 5, 4, 3, 5, 1, 5], 4, 40 -> 40 rolls adding to 167
+[2], 4, 1 -> 1 rolls adding to 6
+3000 problems of up to 20 rolls: 1271 answered, checksum 834743445
+5 problems of 100000 rolls: 2 answered, checksum 451147452

@@ -1,0 +1,134 @@
+// LeetCode #2014: Longest Subsequence Repeated k Times -- LeetCode's Rust
+// template, carried to Kāra by `karac fix`. The ★ arm's breadth-first
+// search over byte strings.
+
+
+struct Solution {}
+
+impl Solution {
+    pub fn longest_subsequence_repeated_k(s: String, k: i32) -> String {
+        let s = s.bytes();
+        let mut cnt = [0; 26];
+        for c in s {
+            cnt[(c - b'a') as usize] += 1;
+        }
+        let cand: Vec[u8] = (0..26u8).filter(|i| cnt[i as usize] >= k).map(|i| b'a' + i).collect();
+        let mut q: VecDeque[Vec[u8]] = VecDeque.new();
+        q.push_back(Vec.new());
+        let mut ans: Vec[u8] = Vec.new();
+        while let Some(cur) = q.pop_front() {
+            for c in ref cand {
+                let mut nxt = cur.clone();
+                nxt.push(c);
+                if Solution.check(s, nxt, k) {
+                    ans = nxt.clone();
+                    q.push_back(nxt);
+                }
+            }
+        }
+        String.from_utf8(ans).unwrap()
+    }
+
+    fn check(s: Slice[u8], t: Slice[u8], k: i32) -> bool {
+        let mut (i, cnt) = (0, 0);
+        for c in s {
+            if c == t[i] {
+                i += 1;
+                if i == t.len() {
+                    cnt += 1;
+                    if cnt == k {
+                        return true;
+                    }
+                    i = 0;
+                }
+            }
+        }
+        false
+    }
+}
+
+fn longest_subsequence_repeated_k(s: Str, k: i64) -> String {
+    Solution.longest_subsequence_repeated_k(s.to_string(), k as i32)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, answer: String) -> i64 {
+    let mut check = (check * 31 + answer.len()) % 1000000007;
+    for c in answer.chars() {
+        check = (check * 31 + (c as i64)) % 1000000007;
+    }
+    check
+}
+
+// a string of `n` letters from the first `letters` of the alphabet: a
+// pattern of up to `width` letters written out again and again, each letter
+// of it kept with odds `keep` in 10, with a stray letter after it with odds
+// `noise` in 10
+fn random_text(n: i64, letters: i64, width: i64, keep: i64, noise: i64, seed: mut ref i64) -> String {
+    let mut pattern: Vec[char] = Vec.new();
+    for _ in 0..next_random(mut seed) % width + 1 {
+        pattern.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+    }
+    let mut text = String.new();
+    let mut at = 0;
+    while text.len() < n {
+        if next_random(mut seed) % 10 < keep {
+            text.push(pattern[at]);
+        }
+        if text.len() < n and next_random(mut seed) % 10 < noise {
+            text.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+        }
+        at = (at + 1) % pattern.len();
+    }
+    text
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        ("letsleetcode", 2),
+        ("bb", 2),
+        ("ab", 2),
+        ("bbabbabbbbabaababab", 3),
+        ("zzzzzzzzzzzzzzz", 2),
+        ("abcabcabcabc", 4),
+        ("cbacbacba", 3),
+        ("aabbaabb", 3),
+    ];
+    for (s, k) in examples {
+        println(f"\"{s}\", k = {k} -> \"{longest_subsequence_repeated_k(s, k)}\"");
+    }
+    let mut seed = 2014;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let k = next_random(mut seed) % 5 + 2;
+        let n = next_random(mut seed) % (8 * k - 2).min(30) + 2;
+        let letters = next_random(mut seed) % 5 + 1;
+        let width = next_random(mut seed) % 4 + 1;
+        let keep = next_random(mut seed) % 5 + 6;
+        let noise = next_random(mut seed) % 5;
+        let s = random_text(n, letters, width, keep, noise, mut seed);
+        let answer = longest_subsequence_repeated_k(s, k);
+        total += answer.len();
+        check = mix(check, answer);
+    }
+    println(f"2000 strings of 2 to 31 letters: total length {total}, checksum {check}");
+    total = 0;
+    check = 0;
+    for a in 0..6 {
+        let k = [251, 260, 300, 400, 251, 285][a];
+        let letters = [3, 8, 26, 2, 5, 12][a];
+        let s = random_text(2000, letters, 7, 9, 2, mut seed);
+        let answer = longest_subsequence_repeated_k(s, k);
+        total += answer.len();
+        check = mix(check, answer);
+    }
+    println(f"6 strings of 2000 letters: total length {total}, checksum {check}");
+}

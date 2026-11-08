@@ -1,0 +1,80 @@
+// LeetCode #2025: Maximum Number of Ways to Partition an Array -- the ★
+// sweep with the two sides in `SortedMap`s, and the pivots' `d` worked out
+// as the sweep reaches them rather than stored: the right side starts with
+// every pivot, and pivot `i` moves to the left side when `i` does. O(n
+// log n).
+
+fn ways_to_partition(nums: Vec[i64], k: i64) -> i64 {
+    let total: i64 = nums.iter().sum();
+    let mut right: SortedMap[i64, i64] = SortedMap.new();
+    let mut prefix = 0;
+    for x in nums.iter().take(nums.len() - 1) {
+        prefix += x;
+        *right.entry(2 * prefix - total).or_insert(0) += 1;
+    }
+    let mut best = right.get(0).unwrap_or(0);
+    let mut left_side: SortedMap[i64, i64] = SortedMap.new();
+    let mut left = 0;
+    for (i, x) in nums.iter().enumerate() {
+        if i > 0 {
+            let moved = 2 * left - total;
+            *right.entry(moved).or_insert(0) -= 1;
+            *left_side.entry(moved).or_insert(0) += 1;
+        }
+        left += x;
+        let delta = k - x;
+        best = best.max(right.get(-delta).unwrap_or(0) + left_side.get(delta).unwrap_or(0));
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], i64)] = [
+        ([2, -1, 2], 3),
+        ([0, 0, 0], 1),
+        ([22, 4, -25, -20, -15, 15, -16, 7, 19, -10, 0, -13, -14], -33),
+        ([1, 1], 5),
+        ([1, 2], 1),
+        ([0, 0, 0, 0, 0], 0),
+        ([3, -3, 3, -3], 0),
+        ([5, 5, 5, 5], -5),
+    ];
+    for (nums, k) in examples {
+        println(f"{nums}, {k} -> {ways_to_partition(nums, k)}");
+    }
+    // 3000 arrays of 2 to 20 values from -r to r, r from 1 to 5, and k in
+    // the same range
+    let mut seed = 2025;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 19 + 2;
+        let r = next_random(mut seed) % 5 + 1;
+        let nums: Vec[i64] = (0..n).map(|_| next_random(mut seed) % (2 * r + 1) - r).collect();
+        let k = next_random(mut seed) % (2 * r + 1) - r;
+        let best = ways_to_partition(nums, k);
+        total += best;
+        check = (check * 31 + best) % 1000000007;
+    }
+    println(f"3000 arrays of up to 20 values: total {total}, checksum {check}");
+    // 5 arrays of 1500 values from -r to r, r from 1 to 100000
+    total = 0;
+    check = 0;
+    for a in 0..5 {
+        let r = [1, 2, 10, 1000, 100000][a];
+        let nums: Vec[i64] = (0..1500).map(|_| next_random(mut seed) % (2 * r + 1) - r).collect();
+        let k = next_random(mut seed) % (2 * r + 1) - r;
+        let best = ways_to_partition(nums, k);
+        total += best;
+        check = (check * 31 + best) % 1000000007;
+    }
+    println(f"5 arrays of 1500 values: total {total}, checksum {check}");
+}

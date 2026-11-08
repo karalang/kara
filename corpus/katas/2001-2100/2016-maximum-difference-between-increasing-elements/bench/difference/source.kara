@@ -1,0 +1,52 @@
+// LeetCode #2016: Maximum Difference Between Increasing Elements -- the ★
+// arm's benchmark. One pass keeps the smallest value so far; each later
+// value larger than it is a candidate difference.
+
+fn maximum_difference(nums: Vec[i64]) -> i64 {
+    let mut smallest = nums[0];
+    let mut best = -1;
+    for x in nums.iter().skip(1) {
+        if x > smallest {
+            best = best.max(x - smallest);
+        }
+        smallest = smallest.min(x);
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 1000 arrays of 10000 values up to 1000000000, each falling with odds of
+    // its own, built once; the ★ arm on each for 10 rounds
+    let mut seed = 2016;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for a in 0..1000 {
+        let fall = a % 11;
+        let mut nums: Vec[i64] = Vec.new();
+        for i in 0..10000 {
+            if i > 0 and next_random(mut seed) % 10 < fall {
+                let step = next_random(mut seed) % 1000;
+                nums.push((nums[i - 1] - step).max(1));
+            } else {
+                nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000 + 1);
+            }
+        }
+        arrays.push(nums);
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..10 {
+        for nums in arrays.iter() {
+            let answer = maximum_difference(nums);
+            calls += 1;
+            sum += answer;
+            check = (check * 31 + answer + 1) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

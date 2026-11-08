@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/2001-2100/2018-check-if-word-can-be-placed-in-crossword/crossword_solution.kara"
+dedup_of = []
+tags = []
+class = "e"
+bucket = "check-refuses:E0200"
+classified_with = "95006f015"
+extracted_src = "c8a5be01"

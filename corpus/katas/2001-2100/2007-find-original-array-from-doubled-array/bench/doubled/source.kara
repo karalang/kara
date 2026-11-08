@@ -1,0 +1,82 @@
+// LeetCode #2007: Find Original Array From Doubled Array -- the ★ arm's
+// benchmark. The smallest value left cannot be anyone's double, so it is an
+// original and takes one copy of twice itself. A count of each value, walked
+// upward, pairs every copy of `v` with a copy of `2v` at once; zeros pair
+// among themselves, so their count must be even.
+
+fn find_original_array(changed: Vec[i64]) -> Vec[i64] {
+    if changed.len() % 2 == 1 {
+        return Vec.new();
+    }
+    let top = changed.iter().max().unwrap();
+    let mut count = Vec.filled(top + 1, 0);
+    for x in changed {
+        count[x] += 1;
+    }
+    if count[0] % 2 == 1 {
+        return Vec.new();
+    }
+    let mut original: Vec[i64] = Vec.new();
+    for _ in 0..count[0] / 2 {
+        original.push(0);
+    }
+    for v in 1..=top {
+        let c = count[v];
+        if c == 0 {
+            continue;
+        }
+        if 2 * v > top or count[2 * v] < c {
+            return Vec.new();
+        }
+        count[2 * v] -= c;
+        for _ in 0..c {
+            original.push(v);
+        }
+    }
+    original
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 2000 doubled arrays of 1000 values up to 10000 built once, one in
+    // three with a value nudged, then the ★ arm on each for 25 rounds
+    let mut seed = 2007;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..2000 {
+        let mut changed: Vec[i64] = Vec.new();
+        for _ in 0..500 {
+            let x = next_random(mut seed) % 5001;
+            changed.push(x);
+            changed.push(2 * x);
+        }
+        for i in (1..changed.len()).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            changed.swap(i, j);
+        }
+        if next_random(mut seed) % 3 == 0 {
+            let i = next_random(mut seed) % changed.len();
+            changed[i] += 1;
+        }
+        arrays.push(changed);
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..25 {
+        for a in 0..arrays.len() {
+            let original = find_original_array(arrays[a]);
+            let mut total = original.len();
+            for v in original {
+                total += v;
+            }
+            calls += 1;
+            sum += total;
+            check = (check * 31 + total) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

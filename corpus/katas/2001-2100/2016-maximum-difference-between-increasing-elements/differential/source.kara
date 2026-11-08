@@ -1,0 +1,226 @@
+// LeetCode #2016: Maximum Difference Between Increasing Elements -- the
+// differential.
+//
+// Six arms against the statement read literally, on 2000 problems, with six
+// properties. A problem is 2 to 12 values from 1 to 20. The sixth arm is
+// LeetCode's Rust template as `karac fix` carried it.
+//
+// P1  the answer is the statement read literally: every difference
+//     `nums[j] - nums[i]` with `i < j` and `nums[i] < nums[j]` listed, the
+//     largest of them, or -1 when there is none
+// P2  every value raised by the same amount leaves the answer
+// P3  the values reversed, each `v` turned into `21 - v`, leave the answer
+// P4  every value doubled doubles the answer, -1 staying -1
+// P5  a value above all the others appended makes the answer that value
+//     less the smallest of the others
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: the smallest so far
+fn star_maximum_difference(nums: Vec[i64]) -> i64 {
+    let mut smallest = nums[0];
+    let mut best = -1;
+    for x in nums.iter().skip(1) {
+        if x > smallest {
+            best = best.max(x - smallest);
+        }
+        smallest = smallest.min(x);
+    }
+    best
+}
+
+// ---- difference_brute.kara: every pair
+fn brute_maximum_difference(nums: Vec[i64]) -> i64 {
+    let mut best = -1;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            if nums[i] < nums[j] and nums[j] - nums[i] > best {
+                best = nums[j] - nums[i];
+            }
+        }
+    }
+    best
+}
+
+// ---- difference_suffix.kara: the largest after each index
+fn suffix_maximum_difference(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut largest_after: Vec[i64] = Vec.filled(n, 0);
+    largest_after[n - 1] = nums[n - 1];
+    for i in (0..n - 1).rev() {
+        largest_after[i] = largest_after[i + 1].max(nums[i + 1]);
+    }
+    let mut best = -1;
+    for i in 0..n - 1 {
+        if largest_after[i] > nums[i] {
+            best = best.max(largest_after[i] - nums[i]);
+        }
+    }
+    best
+}
+
+// ---- difference_fold.kara: a fold over (smallest, best)
+fn fold_maximum_difference(nums: Vec[i64]) -> i64 {
+    let (_, best) = nums.iter().skip(1).fold((nums[0], -1), |(smallest, best), x| {
+        let best = if x > smallest { best.max(x - smallest) } else { best };
+        (smallest.min(x), best)
+    });
+    best
+}
+
+// ---- difference_split.kara: divide and conquer
+fn split_span(nums: Vec[i64], lo: i64, hi: i64) -> (i64, i64, i64) {
+    if hi - lo == 1 {
+        return (nums[lo], nums[lo], -1);
+    }
+    let mid = (lo + hi) / 2;
+    let (left_min, left_max, left_best) = split_span(nums, lo, mid);
+    let (right_min, right_max, right_best) = split_span(nums, mid, hi);
+    let mut best = left_best.max(right_best);
+    if right_max > left_min {
+        best = best.max(right_max - left_min);
+    }
+    (left_min.min(right_min), left_max.max(right_max), best)
+}
+
+fn split_maximum_difference(nums: Vec[i64]) -> i64 {
+    split_span(nums, 0, nums.len()).2
+}
+
+// ---- the Rust template, as carried
+struct Solution {}
+
+impl Solution {
+    pub fn maximum_difference(nums: Vec[i32]) -> i32 {
+        let mut mn = nums[0];
+        let mut ans: i32 = -1;
+        for x in nums.iter().skip(1) {
+            if x > mn {
+                ans = ans.max(x - mn);
+            }
+            mn = mn.min(x);
+        }
+        ans
+    }
+}
+
+fn solution_maximum_difference(nums: Vec[i64]) -> i64 {
+    Solution.maximum_difference(nums.iter().map(|x| x as i32).collect()) as i64
+}
+
+// ---- the literal reading and the checks ------------------------------------
+fn literal(nums: Vec[i64]) -> i64 {
+    let mut differences: Vec[i64] = Vec.new();
+    for j in 0..nums.len() {
+        for i in 0..j {
+            if nums[i] < nums[j] {
+                differences.push(nums[j] - nums[i]);
+            }
+        }
+    }
+    differences.iter().max().cloned().unwrap_or(-1)
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_maximum_difference(nums),
+        1 => brute_maximum_difference(nums),
+        2 => suffix_maximum_difference(nums),
+        3 => fold_maximum_difference(nums),
+        4 => split_maximum_difference(nums),
+        _ => solution_maximum_difference(nums),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    nums: Vec[i64],
+    lift: i64,
+    above: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 11 + 2;
+    let top = next_random(mut seed) % 20 + 1;
+    let fall = next_random(mut seed) % 11;
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i > 0 and next_random(mut seed) % 10 < fall {
+            nums.push((nums[i - 1] - next_random(mut seed) % 3).max(1));
+        } else {
+            nums.push(next_random(mut seed) % top + 1);
+        }
+    }
+    let lift = next_random(mut seed) % 1000;
+    let above = 21 + next_random(mut seed) % 5;
+    Problem { nums, lift, above }
+}
+
+fn main() {
+    let names = ["star", "brute", "suffix", "fold", "split", "solution"];
+    let mut seed = 2016;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..2000 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let nums = prob.nums.clone();
+        let truth = literal(nums.clone());
+        check = (check * 31 + truth + 1) % 1000000007;
+        let lifted: Vec[i64] = nums.iter().map(|v| v + prob.lift).collect();
+        let flipped: Vec[i64] = nums.iter().rev().map(|v| 21 - v).collect();
+        let doubled: Vec[i64] = nums.iter().map(|v| 2 * v).collect();
+        let mut longer = nums.clone();
+        longer.push(prob.above);
+        let smallest = nums.iter().min().cloned().unwrap();
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, nums.clone()));
+        }
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let twice = if a == -1 { -1 } else { 2 * a };
+            let verdicts = [
+                a == truth,
+                answer(arm, lifted.clone()) == a,
+                answer(arm, flipped.clone()) == a,
+                answer(arm, doubled.clone()) == twice,
+                answer(arm, longer.clone()) == prob.above - smallest,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, nums {nums}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"2000 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

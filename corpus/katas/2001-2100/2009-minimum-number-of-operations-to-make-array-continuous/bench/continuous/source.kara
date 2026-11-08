@@ -1,0 +1,52 @@
+// LeetCode #2009: Minimum Number of Operations to Make Array Continuous --
+// the ★ arm's benchmark. Sorted and deduplicated, a right pointer that
+// only moves forward finds, for each left value, how many distinct values
+// its window `[v, v + n - 1]` holds.
+
+fn min_operations(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut values = nums.clone();
+    values.sort();
+    values.dedup();
+    let mut kept = 0;
+    let mut right = 0;
+    for left in 0..values.len() {
+        while right < values.len() and values[right] <= values[left] + n - 1 {
+            right += 1;
+        }
+        kept = kept.max(right - left);
+    }
+    n - kept
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 200 arrays of 2000 values built once, the values spread over 2000 to
+    // 400000 by the array, then the ★ arm on each for 25 rounds
+    let mut seed = 2009;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for a in 0..200 {
+        let top = 2000 * (a + 1);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..2000 {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1);
+        }
+        arrays.push(nums);
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..25 {
+        for a in 0..arrays.len() {
+            let answer = min_operations(arrays[a]);
+            calls += 1;
+            sum += answer;
+            check = (check * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

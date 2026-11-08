@@ -1,0 +1,118 @@
+// LeetCode #2029: Stone Game IX -- the game played out. Alice opens with a
+// 1 or a 2; after that a player whose total is 1 mod 3 must take a 1 and
+// one whose total is 2 mod 3 a 2, unless she takes a 0, which only passes
+// the turn. So the 1s and 2s go in a forced order, every 0 is spent as a
+// pass before anyone gives in, and the player who cannot follow the order
+// loses, unless no stones are left, when Bob wins. Alice tries both
+// openings. O(n).
+
+fn moves_after(first: i64, cnt: Array[i64, 3]) -> (i64, i64) {
+    let mut left = cnt;
+    left[first] -= 1;
+    let mut total = first;
+    let mut moves = 1;
+    loop {
+        // the residue that keeps the total off 0 mod 3
+        let next = total;
+        if left[next] == 0 {
+            break;
+        }
+        left[next] -= 1;
+        total = (total + next) % 3;
+        moves += 1;
+    }
+    (moves + left[0], left[1] + left[2])
+}
+
+fn stone_game_ix(stones: Vec[i64]) -> bool {
+    let mut cnt = [0; 3];
+    for s in stones {
+        cnt[s % 3] += 1;
+    }
+    for first in [1, 2] {
+        if cnt[first] > 0 {
+            let (moves, left) = moves_after(first, cnt);
+            // the player to make move `moves` (Bob on an odd one) is stuck
+            if moves % 2 == 1 and left > 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, answer: bool) -> i64 {
+    (check * 31 + if answer { 1 } else { 0 }) % 1000000007
+}
+
+// `n` stones from 1 to `top`, each a multiple of 3 with odds `zeros` in
+// 10, else 1 or 2 more than one, the 1s with odds `ones` in 10
+fn draw(n: i64, top: i64, zeros: i64, ones: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut stones = Vec.new();
+    for _ in 0..n {
+        let base = 3 * (next_random(mut seed) % (top / 3));
+        let pick = next_random(mut seed) % 10;
+        let residue = if pick < zeros {
+            3
+        } else if next_random(mut seed) % 10 < ones {
+            1
+        } else {
+            2
+        };
+        stones.push(base + residue);
+    }
+    stones
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [2, 1],
+        [2],
+        [5, 1, 2, 4, 3],
+        [3, 6, 9],
+        [1, 1, 1, 1, 2],
+        [3, 1, 1, 1, 1, 2],
+        [1, 2, 3],
+        [7, 4, 1, 10, 3, 2],
+    ];
+    for stones in examples {
+        println(f"{stones} -> {stone_game_ix(stones)}");
+    }
+    // 3000 games of 1 to 20 stones up to 30, the zeros and ones at odds of
+    // their own; the answers counted and folded into a checksum
+    let mut seed = 2029;
+    let mut wins = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 20 + 1;
+        let zeros = next_random(mut seed) % 5;
+        let ones = next_random(mut seed) % 11;
+        let stones = draw(n, 30, zeros, ones, mut seed);
+        let answer = stone_game_ix(stones);
+        if answer {
+            wins += 1;
+        }
+        check = mix(check, answer);
+    }
+    println(f"3000 games of up to 20 stones: Alice wins {wins}, checksum {check}");
+    // 8 games of 100000 stones up to 10000, the most the constraints allow
+    wins = 0;
+    check = 0;
+    for a in 0..8 {
+        let stones = draw(100000, 10000, [0, 1, 3, 5, 2, 4, 0, 1][a], [5, 5, 0, 10, 1, 9, 10, 0][a], mut seed);
+        let answer = stone_game_ix(stones);
+        if answer {
+            wins += 1;
+        }
+        check = mix(check, answer);
+    }
+    println(f"8 games of 100000 stones: Alice wins {wins}, checksum {check}");
+}

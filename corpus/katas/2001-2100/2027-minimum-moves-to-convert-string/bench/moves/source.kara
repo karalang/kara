@@ -1,0 +1,51 @@
+// LeetCode #2027: Minimum Moves to Convert String -- the ★ arm. The
+// leftmost `X` must be covered by some move, and the move that starts at
+// it covers the most beyond it, so take that move and jump three places.
+// O(n).
+
+fn minimum_moves(s: String) -> i64 {
+    let key: Vec[char] = s.chars().collect();
+    let mut moves = 0;
+    let mut i = 0;
+    while i < key.len() {
+        if key[i] == 'X' {
+            moves += 1;
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    moves
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 2000 strings of 1000 places, each with its own share of `X` from 0 to
+    // 1, built once; the ★ arm on each for 50 rounds
+    let mut seed = 2027;
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..2000 {
+        let share = next_random(mut seed) % 101;
+        let mut s = String.new();
+        for _ in 0..1000 {
+            s.push(if next_random(mut seed) % 100 < share { 'X' } else { 'O' });
+        }
+        strings.push(s);
+    }
+    let mut calls = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..50 {
+        for s in strings.iter() {
+            let moves = minimum_moves(s);
+            calls += 1;
+            total += moves;
+            check = (check * 31 + moves) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: {total} moves, checksum {check}");
+}

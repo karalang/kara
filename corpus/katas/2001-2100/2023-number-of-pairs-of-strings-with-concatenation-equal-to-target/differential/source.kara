@@ -1,0 +1,263 @@
+// LeetCode #2023: Number of Pairs of Strings With Concatenation Equal to
+// Target -- the differential.
+//
+// All six arms against the statement read literally, on 1500 problems, with
+// six properties. A problem is 2 to 10 strings of 1 to 4 digits from 1 to
+// 1-3, and a target that with even odds is two of them joined (perhaps one
+// with itself), else 2 to 8 digits.
+//
+// P1  the count is the statement read literally: every ordered pair of two
+//     different places whose strings, joined, are the target
+// P2  the strings in reverse order leave the count
+// P3  every string listed twice makes the count 4c + 2d, where d counts the
+//     strings that, joined with themselves, are the target
+// P4  every string and the target written backwards leave the count
+// P5  the target itself added to the list leaves the count
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: a Map of counts, the target cut at every point
+fn star_num_of_pairs(nums: Vec[String], target: String) -> i64 {
+    let mut count: Map[String, i64] = Map.new();
+    for s in nums.iter() {
+        *count.entry(s.clone()).or_insert(0) += 1;
+    }
+    let mut pairs = 0;
+    for k in 1..target.len() {
+        let a = target[0..k];
+        let b = target[k..target.len()];
+        let ca = count.get(a).unwrap_or(0);
+        if a == b {
+            pairs += ca * (ca - 1);
+        } else {
+            pairs += ca * count.get(b).unwrap_or(0);
+        }
+    }
+    pairs
+}
+
+// ---- pairs_brute.kara: every ordered pair joined and compared
+fn brute_num_of_pairs(nums: Vec[String], target: String) -> i64 {
+    let mut pairs = 0;
+    for i in 0..nums.len() {
+        for j in 0..nums.len() {
+            if i != j and f"{nums[i]}{nums[j]}" == target {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+
+// ---- pairs_ends.kara: lengths, starts_with and ends_with, filter and count
+fn ends_num_of_pairs(nums: Vec[String], target: String) -> i64 {
+    let n = nums.len();
+    (0..n * n)
+        .filter(|p| {
+            let a = ref nums[p / n];
+            let b = ref nums[p % n];
+            p / n != p % n and a.len() + b.len() == target.len() and target.starts_with(a) and target.ends_with(b)
+        })
+        .count()
+}
+
+// ---- pairs_seen.kara: one pass, a Map of the strings seen so far
+fn seen_num_of_pairs(nums: Vec[String], target: String) -> i64 {
+    let mut seen: Map[String, i64] = Map.new();
+    let mut pairs = 0;
+    for x in nums.iter() {
+        if let Some(rest) = target.strip_prefix(x) {
+            pairs += seen.get(rest).unwrap_or(0);
+        }
+        if target.ends_with(x) {
+            let head = target[0..target.len() - x.len()];
+            pairs += seen.get(head).unwrap_or(0);
+        }
+        *seen.entry(x.clone()).or_insert(0) += 1;
+    }
+    pairs
+}
+
+// ---- pairs_sorted.kara: a SortedMap walked by its distinct strings
+fn sorted_num_of_pairs(nums: Vec[String], target: String) -> i64 {
+    let mut count: SortedMap[String, i64] = SortedMap.new();
+    for s in nums.iter() {
+        *count.entry(s.clone()).or_insert(0) += 1;
+    }
+    let mut pairs = 0;
+    for (a, ca) in count.iter() {
+        if target.starts_with(a) {
+            let b = target[a.len()..target.len()];
+            if b == a {
+                pairs += ca * (ca - 1);
+            } else if let Some(cb) = count.get(b) {
+                pairs += ca * cb;
+            }
+        }
+    }
+    pairs
+}
+
+// ---- pairs_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn num_of_pairs(nums: Vec[String], target: String) -> i32 {
+        let mut count: Map[String, i32] = Map.new();
+        for s in ref nums {
+            *count.entry(s.clone()).or_insert(0) += 1;
+        }
+        let mut ans: i32 = 0;
+        for i in 1..target.len() {
+            let (a, b) = target.split_at(i);
+            let ca = *count.get(a).unwrap_or(0);
+            if a == b {
+                ans += ca * (ca - 1);
+            } else {
+                ans += ca * *count.get(b).unwrap_or(0);
+            }
+        }
+        ans
+    }
+}
+
+fn rust_num_of_pairs(nums: Vec[String], target: String) -> i64 {
+    Solution.num_of_pairs(nums.clone(), target.clone())
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+fn literal(nums: Vec[String], target: String) -> i64 {
+    let mut pairs = 0;
+    for i in 0..nums.len() {
+        for j in 0..nums.len() {
+            if i == j {
+                continue;
+            }
+            let mut joined = String.new();
+            joined.push_str(nums[i]);
+            joined.push_str(nums[j]);
+            if joined == target {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+
+fn answer(arm: i64, nums: Vec[String], target: String) -> i64 {
+    match arm {
+        0 => star_num_of_pairs(nums, target),
+        1 => brute_num_of_pairs(nums, target),
+        2 => ends_num_of_pairs(nums, target),
+        3 => seen_num_of_pairs(nums, target),
+        4 => sorted_num_of_pairs(nums, target),
+        _ => rust_num_of_pairs(nums, target),
+    }
+}
+
+fn backwards(s: Str) -> String {
+    s.chars().rev().collect()
+}
+
+struct Problem {
+    nums: Vec[String],
+    target: String,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digits(seed: mut ref i64, len: i64, top: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(('1' as i64 + next_random(mut seed) % top) as u8 as char);
+    }
+    s
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let top = next_random(mut seed) % 3 + 1;
+    let n = next_random(mut seed) % 9 + 2;
+    let mut nums: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let len = next_random(mut seed) % 4 + 1;
+        nums.push(digits(mut seed, len, top));
+    }
+    let joined = next_random(mut seed) % 2 == 0;
+    let i = next_random(mut seed) % n;
+    let j = next_random(mut seed) % n;
+    let len = next_random(mut seed) % 7 + 2;
+    let other = digits(mut seed, len, top);
+    let target = if joined { f"{nums[i]}{nums[j]}" } else { other };
+    Problem { nums: nums, target: target }
+}
+
+fn main() {
+    let names = ["star", "brute", "ends", "seen", "sorted", "rust"];
+    let mut seed = 2023;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let nums = prob.nums.clone();
+        let target = prob.target.clone();
+        let truth = literal(nums.clone(), target.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let reversed: Vec[String] = nums.iter().rev().cloned().collect();
+        let mut twice = nums.clone();
+        twice.extend(nums.iter().cloned());
+        let selves = nums.iter().filter(|s| f"{s}{s}" == target).count();
+        let back: Vec[String] = nums.iter().map(|s| backwards(s)).collect();
+        let back_target = backwards(target);
+        let mut with_target = nums.clone();
+        with_target.push(target.clone());
+        let mut got: Vec[i64] = Vec.new();
+        for arm in 0..6 {
+            got.push(answer(arm, nums.clone(), target.clone()));
+        }
+        for arm in 0..6 {
+            let c = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == c {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                c == truth,
+                answer(arm, reversed.clone(), target.clone()) == c,
+                answer(arm, twice.clone(), target.clone()) == 4 * c + 2 * selves,
+                answer(arm, back.clone(), back_target.clone()) == c,
+                answer(arm, with_target.clone(), target.clone()) == c,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {nums}, {target}, answer {c}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

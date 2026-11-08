@@ -1,0 +1,337 @@
+// LeetCode #2018: Check if Word Can Be Placed In Crossword -- the
+// differential.
+//
+// The five arms that check against the statement read literally, on 1500
+// problems, with six properties. A problem is a board of 1 to 5 by 1 to 5
+// cells, each a wall, a letter from the first 1 to 3, or empty, and a word of
+// 1 to 5 of those letters. The Rust-template arm joins once it checks
+// (B-2026-11-08-47).
+//
+// P1  the answer is the statement read literally: every run of the word's
+//     length in a row or a column, each way, its cells open and empty or
+//     holding the word's letter, the cells just before and just after it
+//     walls or off the board
+// P2  the board transposed leaves the answer
+// P3  every row reversed leaves the answer
+// P4  the word reversed leaves the answer
+// P5  a letter on the board emptied never turns a true answer false
+// P6  each arm agrees with at least two of the other four
+
+// ---- the ★ arm: each line cut at its walls into runs
+fn star_fits(segment: Vec[char], word: Vec[char]) -> bool {
+    let k = word.len();
+    if segment.len() != k {
+        return false;
+    }
+    let forward = (0..k).all(|i| segment[i] == ' ' or segment[i] == word[i]);
+    let backward = (0..k).all(|i| segment[i] == ' ' or segment[i] == word[k - 1 - i]);
+    forward or backward
+}
+
+fn star_place_word_in_crossword(board: Vec[Vec[char]], word: String) -> bool {
+    let word: Vec[char] = word.chars().collect();
+    let (m, n) = (board.len(), board[0].len());
+    let mut lines: Vec[Vec[char]] = board.clone();
+    for c in 0..n {
+        lines.push((0..m).map(|r| board[r][c]).collect());
+    }
+    for line in lines.iter() {
+        let mut segment: Vec[char] = Vec.new();
+        for i in 0..line.len() + 1 {
+            if i == line.len() or line[i] == '#' {
+                if star_fits(segment, word) {
+                    return true;
+                }
+                segment.clear();
+            } else {
+                segment.push(line[i]);
+            }
+        }
+    }
+    false
+}
+
+// ---- crossword_brute.kara: every start cell and direction
+fn brute_place_word_in_crossword(board: Vec[Vec[char]], word: String) -> bool {
+    let word: Vec[char] = word.chars().collect();
+    let (m, n, k) = (board.len(), board[0].len(), word.len());
+    // whether (r, c) is on the board and not a wall
+    let open = |r: i64, c: i64| r >= 0 and r < m and c >= 0 and c < n and board[r][c] != '#';
+    for r in 0..m {
+        for c in 0..n {
+            for (dr, dc) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+                if open(r - dr, c - dc) {
+                    continue;
+                }
+                let mut ok = true;
+                for i in 0..k {
+                    let (rr, cc) = (r + dr * i, c + dc * i);
+                    if not open(rr, cc) or (board[rr][cc] != ' ' and board[rr][cc] != word[i]) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok and not open(r + dr * k, c + dc * k) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---- crossword_lines.kara: four readings, split at the walls, zip
+fn lines_place_word_in_crossword(board: Vec[Vec[char]], word: String) -> bool {
+    let (m, n) = (board.len(), board[0].len());
+    let mut lines: Vec[String] = Vec.new();
+    for r in 0..m {
+        lines.push(board[r].iter().collect());
+        lines.push(board[r].iter().rev().collect());
+    }
+    for c in 0..n {
+        lines.push((0..m).map(|r| board[r][c]).collect());
+        lines.push((0..m).rev().map(|r| board[r][c]).collect());
+    }
+    let k = word.chars().count();
+    lines.iter().any(|line| {
+        line.split("#").any(|piece| {
+            piece.chars().count() == k and piece.chars().zip(word.chars()).all(|(a, b)| a == ' ' or a == b)
+        })
+    })
+}
+
+// ---- crossword_transpose.kara: rows by index, then the transpose
+fn transpose_fits_a_row(board: Vec[Vec[char]], word: Vec[char]) -> bool {
+    let k = word.len();
+    for row in board.iter() {
+        let mut start = 0;
+        for end in 0..row.len() + 1 {
+            if end < row.len() and row[end] != '#' {
+                continue;
+            }
+            if end - start == k {
+                let mut forward = true;
+                let mut backward = true;
+                for i in 0..k {
+                    let cell = row[start + i];
+                    if cell != ' ' {
+                        forward = forward and cell == word[i];
+                        backward = backward and cell == word[k - 1 - i];
+                    }
+                }
+                if forward or backward {
+                    return true;
+                }
+            }
+            start = end + 1;
+        }
+    }
+    false
+}
+
+fn transpose_transpose(board: Vec[Vec[char]]) -> Vec[Vec[char]] {
+    (0..board[0].len()).map(|c| board.iter().map(|row| row[c]).collect()).collect()
+}
+
+fn transpose_place_word_in_crossword(board: Vec[Vec[char]], word: String) -> bool {
+    let word: Vec[char] = word.chars().collect();
+    transpose_fits_a_row(board, word) or transpose_fits_a_row(transpose_transpose(board), word)
+}
+
+// ---- crossword_fold.kara: each line folded once
+struct FoldRun {
+    len: i64,
+    forward: bool,
+    backward: bool,
+    found: bool,
+}
+
+fn fold_fits_a_line(line: Vec[char], word: Vec[char]) -> bool {
+    let k = word.len();
+    let start = FoldRun { len: 0, forward: true, backward: true, found: false };
+    let end = line.iter().cloned().chain(['#'].into_iter()).fold(start, |run, cell| {
+        if cell == '#' {
+            let found = run.found or (run.len == k and (run.forward or run.backward));
+            FoldRun { len: 0, forward: true, backward: true, found: found }
+        } else if run.len >= k {
+            FoldRun { len: run.len + 1, forward: false, backward: false, found: run.found }
+        } else {
+            let i = run.len;
+            FoldRun {
+                len: i + 1,
+                forward: run.forward and (cell == ' ' or cell == word[i]),
+                backward: run.backward and (cell == ' ' or cell == word[k - 1 - i]),
+                found: run.found,
+            }
+        }
+    });
+    end.found
+}
+
+fn fold_place_word_in_crossword(board: Vec[Vec[char]], word: String) -> bool {
+    let word: Vec[char] = word.chars().collect();
+    let (m, n) = (board.len(), board[0].len());
+    board.iter().any(|row| fold_fits_a_line(row.clone(), word))
+        or (0..n).any(|c| fold_fits_a_line((0..m).map(|r| board[r][c]).collect(), word))
+}
+
+// ---- the literal reading and the checks ------------------------------------
+
+// every placement the statement allows: a word of `k` letters along a row or
+// a column, from `(r, c)` in step `(dr, dc)`, whichever of the four ways
+fn literal(board: Vec[Vec[char]], word: String) -> bool {
+    let word: Vec[char] = word.chars().collect();
+    let (m, n, k) = (board.len(), board[0].len(), word.len());
+    let blocked = |r: i64, c: i64| r < 0 or r >= m or c < 0 or c >= n or board[r][c] == '#';
+    let mut placed = false;
+    for (dr, dc) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+        for r in 0..m {
+            for c in 0..n {
+                let cells: Vec[(i64, i64)] = (0..k).map(|i| (r + dr * i, c + dc * i)).collect();
+                let on_board = cells.iter().all(|(rr, cc)| not blocked(rr, cc));
+                if not on_board {
+                    continue;
+                }
+                let letters = (0..k).all(|i| {
+                    let (rr, cc) = cells[i];
+                    board[rr][cc] == ' ' or board[rr][cc] == word[i]
+                });
+                let before = blocked(r - dr, c - dc);
+                let after = blocked(r + dr * k, c + dc * k);
+                if letters and before and after {
+                    placed = true;
+                }
+            }
+        }
+    }
+    placed
+}
+
+fn answer(arm: i64, board: Vec[Vec[char]], word: String) -> bool {
+    match arm {
+        0 => star_place_word_in_crossword(board, word),
+        1 => brute_place_word_in_crossword(board, word),
+        2 => lines_place_word_in_crossword(board, word),
+        3 => transpose_place_word_in_crossword(board, word),
+        _ => fold_place_word_in_crossword(board, word),
+    }
+}
+
+struct Problem {
+    board: Vec[Vec[char]],
+    word: String,
+    // a letter cell to empty for P5, or (-1, -1) when the board has none
+    empty: (i64, i64),
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let m = next_random(mut seed) % 5 + 1;
+    let n = next_random(mut seed) % 5 + 1;
+    let walls = next_random(mut seed) % 5;
+    let filled = next_random(mut seed) % 6;
+    let letters = next_random(mut seed) % 3 + 1;
+    let length = next_random(mut seed) % 5 + 1;
+    let mut board: Vec[Vec[char]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[char] = Vec.new();
+        for _ in 0..n {
+            if next_random(mut seed) % 10 < walls {
+                row.push('#');
+            } else if next_random(mut seed) % 10 < filled {
+                row.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+            } else {
+                row.push(' ');
+            }
+        }
+        board.push(row);
+    }
+    let mut word = String.new();
+    for _ in 0..length {
+        word.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+    }
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            if board[r][c] != '#' and board[r][c] != ' ' {
+                cells.push((r, c));
+            }
+        }
+    }
+    let pick = next_random(mut seed);
+    let empty = if cells.is_empty() { (-1, -1) } else { cells[pick % cells.len()] };
+    Problem { board: board, word: word, empty: empty }
+}
+
+fn main() {
+    let names = ["star", "brute", "lines", "transpose", "fold"];
+    let mut seed = 2018;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let board = prob.board.clone();
+        let word = prob.word.clone();
+        let (m, n) = (board.len(), board[0].len());
+        let truth = literal(board.clone(), word.clone());
+        check = (check * 2 + if truth { 1 } else { 0 }) % 1000000007;
+        let transposed: Vec[Vec[char]] = (0..n).map(|c| (0..m).map(|r| board[r][c]).collect()).collect();
+        let mirrored: Vec[Vec[char]] = board.iter().map(|row| row.iter().rev().cloned().collect()).collect();
+        let reversed: String = word.chars().rev().collect();
+        let mut emptied = board.clone();
+        let (er, ec) = prob.empty;
+        if er >= 0 {
+            emptied[er][ec] = ' ';
+        }
+        let mut got: Vec[bool] = Vec.new();
+        for arm in 0..5 {
+            got.push(answer(arm, board.clone(), word.clone()));
+        }
+        for arm in 0..5 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..5 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, transposed.clone(), word.clone()) == a,
+                answer(arm, mirrored.clone(), word.clone()) == a,
+                answer(arm, board.clone(), reversed.clone()) == a,
+                not a or answer(arm, emptied.clone(), word.clone()),
+                same >= 2,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, board {board}, word \"{word}\", answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

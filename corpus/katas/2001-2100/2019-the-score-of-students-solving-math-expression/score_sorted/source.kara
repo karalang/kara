@@ -1,0 +1,110 @@
+// LeetCode #2019: The Score of Students Solving Math Expression -- the
+// interval DP with each run's values in a `SortedSet`, walked in order so
+// that a pair whose sum or product passes 1000 ends the walk of the right
+// part: every later value is larger. The right answer folds the expression
+// as (sum so far, product of the current term). O(n^3 * 1000^2) at worst.
+
+fn score_of_students(s: String, answers: Vec[i64]) -> i64 {
+    let chars: Vec[char] = s.chars().collect();
+    let n = (chars.len() + 1) / 2;
+    let digit = |i: i64| chars[2 * i] as i64 - '0' as i64;
+    let (sum, term) = (1..n).fold((0, digit(0)), |(sum, term), i| {
+        if chars[2 * i - 1] == '+' { (sum + term, digit(i)) } else { (sum, term * digit(i)) }
+    });
+    let correct = sum + term;
+    let mut runs: Vec[Vec[SortedSet[i64]]] = (0..n).map(|_| (0..n).map(|_| SortedSet.new()).collect()).collect();
+    for i in 0..n {
+        runs[i][i].insert(digit(i));
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            for k in i..j {
+                let plus = chars[2 * k + 1] == '+';
+                let mut found: Vec[i64] = Vec.new();
+                for a in runs[i][k].iter() {
+                    for b in runs[k + 1][j].iter() {
+                        let v = if plus { a + b } else { a * b };
+                        if v > 1000 {
+                            break;
+                        }
+                        found.push(v);
+                    }
+                }
+                for v in found {
+                    runs[i][j].insert(v);
+                }
+            }
+        }
+    }
+    answers.iter().filter(|answer| answer != correct).filter(|answer| runs[0][n - 1].contains(answer)).count() * 2
+        + answers.iter().filter(|answer| answer == correct).count() * 5
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` digits, each from `0..=top`, joined by `*` with odds `times` in 10
+// and `+` otherwise
+fn random_expression(count: i64, top: i64, times: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for i in 0..count {
+        if i > 0 {
+            s.push(if next_random(mut seed) % 10 < times { '*' } else { '+' });
+        }
+        s.push(('0' as i64 + next_random(mut seed) % (top + 1)) as u8 as char);
+    }
+    s
+}
+
+// `count` answers, each from `0..=top`
+fn random_answers(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..count).map(|_| next_random(mut seed) % (top + 1)).collect()
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(String, Vec[i64])] = [
+        ("7+3*1*2", [20, 13, 42]),
+        ("3+5*2", [13, 0, 10, 13, 13, 16, 16]),
+        ("6+0*1", [12, 9, 6, 4, 8, 6]),
+        ("1+2*3+4", [11, 13, 15, 21, 15, 0]),
+        ("9", [9, 0, 1000]),
+        ("9*9*9*9+1*0", [0, 1, 6561, 729, 6562]),
+        ("2*3+4*5", [26, 50, 70, 46, 9]),
+    ];
+    for (s, answers) in examples {
+        println(f"\"{s}\", {answers} -> {score_of_students(s, answers)}");
+    }
+    let mut seed = 2019;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1500 {
+        let count = next_random(mut seed) % 6 + 1;
+        let top = next_random(mut seed) % 9 + 1;
+        let times = next_random(mut seed) % 11;
+        let s = random_expression(count, top, times, mut seed);
+        let answers = random_answers(next_random(mut seed) % 8 + 1, next_random(mut seed) % 25 + 1, mut seed);
+        let points = score_of_students(s, answers);
+        total += points;
+        check = (check * 31 + points) % 1000000007;
+    }
+    println(f"1500 expressions of up to 6 digits: {total} points, checksum {check}");
+    total = 0;
+    check = 0;
+    for a in 0..6 {
+        let count = [11, 11, 10, 11, 9, 11][a];
+        let top = [9, 3, 5, 2, 9, 1][a];
+        let times = [5, 3, 7, 6, 4, 10][a];
+        let s = random_expression(count, top, times, mut seed);
+        let answers = random_answers(10000, [1000, 300, 1000, 200, 1000, 20][a], mut seed);
+        let points = score_of_students(s, answers);
+        total += points;
+        check = (check * 31 + points) % 1000000007;
+    }
+    println(f"6 expressions of up to 11 digits, 10000 answers each: {total} points, checksum {check}");
+}

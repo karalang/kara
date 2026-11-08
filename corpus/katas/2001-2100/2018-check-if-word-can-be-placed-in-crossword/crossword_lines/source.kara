@@ -1,0 +1,117 @@
+// LeetCode #2018: Check if Word Can Be Placed In Crossword -- the board read
+// in all four directions, each line as a String: rows left to right and right
+// to left, columns top to bottom and bottom to top. Each line is split at its
+// walls, and the word fits a piece of its own length whose letters all match,
+// a blank matching any letter, compared by `zip` reading forwards only. O(m n).
+
+fn place_word_in_crossword(board: Vec[Vec[char]], word: String) -> bool {
+    let (m, n) = (board.len(), board[0].len());
+    let mut lines: Vec[String] = Vec.new();
+    for r in 0..m {
+        lines.push(board[r].iter().collect());
+        lines.push(board[r].iter().rev().collect());
+    }
+    for c in 0..n {
+        lines.push((0..m).map(|r| board[r][c]).collect());
+        lines.push((0..m).rev().map(|r| board[r][c]).collect());
+    }
+    let k = word.chars().count();
+    lines.iter().any(|line| {
+        line.split("#").any(|piece| {
+            piece.chars().count() == k and piece.chars().zip(word.chars()).all(|(a, b)| a == ' ' or a == b)
+        })
+    })
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn board_of(rows: Vec[String]) -> Vec[Vec[char]] {
+    rows.iter().map(|row| row.chars().collect()).collect()
+}
+
+// an `m` by `n` board: each cell a wall with odds `walls` in 10, else a
+// letter from the first `letters` with odds `filled` in 10, else empty
+fn random_board(m: i64, n: i64, walls: i64, filled: i64, letters: i64, seed: mut ref i64) -> Vec[Vec[char]] {
+    let mut board: Vec[Vec[char]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[char] = Vec.new();
+        for _ in 0..n {
+            if next_random(mut seed) % 10 < walls {
+                row.push('#');
+            } else if next_random(mut seed) % 10 < filled {
+                row.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+            } else {
+                row.push(' ');
+            }
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn random_word(length: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut word = String.new();
+    for _ in 0..length {
+        word.push(('a' as i64 + next_random(mut seed) % letters) as u8 as char);
+    }
+    word
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[String], String)] = [
+        (["# #", "  #", "#c "], "abc"),
+        ([" #a", " #c", " #a"], "ac"),
+        (["# #", "  #", "# c"], "ca"),
+        (["a"], "a"),
+        ([" "], "ab"),
+        (["#  #"], "ab"),
+        (["  ", "  "], "ab"),
+        (["#b#", "#a#", "# #"], "abc"),
+        (["#####", "#   #", "#####"], "xyz"),
+    ];
+    for (rows, word) in examples {
+        let board = board_of(rows.clone());
+        println(f"{rows}, \"{word}\" -> {place_word_in_crossword(board, word)}");
+    }
+    let mut seed = 2018;
+    let mut placed = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let m = next_random(mut seed) % 6 + 1;
+        let n = next_random(mut seed) % 6 + 1;
+        let walls = next_random(mut seed) % 5;
+        let filled = next_random(mut seed) % 6;
+        let letters = next_random(mut seed) % 3 + 1;
+        let length = next_random(mut seed) % 5 + 1;
+        let board = random_board(m, n, walls, filled, letters, mut seed);
+        let word = random_word(length, letters, mut seed);
+        let answer = place_word_in_crossword(board, word);
+        if answer {
+            placed += 1;
+        }
+        check = (check * 2 + if answer { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"3000 boards of up to 6 by 6: {placed} placed, checksum {check}");
+    placed = 0;
+    check = 0;
+    for a in 0..6 {
+        let m = [300, 1, 400, 30, 600, 2][a];
+        let n = [300, 1000, 250, 3000, 150, 500][a];
+        let walls = [2, 3, 1, 4, 2, 0][a];
+        let length = [3, 5, 8, 2, 4, 500][a];
+        let board = random_board(m, n, walls, 1, 2, mut seed);
+        let word = random_word(length, 2, mut seed);
+        let answer = place_word_in_crossword(board, word);
+        if answer {
+            placed += 1;
+        }
+        check = (check * 2 + if answer { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"6 boards of up to 100000 cells: {placed} placed, checksum {check}");
+}
