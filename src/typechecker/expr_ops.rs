@@ -5047,6 +5047,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             BinOp::Eq | BinOp::NotEq => {
+                // A literal inside a constructor (`m.get(1) == Some(5)`) is
+                // compared at its type now: the comparison reads the item
+                // types, and an open variable would match a `ref` item
+                // (B-2026-11-08-44).
+                let left_ty = self.settle_nested_literals(&left_ty);
+                let right_ty = self.settle_nested_literals(&right_ty);
                 // Comparison auto-derefs reference operands so a value can be
                 // compared against a borrow of the same type (`String ==
                 // ref String`); the comparison only reads through the borrow.
@@ -5107,6 +5113,9 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Bool
             }
             BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                // See `Eq` arm: a literal inside a constructor settles first.
+                let left_ty = self.settle_nested_literals(&left_ty);
+                let right_ty = self.settle_nested_literals(&right_ty);
                 // See `Eq` arm: reference operands auto-deref for comparison.
                 let cmp_left = strip_refs_for_compare(&left_ty);
                 let cmp_right = strip_refs_for_compare(&right_ty);
@@ -6379,6 +6388,15 @@ impl<'a> super::TypeChecker<'a> {
                 let ret_err = &ret_args[1];
                 if inner_err == ret_err {
                     return inner_args[0].clone();
+                }
+                // `Err(1)?` in a function returning `Result[T, i32]`: the
+                // literal is the error the function returns, so its type
+                // fixes it (design.md §8 Literals, B-2026-11-08-44).
+                if let Some((id, kind)) = self.unbound_literal_var(inner_err) {
+                    if super::inference::literal_takes(kind, ret_err) {
+                        self.env.substitutions.insert(id, ret_err.clone());
+                        return inner_args[0].clone();
+                    }
                 }
                 // Cross-error type: require `impl From[InnerErr] for RetErr`.
                 let target_name = match ret_err {

@@ -825,6 +825,10 @@ impl<'a> super::TypeChecker<'a> {
                 result_ty = arm_ty.clone();
                 continue;
             }
+            if let Some(joined) = self.unify_literal_branches(&result_ty, arm_ty) {
+                result_ty = joined;
+                continue;
+            }
             match self.join_branch_types(&result_ty, arm_ty) {
                 Some(joined) => result_ty = joined,
                 None => {

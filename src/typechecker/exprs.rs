@@ -5068,17 +5068,47 @@ impl<'a> super::TypeChecker<'a> {
                 // `y: i32`; design.md § Type inference, B-2026-11-07-57).
                 // Only a by-value `T`: a borrowed one would take the
                 // reference for the number (`take(mut x)`). So is a literal
-                // written as the argument, which the call's result may be
-                // fixed through (`it.fold(0, ..)` returned as `i32`,
-                // B-2026-11-08-44).
+                // written as the argument when the call returns that
+                // parameter, so the result may fix it (`it.fold(0, ..)`
+                // returned as `i32`, B-2026-11-08-44); one only a bound
+                // reads (`open(2, 3)` returning `T`'s `Add` output), or one
+                // the result holds inside a constructor (`Some(5)`), is typed
+                // at the call, as before.
+                // Not where the call's expected type already gave the
+                // parameter a type a number cannot be (`m.get(1) == Some(5)`
+                // seeds `T = ref i64`): the literal keeps its own type there,
+                // and the mismatch is the comparison's to report.
+                let literal_arg = matches!(
+                    arg.value.kind,
+                    ExprKind::Integer(_, None) | ExprKind::Float(_, None)
+                ) && {
+                    let kind = if matches!(arg.value.kind, ExprKind::Integer(..)) {
+                        super::inference::LiteralKind::Int
+                    } else {
+                        super::inference::LiteralKind::Float
+                    };
+                    match resolve_type_vars(
+                        &sub_params[idx],
+                        &self.env.substitutions,
+                        &id_to_name,
+                        &self.env.const_substitutions,
+                        &const_id_to_name,
+                    ) {
+                        // Unsolved, it reads back as the parameter's name.
+                        Type::TypeVar(_) | Type::TypeParam(_) => true,
+                        t => super::inference::literal_takes(kind, &t),
+                    }
+                };
                 let inferred = match &seeded_slot {
                     Some(slot) => self.check_expr(&arg.value, slot),
-                    None if matches!(
-                        arg.value.kind,
-                        ExprKind::Identifier(_)
-                            | ExprKind::Integer(_, None)
-                            | ExprKind::Float(_, None)
-                    ) && matches!(formal_param_ty, Type::TypeParam(_)) =>
+                    None if match formal_param_ty {
+                        Type::TypeParam(p) => {
+                            matches!(arg.value.kind, ExprKind::Identifier(_))
+                                || (literal_arg
+                                    && matches!(return_type, Type::TypeParam(r) if r == p))
+                        }
+                        _ => false,
+                    } =>
                     {
                         self.infer_expr_open(&arg.value)
                     }
@@ -10726,6 +10756,49 @@ impl<'a> super::TypeChecker<'a> {
         ty
     }
 
+    /// Two branch types that still hold a literal's variable meet by
+    /// unification, so the variable and an empty sibling's slot are one
+    /// (`if c { Some(1) } else { None }`: the `None`'s `T` takes the
+    /// literal's type, B-2026-11-08-44). `None` when neither holds one or
+    /// they do not unify, with nothing bound.
+    pub(super) fn unify_literal_branches(&mut self, a: &Type, b: &Type) -> Option<Type> {
+        let holds_literal = |this: &Self, t: &Type| {
+            let t = inference::resolve_type_vars(
+                t,
+                &this.env.substitutions,
+                &HashMap::new(),
+                &this.env.const_substitutions,
+                &HashMap::new(),
+            );
+            let mut ids = Vec::new();
+            type_var_ids(&t, &mut ids);
+            ids.into_iter()
+                .any(|id| inference::literal_var_kind(id).is_some())
+        };
+        if !holds_literal(self, a) && !holds_literal(self, b) {
+            return None;
+        }
+        let saved = self.env.substitutions.clone();
+        let saved_consts = self.env.const_substitutions.clone();
+        if !unify_types(
+            a,
+            b,
+            &mut self.env.substitutions,
+            &mut self.env.const_substitutions,
+        ) {
+            self.env.substitutions = saved;
+            self.env.const_substitutions = saved_consts;
+            return None;
+        }
+        Some(inference::resolve_type_vars(
+            a,
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &HashMap::new(),
+        ))
+    }
+
     /// The literal variable `t` is, unbound, with its kind.
     pub(super) fn unbound_literal_var(
         &self,
@@ -10735,6 +10808,15 @@ impl<'a> super::TypeChecker<'a> {
             Type::TypeVar(id) => inference::literal_var_kind(id).map(|k| (id, k)),
             _ => None,
         }
+    }
+
+    /// `t` with the literal variables inside it settled ([`Self::settle_literals`]),
+    /// unless `t` is one itself, which the operator's own literal rules type.
+    pub(super) fn settle_nested_literals(&mut self, t: &Type) -> Type {
+        if self.unbound_literal_var(t).is_some() || !contains_type_var(t) {
+            return t.clone();
+        }
+        self.settle_literals(t)
     }
 
     /// `t` with each literal variable in it that nothing fixed yet given its
@@ -12228,6 +12310,9 @@ impl<'a> super::TypeChecker<'a> {
                             return then_ty;
                         }
                     }
+                    if let Some(joined) = self.unify_literal_branches(&then_ty, &else_ty) {
+                        return joined;
+                    }
                     match self.join_branch_types(&then_ty, &else_ty) {
                         Some(joined) => joined,
                         None => {
@@ -12308,6 +12393,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     if else_ty == Type::Never {
                         return then_ty;
+                    }
+                    if let Some(joined) = self.unify_literal_branches(&then_ty, &else_ty) {
+                        return joined;
                     }
                     match self.join_branch_types(&then_ty, &else_ty) {
                         Some(joined) => joined,

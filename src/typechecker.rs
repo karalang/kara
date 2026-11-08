@@ -6617,7 +6617,19 @@ impl<'a> TypeChecker<'a> {
     /// to the first operand for any position where neither side is more
     /// concrete, so a genuine same-shape join is unchanged.
     fn merge_branch_types(a: &Type, b: &Type) -> Type {
+        let literal =
+            |t: &Type| matches!(t, Type::TypeVar(id) if inference::literal_var_kind(*id).is_some());
         match (a, b) {
+            // A literal's variable beside a slot an empty sibling left open
+            // (`if c { Some(1) } else { None }`) is the join, so the literal
+            // keeps its default or takes what a later use gives it
+            // (B-2026-11-08-44).
+            (lit, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error) if literal(lit) => {
+                lit.clone()
+            }
+            (Type::TypeParam(_) | Type::TypeVar(_) | Type::Error, lit) if literal(lit) => {
+                lit.clone()
+            }
             (Type::TypeParam(_) | Type::TypeVar(_) | Type::Error, other) => other.clone(),
             (other, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error) => other.clone(),
             (Type::Named { name: na, args: aa }, Type::Named { name: nb, args: ab })
