@@ -676,10 +676,8 @@ fn target(reg: ref Registry, word: Str) -> Result[(i64, Option[Vec[String]]), St
     Ok((at, values))
 }
 
-// `cmd.to_string()` is `karac fix`'s spelling while B-2026-11-08-55 waits
-// on a ruling about a `Str` against a list of literals.
 fn is_update(cmd: Str) -> bool {
-    ["inc", "dec", "set", "observe", "state", "reset"].contains(cmd.to_string())
+    ["inc", "dec", "set", "observe", "state", "reset"].contains(cmd)
 }
 
 fn has_update(kind: Kind, cmd: Str) -> bool {
