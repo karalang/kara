@@ -194,7 +194,7 @@ struct Head {
 /// The blocks of `body` whose terminator is an index call the ranges show
 /// in bounds; codegen checks only the sign there.
 pub fn upper_proven_indexes(body: &Body, tys: &TyInterner) -> Vec<usize> {
-    let Some(a) = Analysis::new(body, tys) else {
+    let Some(a) = Analysis::new(body, tys, true) else {
         return Vec::new();
     };
     let Some(outs) = a.solve() else {
@@ -208,6 +208,123 @@ pub fn upper_proven_indexes(body: &Body, tys: &TyInterner) -> Vec<usize> {
         }
     }
     proven
+}
+
+/// Turns each overflow test the ranges show cannot fail into a `goto` to
+/// its arm for no overflow: a `switchInt` on `t.1` where `t` is a checked
+/// result whose exact interval lies in its type's range. Kata 459's
+/// `for i in d..n { if cs[i] != cs[i - d] ..` subtracts `d`, which an
+/// outer `for d in 1..` keeps positive, from a counter that is never
+/// negative, so `i - d` cannot overflow, and LLVM, which does not relate
+/// the two, kept `sub; jo` on every char (B-2026-11-08-6).
+/// `KARAC_MIR_RANGE_OVERFLOW=0` keeps every test. Answers how many went.
+pub fn elide_proven_overflow(body: &mut Body, tys: &TyInterner) -> usize {
+    let dead = {
+        let Some(a) = Analysis::new(body, tys, false) else {
+            return 0;
+        };
+        let Some(outs) = a.solve() else {
+            return 0;
+        };
+        let mut dead = Vec::new();
+        for (bi, b) in body.blocks.iter().enumerate() {
+            let Some(st) = &outs[bi] else { continue };
+            let TerminatorKind::SwitchInt {
+                discr: Operand::Copy(p) | Operand::Move(p),
+                targets,
+            } = &b.terminator.kind
+            else {
+                continue;
+            };
+            if !matches!(p.projection.as_slice(), [ProjElem::Field(f, _)] if f.index() == 1) {
+                continue;
+            }
+            let Some(slot) = a.slot_of(p.local) else {
+                continue;
+            };
+            // `t` is a checked result not yet past a test of its flag, so
+            // its interval is the operation's exact one.
+            if !st.pending.contains(&slot) || !st.iv[slot as usize].within(a.range[slot as usize]) {
+                continue;
+            }
+            // `x ± c` for a constant `c` is already a compare and an
+            // `nsw`/`nuw` operation LLVM sees through (`checked` in the
+            // backend), and taking its test away only moved LLVM's loop
+            // shapes (kata 167's two-pointer loop kept a bounds check it
+            // had dropped, 1.15x): only an operation of two variables, an
+            // overflow intrinsic LLVM cannot see into, loses its test.
+            let constant = b.statements.iter().rev().find_map(|s| match &s.kind {
+                StatementKind::Assign(d, rv) if d.local == p.local => Some(matches!(
+                    rv,
+                    Rvalue::CheckedBinaryOp(BinOp::Add | BinOp::Sub, x, y)
+                        if matches!(x, Operand::Const(_)) || matches!(y, Operand::Const(_))
+                )),
+                _ => None,
+            });
+            if constant != Some(false) {
+                continue;
+            }
+            let Some(&(_, ok)) = targets.values.iter().find(|(v, _)| *v == 0) else {
+                continue;
+            };
+            dead.push((bi, ok));
+        }
+        dead
+    };
+    for &(bi, ok) in &dead {
+        body.blocks[bi].terminator.kind = TerminatorKind::Goto { target: ok };
+    }
+    dead.len()
+}
+
+/// The locals of `body` that hold a checked result no one tests: each is
+/// written only by a checked operation and read only as `t.0`. A pass
+/// that took the test away proved the operation cannot overflow
+/// ([`elide_proven_overflow`], `counters`), so codegen gives the value
+/// the `nsw`/`nuw` operation, which LLVM's analyses see through, rather
+/// than an overflow intrinsic whose unused flag folds to a bare `sub`
+/// (kata 741's `k - r1` lost its no-wrap that way, 1.10x).
+pub fn untested_checks(body: &Body) -> Vec<bool> {
+    use super::rc_pairs::{statement_mentions, terminator_mentions};
+    let n = body.locals.len();
+    let mut checked = vec![false; n];
+    for b in &body.blocks {
+        for st in &b.statements {
+            if let StatementKind::Assign(p, Rvalue::CheckedBinaryOp(..)) = &st.kind {
+                if p.projection.is_empty() {
+                    checked[p.local.index()] = true;
+                }
+            }
+        }
+    }
+    for (l, c) in checked.iter_mut().enumerate() {
+        if !*c {
+            continue;
+        }
+        let l = Local(l as u32);
+        let ok = body.blocks.iter().all(|b| {
+            !terminator_mentions(&b.terminator.kind, l)
+                && b.statements.iter().all(|st| {
+                    !statement_mentions(&st.kind, l)
+                        || match &st.kind {
+                            StatementKind::Assign(d, Rvalue::CheckedBinaryOp(_, x, y)) => {
+                                *d == Place::local(l)
+                                    && x.place().is_none_or(|p| p.local != l)
+                                    && y.place().is_none_or(|p| p.local != l)
+                            }
+                            StatementKind::Assign(d, Rvalue::Use(Operand::Copy(q) | Operand::Move(q))) => {
+                                d.local != l
+                                    && q.local == l
+                                    && matches!(q.projection.as_slice(), [ProjElem::Field(f, _)] if f.index() == 0)
+                            }
+                            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => true,
+                            _ => false,
+                        }
+                })
+        });
+        *c = ok;
+    }
+    checked
 }
 
 fn fn_name(func: &Operand) -> Option<&str> {
@@ -234,7 +351,8 @@ fn whole(o: &Operand) -> Option<Local> {
 }
 
 impl<'a> Analysis<'a> {
-    fn new(body: &'a Body, tys: &'a TyInterner) -> Option<Self> {
+    /// With `indexed`, only for a body that indexes a followed vector.
+    fn new(body: &'a Body, tys: &'a TyInterner, indexed: bool) -> Option<Self> {
         let n = body.locals.len();
         let mut recv = vec![None; body.blocks.len()];
         let mut vecs = Vec::new();
@@ -258,12 +376,24 @@ impl<'a> Analysis<'a> {
             }
         }
         // Only worth it when some index call is on a followed vector.
-        let indexed = body.blocks.iter().zip(&recv).any(|(b, r)| {
+        let indexes = body.blocks.iter().zip(&recv).any(|(b, r)| {
             r.is_some()
                 && matches!(&b.terminator.kind, TerminatorKind::Call { func, .. }
                     if matches!(vec_method(func), Some("index" | "index_mut")))
         });
-        if !indexed {
+        if indexed && !indexes {
+            return None;
+        }
+        if !indexed
+            && !body.blocks.iter().any(|b| {
+                b.statements.iter().any(|s| {
+                    matches!(
+                        &s.kind,
+                        StatementKind::Assign(_, Rvalue::CheckedBinaryOp(..))
+                    )
+                })
+            })
+        {
             return None;
         }
         // Integer locals whose address is never taken mutably, and the
@@ -605,7 +735,11 @@ impl<'a> Analysis<'a> {
                         Some((st.iv[s as usize], Some(s)))
                     }
                     [ProjElem::Field(f, _)] if f.index() == 0 => {
-                        if st.pending.contains(&s) {
+                        // Before its test, `t.0` is exact only when the
+                        // operation cannot overflow, as when
+                        // `elide_proven_overflow` took the test away.
+                        let iv = st.iv[s as usize];
+                        if st.pending.contains(&s) && !iv.within(self.range[s as usize]) {
                             Some((self.range[s as usize], None))
                         } else {
                             Some((st.iv[s as usize], Some(s)))
@@ -1196,6 +1330,70 @@ mod tests {
     fn mir_range_bounds_proves_a_dp_over_filled_vectors() {
         assert_eq!(proved(WAYS, "ways"), (6, 6));
         assert_eq!(run_source(WAYS).unwrap(), ("408 385 397\n".into(), Some(0)));
+    }
+
+    /// The checked operations of `f` by kind, and whether a switch still
+    /// tests each one's overflow flag.
+    fn overflow_tests(src: &str, f: &str) -> Vec<(crate::mir::BinOp, bool)> {
+        use crate::mir::{Operand, ProjElem, Rvalue, StatementKind};
+        let l = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let body = l
+            .program
+            .bodies
+            .values()
+            .find(|b| b.instance.name == f)
+            .unwrap_or_else(|| panic!("no body {f}"));
+        let tested = |t: crate::mir::Local| {
+            body.blocks.iter().any(|b| {
+                matches!(&b.terminator.kind, TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(p) | Operand::Move(p), ..
+                } if p.local == t
+                    && matches!(p.projection.as_slice(), [ProjElem::Field(i, _)] if i.index() == 1))
+            })
+        };
+        let mut out = Vec::new();
+        for b in &body.blocks {
+            for st in &b.statements {
+                if let StatementKind::Assign(p, Rvalue::CheckedBinaryOp(op, ..)) = &st.kind {
+                    out.push((*op, tested(p.local)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Kata 459's scan (B-2026-11-08-6): `d >= 1` from the outer loop and
+    /// `i >= d` from the inner one, so `i - d` cannot overflow and its test
+    /// goes; the count `found`, which nothing bounds, keeps its test.
+    #[test]
+    fn mir_range_overflow_drops_a_test_the_loops_disprove() {
+        let src = "fn repeats(cs: ref Vec[char]) -> i64 {\n    let n = cs.len();\n    let mut found = 0;\n    for d in 1..n / 2 + 1 {\n        let mut same = true;\n        for i in d..n {\n            if cs[i] != cs[i - d] {\n                same = false;\n                break;\n            }\n        }\n        if same {\n            found += 1;\n        }\n    }\n    found\n}\nfn main() {\n    let cs: Vec[char] = \"abcabcabcabc\".chars().collect();\n    println(f\"{repeats(cs)}\");\n}\n";
+        let tests = overflow_tests(src, "repeats");
+        use crate::mir::BinOp;
+        assert!(
+            tests.iter().any(|&(op, t)| op == BinOp::Sub && !t),
+            "{tests:?}"
+        );
+        assert!(
+            tests.iter().any(|&(op, t)| op == BinOp::Add && t),
+            "{tests:?}"
+        );
+        assert_eq!(run_source(src).unwrap(), ("2\n".into(), Some(0)));
+    }
+
+    /// A start that can be negative leaves `i - d` able to overflow, so its
+    /// test stays and `i64::MIN` still panics.
+    #[test]
+    fn mir_range_overflow_keeps_a_test_a_negative_start_needs() {
+        let src = "fn shift(cs: ref Vec[char], d: i64) -> i64 {\n    let mut t = 0;\n    for i in 0..cs.len() {\n        t = i - d;\n    }\n    t\n}\nfn main() {\n    let cs: Vec[char] = \"ab\".chars().collect();\n    println(f\"{shift(cs, 1)}\");\n    println(f\"{shift(cs, -9223372036854775807 - 1)}\");\n}\n";
+        use crate::mir::BinOp;
+        let tests = overflow_tests(src, "shift");
+        assert!(
+            tests.iter().any(|&(op, t)| op == BinOp::Sub && t),
+            "{tests:?}"
+        );
+        let (o, code) = run_source(src).unwrap();
+        assert_eq!((o.as_str(), code), ("0\n", Some(101)));
     }
 
     /// Off the proof: a fill one short of the index, a `pop` after the

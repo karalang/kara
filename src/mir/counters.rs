@@ -746,21 +746,27 @@ pub(super) fn increment(
             }
             _ => return None,
         };
-        // The block's switch on the overflow flag.
-        let TerminatorKind::SwitchInt {
-            discr: Operand::Copy(f),
-            targets,
-        } = &block.terminator.kind
-        else {
-            return None;
+        // The block's switch on the overflow flag, or the goto that
+        // `range_bounds::elide_proven_overflow` left of it.
+        let ok = match &block.terminator.kind {
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(f),
+                targets,
+            } => {
+                let [(0, ok)] = targets.values.as_slice() else {
+                    return None;
+                };
+                if f.local != pl
+                    || !matches!(f.projection.as_slice(), [ProjElem::Field(FieldIdx(1), _)])
+                {
+                    return None;
+                }
+                *ok
+            }
+            TerminatorKind::Goto { target } => *target,
+            _ => return None,
         };
-        let [(0, ok)] = targets.values.as_slice() else {
-            return None;
-        };
-        if f.local != pl || !matches!(f.projection.as_slice(), [ProjElem::Field(FieldIdx(1), _)]) {
-            return None;
-        }
-        return Some((cb, *ok, c));
+        return Some((cb, ok, c));
     }
     None
 }
@@ -949,9 +955,11 @@ pub(super) fn natural_loops(body: &Body, preds: &[Vec<usize>], idom: &[usize]) -
 mod tests {
     use crate::mir::lower::build_source;
     use crate::mir::lower::tests::run_source;
-    use crate::mir::{BinOp, Rvalue, StatementKind, TerminatorKind};
+    use crate::mir::{BinOp, LocalKind, Operand, Rvalue, StatementKind, TerminatorKind};
 
-    /// How many checked adds in `f` lost their overflow branch.
+    /// How many checked adds to `cnt` in `f` lost their overflow branch
+    /// (`range_bounds::elide_proven_overflow` takes `i + 1`'s, under
+    /// `i < v.len()`, by another argument).
     fn elided(src: &str, f: &str) -> usize {
         let l = build_source(src).unwrap_or_else(|e| panic!("{e}"));
         let body = l
@@ -966,8 +974,10 @@ mod tests {
                 matches!(b.terminator.kind, TerminatorKind::Goto { .. })
                     && b.statements.iter().any(|s| {
                         matches!(
-                            s.kind,
-                            StatementKind::Assign(_, Rvalue::CheckedBinaryOp(BinOp::Add, ..))
+                            &s.kind,
+                            StatementKind::Assign(_, Rvalue::CheckedBinaryOp(BinOp::Add, Operand::Copy(x), _))
+                                if matches!(&body.locals[x.local.index()].kind,
+                                    LocalKind::User { name, .. } if name == "cnt")
                         )
                     })
             })

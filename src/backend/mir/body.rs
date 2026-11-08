@@ -30,7 +30,7 @@ impl<'ctx> Cx<'ctx, '_> {
             StatementKind::Assign(place, rv) => {
                 let ty = self.place_type(place)?;
                 let dst = self.place_ptr(place)?;
-                self.rvalue(dst, ty, rv)
+                self.rvalue(dst, place, ty, rv)
             }
             StatementKind::SetDiscriminant(place, v) => {
                 let ty = self.place_type(place)?;
@@ -562,7 +562,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     // ── rvalues ────────────────────────────────────────────────────
 
-    fn rvalue(&mut self, dst: PointerValue<'ctx>, ty: Ty, rv: &Rvalue) -> R<()> {
+    fn rvalue(&mut self, dst: PointerValue<'ctx>, dest: &Place, ty: Ty, rv: &Rvalue) -> R<()> {
         match rv {
             Rvalue::Use(op) => self.store_operand(dst, op),
             Rvalue::Ref(_, place) => {
@@ -652,10 +652,27 @@ impl<'ctx> Cx<'ctx, '_> {
                     && matches!(b, Operand::Copy(p) | Operand::Move(p)
                         if p.projection.is_empty()
                             && self.lengths.get(p.local.index()) == Some(&true));
+                let untested = dest.projection.is_empty()
+                    && self.untested.get(dest.local.index()) == Some(&true)
+                    && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul);
                 let (v, o) = if by_length {
                     // A length is `>= 0`, and the zero check is the MIR's
                     // own, before this: nothing can overflow.
                     let v = self.binop(*op, at, x.into(), y.into())?.into_int_value();
+                    (v, self.llcx.bool_type().const_zero())
+                } else if untested {
+                    // A pass proved it cannot overflow and took the test.
+                    let signed = self.int_of(at).is_some_and(IntTy::signed);
+                    let b = &self.builder;
+                    let v = match (op, signed) {
+                        (BinOp::Add, true) => b.build_int_nsw_add(x, y, ""),
+                        (BinOp::Add, false) => b.build_int_nuw_add(x, y, ""),
+                        (BinOp::Sub, true) => b.build_int_nsw_sub(x, y, ""),
+                        (BinOp::Sub, false) => b.build_int_nuw_sub(x, y, ""),
+                        (_, true) => b.build_int_nsw_mul(x, y, ""),
+                        (_, false) => b.build_int_nuw_mul(x, y, ""),
+                    }
+                    .map_err(e)?;
                     (v, self.llcx.bool_type().const_zero())
                 } else {
                     self.checked(*op, at, x, y)?

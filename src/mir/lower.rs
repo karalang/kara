@@ -28723,6 +28723,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     let counters = std::env::var("KARAC_MIR_COUNTERS").as_deref() != Ok("0");
     // `KARAC_MIR_POPCOUNT=0` keeps Kernighan's bit-count loop (`popcount`).
     let popcount = std::env::var("KARAC_MIR_POPCOUNT").as_deref() != Ok("0");
+    // `KARAC_MIR_RANGE_OVERFLOW=0` keeps the overflow tests value ranges
+    // prove cannot fail (`range_bounds::elide_proven_overflow`).
+    let range_overflow = std::env::var("KARAC_MIR_RANGE_OVERFLOW").as_deref() != Ok("0");
     // `KARAC_MIR_PRESIZE=0` leaves counting loops' pushes unreserved.
     let presize = std::env::var("KARAC_MIR_PRESIZE").as_deref() != Ok("0");
     // `KARAC_MIR_CONCAT=0` copies every `String.add`'s left side (`concat`).
@@ -28832,6 +28835,10 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         }
         if ascii_chars && !coroutines.contains(&body.instance.name) {
             crate::mir::ascii_chars::walk_ascii_chars(body, &lowered.tys);
+        }
+        // Last: the passes above match loops by their overflow tests.
+        if range_overflow {
+            crate::mir::range_bounds::elide_proven_overflow(body, &lowered.tys);
         }
         if dump.as_deref() == Some("elaborated") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
