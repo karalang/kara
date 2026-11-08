@@ -541,7 +541,7 @@ for w in words {
 }
 ```
 
-`spawn` fails with `NotFound` when there is no such program or working directory, `PermissionDenied` when the program cannot be run, and `Unsupported` on targets that cannot start processes (wasm). `status` and `output` fail the same ways. They never fail because the program did: a non-zero exit is an `Ok` status.
+`spawn` fails with `NotFound` when there is no such program or working directory, `PermissionDenied` when the program cannot be run, and nothing else: on `wasm_wasi`, which cannot start processes, a program that spawns one is refused at compile time ([design.md §16](../design.md#resources-each-target-provides)). `status` and `output` fail the same ways. They never fail because the program did: a non-zero exit is an `Ok` status.
 
 ```kara
 impl Stdio {

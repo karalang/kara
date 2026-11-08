@@ -6824,11 +6824,13 @@ Each target provides a subset of the built-in resources ([§12](#12-effects)). A
 | `FileSystem` | ✓ | ✓ |
 | `Stdin` / `Stdout` / `Stderr` | ✓ | ✓ |
 | `Env` | ✓ | ✓ (limited) |
-| `Network` | ✓ | ✓ |
+| `Network` | ✓ | no |
 | `Clock` | ✓ | ✓ |
 | `RandomSource` | ✓ | ✓ |
 | `Heap` | ✓ | ✓ |
 | `ProcessTable` | ✓ | no |
+
+`Network` is not provided on `wasm_wasi` in v1: WASI preview 1 has no socket `connect` or `bind`, so a TCP or UDP socket, the HTTP client or a server is refused when compiling for it, with the call chain, as for `ProcessTable` (review-thread ruling 2026-11-08, B-2026-11-08-37). It returns with a WASI version that has sockets.
 
 User-defined resources have no target affinity. The target gate does not see a user resource directly, only the built-in resources it reaches transitively.
 
