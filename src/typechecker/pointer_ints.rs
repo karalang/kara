@@ -81,9 +81,30 @@ impl<'a> super::TypeChecker<'a> {
         // `let n = k as usize;` over an `i64` `k`: the cast goes, and `n`
         // is the `i64` everything else gives. Not in a program that declares
         // FFI items, where `n` may be what an `extern` function is given.
-        let lets = std::mem::take(&mut self.usize_cast_lets);
+        //
+        // Every other `as usize` goes the same way, so no cast is left to
+        // feed a `usize` into a type this pass makes `i64` (B-2026-11-08-49).
+        // A `let`'s initializer is collected twice; its fix is made once.
+        let mut lets = std::mem::take(&mut self.usize_cast_lets);
+        let mut seen = std::collections::HashSet::new();
+        lets.retain(|e| seen.insert((e.span.offset, e.span.length)));
         for e in lets.into_iter().filter(|_| ffi.is_empty()) {
-            if let Some(fix) = self.usize_cast_of_an_i64(&e) {
+            // Over any other integer (a `u64`, or a `usize` this pass is
+            // about to make `i64`), the cast's target becomes `i64`.
+            let to_i64 = || match &e.kind {
+                ExprKind::Cast { ty, .. }
+                    if matches!(&ty.kind, TypeKind::Path(p)
+                        if p.generic_args.is_none()
+                            && matches!(p.segments.as_slice(), [n] if n == "usize" || n == "isize")) =>
+                {
+                    Some(super::FixIt {
+                        span: ty.span,
+                        replacement: "i64".to_string(),
+                    })
+                }
+                _ => None,
+            };
+            if let Some(fix) = self.usize_cast_of_an_i64(&e).or_else(to_i64) {
                 let remedy = super::expr_ops::usize_cast_remedy(&fix);
                 self.type_error_with_fix_it(
                     format!(

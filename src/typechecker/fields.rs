@@ -81,6 +81,15 @@ impl<'a> super::TypeChecker<'a> {
         // i64.MAX;`) sees the right `Type::Int(I64)` etc.
         if let ExprKind::Identifier(name) = &object.kind {
             if let Some(cv) = crate::prelude::lookup_primitive_const(name, field) {
+                // `usize.MAX` (Rust's `usize::MAX` sentinel) is a written
+                // `usize` too: when the program's other `usize`s become
+                // `i64`, it becomes `i64.MAX` with them (B-2026-11-08-49).
+                if (name == "usize" || name == "isize")
+                    && object.span.offset < self.program.library_start.unwrap_or(usize::MAX)
+                {
+                    self.written_pointer_ints
+                        .insert(object.span.offset, object.span);
+                }
                 return primitive_const_type(cv);
             }
             // `ExitCode.SUCCESS` / `ExitCode.FAILURE` — paren-free

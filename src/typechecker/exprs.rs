@@ -13038,8 +13038,12 @@ impl<'a> super::TypeChecker<'a> {
                 let from_ty = self.infer_expr(inner);
                 let to_ty = self.lower_type_expr(ty, &[]);
                 // A cast's `usize` has fixes of its own (drop `as usize`,
-                // B-2026-10-25-10), not the written-type one.
-                self.written_pointer_ints.remove(&ty.span.offset);
+                // B-2026-10-25-10), not the written-type one. Each is kept
+                // for `emit_written_pointer_int_fixes`, which retypes every
+                // cast along with the written types (B-2026-11-08-49).
+                if self.written_pointer_ints.remove(&ty.span.offset).is_some() {
+                    self.usize_cast_lets.push(expr.clone());
+                }
                 match (&inner.kind, &to_ty) {
                     // An ASCII char literal cast to `u8` is that byte exactly,
                     // which the byte literal spells (B-2026-10-26-16).

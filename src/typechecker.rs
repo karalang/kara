@@ -2935,7 +2935,10 @@ pub struct TypeChecker<'a> {
     /// error.
     pub(super) pointer_int_mixed: bool,
     /// Initializers `x as usize` of unannotated `let`s, whose binding is a
-    /// `usize` that then meets `i64` (B-2026-11-06-3's remainder, kata 1058).
+    /// `usize` that then meets `i64` (B-2026-11-06-3's remainder, kata 1058),
+    /// and every other `as usize` the program writes: once the written
+    /// `usize` types become `i64`, a cast left behind feeds a `usize` into
+    /// them (B-2026-11-08-49).
     pub(super) usize_cast_lets: Vec<Expr>,
     /// Each `s.parse()` no expected `Option[T]` named the target of, with
     /// the variable that stands for it: reported once the program is
