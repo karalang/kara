@@ -1,0 +1,11 @@
+source = "corpus/core/ok_fold_tuple_reads_a_borrowed_scalar_as_its_value"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["iterator", "fold", "closure"]
+class = "a"
+expected_from = "spec"
+rules = ["6.1"]
+backends = []
+env = {}
+note = "Kata 2021: core-semantics §6.1 (a borrowed scalar read where a value is wanted is its value), here as a part of a fold accumulator tuple built by a closure. Expected output worked by hand from the literals."

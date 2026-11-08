@@ -3788,6 +3788,17 @@ impl<'a> super::TypeChecker<'a> {
                         body_ty = inner;
                     }
                 }
+                // The same peel for a tuple's parts: the tuple literal's own
+                // check accepted `(a + 1, x)` with `x: ref i64` for an
+                // `(i64, i64)` slot, so a `fold` accumulator built that way
+                // is that type too (kata 2021).
+                if let Type::Tuple(_) = &body_ty {
+                    let peeled = Self::peel_scalar_refs_in_tuple(&body_ty);
+                    if peeled != body_ty && self.is_subtype_with_projections(expected_ret, &peeled)
+                    {
+                        body_ty = peeled;
+                    }
+                }
                 let collected = self
                     .closure_return_types
                     .pop()
@@ -6660,6 +6671,20 @@ impl<'a> super::TypeChecker<'a> {
             type_display(c),
             type_display(&w),
         ))
+    }
+
+    /// `t` with each `ref` to a scalar that reads as a value, at the top or
+    /// as a part of a tuple (nested), replaced by the scalar.
+    fn peel_scalar_refs_in_tuple(t: &Type) -> Type {
+        match t {
+            Type::Ref(inner) | Type::MutRef(inner) if Self::scalar_reads_as_value(inner) => {
+                (**inner).clone()
+            }
+            Type::Tuple(ts) => {
+                Type::Tuple(ts.iter().map(Self::peel_scalar_refs_in_tuple).collect())
+            }
+            _ => t.clone(),
+        }
     }
 
     /// `t` read as a value: a `ref` to a `Copy` type or a handle, alone or as

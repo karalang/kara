@@ -1,0 +1,17 @@
+// A fold whose closure builds its accumulator tuple from a borrowed item:
+// `x` is a `ref i64`, read as its value in the `(i64, i64)` it is put in,
+// as a closure whose tail is a bare `x` already is (kata 2021).
+
+fn main() {
+    let v: Vec[i64] = [3, 7, 2, 7, 5];
+    let (count, last) = v.iter().fold((0, 0), |(n, _), x| (n + 1, x));
+    println(f"{count} {last}");
+    // the largest value and where it first occurs
+    let (best, at) = v.iter().enumerate().fold((0, -1), |(best, at), (i, x)| {
+        if x > best { (x, i) } else { (best, at) }
+    });
+    println(f"{best} {at}");
+    let flags: Vec[bool] = [true, false, true];
+    let (any, all) = flags.iter().fold((false, true), |(any, all), f| (any or f, all and f));
+    println(f"{any} {all}");
+}
