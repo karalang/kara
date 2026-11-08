@@ -1728,11 +1728,21 @@ fn numeric_layout_key(t: &Type) -> Option<(u8, u16)> {
 }
 
 /// False when `a` and `b` are both concrete numeric types and not the same
-/// one: the rule for a generic argument or a tuple element.
+/// one: the rule for a generic argument or a tuple element. A tuple or an
+/// array holds its parts in place too, so the rule reaches into them:
+/// `Vec[(i64, i64)]` is not a `Vec[(i64, u64)]` (B-2026-11-08-89).
 pub(super) fn numeric_args_agree(a: &Type, b: &Type) -> bool {
-    match (numeric_layout_key(a), numeric_layout_key(b)) {
-        (Some(ka), Some(kb)) => ka == kb,
-        _ => true,
+    match (a, b) {
+        (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => {
+            xs.iter().zip(ys).all(|(x, y)| numeric_args_agree(x, y))
+        }
+        (Type::Array { element: x, .. }, Type::Array { element: y, .. }) => {
+            numeric_args_agree(x, y)
+        }
+        _ => match (numeric_layout_key(a), numeric_layout_key(b)) {
+            (Some(ka), Some(kb)) => ka == kb,
+            _ => true,
+        },
     }
 }
 

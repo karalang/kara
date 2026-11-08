@@ -6,4 +6,4 @@ tags = ["design", "inference", "literals", "collections"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "design.md §8 Literals: a later use fixes a literal's type. A map built from literals and handed to a SortedMap[i32, i64] or Map[i32, i8] parameter takes those types, as a Vec's pushes do (the -07-3 pin); with no later use, the literals default to i64 (9000000000 fits)."
+note = "design.md §8 Literals: a later use fixes a literal's type. A map built from literals and handed to a SortedMap[i32, i64] or Map[i32, i8] parameter takes those types, as a Vec's pushes do (the -07-3 pin); with no later use, the literals default to i64 (9000000000 fits). A pushed tuple literal's numbers stay open the same way: (1, u64.MAX) into a Vec[(i64, u64)]."

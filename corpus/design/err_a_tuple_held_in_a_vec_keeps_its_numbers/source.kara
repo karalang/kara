@@ -1,0 +1,10 @@
+fn second(m: Vec[(i64, u64)]) {
+    println(m[0].1);
+}
+
+fn main() {
+    let nine: i64 = -9;
+    let t: (i64, i64) = (5, nine);
+    let v: Vec[(i64, i64)] = [t];
+    second(v);
+}

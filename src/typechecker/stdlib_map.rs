@@ -152,6 +152,12 @@ impl<'a> super::TypeChecker<'a> {
         let arg_ty = if !allow_borrowed && matches!(pre_slot, Type::TypeVar(_)) {
             // An inserted literal is open for a later use of the map to fix,
             // as a pushed one is for a `Vec` (design.md §8, B-2026-11-08-42).
+            self.infer_element_open(&arg.value)
+        } else if matches!(pre_slot, Type::TypeVar(_))
+            && Self::unsuffixed_int_literal_value(&arg.value).is_some()
+        {
+            // So is a literal looked up by (`m.contains_key(1)`), which
+            // fixes nothing.
             self.infer_expr_open(&arg.value)
         } else if allow_borrowed || matches!(pre_slot, Type::TypeVar(_) | Type::TypeParam(_)) {
             self.infer_probe_arg(&arg.value, &pre_slot)

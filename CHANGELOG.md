@@ -38,6 +38,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `collect()` into a `Result[C, E]` refuses items whose error type is not
   `E`: `Err(5)` items into a `Result[Vec[i64], String]` were accepted
   (iterators.md § collect, B-2026-11-08-23).
+- A tuple or an array held in a collection keeps its numbers' types, as a
+  number held there does: a `Vec[(i64, i64)]` handed to a
+  `Vec[(i64, u64)]` parameter was accepted, and the interpreter printed `-9`
+  where the compiled binary printed `18446744073709551607`. A map whose key
+  was an open literal let `Map[?, i64]` pass for a `Map[i64, u64]` the same
+  way (B-2026-11-08-89).
 - The deferred `std.cli` parser's `Parser`, `Arg`, `Args`, `CliError`,
   `Subcommand` and `SubcommandResult` are reached through `import std.cli`
   (deferred.md § std.cli), as `std.regex` and `std.json` are: `karac check`

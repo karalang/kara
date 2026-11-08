@@ -3384,6 +3384,8 @@ pub struct TypeChecker<'a> {
     /// The expression whose literal variable [`Self::infer_expr`] leaves
     /// open ([`Self::infer_expr_open`]).
     pub(super) open_literal_expr: Option<crate::ids::NodeId>,
+    /// The tuple literal whose numbers [`Self::infer_element_open`] opens.
+    pub(super) open_tuple_literal: Option<crate::ids::NodeId>,
     /// The spans of [`Self::wide_int_literals`] an integer context has
     /// already range-checked.
     pub(super) wide_int_literals_judged: FxHashSet<SpanKey>,
@@ -4269,6 +4271,7 @@ impl<'a> TypeChecker<'a> {
             body_literal_vars: Vec::new(),
             literal_typed_spans: Vec::new(),
             open_literal_expr: None,
+            open_tuple_literal: None,
             wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             binding_class_reported: rustc_hash::FxHashSet::default(),
@@ -7804,6 +7807,20 @@ impl<'a> TypeChecker<'a> {
             if inference::unify_types(expected, found, &mut subs, &mut const_subs) {
                 self.env.substitutions = subs;
                 self.env.const_substitutions = const_subs;
+                // Unification takes any two numbers, so the value, its
+                // literals now fixed, is judged as any other: an open literal
+                // key must not let `Map[?, i64]` pass for a `Map[i64, u64]`,
+                // nor `Vec[(?, i64)]` for a `Vec[(i64, u64)]` (B-2026-11-08-42).
+                let now = self.resolved_now(found);
+                let mut left = Vec::new();
+                exprs::type_var_ids(&now, &mut left);
+                if now != *found
+                    && !left
+                        .iter()
+                        .any(|id| inference::literal_var_kind(*id).is_some())
+                {
+                    return self.check_assignable(expected, &now, span);
+                }
                 return true;
             }
         }

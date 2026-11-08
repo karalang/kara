@@ -1,0 +1,9 @@
+source = "B-2026-11-08-89"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "numerics", "collections"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference / B-2026-10-23-12: a number held inside a collection or a tuple keeps its type. A Vec[(i64, i64)] is not a Vec[(i64, u64)]; it was accepted, and the interpreter printed -9 where the compiled binary printed 18446744073709551607. The expected.out wording of an error pin is guidance, not a byte oracle."

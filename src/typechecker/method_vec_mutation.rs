@@ -774,7 +774,11 @@ impl<'a> super::TypeChecker<'a> {
         }
         // A pushed literal is open for the element type to fix
         // (B-2026-11-07-3).
-        let mut ty = self.infer_expr_open(arg);
+        let mut ty = if matches!(slot, Type::TypeVar(_)) {
+            self.infer_element_open(arg)
+        } else {
+            self.infer_expr_open(arg)
+        };
         // One the element type cannot take (a `Vec[T]`'s `T`) keeps its
         // default, as it had before, and is judged against the slot as that.
         if self.unbound_literal_var(&ty).is_some()

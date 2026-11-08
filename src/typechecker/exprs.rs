@@ -11056,6 +11056,17 @@ impl<'a> super::TypeChecker<'a> {
         ty
     }
 
+    /// [`Self::infer_expr_open`] for a value stored into a collection whose
+    /// element type no use has fixed yet: a tuple literal's numbers are open
+    /// too (`v.push((1, 2))` later handed to a `Vec[(i64, u64)]`; design.md
+    /// §8, B-2026-11-08-42).
+    pub(super) fn infer_element_open(&mut self, expr: &Expr) -> Type {
+        let saved = self.open_tuple_literal.replace(expr.id);
+        let ty = self.infer_expr_open(expr);
+        self.open_tuple_literal = saved;
+        ty
+    }
+
     /// Two branch types that still hold a literal's variable meet by
     /// unification, so the variable and an empty sibling's slot are one
     /// (`if c { Some(1) } else { None }`: the `None`'s `T` takes the
@@ -13398,10 +13409,18 @@ impl<'a> super::TypeChecker<'a> {
                 if exprs.is_empty() {
                     Type::Unit
                 } else {
+                    // An open tuple literal's numbers are open too: `v.push((1,
+                    // 2))` on a `Vec.new()` later handed to a `Vec[(i64,
+                    // u64)]` (design.md §8, B-2026-11-08-42).
+                    let open = self.open_tuple_literal == Some(expr.id) && !expr.id.is_dummy();
                     let types: Vec<Type> = exprs
                         .iter()
                         .map(|e| {
-                            let t = self.infer_expr(e);
+                            let t = if open {
+                                self.infer_expr_open(e)
+                            } else {
+                                self.infer_expr(e)
+                            };
                             self.tuple_slot_holds_ref_pattern(e, t)
                         })
                         .collect();

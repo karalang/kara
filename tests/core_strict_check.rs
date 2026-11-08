@@ -12746,8 +12746,17 @@ fn a_numeric_type_inside_a_compound_keeps_its_sign() {
     rejected(
         "defaulted-map-into-a-u64-field",
         "struct S { m: Map[i64, u64] }\nfn main() {\n    let mut m2 = Map.new();\n    \
-         let _ = m2.insert(5, 9);\n    let s = S { m: m2 };\n    println(s.m.len());\n}\n",
+         let nine: i64 = 9;\n    let _ = m2.insert(5, nine);\n    let s = S { m: m2 };\n    \
+         println(s.m.len());\n}\n",
         "expected 'Map[i64, u64]', found 'Map[i64, i64]'",
+    );
+    // An inserted literal takes the type the map's later use gives it, as a
+    // pushed one does (design.md §8, B-2026-11-08-42).
+    accepted_and_runs(
+        "map-literal-into-a-u64-field",
+        "struct S { m: Map[i64, u64] }\nfn main() {\n    let mut m2 = Map.new();\n    \
+         let _ = m2.insert(5, 9);\n    let s = S { m: m2 };\n    println(s.m.len());\n}\n",
+        "1\n",
     );
     rejected(
         "option-i64-into-option-u64",

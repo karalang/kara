@@ -10,6 +10,10 @@ fn hashed(d: Map[i32, i8]) {
     println(t);
 }
 
+fn pairs(v: Vec[(i64, u64)]) {
+    println(v[0].1);
+}
+
 fn main() {
     let mut d = SortedMap.new();
     d.insert(1, 2);
@@ -23,4 +27,7 @@ fn main() {
     let mut f = SortedMap.new();
     f.insert(1, 9000000000);
     println(f"{f}");
+    let mut w = Vec.new();
+    w.push((1, 18446744073709551615));
+    pairs(w);
 }
