@@ -700,6 +700,18 @@ impl super::Parser {
                 }
                 break;
             }
+            // Rust's array type as a generic argument, `Vec[[i64; 2]]`: no
+            // shape literal holds a `;`, so the bracket is read as a type,
+            // whose parser reports `[T; N]` with the `Array[T, N]` fix
+            // (kata 1072; before, the shape parser stopped at the `;` and
+            // karac fix inserted another).
+            if self.bracket_holds_semicolon() {
+                args.push(GenericArg::Type(self.parse_type()?));
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+                continue;
+            }
             // Shape literal args: a `[` starting a generic argument is a
             // SHAPE_LIT (`Tensor[f64, [3, 4, ?]]`) — no other generic-arg
             // form begins with `[` (syntax.md § GENERIC_ARG). Dims are

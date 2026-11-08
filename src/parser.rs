@@ -1868,6 +1868,30 @@ impl Parser {
         }
     }
 
+    /// Whether the bracketed group at the current token holds a `;` at its
+    /// own depth, as Rust's array type `[T; N]` does. Reads ahead only.
+    pub(crate) fn bracket_holds_semicolon(&self) -> bool {
+        if !self.check(&Token::LeftBracket) {
+            return false;
+        }
+        let mut depth = 0usize;
+        for t in &self.tokens[self.pos..] {
+            match t.token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                Token::Semicolon if depth == 1 => return true,
+                Token::EOF => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     pub(crate) fn macro_call_name_before_bang(&self, bang_span: &Span) -> Option<String> {
         let prev = self.tokens.get(self.pos.checked_sub(1)?)?;
         let Token::Identifier { name, .. } = &prev.token else {
