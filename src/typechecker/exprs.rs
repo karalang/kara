@@ -4537,6 +4537,12 @@ impl<'a> super::TypeChecker<'a> {
         let mut mangle_frame: FxHashMap<String, String> = FxHashMap::default();
         let mut te_frame: FxHashMap<String, crate::ast::TypeExpr> = FxHashMap::default();
         for (name, ty) in solutions {
+            if let Some((id, _)) = self.unbound_literal_var(ty) {
+                // A literal nothing has fixed yet: recorded when it is.
+                self.pending_literal_call_subs
+                    .push((*span, name.clone(), id));
+                continue;
+            }
             if let Some(resolved) = type_to_concrete_or_param_name(ty) {
                 frame.insert(name.clone(), resolved);
             } else if let Type::Existential { origin, .. } = ty {

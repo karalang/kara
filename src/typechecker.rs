@@ -3163,6 +3163,11 @@ pub struct TypeChecker<'a> {
     /// `call_type_subs` / `call_type_subs_mangle` at export, once every body
     /// has been walked. B-2026-08-22-12.
     pub(super) pending_existential_call_subs: Vec<(SpanKey, String, SpanKey)>,
+    /// Call sites whose type parameter a literal's variable solves, still
+    /// open when the call was recorded: `(call span, param, variable)`. The
+    /// literal takes its type when its body ends, and the call's frames are
+    /// recorded then (`default_literal_vars`, B-2026-11-08-44).
+    pub(super) pending_literal_call_subs: Vec<(Span, String, TypeVarId)>,
     /// `let` bindings whose type is an EXISTENTIAL: `(pattern span,
     /// existential origin)`. Same deferral, same reason, as
     /// `pending_existential_call_subs` — resolved into `pattern_binding_types`
@@ -4188,6 +4193,7 @@ impl<'a> TypeChecker<'a> {
             current_return_impl_trait: None,
             impl_trait_return_witnesses: FxHashMap::default(),
             pending_existential_call_subs: Vec::new(),
+            pending_literal_call_subs: Vec::new(),
             pending_existential_projections: Vec::new(),
             pending_existential_method_callees: Vec::new(),
             pending_existential_pattern_bindings: Vec::new(),
@@ -9007,6 +9013,39 @@ impl<'a> TypeChecker<'a> {
         // Only once the outermost open body ends: an inner one's spans may
         // name an outer body's literals, which are still open.
         if from == 0 || self.body_literal_vars.is_empty() {
+            for (span, name, id) in std::mem::take(&mut self.pending_literal_call_subs) {
+                let t = resolve(self, &Type::TypeVar(id));
+                if !matches!(t, Type::TypeVar(_)) {
+                    // Kept beside the parameters the call already recorded.
+                    let key = SpanKey::from_span(&span);
+                    let before = (
+                        self.call_type_subs.remove(&key),
+                        self.call_type_subs_mangle.remove(&key),
+                        self.call_type_subs_te.remove(&key),
+                    );
+                    let one: std::collections::HashMap<String, Type> =
+                        std::iter::once((name, t)).collect();
+                    self.record_call_type_subs(&span, &one);
+                    if let Some(old) = before.0 {
+                        let f = self.call_type_subs.entry(key).or_default();
+                        for (k, v) in old {
+                            f.entry(k).or_insert(v);
+                        }
+                    }
+                    if let Some(old) = before.1 {
+                        let f = self.call_type_subs_mangle.entry(key).or_default();
+                        for (k, v) in old {
+                            f.entry(k).or_insert(v);
+                        }
+                    }
+                    if let Some(old) = before.2 {
+                        let f = self.call_type_subs_te.entry(key).or_default();
+                        for (k, v) in old {
+                            f.entry(k).or_insert(v);
+                        }
+                    }
+                }
+            }
             for key in std::mem::take(&mut self.literal_typed_spans) {
                 if let Some(t) = self.expr_types.get(&key) {
                     if exprs::contains_type_var(t) {
