@@ -1074,8 +1074,16 @@ impl StringSlice {
     /// with no `sep` is one piece; an empty `sep` matches at both ends and
     /// between every pair of chars.
     fn split(self, sep: Str) -> StrSplit {
-        let pos = if sep.is_empty() { -1 } else { 0 };
-        StrSplit { s: self, sep: sep, pos: pos, done: false }
+        let empty = sep.is_empty();
+        StrSplit {
+            s: self,
+            sep: sep,
+            pos: 0,
+            back: self.len(),
+            lead: empty,
+            trail: empty,
+            done: false,
+        }
     }
 
     /// The lines, each a view without its `\n` or `\r\n`; a final line
@@ -1086,7 +1094,7 @@ impl StringSlice {
 
     /// The runs of non-whitespace chars, each a view into the text.
     fn split_whitespace(self) -> StrWords {
-        StrWords { s: self, pos: 0 }
+        StrWords { s: self, pos: 0, back: self.len() }
     }
 
     /// The text without leading and trailing whitespace, a view into it.
@@ -1273,45 +1281,134 @@ impl String {
 }
 
 /// The pieces of a `Str` between the occurrences of a separator: `split`.
-/// `pos` is the byte the next piece starts at; with an empty separator it
-/// starts at -1, for the empty piece before the first char.
+/// What is left to split is `s[pos..back]`. A non-empty separator cuts
+/// at the matches a front-to-back search finds, from either end, so
+/// `rev()` yields the same pieces last first (B-2026-11-08-15). An empty
+/// separator yields an empty piece, each char, and an empty piece: `lead`
+/// and `trail` say whether the two empty pieces are still to come.
 struct StrSplit {
     s: Str,
     sep: Str,
     pos: i64,
+    back: i64,
+    lead: bool,
+    trail: bool,
     done: bool,
+}
+
+impl StrSplit {
+    /// The start of the last match in `s[pos..back]` that a search from
+    /// `pos` finds. A separator whose start is not also its end (`", "`,
+    /// any one char) cannot overlap itself, so its last match is the same
+    /// from either end and `rfind` finds it; one that can (`"aa"`) is
+    /// searched from the front, as `next` searches.
+    fn last_match(ref self) -> Option[i64] {
+        let m = self.sep.len();
+        let mut border = false;
+        let mut k = 1;
+        while k < m {
+            if self.sep.slice(0, k) == self.sep.slice(m - k, m) {
+                border = true;
+                break;
+            }
+            k = k + 1;
+        }
+        if not border {
+            return match self.s.slice(self.pos, self.back).rfind(self.sep) {
+                Some(j) => Some(self.pos + j),
+                None => None,
+            };
+        }
+        let mut last: Option[i64] = None;
+        let mut at = self.pos;
+        loop {
+            match self.s.find_at_byte(self.sep, at) {
+                Some(i) => {
+                    if i + m > self.back {
+                        return last;
+                    }
+                    last = Some(i);
+                    at = i + m;
+                }
+                None => {
+                    return last;
+                }
+            }
+        }
+    }
 }
 
 impl Iterator for StrSplit {
     type Item = Str;
 
     fn next(mut ref self) -> Option[Self.Item] {
-        if self.done {
+        if self.sep.is_empty() {
+            if self.lead {
+                self.lead = false;
+                return Some(self.s.slice(self.pos, self.pos));
+            }
+            if self.pos < self.back {
+                let at = self.pos;
+                self.pos = at + self.s.char_at_byte(at).len_utf8();
+                return Some(self.s.slice(at, self.pos));
+            }
+            if self.trail {
+                self.trail = false;
+                return Some(self.s.slice(self.back, self.back));
+            }
             return None;
         }
-        let n = self.s.len();
-        if self.sep.is_empty() {
-            if self.pos < 0 {
-                self.pos = 0;
-                return Some(self.s.slice(0, 0));
-            }
-            if self.pos >= n {
-                self.done = true;
-                return Some(self.s.slice(n, n));
-            }
-            let at = self.pos;
-            self.pos = at + self.s.char_at_byte(at).len_utf8();
-            return Some(self.s.slice(at, self.pos));
+        if self.done {
+            return None;
         }
         let at = self.pos;
         match self.s.find_at_byte(self.sep, at) {
             Some(i) => {
-                self.pos = i + self.sep.len();
-                Some(self.s.slice(at, i))
+                if i + self.sep.len() <= self.back {
+                    self.pos = i + self.sep.len();
+                    return Some(self.s.slice(at, i));
+                }
+                self.done = true;
+                Some(self.s.slice(at, self.back))
             }
             None => {
                 self.done = true;
-                Some(self.s.slice(at, n))
+                Some(self.s.slice(at, self.back))
+            }
+        }
+    }
+}
+
+impl DoubleEndedIterator for StrSplit {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.sep.is_empty() {
+            if self.trail {
+                self.trail = false;
+                return Some(self.s.slice(self.back, self.back));
+            }
+            if self.pos < self.back {
+                let end = self.back;
+                self.back = end - self.s.char_before_byte(end).len_utf8();
+                return Some(self.s.slice(self.back, end));
+            }
+            if self.lead {
+                self.lead = false;
+                return Some(self.s.slice(self.pos, self.pos));
+            }
+            return None;
+        }
+        if self.done {
+            return None;
+        }
+        let end = self.back;
+        match self.last_match() {
+            Some(j) => {
+                self.back = j;
+                Some(self.s.slice(j + self.sep.len(), end))
+            }
+            None => {
+                self.done = true;
+                Some(self.s.slice(self.pos, end))
             }
         }
     }
@@ -1335,12 +1432,22 @@ impl Iterator for StrSplitN {
         if self.left > 0 {
             return self.inner.next();
         }
-        if self.inner.done {
-            return None;
+        // The rest of the text as one piece ends the split.
+        if self.inner.sep.is_empty() {
+            if not self.inner.lead and not self.inner.trail and self.inner.pos >= self.inner.back {
+                return None;
+            }
+            self.inner.lead = false;
+            self.inner.trail = false;
+        } else {
+            if self.inner.done {
+                return None;
+            }
+            self.inner.done = true;
         }
-        self.inner.done = true;
-        let at = if self.inner.pos < 0 { 0 } else { self.inner.pos };
-        Some(self.inner.s.slice(at, self.inner.s.len()))
+        let at = self.inner.pos;
+        self.inner.pos = self.inner.back;
+        Some(self.inner.s.slice(at, self.inner.back))
     }
 }
 
@@ -1377,18 +1484,44 @@ impl Iterator for StrLines {
     }
 }
 
-/// The runs of non-whitespace chars of a `Str`: `split_whitespace`. `pos`
-/// is the byte the search for the next run starts at.
+/// The runs of non-whitespace chars of a `Str`: `split_whitespace`. What
+/// is left to search is `s[pos..back]`; `rev()` walks it from the back
+/// (B-2026-11-08-15).
 struct StrWords {
     s: Str,
     pos: i64,
+    back: i64,
+}
+
+impl DoubleEndedIterator for StrWords {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        while self.back > self.pos {
+            let c = self.s.char_before_byte(self.back);
+            if not c.is_whitespace() {
+                break;
+            }
+            self.back = self.back - c.len_utf8();
+        }
+        if self.back <= self.pos {
+            return None;
+        }
+        let end = self.back;
+        while self.back > self.pos {
+            let c = self.s.char_before_byte(self.back);
+            if c.is_whitespace() {
+                break;
+            }
+            self.back = self.back - c.len_utf8();
+        }
+        Some(self.s.slice(self.back, end))
+    }
 }
 
 impl Iterator for StrWords {
     type Item = Str;
 
     fn next(mut ref self) -> Option[Self.Item] {
-        let n = self.s.len();
+        let n = self.back;
         while self.pos < n {
             let c = self.s.char_at_byte(self.pos);
             if not c.is_whitespace() {

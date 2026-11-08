@@ -1,0 +1,31 @@
+fn show(v: Vec[String]) -> String { v.join("|") }
+fn main() {
+    let date = "  20th Oct  2052 ";
+    let w: Vec[String] = date.split_whitespace().rev().map(|w| w.to_string()).collect();
+    println(show(w));
+    let s = "a,b,,c";
+    println(show(s.split(",").rev().map(|w| w.to_string()).collect()));
+    println(show(s.split(",").map(|w| w.to_string()).collect()));
+    println(show("aaaaa".split("aa").map(|w| w.to_string()).collect()));
+    println(show("aaaaa".split("aa").rev().map(|w| w.to_string()).collect()));
+    println(show("héllo".split("").map(|w| w.to_string()).collect()));
+    println(show("héllo".split("").rev().map(|w| w.to_string()).collect()));
+    println(show("".split("").rev().map(|w| w.to_string()).collect()));
+    println(show("a b c d".splitn(2, " ").map(|w| w.to_string()).collect()));
+    println(show("ab".splitn(2, "").map(|w| w.to_string()).collect()));
+    println(show("ab".splitn(1, "").map(|w| w.to_string()).collect()));
+    println(show("ab".splitn(5, "").map(|w| w.to_string()).collect()));
+    let mut it = "1 2 3 4 5".split(" ");
+    let mut out: Vec[String] = Vec.new();
+    out.push(it.next().unwrap().to_string());
+    out.push(it.next_back().unwrap().to_string());
+    out.push(it.next().unwrap().to_string());
+    out.push(it.next_back().unwrap().to_string());
+    out.push(it.next().unwrap().to_string());
+    println(f"{show(out)} {it.next().is_none()} {it.next_back().is_none()}");
+    let mut ws = " x  y ".split_whitespace();
+    let b = ws.next_back().unwrap().to_string();
+    let f = ws.next().unwrap().to_string();
+    let e = ws.next().is_none();
+    println(f"{b} {f} {e}");
+}

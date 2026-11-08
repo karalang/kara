@@ -1,0 +1,9 @@
+source = "B-2026-11-08-15"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iterators", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "library/iterators.md § DoubleEndedIterator: `split_whitespace()` and `split(sep)` walk from both ends, so `.rev()` takes them. Words come back last first; `split(sep).rev()` yields the forward pieces reversed, including empty ones and the empty separator's lead/char/trail pieces; a separator that overlaps itself (`aa` in `aaaaa`) is still matched forward, so the reversed pieces are the forward ones reversed. Mixed `next` / `next_back` meet in the middle and then both give None. Python's `str.split` and `split()` agree with every line."
