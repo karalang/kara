@@ -2164,7 +2164,32 @@ impl<'a> super::Resolver<'a> {
                 }
                 // Look at target module's top-level items for suggestions,
                 // plus any submodule siblings.
-                let mut candidates_owned: Vec<String> = module_top_level_names(tree, &imp.path);
+                // Only names this importer could import: across packages a
+                // name that is not `pub` is E0111, so it is not "available"
+                // (B-2026-11-08-35); neither is a `private` one out of its
+                // directory.
+                let importer_pkg = self
+                    .current_module
+                    .and_then(|id| tree.module(id).package.clone());
+                let importable = |name: &str| {
+                    let Some(vis) = module_item_visibility(tree, &imp.path, name) else {
+                        return true;
+                    };
+                    let (def_path, _) = module::canonical_origin(tree, &imp.path, name)
+                        .unwrap_or_else(|| (imp.path.clone(), name.to_string()));
+                    if !visibility_allows_access(vis, &def_path, &importer_path) {
+                        return false;
+                    }
+                    let def_pkg = tree
+                        .graph
+                        .lookup(&def_path)
+                        .and_then(|id| tree.module(id).package.clone());
+                    vis == Visibility::Pub || def_pkg == importer_pkg
+                };
+                let mut candidates_owned: Vec<String> = module_top_level_names(tree, &imp.path)
+                    .into_iter()
+                    .filter(|n| importable(n))
+                    .collect();
                 // B-2026-08-14-34 leg A — `by_path` is a `HashMap`, and
                 // `suggest_similar` breaks an equal-distance tie on candidate
                 // order, so two sibling submodules equidistant from a typo would
