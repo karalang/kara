@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1501-1600/1504-count-submatrices-with-all-ones/bench/submat.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1504 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "e-differs:stdout"
+classified_with = "1dce193ad+local"
+extracted_src = "ab9f65c5"
