@@ -1,0 +1,14 @@
+// design.md § Assertions: `assert_eq[T](a: T, b: T)`, so a string literal
+// takes `Str` from the other operand, as in `s == "x"` (B-2026-11-08-33).
+fn version() -> Str {
+    "0.1.0"
+}
+
+fn main() {
+    let s: Str = "x";
+    assert_eq(s, "x");
+    assert_eq("x", s);
+    assert_ne(version(), "0.2.0");
+    assert_eq(version(), "0.1.0");
+    println("ok");
+}

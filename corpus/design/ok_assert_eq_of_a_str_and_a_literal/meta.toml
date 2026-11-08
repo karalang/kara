@@ -1,0 +1,9 @@
+source = "B-2026-11-08-33"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "assertions", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "`assert_eq(s, \"x\")` with `s: Str` was refused with \"`assert_eq` of two types is not lowered yet\" while `s == \"x\"` was accepted. The literal takes `Str` from the other operand (`assert_eq[T](a: T, b: T)`, design.md § Assertions). Each assertion here holds, in either operand order, so the program prints ok."

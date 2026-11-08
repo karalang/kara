@@ -20805,6 +20805,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let int = |s: &Self, t: Ty| {
                             matches!(s.tys().tcx().kind(t), HK::Int(_) | HK::UInt(_))
                         };
+                        let text = |s: &Self, t: Ty| {
+                            matches!(s.tys().tcx().kind(t), HK::Str | HK::StaticStr)
+                        };
                         // `assert_eq(e.step(), None)`: a variant written
                         // without its arguments is the same type, with what
                         // it does not name left open, and `==` meets them as
@@ -20854,9 +20857,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 false => Rvalue::Use(v),
                             };
                             self.assign(Place::local(ok), v);
-                        } else if lt != rt && !(int(self, lt) && int(self, rt)) {
-                            // Integers of two widths meet at the wider one;
-                            // any other pair of types has no `==`.
+                        } else if lt != rt
+                            && !(int(self, lt) && int(self, rt))
+                            && !(text(self, lt) && text(self, rt))
+                        {
+                            // Integers of two widths meet at the wider one,
+                            // and a `Str` meets a `String` as `==` meets them
+                            // (B-2026-11-08-33); any other pair of types has
+                            // no `==`.
                             return self.unsupported(e.span, &format!("`{name}` of two types"));
                         } else {
                             // Each operand is evaluated once, before the
