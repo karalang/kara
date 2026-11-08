@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 188 |
-| false-positive | 153 |
+| false-positive | 154 |
 | perf | 120 |
 | missing-feature | 110 |
 | soundness | 53 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 295 |
+| typecheck | 296 |
 | mir-llvm | 156 |
 | mir | 137 |
 | cli | 85 |
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-53 | 2026-11-08 | typecheck | low | `karac fix` drops a closure's `-> i32` and with it the type of the literal-typed tuple binding it returns, leaving `res.max(x as i32)` ("`max` expects an argument of type `i64`, got `i32`") and a narrowing at the caller with no fix and no binding named | — |
 | B-2026-11-08-55 | 2026-11-08 | typecheck | low | RULING WANTED (Str vs String): `["inc", "dec"].contains(cmd)` with `cmd: Str`, and `names.contains(s)` on a `Vec[String]`, are refused "expected 'ref String', found 'Str'" with a `.to_string()` fix, while `Map[String, _].contains_key(s)` takes the view and `let cmds: Vec[Str] = [..]; cmds.contains(cmd)` works | — |
 | B-2026-11-08-57 | 2026-11-08 | typecheck+cli | low | An unannotated array or `Vec` literal's element type is not fixed by where the binding goes: `let mut cnt = [0; 26]; ..; cnt` returned as `Array[i32, 26]`, and `let mut ans = Vec.filled(n, 0); dfs(.., mut ans)` into `ans: mut ref Vec[i32]`, are refused, and the binding annotation the message itself names gets no machine fix | — |
+| B-2026-11-08-58 | 2026-11-08 | typecheck | medium | A closure returning `Some((Vec.new(), x))` to a generic `Fn(S) -> Option[(S, O)]` leaves `O` uninferred, and with the state unannotated reports two unifiable function types as a mismatch: `.scan(Vec.new(), |seen, x| Some((Vec.new(), seen.len())))` is refused 'expected Fn(Vec[?T3], ref i64) -> Option[(Vec[?T3], OutV)], found Fn(Vec[i64], ref i64) -> Option[(Vec[i64], OutV)]' and 'cannot infer type parameter OutV' | — |
 
 ### Relocated
 
