@@ -1,0 +1,678 @@
+// mini_cmd: Python's `cmd.Cmd`, the framework behind line-oriented
+// consoles (pdb, admin shells, test harnesses), with an inventory console
+// built on it: the prompt-and-read loop, the parsing of a command word,
+// `?` and `!`, an empty line repeating the last command, the help
+// listing with its docstrings and columns, and what Tab would complete.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+
+// ------------------------------------------------------------ text
+
+/// Python's `repr` of a string, for the characters the sessions use.
+fn py_repr(s: Str) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+/// `s` padded with spaces on the right to `width` characters.
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    let mut n = s.chars().count();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out
+}
+
+/// `inspect.cleandoc`: tabs expanded, the margin common to the lines after
+/// the first removed, the first line's leading spaces removed, and blank
+/// lines at either end dropped.
+fn cleandoc(doc: Str) -> String {
+    let mut lines: Vec[String] = doc.split("\n").map(|l| expand_tabs(l)).collect();
+    let mut margin = -1;
+    for k in 1..lines.len() {
+        let line = lines[k].as_str();
+        let content = strip_spaces(line).chars().count();
+        if content > 0 {
+            let indent = line.chars().count() - content;
+            if margin < 0 or indent < margin {
+                margin = indent;
+            }
+        }
+    }
+    if not lines.is_empty() {
+        lines[0] = strip_spaces(lines[0]).to_string();
+    }
+    if margin >= 0 {
+        for k in 1..lines.len() {
+            let cs: Vec[char] = lines[k].chars().collect();
+            let from = if margin < cs.len() { margin } else { cs.len() };
+            lines[k] = cs[from..].iter().collect();
+        }
+    }
+    while not lines.is_empty() and lines[lines.len() - 1].is_empty() {
+        lines.pop();
+    }
+    while not lines.is_empty() and lines[0].is_empty() {
+        lines.remove(0);
+    }
+    lines.join("\n")
+}
+
+/// `s` without its leading spaces (`lstrip(' ')`).
+fn strip_spaces(s: Str) -> Str {
+    let mut rest = s;
+    while let Some(r) = rest.strip_prefix(" ") {
+        rest = r;
+    }
+    rest
+}
+
+/// `str.expandtabs()`: each tab moves to the next multiple of 8.
+fn expand_tabs(line: Str) -> String {
+    let mut out = String.new();
+    let mut col = 0;
+    for c in line.chars() {
+        if c == '\t' {
+            out.push(' ');
+            col += 1;
+            while col % 8 != 0 {
+                out.push(' ');
+                col += 1;
+            }
+        } else {
+            out.push(c);
+            col += 1;
+        }
+    }
+    out
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() or c == '_'
+}
+
+// ------------------------------------------------------------ the class
+
+const PROMPT: Str = "(inv) ";
+const INTRO: Str = "Inventory console. Type help or ? to list commands.";
+const DOC_LEADER: Str = "Stock and prices for the shop floor.";
+const DOC_HEADER: Str = "Documented commands (type help <topic>):";
+const MISC_HEADER: Str = "Miscellaneous help topics:";
+const UNDOC_HEADER: Str = "Undocumented commands:";
+const RULER: Str = "-";
+
+/// The class's `do_` methods, in `dir()` order.
+const COMMANDS: Array[Str, 14] = [
+    "EOF", "add", "columns", "complete", "help", "history", "list", "ping", "quit",
+    "remove", "set", "shell", "show", "total",
+];
+
+/// The class's `help_` methods, in `dir()` order.
+const TOPICS: Array[Str, 4] = ["EOF", "add", "list", "pricing"];
+
+/// A `do_` method's `__doc__`, as Python 3.13 compiles it: `None` for a
+/// method without one.
+fn doc_of(name: Str) -> Option[Str] {
+    match name {
+        "add" => Some(
+            "Add stock: add NAME QTY [PRICE].\n\nQTY is added to what is there; PRICE, when given, replaces the\nprice (a new item without one costs 0.00).\n    add bolts 100 0.15\n",
+        ),
+        "columns" => Some("columns WIDTH WORD...: lay the words out as help does."),
+        "help" => Some("List available commands with \"help\" or detailed help with \"help cmd\"."),
+        "history" => Some("Show the lines read so far, across sessions."),
+        "list" => Some("List the items, or those whose names start with ARG."),
+        "ping" => Some("\n        "),
+        "quit" => Some("Leave the console."),
+        "remove" => Some("Remove an item entirely: remove NAME"),
+        "set" => Some("set NAME qty|price VALUE        (changes one field)"),
+        "total" => Some("\nTotal value of the stock.\n\nEach item counts quantity times price.\n\n\n"),
+        _ => None,
+    }
+}
+
+fn is_command(name: Str) -> bool {
+    COMMANDS.iter().any(|c| *c == name)
+}
+
+fn is_topic(name: Str) -> bool {
+    TOPICS.iter().any(|t| *t == name)
+}
+
+/// A price as cents: digits, optionally a point and one or two more.
+fn cents(text: Str) -> Option[i64] {
+    let (whole, frac, dot) = match text.split_once(".") {
+        Some((w, f)) => (w, f, true),
+        None => (text, "", false),
+    };
+    if not all_digits(whole) or whole.len() > 7 {
+        return None;
+    }
+    if dot and (not all_digits(frac) or frac.len() > 2) {
+        return None;
+    }
+    let mut padded = frac.to_string();
+    padded.push_str("00");
+    let w = i64.parse(whole).ok()?;
+    let f = i64.parse(padded[0..2]).ok()?;
+    Some(w * 100 + f)
+}
+
+/// `isascii() and isdigit()`: at least one character, all of them 0 to 9.
+fn all_digits(s: Str) -> bool {
+    not s.is_empty() and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn money(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+struct Console {
+    stock: SortedMap[String, (i64, i64)],
+    history: Vec[String],
+    count: i64,
+    lastcmd: String,
+}
+
+impl Console {
+    // ---- the loop
+
+    fn cmdloop(mut ref self, input: Str) {
+        self.count = 0;
+        self.lastcmd = String.new();
+        println(INTRO);
+        let mut pos = 0;
+        let mut stop = false;
+        while not stop {
+            print(PROMPT);
+            let line = if pos >= input.len() {
+                "EOF".to_string()
+            } else {
+                let rest = input[pos..];
+                let raw = match rest.find("\n") {
+                    Some(i) => rest[0..i + 1],
+                    None => rest,
+                };
+                pos += raw.len();
+                let mut kept = raw;
+                while kept.ends_with("\r") or kept.ends_with("\n") {
+                    kept = kept[0..kept.len() - 1];
+                }
+                kept.to_string()
+            };
+            let line = self.precmd(line);
+            stop = self.onecmd(line);
+            stop = self.postcmd(stop);
+        }
+        println(f"[{self.count} lines handled]");
+    }
+
+    fn precmd(mut ref self, line: own String) -> String {
+        self.history.push(line.clone());
+        line
+    }
+
+    fn postcmd(mut ref self, stop: bool) -> bool {
+        self.count += 1;
+        stop
+    }
+
+    /// `parseline`: the command word, the rest of the line stripped, and
+    /// the line as it was understood; no command when the line is empty.
+    fn parseline(line: Str) -> (Option[String], String, String) {
+        let mut line = line.trim().to_string();
+        if line.is_empty() {
+            return (None, String.new(), line);
+        }
+        if line.starts_with("?") {
+            line = f"help {line[1..]}";
+        } else if line.starts_with("!") {
+            // The class has a do_shell.
+            line = f"shell {line[1..]}";
+        }
+        let mut i = 0;
+        for c in line.chars() {
+            if not is_ident_char(c) {
+                break;
+            }
+            i += 1;
+        }
+        let cmd = line[0..i].to_string();
+        let arg = line[i..].trim().to_string();
+        (Some(cmd), arg, line)
+    }
+
+    fn onecmd(mut ref self, line: Str) -> bool {
+        let (cmd, arg, line) = Console.parseline(line);
+        if line.is_empty() {
+            return self.emptyline();
+        }
+        let Some(cmd) = cmd else {
+            return self.default(line);
+        };
+        self.lastcmd = if line == "EOF" { String.new() } else { line.clone() };
+        if cmd.is_empty() or not is_command(cmd) {
+            return self.default(line);
+        }
+        self.dispatch(cmd, arg)
+    }
+
+    // Repeats the last command through onecmd, which calls back here.
+    #[allow(mutual_recursion_note)]
+    fn emptyline(mut ref self) -> bool {
+        if self.lastcmd.is_empty() {
+            return false;
+        }
+        let again = self.lastcmd.clone();
+        self.onecmd(again)
+    }
+
+    fn default(ref self, line: Str) -> bool {
+        println(f"*** Unknown syntax: {line}");
+        false
+    }
+
+    fn dispatch(mut ref self, cmd: Str, arg: Str) -> bool {
+        match cmd {
+            "EOF" => {
+                println("");
+                return true;
+            }
+            "add" => self.add(arg),
+            "columns" => self.columns(arg),
+            "complete" => self.complete(arg),
+            "help" => self.help(arg),
+            "history" => {
+                for (i, h) in self.history.iter().enumerate() {
+                    println(f"{i + 1:>3} {py_repr(h)}");
+                }
+            }
+            "list" => self.list(arg),
+            "ping" => {
+                if arg.is_empty() {
+                    println("pong");
+                } else {
+                    println(f"pong {arg}");
+                }
+            }
+            "quit" => {
+                println("bye");
+                return true;
+            }
+            "remove" => {
+                if self.stock.remove(arg).is_some() {
+                    println(f"removed {arg}");
+                } else {
+                    println(f"no item {py_repr(arg)}");
+                }
+            }
+            "set" => self.set(arg),
+            "shell" => println(f"(not running) {arg}"),
+            "show" => {
+                let (q, p) = self.stock.get(arg).cloned().unwrap_or((0, 0));
+                println(f"{py_repr(arg)}: qty={q} price={money(p)}");
+            }
+            _ => {
+                let mut t = 0;
+                for (_, (q, p)) in self.stock.iter() {
+                    t += q * p;
+                }
+                println(f"total {money(t)} over {self.stock.len()} items");
+            }
+        }
+        false
+    }
+
+    // ---- the inventory
+
+    fn add(mut ref self, arg: Str) {
+        let words: Vec[Str] = arg.split_whitespace().collect();
+        if words.len() != 2 and words.len() != 3 {
+            println("usage: add NAME QTY [PRICE]");
+            return;
+        }
+        let name = words[0];
+        let qty = words[1];
+        if not all_digits(qty) or qty.len() > 7 {
+            println(f"bad quantity: {qty}");
+            return;
+        }
+        let mut price: Option[i64] = None;
+        if words.len() == 3 {
+            price = cents(words[2]);
+            if price.is_none() {
+                println(f"bad price: {words[2]}");
+                return;
+            }
+        }
+        let (have, old) = self.stock.get(name).cloned().unwrap_or((0, 0));
+        let q = have + i64.parse(qty).unwrap();
+        let p = price.unwrap_or(old);
+        self.stock.insert(name.to_string(), (q, p));
+        println(f"{name}: {q} at {money(p)}");
+    }
+
+    fn list(ref self, arg: Str) {
+        let mut any = false;
+        for (n, (q, p)) in self.stock.iter() {
+            if n.starts_with(arg) {
+                any = true;
+                println(f"{n:<12}{q:>7}{money(p):>10}");
+            }
+        }
+        if not any {
+            println("(nothing)");
+        }
+    }
+
+    fn set(mut ref self, arg: Str) {
+        let words: Vec[Str] = arg.split_whitespace().collect();
+        if words.len() != 3 or (words[1] != "qty" and words[1] != "price") {
+            println(f"cannot set: {py_repr(arg)}");
+            return;
+        }
+        let name = words[0];
+        let value = words[2];
+        let Some((q0, p0)) = self.stock.get(name).cloned() else {
+            println(f"no item {py_repr(name)}");
+            return;
+        };
+        let mut q = q0;
+        let mut p = p0;
+        if words[1] == "qty" {
+            if not all_digits(value) or value.len() > 7 {
+                println(f"bad quantity: {value}");
+                return;
+            }
+            q = i64.parse(value).unwrap();
+        } else {
+            let Some(c) = cents(value) else {
+                println(f"bad price: {value}");
+                return;
+            };
+            p = c;
+        }
+        self.stock.insert(name.to_string(), (q, p));
+        println(f"{name}: {q} at {money(p)}");
+    }
+
+    fn columns(ref self, arg: Str) {
+        let words: Vec[String] = arg.split_whitespace().map(|w| w.to_string()).collect();
+        if words.is_empty() or not all_digits(words[0]) {
+            println("usage: columns WIDTH WORD...");
+            return;
+        }
+        let width = i64.parse(words[0]).unwrap();
+        columnize(words[1..], width);
+    }
+
+    // ---- help
+
+    fn help_topic(name: Str) {
+        match name {
+            "EOF" => println("End of input ends the session."),
+            "add" => println("add NAME QTY [PRICE] -- see also: help pricing"),
+            "list" => println("list [PREFIX]: items in name order, with quantity and price"),
+            _ => println("Prices are in dollars with at most two decimals: 3, 3.5, 3.50."),
+        }
+    }
+
+    fn help(ref self, arg: Str) {
+        if not arg.is_empty() {
+            if is_topic(arg) {
+                Console.help_topic(arg);
+                return;
+            }
+            if is_command(arg) {
+                if let Some(d) = doc_of(arg) {
+                    let d = cleandoc(d);
+                    if not d.is_empty() {
+                        println(d);
+                        return;
+                    }
+                }
+            }
+            println(f"*** No help on {arg}");
+            return;
+        }
+        let mut topics: Vec[String] = TOPICS.iter().map(|t| t.to_string()).collect();
+        let mut documented: Vec[String] = Vec.new();
+        let mut undocumented: Vec[String] = Vec.new();
+        for c in COMMANDS.iter() {
+            if let Some(k) = topics.iter().position(|t| t == *c) {
+                documented.push(c.to_string());
+                topics.remove(k);
+            } else if doc_of(c).map(|d| not d.is_empty()).unwrap_or(false) {
+                documented.push(c.to_string());
+            } else {
+                undocumented.push(c.to_string());
+            }
+        }
+        println(DOC_LEADER);
+        print_topics(DOC_HEADER, documented, 79);
+        print_topics(MISC_HEADER, topics, 79);
+        print_topics(UNDOC_HEADER, undocumented, 79);
+    }
+
+    // ---- completion
+
+    /// The `do_` names starting with `text`.
+    fn completenames(text: Str) -> Vec[String] {
+        COMMANDS.iter().filter(|c| c.starts_with(text)).map(|c| c.to_string()).collect()
+    }
+
+    fn complete(ref self, arg: Str) {
+        let text = match arg.rfind(" ") {
+            Some(i) => arg[i + 1..],
+            None => arg,
+        };
+        let begidx = arg.len() - text.len();
+        let mut got: Vec[String] = Vec.new();
+        if begidx > 0 {
+            let (c, _, _) = Console.parseline(arg);
+            if c == Some("help".to_string()) {
+                // complete_help: the commands and the help topics.
+                let mut all: SortedSet[String] = SortedSet.new();
+                for n in Console.completenames(text).iter() {
+                    all.insert(n.clone());
+                }
+                for t in TOPICS.iter() {
+                    if t.starts_with(text) {
+                        all.insert(t.to_string());
+                    }
+                }
+                got = all.iter().cloned().collect();
+            }
+        } else {
+            got = Console.completenames(text);
+        }
+        if got.is_empty() {
+            println(f"{py_repr(text)}: (none)");
+        } else {
+            println(f"{py_repr(text)}: {got.join(" ")}");
+        }
+    }
+}
+
+fn print_topics(header: Str, cmds: Slice[String], maxcol: i64) {
+    if cmds.is_empty() {
+        return;
+    }
+    println(header);
+    let mut rule = String.new();
+    for _ in 0..header.chars().count() {
+        rule.push_str(RULER);
+    }
+    println(rule);
+    columnize(cmds, maxcol);
+    println("");
+}
+
+/// `Cmd.columnize`: the fewest rows whose columns, each as wide as its
+/// widest entry and two spaces apart, fit in `width`.
+fn columnize(list: Slice[String], width: i64) {
+    if list.is_empty() {
+        println("<empty>");
+        return;
+    }
+    let size = list.len();
+    if size == 1 {
+        println(list[0]);
+        return;
+    }
+    let mut nrows = 0;
+    let mut ncols = 1;
+    let mut colwidths: Vec[i64] = [0];
+    let mut fitted = false;
+    for rows in 1..size {
+        let cols = (size + rows - 1) / rows;
+        let mut widths: Vec[i64] = Vec.new();
+        let mut total = -2;
+        for col in 0..cols {
+            let mut w = 0;
+            for row in 0..rows {
+                let i = row + rows * col;
+                if i >= size {
+                    break;
+                }
+                let n = list[i].chars().count();
+                if n > w {
+                    w = n;
+                }
+            }
+            widths.push(w);
+            total += w + 2;
+            if total > width {
+                break;
+            }
+        }
+        if total <= width {
+            nrows = rows;
+            ncols = cols;
+            colwidths = widths;
+            fitted = true;
+            break;
+        }
+    }
+    if not fitted {
+        nrows = size;
+        ncols = 1;
+        colwidths = [0];
+    }
+    for row in 0..nrows {
+        let mut texts: Vec[String] = Vec.new();
+        for col in 0..ncols {
+            let i = row + nrows * col;
+            texts.push(if i >= size { String.new() } else { list[i].clone() });
+        }
+        while not texts.is_empty() and texts[texts.len() - 1].is_empty() {
+            texts.pop();
+        }
+        let mut cells: Vec[String] = Vec.new();
+        for col in 0..texts.len() {
+            cells.push(ljust(texts[col], colwidths[col]));
+        }
+        println(cells.join("  "));
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/sessions").map_err(|e| f"cannot create data/sessions: {e}")?;
+    write_data()?;
+    let mut names: Vec[String] = Vec.new();
+    for entry in fs.read_dir("data/sessions").map_err(|e| f"cannot list data/sessions: {e}")?.iter() {
+        names.push(entry.clone());
+    }
+    names.sort();
+    let mut console = Console { stock: SortedMap.new(), history: Vec.new(), count: 0, lastcmd: String.new() };
+    for name in names.iter() {
+        println(f"==== {name}");
+        let path = f"data/sessions/{name}";
+        let text = fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")?;
+        console.cmdloop(text);
+    }
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/sessions/01_setup.txt", file_0())?;
+    put_bytes("data/sessions/02_reports.txt", file_1())?;
+    put_bytes("data/sessions/03_crlf.txt", file_2())?;
+    Ok(())
+}
+
+// data/sessions/01_setup.txt
+fn file_0() -> String {
+    """
+0a61646420626f6c74732031303020302e31350a616464206e75747320323530202e30350a616464206e757473203235
+3020302e30350a61646420776173686572732034300a61646420636166c3a9203320322e350a61646420626f6c747320
+32300a0a6c6973740a3f0a68656c700a68656c70206164640a68656c70207365740a68656c7020746f74616c0a68656c
+702070696e670a68656c702073686f770a68656c70206e6f737563680a68656c702070726963696e670a68656c702045
+4f460a68656c702068656c700a68656c7020636f6c756d6e730a68656c7020686973746f72790a68656c702072656d6f
+76650a68656c7020717569740a68656c7020636f6d706c6574650a68656c70206164642065787472610a3f6c6973740a
+216c73202d6c0a7365742d707269636520626f6c747320302e32300a73657420626f6c747320707269636520302e3230
+0a73657420626f6c747320717479206d616e790a736574206e61696c732071747920330a202020746f74616c2020200a
+2d6f6f70730a66726f626e696361746520310a6164640a616464207820790a6164642078203120322e3334350a454f46
+0a6c6973740a
+"""
+}
+
+// data/sessions/02_reports.txt
+fn file_1() -> String {
+    """
+686973746f72790a636f6c756d6e7320323020616c70686120626574612067616d6d612064656c746120657073696c6f
+6e207a657461206574612074686574610a636f6c756d6e732037390a636f6c756d6e73203520610a636f6c756d6e7320
+332061616161206262626220636363630a636f6c756d6e732030207820790a636f6c756d6e7320333020612062622063
+636320646464642065656565652066666666666620676767676767672068686868686868682069206a206b0a636f6c75
+6d6e73206d616e7920776f7264730a636f6d706c6574650a636f6d706c65746520610a636f6d706c6574652068650a63
+6f6d706c6574652068656c7020700a636f6d706c6574652068656c70200a636f6d706c657465206c69737420620a636f
+6d706c657465202d7820790a636f6d706c65746520454f0a70696e670a70696e6720202068656c6c6f202020776f726c
+64200a09206c69737409620a0a72656d6f766520776173686572730a72656d6f766520776173686572730a72656d6f76
+650a73686f7720636166c3a90a73686f770a746f74616c0a717569740a746f74616c0a
+"""
+}
+
+// data/sessions/03_crlf.txt
+fn file_2() -> String {
+    """
+6c6973740d0a61646420726f7065203220392e39390d0a0d0a6c69737420720d0a686973746f72790d0a746f74616c
+"""
+}

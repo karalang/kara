@@ -1,0 +1,229 @@
+==== 01_setup.txt
+Inventory console. Type help or ? to list commands.
+(inv) (inv) bolts: 100 at 0.15
+(inv) bad price: .05
+(inv) nuts: 250 at 0.05
+(inv) washers: 40 at 0.00
+(inv) café: 3 at 2.50
+(inv) bolts: 120 at 0.15
+(inv) bolts: 140 at 0.15
+(inv) bolts           140      0.15
+café              3      2.50
+nuts            250      0.05
+washers          40      0.00
+(inv) Stock and prices for the shop floor.
+Documented commands (type help <topic>):
+----------------------------------------
+EOF  add  columns  help  history  list  ping  quit  remove  set  total
+
+Miscellaneous help topics:
+--------------------------
+pricing
+
+Undocumented commands:
+----------------------
+complete  shell  show
+
+(inv) Stock and prices for the shop floor.
+Documented commands (type help <topic>):
+----------------------------------------
+EOF  add  columns  help  history  list  ping  quit  remove  set  total
+
+Miscellaneous help topics:
+--------------------------
+pricing
+
+Undocumented commands:
+----------------------
+complete  shell  show
+
+(inv) add NAME QTY [PRICE] -- see also: help pricing
+(inv) set NAME qty|price VALUE        (changes one field)
+(inv) Total value of the stock.
+
+Each item counts quantity times price.
+(inv)         
+(inv) *** No help on show
+(inv) *** No help on nosuch
+(inv) Prices are in dollars with at most two decimals: 3, 3.5, 3.50.
+(inv) End of input ends the session.
+(inv) List available commands with "help" or detailed help with "help cmd".
+(inv) columns WIDTH WORD...: lay the words out as help does.
+(inv) Show the lines read so far, across sessions.
+(inv) Remove an item entirely: remove NAME
+(inv) Leave the console.
+(inv) *** No help on complete
+(inv) *** No help on add extra
+(inv) list [PREFIX]: items in name order, with quantity and price
+(inv) (not running) ls -l
+(inv) cannot set: '-price bolts 0.20'
+(inv) bolts: 140 at 0.20
+(inv) bad quantity: many
+(inv) no item 'nails'
+(inv) total 48.00 over 4 items
+(inv) *** Unknown syntax: -oops
+(inv) *** Unknown syntax: frobnicate 1
+(inv) usage: add NAME QTY [PRICE]
+(inv) bad quantity: y
+(inv) bad price: 2.345
+(inv) 
+[39 lines handled]
+==== 02_reports.txt
+Inventory console. Type help or ? to list commands.
+(inv)   1 ''
+  2 'add bolts 100 0.15'
+  3 'add nuts 250 .05'
+  4 'add nuts 250 0.05'
+  5 'add washers 40'
+  6 'add café 3 2.5'
+  7 'add bolts 20'
+  8 ''
+  9 'list'
+ 10 '?'
+ 11 'help'
+ 12 'help add'
+ 13 'help set'
+ 14 'help total'
+ 15 'help ping'
+ 16 'help show'
+ 17 'help nosuch'
+ 18 'help pricing'
+ 19 'help EOF'
+ 20 'help help'
+ 21 'help columns'
+ 22 'help history'
+ 23 'help remove'
+ 24 'help quit'
+ 25 'help complete'
+ 26 'help add extra'
+ 27 '?list'
+ 28 '!ls -l'
+ 29 'set-price bolts 0.20'
+ 30 'set bolts price 0.20'
+ 31 'set bolts qty many'
+ 32 'set nails qty 3'
+ 33 '   total   '
+ 34 '-oops'
+ 35 'frobnicate 1'
+ 36 'add'
+ 37 'add x y'
+ 38 'add x 1 2.345'
+ 39 'EOF'
+ 40 'history'
+(inv) alpha  epsilon
+beta   zeta   
+gamma  eta    
+delta  theta  
+(inv) <empty>
+(inv) a
+(inv) aaaa
+bbbb
+cccc
+(inv) x
+y
+(inv) a    dddd    ggggggg   j
+bb   eeeee   hhhhhhhh  k
+ccc  ffffff  i       
+(inv) usage: columns WIDTH WORD...
+(inv) '': EOF add columns complete help history list ping quit remove set shell show total
+(inv) 'a': add
+(inv) 'he': help
+(inv) 'p': ping pricing
+(inv) 'help': help
+(inv) 'b': (none)
+(inv) 'y': (none)
+(inv) 'EO': EOF
+(inv) pong
+(inv) pong hello   world
+(inv) bolts           140      0.20
+(inv) bolts           140      0.20
+(inv) removed washers
+(inv) no item 'washers'
+(inv) no item ''
+(inv) 'café': qty=3 price=2.50
+(inv) '': qty=0 price=0.00
+(inv) total 48.00 over 3 items
+(inv) bye
+[27 lines handled]
+==== 03_crlf.txt
+Inventory console. Type help or ? to list commands.
+(inv) bolts           140      0.20
+café              3      2.50
+nuts            250      0.05
+(inv) rope: 2 at 9.99
+(inv) rope: 4 at 9.99
+(inv) rope              4      9.99
+(inv)   1 ''
+  2 'add bolts 100 0.15'
+  3 'add nuts 250 .05'
+  4 'add nuts 250 0.05'
+  5 'add washers 40'
+  6 'add café 3 2.5'
+  7 'add bolts 20'
+  8 ''
+  9 'list'
+ 10 '?'
+ 11 'help'
+ 12 'help add'
+ 13 'help set'
+ 14 'help total'
+ 15 'help ping'
+ 16 'help show'
+ 17 'help nosuch'
+ 18 'help pricing'
+ 19 'help EOF'
+ 20 'help help'
+ 21 'help columns'
+ 22 'help history'
+ 23 'help remove'
+ 24 'help quit'
+ 25 'help complete'
+ 26 'help add extra'
+ 27 '?list'
+ 28 '!ls -l'
+ 29 'set-price bolts 0.20'
+ 30 'set bolts price 0.20'
+ 31 'set bolts qty many'
+ 32 'set nails qty 3'
+ 33 '   total   '
+ 34 '-oops'
+ 35 'frobnicate 1'
+ 36 'add'
+ 37 'add x y'
+ 38 'add x 1 2.345'
+ 39 'EOF'
+ 40 'history'
+ 41 'columns 20 alpha beta gamma delta epsilon zeta eta theta'
+ 42 'columns 79'
+ 43 'columns 5 a'
+ 44 'columns 3 aaaa bbbb cccc'
+ 45 'columns 0 x y'
+ 46 'columns 30 a bb ccc dddd eeeee ffffff ggggggg hhhhhhhh i j k'
+ 47 'columns many words'
+ 48 'complete'
+ 49 'complete a'
+ 50 'complete he'
+ 51 'complete help p'
+ 52 'complete help '
+ 53 'complete list b'
+ 54 'complete -x y'
+ 55 'complete EO'
+ 56 'ping'
+ 57 'ping   hello   world '
+ 58 '\t list\tb'
+ 59 ''
+ 60 'remove washers'
+ 61 'remove washers'
+ 62 'remove'
+ 63 'show café'
+ 64 'show'
+ 65 'total'
+ 66 'quit'
+ 67 'list'
+ 68 'add rope 2 9.99'
+ 69 ''
+ 70 'list r'
+ 71 'history'
+(inv) total 87.96 over 4 items
+(inv) 
+[7 lines handled]
