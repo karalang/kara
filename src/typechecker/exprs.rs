@@ -10176,19 +10176,32 @@ impl<'a> super::TypeChecker<'a> {
         ty: &Type,
     ) {
         let id = match self.unbound_literal_var(ty) {
-            Some((id, inference::LiteralKind::Int))
-                if Self::is_int_literal_operator_tree(value) =>
-            {
-                id
-            }
+            Some((id, inference::LiteralKind::Int)) => id,
             _ => {
                 self.literal_lets.remove(name);
                 return;
             }
         };
-        let n = Self::int_literal_operator_tree_value(value);
-        self.literal_lets
-            .insert(name.to_string(), (name_span, id, n));
+        if Self::is_int_literal_operator_tree(value) {
+            let n = Self::int_literal_operator_tree_value(value);
+            self.literal_lets
+                .insert(name.to_string(), (name_span, id, n, name.to_string()));
+            return;
+        }
+        // A copy of such a binding, `let x = carry`, shares its literal's
+        // variable, so a narrowing refused at `x` is fixed on `carry`
+        // (kata 1073: LeetCode's template copies its carry into the digit
+        // sum it pushes onto a `Vec[i32]`).
+        if let ExprKind::Identifier(source) = &value.kind {
+            if let Some(entry) = self.literal_lets.get(source.as_str()) {
+                if self.resolved_now(&Type::TypeVar(entry.1)) == Type::TypeVar(id) {
+                    let entry = entry.clone();
+                    self.literal_lets.insert(name.to_string(), entry);
+                    return;
+                }
+            }
+        }
+        self.literal_lets.remove(name);
     }
 
     /// design.md §8 Literals: a binding whose literal kept its default
@@ -10219,7 +10232,7 @@ impl<'a> super::TypeChecker<'a> {
         let mut found = Vec::new();
         names(expr, &mut found);
         found.into_iter().find_map(|name| {
-            let (span, id, value) = self.literal_lets.get(name)?;
+            let (span, id, value, name) = self.literal_lets.get(name)?;
             if self.resolved_now(&Type::TypeVar(*id)) != *source {
                 return None;
             }

@@ -3965,8 +3965,9 @@ pub struct TypeChecker<'a> {
     /// `let x = 0` with no annotation, by name: the bound name's span, the
     /// literal's type variable and its value. A narrowing refused at a use
     /// of `x` after the variable kept its default names the binding and
-    /// offers its annotation (B-2026-11-08-20).
-    pub(super) literal_lets: FxHashMap<String, (Span, TypeVarId, Option<i128>)>,
+    /// offers its annotation (B-2026-11-08-20). A copy, `let y = x`, is
+    /// noted too, with `x`'s entry and `x` as the binding to annotate.
+    pub(super) literal_lets: FxHashMap<String, (Span, TypeVarId, Option<i128>, String)>,
     /// The spans of identifiers that read a [`StrLitLet`] binding.
     pub(super) str_lit_let_uses: FxHashMap<SpanKey, String>,
     /// The uses reported for a [`StrLitLet`] that is offered `: Str`.
