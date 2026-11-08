@@ -107,6 +107,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   borrowed the local; it borrows what the slice borrows, as the `Str` twin
   already did (core semantics §5.2; B-2026-11-08-66). A body that writes
   through a `mut Slice` keeps the stricter reading.
+- **`entry(k).or_insert(v)` stores `v` at the map's value type.** A
+  literal default on a map whose value is narrower than `i64`
+  (`cnt.entry(p).or_insert(0)` over a `Map[(i32, i32), i32]`) was built as
+  an `i64`, and the compiled program wrote 8 bytes into the 4-byte value:
+  AddressSanitizer's stack-buffer-overflow. The interpreter's answer was
+  right (B-2026-11-08-69).
 - **A negated float literal is an `f32` method's argument.**
   `h.copysign(-1.0)`, `pow`, `hypot` and `atan2` on an `f32` refused the
   `-1.0` as an `f64`; a bare `1.0` was accepted (B-2026-11-07-18).
