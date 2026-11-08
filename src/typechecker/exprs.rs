@@ -10291,6 +10291,53 @@ impl<'a> super::TypeChecker<'a> {
                     return;
                 }
             }
+            // A `usize` / `isize` size expression where an `i64` is wanted
+            // (`Vec.with_capacity(n * (n + 1) / 2)` after a Rust template's
+            // `let n = n as usize;`): `as i64` keeps the meaning for any size
+            // a collection can hold, so it is the machine fix, the operand
+            // parenthesized unless it is a postfix form (B-2026-11-08-16).
+            if matches!(
+                source,
+                Type::UInt(UIntSize::Usize) | Type::Int(IntSize::Isize)
+            ) {
+                let postfix = matches!(
+                    expr.kind,
+                    ExprKind::Identifier(_)
+                        | ExprKind::Path { .. }
+                        | ExprKind::Call { .. }
+                        | ExprKind::MethodCall { .. }
+                        | ExprKind::FieldAccess { .. }
+                        | ExprKind::Index { .. }
+                        | ExprKind::TupleIndex { .. }
+                );
+                let end = expr.span.offset + expr.span.length;
+                let mut edits = Vec::new();
+                if !postfix {
+                    edits.push(crate::resolver::TextEdit {
+                        offset: expr.span.offset,
+                        length: 0,
+                        replacement: "(".to_string(),
+                    });
+                }
+                edits.push(crate::resolver::TextEdit {
+                    offset: end,
+                    length: 0,
+                    replacement: if postfix { " as i64" } else { ") as i64" }.to_string(),
+                });
+                self.error_fix_diffs
+                    .insert(SpanKey::from_span(&expr.span), edits);
+                self.type_error(
+                    format!(
+                        "implicit coercion from '{}' to 'i64' would change sign: sizes, lengths \
+                         and indices are `i64` in Kāra (`usize` and `isize` are for FFI), so \
+                         write `as i64`",
+                        type_display(&source)
+                    ),
+                    expr.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return;
+            }
         }
         if let Some((name, fix)) = self.literal_let_annotation(expr, &source, &target) {
             self.type_error_with_fix_it(
