@@ -44,29 +44,27 @@ fn fix_until_clean(name: &str, src: &str) -> (String, String) {
 
 #[test]
 fn a_to_string_fix_on_a_deref_parenthesizes_it() {
+    // A `push` wants the owned `String`. (A `contains` took one too until
+    // B-2026-11-08-55; it now takes the `Str` as it is, which the last
+    // line checks.)
     let src = "fn main() {
     let names: Vec[String] = [\"a\".to_string(), \"b\".to_string()].to_vec();
     let w: Vec[Str] = \"a c\".split(\" \").collect();
+    let mut seen: Vec[String] = Vec.new();
     for r in w.iter() {
-        if names.contains(*r) {
-            println(f\"has {r}\");
-        }
+        seen.push(*r);
     }
+    seen.push(w[0]);
     if names.contains(w[0]) {
-        println(\"first\");
+        println(seen.join(\",\"));
     }
 }
 ";
     let (fixed, out) = fix_until_clean("suffix-deref", src);
-    assert!(
-        fixed.contains("names.contains((*r).to_string())"),
-        "{fixed}"
-    );
-    assert!(
-        fixed.contains("names.contains(w[0].to_string())"),
-        "{fixed}"
-    );
-    assert_eq!(out, "has a\nfirst\n");
+    assert!(fixed.contains("seen.push((*r).to_string())"), "{fixed}");
+    assert!(fixed.contains("seen.push(w[0].to_string())"), "{fixed}");
+    assert!(fixed.contains("names.contains(w[0]) {"), "{fixed}");
+    assert_eq!(out, "a,c,a\n");
 }
 
 #[test]

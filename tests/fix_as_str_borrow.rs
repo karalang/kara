@@ -63,7 +63,9 @@ fn main() {
         "{err}"
     );
     let (fixed, out) = fix_until_clean("as-str-borrow", src);
-    assert!(fixed.contains("].contains(w[0]) {"), "{fixed}");
+    // A sequence's `contains` takes the element's view (B-2026-11-08-55),
+    // so the `.as_str()` there is no longer an error and stays.
+    assert!(fixed.contains("].contains(w[0].as_str()) {"), "{fixed}");
     assert!(fixed.contains("].to_vec(), name) {"), "{fixed}");
     assert!(!fixed.contains(".to_string())"), "{fixed}");
     assert_eq!(out, "level\nnamed x\n");
