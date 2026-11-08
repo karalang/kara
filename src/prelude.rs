@@ -311,6 +311,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // back the parser's per-arg / per-flag / per-value storage and need
     // scope-0 visibility because their literal constructions appear in the
     // baked `runtime/stdlib/cli.kara` source. See `deferred.md § std.cli`.
+    // A program reaches them through `import std.cli`
+    // (`crate::library_imports`, B-2026-11-08-29).
     "Parser",
     "Arg",
     "Args",
@@ -2464,6 +2466,22 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
         &[],
     ),
     (&["std", "json"], &["Json", "JsonError"], &[]),
+    // deferred.md § std.cli (B-2026-11-08-29).
+    (
+        &["std", "cli"],
+        &[
+            "Parser",
+            "Arg",
+            "Args",
+            "CliError",
+            "Subcommand",
+            "SubcommandResult",
+            "ArgEntry",
+            "FlagEntry",
+            "ParsedValue",
+        ],
+        &[],
+    ),
     (
         &["std", "process"],
         &[

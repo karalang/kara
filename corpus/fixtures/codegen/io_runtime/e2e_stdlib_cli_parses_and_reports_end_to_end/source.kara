@@ -1,4 +1,6 @@
 
+import std.cli.{Arg, Parser};
+
 fn main() {
     let p = Parser.new("greet")
         .about("greets someone")

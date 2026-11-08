@@ -1,3 +1,5 @@
+import std.cli.{Parser};
+
 struct Holder { p: Parser, n: i64 }
 fn mk(nm: own String) -> Parser {
     return Parser { program_name: nm, about_text: "abt",

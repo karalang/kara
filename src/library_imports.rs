@@ -1,6 +1,7 @@
 //! The library modules a program imports before it uses their items:
-//! `std.regex` and `std.json` (docs/library/README.md; design.md, "everything
-//! else is under `std.*`"; B-2026-10-21-56). Their items stay globals of the
+//! `std.regex`, `std.json` (docs/library/README.md; design.md, "everything
+//! else is under `std.*`"; B-2026-10-21-56) and the deferred `std.cli`
+//! (deferred.md; B-2026-11-08-29). Their items stay globals of the
 //! implementation, so `import std.regex.{Regex}` binds nothing new (the
 //! import is dropped as a [`crate::prelude::LIBRARY_GLOBAL_MODULES`] entry);
 //! what the import changes is whether `karac check` accepts the use. A bare
@@ -15,6 +16,24 @@ use std::collections::{BTreeSet, HashSet};
 pub const IMPORT_REQUIRED_MODULES: &[(&str, &[&str])] = &[
     ("std.regex", &["Regex", "Match", "Captures", "RegexError"]),
     ("std.json", &["Json", "JsonError"]),
+    // deferred.md § std.cli: `import std.cli`. The row types the parser
+    // stores (`ArgEntry`, `FlagEntry`, `ParsedValue`) are its items too, so
+    // a program's own type of one of those names shadows nothing it can see
+    // unimported (B-2026-11-08-29).
+    (
+        "std.cli",
+        &[
+            "Parser",
+            "Arg",
+            "Args",
+            "CliError",
+            "Subcommand",
+            "SubcommandResult",
+            "ArgEntry",
+            "FlagEntry",
+            "ParsedValue",
+        ],
+    ),
 ];
 
 /// Whether `name` is an item of an [`IMPORT_REQUIRED_MODULES`] module, so a
@@ -160,7 +179,12 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
         .map(|((module, first, span, _), import)| TypeError {
             message: format!(
                 "`{first}` is in the library module `{module}`, which a program \
-                     imports before it uses it: `{import}` (docs/library/README.md)"
+                     imports before it uses it: `{import}` ({})",
+                if module == "std.cli" {
+                    "deferred.md § std.cli"
+                } else {
+                    "docs/library/README.md"
+                }
             ),
             span,
             kind: TypeErrorKind::RemovedInCore,

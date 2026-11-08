@@ -1,3 +1,5 @@
+import std.cli.{Parser};
+
 fn main() {
          let parser = Parser.new("greet")
              .subcommand("upper", Parser.new("upper").about("uppercase"))

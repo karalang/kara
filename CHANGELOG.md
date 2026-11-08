@@ -38,6 +38,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `collect()` into a `Result[C, E]` refuses items whose error type is not
   `E`: `Err(5)` items into a `Result[Vec[i64], String]` were accepted
   (iterators.md § collect, B-2026-11-08-23).
+- The deferred `std.cli` parser's `Parser`, `Arg`, `Args`, `CliError`,
+  `Subcommand` and `SubcommandResult` are reached through `import std.cli`
+  (deferred.md § std.cli), as `std.regex` and `std.json` are: `karac check`
+  refuses a bare use, with the import as its fix, and `karac build` and
+  `run` are unchanged. A program's own `enum CliError` or `struct Parser`
+  no longer draws a `prelude_shadow` warning on every command
+  (B-2026-11-08-29).
 
 ### Added
 

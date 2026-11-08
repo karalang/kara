@@ -1,3 +1,5 @@
+import std.cli.{Arg};
+
 fn main() {
          let a = Arg.string().required().help("a help");
          println(a.is_required);

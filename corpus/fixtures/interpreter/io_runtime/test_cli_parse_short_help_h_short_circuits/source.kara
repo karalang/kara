@@ -1,3 +1,5 @@
+import std.cli.{Parser};
+
 struct FakeEnv {}
          impl EnvProvider for FakeEnv { fn args(ref self) -> Vec[String] { ["prog", "-h"] } }
          fn main() {
