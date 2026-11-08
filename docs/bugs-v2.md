@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 185 |
+| diagnostics | 186 |
 | false-positive | 153 |
 | perf | 120 |
 | missing-feature | 110 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 136 |
 | cli | 84 |
 | ownership | 63 |
-| parser | 48 |
+| parser | 49 |
 | interp | 39 |
 | effect | 29 |
 | runtime | 28 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-48 | 2026-11-08 | mir | medium | An `isize` operand beside an `i64` passes `karac check` and the MIR builder then refuses the program: `fn f(i: isize, k: i64) -> i64 { i - k }` is 'invalid MIR: binary operands of different types isize and i64' | — |
 | B-2026-11-08-52 | 2026-11-08 | mir-llvm | low | `v.iter().skip(k)` walks the k skipped items one at a time, so a `skip(i * n).take(n)` row walk over a Vec is quadratic where Rust's slice iterator jumps | — |
 | B-2026-11-08-53 | 2026-11-08 | typecheck | low | `karac fix` drops a closure's `-> i32` and with it the type of the literal-typed tuple binding it returns, leaving `res.max(x as i32)` ("`max` expects an argument of type `i64`, got `i32`") and a narrowing at the caller with no fix and no binding named | — |
+| B-2026-11-08-54 | 2026-11-08 | parser | medium | Rust's array type inside a generic argument (`Vec[[i64; 2]]`) is taken for a shape literal: check reports "Expected `]`, found `;`" instead of the `[T; N]` diagnostic, and karac fix inserts a second `;` (`Vec[[i64; 2;]]`) | — |
 
 ### Relocated
 
