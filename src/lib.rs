@@ -932,6 +932,7 @@ fn push_diag_fixed(
 }
 
 /// A `resolver::TextEdit` in the public [`SourceFix`] form.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn fix_of(edit: &crate::resolver::TextEdit) -> SourceFix {
     SourceFix {
         offset: edit.offset,
@@ -949,21 +950,21 @@ fn fix_of(edit: &crate::resolver::TextEdit) -> SourceFix {
 /// stops: the downstream phases would surface noise rooted in unresolved
 /// names, so we return early with just the parse / resolve diagnostics.
 pub fn run_playground(source: &str) -> PlaygroundResult {
-    let (mut diagnostics, artifacts) = run_static_checks(source);
-    let Some((program, typed)) = artifacts else {
-        // Parse or resolve hard-stopped — return the collected diagnostics
-        // without executing.
-        return PlaygroundResult {
-            stdout: Vec::new(),
-            diagnostics,
-            ok: false,
-        };
-    };
+    // The checks `check_source` runs (on a native build, `karac check`'s and
+    // the editor's: the core-semantics rules and the library's signatures,
+    // B-2026-10-31-19), so the playground runs exactly the programs they
+    // accept. It ran the older static checks, which let a bare `for` move
+    // its elements out and required a `MemoryOrdering` on every atomic
+    // operation (B-2026-11-08-40). Their errors stop the run; warnings are
+    // the editor's to show.
+    let mut diagnostics: Vec<PlaygroundDiagnostic> = check_source(source)
+        .into_iter()
+        .filter(|d| d.severity == "error")
+        .collect();
 
     // The program runs on the MIR interpreter, as `karac run --interp` runs
     // it. MIR refuses a program its checks reject, so a program that already
     // has diagnostics does not run.
-    let _ = (&program, &typed);
     let pre_run_diag_count = diagnostics.len();
     let mut stdout = Vec::new();
     let mut runtime_ok = true;
@@ -1008,15 +1009,17 @@ pub fn run_playground(source: &str) -> PlaygroundResult {
     }
 }
 
-/// Shared static-check pipeline for [`check_source`] and [`run_playground`] —
-/// the single source of truth for phase ordering and the parse/resolve
-/// hard-stop posture. Runs parse → desugar → resolve → typecheck → lower →
+/// The static-check pipeline [`check_source`] (and so [`run_playground`])
+/// runs on a wasm build, which has no `cli::editor`; a native build runs the
+/// editor's pipeline instead (B-2026-11-08-40). It holds the phase ordering
+/// and the parse/resolve hard-stop posture. Runs parse → desugar → resolve → typecheck → lower →
 /// effect → ownership, pushing a normalized [`PlaygroundDiagnostic`] per error.
 /// Returns the collected diagnostics plus, when parse + resolve both succeeded
 /// (so execution is *possible*), the lowered program and its typecheck result
 /// for a caller that wants to go on and interpret. Parse and resolve errors are
 /// hard stops (downstream phases would surface noise rooted in unresolved
 /// names), signalled by a `None` artifact.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn run_static_checks(
     source: &str,
 ) -> (
@@ -2091,21 +2094,13 @@ mod playground_tests {
     #[test]
     fn check_source_matches_run_playground_static_prefix() {
         // The two entry points must agree on the static (pre-interpreter)
-        // diagnostics — they share `run_static_checks`, and this pins that
-        // they stay in sync.
+        // diagnostics: the playground reports the errors `check_source`
+        // does (B-2026-11-08-40), catalogue code and help lines included.
         let src = "fn main() { let x: i32 = \"nope\"; let _ = undefined(); }";
-        // The catalogue code and help lines come from `karac check`'s JSON,
-        // which the editor path reads and the playground does not build, so
-        // they are compared apart from the rest (B-2026-11-07-46): the
-        // editor's carry the codes, and the playground's carry none.
         let check: Vec<_> = check_source(src)
             .into_iter()
-            .map(|mut d| {
-                assert!(d.code.is_some(), "no code on {d:?}");
-                d.code = None;
-                d.help.clear();
-                d
-            })
+            .filter(|d| d.severity == "error")
+            .inspect(|d| assert!(d.code.is_some(), "no code on {d:?}"))
             .collect();
         let play = run_playground(src);
         let play_static: Vec<_> = play

@@ -31,7 +31,7 @@ A `par` block runs each of its branches concurrently and waits for all of them b
 sync struct Counter { count: Atomic[i64] }
 
 fn bump(counter: ref Counter) {
-    let _ = counter.count.fetch_add(1, MemoryOrdering.Relaxed);
+    let _ = counter.count.fetch_add(1);
 }
 
 fn main() {
@@ -41,7 +41,7 @@ fn main() {
         bump(counter),
         bump(counter),
     };
-    println(counter.count.load(MemoryOrdering.Relaxed));   // 3
+    println(counter.count.load());   // 3
 }
 ```
 

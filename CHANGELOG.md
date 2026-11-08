@@ -173,6 +173,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   refused there as "no method 'count' on type 'Vec'", findings came without
   snippets and repeated under each target; now a finding every target makes
   is reported once under "all targets", as for a file (B-2026-11-08-38).
+- **The playground runs exactly what `karac check` accepts.**
+  `karac::run_playground` ran its own older checks, so a bare `for` that
+  moves its elements out ran there (E0515 on the command line and in the
+  editor), and an atomic operation without the deprecated `MemoryOrdering`
+  argument was refused. The book's chapter 14 atomics example drops the
+  orderings (B-2026-11-08-40).
 
 ### Performance
 
