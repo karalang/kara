@@ -1,0 +1,236 @@
+// LeetCode #1506: Find Root of N-Ary Tree -- the differential.
+//
+// Four arms against the statement read literally, on 3000 problems, with
+// six properties.
+//
+// P1  the root is the statement read literally: the node no node holds as
+//     a child
+// P2  the nodes listed in another order leave the root
+// P3  every value mapped to 3 v + 7 maps the root's the same way
+// P4  the root reaches every node
+// P5  a new node holding the root as its only child, put anywhere in the
+//     list, is the new root
+// P6  each arm agrees with at least two of the other three
+
+shared struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+// ---- root.kara: the ★ arm: all values less children's
+fn star_arm(nodes: Vec[Node]) -> Node {
+    let mut total = 0;
+    for node in nodes.iter() {
+        total += node.val;
+        for child in node.children.iter() {
+            total -= child.val;
+        }
+    }
+    for node in nodes.iter() {
+        if node.val == total {
+            return node.clone();
+        }
+    }
+    nodes[0].clone()
+}
+
+// ---- root_xor.kara: XOR cancels each child
+fn xor_arm(nodes: Vec[Node]) -> Node {
+    let mut x = 0;
+    for node in nodes.iter() {
+        x ^= node.val;
+        for child in node.children.iter() {
+            x ^= child.val;
+        }
+    }
+    for node in nodes.iter() {
+        if node.val == x {
+            return node.clone();
+        }
+    }
+    nodes[0].clone()
+}
+
+// ---- root_set.kara: the node outside the set of children
+fn set_arm(nodes: Vec[Node]) -> Node {
+    let mut children: Set[i64] = Set.new();
+    for node in nodes.iter() {
+        for child in node.children.iter() {
+            children.insert(child.val);
+        }
+    }
+    for node in nodes.iter() {
+        if not children.contains(node.val) {
+            return node.clone();
+        }
+    }
+    nodes[0].clone()
+}
+
+// ---- root_iter.kara: flat_map, collect, find
+fn iter_arm(nodes: Vec[Node]) -> Node {
+    let children: Set[i64] = nodes.iter().flat_map(|n| n.children.iter().map(|c| c.val)).collect();
+    nodes.iter().find(|n| not children.contains(n.val)).unwrap().clone()
+}
+
+// ---- the statement read literally: the node no node holds as a child
+fn literal(nodes: Vec[Node]) -> i64 {
+    for candidate in nodes.iter() {
+        let mut held = false;
+        for node in nodes.iter() {
+            for child in node.children.iter() {
+                if child.val == candidate.val {
+                    held = true;
+                }
+            }
+        }
+        if not held {
+            return candidate.val;
+        }
+    }
+    -1
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn build(vals: Vec[i64], kids: Vec[Vec[i64]]) -> Vec[Node] {
+    let n = vals.len();
+    let mut made: Vec[Option[Node]] = Vec.filled(n, None);
+    for i in (0..n).rev() {
+        let children: Vec[Node] = kids[i].iter().map(|c| made[*c].clone().unwrap()).collect();
+        made[i] = Some(Node { val: vals[i], children });
+    }
+    made.iter().map(|m| m.clone().unwrap()).collect()
+}
+
+fn reach(node: Node) -> i64 {
+    let mut count = 1;
+    for child in node.children.iter() {
+        count += reach(child);
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, x: i64) -> i64 {
+    (check * 31 + x + 1) % 1000000007
+}
+
+fn arm(k: i64, nodes: Vec[Node]) -> Node {
+    if k == 0 {
+        star_arm(nodes.clone())
+    } else if k == 1 {
+        xor_arm(nodes.clone())
+    } else if k == 2 {
+        set_arm(nodes.clone())
+    } else {
+        iter_arm(nodes.clone())
+    }
+}
+
+fn arm_name(k: i64) -> String {
+    ["star", "xor", "set", "iter"][k].to_string()
+}
+
+fn main() {
+    let arms = 4;
+    let problems = 3000;
+    let mut seed = 15060;
+    let mut check = 0;
+    let mut checks = 0;
+    let mut by_property: Vec[i64] = Vec.filled(7, 0);
+    let mut shown = 0;
+    for p in 0..problems {
+        // everything random is drawn first: values, parents, the shuffles
+        let n = next_random(mut seed) % 10 + 1;
+        let mut vals: Vec[i64] = Vec.new();
+        while vals.len() < n {
+            let v = next_random(mut seed) % 64;
+            if not vals.contains(v) {
+                vals.push(v);
+            }
+        }
+        let mut kids: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+        for i in 1..n {
+            kids[next_random(mut seed) % i].push(i);
+        }
+        let mut order: Vec[i64] = (0..n).collect();
+        let mut again: Vec[i64] = (0..n).collect();
+        for i in (1..n).rev() {
+            order.swap(i, next_random(mut seed) % (i + 1));
+            again.swap(i, next_random(mut seed) % (i + 1));
+        }
+        let built = build(vals, kids);
+        let nodes: Vec[Node] = order.iter().map(|i| built[*i].clone()).collect();
+        let shuffled: Vec[Node] = again.iter().map(|i| built[*i].clone()).collect();
+        let relabelled_vals: Vec[i64] = vals.iter().map(|v| *v * 3 + 7).collect();
+        let relabelled_built = build(relabelled_vals, kids);
+        let relabelled: Vec[Node] = order.iter().map(|i| relabelled_built[*i].clone()).collect();
+        let mut grown: Vec[Node] = nodes.clone();
+        let above = Node { val: 1000, children: [built[0].clone()] };
+        grown.insert(next_random(mut seed) % (n + 1), above);
+
+        let truth = literal(nodes);
+        let mut answers: Vec[i64] = Vec.new();
+        for k in 0..arms {
+            let root = arm(k, nodes);
+            let mut fails: Vec[i64] = Vec.filled(7, 0);
+            if root.val != truth {
+                fails[1] += 1;
+            }
+            if arm(k, shuffled).val != root.val {
+                fails[2] += 1;
+            }
+            if arm(k, relabelled).val != root.val * 3 + 7 {
+                fails[3] += 1;
+            }
+            if reach(root) != n {
+                fails[4] += 1;
+            }
+            if arm(k, grown).val != 1000 {
+                fails[5] += 1;
+            }
+            answers.push(root.val);
+            for q in 1..6 {
+                checks += 1;
+                if fails[q] > 0 {
+                    by_property[q] += 1;
+                    if shown < 10 {
+                        println(f"problem {p}, {arm_name(k)}: P{q}");
+                        shown += 1;
+                    }
+                }
+            }
+        }
+        for k in 0..arms {
+            let mut agree = 0;
+            for other in 0..arms {
+                if other != k and answers[other] == answers[k] {
+                    agree += 1;
+                }
+            }
+            checks += 1;
+            if agree < 2 {
+                by_property[6] += 1;
+                if shown < 10 {
+                    println(f"problem {p}, {arm_name(k)}: P6");
+                    shown += 1;
+                }
+            }
+        }
+        check = mix(check, answers[0]);
+    }
+    let failures = by_property.iter().sum();
+    println(f"{problems} problems: checksum {check}, {checks} checks over {arms} arms: {failures} failures");
+    if failures > 0 {
+        for q in 1..7 {
+            if by_property[q] > 0 {
+                println(f"P{q}: {by_property[q]}");
+            }
+        }
+    }
+}

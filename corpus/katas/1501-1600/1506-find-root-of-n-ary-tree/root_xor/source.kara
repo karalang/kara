@@ -1,0 +1,120 @@
+// LeetCode #1506: Find Root of N-Ary Tree -- by XOR. Each value but the
+// root's is seen twice, once as a node and once as a child, and cancels;
+// what is left is the root's. O(n) time, O(1) space.
+
+shared struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn find_root(nodes: Vec[Node]) -> Node {
+    let mut x = 0;
+    for node in nodes.iter() {
+        x ^= node.val;
+        for child in node.children.iter() {
+            x ^= child.val;
+        }
+    }
+    for node in nodes.iter() {
+        if node.val == x {
+            return node.clone();
+        }
+    }
+    nodes[0].clone()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A tree from LeetCode's level-order form: the root, a None, then each
+// node's children followed by a None, in level order. Nodes are built
+// leaves first, since a node holds its children.
+fn from_level_order(tokens: Vec[Option[i64]]) -> Vec[Node] {
+    let mut vals: Vec[i64] = [tokens[0].unwrap_or(0)];
+    let mut kids: Vec[Vec[i64]] = [Vec.new()];
+    let mut parent = 0;
+    for t in tokens.iter().skip(2) {
+        match t {
+            Some(v) => {
+                kids[parent].push(vals.len());
+                vals.push(v);
+                kids.push(Vec.new());
+            }
+            None => {
+                parent += 1;
+            }
+        }
+    }
+    build(vals, kids)
+}
+
+fn build(vals: Vec[i64], kids: Vec[Vec[i64]]) -> Vec[Node] {
+    let n = vals.len();
+    let mut made: Vec[Option[Node]] = Vec.filled(n, None);
+    for i in (0..n).rev() {
+        let children: Vec[Node] = kids[i].iter().map(|c| made[*c].clone().unwrap()).collect();
+        made[i] = Some(Node { val: vals[i], children });
+    }
+    made.iter().map(|m| m.clone().unwrap()).collect()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, x: i64) -> i64 {
+    (check * 31 + x + 1) % 1000000007
+}
+
+// 1 to `most` nodes with distinct values in 0..=50000, each node after the
+// first the child of an earlier one, built leaves first, then shuffled.
+fn random_tree(most: i64, seed: mut ref i64) -> Vec[Node] {
+    let n = next_random(mut seed) % most + 1;
+    let mut vals: Vec[i64] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    while vals.len() < n {
+        let v = (next_random(mut seed) * 65536 + next_random(mut seed)) % 50001;
+        if seen.insert(v) {
+            vals.push(v);
+        }
+    }
+    let mut kids: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 1..n {
+        kids[next_random(mut seed) % i].push(i);
+    }
+    let mut nodes = build(vals, kids);
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        nodes.swap(i, j);
+    }
+    nodes
+}
+
+fn batch(count: i64, most: i64, seed: mut ref i64) {
+    let mut check = 0;
+    for _ in 0..count {
+        let root = find_root(random_tree(most, mut seed));
+        check = mix(check, root.val);
+    }
+    println(f"{count} trees of 1 to {most} nodes: checksum {check}");
+}
+
+fn main() {
+    let examples: Vec[Vec[Option[i64]]] = [
+        [Some(1), None, Some(3), Some(2), Some(4), None, Some(5), Some(6)],
+        [Some(1), None, Some(2), Some(3), Some(4), Some(5), None, None, Some(6), Some(7), None, Some(8), None, Some(9), Some(10), None, None, Some(11), None, Some(12), None, Some(13), None, None, Some(14)],
+        [Some(7)],
+        [Some(5), None, Some(9), None, Some(0)],
+    ];
+    for tokens in examples.iter() {
+        let mut nodes = from_level_order(tokens.clone());
+        nodes.reverse();
+        let count = nodes.len();
+        let root = find_root(nodes);
+        println(f"{count} nodes, listed leaves first -> root {root.val} with {root.children.len()} children");
+    }
+    let mut seed = 1506;
+    batch(3000, 10, mut seed);
+    batch(300, 300, mut seed);
+    batch(3, 50000, mut seed);
+}

@@ -1,0 +1,7 @@
+6 nodes, listed leaves first -> root 1 with 3 children
+14 nodes, listed leaves first -> root 1 with 4 children
+1 nodes, listed leaves first -> root 7 with 0 children
+3 nodes, listed leaves first -> root 5 with 1 children
+3000 trees of 1 to 10 nodes: checksum 194917047
+300 trees of 1 to 300 nodes: checksum 245752205
+3 trees of 1 to 50000 nodes: checksum 21890974
