@@ -3576,6 +3576,10 @@ struct Bx<'l, 'a> {
     /// Place operands read at their own position, before the operands
     /// after them run (core semantics §8.1; B-2026-11-01-7).
     read_now: FxHashSet<NodeId>,
+    /// Temporaries holding a fresh upgrade of a `weak` slot: their
+    /// `Option[shared T]` already carries its own count, so a read of one
+    /// as a value moves it rather than counting a copy (B-2026-11-08-9).
+    upgraded: FxHashSet<Local>,
     /// The captures a closure body assigns to, found with its moves.
     assigned_caps: std::cell::RefCell<FxHashSet<SymbolId>>,
     /// Whether `moved_captures` is finding a task's: a library builtin's
@@ -3705,6 +3709,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_escapes: false,
             pinned: FxHashMap::default(),
             read_now: FxHashSet::default(),
+            upgraded: FxHashSet::default(),
             escaping_lets: FxHashSet::default(),
             replaced_lets: FxHashSet::default(),
             returned_closures: FxHashSet::default(),
@@ -4218,6 +4223,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.b
             .assign(bb, Place::local(l), Rvalue::Cast(kind, op, t));
         Operand::Copy(Place::local(l))
+    }
+
+    /// Whether `p` is a whole temporary holding a fresh upgrade
+    /// ([`Self::upgraded`]), which a value read moves.
+    fn is_upgrade_temp(&self, p: &Place) -> bool {
+        p.projection.is_empty() && self.upgraded.contains(&p.local)
     }
 
     /// Whether `p` ends at a `mut` field of a `shared` value's contents
@@ -7380,6 +7391,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.needs_drop(ot) {
             self.schedule(ScopeEntry::Drop(Place::local(l)));
         }
+        self.upgraded.insert(l);
         Ok(Place::local(l))
     }
 
@@ -8467,6 +8479,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // goes to: read it as the handle it is.
                 t = self.place_type(&p);
             }
+            if self.is_upgrade_temp(&p) {
+                return Ok(Operand::Move(p));
+            }
             if self.is_handle(t) || self.is_handle_aggregate(t) {
                 let l = self.temp(t);
                 self.count_copy(p, t, Place::local(l));
@@ -8827,6 +8842,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(dest, Rvalue::Ref(kind, p));
                         return Ok(());
                     }
+                }
+                if self.is_upgrade_temp(&p) {
+                    self.assign(dest, Rvalue::Use(Operand::Move(p)));
+                    return Ok(());
                 }
                 if self.is_handle(t) || self.is_handle_aggregate(t) {
                     // Copying a `shared` handle counts; the source keeps

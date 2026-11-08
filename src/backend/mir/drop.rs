@@ -202,6 +202,28 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     pub(super) fn call_glue(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<()> {
+        // A `shared` handle, and an `Option` of one held as a bare pointer,
+        // release in line: the count's decrement and zero test at the drop
+        // site, with only the box's last release out of line. Through the
+        // glue function each release was a call, and a self-recursive one
+        // LLVM keeps out of line (154M calls in kata 510, B-2026-11-08-9).
+        if let TyKind::Shared(a) = self.tys.kind(ty) {
+            return self.release(p, ty, a);
+        }
+        let held = layout::null_niche(self.tys, ty)
+            .and_then(|(_, some)| self.tys.field_ty(ty, Some(some), 0))
+            .and_then(|inner| match self.tys.kind(inner) {
+                TyKind::Shared(a) => Some((inner, a)),
+                _ => None,
+            });
+        if let Some((inner, a)) = held {
+            let b = self.load_ptr(p)?;
+            let live = self
+                .builder
+                .build_is_not_null(b, "")
+                .map_err(|e| e.to_string())?;
+            return self.if_then(live, |cx| cx.release(p, inner, a));
+        }
         let f = self.glue_fn(ty);
         self.builder
             .build_call(f, &[p.into()], "")
