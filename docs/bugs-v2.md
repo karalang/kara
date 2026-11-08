@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 191 |
 | false-positive | 154 |
 | perf | 121 |
-| missing-feature | 110 |
+| missing-feature | 111 |
 | soundness | 53 |
 | miscompile | 44 |
 | run-vs-build | 29 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 297 |
+| typecheck | 298 |
 | mir-llvm | 157 |
-| mir | 137 |
+| mir | 138 |
 | cli | 86 |
 | ownership | 63 |
 | parser | 50 |
@@ -129,8 +129,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-57 | 2026-11-08 | typecheck+cli | low | An unannotated array or `Vec` literal's element type is not fixed by where the binding goes: `let mut cnt = [0; 26]; ..; cnt` returned as `Array[i32, 26]`, and `let mut ans = Vec.filled(n, 0); dfs(.., mut ans)` into `ans: mut ref Vec[i32]`, are refused, and the binding annotation the message itself names gets no machine fix | — |
 | B-2026-11-08-58 | 2026-11-08 | typecheck | medium | A closure returning `Some((Vec.new(), x))` to a generic `Fn(S) -> Option[(S, O)]` leaves `O` uninferred, and with the state unannotated reports two unifiable function types as a mismatch: `.scan(Vec.new(), |seen, x| Some((Vec.new(), seen.len())))` is refused 'expected Fn(Vec[?T3], ref i64) -> Option[(Vec[?T3], OutV)], found Fn(Vec[i64], ref i64) -> Option[(Vec[i64], OutV)]' and 'cannot infer type parameter OutV' | — |
 | B-2026-11-08-59 | 2026-11-08 | resolver | low | An undefined `Deque`, `ArrayDeque`, `deque` or `Queue` gets no suggestion, though `HashMap`, `HashSet`, `BTreeMap` and `BinaryHeap` are each pointed at Kāra's name and a typo like `VecDequ` gets 'did you mean VecDeque': `let mut q: Deque[i64] = Deque.new();` says only 'undefined name Deque' / 'undefined type Deque' | — |
-| B-2026-11-08-60 | 2026-11-08 | parser | medium | A `const` declared inside a function body (`const MOD: i64 = 1_000_000_007;`, the usual first line of a LeetCode Rust solution) is a parse error that says 'const is a reserved keyword and cannot be used as an identifier; write `r#const`', advice that does not apply, with no fix; design.md § Constants does not say whether a block may declare one | — |
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
+| B-2026-11-08-63 | 2026-11-08 | typecheck+mir | low | A constant whose value is computed from another constant is refused as a pattern: `const AA: i64 = 5; const BB: i64 = AA + 1;` then `match 6 { BB => .. }` says 'this range pattern bound is not lowered yet', though a constant in a pattern is its value (design.md § Pattern matching) and `BB` checks and prints 6 anywhere else | — |
 
 ### Relocated
 
@@ -887,6 +887,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-54 | parser | medium | Rust's array type inside a generic argument (`Vec[[i64; 2]]`) is taken for a shape literal: check reports "Expected `]`, found `;`" instead of the `[… | 274ec2990d |
 | B-2026-11-08-56 | mir | high | A call to a closure puts its arguments' borrows in the closure itself, not in what the closure's `mut ref` captures reach: `\|extra: Vec[i64]\| total +… | b4d55d0ffb |
 | B-2026-11-08-55 | typecheck | low | RULING WANTED (Str vs String): `["inc", "dec"].contains(cmd)` with `cmd: Str`, and `names.contains(s)` on a `Vec[String]`, are refused "expected 'ref… | e59006b616 |
+| B-2026-11-08-60 | parser | medium | A `const` declared inside a function body (`const MOD: i64 = 1_000_000_007;`, the usual first line of a LeetCode Rust solution) is a parse error that… | a90821c8d |
 | B-2026-11-08-62 | typecheck+cli | medium | A copy of a defaulted literal binding gets no annotation fix: `let mut carry = 0; let mut x = carry; x += d; out.push(x & 1)` with `out: Vec[i32]` is… | a0bb430292 |
 
 </details>
