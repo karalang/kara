@@ -754,13 +754,14 @@ pub fn target_provides(target: &str, resource: &str) -> bool {
             "Timer",
             "Input",
         ],
+        // No `Network`: WASI preview 1 has no socket `connect` or `bind`
+        // (design.md § Resources each target provides, B-2026-11-08-37).
         "wasm_wasi" => &[
             "FileSystem",
             "Stdin",
             "Stdout",
             "Stderr",
             "Env",
-            "Network",
             "Clock",
             "RandomSource",
             "Heap",

@@ -29,6 +29,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `isize` and `usize` may be 32 bits, so they widen as 64-bit types but take
   only what fits in 32. `let m: isize = k` with `k: i64` was accepted
   (B-2026-11-08-48).
+- A socket, the HTTP client or a server reached from `main` is refused when
+  compiling for `wasm_wasi` (design.md § Resources each target provides):
+  WASI preview 1 has no socket `connect` or `bind`, so `Network` is not
+  provided there. `karac check --target=wasm_wasi` passed such a program and
+  `karac build` then failed in `wasm-ld` on internal runtime symbols; the
+  refusal now names the call chain (B-2026-11-08-37).
 
 ### Changed
 
