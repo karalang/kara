@@ -1063,6 +1063,8 @@ Every integer primitive (`i8` to `i128`, `u8` to `u128`, `isize`, `usize`) has f
 
 Widening composes: `u8` → `i64` is lossless because `u8` → `i16` → `i64` is.
 
+**`isize` and `usize` widen as if they had 32 to 64 bits.** Their width is the target's pointer width, and a program must be type-correct on every target, so a conversion is implicit only when it is lossless at both 32 and 64 bits. Into them: `i8` to `i32` and `u8`, `u16` widen to `isize`; `u8` to `u32` widen to `usize`. Out of them: `isize` widens to `i64` and `i128`; `usize` widens to `u64`, `u128` and `i128`. Anything else needs `as`, among them `usize` → `i64`, `i64` → `isize` and `u32` → `isize`. The rows apply at a binding and in an operator alike, so `i_isize - k_i64` is an `i64` (review-thread ruling 2026-11-08, B-2026-11-08-48). Both types exist for FFI signatures; Kāra code converts at the boundary and works in `i64`.
+
 **At a binding or an argument, the whole table applies.** A value widens implicitly wherever its destination type is known, for example a `let` annotation or an argument: `let b: i64 = a_i32;`, `let f: f64 = a_i32;` and `g(a_i32)` all widen.
 
 **In a binary operator, the narrower operand widens within its kind.** When the two operands have different numeric types of the same kind, and one converts losslessly to the other, that operand widens and the result has the other operand's type:
