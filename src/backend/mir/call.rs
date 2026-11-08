@@ -1492,7 +1492,21 @@ impl<'ctx> Cx<'ctx, '_> {
                 let empty = self.builder.build_and(no_cap, no_len, "").map_err(e)?;
                 let fresh = self.builder.build_and(pos, empty, "").map_err(e)?;
                 let not_empty = self.builder.build_not(empty, "").map_err(e)?;
+                // Only when the room is not already there: a counting loop
+                // that pushes onto a vector already holding elements
+                // reached the runtime's reserve on every entry (kata 481's
+                // 66.3M calls, B-2026-11-08-5). `len <= cap`, so
+                // `cap - len` cannot wrap.
+                let spare = self
+                    .builder
+                    .build_int_nuw_sub(cap, len, "presize.spare")
+                    .map_err(e)?;
+                let short = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, n, spare, "presize.short")
+                    .map_err(e)?;
                 let grow = self.builder.build_and(pos, not_empty, "").map_err(e)?;
+                let grow = self.builder.build_and(grow, short, "").map_err(e)?;
                 let realloc = self.extern_fn(
                     "karac_realloc_or_panic",
                     self.ptr_ty()
