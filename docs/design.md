@@ -2861,6 +2861,8 @@ Type inference is **bidirectional**: two judgments, `synthesize` and `check`, wi
 - **Struct literals.** In check mode, each field checks against its declared type. In synthesis mode, the literal names the struct. **Field shorthand:** `Point { x, y }` means `Point { x: x, y: y }`, and the forms mix: `User { name, email, password_hash: hash(password) }`.
 - **Casts.** `e as T` synthesizes `T`. Only the numeric casts of [§5](#5-types) are legal outside `unsafe`.
 
+**A collection's element type is not solved to a `ref` of a `Copy` type.** When an unannotated `Vec`, `Map`, `Set` or other collection's element or key variable is first solved from a `ref T` with `T: Copy` at a by-value slot (`push`, `insert`, `entry`, a literal element), it is solved to `T`, and the reference is read as its value there ([core-semantics.md §5.10](core-semantics.md)). So `for x in nums.iter() { m.insert(x, 1) }` builds a `Map[i64, i64]`, as Rust's `for &x` idiom does. A written `Map[ref i64, V]` keeps its references (review-thread ruling 2026-11-08, B-2026-11-08-19).
+
 **Type variables are solved within one function body.** A generic call, a constructor whose parameters are unknown (`Vec.new()`), a numeric literal and an unannotated closure parameter each introduce a type variable. Any later use in the same function body may solve it by unification:
 
 ```kara
