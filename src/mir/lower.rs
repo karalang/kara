@@ -22412,6 +22412,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let key = format!("{}.{method}", self.lcx.def_name(d));
                 return self.builtin_method(e, &key, object, "get_mut_by_view", args, dest);
             }
+            if self.contains_by_view(object, method, args, dest.clone())? {
+                return Ok(());
+            }
         }
         // The argument list the typechecker completed: defaults filled in
         // and named arguments in declaration order (the legacy pipeline's
@@ -25486,6 +25489,93 @@ impl<'l, 'a> Bx<'l, 'a> {
             ))
     }
 
+    /// `v.contains(x)` on a `Vec` or `VecDeque` of `String` or `Vec[T]`
+    /// elements, with the element's view as `x` (a `Str`, a `Slice[T]`):
+    /// a call of the library's `vec_contains_*` / `deque_contains_*`, whose
+    /// needle is the view, rather than of the library's `contains`, whose
+    /// needle is `ref T` (docs/library/collections.md, "Lookup by view";
+    /// B-2026-11-08-55). False for every other call.
+    fn contains_by_view(
+        &mut self,
+        object: &'a Expr,
+        method: &str,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<bool> {
+        let [x] = args else {
+            return Ok(false);
+        };
+        if method != "contains" {
+            return Ok(false);
+        }
+        let ot = self.expr_ty(object)?;
+        let (_, base) = self.strip_ty_full(ot);
+        let at = self.expr_ty(&x.value)?;
+        let (_, arg) = self.strip_ty_full(at);
+        let tcx = self.tys().tcx();
+        let (deque, elem) = match tcx.kind(base) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => (false, tcx.list(args)[0]),
+            HK::Intrinsic {
+                kind: IntrinsicKind::VecDeque,
+                args,
+            } => (true, tcx.list(args)[0]),
+            _ => return Ok(false),
+        };
+        let (helper, inst_args) = match (tcx.kind(elem), tcx.kind(arg)) {
+            (
+                HK::Intrinsic {
+                    kind: IntrinsicKind::Vec,
+                    args,
+                },
+                HK::Slice { .. },
+            ) => {
+                let t = tcx.list(args)[0];
+                let helper = if deque {
+                    "deque_contains_slice"
+                } else {
+                    "vec_contains_slice"
+                };
+                (helper, vec![t])
+            }
+            (_, HK::Str | HK::StaticStr) if self.tys().display(elem) == "String" => {
+                let helper = if deque {
+                    "deque_contains_str"
+                } else {
+                    "vec_contains_str"
+                };
+                (helper, vec![])
+            }
+            _ => return Ok(false),
+        };
+        let Some(d) = self.lcx.defs.lookup(0, helper) else {
+            return Ok(false);
+        };
+        let f = self.lcx.fns[&d].f;
+        let recv = self.recv_place(object, false)?;
+        let pt = self.callee_param_ty(&f.params[1], &inst_args)?;
+        let pending = self.arg_pending(&x.value, pt)?;
+        let mut rest = self.finish_args(vec![pending])?;
+        let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+        ops.extend(rest);
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(true)
+    }
+
     /// `x.fmt_debug()` on a type with no `fmt_debug` of its own: the
     /// `Debug` text `dbg` shows, in a new `String` (design.md § Display and
     /// Debug, B-2026-10-31-6).
@@ -27491,6 +27581,10 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "deque_extend_sorted_map",
     "parse_result_int",
     "parse_result_float",
+    "vec_contains_str",
+    "vec_contains_slice",
+    "deque_contains_str",
+    "deque_contains_slice",
 ];
 
 /// The names the library text `lib` declares at its top level.

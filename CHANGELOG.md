@@ -38,6 +38,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- **`contains` and `binary_search` on a sequence of `String` or `Vec[T]`
+  take the element's view.** `["inc", "dec"].contains(cmd)` with `cmd: Str`,
+  `names.contains(s)` on a `Vec[String]` and `rows.contains(w[1..3])` on a
+  `Vec[Vec[i64]]` check and allocate nothing, as a table's lookups already
+  did (docs/library/collections.md, "Lookup by view"; B-2026-11-08-55).
+  They were refused, and `karac fix` added a `.to_string()`.
 - **`None` orders before every `Some(x)`.** `sort()` on a `Vec[Option[T]]`,
   `<`, `cmp`, `min`/`max`, `SortedSet`/`SortedMap` keys and `PriorityQueue`
   now put `None` first, as Rust, Haskell and OCaml do

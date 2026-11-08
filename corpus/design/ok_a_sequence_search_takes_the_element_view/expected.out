@@ -1,0 +1,14 @@
+inc true
+frob false
+reset true
+true false
+true true
+true false
+Some(1) None
+Some(0)
+true false
+true true true false
+true
+Some(2) None
+false true
+true set

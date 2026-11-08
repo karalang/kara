@@ -2030,7 +2030,9 @@ impl<'a> super::TypeChecker<'a> {
 impl<'a> super::TypeChecker<'a> {
     /// A `Map`/`SortedMap` `get_mut` whose key argument is the key's view
     /// (`Str` for a `String` key): the lookup is checked as `get`'s is, and
-    /// the call returns `Option[mut ref V]`. `None` for every other call.
+    /// the call returns `Option[mut ref V]`. Likewise a `Vec`/`VecDeque`
+    /// `contains` whose needle is the element's view (B-2026-11-08-55),
+    /// which returns `bool`. `None` for every other call.
     fn get_mut_by_key_view(
         &mut self,
         type_name: &str,
@@ -2039,10 +2041,15 @@ impl<'a> super::TypeChecker<'a> {
         recv_subs: &HashMap<String, SubstValue>,
         return_type: &Type,
     ) -> Option<Type> {
-        if method != "get_mut" || !matches!(type_name, "Map" | "SortedMap") || args.len() != 1 {
+        let param = match (method, type_name) {
+            ("get_mut", "Map" | "SortedMap") => "K",
+            ("contains", "Vec" | "VecDeque") => "T",
+            _ => return None,
+        };
+        if args.len() != 1 {
             return None;
         }
-        let Some(SubstValue::Type(key)) = recv_subs.get("K") else {
+        let Some(SubstValue::Type(key)) = recv_subs.get(param) else {
             return None;
         };
         let key = resolve_type_var_top(key, &self.env.substitutions);
@@ -2052,7 +2059,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Ref(inner) | Type::MutRef(inner) => *inner,
             t => t,
         };
-        if !self.is_key_view(&key, &arg_ty) {
+        let view = if param == "T" {
+            self.is_elem_view(&key, &arg_ty)
+        } else {
+            self.is_key_view(&key, &arg_ty)
+        };
+        if !view {
             self.errors.truncate(errors);
             return None;
         }

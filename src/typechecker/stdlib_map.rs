@@ -71,6 +71,17 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `contains` and `binary_search` on a sequence of `String` or `Vec[T]`
+    /// elements take the element's view, as a table's lookups do, so a
+    /// `Str` or `Slice[T]` needle checks and allocates nothing
+    /// (docs/library/collections.md, "Lookup by view"; B-2026-11-08-55). An
+    /// element type not yet solved is left to the plain check, which solves
+    /// it from the needle.
+    pub(super) fn is_elem_view(&self, elem: &Type, needle: &Type) -> bool {
+        let elem = resolve_type_var_top(elem, &self.env.substitutions);
+        !matches!(elem, Type::TypeVar(_)) && self.is_key_view(&elem, needle)
+    }
+
     fn check_map_slot_arg(&mut self, slot: &Type, arg: &CallArg) {
         self.check_map_slot_arg_inner(slot, arg, false);
     }

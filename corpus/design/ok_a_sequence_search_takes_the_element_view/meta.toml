@@ -1,0 +1,9 @@
+source = "B-2026-11-08-55"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "strings", "collections"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/collections.md, Lookup by view (review-thread ruling 2026-11-08): `contains` on a Vec, Slice or VecDeque of String or Vec[T] elements, and `binary_search` on a Vec or Slice, take the element's view (a Str, a Slice[T]); before the fix `[\"inc\", \"dec\"].contains(cmd)` with `cmd: Str` was refused 'expected ref String, found Str'. The literals stay Strings. Expected output worked by hand: the sorted searches find ada/bob/cy at 0/1 and [] < [1, 2] < [3]."

@@ -1381,6 +1381,9 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
                         other => other.clone(),
                     };
+                    if self.is_elem_view(&elem, &probe_at) {
+                        continue;
+                    }
                     self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 Type::Bool
@@ -1405,6 +1408,9 @@ impl<'a> super::TypeChecker<'a> {
                     // spells it `needle: ref T`), so it peels for the
                     // assignability comparison exactly as `contains` does.
                     let probe_at = crate::typechecker::peel_probe_ref(&at);
+                    if self.is_elem_view(&elem, &probe_at) {
+                        continue;
+                    }
                     self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
@@ -1943,6 +1949,9 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
                         other => other.clone(),
                     };
+                    if self.is_elem_view(&elem, &probe_at) {
+                        continue;
+                    }
                     self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 Type::Bool
@@ -1967,6 +1976,9 @@ impl<'a> super::TypeChecker<'a> {
                     // spells it `needle: ref T`), so it peels for the
                     // assignability comparison exactly as `contains` does.
                     let probe_at = crate::typechecker::peel_probe_ref(&at);
+                    if self.is_elem_view(&elem, &probe_at) {
+                        continue;
+                    }
                     self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a

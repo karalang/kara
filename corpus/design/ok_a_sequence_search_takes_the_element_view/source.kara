@@ -1,0 +1,49 @@
+// `contains` and `binary_search` on a sequence of `String` or `Vec[T]`
+// elements take the element's view (docs/library/collections.md,
+// "Lookup by view"; B-2026-11-08-55).
+
+fn is_update(cmd: Str) -> bool {
+    ["inc", "dec", "set", "observe", "state", "reset"].contains(cmd)
+}
+
+fn known(names: ref Vec[String], s: Str) -> bool {
+    names.contains(s)
+}
+
+fn main() {
+    let words: Vec[Str] = "inc frob reset".split(" ").collect();
+    for w in words.iter() {
+        println(f"{w} {is_update(w)}");
+    }
+
+    let names: Vec[String] = ["ada", "bob", "cy"];
+    let probe = "xbobx";
+    println(f"{known(names, probe[1..4])} {known(names, probe[0..3])}");
+    println(f"{names.contains("cy")} {names.contains(names[0])}");
+
+    let sl = names.as_slice();
+    println(f"{sl.contains(probe[1..4])} {sl.contains("zed")}");
+    println(f"{names.binary_search(probe[1..4])} {names.binary_search("cat")}");
+    println(f"{sl.binary_search("ada")}");
+
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back("tail".to_string());
+    d.push_front("head".to_string());
+    println(f"{d.contains("head")} {d.contains(probe[0..2])}");
+
+    let rows: Vec[Vec[i64]] = [[1, 2], [3], []];
+    let wide = [0, 3, 1, 2];
+    println(f"{rows.contains(wide[1..2])} {rows.contains(wide[2..4])} {rows.contains(wide[0..0])} {rows.contains(wide[0..2])}");
+    println(f"{rows.as_slice().contains(wide[2..4])}");
+    let sorted: Vec[Vec[i64]] = [[], [1, 2], [3]];
+    println(f"{sorted.binary_search(wide[1..2])} {sorted.binary_search(wide[0..1])}");
+
+    let mut q: VecDeque[Vec[i64]] = VecDeque.new();
+    q.push_back([7, 8]);
+    println(f"{q.contains(wide[2..4])} {q.contains([7, 8].as_slice())}");
+
+    // The owned forms still work, and the literals stay `String`s.
+    let owned = "set".to_string();
+    let cmds = ["inc", "set"];
+    println(f"{cmds.contains(owned)} {owned}");
+}
