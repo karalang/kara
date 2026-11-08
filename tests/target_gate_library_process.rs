@@ -44,7 +44,8 @@ fn main() { println(helper()); }
         err.contains("main \u{2192} helper \u{2192} spawn_it"),
         "{err}"
     );
-    assert_eq!(err.matches("'ProcessTable'").count(), 2, "{err}");
+    // Once: no provider binds `ProcessTable`, so none is offered (B-2026-11-08-39).
+    assert_eq!(err.matches("'ProcessTable'").count(), 1, "{err}");
     assert!(
         native.status.success(),
         "{}",

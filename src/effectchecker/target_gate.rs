@@ -1,5 +1,5 @@
-//! Phase-10: effect-driven target gating — `design.md § Cross-target
-//! Compilation > Effect-Driven Target Gating`.
+//! Phase-10: effect-driven target gating — `design.md § 16 Targets and
+//! compilation > Effect-driven target gating`.
 //!
 //! After effect inference settles, walk the transitive call graph from
 //! the build's entry point and reject any reachable function whose
@@ -52,6 +52,14 @@ use super::{EffectError, EffectErrorKind, EffectOrigin};
 /// Prefix of the synthetic pseudo-call the inference walk records for
 /// each `providers { R => ... }` binding.
 pub(crate) const PROVIDERS_BIND_PREFIX: &str = "__providers_bind::";
+
+/// The host resources no program can bind a provider for: no library trait
+/// stands in for the process table, the heap or the hardware, so an `E0411`
+/// on one of them does not name a provider as its remedy. Every other host
+/// resource has one (the library defaults of `mir::providers::os_default`,
+/// io.md's `FileSystem` and `Network` overrides, and `std.web`'s
+/// `Display => ..` server-side rendering binding).
+const NO_PROVIDER_RESOURCES: &[&str] = &["ProcessTable", "Heap", "Hardware", "GpuBuffer"];
 
 impl<'a> super::EffectChecker<'a> {
     /// Run the target gate for the current compilation target. Assumes
@@ -220,13 +228,19 @@ impl<'a> super::EffectChecker<'a> {
                 {
                     continue;
                 }
+                // A provider discharges the resource below its binding, so
+                // it is a remedy only where one can be bound (B-2026-11-08-39).
+                let provider = if NO_PROVIDER_RESOURCES.contains(&resource.as_str()) {
+                    String::new()
+                } else {
+                    format!(", bind a provider for '{resource}'")
+                };
                 errors.push(EffectError {
                     message: format!(
                         "target `{target}` does not provide resource '{resource}' — \
                          required on the call chain {chain}; gate it with \
-                         `#[target(...)]`, bind a provider for '{resource}', or \
-                         keep it off this target's entry path \
-                         (design.md § Cross-target Compilation)",
+                         `#[target(...)]`{provider}, or keep it off this target's \
+                         entry path (design.md § Effect-driven target gating)",
                     ),
                     span,
                     kind: EffectErrorKind::TargetGateViolation,

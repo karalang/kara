@@ -260,6 +260,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   fixed with `as i64`; when the `usize` comes from a cast, type or suffix
   that the same pass fixes to `i64`, the use is left alone
   (B-2026-11-08-16).
+- E0411 (a target lacks a resource the call chain uses) cites design.md
+  § Effect-driven target gating, the section that states the rule, and
+  offers binding a provider only for a resource one can be bound for: not
+  `ProcessTable`, `Heap` or the hardware (B-2026-11-08-39).
 
 ### Tooling
 
