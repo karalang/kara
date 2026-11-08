@@ -103,6 +103,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- The element literal of `let cnt = [0; 26];` and `let ans = Vec.filled(n,
+  0);` is fixed by where the collection goes, as a scalar's is (design.md
+  §8 Literals): returned as an `Array[i32, 26]`, or handed to a
+  `mut ref Vec[i32]` parameter, it is an `i32`. Both were refused as
+  `Array[i64, 26]` / `Vec[i64]`. Where an operator left the element at
+  `i64` first, returning the collection whole names the binding and
+  `karac fix` writes the literal `0i32`, as for an element read
+  (B-2026-11-08-57).
 - A constant computed from another constant matches as a pattern:
   `const BB: i64 = AA + 1;` then `match x { BB => .. }` was refused with
   "this range pattern bound is not lowered yet", though a constant in a

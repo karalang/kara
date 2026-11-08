@@ -958,7 +958,8 @@ pub(crate) struct LiteralLet {
     /// `v[i]` rather than `v`.
     pub(crate) element: bool,
     /// The literal's type variable, while nothing has settled it (a tuple's
-    /// or a fill's literal is settled to `i64` when the aggregate is built),
+    /// literal is settled to `i64` when the tuple is built; a fill's under
+    /// an unannotated `let` stays open for a use to fix, B-2026-11-08-57),
     /// and its value.
     pub(crate) var: Option<TypeVarId>,
     pub(crate) value: Option<i128>,
@@ -4000,6 +4001,14 @@ pub struct TypeChecker<'a> {
     /// `.to_vec()` makes `x` a `Vec` of its own when a method that changes
     /// a slice in place is called on it (B-2026-11-08-64).
     pub(super) read_only_slice_lets: FxHashMap<String, Span>,
+    /// The value of the unannotated `let` being inferred, when it is a
+    /// repeat literal (`[0; 26]`) or `Vec.filled(n, 0)`: its element's
+    /// number literal stays open for a later use to fix (B-2026-11-08-57).
+    pub(super) open_collection_let: Option<crate::ids::NodeId>,
+    /// The spans of identifiers that read a fill's binding in
+    /// `literal_lets` (`cnt` of `let cnt = [0; 26]`), by span: a refusal
+    /// at the whole collection names it (B-2026-11-08-57).
+    pub(super) literal_collection_uses: FxHashMap<SpanKey, String>,
     /// The spans of identifiers that read a [`StrLitLet`] binding.
     pub(super) str_lit_let_uses: FxHashMap<SpanKey, String>,
     /// The uses reported for a [`StrLitLet`] that is offered `: Str`.
@@ -4410,6 +4419,8 @@ impl<'a> TypeChecker<'a> {
             str_lit_lets: FxHashMap::default(),
             literal_lets: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
+            open_collection_let: None,
+            literal_collection_uses: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
@@ -8553,6 +8564,35 @@ impl<'a> TypeChecker<'a> {
                 TypeErrorKind::TypeMismatch,
                 expected,
                 found,
+            );
+            return false;
+        }
+        // A binding whose element literal kept the default, read here:
+        // the annotation that gives it the type wanted (design.md §8
+        // Literals; B-2026-11-08-57).
+        let want = match expected {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            t => t,
+        };
+        let elem = match want {
+            Type::Array { element, .. } => Some(element.as_ref().clone()),
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => Some(args[0].clone()),
+            _ => None,
+        };
+        if let Some((name, fix, lit)) =
+            elem.and_then(|e| self.literal_collection_annotation(&span, &e))
+        {
+            self.type_error_with_fix_it(
+                format!(
+                    "expected '{}', found '{}': the elements of `{name}` are 'i64' because the \
+                     literal it is filled with took the default, since nothing before this use \
+                     fixed its type (design.md §8 Literals); write that literal {lit}",
+                    type_display(expected),
+                    type_display(found),
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+                fix,
             );
             return false;
         }

@@ -11028,8 +11028,11 @@ impl<'a> super::TypeChecker<'a> {
                     declared
                 } else {
                     // A literal stays open for a later use to fix
-                    // (B-2026-11-07-3).
+                    // (B-2026-11-07-3), and so does the element literal of
+                    // `[0; 26]` or `Vec.filled(n, 0)` (B-2026-11-08-57).
+                    let saved_collection = self.open_collection_let.replace(value.id);
                     let inferred = self.infer_expr_open(value);
+                    self.open_collection_let = saved_collection;
                     // design.md § Collection literals: an empty literal takes
                     // its element type from the expected type, and an
                     // unannotated `let` gives none. `let w = [];` typed as

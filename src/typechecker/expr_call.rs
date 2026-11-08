@@ -2108,9 +2108,19 @@ impl<'a> super::TypeChecker<'a> {
                 && segments[1] == "filled"
                 && args.len() == 2
             {
+                // `let ans = Vec.filled(n, 0);` leaves the element's literal
+                // open for a later use of the vector to fix (design.md §8
+                // Literals; B-2026-11-08-57).
+                let open = self.current_call_node.is_some_and(|(node, _)| {
+                    self.open_collection_let == Some(node) && !node.is_dummy()
+                });
                 let n_ty = self.infer_expr(&args[0].value);
                 self.check_i64_arg(&args[0].value, &n_ty);
-                let elem_ty = self.infer_expr(&args[1].value);
+                let elem_ty = if open {
+                    self.infer_expr_open(&args[1].value)
+                } else {
+                    self.infer_expr(&args[1].value)
+                };
                 let ty = Type::Named {
                     name: "Vec".to_string(),
                     args: vec![elem_ty],

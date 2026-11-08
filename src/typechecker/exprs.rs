@@ -10383,6 +10383,53 @@ impl<'a> super::TypeChecker<'a> {
         (self.resolved_now(&Type::TypeVar(var)) == Type::TypeVar(id)).then(|| entry.clone())
     }
 
+    /// The fix for a fill's binding read whole at `use_span` where a
+    /// collection of `elem` is wanted, when its literal kept the default
+    /// (`cnt` of `let mut cnt = [0; 26]` returned as an `Array[i32, 26]`
+    /// after `cnt[c] += sub[c]`): the literal's suffix, as
+    /// [`Self::literal_let_annotation`] gives for an element read
+    /// (design.md §8 Literal suffixes; B-2026-11-08-57). The binding's
+    /// name, the edit and the suffixed literal.
+    pub(super) fn literal_collection_annotation(
+        &self,
+        use_span: &Span,
+        elem: &Type,
+    ) -> Option<(String, FixIt, String)> {
+        if !matches!(elem, Type::Int(_) | Type::UInt(_)) || *elem == Type::Int(IntSize::I64) {
+            return None;
+        }
+        let name = self
+            .literal_collection_uses
+            .get(&SpanKey::from_span(use_span))?;
+        let entry = self.literal_lets.get(name.as_str())?;
+        if !entry.element || !entry.suffix {
+            return None;
+        }
+        if entry
+            .var
+            .is_some_and(|v| self.resolved_now(&Type::TypeVar(v)) != Type::Int(IntSize::I64))
+        {
+            return None;
+        }
+        if let (Some(v), Some((lo, hi))) = (entry.value, Self::int_literal_range(elem)) {
+            if v < lo || v > hi {
+                return None;
+            }
+        }
+        let t = type_display(elem);
+        let lit = entry
+            .value
+            .map_or_else(|| format!("with the suffix `{t}`"), |v| format!("`{v}{t}`"));
+        Some((
+            entry.root.clone(),
+            FixIt {
+                span: entry.at,
+                replacement: t,
+            },
+            lit,
+        ))
+    }
+
     /// design.md §8 Literals: a binding whose literal kept its default
     /// `i64` because only an operator or a method used it is refused where
     /// it meets a narrower type, far from the `let`. The annotation that
@@ -11226,6 +11273,14 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if self.str_lit_lets.contains_key(name.as_str()) {
                     self.str_lit_let_uses
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                }
+                if self
+                    .literal_lets
+                    .get(name.as_str())
+                    .is_some_and(|e| e.element)
+                {
+                    self.literal_collection_uses
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
                 let ty = self.resolve_identifier_type(name, &expr.span);
@@ -13970,7 +14025,14 @@ impl<'a> super::TypeChecker<'a> {
                 value,
                 count,
             } => {
-                let elem_ty = self.infer_expr(value);
+                // `let cnt = [0; 26];` leaves its element's literal open, for
+                // a later use to fix: a return, an argument, an assignment
+                // (design.md §8 Literals; B-2026-11-08-57).
+                let elem_ty = if self.open_collection_let == Some(expr.id) && !expr.id.is_dummy() {
+                    self.infer_expr_open(value)
+                } else {
+                    self.infer_expr(value)
+                };
                 let count_ty = self.infer_expr(count);
                 // Count must be an integer type; report otherwise but keep going.
                 let count_is_int = matches!(count_ty, Type::Int(_) | Type::UInt(_) | Type::Error);

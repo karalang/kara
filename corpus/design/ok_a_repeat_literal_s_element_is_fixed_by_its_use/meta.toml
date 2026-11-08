@@ -1,0 +1,9 @@
+source = "B-2026-11-08-57"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "literals"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §8 Literals: a return, an argument and an assignment fix a literal's type. `cnt = [0; 26]` returned as `Array[i32, 26]` is an `Array[i32, 26]` (\"abca\" counts a=2, b=1, z=0); `ans = Vec.filled(n, 0)` handed to a `mut ref Vec[i32]` parameter is a `Vec[i32]` (ans[2] = 20); `[3000000000; 2]`, which nothing fixes, keeps `i64` (sum 6000000000). Both fixed shapes were refused with `expected Array[i32, 26], found Array[i64, 26]` before the fix."

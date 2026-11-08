@@ -1,0 +1,32 @@
+// design.md §8 Literals: a return, an argument and an assignment fix a
+// literal's type, here the element literal of `[0; 26]` and of
+// `Vec.filled(n, 0)` (B-2026-11-08-57).
+fn counts(s: Str) -> Array[i32, 26] {
+    let mut cnt = [0; 26];
+    for b in s.bytes() {
+        cnt[(b - 97) as i64] += 1;
+    }
+    cnt
+}
+
+fn fill(ans: mut ref Vec[i32], n: i64) {
+    for i in 0..n {
+        ans[i] = (i * 10) as i32;
+    }
+}
+
+fn build(n: i64) -> Vec[i32] {
+    let mut ans = Vec.filled(n, 0);
+    fill(mut ans, n);
+    ans
+}
+
+fn main() {
+    let c = counts("abca");
+    println(f"{c[0]} {c[1]} {c[25]}");
+    let v = build(3);
+    println(f"{v[2]}");
+    // Nothing fixes this one: it keeps the default `i64`.
+    let big = [3000000000; 2];
+    println(f"{big[0] + big[1]}");
+}
