@@ -3,7 +3,7 @@
 //! so it is not "available", and a typo of one is not suggested
 //! (B-2026-11-08-35).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn fixture(tag: &str) -> PathBuf {
@@ -34,7 +34,7 @@ fn fixture(tag: &str) -> PathBuf {
     root
 }
 
-fn check(root: &PathBuf, main: &str) -> String {
+fn check(root: &Path, main: &str) -> String {
     let app = root.join("app");
     std::fs::write(app.join("src/main.kara"), main).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))

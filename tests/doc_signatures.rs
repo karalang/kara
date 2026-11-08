@@ -2,7 +2,7 @@
 //! struct page lists its public methods and the traits it implements, and a
 //! trait page lists its methods (B-2026-11-08-34).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn build(tag: &str, lib: &str) -> PathBuf {
@@ -29,7 +29,7 @@ fn build(tag: &str, lib: &str) -> PathBuf {
     root
 }
 
-fn page(root: &PathBuf, rel: &str) -> String {
+fn page(root: &Path, rel: &str) -> String {
     let path = root.join("dist/doc").join(rel);
     std::fs::read_to_string(&path).unwrap_or_else(|e| {
         let mut listing = String::new();
@@ -40,7 +40,7 @@ fn page(root: &PathBuf, rel: &str) -> String {
     })
 }
 
-fn walk(dir: &PathBuf) -> Vec<PathBuf> {
+fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
