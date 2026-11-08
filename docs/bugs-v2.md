@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 178 |
-| false-positive | 150 |
+| diagnostics | 180 |
+| false-positive | 151 |
 | perf | 119 |
 | missing-feature | 109 |
 | soundness | 52 |
 | miscompile | 43 |
-| run-vs-build | 28 |
+| run-vs-build | 29 |
 | other | 24 |
-| codegen-gap | 22 |
+| codegen-gap | 23 |
 | crash | 17 |
 | leak | 4 |
 | use-after-free | 1 |
@@ -75,17 +75,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 284 |
-| mir-llvm | 152 |
+| typecheck | 286 |
+| mir-llvm | 153 |
 | mir | 134 |
-| cli | 80 |
+| cli | 83 |
 | ownership | 63 |
 | parser | 47 |
 | interp | 38 |
+| effect | 29 |
 | runtime | 28 |
-| effect | 28 |
 | codegen | 22 |
-| resolver | 15 |
+| resolver | 16 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
@@ -116,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-11 | 2026-11-08 | parser | low | Rust's `mut arr: Vec<i32>` parameter has no `karac fix` edit even in a program written as Rust, where it always means an owned copy (`arr: own Vec[i32]` + `let mut arr = arr;`), and the one error is reported four times | — |
 | B-2026-11-08-12 | 2026-11-08 | ownership | low | `karac check` refuses `let (at, _) = v[i..j].iter().enumerate().min_by_key(..).unwrap(); v.remove(at);`: it keeps the range slice `v[i..j]` borrowed through the tuple pattern's `_`, so a later `mut ref` use of `v` is E-conflict; `.unwrap().0`, or `v.iter()` without the range, checks, and __mir-run accepts the program | — |
 | B-2026-11-08-13 | 2026-11-08 | typecheck | low | `karac fix` rewrites Rust's `if let Some(&i) = pos[d].last()` to `if let Some(i) = ...`, which changes `i` from a copied usize into a borrow of `pos[d]`, so the later `pos[d].pop()` is refused (E0516) with no fix; the meaning-keeping edit is `pos[d].last().cloned()` | — |
-| B-2026-11-08-14 | 2026-11-08 | mir-llvm | medium | Read-only iteration of a field of a `shared` struct that is not declared `mut` pays a run-time borrow flag (acquire + release through the thread-local list) per loan: the flag pass flags every non-Copy field because MIR does not record which fields are `mut` | — |
 | B-2026-11-08-15 | 2026-11-08 | typecheck | low | `s.split_whitespace().rev()` (and `s.split(" ").rev()`) is refused with a bare "no method 'rev' on type 'StrWords'": the string-splitting iterators are not double-ended, though Rust's `split_whitespace` is, and the diagnostic gives no hint or fix | — |
 | B-2026-11-08-16 | 2026-11-08 | typecheck+cli | low | A `usize` length from a Rust template (`let n = n as usize; Vec::with_capacity(n * (n + 1) / 2)`) is refused as an implicit `usize` to `i64` coercion whose message says to write `as i64`, but `karac fix` has no edit for it | — |
 | B-2026-11-08-20 | 2026-11-08 | typecheck | medium | A binding whose literal keeps `i64` because only an operator or a method receiver used it is refused far from the binding, with an `as` cast as the only advice: `let mut b = 0; b += y; b` in `-> i32` says 'implicit coercion from i64 to i32 would narrow ... write an explicit as i32' at the return, with no machine fix; the fix is the binding's annotation (`let mut b: i32 = 0`) | — |
@@ -138,6 +137,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-34 | 2026-11-08 | cli | low | `karac doc` renders wrong signatures and drops members: generic arguments vanish (`-> Result`, field `Vec`, `SortedMap`, `fn add_to(s: mut ref S, ..)` with no `[S: Store[String, i64]]`), a struct page lists no methods from its `impl`, a trait page lists no trait methods, and `builtins/` documents `collect_all`, which core-semantics §11.7 removed (check refuses it) | — |
 | B-2026-11-08-35 | 2026-11-08 | resolver | low | E0113 for an unknown item in a dependency lists non-importable names as available: `import textkit.nope` says "available: Table, Store, Counter, MemStore, add_to, version, load_lines, clean, log_line", where `clean` is package-internal and importing it is E0111 | — |
 | B-2026-11-08-36 | 2026-11-08 | typecheck+interp+mir-llvm | high | A `fold` closure whose parameters are annotated bare (`|acc: Vec[i64], row: Vec[i64]|`) checks, but the program fails on both backends: the interpreter stops on `deref of non-reference Box` in the closure and the compiled program exits 101 with no message; unannotated or `own` parameters run | — |
+| B-2026-11-08-37 | 2026-11-08 | mir-llvm+cli | medium | Networking on `wasm_wasi` passes `karac check --targets=wasm_wasi`, then `karac build --target=wasm_wasi` dies in wasm-ld with raw runtime symbols (`undefined symbol: karac_mir_tcp`, `karac_mir_sock_close`; `karac_mir_ready_http`, `karac_runtime_http_client_mir_send` for `Client.get`); design.md §16 lists `Network` as provided on wasm_wasi, so the program should build, or the gate should refuse it with E0411 and the table should change | — |
+| B-2026-11-08-38 | 2026-11-08 | typecheck+cli | medium | In a package whose kara.toml declares two or more `[build] targets`, `karac check` runs a different checker: `s.split(" ").count()` and `s.split_whitespace().count()` are refused with E0200 "no method 'count' on type 'Vec' ... write `s.split(" ").iter().count(...)`", every error is coded E0200 (a type mismatch too), the text has no source snippet, and identical findings are repeated per target instead of the "all targets" group; the same file with `--targets=native,wasm_wasi`, or with one declared target, checks clean and `karac build` builds and runs it | — |
+| B-2026-11-08-39 | 2026-11-08 | effect | low | The E0411 target-gate message cites a section that does not exist ("design.md § Cross-target Compilation"; the rule is §16 "Effect-driven target gating") and offers "bind a provider for 'ProcessTable'", which has no provider trait to bind (io.md has none, and no fake is planned) | — |
+| B-2026-11-08-40 | 2026-11-08 | cli | medium | `karac::run_playground` (the playground, and the book test's only gate for `kara,run` blocks) runs a program that `karac check` and kara-lsp refuse: the book's ch14 TaskGroup example (`for handle in handles { total = total + handle.join(); }`) is E0515 on the CLI and in the editor, yet tests/book_snippets.rs passes it because a Run block never goes through `check_source` | — |
+| B-2026-11-08-41 | 2026-11-08 | typecheck+resolver | low | Some diagnostics print two headers on one line: `error[typecheck]: f.kara:2:1: error[E_SECRET_TRAIT_FORBIDDEN]: cannot implement ...` and `error[resolve]: f.kara:2:1: error[E_MODULE_BINDING_NAMING]: module-level binding name ...`, where every other error has one `error[CODE]:` prefix | — |
 
 ### Relocated
 
@@ -861,6 +865,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-1 | mir-llvm | medium | The overflow-safe midpoint `lo + (hi - lo) / 2` keeps its signed division: halving (B-2026-11-06-8) does not see `hi - lo` as non-negative under the… | a8696f186e |
 | B-2026-11-08-5 | mir-llvm | low | Kata 481's bench calls karac_mir_vec_reserve on every entry to its inner push loop (66.3M calls): the presize lowering of a counting loop that refill… | bfa904694f |
 | B-2026-11-08-9 | mir-llvm | low | Dropping a shared-struct handle calls an out-of-line, self-recursive drop function even when the count does not reach zero (154M calls, 21% of kata 5… | ca44c9a984 |
+| B-2026-11-08-14 | mir-llvm | medium | Read-only iteration of a field of a `shared` struct that is not declared `mut` pays a run-time borrow flag (acquire + release through the thread-loca… | 4fdf0cf1e3 |
 | B-2026-11-08-17 | typecheck | low | A known unit variant (`None`) in a `match` arm over a scrutinee that already failed to type is also reported as `` `None` is Type-class but binding n… | 8b1e2b6970 |
 
 </details>
