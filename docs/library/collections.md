@@ -340,6 +340,8 @@ Every collection works with `for`. A collection is `Iterable`, so `for x in c` b
 
 `Vec[T]`, `Array[T, N]`, `Slice[T]` and `VecDeque[T]` implement `PartialEq` (with `Rhs = Self`) when `T: PartialEq`, and `Eq` when `T: Eq`: two sequences are equal when they have the same length and equal elements in order. They implement `PartialOrd` and `Ord` when `T` does, comparing lexicographically. The comparison traits borrow both operands ([design.md §9](../design.md#operator-traits)).
 
+`Map[K, V]` and `SortedMap[K, V]` implement `PartialEq` when `V: PartialEq`, and `Eq` when `V: Eq`: two maps are equal when they hold the same keys and each key's values are equal. `Set[T]` and `SortedSet[T]` implement `PartialEq` and `Eq`: two sets are equal when they hold the same elements. Order plays no part, so a `Map` equals a `Map` built by inserting the same entries in another order, and iteration order (random per process for `Map` and `Set`) never affects the result. A struct holding one of them can derive `PartialEq`. They implement no `PartialOrd`; compare `m.iter()` sequences of a `SortedMap` when an order is meant (review-thread ruling 2026-11-08, from the probe's JSON pass).
+
 ## `Arena[T]` and `SlotMap[T]`
 
 Two allocation primitives are library types, not language features:
