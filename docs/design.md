@@ -705,7 +705,7 @@ target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host
 - `[package].edition` is optional and validated.
 - `version` and `authors` are recognized. An unknown key in `[package]` is a warning; invalid TOML is an error.
 - `[build].target` selects the default manifest overlay ([Conditional compilation](#conditional-compilation)); `[build].targets` lists the targets `karac check` verifies ([§16](#16-targets-and-compilation)).
-- Dependency resolution is not yet implemented. Today the compiler reads `[package]` and `[build]` and ignores the other sections without error.
+- **Dependencies in 0.8.** A path dependency (`{ path = "../logging" }`) resolves, type-checks across the package boundary and links into `check`, `run`, `build` and `test`. A registry (`"1.2"`, `{ version = .. }`) or git dependency is refused with `registry dependency `x` cannot be resolved yet` (or `git dependency ..`) and a help line to use a `path` dependency on a local checkout instead.
 
 **Editions.**
 - `"2026"` is the only edition. An unknown value is an error: `unknown edition "2027"; this compiler supports editions up to "2026"`.
