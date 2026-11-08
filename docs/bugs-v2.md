@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 180 |
-| false-positive | 152 |
+| diagnostics | 182 |
+| false-positive | 153 |
 | perf | 119 |
-| missing-feature | 109 |
+| missing-feature | 110 |
 | soundness | 52 |
-| miscompile | 43 |
+| miscompile | 44 |
 | run-vs-build | 29 |
 | other | 24 |
 | codegen-gap | 23 |
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 287 |
-| mir-llvm | 153 |
+| typecheck | 291 |
+| mir-llvm | 154 |
 | mir | 134 |
 | cli | 83 |
 | ownership | 63 |
 | parser | 47 |
-| interp | 38 |
+| interp | 39 |
 | effect | 29 |
 | runtime | 28 |
 | codegen | 22 |
@@ -108,7 +108,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
 | B-2026-11-08-3 | 2026-11-08 | mir-llvm | low | Kata 277's bench runs 1.83x Rust's instructions at karac's default O2 (3.19G vs 1.74G, x86 callgrind) and 0.62x at O3 (1.08G): O2 misses the verify loop's simplification once the candidate is the planted celebrity | — |
-| B-2026-11-08-4 | 2026-11-08 | resolver | low | `karac fix` rewrites Rust's `BinaryHeap<Reverse<i32>>` in a type (a struct field) to `PriorityQueue[Release[i32]]`: the Reverse-around-heap-items fix covers `push(Reverse(x))` and `Some(Reverse(p))` but not the type argument, which takes the resolver's did-you-mean `Release`; it should be `PriorityQueue[i32]` | — |
 | B-2026-11-08-6 | 2026-11-08 | mir-llvm | low | Iterating a String's chars costs 17 instructions a char against Rust's 11 when collected, 35 against 27 in a for loop: the inlined decode reloads the String's pointer and length each char, tests ASCII twice and checks the byte cursor for overflow (katas 459, 467, 484); 459's `cs[i] != cs[i - d]` loop also keeps two bounds checks and the `i - d` overflow check | — |
 | B-2026-11-08-7 | 2026-11-08 | mir-llvm | low | A Map or Set allocates five buffers for its first entry and frees five (the MirMap header, buf, hashes, index, dead): kata 491's bench makes 13.0M mallocs against Rust's 5.6M for the same 3.53M clones, and insert plus free are 47% of its instructions | — |
 | B-2026-11-08-8 | 2026-11-08 | mir-llvm | low | A Map lookup calls SipHash out of line, reloading the hash state from a global and checking the seed on every call, and probes its index one 8-byte cell at a time: kata 454 runs 1.03x Rust's instructions but 2.9x its branch mispredicts and 2.5x its data reads | — |
@@ -140,6 +139,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-40 | 2026-11-08 | cli | medium | `karac::run_playground` (the playground, and the book test's only gate for `kara,run` blocks) runs a program that `karac check` and kara-lsp refuse: the book's ch14 TaskGroup example (`for handle in handles { total = total + handle.join(); }`) is E0515 on the CLI and in the editor, yet tests/book_snippets.rs passes it because a Run block never goes through `check_source` | — |
 | B-2026-11-08-41 | 2026-11-08 | typecheck+resolver | low | Some diagnostics print two headers on one line: `error[typecheck]: f.kara:2:1: error[E_SECRET_TRAIT_FORBIDDEN]: cannot implement ...` and `error[resolve]: f.kara:2:1: error[E_MODULE_BINDING_NAMING]: module-level binding name ...`, where every other error has one `error[CODE]:` prefix | — |
 | B-2026-11-08-42 | 2026-11-08 | typecheck | medium | A literal inserted into a `Map` or `SortedMap` is not fixed by the parameter the map is handed to: `let mut d = SortedMap.new(); d.insert(1, 2); m(d);` with `fn m(d: SortedMap[i32, i64])` is refused 'expected SortedMap[i32, i64], found SortedMap[i64, i64]', though the same with `Vec.new()`, `push` and a `Vec[i32]` parameter is accepted | — |
+| B-2026-11-08-43 | 2026-11-08 | interp+mir-llvm | high | A temporary passed to a `mut ref` parameter (`total(mut v.iter().map(..).collect())`) checks clean and is then handed over as if it were a reference: the interpreter stops with `deref of non-reference Box`, and a `karac build` binary segfaults | — |
+| B-2026-11-08-44 | 2026-11-08 | typecheck | medium | `v.iter().skip(1).fold(0, |x, a| x + 1)` returned as `i32` is refused (`implicit coercion from 'i64' to 'i32'`), though `v.iter().fold(0, ..)` and `(0..3).fold(0, ..)` take `i32` from the return; a follow-up of B-2026-11-07-57 | — |
+| B-2026-11-08-45 | 2026-11-08 | typecheck | low | Rust's `scan` closure over a `&mut` state (`|m, x| { *m = (*m).max(x); Some(*m) }`) draws six `drop the *` fixes that leave `Some(m)` and a type error `expected 'Option[(i64, OutV)]', found 'Option[i64]'`, with no fix and no word that Kāra's `scan` closure returns `Some((next_state, item))` | — |
+| B-2026-11-08-46 | 2026-11-08 | typecheck | low | Rust's `match ans.last_mut() { Some(last) if last[1] == prev && last[2] == avg => last[1] = pos, _ => ans.push(..) }` gets `no method 'last_mut' on type 'Vec': write through an index instead` with no machine fix, though the index form it describes is mechanical for this shape | — |
+| B-2026-11-08-47 | 2026-11-08 | typecheck | low | A sequence has no `split` by a predicate: Rust's `line.split(|&ch| ch == '#')` over a `&Vec<char>` is refused "no method 'split' on type 'Vec'" with no fix and no other spelling named, and draws two cascade errors on the closures that read the pieces | — |
 
 ### Relocated
 
@@ -861,6 +865,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-56 | interp+mir-llvm | medium | A method called straight on a constant whose value is a bare literal reads it at i64, not its declared type (corrected: not only wide ones; `CC.leadi… | a3a7d1eeb0 |
 | B-2026-11-07-57 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3; corrected: the `b += y` shape is a deliberate… | b85cf41506 |
 | B-2026-11-08-1 | mir-llvm | medium | The overflow-safe midpoint `lo + (hi - lo) / 2` keeps its signed division: halving (B-2026-11-06-8) does not see `hi - lo` as non-negative under the… | a8696f186e |
+| B-2026-11-08-4 | resolver | low | `karac fix` rewrites Rust's `BinaryHeap<Reverse<i32>>` in a type (a struct field) to `PriorityQueue[Release[i32]]`: the Reverse-around-heap-items fix… | cdb6382000 |
 | B-2026-11-08-5 | mir-llvm | low | Kata 481's bench calls karac_mir_vec_reserve on every entry to its inner push loop (66.3M calls): the presize lowering of a counting loop that refill… | bfa904694f |
 | B-2026-11-08-9 | mir-llvm | low | Dropping a shared-struct handle calls an out-of-line, self-recursive drop function even when the count does not reach zero (154M calls, 21% of kata 5… | ca44c9a984 |
 | B-2026-11-08-14 | mir-llvm | medium | Read-only iteration of a field of a `shared` struct that is not declared `mut` pays a run-time borrow flag (acquire + release through the thread-loca… | 4fdf0cf1e3 |
