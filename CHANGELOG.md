@@ -91,6 +91,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- **A method returning `Self` in an impl of a `shared struct` is the
+  handle type at its call.** `let y: Node = Node.new(2);` was refused
+  "expected 'Node', found 'Node'" (B-2026-11-08-70).
+
 - **A slice local may be bound to its own sub-slice.** `rest = rest[1..]`
   on a `Slice[T]` local was refused with E0516, as if the sub-slice
   borrowed the local; it borrows what the slice borrows, as the `Str` twin
@@ -186,6 +190,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   219: 760 ms to 690 ms (B-2026-11-08-8).
 
 ### Diagnostics
+
+- **`karac fix` carries Rust's `Rc<RefCell<T>>` to a `shared struct`.**
+  LeetCode's tree template stopped at "unknown module `std.rc`, did you mean
+  `std.io`?". The `use std::rc::Rc;` line's fix now deletes it, declares
+  each struct held in an `Rc<RefCell<T>>` a `shared struct` with `mut`
+  fields, writes the type as `T` and `Rc::new(RefCell::new(x))` as `x`, and
+  drops `.borrow()` / `.borrow_mut()`; `Rc` and `RefCell` elsewhere name
+  `shared struct` (B-2026-11-08-65).
 
 - `Ok[i64, String](3)` is refused by `karac check` with the qualified form,
   `Result[i64, String].Ok(..)`: a call takes no type arguments, and the
