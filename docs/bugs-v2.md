@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 121 |
 | missing-feature | 111 |
 | soundness | 53 |
-| miscompile | 44 |
+| miscompile | 45 |
 | run-vs-build | 29 |
 | other | 24 |
 | codegen-gap | 23 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 299 |
+| typecheck | 300 |
 | mir-llvm | 157 |
-| mir | 139 |
+| mir | 140 |
 | cli | 86 |
 | ownership | 63 |
 | parser | 50 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-63 | 2026-11-08 | typecheck+mir | low | A constant whose value is computed from another constant is refused as a pattern: `const AA: i64 = 5; const BB: i64 = AA + 1;` then `match 6 { BB => .. }` says 'this range pattern bound is not lowered yet', though a constant in a pattern is its value (design.md § Pattern matching) and `BB` checks and prints 6 anywhere else | — |
 | B-2026-11-08-64 | 2026-11-08 | typecheck | low | A mutating method on a read-only Slice binding (`let mut b = s.bytes(); b.swap(i, j)`, also sort, reverse, fill, sort_by, sort_by_key, split_at_mut) says only 'Slice.swap() requires a mutable slice (`mut Slice[T]`)', with no hint or fix; an index assignment through the same binding names `.to_vec()` but is reported twice | — |
 | B-2026-11-08-65 | 2026-11-08 | resolver | medium | `karac fix` carries LeetCode's binary-tree template (`use std::rc::Rc; use std::cell::RefCell;`, `Option<Rc<RefCell<TreeNode>>>`, `n.borrow()`) to `import std.rc.Rc` and `Option[Rc[RefCell[TreeNode]]]`, then stops at 'unknown module `std.rc`, did you mean `std.io`?' with no word of `shared struct`, Kāra's spelling of a reference-counted mutable node | — |
+| B-2026-11-08-69 | 2026-11-08 | typecheck+mir | high | A number literal checked against a closure's return type or a map entry's value keeps its default `i64`: `let g: Fn() -> i32 = || 5` returns an `i64` (a build reads garbage, the interpreter prints `5` for an `f32`), and `*m.entry(k).or_insert(0) += 1` on a `Map[i32, i32]` stores 8 bytes into a 4-byte value (ASan stack-buffer-overflow, wrong counts in a build) | — |
 
 ### Relocated
 
