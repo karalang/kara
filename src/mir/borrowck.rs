@@ -2749,6 +2749,8 @@ fn main() -> () {
             "ok_option_none_orders_first",
             // `fold` and `enumerate` are iter.kara's (kata 2021).
             "ok_fold_tuple_reads_a_borrowed_scalar_as_its_value",
+            // A `Str`'s range index is the library's (B-2026-11-08-66).
+            "ok_a_slice_rebinds_to_its_own_reslice",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
