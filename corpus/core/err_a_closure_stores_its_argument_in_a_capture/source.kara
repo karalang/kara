@@ -1,0 +1,13 @@
+// A closure that pushes its borrowed argument into a captured Vec of views
+// keeps the argument's borrow in that Vec, as a function taking the Vec by
+// `mut ref` does (core semantics §5.6): `t` cannot end while `keep`, read
+// afterwards, still views it.
+fn main() {
+    let mut keep: Vec[Str] = Vec.new();
+    {
+        let mut f = |s: Str| keep.push(s);
+        let t = "ab".to_string();
+        f(t.as_str());
+    }
+    println(keep[0]);
+}

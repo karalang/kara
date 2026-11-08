@@ -1,0 +1,11 @@
+source = "corpus/core/ok_a_mutating_closure_keeps_no_argument_borrow"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures", "borrows"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "B-2026-11-08-56: before the fix the second call was refused with E0516 ('cannot drop the temporary value ... while `add` still borrows it'): a call stored its arguments' borrows into the closure itself. The captures `total` and `lengths` hold no borrow, so nothing is kept (core semantics §9.3, §5.5). Expected output worked by hand."

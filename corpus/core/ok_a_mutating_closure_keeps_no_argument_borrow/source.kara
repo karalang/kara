@@ -1,0 +1,16 @@
+// A closure that changes a capture is called twice with temporaries it
+// only borrows: its captures cannot hold them (core semantics §9.3), so
+// each temporary may end after its call.
+fn main() {
+    let mut total = 0;
+    let mut lengths: Vec[i64] = Vec.new();
+    let mut add = |extra: Vec[i64], label: Str| {
+        total += extra.len();
+        lengths.push(label.len());
+    };
+    add([1, 2, 3], "abc".to_string().as_str());
+    add(Vec.new(), "de".to_string().as_str());
+    add([4], "f");
+    println(total);
+    println(lengths);
+}

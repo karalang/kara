@@ -1,0 +1,9 @@
+source = "corpus/core/err_a_closure_stores_its_argument_in_a_capture"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closures", "borrows"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-08-56: before the fix this was accepted and printed `ab` from a String already freed: the call put the argument's borrow in the closure `f`, which ended with the block, not in `keep`, which the closure's `mut ref` capture reaches. The same push through a `mut ref Vec[Str]` parameter is refused. The expected.out wording of an error pin is guidance, not a byte oracle."
