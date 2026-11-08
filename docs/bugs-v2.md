@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 162 |
 | perf | 130 |
 | missing-feature | 113 |
-| soundness | 53 |
+| soundness | 54 |
 | miscompile | 45 |
 | run-vs-build | 29 |
 | other | 24 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 310 |
+| typecheck | 311 |
 | mir-llvm | 166 |
 | mir | 144 |
 | cli | 87 |
@@ -128,6 +128,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-86 | 2026-11-08 | typecheck | medium | A range of bare literals takes `i64` where it is written, so `(1..=5).collect()` (or `.filter(..)`, `.map(..)` first) into a `Vec[i32]` return or binding is refused with "`C: FromIterator[i64]` is not satisfied" and no fix, though design.md § Type inference lets a return or an annotation fix a literal's type | — |
 | B-2026-11-08-87 | 2026-11-08 | mir-llvm | low | PriorityQueue's sift-to-bottom loop still takes 18 instructions a level against Rust BinaryHeap's 9-12 after B-2026-11-08-10: a swap (2 loads, 2 stores, 2 bounds checks) where Rust moves a hole, and an overflow check on `2 * i + 1` (kata 480: 4.36G instructions against Rust's 3.63G) | — |
 | B-2026-11-08-88 | 2026-11-08 | typecheck+cli | low | A plain list literal's element literal is not fixed by where the binding goes (the remainder of B-2026-11-08-57): `let mut v = [0, 0]; g(mut v)` with `g(a: mut ref Vec[i32])`, and `let v = [0, 7]; g(v)` into a `ref Vec[i32]`, are refused as `Vec[i64]`, with no machine fix | — |
+| B-2026-11-08-89 | 2026-11-08 | typecheck | high | A `Vec[(i64, i64)]` is accepted for a `Vec[(i64, u64)]` parameter (a tuple inside a generic argument is compared by the value rule, not the layout rule), and an open literal key lets `Map[?, i64]` pass for a `Map[i64, u64]`; interp prints -9 where the binary prints 18446744073709551607 | — |
 | B-2026-11-09-1 | 2026-11-09 | mir-llvm | low | A tuple comparison (`a >= b` on `(i64, i64, i64)`) lowers through `cmp`'s Ordering: each element takes setg/inc/cmp/cmov (about 7 instructions) where Rust's lexicographic `PartialOrd` is a compare and a branch, and a 24-byte `swap` goes through a stack slot (kata 632: 2.91G instructions against checked Rust's 1.72G on x86) | — |
 | B-2026-11-09-2 | 2026-11-09 | mir-llvm | low | A by-value function's `mut ref Vec[i64]` parameter gets no `noalias` (mark_noalias skips by-value signatures), so every store into an element reloads the Vec's data pointer and length and re-checks the bound: kata 695's union-find `join` executes 1.54G instructions against Rust's 0.86G (whole bench 1.28x checked Rust on x86) | — |
 
