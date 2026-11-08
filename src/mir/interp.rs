@@ -1912,9 +1912,9 @@ impl<'a> Interp<'a> {
                     // `stdout.flush()` pushes out a partial line
                     // (docs/library/io.md § Buffering).
                     if base == "Stderr" {
-                        let _ = std::io::stderr().flush();
+                        console_written(std::io::stderr().flush());
                     } else {
-                        let _ = std::io::stdout().flush();
+                        console_written(std::io::stdout().flush());
                     }
                 }
                 Ok(Value::Unit)
@@ -6593,7 +6593,7 @@ impl<'a> Interp<'a> {
             // (docs/library/io.md § Buffering).
             if self.stream {
                 use std::io::Write;
-                let _ = std::io::stdout().flush();
+                console_written(std::io::stdout().flush());
             }
             let res = self
                 .command(name, recv, arg_tys.first().copied(), output)?
@@ -14812,11 +14812,11 @@ impl<'a> Interp<'a> {
         use std::io::Write;
         match (self.stream, err) {
             (true, false) => {
-                let _ = std::io::stdout().write_all(text.as_bytes());
+                console_written(std::io::stdout().write_all(text.as_bytes()));
             }
             (true, true) => {
-                let _ = std::io::stdout().flush();
-                let _ = std::io::stderr().write_all(text.as_bytes());
+                console_written(std::io::stdout().flush());
+                console_written(std::io::stderr().write_all(text.as_bytes()));
             }
             (false, false) => self.output.push_str(text),
             (false, true) => self.stderr.push_str(text),
@@ -18442,6 +18442,33 @@ pub fn pool_has_workers() -> bool {
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
             > 1
     })
+}
+
+/// A write to the program's stdout or stderr that found the reader gone
+/// ends the program as `SIGPIPE` would, so `karac run --interp prog | head -1`
+/// stops at once with status 141, as a compiled program does (docs/library/
+/// io.md § HTTP server, B-2026-11-08-28). Rust ignores `SIGPIPE`, so the
+/// closed pipe arrives as the write's `BrokenPipe`; any other error is
+/// dropped, as before.
+fn console_written(res: std::io::Result<()>) {
+    if matches!(&res, Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe) {
+        #[cfg(unix)]
+        {
+            extern "C" {
+                fn signal(sig: i32, handler: usize) -> usize;
+                fn raise(sig: i32) -> i32;
+            }
+            const SIGPIPE: i32 = 13;
+            const SIG_DFL: usize = 0;
+            // SAFETY: restoring a signal's default disposition, then raising
+            // the signal it terminates the process on.
+            unsafe {
+                signal(SIGPIPE, SIG_DFL);
+                raise(SIGPIPE);
+            }
+        }
+        std::process::exit(141);
+    }
 }
 
 #[cfg(test)]

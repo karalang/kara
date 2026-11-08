@@ -196,6 +196,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   non-reference` and a compiled binary segfaulted. The collection now lives
   to the end of the statement and is dropped there (core-semantics §5.5,
   B-2026-11-08-43).
+- **`karac run --interp prog | head -1` stops when `head` does**, with
+  status 141, as the JIT and a built binary do (io.md): the interpreter
+  ignored the closed pipe, ran every remaining iteration and exited 0
+  (B-2026-11-08-28).
 
 ### Performance
 
