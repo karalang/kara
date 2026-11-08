@@ -454,6 +454,7 @@ type   := 'x' | 'X' | 'o' | 'b' | 'd'
 - `.precision` sets the digits after the decimal point.
 - `type` prints an integer in hexadecimal (`x`, `X`), octal (`o`), binary (`b`) or decimal (`d`).
 - An unrecognized specifier is a compile error at the hole.
+- **Which parts apply to which values.** `fill`, `align` and `width` apply to every value: they pad its `Display` text, so `{flag:>6}` on a `bool`, `{c:^3}` on a `char` and `{x:>8}` on an `f64` are all accepted. `+` and `0` apply to numbers. `type` applies to integers. `.precision` applies to floats; on a string, truncation to `precision` characters is not in v1 and is refused with a diagnostic. A float without `.precision` prints its `Display` text (the shortest form that reads back to the same value), so `{x:+}` is `+1.5` and `{nan:>5}` is `  NaN`. A part that does not apply to the value's type is a compile error at the hole (review-thread ruling 2026-11-08, B-2026-11-08-74).
 
 ```kara
 let pi = 3.14159;
