@@ -2123,9 +2123,10 @@ impl<'a> OwnershipChecker<'a> {
         {
             return false;
         }
+        let shown = crate::block_consts::source_name(name);
         self.errors.push(OwnershipError {
             message: format!(
-                "cannot call `{method}` on constant `{name}`: `{method}` takes `mut ref self`, and a \
+                "cannot call `{method}` on constant `{shown}`: `{method}` takes `mut ref self`, and a \
                  constant is a value, not a place; each use builds a fresh one, so the write would \
                  change nothing (design.md § Constants)"
             ),

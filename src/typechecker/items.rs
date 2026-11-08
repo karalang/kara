@@ -5811,7 +5811,7 @@ impl<'a> super::TypeChecker<'a> {
                      with type '{}', which holds a heap-allocated 'String'; a \
                      constant lives in the binary as data (design.md § Constants) \
                      — use 'Str' for constant text: '{}'",
-                    c.name,
+                    crate::block_consts::source_name(&c.name),
                     super::types::type_display(&declared_ty),
                     fixed,
                 );
@@ -5840,7 +5840,7 @@ impl<'a> super::TypeChecker<'a> {
                              heap-allocated 'String'; a constant lives in the binary as \
                              data (design.md § Constants) — give the field type 'Str', or \
                              build the value in a function",
-                            c.name,
+                            crate::block_consts::source_name(&c.name),
                             super::types::type_display(&declared_ty),
                         ),
                         c.ty.span,
@@ -6310,6 +6310,8 @@ impl<'a> super::TypeChecker<'a> {
         is_mut: bool,
         is_const: bool,
     ) -> bool {
+        // A block's constant is hoisted under a fresh name (B-2026-11-08-60).
+        let binding = crate::block_consts::source_name(binding);
         if matches!(declared, Type::Str) {
             let message = if is_const {
                 format!(
@@ -6628,10 +6630,11 @@ impl<'a> super::TypeChecker<'a> {
         }
         let whole = std::ptr::eq(root, target)
             && !matches!(&root.kind, ExprKind::Path { segments, .. } if segments.len() > 1);
+        let shown = crate::block_consts::source_name(name);
         let what = if whole {
-            format!("constant `{name}`")
+            format!("constant `{shown}`")
         } else {
-            format!("a part of constant `{name}`")
+            format!("a part of constant `{shown}`")
         };
         self.type_error(
             format!(

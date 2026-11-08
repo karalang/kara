@@ -38,6 +38,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- **A block may declare a constant.** `const MOD: i64 = 1_000_000_007;` as
+  the first line of a function body, the way a Rust solution writes it, was
+  a parse error advising `r#const`. Its scope is the rest of the block; it
+  shadows like a `let`; its initializer names constants only, and naming a
+  local is refused with that reason (design.md § Constants,
+  B-2026-11-08-60).
+
 - **`contains` and `binary_search` on a sequence of `String` or `Vec[T]`
   take the element's view.** `["inc", "dec"].contains(cmd)` with `cmd: Str`,
   `names.contains(s)` on a `Vec[String]` and `rows.contains(w[1..3])` on a

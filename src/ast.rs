@@ -828,6 +828,13 @@ pub struct Program {
     /// read the mark: such a binding borrows its part and never moves it
     /// (`docs/core-semantics.md` §4.6).
     pub ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// A `const` declared in a block (design.md § Constants,
+    /// B-2026-11-08-60), keyed by its name's span. The parser reads it as
+    /// the `let` it is written like and marks it here, for the reason
+    /// [`Self::freeze_spans`] gives; [`crate::block_consts`] hoists each one
+    /// to module scope under a name no source can write, and the formatter
+    /// writes `const` back.
+    pub block_const_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// The base of each struct update `D { a: 5, ..o }` that
     /// `struct_spread` expanded into field copies (`c: o.c`), keyed by the
     /// literal's span. Kept so the check can still compare the base's type

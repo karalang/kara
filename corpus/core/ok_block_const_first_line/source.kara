@@ -1,0 +1,40 @@
+// A block may declare a constant (design.md § Constants, B-2026-11-08-60):
+// LeetCode's Rust solutions open a method with `const MOD`, and its scope is
+// the rest of the block, shadowing like a `let`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn num_of_subarrays(arr: Vec[i64]) -> i64 {
+        const MOD: i64 = 1_000_000_007;
+        const HALF: i64 = MOD / 2;
+        let mut odd = 0;
+        let mut even = 1;
+        let mut sum = 0;
+        let mut ans = 0;
+        for x in arr {
+            sum += x;
+            if sum % 2 == 1 {
+                ans += even;
+                odd += 1;
+            } else {
+                ans += odd;
+                even += 1;
+            }
+        }
+        (ans + HALF - HALF) % MOD
+    }
+}
+
+const LIMIT: i64 = 10;
+
+fn main() {
+    println(f"{Solution.num_of_subarrays([1, 3, 5])}");
+    println(f"{Solution.num_of_subarrays(Vec.filled(100000, 1))}");
+    println(f"module {LIMIT}");
+    {
+        const LIMIT: i64 = LIMIT * 2;
+        println(f"block {LIMIT}");
+    }
+    println(f"module again {LIMIT}");
+}

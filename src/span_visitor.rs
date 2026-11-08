@@ -913,6 +913,11 @@ pub fn walk_item_mut_with(item: &mut Item, visit: &mut impl MutVisitor) {
     walk_item_mut(item, visit);
 }
 
+/// [`walk_item_mut_with`] for one expression.
+pub fn walk_expr_mut_with(e: &mut Expr, visit: &mut impl MutVisitor) {
+    walk_expr_mut(e, visit);
+}
+
 /// [`walk_item_mut_with`] for one function or method.
 pub fn walk_function_mut_with(f: &mut Function, visit: &mut impl MutVisitor) {
     visit_function_mut(f, visit);

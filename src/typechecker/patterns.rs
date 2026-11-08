@@ -2872,7 +2872,7 @@ impl<'a> super::TypeChecker<'a> {
                             format!(
                                 "constant '{}' in a pattern must be of an integer or `char` \
                                  type, or have a literal value",
-                                segments.join("."),
+                                crate::block_consts::source_name(&segments.join(".")),
                             )
                         } else {
                             format!(

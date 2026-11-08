@@ -19,6 +19,10 @@ use crate::token::Span;
 /// Today: argument-position `impl Trait` desugar (slice 2) and
 /// parallel/destructuring-assignment desugar.
 pub fn desugar_program(program: &mut Program) {
+    // A block's `const` (B-2026-11-08-60) becomes a module-scope constant
+    // FIRST, so the constant-pattern rewrite below and every later pass see
+    // only module constants.
+    crate::block_consts::hoist_block_consts(program);
     // `select { .. }` (core-semantics §11.11) FIRST, so every pass after it
     // sees only the loop and `match` it stands for.
     crate::select_desugar::desugar_selects(program);

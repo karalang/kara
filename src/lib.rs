@@ -15,6 +15,7 @@ pub mod chained_receiver_lint;
 // modules from the wasm32 build is a strict subset of what the playground
 // needs — see `pub fn run_playground` at the bottom of this file.
 pub mod backend;
+pub mod block_consts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod closure_escape;

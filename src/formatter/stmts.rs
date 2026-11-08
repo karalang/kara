@@ -81,7 +81,12 @@ impl super::Formatter {
                 value,
             } => {
                 self.write_indent();
-                self.write_str("let ");
+                // A block's `const` (B-2026-11-08-60) is parsed as this `let`
+                // and marked by its name's span.
+                let block_const = self
+                    .block_const_spans
+                    .contains(&crate::resolver::SpanKey::from_span(&pattern.span));
+                self.write_str(if block_const { "const " } else { "let " });
                 if *is_mut {
                     self.write_str("mut ");
                 }

@@ -340,7 +340,7 @@ impl super::Parser {
         }
         matches!(
             self.peek_token(),
-            Token::Let | Token::Defer | Token::ErrDefer | Token::Fn
+            Token::Let | Token::Defer | Token::ErrDefer | Token::Fn | Token::Const
         )
     }
 
@@ -611,8 +611,66 @@ impl super::Parser {
             Token::Pound => self.parse_attributed_statement(),
             // Rust's nested `fn` item (kata 1061).
             Token::Fn => self.hoist_nested_fn(),
+            Token::Const => self.parse_block_const(),
             _ => self.parse_expression_statement(),
         }
+    }
+
+    /// `const NAME: T = e;` as a statement: a block may declare a constant
+    /// (design.md § Constants, B-2026-11-08-60). It is parsed as the `let` it
+    /// is written like and marked in [`crate::ast::Program::block_const_spans`]
+    /// by its name's span, so no walk in the compiler meets a new statement
+    /// kind; [`crate::block_consts`] turns each one into a module-scope
+    /// constant before name resolution, and the formatter writes the keyword
+    /// back. A value-class name in the initializer (a local, a parameter, a
+    /// pattern binding) is a run-time value, refused here.
+    pub(crate) fn parse_block_const(&mut self) -> Option<Stmt> {
+        let start = self.current_span();
+        self.expect(&Token::Const)?;
+        let name_span = self.current_span();
+        let name = self.expect_identifier()?;
+        self.check_ident_class(&name, crate::lexer::IdentClass::Const, "const", name_span);
+        self.expect(&Token::Colon)?;
+        let ty = self.parse_type()?;
+        self.expect(&Token::Equal)?;
+        let value = self.parse_expression()?;
+        self.expect(&Token::Semicolon)?;
+        let mut locals: Vec<(String, Span)> = Vec::new();
+        crate::span_visitor::for_each_expr(&value, &mut |e| match &e.kind {
+            ExprKind::Identifier(n)
+                if crate::lexer::classify_ident(n) == crate::lexer::IdentClass::Value =>
+            {
+                locals.push((n.clone(), e.span));
+            }
+            ExprKind::SelfValue => locals.push(("self".to_string(), e.span)),
+            _ => {}
+        });
+        for (local, at) in locals {
+            self.error_at(
+                &format!(
+                    "the constant `{name}` cannot use `{local}`: a constant is computed at \
+                     compile time, so its initializer may name other constants but no local \
+                     binding, parameter or function (design.md § Constants)"
+                ),
+                at,
+            );
+        }
+        self.block_const_spans
+            .insert(crate::resolver::SpanKey::from_span(&name_span));
+        Some(Stmt {
+            id: crate::ids::NodeId::DUMMY,
+            span: self.span_from(&start),
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name),
+                    span: name_span,
+                    id: crate::ids::NodeId::DUMMY,
+                },
+                ty: Some(ty),
+                value,
+            },
+        })
     }
 
     /// The tail of [`Self::parse_statement`] — an expression, optionally

@@ -1,0 +1,9 @@
+source = "B-2026-11-08-60"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["const", "scope"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Constants, 'A block may declare a constant': its scope is the rest of the enclosing block, it may name earlier constants, and it shadows like a `let`. [1,3,5] has 4 odd-sum sub-arrays; 100000 ones have 50000 * 50001 = 2500050000, which is 500049986 mod 10^9+7."
