@@ -59,15 +59,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 177 |
-| false-positive | 149 |
+| false-positive | 150 |
 | perf | 119 |
-| missing-feature | 105 |
+| missing-feature | 106 |
 | soundness | 52 |
 | miscompile | 42 |
 | run-vs-build | 28 |
 | other | 24 |
 | codegen-gap | 22 |
-| crash | 15 |
+| crash | 16 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 278 |
-| mir-llvm | 148 |
+| typecheck | 280 |
+| mir-llvm | 150 |
 | mir | 134 |
 | cli | 79 |
 | ownership | 63 |
 | parser | 47 |
-| interp | 35 |
+| interp | 36 |
 | runtime | 28 |
 | effect | 28 |
 | codegen | 22 |
@@ -129,6 +129,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-27 | 2026-11-08 | interp+mir-llvm | low | `Json.deserialize` errors give a byte offset and no field (`expected '"' at character 13`) where `Json.parse` on the same text gives `expected value at line 2 column 12`; a wrong-typed field (`{"title": 3}` into `title: String`) also reads `expected '"' at character 10`, naming neither the field nor the type | — |
 | B-2026-11-08-28 | 2026-11-08 | interp | low | `karac run --interp prog | head -1` keeps running after the pipe closes and exits 0, printing nothing more but running every remaining iteration (a 2,000,000-line loop: 2.1 s, then its trailing eprintln runs); the JIT and a built binary stop at once with status 141 as io.md specifies | — |
 | B-2026-11-08-29 | 2026-11-08 | typecheck | medium | The unimported, deferred `std.cli` parser's types sit in the prelude, so a program declaring its own `Parser`, `Arg`, `Args`, `CliError` or `SubcommandResult` gets `warning[prelude_shadow] ... built-in paths keyed on 'Parser' no longer apply to this type` on every check, run, build and test; deferred.md § std.cli says the module is imported (`import std.cli`, `cli.Parser`) and no library doc lists these names | — |
+| B-2026-11-08-30 | 2026-11-08 | interp+mir-llvm | low | `IoError` and `VarError` display as their variant names (`PermissionDenied`, `NotPresent`, `Other(disk full)`), and `IoError` has no `Debug` (`dbg(IoError.NotFound)` is refused); io.md (8b7176574f) rules Display as readable phrases (`not found`, `permission denied`, ..., `Other`'s message as it is; VarError `environment variable not found`) and Debug as the variant | — |
+| B-2026-11-08-18 | 2026-11-08 | typecheck | medium | A literal bound by `let` is fixed to `i32` or `u32` by a later use but never to `u64` or `usize`: `fn f(i: u64) -> u64 { let k = 2; i - k }` is refused 'cannot mix integer types u64 and i64', so Rust's `let mut k = 1; while k * k <= i` over a `usize` fails; and a compound assignment fixes nothing: `fn f(n: i32) -> i32 { let mut a = 0; a += n; a }` is refused 'implicit coercion from i64 to i32' (kata 1518) | — |
+| B-2026-11-08-19 | 2026-11-08 | typecheck+mir-llvm | high | An untyped `Map.new()` whose key type comes from a `for x in v.iter()` element is inferred `Map[ref i64, _]`; `*m.entry(x).or_insert(0) += 1` then checks and runs under the interpreter, but the compiled program passes the key by value to `hash.ref i64` and segfaults (exit 101 with no message, 139 under karac run/build) | — |
 
 ### Relocated
 
