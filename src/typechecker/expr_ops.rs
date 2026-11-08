@@ -4744,17 +4744,23 @@ impl<'a> super::TypeChecker<'a> {
                                     TypeErrorKind::TypeMismatch,
                                     fix,
                                 ),
-                                None => self.type_error(
-                                    format!(
-                                        "cannot mix integer types '{l_disp}' and \
+                                None => {
+                                    // `let mut l = 0usize; .. r - l + 1` with `r`
+                                    // from `0..s.len()`: the written `usize`
+                                    // gets its fix to `i64` (kata 2024).
+                                    self.note_pointer_int_mix(&left_ty, &right_ty);
+                                    self.type_error(
+                                        format!(
+                                            "cannot mix integer types '{l_disp}' and \
                                          '{r_disp}' in arithmetic — they must match; \
                                          cast explicitly with `as`, choosing the \
                                          direction deliberately: neither type can \
                                          represent every value of the other"
-                                    ),
-                                    right.span,
-                                    TypeErrorKind::TypeMismatch,
-                                ),
+                                        ),
+                                        right.span,
+                                        TypeErrorKind::TypeMismatch,
+                                    )
+                                }
                             }
                         }
                     } else if (left_is_int && matches!(right_ty, Type::Float(_)))
