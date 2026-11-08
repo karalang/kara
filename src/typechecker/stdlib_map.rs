@@ -149,8 +149,11 @@ impl<'a> super::TypeChecker<'a> {
         // A borrowed key cannot be pushed through `check_expr` against the
         // concrete slot — that is precisely the check that rejects `ref String`
         // against `String` — so infer it plainly and peel below.
-        let arg_ty = if allow_borrowed || matches!(pre_slot, Type::TypeVar(_) | Type::TypeParam(_))
-        {
+        let arg_ty = if !allow_borrowed && matches!(pre_slot, Type::TypeVar(_)) {
+            // An inserted literal is open for a later use of the map to fix,
+            // as a pushed one is for a `Vec` (design.md §8, B-2026-11-08-42).
+            self.infer_expr_open(&arg.value)
+        } else if allow_borrowed || matches!(pre_slot, Type::TypeVar(_) | Type::TypeParam(_)) {
             self.infer_probe_arg(&arg.value, &pre_slot)
         } else {
             self.check_expr(&arg.value, &pre_slot)

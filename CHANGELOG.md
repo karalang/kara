@@ -234,6 +234,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Debug`, so `dbg(IoError.NotFound)` shows the variant where it was refused.
   `AllocError`'s exit from `main` printed its variant too and now prints its
   phrase (B-2026-11-08-30).
+- **A map's inserted literals take the types a later use gives them**, as a
+  `Vec`'s pushes do: `let mut d = SortedMap.new(); d.insert(1, 2);
+  m(d);` into `d: SortedMap[i32, i64]` was refused as 'found
+  SortedMap[i64, i64]' (design.md §8, B-2026-11-08-42).
 
 ### Performance
 
