@@ -9927,11 +9927,17 @@ impl<'a> super::TypeChecker<'a> {
         self.note_pointer_int_mix(&source, &target);
         if target == Type::Int(IntSize::I64) {
             if let Some(fix) = self.usize_cast_of_an_i64(expr) {
+                let remedy = if fix.replacement.is_empty() {
+                    "drop the `as usize`"
+                } else {
+                    "cast to `i64`"
+                };
                 self.type_error_with_fix_it(
-                    "implicit coercion from 'usize' to 'i64' would change sign — sizes, \
-                     lengths and indices are `i64` in Kāra (`usize` is for FFI), so drop \
-                     the `as usize`"
-                        .to_string(),
+                    format!(
+                        "implicit coercion from 'usize' to 'i64' would change sign — sizes, \
+                         lengths and indices are `i64` in Kāra (`usize` is for FFI), so \
+                         {remedy}"
+                    ),
                     expr.span,
                     TypeErrorKind::TypeMismatch,
                     fix,

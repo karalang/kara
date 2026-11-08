@@ -84,11 +84,13 @@ impl<'a> super::TypeChecker<'a> {
         let lets = std::mem::take(&mut self.usize_cast_lets);
         for e in lets.into_iter().filter(|_| ffi.is_empty()) {
             if let Some(fix) = self.usize_cast_of_an_i64(&e) {
+                let remedy = super::expr_ops::usize_cast_remedy(&fix);
                 self.type_error_with_fix_it(
-                    "this `as usize` makes a `usize` that mixes with `i64`, and `usize` \
-                     is for FFI signatures: Kāra writes sizes, lengths, counts and \
-                     indices as `i64` (design.md §5), so drop the `as usize`"
-                        .to_string(),
+                    format!(
+                        "this `as usize` makes a `usize` that mixes with `i64`, and `usize` \
+                         is for FFI signatures: Kāra writes sizes, lengths, counts and \
+                         indices as `i64` (design.md §5), so {remedy}"
+                    ),
                     e.span,
                     TypeErrorKind::TypeMismatch,
                     fix,

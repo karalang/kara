@@ -144,9 +144,24 @@ impl super::TypeChecker<'_> {
                 }
             })
         };
-        if ty(e) != Some(Type::UInt(UIntSize::Usize)) || ty(inner) != Some(Type::Int(IntSize::I64))
-        {
+        if ty(e) != Some(Type::UInt(UIntSize::Usize)) {
             return None;
+        }
+        match ty(inner) {
+            Some(Type::Int(IntSize::I64)) => {}
+            // `nums[u] as usize` over an `i32` (kata 2003): the value is not
+            // already `i64`, so the cast stays and its target becomes `i64`,
+            // which every narrower integer widens to without loss.
+            Some(
+                Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32)
+                | Type::UInt(UIntSize::U8 | UIntSize::U16 | UIntSize::U32),
+            ) => {
+                return Some(FixIt {
+                    span: cast_ty.span,
+                    replacement: "i64".to_string(),
+                });
+            }
+            _ => return None,
         }
         let to = e.span.offset + e.span.length;
         let from = match appended_cast_end_offset(inner) {
@@ -169,6 +184,16 @@ impl super::TypeChecker<'_> {
             },
             replacement: String::new(),
         })
+    }
+}
+
+/// The words for a [`super::TypeChecker::usize_cast_of_an_i64`] fix: the
+/// cast goes when its operand is already `i64`, else its target becomes `i64`.
+pub(super) fn usize_cast_remedy(fix: &FixIt) -> &'static str {
+    if fix.replacement.is_empty() {
+        "drop the `as usize`"
+    } else {
+        "cast to `i64`"
     }
 }
 
@@ -342,10 +367,11 @@ impl<'a> super::TypeChecker<'a> {
                 None
             };
             if let Some(fix) = drop_cast {
+                let remedy = usize_cast_remedy(&fix);
                 self.type_error_with_fix_it(
                     format!(
                         "cannot compare '{}' and '{}': sizes, lengths and indices are \
-                         `i64` in Kāra (`usize` is for FFI), so drop the `as usize`",
+                         `i64` in Kāra (`usize` is for FFI), so {remedy}",
                         type_display(left),
                         type_display(right)
                     ),
@@ -4636,7 +4662,8 @@ impl<'a> super::TypeChecker<'a> {
                                         "cannot mix integer types '{l_disp}' and \
                                          '{r_disp}' in arithmetic — sizes, lengths and \
                                          indices are `i64` in Kāra (`usize` is for \
-                                         FFI), so drop the `as usize`"
+                                         FFI), so {}",
+                                        usize_cast_remedy(&fix)
                                     ),
                                     right.span,
                                     TypeErrorKind::TypeMismatch,
