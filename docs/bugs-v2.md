@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 194 |
-| false-positive | 157 |
-| perf | 124 |
-| missing-feature | 111 |
+| diagnostics | 196 |
+| false-positive | 161 |
+| perf | 125 |
+| missing-feature | 112 |
 | soundness | 53 |
 | miscompile | 45 |
 | run-vs-build | 29 |
@@ -75,15 +75,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 301 |
+| typecheck | 307 |
 | mir-llvm | 160 |
-| mir | 141 |
+| mir | 143 |
 | cli | 86 |
 | ownership | 63 |
 | parser | 51 |
 | interp | 39 |
+| runtime | 29 |
 | effect | 29 |
-| runtime | 28 |
 | codegen | 22 |
 | resolver | 18 |
 | other | 6 |
@@ -122,6 +122,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-67 | 2026-11-08 | mir | low | Assigning the `ref i32` a `SortedMap` walk yields to an `i64` local, `cur = d`, is refused E0509 "a view ... is stored in an escaping closure, a `shared` value or a channel", though `cur` is a plain local | — |
 | B-2026-11-08-72 | 2026-11-08 | mir-llvm | low | Kata 540's binary search divides `(low + high) / 2` and tests `mid % 2 == 1` as signed `i64`s, 3 instructions a step more than Rust's `usize` (8.08G against 6.21G on x86, 1.53x on the M5), though the loop keeps both indices non-negative | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
+| B-2026-11-08-74 | 2026-11-08 | typecheck | medium | A float format spec without a precision is refused (`{x:>8}`, `{x:+}`, `{x:<5}` on an f64: "a float format spec needs a precision"), and any spec on a `bool` or `char` is refused ("format specifiers apply to int, float, and string values only"); design.md §3's grammar makes precision optional and puts no type limit on fill, align and width | — |
+| B-2026-11-08-75 | 2026-11-08 | typecheck | medium | A `select` whose value is the function's result (its tail expression) gets false W0278 "discarded `Result` value" warnings (five for a two-arm select); and because the library's own `recv_timeout` is such a select, every program that calls `rx.recv_timeout(d)` prints 3 of these warnings at a line past its end (`svc.kara:5439:9`, `rt.kara:5022:9`) on check and on every `karac run` | — |
+| B-2026-11-08-76 | 2026-11-08 | typecheck | medium | A user type that implements both `Iterable` and `IntoIterator` cannot be the subject of a bare `for`: "type 'Bag' cannot be iterated by a `for` loop: it implements `IntoIterator` but not `Iterator`, and `for` never calls `into_iter`"; design.md §9 says `for x in c` over a non-Iterator borrows through `Iterable`, which `Vec` (implementing both) already does, and the same type with only `Iterable` loops fine | — |
+| B-2026-11-08-77 | 2026-11-08 | typecheck | medium | Two impls of one generic trait on a type (`impl Conv[String] for N`, `impl Conv[f64] for N`) leave the method uncallable: `n.conv()` is ambiguous (right, §9 step 2), but the diagnostic's fix `Conv.conv(N)` is listed for both candidates and is itself refused as ambiguous, and the qualified form `Conv[String].conv(n)` is refused with "no method 'conv' on `Conv[…]`" (plus a cascading "value 'n' moved" error) | — |
+| B-2026-11-08-78 | 2026-11-08 | typecheck+mir | medium | `#[derive(Serialize, Deserialize)]` on a struct with a tuple field (`pair: (i64, bool)`) fails: alone it is refused at check with an internal message (E_COMPTIME_PANIC "derive `derive_serialize` could not be compiled: 6399:13 in `derive_serialize`: the method call `.name` with no resolved callee is not lowered yet"), and inside a larger program check passes and every run lane fails with "error[mir]: typecheck: 18:1: no method 'serialize' on type '(i64, bool)'" | — |
+| B-2026-11-08-79 | 2026-11-08 | typecheck | low | `Json.deserialize(text)` takes `text: String`, so a `Str` (a line from `text.lines()`, a slice) is refused ("expected 'ref String', found 'Str'") and needs `.to_string()`; `Json.parse(text: Str)` takes the view, and strings.md's reading methods all take `Str` | — |
+| B-2026-11-08-80 | 2026-11-08 | mir | low | A missing field in `Json.deserialize` is reported by its Kāra name, not its JSON key: a `#[serde(rename: "userName")] name: String` field absent from the input gives "missing field `name`", though the sender never sees a `name` key | — |
+| B-2026-11-08-81 | 2026-11-08 | runtime | medium | `s.chars().last()` walks the whole string: `StrChars` and `StrViewChars` take `Iterator.last`'s default rather than reading from the back, so kata 2030's string arm (its stack kept as a `String`, the top read with `chars().last()`) is quadratic | — |
 
 ### Relocated
 
