@@ -16,8 +16,9 @@
 //! have all shipped against this skeleton.
 
 use crate::ast::{
-    EffectVerbKind, EnumDef, ExternFunction, ExternItem, Function, Item, OpaqueTypeDecl, StructDef,
-    StructField, TypeExpr, Variant, VariantKind,
+    EffectVerbKind, EnumDef, ExternFunction, ExternItem, Function, ImplBlock, ImplItem, Item,
+    OpaqueTypeDecl, StructDef, StructField, TraitDef, TraitItem, TypeExpr, TypeKind, Variant,
+    VariantKind,
 };
 use crate::module::{ModulePath, ProgramTree};
 use std::borrow::Cow;
@@ -81,11 +82,11 @@ impl std::fmt::Display for DocBuildError {
 /// A compiler builtin surfaced in `karac doc` via the doc-only registry.
 ///
 /// The builtins here (`assert` / `assert_eq` / `assert_ne`, `todo`,
-/// `unreachable`, `dbg`, `collect_all`) are *intercept-only*: the
+/// `unreachable`, `panic`, `dbg`) are *intercept-only*: the
 /// typechecker and codegen recognise them by name, and there is no stdlib
 /// `#[compiler_builtin]` declaration for the renderer to walk. Their
-/// signatures are variadic (`collect_all` is 2..=8 heterogeneous branches)
-/// or effect-shaped in ways a single Kāra decl can't express — see
+/// signatures take an optional argument (`todo()` / `todo(msg)`)
+/// or are effect-shaped in ways a single Kāra decl can't express — see
 /// design.md § Compiler builtins — so a real stdlib decl is either
 /// impossible or actively misleading (an under-specified arity risks
 /// effect-attribution interference). Without this registry they were
@@ -110,7 +111,7 @@ fn builtins_module_path() -> ModulePath {
 const BUILTINS_MODULE_DOC: &str = "Compiler builtins — callable from every \
 module without an `import`.\n\nThese are recognised by the compiler itself, \
 not defined in stdlib source: their semantics (the `Never` bottom type, \
-source-location capture, release-mode elision, the variadic gather shape) \
+source-location capture, release-mode elision, the optional message) \
 cannot be expressed in pure Kāra. They are documented here so `karac doc` \
 and IDE tooling surface the same signatures the compiler enforces.";
 
@@ -129,19 +130,20 @@ the builtin.",
         },
         BuiltinDoc {
             name: "assert_eq",
-            signature: "fn assert_eq[T: Eq + Debug](left: T, right: T) with panics",
-            doc: "Panics unless `left == right`. Requires `T: Eq + Debug` — \
-the two values are printed via `Debug` in the failure message:\n\n```\n\
-assertion failed: a == b\n  left:  <left>\n  right: <right>\n```\n\n\
-Propagates `panics`; annotated `#[track_caller]` so the report points at \
-the call site.",
+            signature: "fn assert_eq[T: PartialEq + Debug](a: T, b: T) with panics",
+            doc: "Panics unless `a == b`. Requires `T: PartialEq + Debug`: \
+`PartialEq` to compare, `Debug` to print both operands in the failure \
+message:\n\n```\nassertion failed: a == b\n  left:  <a>\n  right: <b>\n```\n\n\
+Both operands are borrowed, so neither moves. Propagates `panics`; \
+annotated `#[track_caller]` so the report points at the call site.",
         },
         BuiltinDoc {
             name: "assert_ne",
-            signature: "fn assert_ne[T: Eq + Debug](left: T, right: T) with panics",
-            doc: "Panics unless `left != right`. Requires `T: Eq + Debug`. On \
-failure:\n\n```\nassertion failed: a != b\n  value: <left>\n```\n\n\
-Propagates `panics`; annotated `#[track_caller]`.",
+            signature: "fn assert_ne[T: PartialEq + Debug](a: T, b: T) with panics",
+            doc: "Panics unless `a != b`. Requires `T: PartialEq + Debug`. On \
+failure:\n\n```\nassertion failed: a != b\n  value: <a>\n```\n\n\
+Both operands are borrowed. Propagates `panics`; annotated \
+`#[track_caller]`.",
         },
         BuiltinDoc {
             name: "dbg",
@@ -175,19 +177,13 @@ requirement of a `let … else` block. Propagates `panics`; annotated \
 `#[track_caller]`.",
         },
         BuiltinDoc {
-            name: "collect_all",
-            signature: "fn collect_all(f1: Fn() -> Result[A1, E1], …, fn: Fn() -> Result[An, En]) \
--> (Result[A1, E1], …, Result[An, En])",
-            doc: "Runs 2–8 closures in parallel and returns a **heterogeneous \
-tuple** with one `Result` per branch, position-bound (`output.0` is `f1`'s \
-outcome). Each branch keeps its own success and error type.\n\nGather mode: \
-every branch runs to completion regardless of a peer's `Err` — only a \
-*panic* cancels siblings, in which case the tuple is never constructed and \
-the panic dominates. The enclosing function's inferred effects are the \
-union of all branch effects (no special effect-system treatment).\n\n\
-Bare-expression branches are auto-wrapped: `collect_all(fetch_a(id), \
-fetch_b(id))` is shorthand for `collect_all(|| fetch_a(id), || \
-fetch_b(id))`. For a homogeneous, unbounded gather use `collect_all_vec`.",
+            name: "panic",
+            signature: "fn panic(message: String) -> Never with panics",
+            doc: "Ends the program with the given message: a panic is for an \
+unrecoverable condition, and a recoverable one returns a `Result`. The \
+`message` argument is optional (`panic()` and `panic(\"reason\")` are both \
+valid). Returns `Never`, so it type-checks in any expression position. \
+Propagates `panics`; annotated `#[track_caller]`.",
         },
     ]
 }
@@ -200,7 +196,7 @@ fetch_b(id))`. For a homogeneous, unbounded gather use `collect_all_vec`.",
 /// `std.prelude` module are skipped (they're compiler-internal stubs,
 /// not user-facing API).
 ///
-/// The compiler builtins (`assert`, `todo`, `dbg`, `collect_all`, …) are
+/// The compiler builtins (`assert`, `todo`, `dbg`, `panic`, …) are
 /// always surfaced under a synthetic `builtins` module via the doc-only
 /// registry ([`builtin_docs`]) — they're callable from every project, so
 /// they appear in the sidebar, global index, and search index regardless
@@ -303,7 +299,7 @@ pub fn build_docs(
 
             let file_path = module_dir.join(format!("{name}.html"));
             let page_dir = file_path.parent().unwrap_or(output_dir).to_path_buf();
-            let extras = render_item_extras(d, &link_table, &page_dir, output_dir);
+            let extras = render_item_extras(d, &module.items, &link_table, &page_dir, output_dir);
             let sidebar = render_sidebar(&index_entries, &module_docs, &page_dir, output_dir);
             let html = render_item_page_with_links(
                 &name,
@@ -672,23 +668,12 @@ fn render_signature(
             return format!("extern type {}", opaque_type.name);
         }
     };
+    use crate::formatter::{render_fn_head, render_generic_params, render_where_clause};
     match item {
         Item::Function(f) => {
-            let params = f
-                .params
-                .iter()
-                .map(|p| match p.name() {
-                    Some(n) => format!("{n}: {}", type_repr(&p.ty)),
-                    None => format!("_: {}", type_repr(&p.ty)),
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let ret = f
-                .return_type
-                .as_ref()
-                .map(|t| format!(" -> {}", type_repr(t)))
-                .unwrap_or_default();
-            let with_clause = if f.is_pub {
+            // A `pub fn` declares its effects; when it declares none, the
+            // inferred set is shown instead.
+            let with_clause = if f.is_pub && f.effects.is_none() {
                 effects
                     .and_then(|map| map.get(&(module_path.to_vec(), f.name.clone())))
                     .and_then(format_with_clause)
@@ -696,14 +681,53 @@ fn render_signature(
             } else {
                 String::new()
             };
-            format!("fn {}({params}){ret}{with_clause}", f.name)
+            format!("{}{with_clause}", render_fn_head(f))
         }
-        Item::StructDef(s) => format!("struct {}", s.name),
-        Item::EnumDef(e) => format!("enum {}", e.name),
-        Item::TraitDef(t) => format!("trait {}", t.name),
+        Item::StructDef(s) => format!(
+            "struct {}{}{}",
+            s.name,
+            render_generic_params(&s.generic_params),
+            render_where_clause(&s.where_clause)
+        ),
+        Item::EnumDef(e) => format!(
+            "enum {}{}{}",
+            e.name,
+            render_generic_params(&e.generic_params),
+            render_where_clause(&e.where_clause)
+        ),
+        Item::TraitDef(t) => {
+            let supers = if t.supertraits.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ": {}",
+                    t.supertraits
+                        .iter()
+                        .map(crate::formatter::render_trait_bound)
+                        .collect::<Vec<_>>()
+                        .join(" + ")
+                )
+            };
+            format!(
+                "trait {}{}{supers}{}",
+                t.name,
+                render_generic_params(&t.generic_params),
+                render_where_clause(&t.where_clause)
+            )
+        }
         Item::ConstDecl(c) => format!("const {}: {}", c.name, type_repr(&c.ty)),
-        Item::TypeAlias(t) => format!("type {}", t.name),
-        Item::DistinctType(d) => format!("distinct type {}", d.name),
+        Item::TypeAlias(t) => format!(
+            "type {}{} = {}",
+            t.name,
+            render_generic_params(&t.generic_params),
+            type_repr(&t.ty)
+        ),
+        Item::DistinctType(d) => format!(
+            "distinct type {}{} = {}",
+            d.name,
+            render_generic_params(&d.generic_params),
+            type_repr(&d.base_type)
+        ),
         Item::ExternFunction(e) => format!("extern \"{}\" fn {}", e.abi, e.name),
         Item::LayoutDef(l) => format!("layout {}", l.name),
         _ => String::new(),
@@ -717,8 +741,13 @@ fn render_signature(
 /// shape (unit / tuple / struct). Returns an empty string for kinds
 /// that don't carry public surface here (functions, consts, etc. — the
 /// signature line already shows everything).
+///
+/// A struct or enum page also lists the public methods of the `impl`
+/// blocks in its module and the traits it implements there; a trait page
+/// lists its associated types and methods (B-2026-11-08-34).
 fn render_item_extras(
     d: Documentable<'_>,
+    module_items: &[Item],
     link_table: &HashMap<String, String>,
     page_dir: &Path,
     doc_root: &Path,
@@ -734,11 +763,175 @@ fn render_item_extras(
         Documentable::ExternBlockOpaqueType { .. } => return String::new(),
     };
     match item {
-        Item::StructDef(s) => render_struct_extras(s, link_table, page_dir, doc_root),
-        Item::EnumDef(e) => render_enum_extras(e, link_table, page_dir, doc_root),
+        Item::StructDef(s) => {
+            render_struct_extras(s, link_table, page_dir, doc_root)
+                + &render_impl_extras(&s.name, module_items, link_table, page_dir, doc_root)
+        }
+        Item::EnumDef(e) => {
+            render_enum_extras(e, link_table, page_dir, doc_root)
+                + &render_impl_extras(&e.name, module_items, link_table, page_dir, doc_root)
+        }
+        Item::TraitDef(t) => render_trait_extras(t, link_table, page_dir, doc_root),
         Item::Function(f) => render_param_extras(f, link_table, page_dir, doc_root),
         _ => String::new(),
     }
+}
+
+/// The `impl` blocks in `items` whose target is the type `name`, written
+/// bare or with generic arguments (`Point`, `Stack[T]`).
+fn impls_for<'a>(items: &'a [Item], name: &str) -> Vec<&'a ImplBlock> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ImplBlock(imp) => match &imp.target_type.kind {
+                TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == name => Some(imp),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// One `<dt>` signature / `<dd>` prose row of a method list.
+fn push_method_row(
+    out: &mut String,
+    signature: &str,
+    doc: Option<&str>,
+    link_table: &HashMap<String, String>,
+    page_dir: &Path,
+    doc_root: &Path,
+) {
+    out.push_str("<dt>");
+    out.push_str(&html_escape(signature));
+    out.push_str("</dt>\n<dd>");
+    if let Some(doc) = doc {
+        out.push_str(&markdown_to_html(doc, link_table, page_dir, doc_root));
+    }
+    out.push_str("</dd>\n");
+}
+
+/// The Methods (public inherent methods) and Trait implementations
+/// sections of a struct or enum page.
+fn render_impl_extras(
+    name: &str,
+    module_items: &[Item],
+    link_table: &HashMap<String, String>,
+    page_dir: &Path,
+    doc_root: &Path,
+) -> String {
+    let impls = impls_for(module_items, name);
+    let mut out = String::new();
+    let methods: Vec<&Function> = impls
+        .iter()
+        .filter(|imp| imp.trait_name.is_none())
+        .flat_map(|imp| imp.items.iter())
+        .filter_map(|it| match it {
+            ImplItem::Method(f) if f.is_pub => Some(&**f),
+            _ => None,
+        })
+        .collect();
+    if !methods.is_empty() {
+        out.push_str("<h2>Methods</h2>\n<dl class=\"methods\">\n");
+        for f in methods {
+            let sig = crate::formatter::render_fn_head(f);
+            push_method_row(
+                &mut out,
+                &sig,
+                f.doc_comment.as_deref(),
+                link_table,
+                page_dir,
+                doc_root,
+            );
+        }
+        out.push_str("</dl>\n");
+    }
+    let trait_impls: Vec<&&ImplBlock> = impls
+        .iter()
+        .filter(|imp| imp.trait_name.is_some())
+        .collect();
+    if !trait_impls.is_empty() {
+        out.push_str("<h2>Trait implementations</h2>\n<ul class=\"impls\">\n");
+        for imp in trait_impls {
+            out.push_str("<li>");
+            out.push_str(&html_escape(&crate::formatter::render_impl_head(imp)));
+            out.push_str("</li>\n");
+        }
+        out.push_str("</ul>\n");
+    }
+    out
+}
+
+/// A trait page's Associated types, Required methods and Provided methods
+/// sections.
+fn render_trait_extras(
+    t: &TraitDef,
+    link_table: &HashMap<String, String>,
+    page_dir: &Path,
+    doc_root: &Path,
+) -> String {
+    let mut out = String::new();
+    let assoc: Vec<String> = t
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            TraitItem::AssocType(a) => {
+                let bounds = if a.bounds.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ": {}",
+                        a.bounds
+                            .iter()
+                            .map(crate::formatter::render_trait_bound)
+                            .collect::<Vec<_>>()
+                            .join(" + ")
+                    )
+                };
+                Some(format!(
+                    "type {}{}{bounds}",
+                    a.name,
+                    crate::formatter::render_generic_params(&a.generic_params)
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    if !assoc.is_empty() {
+        out.push_str("<h2>Associated types</h2>\n<ul class=\"assoc-types\">\n");
+        for a in assoc {
+            out.push_str("<li>");
+            out.push_str(&html_escape(&a));
+            out.push_str("</li>\n");
+        }
+        out.push_str("</ul>\n");
+    }
+    for (heading, provided) in [("Required methods", false), ("Provided methods", true)] {
+        let methods: Vec<_> = t
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                TraitItem::Method(m) if m.body.is_some() == provided => Some(m),
+                _ => None,
+            })
+            .collect();
+        if methods.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("<h2>{heading}</h2>\n<dl class=\"methods\">\n"));
+        for m in methods {
+            let sig = crate::formatter::render_trait_method_head(m);
+            push_method_row(
+                &mut out,
+                &sig,
+                m.doc_comment.as_deref(),
+                link_table,
+                page_dir,
+                doc_root,
+            );
+        }
+        out.push_str("</dl>\n");
+    }
+    out
 }
 
 fn render_param_extras(
@@ -862,18 +1055,7 @@ fn render_variant(v: &Variant) -> String {
 /// renderer just needs something readable. Falls back to the type's
 /// `{:?}` debug form when the structural cases don't match.
 fn type_repr(t: &TypeExpr) -> String {
-    use crate::ast::TypeKind;
-    match &t.kind {
-        TypeKind::Path(path) => path.segments.join("."),
-        TypeKind::Tuple(elems) if elems.is_empty() => "()".to_string(),
-        TypeKind::Tuple(elems) => format!(
-            "({})",
-            elems.iter().map(type_repr).collect::<Vec<_>>().join(", ")
-        ),
-        TypeKind::Ref(inner) => format!("ref {}", type_repr(inner)),
-        TypeKind::MutRef(inner) => format!("mut ref {}", type_repr(inner)),
-        _ => format!("{:?}", t.kind),
-    }
+    crate::formatter::render_type_expr(t)
 }
 
 /// Shared CSS for every doc page. Defines the two-column flex layout
@@ -900,12 +1082,13 @@ nav.local { font-size: 0.9em; margin-bottom: 1em; }
 .signature { background: #f4f4f4; padding: 0.6em 0.8em; border-radius: 4px;
              font-family: ui-monospace, "SF Mono", Menlo, monospace;
              white-space: pre-wrap; }
-.fields dt { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+.fields dt, .methods dt { font-family: ui-monospace, "SF Mono", Menlo, monospace;
              font-weight: 600; margin-top: 0.4em; }
 .fields dd { margin: 0 0 0.6em 1.5em;
              font-family: ui-monospace, "SF Mono", Menlo, monospace;
              color: #555; }
-.variants li { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+.methods dd { margin: 0 0 0.6em 1.5em; }
+.variants li, .impls li, .assoc-types li { font-family: ui-monospace, "SF Mono", Menlo, monospace;
                margin: 0.2em 0; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 0.4em 0.6em; border-bottom: 1px solid #eee; }

@@ -828,7 +828,7 @@ fn doc_search_index_holds_only_builtins_when_no_user_items_documented() {
 #[test]
 fn doc_surfaces_compiler_builtins_under_builtins_module() {
     // The intercept-only compiler builtins (assert family, todo,
-    // unreachable, dbg, collect_all) have no stdlib decl, so they were
+    // unreachable, panic, dbg) have no stdlib decl, so they were
     // invisible to `karac doc`. The doc-only builtin registry surfaces
     // them under a synthetic `builtins` module: one page each, a module
     // index, sidebar entries, and search-index rows — present in every
@@ -862,7 +862,7 @@ fn doc_surfaces_compiler_builtins_under_builtins_module() {
         "dbg",
         "todo",
         "unreachable",
-        "collect_all",
+        "panic",
     ] {
         let page = doc_root.join("builtins").join(format!("{name}.html"));
         assert!(page.exists(), "expected builtin page {page:?}");
@@ -871,7 +871,7 @@ fn doc_surfaces_compiler_builtins_under_builtins_module() {
     // A representative page renders its signature and prose.
     let assert_eq_html = fs::read_to_string(doc_root.join("builtins/assert_eq.html")).unwrap();
     assert!(
-        assert_eq_html.contains("fn assert_eq[T: Eq + Debug](left: T, right: T) with panics"),
+        assert_eq_html.contains("fn assert_eq[T: PartialEq + Debug](a: T, b: T) with panics"),
         "expected assert_eq signature; got:\n{assert_eq_html}"
     );
     assert!(assert_eq_html.contains("Panics unless"));
@@ -893,8 +893,12 @@ fn doc_surfaces_compiler_builtins_under_builtins_module() {
 
     // Search index carries the builtins with the fn kind.
     let json = fs::read_to_string(doc_root.join("search-index.json")).unwrap();
-    assert!(json.contains("\"name\":\"collect_all\""));
-    assert!(json.contains("\"href\":\"builtins/collect_all.html\""));
+    assert!(json.contains("\"name\":\"panic\""));
+    assert!(json.contains("\"href\":\"builtins/panic.html\""));
+    // `collect_all` left the language; its page went with it
+    // (B-2026-11-08-34).
+    assert!(!json.contains("collect_all"), "{json}");
+    assert!(!doc_root.join("builtins/collect_all.html").exists());
 }
 
 #[test]

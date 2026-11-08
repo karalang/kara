@@ -99,6 +99,93 @@ pub fn render_trait_bound(bound: &TraitBound) -> String {
     f.output
 }
 
+/// A generic parameter list (`[T: Bound, U]`), or the empty string when
+/// there is none.
+pub fn render_generic_params(gp: &Option<GenericParams>) -> String {
+    let mut f = Formatter::new();
+    f.format_generic_params(gp);
+    f.output
+}
+
+/// A function's head as declared, without its body: modifiers, name,
+/// generic parameters, receiver and parameters, return type, declared
+/// effects and `where` clause. `karac doc` shows it as the signature
+/// (B-2026-11-08-34).
+pub fn render_fn_head(func: &Function) -> String {
+    let mut f = Formatter::new();
+    if func.is_comptime {
+        f.write_str("comptime ");
+    }
+    if func.is_unsafe {
+        f.write_str("unsafe ");
+    }
+    f.write_str("fn ");
+    f.write_str(&func.name);
+    f.format_generic_params(&func.generic_params);
+    f.write_str("(");
+    f.format_fn_params_with_receiver(
+        &func.self_param,
+        func.self_is_frozen,
+        func.self_is_own,
+        &func.params,
+    );
+    f.write_str(")");
+    if let Some(ref rt) = func.return_type {
+        f.write_str(" -> ");
+        f.format_return_type(rt);
+    }
+    f.format_effects(&func.effects);
+    f.format_where_clause(&func.where_clause);
+    f.output
+}
+
+/// [`render_fn_head`] for a trait method declaration.
+pub fn render_trait_method_head(m: &TraitMethod) -> String {
+    let mut f = Formatter::new();
+    if m.is_unsafe {
+        f.write_str("unsafe ");
+    }
+    f.write_str("fn ");
+    f.write_str(&m.name);
+    f.format_generic_params(&m.generic_params);
+    f.write_str("(");
+    f.format_fn_params(&m.self_param, m.self_is_own, &m.params);
+    f.write_str(")");
+    if let Some(ref rt) = m.return_type {
+        f.write_str(" -> ");
+        f.format_return_type(rt);
+    }
+    f.format_effects(&m.effects);
+    f.format_where_clause(&m.where_clause);
+    f.output
+}
+
+/// An `impl` block's head (`impl[T: Show] Show for Vec[T]`), without its
+/// body.
+pub fn render_impl_head(imp: &ImplBlock) -> String {
+    let mut f = Formatter::new();
+    f.write_str("impl");
+    f.format_generic_params(&imp.generic_params);
+    if let Some(ref trait_name) = imp.trait_name {
+        f.write_str(" ");
+        f.write_path(&trait_name.segments);
+        f.format_generic_args_opt(&trait_name.generic_args);
+        f.write_str(" for");
+    }
+    f.write_str(" ");
+    f.format_type_expr(&imp.target_type);
+    f.format_where_clause(&imp.where_clause);
+    f.output
+}
+
+/// A `where` clause as the formatter writes it (on its own line, with the
+/// leading newline), or the empty string when there is none.
+pub fn render_where_clause(wc: &Option<WhereClause>) -> String {
+    let mut f = Formatter::new();
+    f.format_where_clause(wc);
+    f.output
+}
+
 pub(super) struct Formatter {
     pub(super) output: String,
     pub(super) indent: usize,
