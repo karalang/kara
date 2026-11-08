@@ -3499,6 +3499,12 @@ pub struct TypeChecker<'a> {
     /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
     /// is read under.
     pub(super) call_bound_receiver_subs: Option<std::collections::HashMap<String, SubstValue>>,
+    /// The method calls being checked, innermost last: where the receiver
+    /// ends and where each argument ends, when an appended `.cloned()` can
+    /// go there. A bound that ties an argument's `Item` to the receiver's
+    /// (`chain`'s `J: Iterator[Item = Self.Item]`) offers `.cloned()` on
+    /// the side that yields `ref T`.
+    pub(super) method_call_ends: Vec<(Option<usize>, Vec<Option<usize>>)>,
     /// The enclosing function's type parameters a trait method's signature
     /// names through a type-parameter receiver (`Self` = `I`): the call's
     /// instantiation keeps them as they are rather than minting a variable
@@ -4249,6 +4255,7 @@ impl<'a> TypeChecker<'a> {
             loose_expr_spans: FxHashSet::default(),
             as_str_calls: FxHashMap::default(),
             call_bound_receiver_subs: None,
+            method_call_ends: Vec::new(),
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
             unsolved_call_consts: Vec::new(),

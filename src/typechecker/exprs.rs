@@ -7554,6 +7554,10 @@ impl<'a> super::TypeChecker<'a> {
                 scope.extend(receiver_subs.keys().filter(|k| *k != "Self").cloned());
             }
             let required = self.lower_type_expr(ty, &scope);
+            let names_receiver = matches!(
+                &required,
+                Type::AssocProjection { param, .. } if param == "Self"
+            );
             // A method's bound names its receiver as `Self`
             // (`fn chain[J: Iterator[Item = Self.Item]]`), which the call's
             // receiver substitution supplies.
@@ -7578,7 +7582,31 @@ impl<'a> super::TypeChecker<'a> {
             } else {
                 ""
             };
-            self.type_error(
+            // The bound ties the argument's items (`found`) to the
+            // receiver's (`required`), so the side that yields `ref T` takes
+            // the `.cloned()`: the receiver, or the call's one argument.
+            let fix = match self.method_call_ends.last() {
+                Some((receiver, args)) if names_receiver && !help.is_empty() => {
+                    if views(&required, &found) {
+                        *receiver
+                    } else if args.len() == 1 {
+                        args[0]
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+            .map(|offset| FixIt {
+                span: Span {
+                    offset,
+                    length: 0,
+                    line: discharge_span.line,
+                    column: discharge_span.column,
+                },
+                replacement: ".cloned()".to_string(),
+            });
+            self.type_error_maybe_fix_it(
                 format!(
                     "error[E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED]: associated-type \
                      bound `{}.{} = {}` is not satisfied; `{}` has `{} = {}`{help}",
@@ -7591,6 +7619,7 @@ impl<'a> super::TypeChecker<'a> {
                 ),
                 *discharge_span,
                 TypeErrorKind::TypeMismatch,
+                fix,
             );
         }
     }

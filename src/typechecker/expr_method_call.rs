@@ -1735,6 +1735,26 @@ impl<'a> super::TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
+        args_close_span: &Span,
+    ) -> Type {
+        let ends = (
+            super::expr_ops::appended_cast_end_offset(object),
+            args.iter()
+                .map(|a| super::expr_ops::appended_cast_end_offset(&a.value))
+                .collect(),
+        );
+        self.method_call_ends.push(ends);
+        let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
+        self.method_call_ends.pop();
+        ty
+    }
+
+    fn infer_method_call_inner(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
         // The closing-paren span of the call (`)` token). A leaf span that is
         // NEVER aliased by an outer expr — unlike `span`, which the parser sets
         // equal to the receiver's span, so the generic `infer_expr` post-record
