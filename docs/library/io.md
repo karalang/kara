@@ -258,6 +258,8 @@ enum VarError {
 
 `InvalidInput` is an argument the operation refuses: a negative length or offset, or `OpenOptions` that open nothing. `Unsupported` is an operation this platform does not provide. `ProviderUnavailable` is an operation on a file opened under a `FileSystem` override after that override's `with_provider` call has returned ([Overriding the file system](#files)). `Other` carries the system's message for every other failure.
 
+**Display.** An `IoError` displays as a short lowercase phrase a program's user can read, and `Debug` shows the variant: `not found`, `permission denied`, `already exists`, `invalid input`, `unexpected end of file`, `invalid UTF-8`, `interrupted`, `unsupported`, `provider unavailable`, and `Other`'s message as it is. So `eprintln(f"lgrep: {path}: {e}")` prints `lgrep: nope: not found` (review-thread ruling 2026-11-08). `VarError` displays as `environment variable not found` and `environment variable is not valid unicode`.
+
 Both are prelude types. `IoError` covers the standard streams and files; `VarError` covers environment-variable lookup ([time-random-env.md](time-random-env.md#env)). They are kept separate so that each has a tight set of variants: a handler for `env.var` does not have to consider `NotFound` or `PermissionDenied`. The two overlap on one point (`IoError.InvalidUtf8` and `VarError.NotUnicode` describe the same condition from different sources), and the library provides `impl From[VarError] for IoError` (`NotPresent` becomes `NotFound`, `NotUnicode` becomes `InvalidUtf8`), so a function that uses `?` on both can return `IoError` alone.
 
 ## Networking
