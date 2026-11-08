@@ -404,6 +404,8 @@ The sends write one unfragmented frame each; a server's frames are not masked. A
 
 ### HTTP server
 
+The servers speak HTTP/1.1 with keep-alive (and WebSocket through `serve_ws`); HTTP/2 on the server is deferred ([deferred.md § Server-side HTTP/2](../deferred.md#server-side-http2)).
+
 ```kara
 impl Server {
     fn serve(addr: String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
@@ -458,6 +460,8 @@ fn main() {
 `serve_ws` adds WebSocket. When `handler` answers status 101 to a request that is a WebSocket opening handshake (a `GET` with `Upgrade: websocket` and a `Sec-WebSocket-Key`), the server sends the handshake's own 101, not the handler's response, and runs `ws_handler` on the upgraded connection, in that connection's task; the bytes the client sent after the request are its first frames. The server goes on serving requests while the sessions run ([core semantics §11.8](../core-semantics.md)). A 101 to a request that is not a handshake is sent as it is, and any other status to a handshake is sent normally. The connection closes when `ws_handler` drops its `WebSocket`. `serve_ws_tls` is `serve_ws` over TLS, as `serve_tls` is `serve`'s.
 
 ### HTTP client
+
+The client negotiates HTTP/2 through ALPN over `https://`, falling back to HTTP/1.1, and speaks HTTP/1.1 over `http://`.
 
 ```kara
 impl Client {

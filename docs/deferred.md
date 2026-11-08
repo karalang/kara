@@ -1033,6 +1033,16 @@ Type-level marker for data originating at an external trust boundary (HTTP body,
 
 **Cross-reference:** [design.md §12](design.md#12-effects), the capability primitive that already constrains *which* boundaries untrusted data can enter through; [Refinement Types](#refinement-types), the closest in-language mechanism for validated-at-boundary types without a separate marker layer; [library/secret.md](library/secret.md), the sibling wrapper with distinct semantics.
 
+### Server-side HTTP/2
+
+The v1 servers (`Server.serve`, `Server.serve_tls`, WebSocket) speak HTTP/1.1. HTTP/2 on the server, ALPN `h2` over TLS and h2c prior-knowledge over plain TCP, is deferred. The HTTPS client already negotiates HTTP/2 ([library/io.md](library/io.md)).
+
+**Why deferred:** HTTP/1.1 with keep-alive covers the v1 server workloads, and a server behind a TLS-terminating proxy or load balancer usually speaks HTTP/1.1 to it anyway. The pre-M3 pipeline negotiated h2 through hyper's `auto::Builder`; the v2 servers were rebuilt on the HTTP/1.1 path, and carrying h2 over means per-stream handler tasks, flow control and HPACK under the v2 executor and drop schedule, which is real work with no launch user asking for it. Decided by Gowtham, 2026-11-08.
+
+**Promotion gate:** Concrete demand for HTTP/2 served directly by a Kāra process (no proxy in front), or gRPC ([below](#grpc-streaming-reflection-server--client)), which needs it. The two are expected to land together.
+
+**Why non-breaking:** Purely additive. Negotiation happens per connection; a handler sees the same `Request` and `Response` whichever protocol carried them, so HTTP/1.1 servers keep working unchanged.
+
 ### gRPC (Streaming, Reflection, Server / Client)
 
 A first-class stdlib gRPC stack — server, client, streaming RPCs (server-stream, client-stream, bidirectional), reflection, codegen from `.proto` files, interceptors, deadlines / cancellation. Equivalent to Go's `google.golang.org/grpc` or Rust's `tonic`.
@@ -1053,7 +1063,7 @@ HTTP/3 over QUIC, including the QUIC transport itself (UDP-based, encrypted-by-d
 
 **Promotion gate:** Promote when (a) HTTP/3 deployment has crossed an inflection point in mainstream backends (target: >40% of Cloudflare-fronted traffic, or equivalent industry benchmarks), AND (b) Kāra's TLS substrate (rustls + aws-lc-rs) has matured QUIC integration on its side (rustls's QUIC support is ongoing).
 
-**Why non-breaking:** Purely additive. `std.http`'s stable surface stays HTTP/1.1 + HTTP/2; HTTP/3 lands as additional negotiation paths and connection types without changing existing semantics.
+**Why non-breaking:** Purely additive. `std.http`'s stable surface stays HTTP/1.1 (server and client) + HTTP/2 (client, and the server once [Server-side HTTP/2](#server-side-http2) lands); HTTP/3 lands as additional negotiation paths and connection types without changing existing semantics.
 
 **Cross-reference:** [design.md §1 v1 scope](design.md#v1-scope).
 
