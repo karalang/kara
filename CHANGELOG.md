@@ -282,6 +282,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A `select` that is a function's tail value no longer draws `must_use`
+  warnings on the statements it is rewritten into, and a warning from a
+  library body (`recv_timeout`'s) no longer reaches a program's output at a
+  line its file does not have; a discarded `select` still warns, once
+  (B-2026-11-08-75).
+
 - An undefined `Deque`, `ArrayDeque`, `deque`, `Queue` or `LinkedList` names
   `VecDeque`, and `karac fix` writes it, as `HashMap` names `Map`
   (B-2026-11-08-59).

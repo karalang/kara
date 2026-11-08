@@ -3441,6 +3441,11 @@ pub(super) fn lint_entries_for_compile_path(
         let is_err = d.level == crate::logical_lint::LintLevel::Error;
         out.push((d.lint_name, is_err, d.message, d.span));
     }
+    // A library item's finding is not the program's: its span is past the
+    // program's own text, at a line the user's file does not have
+    // (B-2026-11-08-75).
+    let user_end = crate::must_use_lint::user_text_end(&pipeline.parsed.program);
+    out.retain(|(_, _, _, span)| span.offset < user_end);
     out
 }
 

@@ -225,7 +225,23 @@ pub fn check_implicit_must_use(
             }
         }
     }
+    // A library body's discard is the library's, not the program's: on the
+    // baked path its spans run on past the program's own text, so a warning
+    // there was printed against the user's file at a line it does not have
+    // (B-2026-11-08-75: `recv_timeout`'s probes, at line 5009 of a 10-line
+    // program).
+    let user_end = user_text_end(program);
+    diags.retain(|d| d.span.offset < user_end);
     diags
+}
+
+/// Where the program's own text ends: the library is appended from
+/// `library_start` on (the baked path), or else lives at the gated and
+/// stdlib span bases. A lint span at or past it is not in the user's file.
+pub fn user_text_end(program: &Program) -> usize {
+    program
+        .library_start
+        .unwrap_or_else(|| crate::prelude::gated_span_base(0))
 }
 
 struct Walker<'a> {
@@ -248,8 +264,19 @@ impl Walker<'_> {
         // is recursed into but NOT checked for must-use at this level
         // (the enclosing context decides whether the value flows out or
         // is itself discarded).
+        //
+        // A statement whose span IS its block's span was made by a desugar
+        // (`select_desugar` gives every node of its template the `select`'s
+        // span), so the type recorded at that span is the whole construct's,
+        // not the statement's: a `select` tail of type `Result` read its
+        // `if r.is_some() { break k; }` probes as discarded `Result`s
+        // (B-2026-11-08-75). A statement the program wrote is always
+        // narrower than the braces around it.
         for stmt in &block.stmts {
-            self.walk_stmt(stmt);
+            match &stmt.kind {
+                StmtKind::Expr(e) if e.span == block.span => self.walk_expr(e),
+                _ => self.walk_stmt(stmt),
+            }
         }
         if let Some(tail) = &block.final_expr {
             self.walk_expr(tail);
