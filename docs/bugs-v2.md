@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 177 |
+| diagnostics | 178 |
 | false-positive | 150 |
 | perf | 119 |
-| missing-feature | 106 |
+| missing-feature | 109 |
 | soundness | 52 |
 | miscompile | 43 |
 | run-vs-build | 28 |
 | other | 24 |
 | codegen-gap | 22 |
-| crash | 16 |
+| crash | 17 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -75,17 +75,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 281 |
-| mir-llvm | 151 |
+| typecheck | 284 |
+| mir-llvm | 152 |
 | mir | 134 |
-| cli | 79 |
+| cli | 80 |
 | ownership | 63 |
 | parser | 47 |
-| interp | 37 |
+| interp | 38 |
 | runtime | 28 |
 | effect | 28 |
 | codegen | 22 |
-| resolver | 14 |
+| resolver | 15 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
@@ -133,6 +133,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-18 | 2026-11-08 | typecheck | medium | A literal bound by `let` is fixed to `i32` or `u32` by a later use but never to `u64` or `usize`: `fn f(i: u64) -> u64 { let k = 2; i - k }` is refused 'cannot mix integer types u64 and i64', so Rust's `let mut k = 1; while k * k <= i` over a `usize` fails; and a compound assignment fixes nothing: `fn f(n: i32) -> i32 { let mut a = 0; a += n; a }` is refused 'implicit coercion from i64 to i32' (kata 1518) | — |
 | B-2026-11-08-19 | 2026-11-08 | typecheck+mir-llvm | high | An untyped `Map.new()` whose key type comes from a `for x in v.iter()` element is inferred `Map[ref i64, _]`; `*m.entry(x).or_insert(0) += 1` then checks and runs under the interpreter, but the compiled program passes the key by value to `hash.ref i64` and segfaults (exit 101 with no message, 139 under karac run/build) | — |
 | B-2026-11-08-31 | 2026-11-08 | typecheck+interp+mir-llvm | high | A `ref u8` from a `Slice`'s `iter()` passed where an `i64` parameter is expected is accepted as an implicit widening, but the compiled program passes the reference's address (195 prints as 279565490929665) and the interpreter stops on `Add on Int and Ref`; `karac fix`'s lossless_cast removal of `b as i64` produces exactly this | — |
+| B-2026-11-08-32 | 2026-11-08 | typecheck | medium | A blanket impl whose method calls its bound's method (`impl[S: Store] Counter for S { fn peek(self) -> i64 { self.get() + 1 } }`) is refused at check once a concrete type uses it: "a type that failed to check is not lowered yet" at `self.get()` (design.md §9 Coherence allows the impl; B-2026-11-04-16/-49 fixed the lookup and sibling calls, not a call into the bound) | — |
+| B-2026-11-08-33 | 2026-11-08 | typecheck | low | `assert_eq(s, "x")` with `s: Str` is refused: "`assert_eq` of two types is not lowered yet"; the literal should take `Str` from the other operand (strings.md: a literal is `Str` where a `Str` is expected), while `version() == "0.1.0"` on a `Str` already works | — |
+| B-2026-11-08-34 | 2026-11-08 | cli | low | `karac doc` renders wrong signatures and drops members: generic arguments vanish (`-> Result`, field `Vec`, `SortedMap`, `fn add_to(s: mut ref S, ..)` with no `[S: Store[String, i64]]`), a struct page lists no methods from its `impl`, a trait page lists no trait methods, and `builtins/` documents `collect_all`, which core-semantics §11.7 removed (check refuses it) | — |
+| B-2026-11-08-35 | 2026-11-08 | resolver | low | E0113 for an unknown item in a dependency lists non-importable names as available: `import textkit.nope` says "available: Table, Store, Counter, MemStore, add_to, version, load_lines, clean, log_line", where `clean` is package-internal and importing it is E0111 | — |
+| B-2026-11-08-36 | 2026-11-08 | typecheck+interp+mir-llvm | high | A `fold` closure whose parameters are annotated bare (`|acc: Vec[i64], row: Vec[i64]|`) checks, but the program fails on both backends: the interpreter stops on `deref of non-reference Box` in the closure and the compiled program exits 101 with no message; unannotated or `own` parameters run | — |
 
 ### Relocated
 
