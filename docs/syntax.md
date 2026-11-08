@@ -1148,6 +1148,7 @@ STATEMENT = LET_STATEMENT
           | ASSIGN_STATEMENT
           | DEFER_STATEMENT
           | ERRDEFER_STATEMENT
+          | CONST_STATEMENT
           | EXPR_STATEMENT
           // Note: `return`, `break`, and `continue` are expressions (§5.19, §5.7),
           // so `return expr;` parses as EXPR_STATEMENT. This is intentional —
@@ -1162,6 +1163,12 @@ EXPR_STATEMENT = EXPR ";"
           // need none. A block's last expression without `;` is its value.
           // A `match` arm body may be a bare assignment: `p => x = y,` and
           // `p => n += 1,` mean `p => { x = y; }`.
+
+CONST_STATEMENT = "const" IDENT ":" TYPE "=" EXPR ";"
+          // A constant local to the block: the module-scope initializer rules,
+          // scope from the declaration to the end of the block, no visibility
+          // keyword, and no local binding in the initializer (design.md
+          // § Constants).
 
 LET_STATEMENT      = "let" [ "mut" ] PATTERN [ ":" TYPE ] "=" EXPR ";"
 LET_UNINIT_STATEMENT = "let" [ "mut" ] IDENT ":" TYPE ";"
