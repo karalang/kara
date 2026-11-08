@@ -1,0 +1,11 @@
+n = 4, left = [4, 3], right = [0, 1] -> 4
+n = 7, left = [], right = [0, 1, 2, 3, 4, 5, 6, 7] -> 7
+n = 7, left = [0, 1, 2, 3, 4, 5, 6, 7], right = [] -> 7
+n = 1, left = [0], right = [1] -> 0
+n = 1, left = [1], right = [0] -> 1
+n = 20, left = [], right = [] -> 0
+n = 9, left = [5], right = [4] -> 5
+n = 10, left = [2, 6], right = [3, 7] -> 7
+3000 planks of 1 to 12 units: sum 14228, checksum 521154340
+300 planks of 1 to 100 units: sum 13507, checksum 795559535
+5 planks of 1 to 600 units: sum 1608, checksum 392772863

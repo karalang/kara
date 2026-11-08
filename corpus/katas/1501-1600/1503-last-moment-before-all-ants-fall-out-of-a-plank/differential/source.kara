@@ -1,0 +1,244 @@
+// LeetCode #1503: Last Moment Before All Ants Fall Out of a Plank -- the
+// differential.
+//
+// Four arms against the statement simulated, on 3000 problems, with six
+// properties.
+//
+// P1  the answer is the statement simulated: ants that meet turn round
+// P2  the plank mirrored (each ant at n - p, walking the other way) leaves
+//     the answer
+// P3  one ant taken off never makes the answer later
+// P4  one more unit on the right end makes the answer later by 0 or 1
+// P5  the answer lies in 0..=n, and is n exactly when an ant starts at an
+//     end walking toward the other
+// P6  each arm agrees with at least two of the other three
+
+// ---- ants.kara: the ★ arm: the longest walk
+fn star_arm(n: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for p in left.iter() {
+        best = best.max(*p);
+    }
+    for p in right.iter() {
+        best = best.max(n - *p);
+    }
+    best
+}
+
+// ---- ants_iter.kara: chain and max
+fn iter_arm(n: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    left.iter().map(|p| *p).chain(right.iter().map(|p| n - *p)).max().unwrap_or(0)
+}
+
+// ---- ants_sort.kara: each end's falls sorted
+fn sort_arm(n: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    let mut at_left = left.clone();
+    at_left.sort();
+    let mut at_right: Vec[i64] = Vec.new();
+    for p in right.iter() {
+        at_right.push(n - *p);
+    }
+    at_right.sort();
+    let mut last = 0;
+    if not at_left.is_empty() {
+        last = last.max(at_left[at_left.len() - 1]);
+    }
+    if not at_right.is_empty() {
+        last = last.max(at_right[at_right.len() - 1]);
+    }
+    last
+}
+
+// ---- ants_solution.kara: LeetCode's Rust template
+struct Solution {}
+
+impl Solution {
+    pub fn get_last_moment(n: i32, left: Vec[i32], right: Vec[i32]) -> i32 {
+        let l = left.iter().max().cloned().unwrap_or(0);
+        let r = right.iter().map(|p| n - p).max().unwrap_or(0);
+        l.max(r)
+    }
+}
+
+fn rust_arm(n: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    Solution.get_last_moment(
+        n as i32,
+        left.iter().map(|x| *x as i32).collect(),
+        right.iter().map(|x| *x as i32).collect(),
+    ) as i64
+}
+
+// ---- the statement simulated (ants_sim.kara)
+fn sim_arm(n: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    let mut pos: Vec[i64] = Vec.new();
+    let mut dir: Vec[i64] = Vec.new();
+    for p in left.iter() {
+        pos.push(2 * *p);
+        dir.push(-1);
+    }
+    for p in right.iter() {
+        pos.push(2 * *p);
+        dir.push(1);
+    }
+    let mut on = Vec.filled(pos.len(), true);
+    let mut alive = pos.len();
+    let mut at: Vec[i64] = Vec.filled(2 * n + 1, -1);
+    let mut tick = 0;
+    let mut last = 0;
+    while alive > 0 {
+        for i in 0..pos.len() {
+            if on[i] and ((pos[i] == 0 and dir[i] == -1) or (pos[i] == 2 * n and dir[i] == 1)) {
+                on[i] = false;
+                alive -= 1;
+                last = tick;
+            }
+        }
+        for i in 0..pos.len() {
+            if on[i] {
+                let other = at[pos[i]];
+                if other >= 0 {
+                    dir[i] = -dir[i];
+                    dir[other] = -dir[other];
+                } else {
+                    at[pos[i]] = i;
+                }
+            }
+        }
+        for i in 0..pos.len() {
+            if on[i] {
+                at[pos[i]] = -1;
+                pos[i] += dir[i];
+            }
+        }
+        tick += 1;
+    }
+    last / 2
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, x: i64) -> i64 {
+    (check * 31 + x + 1) % 1000000007
+}
+
+fn arm(k: i64, n: i64, left: Vec[i64], right: Vec[i64]) -> i64 {
+    if k == 0 {
+        star_arm(n, left.clone(), right.clone())
+    } else if k == 1 {
+        iter_arm(n, left.clone(), right.clone())
+    } else if k == 2 {
+        sort_arm(n, left.clone(), right.clone())
+    } else {
+        rust_arm(n, left.clone(), right.clone())
+    }
+}
+
+fn arm_name(k: i64) -> String {
+    ["star", "iter", "sort", "rust"][k].to_string()
+}
+
+fn main() {
+    let arms = 4;
+    let problems = 3000;
+    let mut seed = 15030;
+    let mut check = 0;
+    let mut checks = 0;
+    let mut by_property: Vec[i64] = Vec.filled(7, 0);
+    let mut shown = 0;
+    for p in 0..problems {
+        // everything random is drawn first: the plank, the ants, the ant dropped
+        let n = next_random(mut seed) % 10 + 1;
+        let fill = next_random(mut seed) % 100 + 1;
+        let mut left: Vec[i64] = Vec.new();
+        let mut right: Vec[i64] = Vec.new();
+        for q in 0..n + 1 {
+            if next_random(mut seed) % 100 < fill {
+                if next_random(mut seed) % 2 == 0 {
+                    left.push(q);
+                } else {
+                    right.push(q);
+                }
+            }
+        }
+        let drop = next_random(mut seed);
+        let mirror_left: Vec[i64] = right.iter().map(|q| n - *q).collect();
+        let mirror_right: Vec[i64] = left.iter().map(|q| n - *q).collect();
+        let ants = left.len() + right.len();
+        let mut fewer_left = left.clone();
+        let mut fewer_right = right.clone();
+        if ants > 0 {
+            let at = drop % ants;
+            if at < left.len() {
+                fewer_left.remove(at);
+            } else {
+                fewer_right.remove(at - left.len());
+            }
+        }
+        let at_end = right.contains(0) or left.contains(n);
+
+        let literal = sim_arm(n, left.clone(), right.clone());
+        let mut answers: Vec[i64] = Vec.new();
+        for k in 0..arms {
+            let answer = arm(k, n, left, right);
+            let mut fails: Vec[i64] = Vec.filled(7, 0);
+            if answer != literal {
+                fails[1] += 1;
+            }
+            if arm(k, n, mirror_left, mirror_right) != answer {
+                fails[2] += 1;
+            }
+            if arm(k, n, fewer_left, fewer_right) > answer {
+                fails[3] += 1;
+            }
+            let longer = arm(k, n + 1, left, right);
+            if longer < answer or longer > answer + 1 {
+                fails[4] += 1;
+            }
+            if answer < 0 or answer > n or (answer == n) != at_end {
+                fails[5] += 1;
+            }
+            answers.push(answer);
+            for q in 1..6 {
+                checks += 1;
+                if fails[q] > 0 {
+                    by_property[q] += 1;
+                    if shown < 10 {
+                        println(f"problem {p}, {arm_name(k)}: P{q}");
+                        shown += 1;
+                    }
+                }
+            }
+        }
+        for k in 0..arms {
+            let mut agree = 0;
+            for other in 0..arms {
+                if other != k and answers[other] == answers[k] {
+                    agree += 1;
+                }
+            }
+            checks += 1;
+            if agree < 2 {
+                by_property[6] += 1;
+                if shown < 10 {
+                    println(f"problem {p}, {arm_name(k)}: P6");
+                    shown += 1;
+                }
+            }
+        }
+        check = mix(check, answers[0]);
+    }
+    let failures = by_property.iter().sum();
+    println(f"{problems} problems: checksum {check}, {checks} checks over {arms} arms: {failures} failures");
+    if failures > 0 {
+        for q in 1..7 {
+            if by_property[q] > 0 {
+                println(f"P{q}: {by_property[q]}");
+            }
+        }
+    }
+}

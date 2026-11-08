@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1501-1600/1503-last-moment-before-all-ants-fall-out-of-a-plank/bench/ants.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1503 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "e-differs:stdout"
+classified_with = "1dce193ad"
+extracted_src = "baa260a9"
