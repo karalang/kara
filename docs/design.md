@@ -4658,7 +4658,7 @@ Any other return type is a compile error that lists these three.
 
 **The `E: Display` bound** is checked at `main`'s signature. If `E` lacks `Display`, the error points at the signature with a fix that adds `impl Display for E`. There is no `Termination` trait: a direct bound is simpler for one use site.
 
-**An error exit** is ordinary: when `main` returns `Err(e)`, `main`'s drops, `defer`s and `errdefer`s run, then the runtime writes exactly `Error: {e}` and a newline to stderr and exits with `1` ([core-semantics.md §10.3](core-semantics.md#10-panics-and-errors-c8)). The code is the literal `1` on every platform, not `EXIT_FAILURE`. `KARA_BACKTRACE=1` in the environment adds a backtrace.
+**An error exit** is ordinary: when `main` returns `Err(e)`, `main`'s drops, `defer`s and `errdefer`s run, then the runtime writes `Error: {e}` and a newline to stderr and exits with `1`. A release build writes exactly that line; a debug build follows it with the [error return trace](#error-return-traces) when one was recorded ([core-semantics.md §10.3](core-semantics.md#10-panics-and-errors-c8)). The code is the literal `1` on every platform, not `EXIT_FAILURE`. `KARA_BACKTRACE=1` in the environment adds a backtrace.
 
 **`ExitCode`** wraps an OS exit code: `ExitCode.SUCCESS`, `ExitCode.FAILURE`, `ExitCode.from(code: i32) -> ExitCode`. Returning it is a normal return, so `main`'s drops and `defer`s run. A program that wants both `?` and a custom code says so:
 
