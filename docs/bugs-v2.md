@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 196 |
+| diagnostics | 197 |
 | false-positive | 162 |
 | perf | 128 |
 | missing-feature | 113 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 309 |
+| typecheck | 310 |
 | mir-llvm | 164 |
 | mir | 144 |
-| cli | 86 |
+| cli | 87 |
 | ownership | 63 |
 | parser | 51 |
 | interp | 39 |
@@ -111,12 +111,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-45 | 2026-11-08 | typecheck | low | Rust's `scan` closure over a `&mut` state (`|m, x| { *m = (*m).max(x); Some(*m) }`) draws six `drop the *` fixes that leave `Some(m)` and a type error `expected 'Option[(i64, OutV)]', found 'Option[i64]'`, with no fix and no word that Kāra's `scan` closure returns `Some((next_state, item))` | — |
 | B-2026-11-08-46 | 2026-11-08 | typecheck | low | Rust's `match ans.last_mut() { Some(last) if last[1] == prev && last[2] == avg => last[1] = pos, _ => ans.push(..) }` gets `no method 'last_mut' on type 'Vec': write through an index instead` with no machine fix, though the index form it describes is mechanical for this shape | — |
 | B-2026-11-08-47 | 2026-11-08 | typecheck | low | A sequence has no `split` by a predicate: Rust's `line.split(|&ch| ch == '#')` over a `&Vec<char>` is refused "no method 'split' on type 'Vec'" with no fix and no other spelling named, and draws two cascade errors on the closures that read the pieces | — |
-| B-2026-11-08-57 | 2026-11-08 | typecheck+cli | low | An unannotated array or `Vec` literal's element type is not fixed by where the binding goes: `let mut cnt = [0; 26]; ..; cnt` returned as `Array[i32, 26]`, and `let mut ans = Vec.filled(n, 0); dfs(.., mut ans)` into `ans: mut ref Vec[i32]`, are refused, and the binding annotation the message itself names gets no machine fix | — |
 | B-2026-11-08-58 | 2026-11-08 | typecheck | medium | A closure returning `Some((Vec.new(), x))` to a generic `Fn(S) -> Option[(S, O)]` leaves `O` uninferred, and with the state unannotated reports two unifiable function types as a mismatch: `.scan(Vec.new(), |seen, x| Some((Vec.new(), seen.len())))` is refused 'expected Fn(Vec[?T3], ref i64) -> Option[(Vec[?T3], OutV)], found Fn(Vec[i64], ref i64) -> Option[(Vec[i64], OutV)]' and 'cannot infer type parameter OutV' | — |
-| B-2026-11-08-59 | 2026-11-08 | resolver | low | An undefined `Deque`, `ArrayDeque`, `deque` or `Queue` gets no suggestion, though `HashMap`, `HashSet`, `BTreeMap` and `BinaryHeap` are each pointed at Kāra's name and a typo like `VecDequ` gets 'did you mean VecDeque': `let mut q: Deque[i64] = Deque.new();` says only 'undefined name Deque' / 'undefined type Deque' | — |
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
-| B-2026-11-08-63 | 2026-11-08 | typecheck+mir | low | A constant whose value is computed from another constant is refused as a pattern: `const AA: i64 = 5; const BB: i64 = AA + 1;` then `match 6 { BB => .. }` says 'this range pattern bound is not lowered yet', though a constant in a pattern is its value (design.md § Pattern matching) and `BB` checks and prints 6 anywhere else | — |
-| B-2026-11-08-64 | 2026-11-08 | typecheck | low | A mutating method on a read-only Slice binding (`let mut b = s.bytes(); b.swap(i, j)`, also sort, reverse, fill, sort_by, sort_by_key, split_at_mut) says only 'Slice.swap() requires a mutable slice (`mut Slice[T]`)', with no hint or fix; an index assignment through the same binding names `.to_vec()` but is reported twice | — |
 | B-2026-11-08-67 | 2026-11-08 | mir | low | Assigning the `ref i32` a `SortedMap` walk yields to an `i64` local, `cur = d`, is refused E0509 "a view ... is stored in an escaping closure, a `shared` value or a channel", though `cur` is a plain local | — |
 | B-2026-11-08-72 | 2026-11-08 | mir-llvm | low | Kata 540's binary search divides `(low + high) / 2` and tests `mid % 2 == 1` as signed `i64`s, 3 instructions a step more than Rust's `usize` (8.08G against 6.21G on x86, 1.53x on the M5), though the loop keeps both indices non-negative | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
@@ -133,6 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-85 | 2026-11-08 | mir-llvm+runtime | medium | `sort()` on a Vec of tuples runs about 3.3x Rust's stable `sort`: anything but a plain integer goes to the runtime's byte-wise `merge_sort` with the comparator called through a pointer, so katas 2015 and 2021 (sorted event triples and pairs) bench at 2.07x and 2.46x Rust under overflow checks while a Vec[i64] sort beats Rust | — |
 | B-2026-11-08-86 | 2026-11-08 | typecheck | medium | A range of bare literals takes `i64` where it is written, so `(1..=5).collect()` (or `.filter(..)`, `.map(..)` first) into a `Vec[i32]` return or binding is refused with "`C: FromIterator[i64]` is not satisfied" and no fix, though design.md § Type inference lets a return or an annotation fix a literal's type | — |
 | B-2026-11-08-87 | 2026-11-08 | mir-llvm | low | PriorityQueue's sift-to-bottom loop still takes 18 instructions a level against Rust BinaryHeap's 9-12 after B-2026-11-08-10: a swap (2 loads, 2 stores, 2 bounds checks) where Rust moves a hole, and an overflow check on `2 * i + 1` (kata 480: 4.36G instructions against Rust's 3.63G) | — |
+| B-2026-11-08-88 | 2026-11-08 | typecheck+cli | low | A plain list literal's element literal is not fixed by where the binding goes (the remainder of B-2026-11-08-57): `let mut v = [0, 0]; g(mut v)` with `g(a: mut ref Vec[i32])`, and `let v = [0, 7]; g(v)` into a `ref Vec[i32]`, are refused as `Vec[i64]`, with no machine fix | — |
 
 ### Relocated
 
@@ -904,8 +901,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-54 | parser | medium | Rust's array type inside a generic argument (`Vec[[i64; 2]]`) is taken for a shape literal: check reports "Expected `]`, found `;`" instead of the `[… | 274ec2990d |
 | B-2026-11-08-56 | mir | high | A call to a closure puts its arguments' borrows in the closure itself, not in what the closure's `mut ref` captures reach: `\|extra: Vec[i64]\| total +… | b4d55d0ffb |
 | B-2026-11-08-55 | typecheck | low | RULING WANTED (Str vs String): `["inc", "dec"].contains(cmd)` with `cmd: Str`, and `names.contains(s)` on a `Vec[String]`, are refused "expected 'ref… | e59006b616 |
+| B-2026-11-08-57 | typecheck+cli | low | An unannotated array or `Vec` literal's element type is not fixed by where the binding goes: `let mut cnt = [0; 26]; ..; cnt` returned as `Array[i32,… | 8da3c36f75 |
+| B-2026-11-08-59 | resolver | low | An undefined `Deque`, `ArrayDeque`, `deque` or `Queue` gets no suggestion, though `HashMap`, `HashSet`, `BTreeMap` and `BinaryHeap` are each pointed… | e99826bcc0 |
 | B-2026-11-08-60 | parser | medium | A `const` declared inside a function body (`const MOD: i64 = 1_000_000_007;`, the usual first line of a LeetCode Rust solution) is a parse error that… | a90821c8d |
 | B-2026-11-08-62 | typecheck+cli | medium | A copy of a defaulted literal binding gets no annotation fix: `let mut carry = 0; let mut x = carry; x += d; out.push(x & 1)` with `out: Vec[i32]` is… | a0bb430292 |
+| B-2026-11-08-63 | typecheck+mir | low | A constant whose value is computed from another constant is refused as a pattern: `const AA: i64 = 5; const BB: i64 = AA + 1;` then `match 6 { BB => . | 429cb5a08c |
+| B-2026-11-08-64 | typecheck | low | A mutating method on a read-only Slice binding (`let mut b = s.bytes(); b.swap(i, j)`, also sort, reverse, fill, sort_by, sort_by_key, split_at_mut)… | 34d42091dd |
 | B-2026-11-08-65 | resolver | medium | `karac fix` carries LeetCode's binary-tree template (`use std::rc::Rc; use std::cell::RefCell;`, `Option<Rc<RefCell<TreeNode>>>`, `n.borrow()`) to `i… | a4aa93dce |
 | B-2026-11-08-66 | mir | low | `rest = rest[1..]` on a `Slice[T]` local is refused E0516 ("cannot assign to `rest` while .. | 76bc1b9842 |
 | B-2026-11-08-69 | typecheck+mir | high | A number literal checked against a closure's return type or a map entry's value keeps its default `i64`: `let g: Fn() -> i32 = \|\| 5` returns an `i64`… | 1de47226fa |
