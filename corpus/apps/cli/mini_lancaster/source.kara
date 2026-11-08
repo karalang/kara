@@ -1,0 +1,687 @@
+// mini_lancaster: NLTK's Lancaster (Paice/Husk) stemmer, the aggressive
+// suffix stripper search indexes use to fold "connection", "connected" and
+// "connecting" into one term, with its rule language (custom rule sets,
+// intact-only rules, rules that stop or carry on), its optional prefix
+// stripping, and a small inverted index over a few documents built on it.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+
+// ------------------------------------------------------------ rules
+
+/// One rule, as `^([a-z]+)(\*?)(\d)([a-z]*)([>.]?)$` takes it apart: the
+/// ending (written reversed in the rule), whether the word must be intact,
+/// how many characters to remove, what to append, and whether to stop.
+struct Rule {
+    ending: String,
+    intact: bool,
+    remove: i64,
+    append: String,
+    stop: bool,
+}
+
+fn is_rule_letter(c: char) -> bool {
+    c >= 'a' and c <= 'z'
+}
+
+/// The rule `text` stands for, or `None` when it is not a rule.
+fn parse_rule(text: Str) -> Option[Rule] {
+    let cs: Vec[char] = text.chars().collect();
+    let mut i = 0;
+    let mut reversed = String.new();
+    while i < cs.len() and is_rule_letter(cs[i]) {
+        reversed.push(cs[i]);
+        i += 1;
+    }
+    if reversed.is_empty() {
+        return None;
+    }
+    let intact = i < cs.len() and cs[i] == '*';
+    if intact {
+        i += 1;
+    }
+    if i >= cs.len() or not cs[i].is_ascii_digit() {
+        return None;
+    }
+    let remove = (cs[i] as i64) - ('0' as i64);
+    i += 1;
+    let mut append = String.new();
+    while i < cs.len() and is_rule_letter(cs[i]) {
+        append.push(cs[i]);
+        i += 1;
+    }
+    let mut stop = false;
+    if i < cs.len() and (cs[i] == '>' or cs[i] == '.') {
+        stop = cs[i] == '.';
+        i += 1;
+    }
+    if i != cs.len() {
+        return None;
+    }
+    let ending: String = reversed.chars().rev().collect();
+    Some(Rule { ending, intact, remove, append, stop })
+}
+
+/// The module's default rule tuple, in its order.
+fn default_rules() -> Vec[String] {
+    let text = """
+ai*2. a*1. bb1. city3s. ci2> cn1t> dd1. dei3y> deec2ss. dee1. de2> dooh4>
+e1> feil1v. fi2> gni3> gai3y. ga2> gg1. ht*2. hsiug5ct. hsi3> i*1. i1y>
+ji1d. juf1s. ju1d. jo1d. jeh1r. jrev1t. jsim2t. jn1d. j1s. lbaifi6. lbai4y.
+lba3> lbi3. lib2l> lc1. lufi4y. luf3> lu2. lai3> lau3> la2> ll1. mui3.
+mu*2. msi3> mm1. nois4j> noix4ct. noi3> nai3> na2> nee0. ne2> nn1.
+pihs4> pp1. re2> rae0. ra2. ro2> ru2> rr1. rt1> rei3y> sei3y> sis2. si2>
+ssen4> ss0. suo3> su*2. s*1> s0. tacilp4y. ta2> tnem4> tne3> tna3>
+tpir2b. tpro2b. tcud1. tpmus2. tpec2iv. tulo2v. tsis0. tsi3> tt1. uqi3.
+ugo1. vis3j> vie0. vi2> ylb1> yli3y> ylp0. yl2> ygo1. yhp1. ymo1. ypo1.
+yti3> yte3> ytl2. yrtsi5. yra3> yro3> yfi3. ycn2t> yca3> zi2> zy1s.
+""";
+    text.split_whitespace().map(|r| r.to_string()).collect()
+}
+
+// ------------------------------------------------------------ stemmer
+
+/// The words longer than this are returned unstemmed (the module's
+/// `MAX_WORD_LEN`), counted in characters.
+const MAX_WORD_LEN: i64 = 1000;
+
+const PREFIXES: Array[Str, 9] = [
+    "kilo", "micro", "milli", "intra", "ultra", "mega", "nano", "pico", "pseudo",
+];
+
+struct Stemmer {
+    rules: Vec[String],
+    table: SortedMap[char, Vec[Rule]],
+    strip_prefix: bool,
+}
+
+fn is_stem_vowel(c: char) -> bool {
+    "aeiouy".contains(c.to_string())
+}
+
+fn text_of(cs: Slice[char]) -> String {
+    let mut s = String.new();
+    for c in cs.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn ends_with_chars(word: Slice[char], ending: Str) -> bool {
+    let tail: Vec[char] = ending.chars().collect();
+    if tail.len() > word.len() {
+        return false;
+    }
+    let start = word.len() - tail.len();
+    for k in 0..tail.len() {
+        if word[start + k] != tail[k] {
+            return false;
+        }
+    }
+    true
+}
+
+/// The index of the last letter of the word's leading run of letters, or
+/// -1: the rules are looked up by that letter, not by the word's last one.
+fn last_letter(word: Slice[char]) -> i64 {
+    let mut last = -1;
+    for k in 0..word.len() {
+        if word[k].is_alphabetic() {
+            last = k;
+        } else {
+            break;
+        }
+    }
+    last
+}
+
+/// Whether `remove` characters may come off `word`: a word that starts
+/// with a vowel keeps at least two, any other at least three with a vowel
+/// in the second or third place.
+fn acceptable(word: Slice[char], remove: i64) -> bool {
+    let left = word.len() - remove;
+    if is_stem_vowel(word[0]) {
+        left >= 2
+    } else if left >= 3 {
+        is_stem_vowel(word[1]) or is_stem_vowel(word[2])
+    } else {
+        false
+    }
+}
+
+impl Stemmer {
+    /// A stemmer over `rules` (the default tuple when there are none), or
+    /// the module's `ValueError` text for the first rule that is not one.
+    fn new(rules: own Vec[String], strip_prefix: bool) -> Result[Stemmer, String] {
+        let rules = if rules.is_empty() { default_rules() } else { rules };
+        let mut table: SortedMap[char, Vec[Rule]] = SortedMap.new();
+        for text in rules.iter() {
+            let Some(rule) = parse_rule(text) else {
+                return Err(f"ValueError: The rule {text} is invalid");
+            };
+            let first = text.chars().next().unwrap();
+            if let Some(list) = table.get_mut(first) {
+                list.push(rule);
+            } else {
+                table.insert(first, [rule]);
+            }
+        }
+        Ok(Stemmer { rules, table, strip_prefix })
+    }
+
+    fn stem(ref self, word: Str) -> String {
+        let mut w: Vec[char] = word.to_lowercase().chars().collect();
+        if self.strip_prefix {
+            for p in PREFIXES.iter() {
+                let pc: Vec[char] = p.chars().collect();
+                if w.len() >= pc.len() and w[0..pc.len()] == pc[..] {
+                    w = w[pc.len()..].to_vec();
+                    break;
+                }
+            }
+        }
+        if w.len() > MAX_WORD_LEN {
+            return text_of(w);
+        }
+        let intact = w.clone();
+        loop {
+            let last = last_letter(w);
+            if last < 0 {
+                break;
+            }
+            let Some(rules) = self.table.get(w[last]) else {
+                break;
+            };
+            let mut applied = false;
+            let mut stop = false;
+            for r in rules.iter() {
+                if not ends_with_chars(w, r.ending) {
+                    continue;
+                }
+                if r.intact and w != intact {
+                    continue;
+                }
+                if acceptable(w, r.remove) {
+                    w.truncate(w.len() - r.remove);
+                    w.extend(r.append.chars());
+                    applied = true;
+                    stop = r.stop;
+                    break;
+                }
+            }
+            if not applied or stop {
+                break;
+            }
+        }
+        text_of(w)
+    }
+}
+
+// ------------------------------------------------------------ index
+
+/// What a token loses at either end.
+const PUNCT: Str = ".,;:!?\"'()[]{}\u{ab}\u{bb}#";
+
+fn tokens(text: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for t in text.split_whitespace() {
+        let cs: Vec[char] = t.chars().collect();
+        let mut a = 0;
+        let mut b = cs.len();
+        while a < b and PUNCT.contains(cs[a].to_string()) {
+            a += 1;
+        }
+        while b > a and PUNCT.contains(cs[b - 1].to_string()) {
+            b -= 1;
+        }
+        if a < b {
+            out.push(text_of(cs[a..b]));
+        }
+    }
+    out
+}
+
+/// One indexed document: how often each stem occurs in it, and the
+/// lower-cased tokens that stemmed to it.
+struct Doc {
+    counts: Map[String, i64],
+    forms: Map[String, Set[String]],
+}
+
+/// A count in a script line: one to six digits.
+fn count(word: Str) -> Result[i64, String] {
+    if word.is_empty() or word.len() > 6 or not word.chars().all(|c| c.is_ascii_digit()) {
+        return Err(f"bad count {word}");
+    }
+    i64.parse(word).map_err(|_| f"bad count {word}")
+}
+
+/// The last `n` characters of `s`.
+fn tail(s: Str, n: i64) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let from = if cs.len() > n { cs.len() - n } else { 0 };
+    text_of(cs[from..])
+}
+
+// ------------------------------------------------------------ script
+
+fn usage(cmd: Str) -> Option[String] {
+    match cmd {
+        "stem" => Some("usage: stem WORD..."),
+        "stem-repeat" => Some("usage: stem-repeat PIECE COUNT"),
+        "use" => Some("usage: use RULES [prefix]"),
+        "index" => Some("usage: index DOC"),
+        "classes" => Some("usage: classes [MIN]"),
+        "top" => Some("usage: top COUNT"),
+        "query" => Some("usage: query WORD..."),
+        _ => None,
+    }
+}
+
+struct Player {
+    stemmer: Stemmer,
+    docs: SortedMap[String, Doc],
+}
+
+impl Player {
+    fn run(mut ref self, words: Slice[String]) -> Result[Vec[String], String] {
+        let cmd = words[0].as_str();
+        let Some(text) = usage(cmd) else {
+            return Err(f"unknown command {cmd}");
+        };
+        let args = words[1..];
+        let ok = match cmd {
+            "stem" | "query" => args.len() >= 1,
+            "classes" => args.len() <= 1,
+            "use" => args.len() == 1 or (args.len() == 2 and args[1] == "prefix"),
+            _ => args.len() == text.split_whitespace().count() - 2,
+        };
+        if not ok {
+            return Err(text);
+        }
+        match cmd {
+            "stem" => Ok(args.iter().map(|w| f"{w} -> {self.stemmer.stem(w)}").collect()),
+            "stem-repeat" => self.stem_repeat(args[0], args[1]),
+            "use" => self.use_rules(args[0], args.len() == 2),
+            "index" => self.index(args[0]),
+            "classes" => self.classes(args),
+            "top" => self.top(args[0]),
+            _ => Ok(self.query(args)),
+        }
+    }
+
+    fn stem_repeat(ref self, piece: Str, n: Str) -> Result[Vec[String], String] {
+        let n = count(n)?;
+        let mut word = String.new();
+        for _ in 0..n {
+            word.push_str(piece);
+        }
+        let s = self.stemmer.stem(word);
+        let line = f"{piece} x {n}: {word.chars().count()} chars -> {s.chars().count()} chars, ending \"{tail(s, 8)}\"";
+        Ok([line])
+    }
+
+    fn use_rules(mut ref self, name: Str, prefix: bool) -> Result[Vec[String], String] {
+        let mut rules: Vec[String] = Vec.new();
+        if name != "default" {
+            let path = f"data/rules/{name}.rules";
+            let Ok(body) = fs.read_to_string(path) else {
+                return Err(f"no rules {path}");
+            };
+            for line in body.split("\n") {
+                if not line.is_empty() and not line.starts_with("#") {
+                    rules.push(line.to_string());
+                }
+            }
+        }
+        let st = Stemmer.new(rules, prefix)?;
+        let how = if prefix { " with prefixes" } else { "" };
+        let line = f"using {name}{how}: {st.rules.len()} rules under {st.table.len()} letters";
+        self.stemmer = st;
+        self.docs = SortedMap.new();
+        Ok([line])
+    }
+
+    fn index(mut ref self, name: Str) -> Result[Vec[String], String] {
+        let path = f"data/docs/{name}.txt";
+        let Ok(body) = fs.read_to_string(path) else {
+            return Err(f"no document {path}");
+        };
+        let toks = tokens(body);
+        let mut doc = Doc { counts: Map.new(), forms: Map.new() };
+        for t in toks.iter() {
+            let s = self.stemmer.stem(t);
+            let k = doc.counts.get(s) ?? 0;
+            doc.counts.insert(s.clone(), k + 1);
+            if let Some(set) = doc.forms.get_mut(s) {
+                set.insert(t.to_lowercase());
+            } else {
+                let mut set: Set[String] = Set.new();
+                set.insert(t.to_lowercase());
+                doc.forms.insert(s, set);
+            }
+        }
+        let line = f"indexed {name}: {toks.len()} tokens, {doc.counts.len()} stems";
+        self.docs.insert(name.to_string(), doc);
+        Ok([line])
+    }
+
+    fn classes(ref self, args: Slice[String]) -> Result[Vec[String], String] {
+        let least = if args.is_empty() { 2 } else { count(args[0])? };
+        let mut forms: SortedMap[String, SortedSet[String]] = SortedMap.new();
+        for (_, doc) in self.docs.iter() {
+            for (s, ws) in doc.forms.iter() {
+                if not forms.contains_key(s) {
+                    forms.insert(s.clone(), SortedSet.new());
+                }
+                let all = forms.get_mut(s).unwrap();
+                for w in ws.iter() {
+                    all.insert(w.clone());
+                }
+            }
+        }
+        let mut out: Vec[String] = Vec.new();
+        for (s, ws) in forms.iter() {
+            if ws.len() >= least {
+                let list: Vec[String] = ws.iter().cloned().collect();
+                out.push(f"{s}: {list.join(" ")}");
+            }
+        }
+        if out.is_empty() {
+            out.push("no classes".to_string());
+        }
+        Ok(out)
+    }
+
+    fn top(ref self, n: Str) -> Result[Vec[String], String] {
+        let n = count(n)?;
+        if self.docs.is_empty() {
+            return Ok(["index is empty".to_string()]);
+        }
+        let mut totals: Map[String, i64] = Map.new();
+        for (_, doc) in self.docs.iter() {
+            for (s, k) in doc.counts.iter() {
+                let t = totals.get(s) ?? 0;
+                totals.insert(s.clone(), t + *k);
+            }
+        }
+        let mut ranked: Vec[(i64, String)] = totals.iter().map(|(s, k)| (-*k, s.clone())).collect();
+        ranked.sort();
+        let mut out: Vec[String] = Vec.new();
+        for (neg, s) in ranked.iter() {
+            if out.len() >= n {
+                break;
+            }
+            out.push(f"{s} {-neg}");
+        }
+        Ok(out)
+    }
+
+    fn query(ref self, args: Slice[String]) -> Vec[String] {
+        let stems: Vec[String] = args.iter().map(|w| self.stemmer.stem(w)).collect();
+        let mut hits: Vec[(i64, String)] = Vec.new();
+        for (name, doc) in self.docs.iter() {
+            if stems.iter().all(|s| doc.counts.contains_key(s)) {
+                let mut score = 0;
+                for s in stems.iter() {
+                    score += doc.counts.get(s) ?? 0;
+                }
+                hits.push((-score, name.clone()));
+            }
+        }
+        hits.sort();
+        let mut out: Vec[String] = [f"stems: {stems.join(" ")}"];
+        for (neg, name) in hits.iter() {
+            out.push(f"{name} {-neg}");
+        }
+        if hits.is_empty() {
+            out.push("no document matches".to_string());
+        }
+        out
+    }
+}
+
+fn play(script: Str) -> Result[(), String] {
+    let stemmer = Stemmer.new(Vec.new(), false)?;
+    let mut player = Player { stemmer, docs: SortedMap.new() };
+    for (i, line) in script.split("\n").enumerate() {
+        let words: Vec[String] = line.split(" ").filter(|w| not w.is_empty()).map(|w| w.to_string()).collect();
+        if words.is_empty() or words[0].starts_with("#") {
+            continue;
+        }
+        println(f"> {words.join(" ")}");
+        match player.run(words) {
+            Ok(lines) => {
+                for l in lines.iter() {
+                    println(f"  {l}");
+                }
+            }
+            Err(e) => println(f"  error: script.txt:{i + 1}: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/docs").map_err(|e| f"cannot create data/docs: {e}")?;
+    fs.create_dir_all("data/rules").map_err(|e| f"cannot create data/rules: {e}")?;
+    write_data()?;
+    let text = fs.read_to_string("data/script.txt").map_err(|e| f"cannot read data/script.txt: {e}")?;
+    play(text)
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/docs/bug_report.txt", file_0())?;
+    put_bytes("data/docs/contract.txt", file_1())?;
+    put_bytes("data/docs/french.txt", file_2())?;
+    put_bytes("data/docs/mixed.txt", file_3())?;
+    put_bytes("data/docs/recipe.txt", file_4())?;
+    put_bytes("data/docs/release_notes.txt", file_5())?;
+    put_bytes("data/rules/chain.rules", file_6())?;
+    put_bytes("data/rules/empty.rules", file_7())?;
+    put_bytes("data/rules/greedy.rules", file_8())?;
+    put_bytes("data/rules/intact.rules", file_9())?;
+    put_bytes("data/rules/nest.rules", file_10())?;
+    put_bytes("data/rules/plurals.rules", file_11())?;
+    put_bytes("data/rules/shouting.rules", file_12())?;
+    put_bytes("data/rules/spaced.rules", file_13())?;
+    put_bytes("data/script.txt", file_14())?;
+    Ok(())
+}
+
+// data/docs/bug_report.txt
+fn file_0() -> String {
+    """
+5469746c653a20746865207363686564756c657220646f65736e27742072657472792034303473206166746572206120
+72652d72756e0a0a53746570733a207374617274207468652073746174652d6f662d7468652d61727420736368656475
+6c6572202876322e33292c207175657565203132206a6f62732c0a6b696c6c2074686520776f726b65722e2054686520
+776f726b657227732071756575652073686f7773202772756e6e696e672720666f72206a6f627320746861740a617265
+6e27742e205265747279696e672062792068616e6420776f726b733b2072657472696573206279207468652073636865
+64756c657220646f6e27742e0a45787065637465643a2072657472696564206a6f627320617265202271756575656422
+20616761696e2028736565202334343131292e0a41637475616c3a206e6f7468696e673b20746865206a6f6273207374
+61792072756e6e696e672e2e2e20666f72657665723f0a4e6f7465733a206d70337320616e64207838365f3634206275
+696c647320626f74682073686f772069742e205477656c7665206b696c6f6d6574657273206f660a6c6f67732c206e6f
+206572726f72732e0a
+"""
+}
+
+// data/docs/contract.txt
+fn file_1() -> String {
+    """
+50726f766973696f6e732e204e6f74776974687374616e64696e67207468652070726f766973696f6e732061626f7665
+2c2074686520537570706c6965722069730a6c6961626c6520666f7220746865206c696162696c697469657320697420
+617373756d65732c2070726f766964656420746861742074686520437573746f6d65722c0a70726f766964696e67206e
+6f746963652c2061636365707473207468652061737369676e6d656e742e2041737369676e6d656e7473206f66207468
+69730a41677265656d656e742061726520616772656561626c6520746f20626f746820706172746965733b206e6f2061
+677265656d656e742062696e647320610a70617274792077686f20686173206e6f742061677265656420696e20777269
+74696e672e2044697361677265656d656e747320617265207265736f6c7665640a6279206172626974726174696f6e2c
+20616e64207468652061726269747261746f722773207265736f6c7574696f6e2069732066696e616c2e0a
+"""
+}
+
+// data/docs/french.txt
+fn file_2() -> String {
+    """
+4c6520636166c3a9206372c3a86d65206475206d6174696e2c20756e6520c3a96cc3a967616e6365206e61c3af76653a
+206c652072c3a973756dc3a9206465732072c3a973756dc3a9732e0a4c657320c3a96cc3a876657320c3a9746169656e
+7420c3a9746f6e6ec3a9733b206c61206e61c3af766574c3a920c3a9746f6e6e6520746f756a6f7572732e0ac3896cc3
+a967616e6365732c20434146c38953206574206372c3a86d6573c2a0c2bb73616e732066696ec2ab2e0a
+"""
+}
+
+// data/docs/mixed.txt
+fn file_3() -> String {
+    """
+ce9fce94ce9fcea320616e6420cea3ce91cea32061726520477265656b3b20c4b07374616e62756c20616e6420c4b07a
+6d697220617265205475726b697368206369746965732e0ad09cd0bed181d0bad0b2d0b0206973205275737369616e2e
+2053747261c39f6520616e64205354524153534520617265204765726d616e20737472656574732e0aefbca1efbca2ef
+bca3206172652066756c6c7769647468206c6574746572733b20e69db1e4baac20697320546f6b796f2e0a
+"""
+}
+
+// data/docs/recipe.txt
+fn file_4() -> String {
+    """
+536c69636520746865206f6e696f6e7320616e6420626f696c207468656d207768696c6520746865206f76656e206865
+6174732e20426f696c696e670a736f6674656e73207468656d3b20626f696c6564206f6e696f6e7320736c6963652063
+6c65616e6c792e2053746972207468652073617563652c206b6565700a7374697272696e672c20616e64207768656e20
+697420686173207374697272656420666f722074656e206d696e75746573206164642074686520736c696365640a6f6e
+696f6e732e2042616b6520666f7220666f727479206d696e757465732e2042616b696e67206c6f6e6765722064726965
+73207468652062616b6572790a6c6f61663b2062616b6564206272656164206b6565707320666f7220646179732e2053
+657276657320666f75722068756e6772792062616b6572732e0a
+"""
+}
+
+// data/docs/release_notes.txt
+fn file_5() -> String {
+    """
+52656c65617365206e6f74657320666f722076657273696f6e20342e32206f6620746865207363686564756c65722e0a
+0a46697865643a20636f6e6e656374696e6720746f2061207265706c696361206e6f206c6f6e6765722068616e677320
+7768656e2074686520636f6e6e656374696f6e0a697320726566757365643b207265636f6e6e65637473206172652072
+6574726965642c20616e6420657665727920636f6e6e656374656420636c69656e742069730a746f6c642e2054686520
+696e7374616c6c6572206e6f772070726f766973696f6e7320746865206361636865206265666f726520696e7374616c
+6c696e670a706c7567696e732c20616e6420696e7374616c6c6174696f6e206c6f677320736179207768696368207072
+6f766973696f6e206661696c65642e0a436f6e66696775726174696f6e20697320636f6e666967757261626c65207065
+722074656e616e743a20636f6e66696775726564206c696d697473206172650a6d756c7469706c696564206279207468
+652074656e616e742773207765696768742c2070726573756d61626c7920746865206d6178696d756d20616e796f6e65
+0a6e656564732e2052656164696e6573732070726f626573207265706f727420686f706566756c6e657373206e6f206d
+6f72653b2074686579207265706f72740a72656164696e6573732e204d6963726f736572766963657320736869702033
+30206d6567616279746573206c6967687465722c20616e64207468650a70736575646f636f646520696e207468652064
+6f637320697320676f6e652e0a
+"""
+}
+
+// data/rules/chain.rules
+fn file_6() -> String {
+    """
+676e6933650a657a69323e0a7a31732e0a
+"""
+}
+
+// data/rules/empty.rules
+fn file_7() -> String {
+    """
+23206e6f7468696e6720686572650a
+"""
+}
+
+// data/rules/greedy.rules
+fn file_8() -> String {
+    """
+676e6931303e0a
+"""
+}
+
+// data/rules/intact.rules
+fn file_9() -> String {
+    """
+732a313e0a65312e0a7365692a33792e0a
+"""
+}
+
+// data/rules/nest.rules
+fn file_10() -> String {
+    """
+7373656e343e0a7331742e0a
+"""
+}
+
+// data/rules/plurals.rules
+fn file_11() -> String {
+    """
+2320412074696e7920456e676c69736820706c7572616c2073747269707065722e0a0a73656933792e0a73657373322e
+0a7373302e0a73313e0a676e69332e0a6465322e0a
+"""
+}
+
+// data/rules/shouting.rules
+fn file_12() -> String {
+    """
+73656933792e0a53313e0a
+"""
+}
+
+// data/rules/spaced.rules
+fn file_13() -> String {
+    """
+73312e200a
+"""
+}
+
+// data/script.txt
+fn file_14() -> String {
+    """
+23205468652064656661756c74207374656d6d65723a204e4c544b2773206f776e20646f637465737420776f72647320
+66697273742e0a7374656d206d6178696d756d2070726573756d61626c79206d756c7469706c792070726f766973696f
+6e206f7765642065617220736179696e6720637279696e6720737472696e67206d65616e742063656d656e740a737465
+6d2052756e6e696e672052554e532072756e6e65722072756e6e6572732072616e0a7374656d20636f6e6e656374696f
+6e20636f6e6e656374696f6e7320636f6e6e656374656420636f6e6e656374696e6720636f6e6e656374730a7374656d
+20686f706566756c6e6573732072656164696e657373206b696c6f6d65746572206d6963726f73657276696365730a73
+74656d20646f6e2774207838365f36342034303473206d7033732073746174652d6f662d7468652d617274202771756f
+746564270a7374656d20636166c3a920c3894cc38947414e4345206e61c3af766574c3a92072c3a973756dc3a9730a73
+74656d20ce9fce94ce9fcea320c4b07374616e62756c2053747261c39f6520efbca1efbca2efbca30a7374656d206120
+6920792069732075732061730a7374656d206961206169206861206169610a7374656d0a0a2320546865207072656669
+7820666c616720737472697073206f6e65206f662061206669786564206c697374206f66207072656669786573206669
+7273742e0a7573652064656661756c74207072656669780a7374656d206b696c6f6d65746572206b696c6f206b696c6f
+73206d6963726f7365727669636573206d696c6c696d65746572206d65676162797465732070736575646f636f646520
+756c747261736f6e696320696e7472616e6574206e616e6f7365636f6e6473207069636f6a6f756c65730a7374656d2d
+726570656174206b696c6f20310a7374656d2d726570656174206e657373203235300a7374656d2d726570656174206e
+657373203235310a7573652064656661756c740a7374656d2d726570656174206e657373203235300a7374656d2d7265
+70656174206e657373203235310a7374656d2d72657065617420c3a96e657373203230300a7374656d2d726570656174
+20c3a96e657373203230310a7374656d2d7265706561742061626320300a0a2320437573746f6d2072756c6520736574
+732e0a757365206e6573740a7374656d206e65737320627573696e657373206e6573732773206e657374730a75736520
+706c7572616c730a7374656d20706f6e69657320636c617373657320676c61737320646f677320646f672072756e6e69
+6e6720656e646564206e65656465642069730a7573652073686f7574696e670a757365207370616365640a7573652067
+72656564790a7374656d2072756e6e696e670a75736520656d7074790a7374656d2072756e6e696e6720636f6e6e6563
+74696f6e730a75736520636861696e0a7374656d2072756e6e696e67206f7267616e697a696e6720616d617a696e670a
+75736520696e746163740a7374656d206361747320636173657320706f6e6965732074696573207469650a757365206d
+697373696e670a7573650a0a2320416e20696e646578206f7665722074686520646f63756d656e74732c207769746820
+7468652064656661756c74207374656d6d65722e0a7573652064656661756c740a696e6465782072656c656173655f6e
+6f7465730a696e646578206275675f7265706f72740a696e646578207265636970650a696e64657820636f6e74726163
+740a696e646578206672656e63680a696e646578206d697865640a696e646578206e6f77686572650a636c6173736573
+0a636c617373657320330a746f702031320a717565727920636f6e6e6563740a717565727920636f6e6e656374696f6e
+7320726574726965640a71756572792062616b650a71756572792062616b696e6720736c6963696e670a717565727920
+70726f766973696f6e732061677265656d656e740a717565727920c3894cc38947414e43450a717565727920cebfceb4
+cebfcf820a7175657279206e6f7468696e672d686572650a71756572790a0a232052652d696e646578696e6720612064
+6f63756d656e74207265706c616365732069743b20737769746368696e67207374656d6d65727320656d707469657320
+74686520696e6465782e0a696e646578207265636970650a746f7020330a7573652064656661756c7420707265666978
+0a746f7020330a696e646578206275675f7265706f72740a696e6465782072656c656173655f6e6f7465730a71756572
+79206d65746572730a7175657279206b696c6f6d65746572730a636c617373657320320a0a7374656d6d20776f72640a
+746f70206d616e790a636c6173736573202d310a7374656d2d726570656174206e657373206d616e790a
+"""
+}

@@ -1,0 +1,267 @@
+> stem maximum presumably multiply provision owed ear saying crying string meant cement
+  maximum -> maxim
+  presumably -> presum
+  multiply -> multiply
+  provision -> provid
+  owed -> ow
+  ear -> ear
+  saying -> say
+  crying -> cry
+  string -> string
+  meant -> meant
+  cement -> cem
+> stem Running RUNS runner runners ran
+  Running -> run
+  RUNS -> run
+  runner -> run
+  runners -> run
+  ran -> ran
+> stem connection connections connected connecting connects
+  connection -> connect
+  connections -> connect
+  connected -> connect
+  connecting -> connect
+  connects -> connect
+> stem hopefulness readiness kilometer microservices
+  hopefulness -> hop
+  readiness -> ready
+  kilometer -> kilomet
+  microservices -> microserv
+> stem don't x86_64 404s mp3s state-of-the-art 'quoted'
+  don't -> don't
+  x86_64 -> x86_64
+  404s -> 404s
+  mp3s -> mp3s
+  state-of-the-art -> state-of-the-art
+  'quoted' -> 'quoted'
+> stem café ÉLÉGANCE naïveté résumés
+  café -> café
+  ÉLÉGANCE -> élégance
+  naïveté -> naïveté
+  résumés -> résumés
+> stem ΟΔΟΣ İstanbul Straße ＡＢＣ
+  ΟΔΟΣ -> οδος
+  İstanbul -> i̇stanbul
+  Straße -> straße
+  ＡＢＣ -> ａｂｃ
+> stem a i y is us as
+  a -> a
+  i -> i
+  y -> y
+  is -> is
+  us -> us
+  as -> as
+> stem ia ai ha aia
+  ia -> ia
+  ai -> ai
+  ha -> ha
+  aia -> ai
+> stem
+  error: script.txt:11: usage: stem WORD...
+> use default prefix
+  using default with prefixes: 115 rules under 21 letters
+> stem kilometer kilo kilos microservices millimeter megabytes pseudocode ultrasonic intranet nanoseconds picojoules
+  kilometer -> met
+  kilo -> 
+  kilos -> s
+  microservices -> serv
+  millimeter -> met
+  megabytes -> byt
+  pseudocode -> cod
+  ultrasonic -> son
+  intranet -> net
+  nanoseconds -> second
+  picojoules -> joul
+> stem-repeat kilo 1
+  kilo x 1: 4 chars -> 0 chars, ending ""
+> stem-repeat ness 250
+  ness x 250: 1000 chars -> 4 chars, ending "ness"
+> stem-repeat ness 251
+  ness x 251: 1004 chars -> 1004 chars, ending "nessness"
+> use default
+  using default: 115 rules under 21 letters
+> stem-repeat ness 250
+  ness x 250: 1000 chars -> 4 chars, ending "ness"
+> stem-repeat ness 251
+  ness x 251: 1004 chars -> 1004 chars, ending "nessness"
+> stem-repeat éness 200
+  éness x 200: 1000 chars -> 996 chars, ending "ssénessé"
+> stem-repeat éness 201
+  éness x 201: 1005 chars -> 1005 chars, ending "esséness"
+> stem-repeat abc 0
+  abc x 0: 0 chars -> 0 chars, ending ""
+> use nest
+  using nest: 2 rules under 1 letters
+> stem ness business ness's nests
+  ness -> nest
+  business -> busi
+  ness's -> ness't
+  nests -> nestt
+> use plurals
+  using plurals: 6 rules under 3 letters
+> stem ponies classes glass dogs dog running ended needed is
+  ponies -> pony
+  classes -> class
+  glass -> glass
+  dogs -> dog
+  dog -> dog
+  running -> runn
+  ended -> end
+  needed -> need
+  is -> is
+> use shouting
+  error: script.txt:31: ValueError: The rule S1> is invalid
+> use spaced
+  error: script.txt:32: ValueError: The rule s1.  is invalid
+> use greedy
+  error: script.txt:33: ValueError: The rule gni10> is invalid
+> stem running
+  running -> runn
+> use empty
+  using empty: 115 rules under 21 letters
+> stem running connections
+  running -> run
+  connections -> connect
+> use chain
+  using chain: 3 rules under 3 letters
+> stem running organizing amazing
+  running -> runne
+  organizing -> organi
+  amazing -> amaze
+> use intact
+  using intact: 3 rules under 2 letters
+> stem cats cases ponies ties tie
+  cats -> cat
+  cases -> cas
+  ponies -> poni
+  ties -> tie
+  tie -> tie
+> use missing
+  error: script.txt:41: no rules data/rules/missing.rules
+> use
+  error: script.txt:42: usage: use RULES [prefix]
+> use default
+  using default: 115 rules under 21 letters
+> index release_notes
+  indexed release_notes: 86 tokens, 63 stems
+> index bug_report
+  indexed bug_report: 68 tokens, 49 stems
+> index recipe
+  indexed recipe: 53 tokens, 32 stems
+> index contract
+  indexed contract: 54 tokens, 37 stems
+> index french
+  indexed french: 26 tokens, 24 stems
+> index mixed
+  indexed mixed: 27 tokens, 21 stems
+> index nowhere
+  error: script.txt:52: no document data/docs/nowhere.txt
+> classes
+  agr: agreeable agreement
+  assign: assignment assignments
+  bak: bake baked bakers baking
+  boil: boil boiled boiling
+  café: café cafés
+  config: configurable configuration configured
+  connect: connected connecting connection
+  fin: fin final
+  instal: installation installer installing
+  keep: keep keeps
+  liabl: liabilities liable
+  not: not notes notice
+  party: parties party
+  provid: provided providing provision provisions
+  queu: queue queued
+  resolv: resolution resolved
+  retry: retried retries retry retrying
+  show: show shows
+  slic: slice sliced
+  stir: stir stirred stirring
+  ten: ten tenant
+  work: worker works
+> classes 3
+  bak: bake baked bakers baking
+  boil: boil boiled boiling
+  config: configurable configuration configured
+  connect: connected connecting connection
+  instal: installation installer installing
+  not: not notes notice
+  provid: provided providing provision provisions
+  retry: retried retries retry retrying
+  stir: stir stirred stirring
+> top 12
+  the 25
+  and 10
+  ar 9
+  is 8
+  for 6
+  provid 6
+  retry 5
+  bak 4
+  by 4
+  job 4
+  no 4
+  not 4
+> query connect
+  stems: connect
+  release_notes 3
+> query connections retried
+  stems: connect retry
+  release_notes 4
+> query bake
+  stems: bak
+  recipe 4
+> query baking slicing
+  stems: bak slic
+  recipe 7
+> query provisions agreement
+  stems: provid agr
+  contract 7
+> query ÉLÉGANCE
+  stems: élégance
+  french 1
+> query οδος
+  stems: οδος
+  mixed 1
+> query nothing-here
+  stems: nothing-here
+  no document matches
+> query
+  error: script.txt:64: usage: query WORD...
+> index recipe
+  indexed recipe: 53 tokens, 32 stems
+> top 3
+  the 25
+  and 10
+  ar 9
+> use default prefix
+  using default with prefixes: 115 rules under 21 letters
+> top 3
+  index is empty
+> index bug_report
+  indexed bug_report: 68 tokens, 49 stems
+> index release_notes
+  indexed release_notes: 86 tokens, 63 stems
+> query meters
+  stems: met
+  bug_report 1
+> query kilometers
+  stems: met
+  bug_report 1
+> classes 2
+  config: configurable configuration configured
+  connect: connected connecting connection
+  instal: installation installer installing
+  provid: provision provisions
+  queu: queue queued
+  retry: retried retries retry retrying
+  show: show shows
+  work: worker works
+> stemm word
+  error: script.txt:77: unknown command stemm
+> top many
+  error: script.txt:78: bad count many
+> classes -1
+  error: script.txt:79: bad count -1
+> stem-repeat ness many
+  error: script.txt:80: bad count many
