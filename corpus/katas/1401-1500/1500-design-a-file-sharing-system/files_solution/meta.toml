@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/1401-1500/1500-design-a-file-sharing-system/files_solution.kara"
+dedup_of = []
+tags = ["lib:map", "lib:sortedset", "lib:heap", "io:fs"]
+class = "e"
+bucket = "b-fix-incomplete:E0200"
+classified_with = "83c2a5580"
+extracted_src = "4bedde70"

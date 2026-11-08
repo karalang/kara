@@ -1,0 +1,493 @@
+// LeetCode #1500: Design a File Sharing System -- the differential.
+//
+// Four arms against the statement read literally, on 1000 problems, with
+// six properties. A problem is a number of chunks and a list of calls drawn
+// before any arm runs: a join's chunks, and for a leave or a request an
+// index into the arm's own list of live ids, so each arm picks its users
+// from the ids it gave out. An arm's trace is every join's id and every
+// request's answer, in order.
+//
+// P1  the trace is the statement read literally: users in a list, a join
+//     takes the smallest positive id no user holds, a request returns the
+//     ids of every user whose chunks hold it, sorted
+// P2  the chunks renamed one-to-one leave the trace
+// P3  every join returns the smallest positive id not live
+// P4  every answer is strictly ascending and names only live users
+// P5  a request repeated at once by the same user returns the first
+//     answer with that user in it, when the first was not empty
+// P6  each arm agrees with at least two of the other three
+
+trait Sharing {
+    fn join(mut ref self, chunks: own Vec[i64]) -> i64;
+    fn leave(mut ref self, id: i64);
+    fn request(mut ref self, id: i64, chunk: i64) -> Vec[i64];
+}
+
+// ---- files.kara: the ★ arm: a SortedSet of owners per chunk
+struct Star {
+    owners: Map[i64, SortedSet[i64]],
+    owned: Map[i64, Vec[i64]],
+    free: PriorityQueue[i64],
+    next: i64,
+}
+
+impl Sharing for Star {
+    fn join(mut ref self, chunks: own Vec[i64]) -> i64 {
+        let id = match self.free.pop() {
+            Some(id) => id,
+            None => {
+                self.next += 1;
+                self.next - 1
+            }
+        };
+        for c in chunks.iter() {
+            self.owners.entry(*c).or_insert_with(SortedSet.new).insert(id);
+        }
+        self.owned.insert(id, chunks);
+        id
+    }
+
+    fn leave(mut ref self, id: i64) {
+        match self.owned.remove(id) {
+            Some(chunks) => {
+                for c in chunks.iter() {
+                    match self.owners.get_mut(*c) {
+                        Some(set) => {
+                            set.remove(id);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+        self.free.push(id);
+    }
+
+    fn request(mut ref self, id: i64, chunk: i64) -> Vec[i64] {
+        let answer: Vec[i64] = match self.owners.get(chunk) {
+            Some(set) => set.iter().map(|x| *x).collect(),
+            None => Vec.new(),
+        };
+        if not answer.is_empty() {
+            let set = self.owners.entry(chunk).or_insert_with(SortedSet.new);
+            if set.insert(id) {
+                self.owned.get_mut(id).unwrap().push(chunk);
+            }
+        }
+        answer
+    }
+}
+
+impl Star {
+    fn new(m: i64) -> Star {
+        Star { owners: Map.new(), owned: Map.new(), free: PriorityQueue.new(), next: 1 }
+    }
+}
+
+// ---- files_scan.kara: users in a table indexed by id
+struct Scan {
+    users: Vec[Option[Set[i64]]],
+}
+
+impl Sharing for Scan {
+    fn join(mut ref self, chunks: own Vec[i64]) -> i64 {
+        let mut set: Set[i64] = Set.new();
+        for c in chunks.iter() {
+            set.insert(*c);
+        }
+        for id in 1..self.users.len() {
+            if self.users[id].is_none() {
+                self.users[id] = Some(set);
+                return id;
+            }
+        }
+        self.users.push(Some(set));
+        self.users.len() - 1
+    }
+
+    fn leave(mut ref self, id: i64) {
+        self.users[id] = None;
+    }
+
+    fn request(mut ref self, id: i64, chunk: i64) -> Vec[i64] {
+        let mut answer: Vec[i64] = Vec.new();
+        for u in 1..self.users.len() {
+            match ref self.users[u] {
+                Some(set) => {
+                    if set.contains(chunk) {
+                        answer.push(u);
+                    }
+                }
+                None => {}
+            }
+        }
+        if not answer.is_empty() {
+            match mut ref self.users[id] {
+                Some(set) => {
+                    set.insert(chunk);
+                }
+                None => {}
+            }
+        }
+        answer
+    }
+}
+
+impl Scan {
+    fn new(m: i64) -> Scan {
+        Scan { users: [None] }
+    }
+}
+
+// ---- files_sorted.kara: sorted owner Vecs, free ids in a SortedSet
+struct Sorted {
+    owners: Vec[Vec[i64]],
+    owned: Map[i64, Vec[i64]],
+    free: SortedSet[i64],
+    next: i64,
+}
+
+// Where `x` sits in the sorted `v`, or would go.
+fn position_sorted(v: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if v[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+impl Sharing for Sorted {
+    fn join(mut ref self, chunks: own Vec[i64]) -> i64 {
+        let id = match self.free.pop_first() {
+            Some(id) => id,
+            None => {
+                self.next += 1;
+                self.next - 1
+            }
+        };
+        for c in chunks.iter() {
+            let at = position_sorted(self.owners[*c], id);
+            self.owners[*c].insert(at, id);
+        }
+        self.owned.insert(id, chunks);
+        id
+    }
+
+    fn leave(mut ref self, id: i64) {
+        match self.owned.remove(id) {
+            Some(chunks) => {
+                for c in chunks.iter() {
+                    let at = position_sorted(self.owners[*c], id);
+                    self.owners[*c].remove(at);
+                }
+            }
+            None => {}
+        }
+        self.free.insert(id);
+    }
+
+    fn request(mut ref self, id: i64, chunk: i64) -> Vec[i64] {
+        let answer = self.owners[chunk].clone();
+        if not answer.is_empty() {
+            let at = position_sorted(self.owners[chunk], id);
+            if at == answer.len() or answer[at] != id {
+                self.owners[chunk].insert(at, id);
+                match self.owned.get_mut(id) {
+                    Some(chunks) => chunks.push(chunk),
+                    None => {}
+                }
+            }
+        }
+        answer
+    }
+}
+
+impl Sorted {
+    fn new(m: i64) -> Sorted {
+        Sorted { owners: Vec.filled(m + 1, Vec.new()), owned: Map.new(), free: SortedSet.new(), next: 1 }
+    }
+}
+
+// ---- files_iter.kara: a Map of user to chunks, read with iterators
+struct Iter {
+    users: Map[i64, Set[i64]],
+}
+
+impl Sharing for Iter {
+    fn join(mut ref self, chunks: own Vec[i64]) -> i64 {
+        let id = (1..).find(|id| not self.users.contains_key(id)).unwrap_or(0);
+        self.users.insert(id, chunks.iter().map(|c| *c).collect());
+        id
+    }
+
+    fn leave(mut ref self, id: i64) {
+        self.users.remove(id);
+    }
+
+    fn request(mut ref self, id: i64, chunk: i64) -> Vec[i64] {
+        let mut answer: Vec[i64] = self.users.iter().filter(|(_, set)| set.contains(chunk)).map(|(u, _)| *u).collect();
+        answer.sort();
+        if not answer.is_empty() {
+            match self.users.get_mut(id) {
+                Some(set) => {
+                    set.insert(chunk);
+                }
+                None => {}
+            }
+        }
+        answer
+    }
+}
+
+impl Iter {
+    fn new(m: i64) -> Iter {
+        Iter { users: Map.new() }
+    }
+}
+
+// ---- the statement read literally
+struct Literal {
+    users: Vec[(i64, Vec[i64])],
+}
+
+impl Literal {
+    fn new(m: i64) -> Literal {
+        Literal { users: Vec.new() }
+    }
+}
+
+impl Sharing for Literal {
+    fn join(mut ref self, chunks: own Vec[i64]) -> i64 {
+        let mut id = 1;
+        while self.users.iter().any(|(u, _)| *u == id) {
+            id += 1;
+        }
+        self.users.push((id, chunks));
+        id
+    }
+
+    fn leave(mut ref self, id: i64) {
+        self.users.retain(|(u, _)| u != id);
+    }
+
+    fn request(mut ref self, id: i64, chunk: i64) -> Vec[i64] {
+        let mut answer: Vec[i64] = Vec.new();
+        for (u, chunks) in self.users.iter() {
+            if chunks.contains(chunk) {
+                answer.push(u);
+            }
+        }
+        answer.sort();
+        if not answer.is_empty() {
+            for (u, chunks) in self.users.iter_mut() {
+                if u == id and not chunks.contains(chunk) {
+                    chunks.push(chunk);
+                }
+            }
+        }
+        answer
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, x: i64) -> i64 {
+    (check * 31 + x + 1) % 1000000007
+}
+
+// One call: 0 join (with `chunks`), 1 leave, 2 request (of `chunk`); a
+// leave or request takes the live id at `pick` modulo their count.
+struct Call {
+    kind: i64,
+    pick: i64,
+    chunk: i64,
+    chunks: Vec[i64],
+}
+
+// Every join's id and every request's answer (its length, then its ids).
+// P3 and P4 are counted into `fails` along the way; with `again`, every
+// request with an answer is made twice and P5 is counted.
+fn trace[S: Sharing](system: mut ref S, calls: ref Vec[Call], again: bool, fails: mut ref Vec[i64]) -> Vec[i64] {
+    let mut live: Vec[i64] = Vec.new();
+    let mut out: Vec[i64] = Vec.new();
+    for call in calls.iter() {
+        if call.kind == 0 or live.is_empty() {
+            let id = system.join(call.chunks.clone());
+            let mut least = 1;
+            while live.contains(least) {
+                least += 1;
+            }
+            if id != least {
+                fails[3] += 1;
+            }
+            live.push(id);
+            out.push(id);
+        } else if call.kind == 1 {
+            let at = call.pick % live.len();
+            system.leave(live.swap_remove(at));
+        } else {
+            let user = live[call.pick % live.len()];
+            let answer = system.request(user, call.chunk);
+            let mut ordered = true;
+            for i in 0..answer.len() {
+                if not live.contains(answer[i]) or (i > 0 and answer[i - 1] >= answer[i]) {
+                    ordered = false;
+                }
+            }
+            if not ordered {
+                fails[4] += 1;
+            }
+            if again and not answer.is_empty() {
+                let second = system.request(user, call.chunk);
+                let mut expect = answer.clone();
+                if not expect.contains(user) {
+                    expect.push(user);
+                    expect.sort();
+                }
+                if second != expect {
+                    fails[5] += 1;
+                }
+            }
+            out.push(answer.len());
+            for id in answer.iter() {
+                out.push(*id);
+            }
+        }
+    }
+    out
+}
+
+fn run_arm(arm: i64, m: i64, calls: ref Vec[Call], again: bool, fails: mut ref Vec[i64]) -> Vec[i64] {
+    if arm == 0 {
+        let mut s = Star.new(m);
+        trace(mut s, calls, again, mut fails)
+    } else if arm == 1 {
+        let mut s = Scan.new(m);
+        trace(mut s, calls, again, mut fails)
+    } else if arm == 2 {
+        let mut s = Sorted.new(m);
+        trace(mut s, calls, again, mut fails)
+    } else if arm == 3 {
+        let mut s = Iter.new(m);
+        trace(mut s, calls, again, mut fails)
+    } else {
+        let mut s = Literal.new(m);
+        trace(mut s, calls, again, mut fails)
+    }
+}
+
+fn arm_name(arm: i64) -> String {
+    ["star", "scan", "sorted", "iter"][arm].to_string()
+}
+
+fn main() {
+    let arms = 4;
+    let problems = 1000;
+    let mut seed = 15000;
+    let mut check = 0;
+    let mut checks = 0;
+    let mut by_property: Vec[i64] = Vec.filled(7, 0);
+    let mut shown = 0;
+    for p in 0..problems {
+        // everything random is drawn first: chunks, calls, renaming
+        let m = next_random(mut seed) % 6 + 1;
+        let count = next_random(mut seed) % 30 + 1;
+        let mut calls: Vec[Call] = Vec.new();
+        for _ in 0..count {
+            let r = next_random(mut seed) % 10;
+            let kind = if r < 3 { 0 } else if r < 5 { 1 } else { 2 };
+            let pick = next_random(mut seed);
+            let chunk = next_random(mut seed) % m + 1;
+            let mut chunks: Vec[i64] = Vec.new();
+            if kind == 0 {
+                let want = next_random(mut seed) % (m + 1);
+                while chunks.len() < want {
+                    let c = next_random(mut seed) % m + 1;
+                    if not chunks.contains(c) {
+                        chunks.push(c);
+                    }
+                }
+            }
+            calls.push(Call { kind, pick, chunk, chunks });
+        }
+        let mut rename: Vec[i64] = (0..m + 1).collect();
+        for i in (2..m + 1).rev() {
+            let j = next_random(mut seed) % i + 1;
+            rename.swap(i, j);
+        }
+        let renamed: Vec[Call] = calls.iter().map(|c| Call {
+            kind: c.kind,
+            pick: c.pick,
+            chunk: rename[c.chunk],
+            chunks: c.chunks.iter().map(|x| rename[*x]).collect(),
+        }).collect();
+
+        let mut scratch: Vec[i64] = Vec.filled(7, 0);
+        let literal = run_arm(4, m, calls, false, mut scratch);
+        let mut traces: Vec[Vec[i64]] = Vec.new();
+        for arm in 0..arms {
+            let mut fails: Vec[i64] = Vec.filled(7, 0);
+            let t = run_arm(arm, m, calls, false, mut fails);
+            if t != literal {
+                fails[1] += 1;
+            }
+            if run_arm(arm, m, renamed, false, mut scratch) != t {
+                fails[2] += 1;
+            }
+            run_arm(arm, m, calls, true, mut scratch);
+            fails[5] = scratch[5];
+            scratch[5] = 0;
+            traces.push(t);
+            for k in 1..6 {
+                checks += 1;
+                if fails[k] > 0 {
+                    by_property[k] += 1;
+                    if shown < 10 {
+                        println(f"problem {p}, {arm_name(arm)}: P{k}");
+                        shown += 1;
+                    }
+                }
+            }
+        }
+        for arm in 0..arms {
+            let mut agree = 0;
+            for other in 0..arms {
+                if other != arm and traces[other] == traces[arm] {
+                    agree += 1;
+                }
+            }
+            checks += 1;
+            if agree < 2 {
+                by_property[6] += 1;
+                if shown < 10 {
+                    println(f"problem {p}, {arm_name(arm)}: P6");
+                    shown += 1;
+                }
+            }
+        }
+        for x in traces[0].iter() {
+            check = mix(check, *x);
+        }
+    }
+    let failures = by_property.iter().sum();
+    println(f"{problems} problems: checksum {check}, {checks} checks over {arms} arms: {failures} failures");
+    if failures > 0 {
+        for k in 1..7 {
+            if by_property[k] > 0 {
+                println(f"P{k}: {by_property[k]}");
+            }
+        }
+    }
+}

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1401-1500/1500-design-a-file-sharing-system/bench/files.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["io:fs", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1500 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "83c2a5580"
+extracted_src = "f956524b"
