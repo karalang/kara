@@ -453,6 +453,10 @@ pub struct Parser {
     /// `while let` or `for` that parsed the pattern turns them into a fix
     /// once its body is parsed (B-2026-10-25-8).
     pub(crate) pattern_muts: Vec<(crate::resolver::SpanKey, crate::resolver::TextEdit, String)>,
+    /// The span of each Rust `&` / `&mut` pattern sigil reported, so an
+    /// `if let` / `while let` over `Some(&x)` can turn the sigil's deletion
+    /// into `.cloned()` on its scrutinee (B-2026-11-08-13).
+    pub(crate) amp_sigils: Vec<Span>,
     /// Offsets of the `!`s already reported as a Rust macro call. Two
     /// recognizers see the same `!` when recovery re-parses it (`expect` and
     /// the prefix parser), and each reported it (B-2026-10-20-5).
@@ -601,6 +605,7 @@ impl Parser {
             fix_diffs: FxHashMap::default(),
             let_pattern: None,
             pattern_muts: Vec::new(),
+            amp_sigils: Vec::new(),
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
             escaped_bindings: rustc_hash::FxHashSet::default(),
             source: None,

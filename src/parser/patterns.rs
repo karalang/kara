@@ -151,6 +151,71 @@ impl super::Parser {
                 replacement: String::new(),
             },
         );
+        self.amp_sigils.push(sigil);
+    }
+
+    /// `if let Some(&i) = pos[d].last()`: Rust's `&i` copies the value out
+    /// of an `Option<&T>`, so `i` borrows nothing. Deleting the `&` alone
+    /// leaves `Some(i)` a borrow of `pos[d]`, refused at a later `pos[d]
+    /// .pop()`. When the pattern parsed since `from` is exactly `Some(&p)`,
+    /// the fix also writes `.cloned()` on the scrutinee `value`, which keeps
+    /// the copy (B-2026-11-08-13). Any other `&` keeps the plain deletion.
+    pub(crate) fn clone_through_some_amp(&mut self, from: usize, pattern: &Pattern, value: &Expr) {
+        let from = from.min(self.amp_sigils.len());
+        let sigils: Vec<crate::token::Span> = self.amp_sigils.drain(from..).collect();
+        let [sigil] = sigils.as_slice() else {
+            return;
+        };
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if path.last().map(String::as_str) != Some("Some") || patterns.len() != 1 {
+            return;
+        }
+        let sub = &patterns[0];
+        if sigil.offset < pattern.span.offset || sigil.offset + sigil.length > sub.span.offset {
+            return;
+        }
+        let key = crate::resolver::SpanKey::from_span(sigil);
+        let Some(delete) = self.fix_edits.remove(&key) else {
+            return;
+        };
+        let postfix = matches!(
+            value.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::Path { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::TupleIndex { .. }
+        );
+        let end = value.span.offset + value.span.length;
+        let mut edits = vec![delete];
+        if !postfix {
+            edits.push(crate::resolver::TextEdit {
+                offset: value.span.offset,
+                length: 0,
+                replacement: "(".to_string(),
+            });
+        }
+        edits.push(crate::resolver::TextEdit {
+            offset: end,
+            length: 0,
+            replacement: if postfix { ".cloned()" } else { ").cloned()" }.to_string(),
+        });
+        self.fix_diffs.insert(key, edits);
+        if let Some(e) = self
+            .errors
+            .iter_mut()
+            .rev()
+            .find(|e| e.span.offset == sigil.offset && e.span.length == sigil.length)
+        {
+            e.message = "`&` before a pattern is Rust syntax -- here it copies the value out \
+                         of a borrowed `Some`; Kāra writes that copy as `.cloned()` on the \
+                         value matched, and drops the `&`"
+                .to_string();
+        }
     }
 
     pub(crate) fn parse_single_pattern(&mut self) -> Option<Pattern> {

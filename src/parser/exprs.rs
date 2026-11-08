@@ -2377,10 +2377,12 @@ impl super::Parser {
         if self.check(&Token::Let) {
             self.advance();
             let m0 = self.pattern_muts.len();
+            let a0 = self.amp_sigils.len();
             let pattern = self.parse_pattern()?;
             let muts = self.take_pattern_muts(m0);
             self.expect(&Token::Equal)?;
             let value = self.parse_condition_expr()?;
+            self.clone_through_some_amp(a0, &pattern, &value);
             let then_block = self.parse_block()?;
             self.fix_pattern_muts(muts, then_block.span, true);
             // A literal or binding pattern can match a `bool` (`if let true
@@ -2633,10 +2635,12 @@ impl super::Parser {
         if self.check(&Token::Let) {
             self.advance();
             let m0 = self.pattern_muts.len();
+            let a0 = self.amp_sigils.len();
             let pattern = self.parse_pattern()?;
             let muts = self.take_pattern_muts(m0);
             self.expect(&Token::Equal)?;
             let value = self.parse_condition_expr()?;
+            self.clone_through_some_amp(a0, &pattern, &value);
             let body = self.parse_block()?;
             self.fix_pattern_muts(muts, body.span, true);
             if label.is_some() {
