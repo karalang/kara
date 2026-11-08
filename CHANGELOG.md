@@ -71,6 +71,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   under its `lo < hi` guard, which keeps `hi - lo` positive; the signed
   division's sign fixup is gone. Kata 1064 on x86 went from 260 ms to
   170 ms (B-2026-11-08-1).
+- **A field of a `shared` struct that is not `mut` takes no borrow flag.**
+  No handle can write it, so a loan of it cannot conflict; each loan took
+  and gave back a run-time flag all the same. Kata 1506's read-only walk
+  over `children` went from about 270 ms to 160 ms on x86
+  (B-2026-11-08-14).
 
 ### Diagnostics
 

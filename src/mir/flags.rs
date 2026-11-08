@@ -15,9 +15,12 @@
 //!   flag without taking it.
 //! - A frame gives back what it still holds when it returns.
 //!
-//! MIR does not record which fields are `mut`; the type checker rejects
-//! a write or `mut` borrow of any other field, so flagging every field
-//! of the right type changes nothing for those.
+//! A struct field not declared `mut` takes no flag: the type checker
+//! rejects a write or `mut` borrow of it through any handle, so every loan
+//! of it is shared and none can conflict. Each such loan took and gave back
+//! a flag all the same, until the lowering's `mut` fields reached this pass
+//! (B-2026-11-08-14: kata 1506's read-only walk over `children` spent 39%
+//! of its instructions there). A variant's field is flagged as before.
 //!
 //! A reference a function returns into a flagged field of a parameter's
 //! object holds no flag in the caller: the loan was the callee's. That is
@@ -33,16 +36,19 @@ use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
 
 /// Inserts the borrow-flag operations into an elaborated `body`.
 /// `has_receiver` is the borrow checker's.
+/// `mut_field(struct, index)` says whether a handle may write a struct's
+/// field: one declared `mut`, or an `Atomic` or `Mutex`.
 pub fn insert_borrow_flags(
     body: &mut Body,
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
+    mut_field: &dyn Fn(&str, u32) -> bool,
 ) {
-    let track = |k: BorrowKind, p: &Place| !flagged_prefixes(body, tys, p, k).is_empty();
+    let track = |k: BorrowKind, p: &Place| !flagged_prefixes(body, tys, p, k, mut_field).is_empty();
     let (loans, live) = loan_liveness(body, tys, has_receiver, &track);
     let held: Vec<Vec<(Place, BorrowKind)>> = loans
         .iter()
-        .map(|(k, p, _)| flagged_prefixes(body, tys, p, *k))
+        .map(|(k, p, _)| flagged_prefixes(body, tys, p, *k, mut_field))
         .collect();
     // Per block: (point, order, op). A point is a statement index, or the
     // statement count for the terminator; the op goes just before it. At
@@ -98,7 +104,7 @@ pub fn insert_borrow_flags(
                     // storage touches no object.
                     Access::Borrow(_) | Access::StorageDead => continue,
                 };
-                for (fp, k) in flagged_prefixes(body, tys, &place, kind) {
+                for (fp, k) in flagged_prefixes(body, tys, &place, kind, mut_field) {
                     ins[bi].push((p, 2, FlagOp::Check { place: fp, kind: k }));
                 }
             }
@@ -349,19 +355,46 @@ fn flagged_prefixes(
     tys: &TyInterner,
     place: &Place,
     kind: BorrowKind,
+    mut_field: &dyn Fn(&str, u32) -> bool,
 ) -> Vec<(Place, BorrowKind)> {
     let mut out: Vec<(Place, BorrowKind)> = (1..=place.projection.len())
         .map(|i| Place {
             local: place.local,
             projection: place.projection[..i].to_vec(),
         })
-        .filter(|p| is_flagged_place(body, tys, p))
+        .filter(|p| is_flagged_place(body, tys, p) && may_be_written(body, tys, p, mut_field))
         .map(|p| (p, BorrowKind::Shared))
         .collect();
     if let Some(last) = out.last_mut() {
         last.1 = kind;
     }
     out
+}
+
+/// Whether the field `place` names can be written or lent `mut` at all: a
+/// struct's field only when declared `mut` or interior-mutable
+/// (B-2026-11-08-14).
+fn may_be_written(
+    body: &Body,
+    tys: &TyInterner,
+    place: &Place,
+    mut_field: &dyn Fn(&str, u32) -> bool,
+) -> bool {
+    let Some((ProjElem::Field(f, _), base)) = place.projection.split_last() else {
+        return true;
+    };
+    let base = Place {
+        local: place.local,
+        projection: base.to_vec(),
+    };
+    let Ok(b) = place_ty(body, tys, &base) else {
+        return true;
+    };
+    let TyKind::Shared(a) = tys.kind(b.ty) else {
+        return true;
+    };
+    let adt = tys.adt(a);
+    adt.is_enum || mut_field(&adt.name, f.0)
 }
 
 /// §6.2: a field is read as a value, and so takes no flag, when its type
@@ -468,6 +501,36 @@ mod tests {
         // before the write through the other handle.
         let seq = "fn main() {\n    let a = Bag { items: Vec.new(), n: 0 };\n    let c = a;\n    a.items.push(2);\n    for x in a.items { c.n = c.n + x; a.n = a.n + 1; }\n    c.items.push(3);\n    println(f\"{a.items.len()} {a.n}\");\n}\n";
         assert_eq!(run(seq), ("2 3\n".into(), Some(0)));
+    }
+
+    /// B-2026-11-08-14: a field not declared `mut` is never written, so
+    /// a loan of it takes no flag; a `mut` field still does.
+    #[test]
+    fn mir_flags_skip_a_field_that_is_not_mut() {
+        let acquires = |decl: &str| -> usize {
+            let src = format!(
+                "{decl}\nfn walk(t: ref Tree) -> i64 {{\n    let mut s = 0;\n    for x in t.kids.iter() {{ s += x; }}\n    s\n}}\nfn main() {{\n    let t = Tree {{ kids: Vec.new() }};\n    println(walk(t));\n}}\n"
+            );
+            let l = crate::mir::lower::build_source(&src).unwrap_or_else(|e| panic!("{e}"));
+            let body = l
+                .program
+                .bodies
+                .values()
+                .find(|b| b.instance.name == "walk")
+                .expect("walk");
+            body.blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .filter(|s| {
+                    matches!(
+                        s.kind,
+                        crate::mir::StatementKind::BorrowFlag(crate::mir::FlagOp::Acquire { .. })
+                    )
+                })
+                .count()
+        };
+        assert_eq!(acquires("shared struct Tree { kids: Vec[i64] }"), 0);
+        assert_eq!(acquires("shared struct Tree { mut kids: Vec[i64] }"), 1);
     }
 
     /// The text form round-trips, and the validator refuses a flag on a

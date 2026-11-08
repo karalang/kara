@@ -240,6 +240,10 @@ pub struct Lowered {
     /// Each body's locals the ownership check proved frozen (design.md §
     /// Frozen handles), which `frozen::uncount` makes count nothing.
     pub frozen_locals: FxHashMap<String, crate::mir::frozen::FrozenLocals>,
+    /// The fields of the program's structs a handle may write, as (struct,
+    /// field index): only those of a `shared` value take a borrow flag (core
+    /// semantics §6.2, B-2026-11-08-14).
+    pub writable_fields: FxHashSet<(String, u32)>,
     /// For a build that runs loops or statements as tasks, the program as
     /// `KARAC_AUTO_PAR=0` builds it. A run on one worker runs this one
     /// instead ([`Lowered::for_this_pool`]), and a native build carries
@@ -416,6 +420,27 @@ fn lower_program_inner<'a>(
                     .iter()
                     .enumerate()
                     .filter(|(_, f)| f.is_mut)
+                    .map(|(i, _)| (s.name.clone(), i as u32))
+            })
+            .collect(),
+        // A non-`mut` `Atomic` or `Mutex` field may still be written through
+        // a handle (the type checker's `shared_struct_mut_field_names`).
+        writable_fields: program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::StructDef(s) => Some(s),
+                _ => None,
+            })
+            .flat_map(|s| {
+                s.fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| {
+                        f.is_mut
+                            || matches!(&f.ty.kind, ast::TypeKind::Path(p)
+                                if matches!(p.segments.last().map(String::as_str), Some("Atomic" | "Mutex")))
+                    })
                     .map(|(i, _)| (s.name.clone(), i as u32))
             })
             .collect(),
@@ -735,6 +760,7 @@ fn lower_program_inner<'a>(
         auto_par_reductions: lcx.auto_par_reduced,
         auto_par_record: matches!(lcx.auto_par, AutoPar::Record),
         frozen_locals: lcx.frozen_locals,
+        writable_fields: lcx.writable_fields,
         in_order: None,
     }
 }
@@ -1152,6 +1178,9 @@ struct Lcx<'a> {
     /// one of a `shared` value whose type is `Copy` or counted is read as a
     /// value, never lent in place (core semantics §6.2, B-2026-11-01-12).
     mut_fields: FxHashSet<(String, u32)>,
+    /// The fields a handle may write: the `mut` ones, and an `Atomic` or
+    /// `Mutex` field (B-2026-11-08-14).
+    writable_fields: FxHashSet<(String, u32)>,
     /// The `let` bindings whose written function type declares an effect
     /// clause, by symbol, so a closure that captures one finds it too
     /// (B-2026-10-27-8).
@@ -28594,6 +28623,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // `KARAC_MIR_HALVING=0` keeps every signed `x / 2^k` a division
     // (`halving`).
     let halving = std::env::var("KARAC_MIR_HALVING").as_deref() != Ok("0");
+    // `KARAC_MIR_FLAG_ALL_FIELDS=1` gives every field of a `shared` struct a
+    // borrow flag, `mut` or not (B-2026-11-08-14).
+    let flag_all_fields = std::env::var("KARAC_MIR_FLAG_ALL_FIELDS").as_deref() == Ok("1");
     // A program that binds a resource passes its providers explicitly
     // (core semantics §14.3), decided by the effects of the program as
     // built, which `par_check` reports from.
@@ -28656,7 +28688,11 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         crate::mir::elaborate_drops(body, &mut lowered.tys)
             .map_err(|e| format!("elaborate {}: {e}", body.instance.name))?;
         // §6.2's run-time borrow flags, on the elaborated body.
-        crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver);
+        // `KARAC_MIR_FLAG_ALL_FIELDS=1` flags a field that is not `mut` too.
+        let writable = &lowered.writable_fields;
+        let writable =
+            |adt: &str, f: u32| flag_all_fields || writable.contains(&(adt.to_string(), f));
+        crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver, &writable);
         crate::mir::flags::narrow_call_flags(body, &lowered.tys, &|n| !names.contains(n));
         if let Some(f) = lowered.frozen_locals.get(&body.instance.name) {
             crate::mir::frozen::uncount(body, &lowered.tys, f);
