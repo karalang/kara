@@ -50,10 +50,10 @@ println(a == b);
 ```
 
 ```text
-error[typecheck]: type 'Secret<String>' does not implement Eq; add #[derive(Eq)] to use == or !=
+error[typecheck]: 'Secret[String]' does not implement PartialEq; add #[derive(PartialEq)]
 ```
 
-The suggestion to `#[derive(Eq)]` is a dead end *on purpose* — deriving it is itself blocked:
+The suggestion to `#[derive(PartialEq)]` is a dead end *on purpose* — deriving it is itself blocked:
 
 ```kara,ignore
 impl Display for Secret[String] {

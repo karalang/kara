@@ -61,8 +61,10 @@ Promote a lint to a hard error within the annotated item.
 On an `extern "C"` or `extern "C-unwind"` function: removes `blocks` from the default effect set. Use this for pure-CPU foreign functions (math routines, `strlen`, etc.) that are known not to block.
 
 ```kara,ignore
-@noblock
-extern "C" fn sqrt(x: f64) -> f64;
+unsafe extern "C" {
+    @noblock
+    fn sqrt(x: f64) -> f64;
+}
 ```
 
 ---
@@ -87,7 +89,7 @@ Prevent dead-code elimination for the annotated symbol even if no Kāra code ref
 ```kara,ignore
 #[unsafe(link_section(".vectors"))]
 #[used]
-let interrupt_table: [fn(); 16] = [...];
+const VECTOR_TABLE: Array[u32, 16] = [0; 16];
 ```
 
 ### `#[unsafe(link_section("name"))]`
@@ -98,7 +100,7 @@ The `#[unsafe(...)]` wrap is mandatory: section placement carries layout and ali
 
 ```kara,ignore
 #[unsafe(link_section(".dtcmram"))]
-let fast_buffer: [u8; 1024] = [0; 1024];
+const LOOKUP: Array[u8, 1024] = [0; 1024];
 ```
 
 ---
@@ -110,8 +112,10 @@ let fast_buffer: [u8; 1024] = [0; 1024];
 On an `extern` item: rebinds a non-conforming foreign name to a valid Kāra identifier. The Kāra-visible name must follow the identifier case-class rules; the foreign name may be arbitrary ASCII.
 
 ```kara,ignore
-#[kara_name("GlxFbConfig")]
-extern type GLXFBConfig;
+unsafe extern "C" {
+    #[kara_name("GlxFbConfig")]
+    type GLXFBConfig;
+}
 ```
 
 ---
@@ -120,7 +124,7 @@ extern type GLXFBConfig;
 
 ### `#[thread_local]`
 
-On a module-level `let mut` binding: gives each OS thread (and each task under the runtime) its own independent copy. The binding's initializer must still be a compile-time constant.
+**Deferred past v1** (the systems track, [deferred.md](https://github.com/karalang/kara/blob/main/docs/deferred.md#systems)): Kāra has no module-level `let` or `let mut` in v1, so there is nothing to mark yet. The planned form gives each OS thread its own copy of a module-level binding whose initializer is a compile-time constant.
 
 ```kara,ignore
 #[thread_local]

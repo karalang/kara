@@ -64,8 +64,8 @@ fn main() {
         k = k + 1;
     }
 
-    let mut total = 0i64;
-    for handle in handles {
+    let mut total = 0;
+    for handle in handles.into_iter() {
         total = total + handle.join();      // wait for each, collect its result
     }
     println(total);                          // 1 + 4 + 9 + 16 = 30

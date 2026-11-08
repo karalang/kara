@@ -15,7 +15,7 @@ An effect is a **verb** applied to a **resource**:
 ```
 reads(FileSystem)       — reads from the filesystem
 writes(Database)        — writes to a database
-sends(Net)              — sends data over the network
+sends(Network)              — sends data over the network
 receives(Net)           — receives data from the network
 allocates(Heap)         — allocates memory
 panics                  — might crash (no resource needed)
@@ -44,7 +44,7 @@ The resource verbs say *what* a function touches. Two more verbs say *how it run
 
 ```kara,ignore
 fn sleep(d: Duration) with blocks { ... }                          // parks the thread
-fn http_get(url: String) -> Response with sends(Net) suspends { ... }   // yields while waiting
+fn http_get(url: String) -> Response with sends(Network) suspends { ... }   // yields while waiting
 fn compute(x: f64) -> f64 { ... }                                  // neither — runs anywhere
 ```
 
@@ -75,7 +75,7 @@ At API boundaries, you declare your effects explicitly. This is a contract with 
 
 ```kara,ignore
 pub fn fetch_user(id: u64) -> Result[User, Error]
-    with reads(Database) sends(Net)
+    with reads(Database) sends(Network)
 {
     let cached = check_cache(id);
     match cached {

@@ -12,6 +12,14 @@ and client is which **provider** you bind for its resources.
 The full, runnable code for this chapter is
 [`examples/ssr_counter`](https://github.com/karalang/kara/tree/main/examples/ssr_counter).
 
+> **In 0.8 only the server half builds.** The `wasm_browser` target, its
+> `Dom` resource and the JavaScript glue are deferred past v1
+> ([deferred.md](https://github.com/karalang/kara/blob/main/docs/deferred.md)),
+> so `karac build --target=wasm_browser` and a `#[target(wasm_browser)]`
+> item do not compile yet. The provider pattern this chapter teaches works
+> today between `native` and `wasm_wasi`, or between a real provider and a
+> test fake.
+
 ## The shared component
 
 The component renders against an abstract resource, `Sink`, rather than
@@ -103,7 +111,7 @@ Build each target from the same file:
 
 ```sh
 karac build ssr_counter.kara                       # ./ssr_counter (server)
-karac build ssr_counter.kara --target=wasm_browser # .wasm + .js (client)
+karac build ssr_counter.kara --target=wasm_browser # .wasm + .js (client; deferred past 0.8)
 ```
 
 The server prints the page body; the browser loads the wasm, supplies the

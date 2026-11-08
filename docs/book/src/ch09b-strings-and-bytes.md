@@ -124,21 +124,21 @@ one (`IV` is 4):
 
 ```kara
 fn value(b: u8) -> i64 {
-    if b == b'I' { return 1i64; }
-    if b == b'V' { return 5i64; }
-    if b == b'X' { return 10i64; }
-    if b == b'L' { return 50i64; }
-    if b == b'C' { return 100i64; }
-    if b == b'D' { return 500i64; }
-    if b == b'M' { return 1000i64; }
-    0i64
+    if b == b'I' { return 1; }
+    if b == b'V' { return 5; }
+    if b == b'X' { return 10; }
+    if b == b'L' { return 50; }
+    if b == b'C' { return 100; }
+    if b == b'D' { return 500; }
+    if b == b'M' { return 1000; }
+    0
 }
 
 fn roman_to_int(s: ref String) -> i64 {
     let bytes = s.bytes();
     let n = bytes.len();
-    let mut total = 0i64;
-    let mut i = 0i64;
+    let mut total = 0;
+    let mut i = 0;
     while i < n {
         let cur = value(bytes[i]);
         if i + 1 < n and cur < value(bytes[i + 1]) {

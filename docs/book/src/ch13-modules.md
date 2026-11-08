@@ -49,13 +49,13 @@ import db.connection.Connection;
 import auth.token.Token;
 
 // Multiple items from the same module
-import std.collections.{Map, Set};
+import std.sync.{RecvTimeoutError, SendTimeoutError};
 
 // Rename an imported item
-import std.collections.Map as Dict;
+import db.connection.Connection as DbConn;
 ```
 
-Import paths are absolute from the crate root. Every file writes the same path for the same item, regardless of where it sits in the directory tree.
+`Vec`, `Map`, `Set` and the other everyday types are in the prelude and need no import. Import paths are absolute from the package root. Every file writes the same path for the same item, regardless of where it sits in the directory tree.
 
 ## Re-exports
 

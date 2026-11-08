@@ -148,7 +148,7 @@ let (number, text) = pair;
 
 fn min_max(items: Vec[i64]) -> (i64, i64) {
     // return both at once
-    (items.min(), items.max())
+    (items.iter().min().unwrap(), items.iter().max().unwrap())   // min and max return Option: None for an empty Vec
 }
 ```
 
@@ -194,12 +194,12 @@ Borrowing costs nothing and reads the row in place:
 ```kara
 fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {
     let rows = g.len();
-    let mut total = 0i64;
-    let mut i = 0i64;
+    let mut total = 0;
+    let mut i = 0;
     while i < rows {
         let row = ref g[i];
         let cols = row.len();
-        let mut j = 0i64;
+        let mut j = 0;
         while j < cols {
             total = total + row[j];
             j = j + 1;
