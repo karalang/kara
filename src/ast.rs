@@ -914,6 +914,13 @@ pub struct Program {
     /// s.parse().unwrap();`, a tuple collected into `Vec[(i64, i64)]`), the
     /// typechecker's fix writes `f64.parse(s)` from it (kata 1058).
     pub parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Rust's `m.range(a..b)` / `m.range(a..=b)` with one range argument,
+    /// keyed by the offset of that argument, with the edit that writes
+    /// Kāra's `range(a, b)` / `range_inclusive(a, b)` over the method name
+    /// and the argument list. Set by the PARSER; the typechecker attaches it
+    /// where `SortedMap` / `SortedSet` `range` finds one argument for two
+    /// (kata 2008).
+    pub range_arg_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and

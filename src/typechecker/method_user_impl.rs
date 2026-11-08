@@ -1442,16 +1442,23 @@ impl<'a> super::TypeChecker<'a> {
                         params.len().to_string()
                     };
                     if !named_reported {
-                        self.type_error(
-                            format!(
-                                "method '{}' expects {} argument(s), found {}",
-                                method,
-                                expected,
-                                args.len()
-                            ),
-                            *span,
-                            TypeErrorKind::WrongNumberOfArgs,
+                        let message = format!(
+                            "method '{}' expects {} argument(s), found {}",
+                            method,
+                            expected,
+                            args.len()
                         );
+                        match self.range_arg_fix(&type_name, method, args, params.len(), span) {
+                            Some((advice, fix)) => self.type_error_with_fix_it(
+                                format!("{message}: {advice}"),
+                                *span,
+                                TypeErrorKind::WrongNumberOfArgs,
+                                fix,
+                            ),
+                            None => {
+                                self.type_error(message, *span, TypeErrorKind::WrongNumberOfArgs)
+                            }
+                        }
                     }
                     for arg in args {
                         self.infer_expr(&arg.value);

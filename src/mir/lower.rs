@@ -14599,14 +14599,25 @@ impl<'l, 'a> Bx<'l, 'a> {
         left: &'a Expr,
         right: Option<&'a Expr>,
     ) -> R<(Operand, Option<Operand>, Ty)> {
+        // A bound that is a `ref` to an integer (`1..=top` with `top` from
+        // `v.iter().max().unwrap()`) is read as its value (core semantics
+        // §5.10): the counter is the integer, never the reference.
+        let value_ty = |this: &Self, t: Ty| match this.tys().tcx().kind(t) {
+            HK::Ref(inner) | HK::MutRef(inner) => inner,
+            _ => t,
+        };
         let lt = self.expr_ty(left)?;
+        let lt = value_ty(self, lt);
         let rt = match right {
-            Some(r) => self.expr_ty(r)?,
+            Some(r) => {
+                let rt = self.expr_ty(r)?;
+                value_ty(self, rt)
+            }
             None => lt,
         };
-        let start = self.expr_operand(left)?;
+        let start = self.owned_operand(left, lt)?;
         let end = match right {
-            Some(r) => Some(self.expr_operand(r)?),
+            Some(r) => Some(self.owned_operand(r, rt)?),
             None => None,
         };
         // An unsuffixed literal bound takes the other bound's type (the

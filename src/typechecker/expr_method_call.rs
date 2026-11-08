@@ -6517,6 +6517,44 @@ fn rust_string_method_twin(method: &str) -> Option<&'static str> {
 }
 
 impl super::TypeChecker<'_> {
+    /// Rust's one-argument `m.range(a..b)` / `m.range(a..=b)` where Kāra's
+    /// `range` takes two: the parser's edit to `range(a, b)` or
+    /// `range_inclusive(a, b)` (kata 2008), with the advice that names it.
+    pub(super) fn range_arg_fix(
+        &self,
+        receiver: &str,
+        name: &str,
+        args: &[CallArg],
+        wanted: usize,
+        span: &Span,
+    ) -> Option<(String, super::FixIt)> {
+        if !matches!(receiver, "SortedMap" | "SortedSet")
+            || name != "range"
+            || args.len() != 1
+            || wanted != 2
+        {
+            return None;
+        }
+        let edit = self
+            .program
+            .range_arg_edits
+            .get(&args[0].value.span.offset)?;
+        let advice = format!(
+            "Rust's one range argument is two here, `{}` (`range` is half-open, \
+             `range_inclusive` closed; docs/library/collections.md)",
+            edit.replacement
+        );
+        let fix = super::FixIt {
+            span: Span {
+                offset: edit.offset,
+                length: edit.length,
+                ..*span
+            },
+            replacement: edit.replacement.clone(),
+        };
+        Some((advice, fix))
+    }
+
     /// `v.drain(a..)`, `v.drain(..b)`, `v.drain(a..=b)` or `v.drain(..)` on a
     /// `Vec`: Rust's spellings of a range `Vec.drain` takes as `start..end`
     /// (docs/library/collections.md). Refused with the `start..end` that

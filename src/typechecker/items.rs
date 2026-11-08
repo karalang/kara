@@ -10869,6 +10869,21 @@ impl<'a> super::TypeChecker<'a> {
                 if ty.is_none() && matches!(value.kind, ExprKind::Cast { .. }) {
                     self.usize_cast_lets.push(value.clone());
                 }
+                // `let (end, tip) = (r[1] as usize, r[2] as i64);`: each
+                // cast the tuple binds by name is one such `let` (kata 2008).
+                if let (None, ExprKind::Tuple(parts), PatternKind::Tuple(names)) =
+                    (ty, &value.kind, &pattern.kind)
+                {
+                    if parts.len() == names.len() {
+                        for (part, name) in parts.iter().zip(names) {
+                            if matches!(part.kind, ExprKind::Cast { .. })
+                                && matches!(name.kind, PatternKind::Binding(_))
+                            {
+                                self.usize_cast_lets.push(part.clone());
+                            }
+                        }
+                    }
+                }
                 // `let g = freeze root;` binds a `frozen` handle, which may
                 // enter a `par` branch (core §11.3; B-2026-10-19-46).
                 if self

@@ -2388,6 +2388,11 @@ impl<'a> Resolver<'a> {
         if self.report_ambiguous_wildcard(name, span) {
             return;
         }
+        // `BinaryHeap[Reverse[T]]`: Rust's wrapper in the heap's item type,
+        // never the did-you-mean `Release` (kata 2008).
+        if self.report_rust_reverse(name, span) {
+            return;
+        }
         if self.named_by_failed_import_fix(name) {
             return;
         }

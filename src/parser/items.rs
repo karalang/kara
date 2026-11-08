@@ -2058,15 +2058,29 @@ impl super::Parser {
                 format!("a bare `{name}: T` already borrows, so drop the `ref`"),
                 Some((start.offset, name_span.offset - start.offset, String::new())),
             ),
-            // `v: mut ref T` borrows mutably and `v: own T` with a `let mut`
-            // owns; which one was meant is not written down, so no edit.
-            "mut" => (
-                format!(
-                    "write `{name}: mut ref T` to change the caller's value, or \
-                     `{name}: own T` and `let mut {name} = {name};` to change your own copy"
-                ),
-                None,
-            ),
+            // `mut v: T` is Rust's owned parameter that the body changes,
+            // so the edit writes `v: own T` and a `let mut v = v;` at the
+            // body's start (kata 2008); `v: mut ref T`, which changes the
+            // caller's value, would change the contract, so it stays advice.
+            "mut" => {
+                self.pattern_muts.push((
+                    crate::resolver::SpanKey::from_span(&start),
+                    crate::resolver::TextEdit {
+                        offset: start.offset,
+                        length: colon_end - start.offset,
+                        replacement: format!("{name}: own"),
+                    },
+                    name.clone(),
+                ));
+                (
+                    format!(
+                        "Rust's `mut {name}: T` is an owned parameter the body changes: \
+                         write `{name}: own T` and `let mut {name} = {name};` at the body's \
+                         start, or `{name}: mut ref T` to change the caller's value"
+                    ),
+                    None,
+                )
+            }
             _ => (
                 format!("write `{name}: {mode} T`"),
                 Some((

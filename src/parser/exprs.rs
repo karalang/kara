@@ -548,10 +548,14 @@ impl super::Parser {
                             let turbofish = None;
                             if self.check(&Token::LeftParen) {
                                 // Method call
+                                let name_span = self.tokens[self.pos - 1].span;
                                 self.advance();
                                 let args = self.parse_arg_list()?;
                                 self.expect(&Token::RightParen)?;
                                 let args_close_span = self.tokens[self.pos - 1].span;
+                                if method == "range" && args.len() == 1 {
+                                    self.note_range_arg(name_span, &args[0].value, args_close_span);
+                                }
                                 // B-2026-08-18-24 — MEASUREMENT SCAFFOLD.
                                 let end = args_close_span.offset + args_close_span.length;
                                 let span = Span {

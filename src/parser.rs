@@ -242,6 +242,8 @@ pub struct Parser {
     pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::parse_target_edits`].
     pub(crate) parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// See [`crate::ast::Program::range_arg_edits`].
+    pub(crate) range_arg_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::paren_return_types`].
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::cast_operand_ends`].
@@ -559,6 +561,7 @@ impl Parser {
             expr_stmt_semis: rustc_hash::FxHashMap::default(),
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
             parse_target_edits: rustc_hash::FxHashMap::default(),
+            range_arg_edits: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             cast_operand_ends: rustc_hash::FxHashMap::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
@@ -992,6 +995,7 @@ impl Parser {
             rust_reverse_wraps: self.rust_reverse_wraps(),
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
             parse_target_edits: std::mem::take(&mut self.parse_target_edits),
+            range_arg_edits: std::mem::take(&mut self.range_arg_edits),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
@@ -1004,22 +1008,33 @@ impl Parser {
     }
 
     /// Each `Reverse(` written as a heap's item: the argument of a `.push(`
-    /// or the payload of a `Some(` (kata 1057). See
+    /// or the payload of a `Some(` (kata 1057), and each `Reverse[` written
+    /// as the item type of a `BinaryHeap[` (kata 2008). See
     /// [`crate::ast::Program::rust_reverse_wraps`].
     fn rust_reverse_wraps(&self) -> rustc_hash::FxHashMap<usize, crate::resolver::TextEdit> {
         let mut out = rustc_hash::FxHashMap::default();
         let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
         let ident = |i: usize, want: &str| matches!(tok(i), Some(Token::Identifier { name, .. }) if name == want);
         for i in 2..self.tokens.len() {
-            if !ident(i, "Reverse") || !matches!(tok(i + 1), Some(Token::LeftParen)) {
+            if !ident(i, "Reverse") {
                 continue;
             }
-            if !matches!(tok(i - 1), Some(Token::LeftParen)) {
-                continue;
-            }
-            let pushed = ident(i - 2, "push") && i >= 3 && matches!(tok(i - 3), Some(Token::Dot));
-            if !pushed && !ident(i - 2, "Some") {
-                continue;
+            // The heap's item type, `BinaryHeap[Reverse[T]]` (kata 2008):
+            // the edit writes `T`.
+            let in_type = matches!(tok(i + 1), Some(Token::LeftBracket))
+                && matches!(tok(i - 1), Some(Token::LeftBracket))
+                && ident(i - 2, "BinaryHeap");
+            if !in_type {
+                if !matches!(tok(i + 1), Some(Token::LeftParen))
+                    || !matches!(tok(i - 1), Some(Token::LeftParen))
+                {
+                    continue;
+                }
+                let pushed =
+                    ident(i - 2, "push") && i >= 3 && matches!(tok(i - 3), Some(Token::Dot));
+                if !pushed && !ident(i - 2, "Some") {
+                    continue;
+                }
             }
             // The `)` that closes `Reverse(`; the edit writes what lies
             // between the two in the call's place.
@@ -1062,6 +1077,46 @@ impl Parser {
             );
         }
         out
+    }
+
+    /// `m.range(a..b)` or `m.range(a..=b)`, Rust's one-argument range: the
+    /// edit that writes `range(a, b)` or `range_inclusive(a, b)` from the
+    /// method's name to the call's `)`, keyed by the argument's offset
+    /// ([`crate::ast::Program::range_arg_edits`], kata 2008).
+    fn note_range_arg(&mut self, name: Span, arg: &Expr, close: Span) {
+        let (from, to, inclusive) = match &arg.kind {
+            ExprKind::Range {
+                start: Some(from),
+                end: Some(to),
+                inclusive,
+            } => (from.as_ref(), to.as_ref(), *inclusive),
+            ExprKind::Binary {
+                op: op @ (BinOp::Range | BinOp::RangeInclusive),
+                left,
+                right,
+            } => (left.as_ref(), right.as_ref(), *op == BinOp::RangeInclusive),
+            _ => return,
+        };
+        let (Some(a), Some(b)) = (
+            self.source_at(from.span.offset, from.span.length),
+            self.source_at(to.span.offset, to.span.length),
+        ) else {
+            return;
+        };
+        let method = if inclusive {
+            "range_inclusive"
+        } else {
+            "range"
+        };
+        let replacement = format!("{method}({a}, {b})");
+        self.range_arg_edits.insert(
+            arg.span.offset,
+            crate::resolver::TextEdit {
+                offset: name.offset,
+                length: close.offset + close.length - name.offset,
+                replacement,
+            },
+        );
     }
 
     /// `recv.parse()`: the receiver's text, keyed by the call's offset, so
