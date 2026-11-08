@@ -101,6 +101,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   Some(3)` over a `Map[String, i64]`, `v.first() == Some('a')`, and
   `o == Some(4)` with `o: Option[i32]` were refused as mismatches; only a
   string literal was promoted (B-2026-11-08-22).
+- **A part destructured out of a slice read no longer holds the slice
+  borrowed.** `let (at, _) = v[i..j].iter().enumerate().min_by_key(..).unwrap();
+  v.remove(at);` was refused as a mutation of `v` while borrowed, though
+  `at` is an owned `i64`; a part that is still a borrow keeps the slice
+  borrowed as before (B-2026-11-08-12).
+- **`split_whitespace()` and `split(sep)` walk from both ends**, so
+  `s.split_whitespace().rev()` gives the words last first and
+  `s.split(",").rev()` the forward pieces in reverse; both were refused with
+  "no method 'rev'" (B-2026-11-08-15).
 
 ### Performance
 
@@ -145,6 +154,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `karac fix` removes.
 - A known variant such as `None` in a `match` over a scrutinee that is
   already an error is no longer also reported as a Type-class binding.
+- **Three Rust shapes in a program written as Rust get a `karac fix` edit.**
+  A `mut arr: Vec<i32>` parameter is fixed to `arr: own Vec[i32]` with
+  `let mut arr = arr;` at the top of the body (B-2026-11-08-11).
+  `if let Some(&i) = v.last()` is fixed with `.cloned()` on the scrutinee,
+  keeping `i` a copy, where the fix used to drop the `&` and make `i` a
+  borrow (B-2026-11-08-13). A `usize` size where an `i64` is wanted
+  (`Vec.with_capacity(n * (n + 1) / 2)` after `let n = n as usize;`) is
+  fixed with `as i64` (B-2026-11-08-16).
 
 ### Tooling
 
