@@ -11460,6 +11460,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.in_defer = prev;
             }
             StmtKind::Assign { target, value } => {
+                self.note_last_mut_write(target);
                 self.note_str_lit_assign(target, value);
                 // design.md § "The index operator (`expr[i]`)" — the RHS of an
                 // assignment is a value position exactly as a `let` initializer
@@ -11584,6 +11585,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.drop_repeated_errors(errors_before_rhs, errors_before_check);
             }
             StmtKind::CompoundAssign { target, value, op } => {
+                self.note_last_mut_write(target);
                 self.check_const_assignment(target);
                 // B-2026-08-14-29 — check the implied binary operation, not
                 // just the two operands in isolation. This arm used to infer

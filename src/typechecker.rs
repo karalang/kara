@@ -2946,6 +2946,12 @@ pub struct TypeChecker<'a> {
     /// `usize` types become `i64`, a cast left behind feeds a `usize` into
     /// them (B-2026-11-08-49).
     pub(super) usize_cast_lets: Vec<Expr>,
+    /// Rust's `*v.last_mut().unwrap() = x` (and `first_mut`, `expect`, a
+    /// compound assignment) over a plain place `v`: the edit that writes
+    /// `v[v.len() - 1]` / `v[0]` for the whole left side, keyed by the
+    /// offset of `v`, for the "no method `last_mut`" error to carry
+    /// (kata 1520).
+    pub(super) last_mut_writes: std::collections::HashMap<usize, FixIt>,
     /// Each `s.parse()` no expected `Option[T]` named the target of, with
     /// the variable that stands for it: reported once the program is
     /// checked, with the fix `T.parse(s)` when a later use fixed `T` to a
@@ -4143,6 +4149,7 @@ impl<'a> TypeChecker<'a> {
             pointer_int_mixed: false,
             usize_use_site_fixes: Vec::new(),
             usize_cast_lets: Vec::new(),
+            last_mut_writes: Default::default(),
             untargeted_parses: Vec::new(),
             fn_item_spans: FxHashSet::default(),
             forking: None,

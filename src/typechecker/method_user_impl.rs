@@ -2006,6 +2006,19 @@ impl<'a> super::TypeChecker<'a> {
                         self.type_error_with_fix_it(msg, *span, TypeErrorKind::NoMethodFound, fix);
                         return Type::Error;
                     }
+                    // `*v.last_mut().unwrap() = x`: the index the message
+                    // names, written for the whole left side (kata 1520).
+                    if type_name == "Vec" && matches!(method, "last_mut" | "first_mut") {
+                        if let Some(fix) = self.last_mut_writes.get(&object.span.offset).cloned() {
+                            self.type_error_with_fix_it(
+                                msg,
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                                fix,
+                            );
+                            return Type::Error;
+                        }
+                    }
                     self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                 }
                 Type::Error
@@ -2104,4 +2117,78 @@ fn no_arg_call_start(object: &Expr, method: &str, to: usize) -> usize {
     let object_end = object.span.offset + object.span.length;
     to.saturating_sub(method.len() + ".()".len())
         .max(object_end)
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// Notes Rust's `*v.last_mut().unwrap()` (or `first_mut`, or
+    /// `.expect(..)`) as an assignment's left side over a plain place `v`
+    /// (a name, or a field path of one): the library has no `last_mut`, and
+    /// the write is `v[v.len() - 1] = ..` / `v[0] = ..` (kata 1520).
+    pub(super) fn note_last_mut_write(&mut self, target: &Expr) {
+        let ExprKind::Unary {
+            op: UnaryOp::Deref,
+            operand,
+        } = &target.kind
+        else {
+            return;
+        };
+        let ExprKind::MethodCall {
+            object: call,
+            method: unwrap,
+            args_close_span: close,
+            ..
+        } = &operand.kind
+        else {
+            return;
+        };
+        if !matches!(unwrap.as_str(), "unwrap" | "expect") {
+            return;
+        }
+        let ExprKind::MethodCall {
+            object: recv,
+            method,
+            args,
+            ..
+        } = &call.kind
+        else {
+            return;
+        };
+        if !args.is_empty() || !matches!(method.as_str(), "last_mut" | "first_mut") {
+            return;
+        }
+        fn place(e: &Expr) -> Option<String> {
+            match &e.kind {
+                ExprKind::Identifier(name) => Some(name.clone()),
+                ExprKind::SelfValue => Some("self".to_string()),
+                ExprKind::FieldAccess { object, field } => {
+                    Some(format!("{}.{field}", place(object)?))
+                }
+                _ => None,
+            }
+        }
+        let Some(v) = place(recv) else {
+            return;
+        };
+        let end = close.offset + close.length;
+        if close.length == 0 || end <= target.span.offset {
+            return;
+        }
+        let replacement = if method == "last_mut" {
+            format!("{v}[{v}.len() - 1]")
+        } else {
+            format!("{v}[0]")
+        };
+        self.last_mut_writes.insert(
+            recv.span.offset,
+            FixIt {
+                span: Span {
+                    line: target.span.line,
+                    column: target.span.column,
+                    offset: target.span.offset,
+                    length: end - target.span.offset,
+                },
+                replacement,
+            },
+        );
+    }
 }
