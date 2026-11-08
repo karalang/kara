@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 184 |
+| diagnostics | 185 |
 | false-positive | 153 |
-| perf | 119 |
+| perf | 120 |
 | missing-feature | 110 |
 | soundness | 52 |
 | miscompile | 44 |
@@ -75,8 +75,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 292 |
-| mir-llvm | 155 |
+| typecheck | 293 |
+| mir-llvm | 156 |
 | mir | 136 |
 | cli | 84 |
 | ownership | 63 |
@@ -135,6 +135,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-46 | 2026-11-08 | typecheck | low | Rust's `match ans.last_mut() { Some(last) if last[1] == prev && last[2] == avg => last[1] = pos, _ => ans.push(..) }` gets `no method 'last_mut' on type 'Vec': write through an index instead` with no machine fix, though the index form it describes is mechanical for this shape | — |
 | B-2026-11-08-47 | 2026-11-08 | typecheck | low | A sequence has no `split` by a predicate: Rust's `line.split(|&ch| ch == '#')` over a `&Vec<char>` is refused "no method 'split' on type 'Vec'" with no fix and no other spelling named, and draws two cascade errors on the closures that read the pieces | — |
 | B-2026-11-08-48 | 2026-11-08 | mir | medium | An `isize` operand beside an `i64` passes `karac check` and the MIR builder then refuses the program: `fn f(i: isize, k: i64) -> i64 { i - k }` is 'invalid MIR: binary operands of different types isize and i64' | — |
+| B-2026-11-08-52 | 2026-11-08 | mir-llvm | low | `v.iter().skip(k)` walks the k skipped items one at a time, so a `skip(i * n).take(n)` row walk over a Vec is quadratic where Rust's slice iterator jumps | — |
+| B-2026-11-08-53 | 2026-11-08 | typecheck | low | `karac fix` drops a closure's `-> i32` and with it the type of the literal-typed tuple binding it returns, leaving `res.max(x as i32)` ("`max` expects an argument of type `i64`, got `i32`") and a narrowing at the caller with no fix and no binding named | — |
 
 ### Relocated
 
