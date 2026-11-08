@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 174 |
-| false-positive | 145 |
+| diagnostics | 175 |
+| false-positive | 146 |
 | perf | 119 |
 | missing-feature | 105 |
 | soundness | 52 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 272 |
+| typecheck | 274 |
 | mir-llvm | 147 |
 | mir | 132 |
 | cli | 79 |
@@ -107,7 +107,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
-| B-2026-11-07-57 | 2026-11-07 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3): `let mut b = 0; b = y; b` and `b += y` with `y: i32` in a fn returning `i32`, and `let b = 0; max(b, y)`, are refused 'implicit coercion from i64 to i32 would narrow' | — |
 | B-2026-11-08-3 | 2026-11-08 | mir-llvm | low | Kata 277's bench runs 1.83x Rust's instructions at karac's default O2 (3.19G vs 1.74G, x86 callgrind) and 0.62x at O3 (1.08G): O2 misses the verify loop's simplification once the candidate is the planted celebrity | — |
 | B-2026-11-08-4 | 2026-11-08 | resolver | low | `karac fix` rewrites Rust's `BinaryHeap<Reverse<i32>>` in a type (a struct field) to `PriorityQueue[Release[i32]]`: the Reverse-around-heap-items fix covers `push(Reverse(x))` and `Some(Reverse(p))` but not the type argument, which takes the resolver's did-you-mean `Release`; it should be `PriorityQueue[i32]` | — |
 | B-2026-11-08-5 | 2026-11-08 | mir-llvm | low | Kata 481's bench calls karac_mir_vec_reserve on every entry to its inner push loop (66.3M calls): the presize lowering of a counting loop that refills an existing Vec reserves through the runtime with no inline len + n <= cap check, 2.47x checked Rust's instructions | — |
@@ -122,6 +121,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-14 | 2026-11-08 | mir-llvm | medium | Read-only iteration of a field of a `shared` struct that is not declared `mut` pays a run-time borrow flag (acquire + release through the thread-local list) per loan: the flag pass flags every non-Copy field because MIR does not record which fields are `mut` | — |
 | B-2026-11-08-15 | 2026-11-08 | typecheck | low | `s.split_whitespace().rev()` (and `s.split(" ").rev()`) is refused with a bare "no method 'rev' on type 'StrWords'": the string-splitting iterators are not double-ended, though Rust's `split_whitespace` is, and the diagnostic gives no hint or fix | — |
 | B-2026-11-08-16 | 2026-11-08 | typecheck+cli | low | A `usize` length from a Rust template (`let n = n as usize; Vec::with_capacity(n * (n + 1) / 2)`) is refused as an implicit `usize` to `i64` coercion whose message says to write `as i64`, but `karac fix` has no edit for it | — |
+| B-2026-11-08-20 | 2026-11-08 | typecheck | medium | A binding whose literal keeps `i64` because only an operator or a method receiver used it is refused far from the binding, with an `as` cast as the only advice: `let mut b = 0; b += y; b` in `-> i32` says 'implicit coercion from i64 to i32 would narrow ... write an explicit as i32' at the return, with no machine fix; the fix is the binding's annotation (`let mut b: i32 = 0`) | — |
+| B-2026-11-08-21 | 2026-11-08 | typecheck | medium | A binding's literal is not fixed by a collection literal it is an element of: `let p = 0; let v: Vec[i32] = [p, 1];` and `a.push([p, 1])` on a `Vec[Vec[i32]]` are refused 'implicit coercion from i64 to i32 would narrow', though `a.push(p)` on a `Vec[i32]` fixes `p` | — |
 
 ### Relocated
 
@@ -841,6 +842,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-54 | typecheck | low | `opt == Some("")` with `opt: Option[Str]` is refused ("cannot compare 'Option[Str]' and 'Option[String]'") though `let a: Option[Str] = Some("")` is… | 670fbcb5ec |
 | B-2026-11-07-55 | mir-llvm | medium | Katas 100 and 101 (recursive `shared` tree code) ran about 1.5x slower on the M5 at karac 97681763d than at 6697158fa while checked Rust held steady… | b5581f4232 |
 | B-2026-11-07-56 | interp+mir-llvm | medium | A method called straight on a constant whose value is a bare literal reads it at i64, not its declared type (corrected: not only wide ones; `CC.leadi… | a3a7d1eeb0 |
+| B-2026-11-07-57 | typecheck | medium | A literal's type variable is not fixed by an assignment or a generic call (follow-up of B-2026-11-07-3; corrected: the `b += y` shape is a deliberate… | b85cf41506 |
 | B-2026-11-08-1 | mir-llvm | medium | The overflow-safe midpoint `lo + (hi - lo) / 2` keeps its signed division: halving (B-2026-11-06-8) does not see `hi - lo` as non-negative under the… | a8696f186e |
 | B-2026-11-08-17 | typecheck | low | A known unit variant (`None`) in a `match` arm over a scrutinee that already failed to type is also reported as `` `None` is Type-class but binding n… | 8b1e2b6970 |
 
