@@ -53,13 +53,14 @@ fn check_then_fix(tag: &str, src: &str, message: &str, fixed: &str) {
 
 #[test]
 fn a_usize_size_argument_is_fixed_with_as_i64() {
-    // The `usize` comes from a float, whose `as usize` has no `i64` fix, so
-    // the use is where the edit goes.
+    // A program that declares FFI items keeps its `as usize` casts (one may
+    // be what a foreign function is given), so the use is where the edit
+    // goes.
     check_then_fix(
         "capacity",
-        "fn sums(x: f64) -> i64 {\n    let n = x as usize;\n    let mut v: Vec[i64] = Vec.with_capacity(n * (n + 1) / 2);\n    let w: Vec[i64] = Vec.with_capacity(n);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4.0)); }\n",
+        "/// # Safety\n/// `abs` is libc's.\nunsafe extern \"C\" {\n    fn abs(x: i32) -> i32;\n}\nfn sums(x: f64) -> i64 {\n    let n = x as usize;\n    let mut v: Vec[i64] = Vec.with_capacity(n * (n + 1) / 2);\n    let w: Vec[i64] = Vec.with_capacity(n);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4.0)); }\n",
         "implicit coercion from 'usize' to 'i64' would change sign",
-        "fn sums(x: f64) -> i64 {\n    let n = x as usize;\n    let mut v: Vec[i64] = Vec.with_capacity((n * (n + 1) / 2) as i64);\n    let w: Vec[i64] = Vec.with_capacity(n as i64);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4.0)); }\n",
+        "/// # Safety\n/// `abs` is libc's.\nunsafe extern \"C\" {\n    fn abs(x: i32) -> i32;\n}\nfn sums(x: f64) -> i64 {\n    let n = x as usize;\n    let mut v: Vec[i64] = Vec.with_capacity((n * (n + 1) / 2) as i64);\n    let w: Vec[i64] = Vec.with_capacity(n as i64);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4.0)); }\n",
     );
 }
 
@@ -73,6 +74,12 @@ fn a_usize_use_takes_no_cast_when_its_root_is_fixed() {
         "fn sums(n: i32) -> i64 {\n    let n = n as usize;\n    let mut v: Vec[i64] = Vec.with_capacity(n * (n + 1) / 2);\n    let m = n;\n    let w: Vec[i64] = Vec.with_capacity(m);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4)); }\n",
         "implicit coercion from 'usize' to 'i64' would change sign",
         "fn sums(n: i32) -> i64 {\n    let n = n as i64;\n    let mut v: Vec[i64] = Vec.with_capacity(n * (n + 1) / 2);\n    let m = n;\n    let w: Vec[i64] = Vec.with_capacity(m);\n    v.push(1);\n    v.len() + w.len()\n}\nfn main() { println(sums(4)); }\n",
+    );
+    check_then_fix(
+        "float",
+        "fn sums(x: f64) -> i64 {\n    let n = x as usize;\n    let v: Vec[i64] = Vec.with_capacity(n * 2);\n    v.len()\n}\nfn main() { println(sums(4.0)); }\n",
+        "implicit coercion from 'usize' to 'i64' would change sign",
+        "fn sums(x: f64) -> i64 {\n    let n = x as i64;\n    let v: Vec[i64] = Vec.with_capacity(n * 2);\n    v.len()\n}\nfn main() { println(sums(4.0)); }\n",
     );
     check_then_fix(
         "param",
