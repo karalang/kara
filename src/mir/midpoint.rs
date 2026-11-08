@@ -57,8 +57,22 @@ pub fn midpoints(body: &Body, tys: &TyInterner) -> Vec<Midpoint> {
         let Some((lo, hi, signed, inside)) = guard(body, tys, data) else {
             continue;
         };
-        if let Some(m) = walk(body, &preds, g, inside, lo, hi, signed) {
+        if let Some(m) = walk(body, &preds, g, inside, lo, hi, signed, &mut Vec::new()) {
             out.push(m);
+        }
+    }
+    out
+}
+
+/// Each `(hi - lo) / 2` on the way in from a `lo < hi` guard, as (block,
+/// statement): its dividend is at least 1, so the halving may be a shift
+/// (B-2026-11-08-1, [`super::halving`]).
+pub fn guarded_diff_halvings(body: &Body, tys: &TyInterner) -> Vec<(usize, usize)> {
+    let preds = super::counters::predecessors(body);
+    let mut out = Vec::new();
+    for (g, data) in body.blocks.iter().enumerate() {
+        if let Some((lo, hi, signed, inside)) = guard(body, tys, data) {
+            walk(body, &preds, g, inside, lo, hi, signed, &mut out);
         }
     }
     out
@@ -110,7 +124,9 @@ fn guard(
 }
 
 /// Follows the straight line from `start` (entered only from the guard
-/// `g`, past checks that abort) to the first local assigned a midpoint.
+/// `g`, past checks that abort) to the first local assigned a midpoint,
+/// noting in `halves` each `(hi - lo) / 2` it passes.
+#[allow(clippy::too_many_arguments)]
 fn walk(
     body: &Body,
     preds: &[Vec<usize>],
@@ -119,6 +135,7 @@ fn walk(
     lo: Local,
     hi: Local,
     signed: bool,
+    halves: &mut Vec<(usize, usize)>,
 ) -> Option<Midpoint> {
     // (local, what it holds, whether it is a checked pair)
     let mut known: Vec<(Local, Sym, bool)> = Vec::new();
@@ -189,7 +206,10 @@ fn walk(
                     Some(Sym::Mid)
                 }
                 BinOp::Div if is_const(c, 2) => match sym(a) {
-                    Some(Sym::Diff) => Some(Sym::Half),
+                    Some(Sym::Diff) => {
+                        halves.push((b, si));
+                        Some(Sym::Half)
+                    }
                     // Truncation equals flooring only on unsigned values.
                     Some(Sym::Sum) if !signed => Some(Sym::Mid),
                     _ => None,

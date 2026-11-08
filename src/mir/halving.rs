@@ -20,6 +20,12 @@
 //! mutably and a local written through a projection lose it outright. The
 //! loop-carried `lo = mid + 1` / `hi = mid` of a search starting at `0`
 //! and `len` keeps it, which a single forward pass could not show.
+//!
+//! The overflow-safe midpoint `lo + (hi - lo) / 2` halves a difference,
+//! which no fixpoint over writes can call non-negative: it is so only past
+//! the loop's `lo < hi`. [`super::midpoint`] walks from that guard to the
+//! halving, so it is a shift too (B-2026-11-08-1). `f(3, 1)`'s `hi - lo`
+//! outside any guard is `-2`, and keeps its division.
 
 use super::syntax::*;
 use super::ty::{Ty, TyInterner, TyKind};
@@ -33,9 +39,13 @@ pub fn halve_non_negative(
     native: &dyn Fn(&str) -> bool,
 ) -> usize {
     let nonneg = non_negative(body, tys, native);
+    // `(hi - lo) / 2` under a `lo < hi` guard halves a value of at least 1,
+    // which the fixpoint cannot see: it holds only past the guard
+    // (B-2026-11-08-1).
+    let guarded = super::midpoint::guarded_diff_halvings(body, tys);
     let mut n = 0;
-    for b in body.blocks.iter_mut() {
-        for s in b.statements.iter_mut() {
+    for (bi, b) in body.blocks.iter_mut().enumerate() {
+        for (si, s) in b.statements.iter_mut().enumerate() {
             let StatementKind::Assign(_, rv) = &mut s.kind else {
                 continue;
             };
@@ -58,7 +68,7 @@ pub fn halve_non_negative(
             if !it.signed() || *v < 2 || !v.is_power_of_two() || *v >> (it.bits() - 1) != 0 {
                 continue;
             }
-            if !operand_nonneg(a, &nonneg, tys) {
+            if !operand_nonneg(a, &nonneg, tys) && !guarded.contains(&(bi, si)) {
                 continue;
             }
             *op = BinOp::Shr;
@@ -282,6 +292,27 @@ mod tests {
         assert_eq!(shape(&search("x", "v.len()", "/ 2")), (1, 0, 0));
         assert_eq!(shape(&search("0", "v.len()", "/ 3")), (1, 0, 0));
         assert_eq!(shape(&search("0", "b.len()", "/ 2")), (1, 0, 0));
+    }
+
+    /// The overflow-safe midpoint halves `hi - lo`, which only the guard
+    /// `lo < hi` keeps positive: it is a shift wherever `lo` starts, and
+    /// the same difference outside a guard keeps its division
+    /// (B-2026-11-08-1).
+    #[test]
+    fn a_difference_under_its_guard_halves_with_a_shift() {
+        let src =
+            |lo: &str| search(lo, "v.len()", "/ 2").replace("(lo + hi) / 2", "lo + (hi - lo) / 2");
+        assert_eq!(shape(&src("0")), (0, 1, 1));
+        assert_eq!(shape(&src("x")), (0, 1, 1));
+        let bare = concat!(
+            "fn f(lo: i64, hi: i64) -> i64 {\n",
+            "    lo + (hi - lo) / 2\n",
+            "}\n",
+            "fn main() {\n",
+            "    println(f(3, 1));\n",
+            "}\n",
+        );
+        assert_eq!(shape(bare), (1, 0, 0));
     }
 
     /// A mutable loan can write anything; so can a parameter's caller.

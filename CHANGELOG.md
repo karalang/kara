@@ -61,6 +61,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   fixes it too. One nothing fixes is refused at the call once the body has
   been checked (B-2026-11-07-9).
 
+### Performance
+
+- **The overflow-safe midpoint `lo + (hi - lo) / 2` halves with a shift**
+  under its `lo < hi` guard, which keeps `hi - lo` positive; the signed
+  division's sign fixup is gone. Kata 1064 on x86 went from 260 ms to
+  170 ms (B-2026-11-08-1).
+
 ### Diagnostics
 
 - Comparing an `Option[ref T]` with an `Option[T]` whose `T` is not `Copy`
