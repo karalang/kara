@@ -763,6 +763,27 @@ impl super::Parser {
                     // see the tuple shape. Single-index `v[i]` parses
                     // unchanged (no 1-tuple wrapping).
                     self.advance();
+                    // `m[&k]`: Rust indexes a map by a borrowed key; a Kāra
+                    // index takes the key as it is, so the edit drops the
+                    // `&` (a `ref (a, b)` of a temporary is refused; kata
+                    // 2013).
+                    if self.check(&Token::Amp) && !matches!(self.peek_token_ref_at(1), Token::Mut) {
+                        let amp = self.current_span();
+                        self.error_at(
+                            "`&` is Rust syntax -- an index takes its key as it is, \
+                             with no borrow: drop the `&`",
+                            amp,
+                        );
+                        self.fix_edits.insert(
+                            crate::resolver::SpanKey::from_span(&amp),
+                            crate::resolver::TextEdit {
+                                offset: amp.offset,
+                                length: amp.length,
+                                replacement: String::new(),
+                            },
+                        );
+                        self.advance();
+                    }
                     let index_start = self.current_span();
                     let first = self.parse_expression()?;
                     let index = if self.check(&Token::Comma) {
