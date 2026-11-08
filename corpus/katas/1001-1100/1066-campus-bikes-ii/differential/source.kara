@@ -1,0 +1,396 @@
+// LeetCode #1066: Campus Bikes II -- the differential.
+//
+// The six arms against the statement read literally, on 2000 problems,
+// with six properties:
+//
+// P1  the answer is the statement read literally: the least total over
+//     every way to give each worker a different bike, tried one by one
+// P2  the answer lies between the sum of each worker's nearest bike and
+//     the total of the workers taking the nearest free bike in turn
+// P3  every point turned (x and y swapped) and moved leaves the answer,
+//     and so do the workers and the bikes both in reverse order
+// P4  every coordinate doubled doubles the answer
+// P5  a bike added never raises the answer, and a worker and a bike added
+//     far from the rest, some distance apart, raise it by that distance
+// P6  each arm agrees with at least three of the other five
+
+// ---- campus_bikes.kara: the ★ arm: the table over the sets of bikes taken
+fn distance(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0).abs() + (a.1 - b.1).abs()
+}
+
+fn star_arm(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let n = workers.len();
+    let m = bikes.len();
+    let mut best: Vec[i64] = Vec.filled(1 << m, i64.MAX);
+    best[0] = 0;
+    let mut answer = i64.MAX;
+    for mask in 0..best.len() {
+        if best[mask] == i64.MAX {
+            continue;
+        }
+        let w = mask.count_ones();
+        if w == n {
+            answer = answer.min(best[mask]);
+            continue;
+        }
+        for b in 0..m {
+            if mask & (1 << b) == 0 {
+                let next = mask | (1 << b);
+                best[next] = best[next].min(best[mask] + distance(workers[w], bikes[b]));
+            }
+        }
+    }
+    answer
+}
+
+// ---- campus_bikes_memo.kara: top down, memoized by the set taken
+// memo[mask]: the least total for the workers still to come once the
+// bikes in `mask` are taken, or -1 before it is known.
+fn memo_least(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)], mask: i64, memo: mut ref Vec[i64]) -> i64 {
+    let w = mask.count_ones();
+    if w == workers.len() {
+        return 0;
+    }
+    if memo[mask] >= 0 {
+        return memo[mask];
+    }
+    let mut best = i64.MAX;
+    for b in 0..bikes.len() {
+        if mask & (1 << b) == 0 {
+            let rest = memo_least(workers, bikes, mask | (1 << b), mut memo);
+            best = best.min(distance(workers[w], bikes[b]) + rest);
+        }
+    }
+    memo[mask] = best;
+    best
+}
+
+fn memo_arm(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let mut memo: Vec[i64] = Vec.filled(1 << bikes.len(), -1);
+    memo_least(workers, bikes, 0, mut memo)
+}
+
+// ---- campus_bikes_bound.kara: branch and bound, nearest bike first
+struct Search {
+    // for each worker, the bikes by distance, nearest first
+    order: Vec[Vec[(i64, i64)]],
+    used: Vec[bool],
+    best: i64,
+}
+
+impl Search {
+    fn go(mut ref self, w: i64, total: i64) {
+        if total >= self.best {
+            return;
+        }
+        if w == self.order.len() {
+            self.best = total;
+            return;
+        }
+        for k in 0..self.order[w].len() {
+            let (d, b) = self.order[w][k];
+            if not self.used[b] {
+                self.used[b] = true;
+                self.go(w + 1, total + d);
+                self.used[b] = false;
+            }
+        }
+    }
+}
+
+fn bound_arm(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let order: Vec[Vec[(i64, i64)]] = workers
+        .iter()
+        .map(|w| {
+            let mut by: Vec[(i64, i64)] = (0..bikes.len()).map(|b| (distance(w, bikes[b]), b)).collect();
+            by.sort();
+            by
+        })
+        .collect();
+    let mut search = Search { order, used: Vec.filled(bikes.len(), false), best: i64.MAX };
+    search.go(0, 0);
+    search.best
+}
+
+// ---- campus_bikes_dijkstra.kara: Dijkstra over the sets taken
+fn dijkstra_arm(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let n = workers.len();
+    let m = bikes.len();
+    let mut done: Vec[bool] = Vec.filled(1 << m, false);
+    // (total, mask), smallest total first
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, 0));
+    while let Some((total, mask)) = queue.pop() {
+        if done[mask] {
+            continue;
+        }
+        done[mask] = true;
+        let w = mask.count_ones();
+        if w == n {
+            return total;
+        }
+        for b in 0..m {
+            let next = mask | (1 << b);
+            if next != mask and not done[next] {
+                queue.push((total + distance(workers[w], bikes[b]), next));
+            }
+        }
+    }
+    -1
+}
+
+// ---- campus_bikes_hungarian.kara: the Hungarian algorithm
+fn hungarian_arm(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let n = workers.len();
+    let m = bikes.len();
+    // 1-based: worker i in 1..=n, bike j in 1..=m, column 0 a sentinel
+    let mut u: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut v: Vec[i64] = Vec.filled(m + 1, 0);
+    // owner[j]: the worker on bike j, 0 for none
+    let mut owner: Vec[i64] = Vec.filled(m + 1, 0);
+    let mut way: Vec[i64] = Vec.filled(m + 1, 0);
+    for i in 1..n + 1 {
+        owner[0] = i;
+        let mut j0 = 0;
+        let mut least: Vec[i64] = Vec.filled(m + 1, i64.MAX);
+        let mut used: Vec[bool] = Vec.filled(m + 1, false);
+        loop {
+            used[j0] = true;
+            let i0 = owner[j0];
+            let mut delta = i64.MAX;
+            let mut j1 = 0;
+            for j in 1..m + 1 {
+                if not used[j] {
+                    let cost = distance(workers[i0 - 1], bikes[j - 1]) - u[i0] - v[j];
+                    if cost < least[j] {
+                        least[j] = cost;
+                        way[j] = j0;
+                    }
+                    if least[j] < delta {
+                        delta = least[j];
+                        j1 = j;
+                    }
+                }
+            }
+            for j in 0..m + 1 {
+                if used[j] {
+                    u[owner[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    least[j] -= delta;
+                }
+            }
+            j0 = j1;
+            if owner[j0] == 0 {
+                break;
+            }
+        }
+        // flip the path back to the sentinel
+        while j0 != 0 {
+            let j1 = way[j0];
+            owner[j0] = owner[j1];
+            j0 = j1;
+        }
+    }
+    let mut total = 0;
+    for j in 1..m + 1 {
+        if owner[j] != 0 {
+            total += distance(workers[owner[j] - 1], bikes[j - 1]);
+        }
+    }
+    total
+}
+
+// ---- campus_bikes_solution.kara: LeetCode's Rust template
+struct Solution {}
+
+impl Solution {
+    pub fn assign_bikes(workers: Vec[Vec[i32]], bikes: Vec[Vec[i32]]) -> i32 {
+        let n = workers.len();
+        let m = bikes.len();
+        let mut dp = Vec.filled(1 << m, i32.MAX);
+        dp[0] = 0;
+        let mut ans = i32.MAX;
+        for mask in 0..(1 << m) {
+            if dp[mask] == i32.MAX {
+                continue;
+            }
+            let i = mask.count_ones();
+            if i == n {
+                ans = ans.min(dp[mask]);
+                continue;
+            }
+            for j in 0..m {
+                if mask & (1 << j) == 0 {
+                    let d = (workers[i][0] - bikes[j][0]).abs() + (workers[i][1] - bikes[j][1]).abs();
+                    let next = mask | (1 << j);
+                    dp[next] = dp[next].min(dp[mask] + d);
+                }
+            }
+        }
+        ans
+    }
+}
+
+fn solution_arm(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let w: Vec[Vec[i32]] = workers.iter().map(|p| [p.0 as i32, p.1 as i32]).collect();
+    let b: Vec[Vec[i32]] = bikes.iter().map(|p| [p.0 as i32, p.1 as i32]).collect();
+    Solution.assign_bikes(w, b)
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` distinct points with both coordinates below `side`, none of them in
+// `taken`, each added to it.
+fn random_points(n: i64, side: i64, taken: mut ref Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    while points.len() < n {
+        let p = (next_random(mut seed) % side, next_random(mut seed) % side);
+        if not taken.contains(p) {
+            taken.push(p);
+            points.push(p);
+        }
+    }
+    points
+}
+
+fn arm(a: i64, workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    match a {
+        0 => star_arm(workers, bikes),
+        1 => memo_arm(workers, bikes),
+        2 => bound_arm(workers, bikes),
+        3 => dijkstra_arm(workers, bikes),
+        4 => hungarian_arm(workers, bikes),
+        _ => solution_arm(workers, bikes),
+    }
+}
+
+// The least total over every way to give each worker a different bike,
+// tried one by one.
+fn every_way(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)], w: i64, used: mut ref Vec[bool], total: i64) -> i64 {
+    if w == workers.len() {
+        return total;
+    }
+    let mut best = i64.MAX;
+    for b in 0..bikes.len() {
+        if not used[b] {
+            used[b] = true;
+            let d = (workers[w].0 - bikes[b].0).abs() + (workers[w].1 - bikes[b].1).abs();
+            best = best.min(every_way(workers, bikes, w + 1, mut used, total + d));
+            used[b] = false;
+        }
+    }
+    best
+}
+
+fn read_literally(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let mut used: Vec[bool] = Vec.filled(bikes.len(), false);
+    every_way(workers, bikes, 0, mut used, 0)
+}
+
+fn apart(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0).abs() + (a.1 - b.1).abs()
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)], seed: mut ref i64) {
+    // every random choice drawn before any arm answers, so the problems
+    // are the same whatever an arm gets wrong
+    let (dx, dy) = (next_random(mut seed) % 50, next_random(mut seed) % 50);
+    let spare = (next_random(mut seed) % 40, next_random(mut seed) % 40);
+    let far = next_random(mut seed) % 20;
+    // each worker's nearest bike, and the bikes taken in turn by nearest
+    let floor: i64 = workers.iter().map(|w| bikes.iter().map(|b| apart(w, b)).min().unwrap()).sum();
+    let mut free: Vec[bool] = Vec.filled(bikes.len(), true);
+    let mut greedy = 0;
+    for w in workers.iter() {
+        let mut pick = -1;
+        for b in 0..bikes.len() {
+            if free[b] and (pick == -1 or apart(w, bikes[b]) < apart(w, bikes[pick])) {
+                pick = b;
+            }
+        }
+        free[pick] = false;
+        greedy += apart(w, bikes[pick]);
+    }
+    let moved: Fn(Slice[(i64, i64)]) -> Vec[(i64, i64)] = |ps: Slice[(i64, i64)]| { ps.iter().map(|(x, y)| (y + dy, x + dx)).collect() };
+    let doubled: Fn(Slice[(i64, i64)]) -> Vec[(i64, i64)] = |ps: Slice[(i64, i64)]| { ps.iter().map(|(x, y)| (2 * x, 2 * y)).collect() };
+    let (moved_workers, moved_bikes) = (moved(workers), moved(bikes));
+    let back_workers: Vec[(i64, i64)] = workers.iter().rev().collect();
+    let back_bikes: Vec[(i64, i64)] = bikes.iter().rev().collect();
+    let (double_workers, double_bikes) = (doubled(workers), doubled(bikes));
+    let mut more_bikes: Vec[(i64, i64)] = bikes.to_vec();
+    more_bikes.push(spare);
+    let mut far_workers: Vec[(i64, i64)] = workers.to_vec();
+    far_workers.insert(0, (100000, 100000));
+    let mut far_bikes: Vec[(i64, i64)] = bikes.to_vec();
+    far_bikes.push((100000 + far, 100000 + far));
+    let want = read_literally(workers, bikes);
+    let answers: Vec[i64] = (0..6).map(|a| arm(a, workers, bikes)).collect();
+    for a in 0..6 {
+        let answer = answers[a];
+        let what = f"arm {a}, {workers} {bikes} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        expect(mut t, 2, answer >= floor and answer <= greedy, f"P2 {what}: between {floor} and {greedy}");
+        let other = arm(a, moved_workers, moved_bikes);
+        expect(mut t, 3, other == answer, f"P3 {what}: turned and moved -> {other}");
+        let back = arm(a, back_workers, back_bikes);
+        expect(mut t, 3, back == answer, f"P3 {what}: both reversed -> {back}");
+        let twice = arm(a, double_workers, double_bikes);
+        expect(mut t, 4, twice == 2 * answer, f"P4 {what}: doubled -> {twice}");
+        let spared = arm(a, workers, more_bikes);
+        expect(mut t, 5, spared <= answer, f"P5 {what}: with a bike at {spare} -> {spared}");
+        let farther = arm(a, far_workers, far_bikes);
+        expect(mut t, 5, farther == answer + 2 * far, f"P5 {what}: with a far pair {2 * far} apart -> {farther}");
+        let agree = (0..6).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 6, agree >= 3, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems: 1000 of 1 to 4 workers and up to 6 bikes on a 10 by
+    // 10 grid, and 1000 of 1 to 5 workers and up to 7 bikes on 30 by 30
+    let mut seed = 10661;
+    for i in 0..2000 {
+        let (most, bikes_most, side) = if i < 1000 { (4, 6, 10) } else { (5, 7, 30) };
+        let n = next_random(mut seed) % most + 1;
+        let m = n + next_random(mut seed) % (bikes_most + 1 - n);
+        let mut taken: Vec[(i64, i64)] = Vec.new();
+        let workers = random_points(n, side, mut taken, mut seed);
+        let bikes = random_points(m, side, mut taken, mut seed);
+        check_case(mut t, workers, bikes, mut seed);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

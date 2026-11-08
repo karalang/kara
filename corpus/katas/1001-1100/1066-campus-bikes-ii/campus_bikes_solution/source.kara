@@ -1,0 +1,115 @@
+// LeetCode #1066: Campus Bikes II -- LeetCode's Rust template, written as
+// Rust writes it and carried to Kāra by `karac fix`: the bitmask table
+// over the sets of bikes taken. O(2^m * m).
+
+struct Solution {}
+
+impl Solution {
+    pub fn assign_bikes(workers: Vec[Vec[i32]], bikes: Vec[Vec[i32]]) -> i32 {
+        let n = workers.len();
+        let m = bikes.len();
+        let mut dp = Vec.filled(1 << m, i32.MAX);
+        dp[0] = 0;
+        let mut ans = i32.MAX;
+        for mask in 0..(1 << m) {
+            if dp[mask] == i32.MAX {
+                continue;
+            }
+            let i = mask.count_ones();
+            if i == n {
+                ans = ans.min(dp[mask]);
+                continue;
+            }
+            for j in 0..m {
+                if mask & (1 << j) == 0 {
+                    let d = (workers[i][0] - bikes[j][0]).abs() + (workers[i][1] - bikes[j][1]).abs();
+                    let next = mask | (1 << j);
+                    dp[next] = dp[next].min(dp[mask] + d);
+                }
+            }
+        }
+        ans
+    }
+}
+
+fn assign_bikes(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let w: Vec[Vec[i32]] = workers.iter().map(|p| [p.0 as i32, p.1 as i32]).collect();
+    let b: Vec[Vec[i32]] = bikes.iter().map(|p| [p.0 as i32, p.1 as i32]).collect();
+    Solution.assign_bikes(w, b)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` distinct points with both coordinates below `side`, none of them in
+// `taken`, each added to it.
+fn random_points(n: i64, side: i64, taken: mut ref Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    while points.len() < n {
+        let p = (next_random(mut seed) % side, next_random(mut seed) % side);
+        if not taken.contains(p) {
+            taken.push(p);
+            points.push(p);
+        }
+    }
+    points
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples: Vec[(Vec[(i64, i64)], Vec[(i64, i64)])] = [
+        ([(0, 0), (2, 1)], [(1, 2), (3, 3)]),
+        ([(0, 0), (1, 1), (2, 0)], [(1, 0), (2, 2), (2, 1)]),
+        ([(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)], [(0, 999), (1, 999), (2, 999), (3, 999), (4, 999)]),
+        ([(5, 5)], [(5, 6)]),
+        ([(0, 0)], [(9, 9), (3, 4), (1, 1)]),
+        ([(0, 0), (10, 10)], [(10, 9), (0, 1)]),
+        ([(0, 0), (0, 2)], [(0, 1), (100, 100), (0, 3)]),
+    ];
+    for (workers, bikes) in examples.iter() {
+        println(f"{workers} {bikes} -> {assign_bikes(workers, bikes)}");
+    }
+    let mut seed = 1066;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 4 + 1;
+        let m = n + next_random(mut seed) % (7 - n);
+        let mut taken: Vec[(i64, i64)] = Vec.new();
+        let workers = random_points(n, 10, mut taken, mut seed);
+        let bikes = random_points(m, 10, mut taken, mut seed);
+        let answer = assign_bikes(workers, bikes);
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"2000 problems of 1 to 4 workers, 1 to 6 bikes: sum {sum}, checksum {check}");
+    sum = 0;
+    check = 0;
+    for _ in 0..100 {
+        let n = next_random(mut seed) % 8 + 1;
+        let m = n + next_random(mut seed) % (11 - n);
+        let mut taken: Vec[(i64, i64)] = Vec.new();
+        let workers = random_points(n, 1000, mut taken, mut seed);
+        let bikes = random_points(m, 1000, mut taken, mut seed);
+        let answer = assign_bikes(workers, bikes);
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"100 problems of 1 to 8 workers, 1 to 10 bikes: sum {sum}, checksum {check}");
+    // the largest: 10 workers and 10 bikes, at random, on a line, and each
+    // bike nearest a different worker than the one it should go to
+    let mut taken: Vec[(i64, i64)] = Vec.new();
+    let workers = random_points(10, 1000, mut taken, mut seed);
+    let bikes = random_points(10, 1000, mut taken, mut seed);
+    println(f"10 and 10 at random: {assign_bikes(workers, bikes)}");
+    let line_workers: Vec[(i64, i64)] = (0..10).map(|i| (i * 10, 0)).collect();
+    let line_bikes: Vec[(i64, i64)] = (0..10).map(|i| (i * 10 + 5, 0)).collect();
+    println(f"10 and 10 on a line: {assign_bikes(line_workers, line_bikes)}");
+    let ring_workers: Vec[(i64, i64)] = (0..10).map(|i| (i * 100, 500)).collect();
+    let ring_bikes: Vec[(i64, i64)] = (0..10).map(|i| ((i * 100 + 160) % 1000, 499 - i)).collect();
+    println(f"10 and 10 shifted: {assign_bikes(ring_workers, ring_bikes)}");
+}

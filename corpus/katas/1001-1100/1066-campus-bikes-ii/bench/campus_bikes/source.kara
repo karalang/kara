@@ -1,0 +1,63 @@
+// LeetCode #1066: Campus Bikes II -- the benchmark, the same table over
+// the sets of bikes taken as campus_bikes.kara.
+
+fn distance(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0).abs() + (a.1 - b.1).abs()
+}
+
+fn assign_bikes(workers: Slice[(i64, i64)], bikes: Slice[(i64, i64)]) -> i64 {
+    let n = workers.len();
+    let m = bikes.len();
+    let mut best: Vec[i64] = Vec.filled(1 << m, i64.MAX);
+    best[0] = 0;
+    let mut answer = i64.MAX;
+    for mask in 0..best.len() {
+        if best[mask] == i64.MAX {
+            continue;
+        }
+        let w = mask.count_ones();
+        if w == n {
+            answer = answer.min(best[mask]);
+            continue;
+        }
+        for b in 0..m {
+            if mask & (1 << b) == 0 {
+                let next = mask | (1 << b);
+                best[next] = best[next].min(best[mask] + distance(workers[w], bikes[b]));
+            }
+        }
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_points(n: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    (0..n).map(|_| (next_random(mut seed) % 1000, next_random(mut seed) % 1000)).collect()
+}
+
+fn main() {
+    // 5000 problems of 8 to 10 workers and 10 bikes on a 1000 by 1000
+    // grid, built once, then each answered
+    let mut seed = 1066;
+    let mut problems: Vec[(Vec[(i64, i64)], Vec[(i64, i64)])] = Vec.new();
+    for _ in 0..5000 {
+        let n = 8 + next_random(mut seed) % 3;
+        let workers = random_points(n, mut seed);
+        let bikes = random_points(10, mut seed);
+        problems.push((workers, bikes));
+    }
+    let mut calls = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for (workers, bikes) in problems.iter() {
+        let answer = assign_bikes(workers, bikes);
+        total += answer;
+        check = (check * 31 + answer) % 1000000007;
+        calls += 1;
+    }
+    println(f"{calls} calls: answers sum {total}, checksum {check}");
+}
