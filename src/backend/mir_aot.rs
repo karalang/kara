@@ -385,6 +385,15 @@ fn route_heap(module: &Module<'_>) {
 /// programs 0.914x geomean. Later on the same container, the same
 /// unaligned binary of 661 ran 0.27 s and alignment bought nothing,
 /// 0.985x geomean, while kata 207's queue loop ran 2.3x slower aligned.
+///
+/// Loops are unswitched on a condition they never change even when that
+/// takes a second copy of the loop (`-enable-nontrivial-unswitch`, which
+/// LLVM's pipeline turns on only at O3; rustc's O2 does it too). Kata
+/// 492's `while area % width != 0` otherwise tests `area == i64.MIN` on
+/// every step (4.02G against 3.45G instructions), and kata 277's
+/// verification loop keeps asking `knows(cand, j)` after `cand` is the
+/// planted celebrity (3.19G against 1.08G; B-2026-11-08-3).
+/// `KARAC_MIR_UNSWITCH=0` leaves it to LLVM's level.
 fn unroll_threshold() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -400,6 +409,14 @@ fn unroll_threshold() {
             args.push(
                 std::ffi::CString::new("-x86-branches-within-32B-boundaries").unwrap_or_default(),
             );
+        }
+        if std::env::var("KARAC_MIR_UNSWITCH").as_deref() != Ok("0") {
+            args.push(std::ffi::CString::new("-enable-nontrivial-unswitch").unwrap_or_default());
+            if let Ok(t) = std::env::var("KARAC_MIR_UNSWITCH_THRESHOLD") {
+                args.push(
+                    std::ffi::CString::new(format!("-unswitch-threshold={t}")).unwrap_or_default(),
+                );
+            }
         }
         let fold = std::env::var("KARAC_MIR_PHI_FOLD_THRESHOLD")
             .ok()
