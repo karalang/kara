@@ -1,0 +1,21 @@
+// design.md §5: a literal inside `Some(..)` / `Ok(..)` / a tuple takes the
+// element type the other operand fixes, a view (`Option[ref i64]`) or a
+// narrower number (`Option[i32]`), as a string literal does.
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m["k"] = -3;
+    let k = "k".to_string();
+    let z = "z".to_string();
+    println(f"{m.get(k) == Some(-3)} {Some(3) == m.get(k)} {m.get(k) != Some(-3)} {m.get(z) == Some(0)}");
+    let f: Vec[f32] = [0.5, 2.0];
+    println(f"{f.last() == Some(2.0)} {f.first() == Some(2.0)}");
+    let u: Vec[u64] = [7];
+    println(f"{u.first() == Some(7)} {u.first() == Some(8)}");
+    let c: Vec[char] = ['x'];
+    let p: Option[(i32, char)] = Some((1, 'x'));
+    println(f"{c.first() != Some('x')} {p == Some((1, 'x'))}");
+    let o: Option[i32] = Some(4);
+    let r: Result[i32, String] = Ok(4);
+    let b: Vec[bool] = [true];
+    println(f"{o == Some(4)} {r == Ok(4)} {b.last() == Some(true)}");
+}

@@ -1,0 +1,12 @@
+source = "design.md §5 (a literal takes the type the other operand fixes)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["comparison", "literals", "option"]
+class = "a"
+expected_from = "spec"
+rules = ["5.10"]
+backends = []
+env = {}
+note = "B-2026-11-08-22: `m.get(k) == Some(-3)` over `Option[ref i64]`, `f.last() == Some(2.0)` over `Option[ref f32]`, `o == Some(4)` over `Option[i32]` and `r == Ok(4)` were refused as mismatches; only string literals were promoted (B-2026-11-07-54)."
+bucket = "a"

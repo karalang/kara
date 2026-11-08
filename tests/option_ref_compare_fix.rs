@@ -5,7 +5,9 @@
 //! and `!=`, after a `Map.get` and a `Vec.get`, and on an ordering. A
 //! non-`Copy` item compared with `Some(place)` gets `Some(ref place)`
 //! (B-2026-11-04-61); any other non-`Copy` shape gets `.cloned()` too
-//! (B-2026-11-07-54).
+//! (B-2026-11-07-54). A LITERAL in the constructor takes the viewed
+//! element type instead, so `m.get(1) == Some(5)` itself is accepted
+//! (B-2026-11-08-22); the fix is for a place.
 
 use std::process::{Command, Stdio};
 
@@ -33,7 +35,9 @@ fn karac_fix_clones_the_viewed_side_of_an_option_compare() {
     m.insert(1, 5);
     let v: Vec[i64] = vec![5, 6];
     let o: Option[i64] = Some(5);
-    println(f\"{m.get(1) == Some(5)} {Some(6) != m.get(1)} {v.get(1) == o.map(|x| x + 1)} {m.get(2) == None}\");
+    let n: i64 = 5;
+    let s: i64 = 6;
+    println(f\"{m.get(1) == Some(n)} {Some(s) != m.get(1)} {v.get(1) == o.map(|x| x + 1)} {m.get(2) == None}\");
     println(f\"{m.get(1) < o}\");
 }
 ";
@@ -53,8 +57,8 @@ fn karac_fix_clones_the_viewed_side_of_an_option_compare() {
     );
     let out = std::fs::read_to_string(&path).unwrap();
     for want in [
-        "m.get(1).cloned() == Some(5)",
-        "Some(6) != m.get(1).cloned()",
+        "m.get(1).cloned() == Some(n)",
+        "Some(s) != m.get(1).cloned()",
         "v.get(1).cloned() == o.map(",
         "m.get(2) == None",
         "m.get(1).cloned() < o",

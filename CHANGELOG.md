@@ -86,6 +86,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   passed the reference's address in a compiled program and stopped the
   interpreter on `Add on Int and Ref`; it now adds the value
   (B-2026-11-08-31).
+- **A number, `char` or `bool` literal inside `Some(..)`, `Ok(..)` or a
+  tuple compares with the other side's element type.** `m.get(k) ==
+  Some(3)` over a `Map[String, i64]`, `v.first() == Some('a')`, and
+  `o == Some(4)` with `o: Option[i32]` were refused as mismatches; only a
+  string literal was promoted (B-2026-11-08-22).
 
 ### Performance
 

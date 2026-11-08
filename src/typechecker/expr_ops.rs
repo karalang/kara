@@ -3935,6 +3935,24 @@ impl<'a> super::TypeChecker<'a> {
     /// B-2026-11-07-54). An owned `String` slot is what the literal already
     /// types as, so it fits too, but at least one literal must not.
     fn text_literal_takes(e: &Expr, want: &Type) -> bool {
+        /// An unsuffixed number literal (or its negation) into a number
+        /// type, a `char` literal into `char`, a `bool` into `bool`.
+        fn scalar_literal_fits(e: &Expr, want: &Type) -> bool {
+            match (&e.kind, want) {
+                (ExprKind::Integer(_, None), Type::Int(_) | Type::UInt(_) | Type::Float(_)) => true,
+                (ExprKind::Float(_, None), Type::Float(_)) => true,
+                (
+                    ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        operand,
+                    },
+                    Type::Int(_) | Type::Float(_),
+                ) => scalar_literal_fits(operand, want),
+                (ExprKind::CharLit(_), Type::Char) => true,
+                (ExprKind::Bool(_), Type::Bool) => true,
+                _ => false,
+            }
+        }
         fn fits(e: &Expr, want: &Type, retyped: &mut bool) -> bool {
             match (&e.kind, want) {
                 (ExprKind::StringLit(_), Type::Str) => true,
@@ -3944,6 +3962,26 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 (ExprKind::StringLit(_), Type::Ref(inner)) if **inner == Type::Str => {
                     *retyped = true;
+                    true
+                }
+                // A number, `char` or `bool` literal takes a `Copy` element
+                // the other side views or narrows: `m.get(k) == Some(3)`
+                // over `Option[ref i64]`, `o == Some(4)` over `Option[i32]`
+                // (design.md §5; B-2026-11-08-22).
+                (_, Type::Ref(inner)) if scalar_literal_fits(e, inner) => {
+                    *retyped = true;
+                    true
+                }
+                (_, w) if scalar_literal_fits(e, w) => {
+                    if !matches!(
+                        w,
+                        Type::Int(IntSize::I64)
+                            | Type::Float(super::types::FloatSize::F64)
+                            | Type::Char
+                            | Type::Bool
+                    ) {
+                        *retyped = true;
+                    }
                     true
                 }
                 (ExprKind::Tuple(es), Type::Tuple(ws))
@@ -3969,6 +4007,13 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 _ => false,
             }
+        }
+        // A bare number literal operand keeps its own comparison rule
+        // (`c < 300` over a `u8` compares wider); only one inside a
+        // constructor or tuple takes the element type.
+        if scalar_literal_fits(e, want) || matches!(want, Type::Ref(t) if scalar_literal_fits(e, t))
+        {
+            return false;
         }
         let mut retyped = false;
         fits(e, want, &mut retyped) && retyped
