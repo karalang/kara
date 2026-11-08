@@ -210,6 +210,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- **`s.chars().last()` reads the last char from the back** instead of
+  walking the whole text, on a `String` and on a `Str` view, as Rust's
+  `Chars::last` does. Kata 2030's string arm, which reads the top of its
+  stack this way, was quadratic; 20000 reads of a 20000-char string went
+  from over two minutes under the interpreter to a third of a second
+  (B-2026-11-08-81).
+
 - **The overflow-safe midpoint `lo + (hi - lo) / 2` halves with a shift**
   under its `lo < hi` guard, which keeps `hi - lo` positive; the signed
   division's sign fixup is gone. Kata 1064 on x86 went from 260 ms to

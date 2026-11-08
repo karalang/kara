@@ -1015,6 +1015,13 @@ impl Iterator for StrChars {
         self.pos = self.pos.wrapping_add(c.len_utf8());
         Some(c)
     }
+
+    /// The last char, read from the back rather than by walking the text,
+    /// as Rust's `Chars::last` does.
+    fn last(own self) -> Option[char] {
+        let mut it = self;
+        it.next_back()
+    }
 }
 
 impl DoubleEndedIterator for StrChars {
@@ -1054,6 +1061,12 @@ impl Iterator for StrViewChars {
         let c = self.s.char_at_byte(self.pos);
         self.pos = self.pos.wrapping_add(c.len_utf8());
         Some(c)
+    }
+
+    /// As `StrChars.last`.
+    fn last(own self) -> Option[char] {
+        let mut it = self;
+        it.next_back()
     }
 }
 
