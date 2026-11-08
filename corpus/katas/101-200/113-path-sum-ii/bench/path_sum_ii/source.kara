@@ -17,10 +17,7 @@ fn dfs(node: Option[TreeNode], target: i64, path: mut ref Vec[i64], out: mut ref
             let right_none = match n.right { None => true, Some(_) => false };
             if left_none and right_none {
                 if rem == 0 {
-                    let mut copy: Vec[i64] = Vec.new();
-                    let mut i = 0;
-                    while i < path.len() { copy.push(path[i]); i = i + 1; }
-                    out.push(copy);
+                    out.push(path.clone());
                 }
             } else {
                 dfs(n.left, rem, mut path, mut out);
