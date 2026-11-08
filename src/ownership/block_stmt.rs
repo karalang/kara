@@ -311,10 +311,23 @@ impl<'a> super::OwnershipChecker<'a> {
                         .typecheck_result
                         .expr_type(value)
                         .is_some_and(crate::ownership::type_is_deeply_owned);
-                    if copied_out {
+                    // A destructuring pattern hands each name its own part:
+                    // a name whose part is deeply owned (`at: i64` in
+                    // `let (at, _) = s.iter().enumerate().next().unwrap()`)
+                    // copied it out and holds no borrow (B-2026-11-08-12).
+                    let mut owned_parts = Vec::new();
+                    if let Some(ty) = self.typecheck_result.expr_type(value) {
+                        crate::ownership::deeply_owned_pattern_names(pattern, ty, &mut owned_parts);
+                    }
+                    let holders: Vec<String> = pattern
+                        .binding_names()
+                        .into_iter()
+                        .filter(|n| !owned_parts.contains(n))
+                        .collect();
+                    if copied_out || holders.is_empty() {
                         self.end_copied_out_slice_borrow(&borrow_key);
                     } else {
-                        for name in pattern.binding_names() {
+                        for name in holders {
                             self.slice_binding_keys.insert(name.clone(), borrow_key);
                             self.slice_binding_sources
                                 .insert(name.clone(), entry.clone());

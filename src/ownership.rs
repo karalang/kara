@@ -1284,6 +1284,22 @@ pub struct OwnershipCheckResult {
 /// see through (type params, unresolved vars, projections, closures —
 /// which may capture borrows): those return `false`, keeping the
 /// pre-existing propagate-the-borrow behavior.
+/// The names `pattern` binds to a deeply owned part of a value of type
+/// `ty`, walking tuple patterns over tuple types; any other destructuring
+/// shape is left out, so its names are treated as borrow-carrying
+/// (B-2026-11-08-12).
+pub(crate) fn deeply_owned_pattern_names(pattern: &Pattern, ty: &Type, out: &mut Vec<String>) {
+    match (&pattern.kind, ty) {
+        (PatternKind::Binding(name), _) if type_is_deeply_owned(ty) => out.push(name.clone()),
+        (PatternKind::Tuple(parts), Type::Tuple(elems)) if parts.len() == elems.len() => {
+            for (p, t) in parts.iter().zip(elems) {
+                deeply_owned_pattern_names(p, t, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn type_is_deeply_owned(ty: &Type) -> bool {
     match ty {
         Type::Int(_)
