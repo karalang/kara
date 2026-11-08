@@ -2255,11 +2255,17 @@ impl<'a> Resolver<'a> {
     ///
     /// Python's `Dict` (the `typing` name) is a `Map` too: it was otherwise
     /// "did you mean 'Div'?" (B-2026-11-07-53).
+    ///
+    /// Other languages' double-ended queues are `VecDeque`: Java's and
+    /// Kotlin's `Deque` / `ArrayDeque`, Python's `deque`, Java's `Queue`
+    /// and Rust's `LinkedList` when it is used as one. Edit distance does
+    /// not reach `VecDeque` from them (B-2026-11-08-59, kata 1522).
     fn renamed_stdlib_type(name: &str) -> Option<&'static str> {
         match name {
             "TreeMap" => Some("SortedMap"),
             "Dict" => Some("Map"),
             "TreeSet" => Some("SortedSet"),
+            "Deque" | "ArrayDeque" | "deque" | "Queue" | "LinkedList" => Some("VecDeque"),
             _ => crate::parser::rust_collection_rename(name),
         }
     }

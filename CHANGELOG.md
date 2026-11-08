@@ -255,6 +255,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- An undefined `Deque`, `ArrayDeque`, `deque`, `Queue` or `LinkedList` names
+  `VecDeque`, and `karac fix` writes it, as `HashMap` names `Map`
+  (B-2026-11-08-59).
 - **A method that changes a slice in place, called on a local bound from a
   view, names the binding and carries `.to_vec()`.** `let mut b =
   s.bytes(); b.sort()` said only "Slice.sort() requires a mutable slice";
