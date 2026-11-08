@@ -1867,8 +1867,25 @@ impl<'a> super::Resolver<'a> {
         let wanted = deepest.join(".");
         let names = crate::prelude::importable_stdlib_module_names();
         let candidates: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-        let suggestion = suggest_similar(&wanted, &candidates);
+        // Rust's `std::rc` / `std::cell` have no Kāra module to be near:
+        // `std.io` is no answer to `std.rc` (B-2026-11-08-65).
+        let rust_rc = wanted == "std.rc"
+            || wanted == "std.cell"
+            || wanted.starts_with("std.rc.")
+            || wanted.starts_with("std.cell.");
+        let suggestion = if rust_rc {
+            None
+        } else {
+            suggest_similar(&wanted, &candidates)
+        };
         let mut message = format!("unknown module `{wanted}`");
+        if rust_rc {
+            message.push_str(
+                ": `Rc` and `RefCell` are Rust's, and Kāra has neither; a `shared struct` is \
+                 reference counted with `mut` fields writable through any handle (design.md \
+                 §11), so `Rc<RefCell<T>>` is a `T` declared `shared struct`",
+            );
+        }
         if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean `{s}`?"));
         }

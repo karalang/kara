@@ -17,6 +17,7 @@ mod items_effects;
 mod items_extern;
 mod items_trait;
 mod patterns;
+mod rust_rc;
 mod stmts;
 mod types;
 
@@ -445,6 +446,10 @@ pub struct Parser {
     /// see [`ParseResult::fix_diffs`] for why a repair sometimes needs both
     /// halves or neither.
     pub(crate) fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// Whether a `use std::rc::Rc;` / `use std::cell::RefCell;` line has
+    /// carried the `Rc<RefCell<T>>` rewrite already (`parser/rust_rc.rs`):
+    /// the second such line deletes only itself. B-2026-11-08-65.
+    pub(crate) rc_envelope_done: bool,
     /// While a `let` pattern is parsed: where the pattern starts, and
     /// whether `mut` already stands before it. A `mut` inside the pattern
     /// (Rust's `let (mut a, b)`) is then answered with the Kāra spelling
@@ -606,6 +611,7 @@ impl Parser {
             keyword_block_is_name: false,
             fix_edits: FxHashMap::default(),
             fix_diffs: FxHashMap::default(),
+            rc_envelope_done: false,
             let_pattern: None,
             pattern_muts: Vec::new(),
             amp_sigils: Vec::new(),

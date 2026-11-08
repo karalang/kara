@@ -342,7 +342,7 @@ impl super::Parser {
                 ref name,
                 raw: false,
             } if name == "use" && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) => {
-                if self.reject_rust_prelude_import() {
+                if self.reject_rust_prelude_import() || self.reject_rust_rc_import() {
                     return None;
                 }
                 let use_span = self.current_span();
@@ -361,7 +361,7 @@ impl super::Parser {
                 self.import_item(is_pub)
             }
             Token::Import => {
-                if self.reject_rust_prelude_import() {
+                if self.reject_rust_prelude_import() || self.reject_rust_rc_import() {
                     return None;
                 }
                 self.import_item(is_pub)

@@ -2203,6 +2203,7 @@ impl<'a> Resolver<'a> {
                  with an f-string `f\"{x}\"`",
                 call,
             ),
+            "Rc" | "RefCell" => (RC_REFCELL_HELP, None),
             _ => return false,
         };
         self.errors.push(ResolveError {
@@ -2413,6 +2414,17 @@ impl<'a> Resolver<'a> {
         if self.wildcard_hides_unresolved_names() {
             return;
         }
+        if matches!(name, "Rc" | "RefCell") {
+            self.errors.push(ResolveError {
+                message: RC_REFCELL_HELP.to_string(),
+                span,
+                kind: ResolveErrorKind::UndefinedType,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
         let visible = self.suggestable_names();
         // A known rename wins over edit distance — `TreeMap` is nowhere near
         // `SortedMap` by distance, so the generic suggester cannot find it.
@@ -2568,3 +2580,11 @@ const METHOD_SPELLED_AS_FUNCTION: &[&str] = &[
     "contains",
     "clamp",
 ];
+
+/// What `Rc` and `RefCell`, as a name or a type, are in Kāra; the fix is
+/// the parser's, at the `use std::rc::Rc;` line (`parser/rust_rc.rs`).
+/// B-2026-11-08-65.
+const RC_REFCELL_HELP: &str = "`Rc` and `RefCell` are Rust's: Kāra has neither. A `shared struct` \
+     is reference counted, and its `mut` fields can be written through any handle (design.md \
+     §11), so `Rc<RefCell<T>>` is a `T` declared `shared struct` with `mut` fields, \
+     `Rc::new(RefCell::new(x))` is `x`, and `.borrow()` / `.borrow_mut()` are the handle itself";

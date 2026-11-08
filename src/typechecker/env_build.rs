@@ -3116,11 +3116,26 @@ impl<'a> super::TypeChecker<'a> {
                 .iter()
                 .map(|p| self.lower_type_expr(&p.ty, &lowering_scope))
                 .collect();
-            let return_type = method
+            let mut return_type = method
                 .return_type
                 .as_ref()
                 .map(|t| self.lower_type_expr(t, &lowering_scope))
                 .unwrap_or(Type::Unit);
+            // `Self` in an impl of a non-generic `shared` / `sync` struct is
+            // the handle type its name lowers to, `Type::Shared`; left as
+            // `Self` a call's result read as a plain `Node` and was "expected
+            // 'Node', found 'Node'" against any annotation (B-2026-11-08-70).
+            let mut params = params;
+            if let Some(info) = self.env.structs.get(&type_name) {
+                if (info.is_shared || info.is_par) && info.generic_params.is_empty() {
+                    let handle = Type::Shared(type_name.clone());
+                    return_type = Self::resolve_self_in_type(return_type, &handle);
+                    params = params
+                        .into_iter()
+                        .map(|p| Self::resolve_self_in_type(p, &handle))
+                        .collect();
+                }
+            }
             methods.insert(
                 method.name.clone(),
                 FunctionSig {
