@@ -1,0 +1,853 @@
+// mini_multidict: the `multidict` package that aiohttp and yarl keep HTTP
+// headers and query strings in. A key may appear more than once and every
+// pair keeps its place; a case-insensitive variant serves headers,
+// read-only proxies sit over both, and the key and item views work as
+// sets. README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+
+// ------------------------------------------------------------ text
+
+/// A script word as text: `\s` is a space.
+fn text(word: Str) -> String {
+    word.replace("\\s", " ")
+}
+
+/// Python's `repr` of a string, for the characters the script uses.
+fn py_repr(s: Str) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_list(items: Slice[String]) -> String {
+    let parts: Vec[String] = items.iter().map(|s| py_repr(s)).collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn repr_pair(k: Str, v: Str) -> String {
+    f"({py_repr(k)}, {py_repr(v)})"
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+/// `K=V` words as pairs, split at the first `=`.
+fn pairs(words: Slice[String]) -> Result[Vec[(String, String)], String] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for w in words.iter() {
+        let Some(i) = w.find("=") else {
+            return Err(f"bad pair {w}");
+        };
+        out.push((text(w[0..i]), text(w[i + 1..])));
+    }
+    Ok(out)
+}
+
+/// A set as the report prints it: sorted, each member once.
+fn show_set(members: own Vec[String]) -> String {
+    let mut members = members;
+    if members.is_empty() {
+        return "set()";
+    }
+    members.sort();
+    members.dedup();
+    f"{{{members.join(", ")}}}"
+}
+
+// ------------------------------------------------------------ multidict
+
+/// One entry: the key as written, the identity lookups compare, the value.
+#[derive(Clone)]
+struct Record {
+    key: String,
+    identity: String,
+    value: String,
+}
+
+/// A `MultiDict`, or with `ci` a `CIMultiDict`: its entries in order.
+#[derive(Clone)]
+struct Md {
+    ci: bool,
+    entries: Vec[Record],
+}
+
+impl Md {
+    fn new(ci: bool) -> Md {
+        Md { ci, entries: Vec.new() }
+    }
+
+    fn from_pairs(ci: bool, items: Slice[(String, String)]) -> Md {
+        let mut md = Md.new(ci);
+        md.extend(items);
+        md
+    }
+
+    fn class_name(ref self) -> String {
+        if self.ci { "CIMultiDict".to_string() } else { "MultiDict".to_string() }
+    }
+
+    /// The identity of a key: itself, or lowercased in a `CIMultiDict`.
+    fn identity(ref self, key: Str) -> String {
+        if self.ci { key.to_lowercase() } else { key.to_string() }
+    }
+
+    fn entry(ref self, key: Str, value: Str) -> Record {
+        Record { key: key.to_string(), identity: self.identity(key), value: value.to_string() }
+    }
+
+    fn pairs(ref self) -> Vec[(String, String)] {
+        self.entries.iter().map(|e| (e.key.clone(), e.value.clone())).collect()
+    }
+
+    /// The positions of the entries matching a key, in order.
+    fn matches(ref self, key: Str) -> Vec[i64] {
+        let id = self.identity(key);
+        let mut out: Vec[i64] = Vec.new();
+        for (i, e) in self.entries.iter().enumerate() {
+            if e.identity == id {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    fn first(ref self, key: Str) -> Option[i64] {
+        let id = self.identity(key);
+        self.entries.iter().position(|e| e.identity == id)
+    }
+
+    fn contains(ref self, key: Str) -> bool {
+        self.first(key).is_some()
+    }
+
+    fn has_item(ref self, key: Str, value: Str) -> bool {
+        let id = self.identity(key);
+        self.entries.iter().any(|e| e.identity == id and e.value == value)
+    }
+
+    /// The positions of the first entry of each identity, in order.
+    fn first_entries(ref self) -> Vec[i64] {
+        let mut seen: Set[String] = Set.new();
+        let mut out: Vec[i64] = Vec.new();
+        for (i, e) in self.entries.iter().enumerate() {
+            if seen.insert(e.identity.clone()) {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    fn keys(ref self) -> Vec[String] {
+        self.first_entries().iter().map(|i| self.entries[i].key.clone()).collect()
+    }
+
+    fn values(ref self) -> Vec[String] {
+        self.entries.iter().map(|e| e.value.clone()).collect()
+    }
+
+    fn getone(ref self, key: Str) -> Result[String, String] {
+        match self.first(key) {
+            Some(i) => Ok(self.entries[i].value.clone()),
+            None => Err(not_found(key)),
+        }
+    }
+
+    fn getall(ref self, key: Str) -> Result[Vec[String], String] {
+        let found: Vec[String] = self.matches(key).iter().map(|i| self.entries[i].value.clone()).collect();
+        if found.is_empty() {
+            return Err(not_found(key));
+        }
+        Ok(found)
+    }
+
+    fn add(mut ref self, key: Str, value: Str) {
+        let e = self.entry(key, value);
+        self.entries.push(e);
+    }
+
+    fn extend(mut ref self, items: Slice[(String, String)]) {
+        for (k, v) in items.iter() {
+            self.add(k, v);
+        }
+    }
+
+    /// `md[key] = value`: the first match takes the key and value, the
+    /// other matches go; with none, the pair is appended.
+    fn set(mut ref self, key: Str, value: Str) {
+        let found = self.matches(key);
+        if found.is_empty() {
+            self.add(key, value);
+            return;
+        }
+        let first = found[0];
+        self.entries[first].key = key.to_string();
+        self.entries[first].value = value.to_string();
+        let mut k = found.len() - 1;
+        while k > 0 {
+            self.entries.remove(found[k]);
+            k -= 1;
+        }
+    }
+
+    /// Drops every match; the values, in order.
+    fn take_all(mut ref self, key: Str) -> Vec[String] {
+        let id = self.identity(key);
+        let mut taken: Vec[String] = Vec.new();
+        let mut kept: Vec[Record] = Vec.new();
+        for e in self.entries.iter() {
+            if e.identity == id {
+                taken.push(e.value.clone());
+            } else {
+                kept.push(e.clone());
+            }
+        }
+        self.entries = kept;
+        taken
+    }
+
+    fn popone(mut ref self, key: Str) -> Option[String] {
+        let i = self.first(key)?;
+        Some(self.entries.remove(i).value)
+    }
+
+    fn setdefault(mut ref self, key: Str, value: Str) -> String {
+        match self.first(key) {
+            Some(i) => self.entries[i].value.clone(),
+            None => {
+                self.add(key, value);
+                value.to_string()
+            }
+        }
+    }
+
+    /// `update`: each pair goes into the first match this call has not
+    /// written, or is appended; at the end the matches of a written key
+    /// that the call did not write are dropped.
+    fn update(mut ref self, items: Slice[(String, String)]) {
+        let mut written: Vec[bool] = Vec.filled(self.entries.len(), false);
+        let mut doomed: Vec[bool] = Vec.filled(self.entries.len(), false);
+        for (k, v) in items.iter() {
+            let id = self.identity(k);
+            let mut found = false;
+            for i in 0..self.entries.len() {
+                if self.entries[i].identity != id or written[i] {
+                    continue;
+                }
+                if not found {
+                    found = true;
+                    written[i] = true;
+                    doomed[i] = false;
+                    self.entries[i].key = k.clone();
+                    self.entries[i].value = v.clone();
+                } else {
+                    doomed[i] = true;
+                }
+            }
+            if not found {
+                self.add(k, v);
+                written.push(true);
+                doomed.push(false);
+            }
+        }
+        let mut kept: Vec[Record] = Vec.new();
+        for (i, e) in self.entries.iter().enumerate() {
+            if not doomed[i] {
+                kept.push(e.clone());
+            }
+        }
+        self.entries = kept;
+    }
+
+    /// `merge`: appends each pair whose identity was not there before.
+    fn merge(mut ref self, items: Slice[(String, String)]) {
+        let before: Set[String] = self.entries.iter().map(|e| e.identity.clone()).collect();
+        for (k, v) in items.iter() {
+            if not before.contains(self.identity(k)) {
+                self.add(k, v);
+            }
+        }
+    }
+
+    fn to_dict(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for i in self.first_entries().iter() {
+            let key = self.entries[i].key.clone();
+            let values = self.getall(key).unwrap_or(Vec.new());
+            parts.push(f"{py_repr(key)}: {repr_list(values)}");
+        }
+        f"{{{parts.join(", ")}}}"
+    }
+
+    fn repr_items(ref self) -> String {
+        let parts: Vec[String] = self.entries.iter().map(|e| f"{py_repr(e.key)}: {py_repr(e.value)}").collect();
+        parts.join(", ")
+    }
+
+    /// `==`: equal lengths, and entry by entry equal identities and values.
+    fn equals(ref self, other: ref Md) -> bool {
+        if self.entries.len() != other.entries.len() {
+            return false;
+        }
+        for i in 0..self.entries.len() {
+            if self.entries[i].identity != other.entries[i].identity or self.entries[i].value != other.entries[i].value {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `==` against a plain dict: equal lengths, and the dict's value at
+    /// each entry's key equal to the entry's value.
+    fn equals_dict(ref self, dict: Map[String, String]) -> bool {
+        if self.entries.len() != dict.len() {
+            return false;
+        }
+        self.entries.iter().all(|e| dict.get(e.key) == Some(ref e.value))
+    }
+}
+
+fn not_found(key: Str) -> String {
+    let message = f"Key not found: {py_repr(key)}";
+    f"KeyError: {py_repr(message)}"
+}
+
+fn key_error(key: Str) -> String {
+    f"KeyError: {py_repr(key)}"
+}
+
+// ------------------------------------------------------------ views as sets
+
+/// `keyset NAME OP WORDS`.
+fn key_set(md: ref Md, op: Str, words: Slice[String]) -> Result[String, String] {
+    let ids: Set[String] = words.iter().map(|w| md.identity(w)).collect();
+    let keys = md.keys();
+    let unmatched: Vec[String] = words.iter().filter(|w| not md.contains(w)).map(|w| w.clone()).collect();
+    let not_named: Vec[String] = keys.iter().filter(|k| not ids.contains(md.identity(k))).map(|k| k.clone()).collect();
+    let out: Vec[String] = match op {
+        "and" => {
+            let mut v: Vec[String] = Vec.new();
+            for w in words.iter() {
+                if let Some(i) = md.first(w) {
+                    v.push(md.entries[i].key.clone());
+                }
+            }
+            v
+        }
+        "rand" => words.iter().filter(|w| md.contains(w)).map(|w| w.clone()).collect(),
+        "or" => {
+            let mut v = keys.clone();
+            v.extend(unmatched);
+            v
+        }
+        "ror" => {
+            let mut v = words.to_vec();
+            v.extend(not_named);
+            v
+        }
+        "sub" => not_named,
+        "rsub" => unmatched,
+        "xor" => {
+            let mut v = not_named;
+            v.extend(unmatched);
+            v
+        }
+        "disjoint" => return Ok(py_bool(unmatched.len() == words.len())),
+        _ => return Err(f"bad set operation {op}"),
+    };
+    Ok(show_set(out.iter().map(|s| py_repr(s)).collect()))
+}
+
+/// `itemset NAME OP PAIRS`.
+fn item_set(md: ref Md, op: Str, items: Slice[(String, String)]) -> Result[String, String] {
+    let named: Set[(String, String)] = items.iter().map(|(k, v)| (md.identity(k), v.clone())).collect();
+    let entries: Vec[(String, String)] = md.pairs();
+    let unmatched: Vec[(String, String)] = items.iter().filter(|(k, v)| not md.has_item(k, v)).map(|p| p.clone()).collect();
+    let not_named: Vec[(String, String)] = md.entries.iter()
+        .filter(|e| not named.contains((e.identity.clone(), e.value.clone())))
+        .map(|e| (e.key.clone(), e.value.clone()))
+        .collect();
+    let out: Vec[(String, String)] = match op {
+        "and" => {
+            let mut v: Vec[(String, String)] = Vec.new();
+            for (k, val) in items.iter() {
+                for i in md.matches(k).iter() {
+                    if md.entries[i].value == val {
+                        v.push((md.entries[i].key.clone(), val.clone()));
+                    }
+                }
+            }
+            v
+        }
+        "rand" => items.iter().filter(|(k, v)| md.has_item(k, v)).map(|p| p.clone()).collect(),
+        "or" => {
+            let mut v = entries;
+            v.extend(unmatched);
+            v
+        }
+        "ror" => {
+            let mut v = items.to_vec();
+            v.extend(not_named);
+            v
+        }
+        "sub" => not_named,
+        "rsub" => unmatched,
+        "xor" => {
+            let mut v = not_named;
+            v.extend(unmatched);
+            v
+        }
+        "disjoint" => return Ok(py_bool(unmatched.len() == items.len())),
+        _ => return Err(f"bad set operation {op}"),
+    };
+    let mut sorted = out;
+    sorted.sort();
+    Ok(show_set(sorted.iter().map(|(k, v)| repr_pair(k, v)).collect()))
+}
+
+// ------------------------------------------------------------ the player
+
+/// A name's object: a multidict, or a proxy of either kind over the
+/// multidict another name holds.
+enum Obj {
+    Dict(Md),
+    Proxy(bool, String),
+}
+
+struct Player {
+    objs: Map[String, Obj],
+}
+
+/// How many words a command takes after the name.
+fn want(cmd: Str, rest: Slice[String], lo: i64, hi: i64) -> Result[(), String] {
+    if rest.len() >= lo and rest.len() <= hi {
+        return Ok(());
+    }
+    let n = if lo == hi { f"{lo}" } else { f"{lo} or {hi}" };
+    let s = if n == "1" { "" } else { "s" };
+    Err(f"{cmd} takes {n} word{s} after the name")
+}
+
+impl Player {
+    fn fresh(ref self, name: Str) -> Result[String, String] {
+        if self.objs.contains_key(name) {
+            return Err(f"{name} exists");
+        }
+        Ok(name.to_string())
+    }
+
+    /// The multidict a name shows: its own, or a proxy's target.
+    fn md(ref self, name: Str) -> Result[ref Md, String] {
+        match self.objs.get(name) {
+            Some(Obj.Dict(md)) => Ok(md),
+            Some(Obj.Proxy(_, target)) => match self.objs.get(target) {
+                Some(Obj.Dict(md)) => Ok(md),
+                _ => Err(f"no multidict {target}"),
+            },
+            None => Err(f"no multidict {name}"),
+        }
+    }
+
+    /// A name's class, as Python names it.
+    fn class_name(ref self, name: Str) -> String {
+        match self.objs.get(name) {
+            Some(Obj.Dict(md)) => md.class_name(),
+            Some(Obj.Proxy(ci, _)) => if ci { "CIMultiDictProxy".to_string() } else { "MultiDictProxy".to_string() },
+            None => String.new(),
+        }
+    }
+
+    /// `from OTHER` or `K=V` pairs, as pairs taken before anything changes.
+    fn source(ref self, words: Slice[String]) -> Result[Vec[(String, String)], String] {
+        if not words.is_empty() and words[0] == "from" {
+            if words.len() != 2 {
+                return Err("usage: ... from OTHER");
+            }
+            return Ok(self.md(words[1])?.pairs());
+        }
+        pairs(words)
+    }
+
+    fn run(mut ref self, words: Slice[String]) -> Result[Vec[String], String] {
+        let cmd = words[0].as_str();
+        let args = words[1..];
+        let none: Vec[String] = Vec.new();
+        match cmd {
+            "new" => {
+                if args.len() < 2 or not ["md", "ci"].contains(args[1].as_str()) {
+                    return Err("usage: new NAME md|ci [K=V ...] | new NAME md|ci from OTHER");
+                }
+                let name = self.fresh(args[0])?;
+                let items = self.source(args[2..])?;
+                self.objs.insert(name, Obj.Dict(Md.from_pairs(args[1] == "ci", items)));
+                return Ok(none);
+            }
+            "proxy" => {
+                if args.len() != 3 or not ["md", "ci"].contains(args[1].as_str()) {
+                    return Err("usage: proxy NAME md|ci OF");
+                }
+                let name = self.fresh(args[0])?;
+                let target_md = self.md(args[2])?;
+                let ci = args[1] == "ci";
+                let of_class = self.class_name(args[2]);
+                if ci and not of_class.starts_with("CI") {
+                    return Err(f"TypeError: ctor requires CIMultiDict or CIMultiDictProxy instance, not <class 'multidict._multidict_py.{of_class}'>");
+                }
+                let _ = target_md;
+                let target = match self.objs.get(args[2]) {
+                    Some(Obj.Proxy(_, t)) => t.clone(),
+                    _ => args[2].clone(),
+                };
+                self.objs.insert(name, Obj.Proxy(ci, target));
+                return Ok(none);
+            }
+            "copy" => {
+                if args.len() != 2 {
+                    return Err("usage: copy NAME NEW");
+                }
+                let md = self.md(args[0])?;
+                let ci = self.class_name(args[0]).starts_with("CI");
+                let copy = Md.from_pairs(ci, md.pairs());
+                let name = self.fresh(args[1])?;
+                self.objs.insert(name, Obj.Dict(copy));
+                return Ok(none);
+            }
+            _ => {}
+        }
+        if args.is_empty() {
+            return Err(f"usage: {cmd} NAME ...");
+        }
+        let name = args[0].as_str();
+        let rest = args[1..];
+        let t: Vec[String] = rest.iter().map(|w| text(w)).collect();
+        let class = self.class_name(name);
+        let md = self.md(name)?;
+        let out: String = match cmd {
+            "show" => {
+                want(cmd, rest, 0, 0)?;
+                f"<{class}({md.repr_items()})>"
+            }
+            "len" => {
+                want(cmd, rest, 0, 0)?;
+                f"{md.entries.len()}"
+            }
+            "keys" => {
+                want(cmd, rest, 0, 0)?;
+                let keys: Vec[String] = md.keys().iter().map(|k| py_repr(k)).collect();
+                f"<_KeysView({keys.join(", ")})> len {keys.len()}"
+            }
+            "values" => {
+                want(cmd, rest, 0, 0)?;
+                let values: Vec[String] = md.values().iter().map(|v| py_repr(v)).collect();
+                f"<_ValuesView({values.join(", ")})> len {values.len()}"
+            }
+            "items" => {
+                want(cmd, rest, 0, 0)?;
+                f"<_ItemsView({md.repr_items()})> len {md.entries.len()}"
+            }
+            "reversed" => {
+                if rest.len() != 1 or not ["keys", "values", "items"].contains(rest[0].as_str()) {
+                    return Err("usage: reversed NAME keys|values|items");
+                }
+                let mut parts: Vec[String] = match rest[0].as_str() {
+                    "keys" => md.keys().iter().map(|k| py_repr(k)).collect(),
+                    "values" => md.values().iter().map(|v| py_repr(v)).collect(),
+                    _ => md.entries.iter().map(|e| repr_pair(e.key, e.value)).collect(),
+                };
+                parts.reverse();
+                f"[{parts.join(", ")}]"
+            }
+            "todict" => {
+                want(cmd, rest, 0, 0)?;
+                md.to_dict()
+            }
+            "has" => {
+                want(cmd, rest, 1, 1)?;
+                py_bool(md.contains(t[0]))
+            }
+            "hasitem" => {
+                want(cmd, rest, 2, 2)?;
+                py_bool(md.has_item(t[0], t[1]))
+            }
+            "hasvalue" => {
+                want(cmd, rest, 1, 1)?;
+                py_bool(md.entries.iter().any(|e| e.value == t[0]))
+            }
+            "item" => {
+                want(cmd, rest, 1, 1)?;
+                py_repr(md.getone(t[0])?)
+            }
+            "get" => {
+                want(cmd, rest, 1, 2)?;
+                match md.getone(t[0]) {
+                    Ok(v) => py_repr(v),
+                    Err(_) => if t.len() == 2 { py_repr(t[1]) } else { "None".to_string() },
+                }
+            }
+            "getone" => {
+                want(cmd, rest, 1, 2)?;
+                match md.getone(t[0]) {
+                    Ok(v) => py_repr(v),
+                    Err(e) => if t.len() == 2 { py_repr(t[1]) } else { return Err(e) },
+                }
+            }
+            "getall" => {
+                want(cmd, rest, 1, 2)?;
+                match md.getall(t[0]) {
+                    Ok(vs) => repr_list(vs),
+                    Err(e) => if t.len() == 2 { py_repr(t[1]) } else { return Err(e) },
+                }
+            }
+            "eq" => {
+                want(cmd, rest, 1, 1)?;
+                py_bool(md.equals(self.md(rest[0])?))
+            }
+            "eqdict" => {
+                let mut dict: Map[String, String] = Map.new();
+                for (k, v) in pairs(rest)? {
+                    dict.insert(k.clone(), v.clone());
+                }
+                py_bool(md.equals_dict(dict))
+            }
+            "keyset" | "itemset" => {
+                if rest.is_empty() {
+                    return Err(f"usage: {cmd} NAME OP [...]");
+                }
+                if cmd == "keyset" {
+                    key_set(md, rest[0], t[1..])?
+                } else {
+                    item_set(md, rest[0], pairs(rest[1..])?)?
+                }
+            }
+            _ => return self.mutate(cmd, name, rest),
+        };
+        Ok([out])
+    }
+
+    /// The commands that change a multidict, which a proxy does not have.
+    fn mutate(mut ref self, cmd: Str, name: Str, rest: Slice[String]) -> Result[Vec[String], String] {
+        let none: Vec[String] = Vec.new();
+        let t: Vec[String] = rest.iter().map(|w| text(w)).collect();
+        match cmd {
+            "add" | "setdefault" | "set" => want(cmd, rest, 2, 2)?,
+            "popone" | "popall" => want(cmd, rest, 1, 2)?,
+            "del" => want(cmd, rest, 1, 1)?,
+            "popitem" | "clear" => want(cmd, rest, 0, 0)?,
+            "extend" | "update" | "merge" => {}
+            _ => return Err(f"unknown command {cmd}"),
+        }
+        let items = if ["extend", "update", "merge"].contains(cmd) { self.source(rest)? } else { Vec.new() };
+        let class = self.class_name(name);
+        let Some(Obj.Dict(md)) = self.objs.get_mut(name) else {
+            return match cmd {
+                "set" => Err(f"TypeError: '{class}' object does not support item assignment"),
+                "del" => Err(f"TypeError: '{class}' object does not support item deletion"),
+                _ => Err(f"AttributeError: '{class}' object has no attribute '{cmd}'"),
+            };
+        };
+        match cmd {
+            "add" => md.add(t[0], t[1]),
+            "set" => md.set(t[0], t[1]),
+            "del" => {
+                if md.take_all(t[0]).is_empty() {
+                    return Err(key_error(t[0]));
+                }
+            }
+            "setdefault" => return Ok([py_repr(md.setdefault(t[0], t[1]))]),
+            "popone" => {
+                return match md.popone(t[0]) {
+                    Some(v) => Ok([py_repr(v)]),
+                    None => if t.len() == 2 { Ok([py_repr(t[1])]) } else { Err(key_error(t[0])) },
+                };
+            }
+            "popall" => {
+                let taken = md.take_all(t[0]);
+                if not taken.is_empty() {
+                    return Ok([repr_list(taken)]);
+                }
+                return if t.len() == 2 { Ok([py_repr(t[1])]) } else { Err(key_error(t[0])) };
+            }
+            "popitem" => {
+                let Some(e) = md.entries.pop() else {
+                    return Err(key_error("empty multidict"));
+                };
+                return Ok([repr_pair(e.key, e.value)]);
+            }
+            "clear" => md.entries.clear(),
+            "extend" => md.extend(items),
+            "update" => md.update(items),
+            _ => md.merge(items),
+        }
+        Ok(none)
+    }
+}
+
+fn play(script: Str) {
+    let mut player = Player { objs: Map.new() };
+    println("== mini_multidict 7.2.1");
+    for (i, line) in script.split("\n").enumerate() {
+        let words: Vec[String] = line.split_whitespace().map(|w| w.to_string()).collect();
+        if words.is_empty() or words[0].starts_with("#") {
+            continue;
+        }
+        println(f"> {words.join(" ")}");
+        match player.run(words) {
+            Ok(lines) => {
+                for l in lines.iter() {
+                    println(f"  {l}");
+                }
+            }
+            Err(e) => println(f"  error: script.txt:{i + 1}: {e}"),
+        }
+    }
+    println("== end");
+    println(f"  {player.objs.len()} multidicts");
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data").map_err(|e| f"cannot create data: {e}")?;
+    write_data()?;
+    let text = fs.read_to_string("data/script.txt").map_err(|e| f"cannot read data/script.txt: {e}")?;
+    play(text);
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/script.txt", file_0())?;
+    Ok(())
+}
+
+// data/script.txt
+fn file_0() -> String {
+    """
+2320416e20485454502065786368616e676520696e206d756c746964696374732e20605c736020696e206120776f7264
+20697320612073706163652e0a0a232054686520717565727920737472696e67206f6620474554202f7365617263683f
+7461673d726564267461673d626c756526706167653d32267461673d72656426713d697427730a6e6577207175657279
+206d64207461673d726564207461673d626c756520706167653d32207461673d72656420713d697427730a73686f7720
+71756572790a6c656e2071756572790a6b6579732071756572790a76616c7565732071756572790a6974656d73207175
+6572790a6765746f6e65207175657279207461670a676574616c6c207175657279207461670a6974656d207175657279
+20706167650a67657420717565727920736f72740a67657420717565727920736f72742072656c6576616e63650a6765
+746f6e6520717565727920736f72740a6765746f6e6520717565727920736f72742072656c6576616e63650a67657461
+6c6c20717565727920736f72740a676574616c6c20717565727920736f7274205b5d0a6974656d20717565727920736f
+72740a686173207175657279207461670a686173207175657279205461670a6861736974656d20717565727920746167
+20626c75650a6861736974656d2071756572792074616720677265656e0a68617376616c756520717565727920320a68
+617376616c75652071756572792074776f0a746f646963742071756572790a7265766572736564207175657279206b65
+79730a72657665727365642071756572792076616c7565730a7265766572736564207175657279206974656d730a0a23
+205265717565737420686561646572732061726520636173652d696e73656e7369746976653b2065616368206b657920
+6b6565707320697473207370656c6c696e672e0a6e65772072657120636920486f73743d6578616d706c652e6f726720
+4163636570743d746578742f68746d6c204163636570743d6170706c69636174696f6e2f6a736f6e20582d5472616365
+2d49643d616263313233206163636570743d2a2f2a0a73686f77207265710a6b657973207265710a676574616c6c2072
+6571204143434550540a6765746f6e652072657120782d74726163652d69640a6861732072657120484f53540a686173
+2072657120686f73740a6861736974656d207265712041434345505420746578742f68746d6c0a746f64696374207265
+710a726576657273656420726571206b6579730a64656c20726571206163636570740a73686f77207265710a64656c20
+726571206163636570740a706f706f6e652072657120782d74726163652d69640a706f706f6e652072657120782d7472
+6163652d696420676f6e650a706f70616c6c20726571206e6f7468696e670a706f70616c6c20726571206e6f7468696e
+67205b5d0a0a23204120726573706f6e73652c206275696c7420757020616e642072657772697474656e2e0a6e657720
+7265737020636920436f6e74656e742d547970653d746578742f706c61696e205365742d436f6f6b69653d613d310a61
+64642072657370205365742d436f6f6b696520623d320a6164642072657370207365742d636f6f6b696520633d330a61
+646420726573702056617279204163636570740a73686f7720726573700a736574207265737020434f4e54454e542d54
+59504520746578742f68746d6c3b5c73636861727365743d7574662d380a73686f7720726573700a7365742072657370
+205365742d436f6f6b69652073657373696f6e3d78797a0a73686f7720726573700a7365742072657370204361636865
+2d436f6e74726f6c206e6f2d73746f72650a73657464656661756c742072657370205661727920436f6f6b69650a7365
+7464656661756c742072657370204554616720227631220a73686f7720726573700a7570646174652072657370207661
+72793d4163636570742d456e636f64696e6720766172793d4f726967696e20766172793d436f6f6b696520657461673d
+227632220a73686f7720726573700a6d65726765207265737020455461673d22763322205365727665723d6b61726120
+5365727665723d6b6172612f302e380a73686f7720726573700a657874656e642072657370204c696e6b3d3c2f613e20
+4c696e6b3d3c2f623e0a73686f7720726573700a706f706974656d20726573700a706f70616c6c2072657370206c696e
+6b0a6c656e20726573700a6b65797320726573700a0a232055706461746573207265706c61636520696e20706c616365
+3a20746865206669727374206d617463682074616b657320746865206e6577206b657920616e642076616c75652c0a23
+206c61746572206974656d732074616b65206c61746572206d6174636865732c207468652072657374206f6620746865
+206d61746368657320676f2e0a6e657720666f726d206d6420636f6c6f723d7265642073697a653d6d20636f6c6f723d
+677265656e206e6f74653d686920636f6c6f723d626c75650a75706461746520666f726d20636f6c6f723d626c61636b
+0a73686f7720666f726d0a6e657720666f726d32206d6420636f6c6f723d7265642073697a653d6d20636f6c6f723d67
+7265656e206e6f74653d686920636f6c6f723d626c75650a75706461746520666f726d3220636f6c6f723d626c61636b
+20636f6c6f723d77686974650a73686f7720666f726d320a6e657720666f726d33206d6420636f6c6f723d7265642073
+697a653d6d20636f6c6f723d677265656e0a75706461746520666f726d3320636f6c6f723d626c61636b20636f6c6f72
+3d776869746520636f6c6f723d676f6c642073697a653d6c2073697a653d786c0a73686f7720666f726d330a6e657720
+666f726d34206d6420613d310a75706461746520666f726d3420623d3220623d3320613d340a73686f7720666f726d34
+0a6d6572676520666f726d3420613d3520633d3620633d3720623d380a73686f7720666f726d340a7570646174652066
+6f726d342066726f6d20666f726d340a73686f7720666f726d340a657874656e6420666f726d342066726f6d20666f72
+6d340a73686f7720666f726d340a0a2320436f706965732c2070726f7869657320616e6420636f6e76657273696f6e73
+206265747765656e207468652074776f206b696e64732e0a636f70792072657120726571320a61646420726571322041
+636365707420746578742f706c61696e0a73686f77207265710a73686f7720726571320a70726f787920766965772063
+69207265710a73686f7720766965770a676574616c6c2076696577206163636570740a61646420726571204163636570
+7420696d6167652f706e670a73686f7720766965770a61646420766965772041636365707420782f790a736574207669
+657720486f7374206f746865720a64656c207669657720486f73740a706f706f6e65207669657720486f73740a636c65
+617220766965770a636f7079207669657720736e617073686f740a73686f7720736e617073686f740a70726f78792076
+6965773220636920766965770a73686f772076696577320a70726f7879206c6f6f7365206d64207265710a73686f7720
+6c6f6f73650a636f7079206c6f6f736520706c61696e0a73686f7720706c61696e0a676574616c6c20706c61696e2061
+63636570740a676574616c6c20706c61696e204163636570740a70726f78792077726f6e672063692071756572790a70
+726f78792077726f6e6732206369206c6f6f73650a6e6577206c6f7765726564206d642066726f6d207265710a676574
+616c6c206c6f7765726564204163636570740a6e6577207261697365642063692066726f6d2071756572790a67657461
+6c6c20726169736564205441470a6e6577206d6978656420636920457461673d6120455441473d620a6e657720626163
+6b206d642066726f6d206d697865640a73686f77206261636b0a6b657973206261636b0a6e65772066726f6d5f766965
+772063692066726f6d20766965770a73686f772066726f6d5f766965770a0a2320457175616c6974793a2074776f206d
+756c7469646963747320636f6d7061726520656e74727920627920656e7472792c206279206964656e7469747920616e
+642076616c75652e0a6e6577207131206d6420613d3120623d320a6e6577207132206d6420613d3120623d320a6e6577
+207133206d6420623d3220613d310a6e657720713420636920413d3120423d320a65712071312071320a657120713120
+71330a65712071312071340a65712071342071310a65712076696577207265710a65712072657120766965770a657120
+6c6f6f736520706c61696e0a65716469637420713120613d3120623d320a65716469637420713120623d3220613d310a
+65716469637420713120613d310a65716469637420713420613d3120623d320a65716469637420713420413d3120423d
+320a6e657720647570206d6420613d3120613d310a6571646963742064757020613d310a657164696374206475702061
+3d3120613d310a0a23204b657920616e64206974656d20766965777320617320736574732e0a6e657720746167732063
+69205461673d726564207461673d626c75652053697a653d6d0a6b6579736574207461677320616e6420544147207369
+7a6520636f6c6f720a6b657973657420746167732072616e64205441472073697a6520636f6c6f720a6b657973657420
+74616773206f72205441472073697a6520636f6c6f720a6b6579736574207461677320726f72205441472073697a6520
+636f6c6f720a6b65797365742074616773207375622054414720636f6c6f720a6b657973657420746167732072737562
+2054414720636f6c6f720a6b6579736574207461677320786f722054414720636f6c6f720a6b65797365742074616773
+206469736a6f696e7420636f6c6f722073686170650a6b65797365742074616773206469736a6f696e7420636f6c6f72
+2053495a450a6b6579736574207461677320616e640a6b65797365742074616773207375620a6974656d736574207461
+677320616e64205441473d626c7565207461673d7265642073697a653d6c0a6974656d73657420746167732072616e64
+205441473d626c7565207461673d7265642073697a653d6c0a6974656d7365742074616773206f72205441473d626c75
+652073697a653d6c0a6974656d736574207461677320726f72205441473d626c75652073697a653d6c0a6974656d7365
+74207461677320737562207461673d524544207461673d7265640a6974656d7365742074616773207273756220544147
+3d626c75652073697a653d6c0a6974656d736574207461677320786f72205441473d626c75652073697a653d6c0a6974
+656d7365742074616773206469736a6f696e742073697a653d6c0a6974656d7365742074616773206469736a6f696e74
+2053495a453d6d0a6b657973657420717565727920737562207461670a6974656d73657420717565727920616e642074
+61673d7265640a0a2320456d707479696e672e0a706f706974656d20666f726d0a636c65617220666f726d0a73686f77
+20666f726d0a706f706974656d20666f726d0a6b65797320666f726d0a746f6469637420666f726d0a0a23204d697374
+616b65732e0a6e6577207175657279206d640a6e65770a6e65772078206469637420613d310a6e65772078206d642061
+0a6e65772078206d642066726f6d0a6e65772078206d642066726f6d206e6f737563680a6e65772078206d642066726f
+6d2071756572792065787472610a70726f78790a70726f78792078206d64206e6f737563680a636f7079207175657279
+0a636f7079206e6f7375636820790a636f7079207175657279207265710a73686f770a73686f77206e6f737563680a73
+686f772071756572792065787472610a6c656e2071756572792065787472610a6b657973207175657279206578747261
+0a72657665727365642071756572790a72657665727365642071756572792073696465776179730a6861732071756572
+790a6861736974656d207175657279207461670a6974656d2071756572790a6765742071756572790a67657420717565
+72792061206220630a73657420717565727920610a64656c2071756572790a61646420717565727920610a7365746465
+6661756c7420717565727920610a706f706f6e652071756572790a706f706974656d2071756572792065787472610a63
+6c6561722071756572792065787472610a65712071756572790a6571207175657279206e6f737563680a6b6579736574
+2071756572790a6b6579736574207175657279206e616e6420610a6974656d73657420717565727920616e6420610a65
+7874656e6420717565727920610a7570646174652071756572792066726f6d0a6d657267652071756572792066726f6d
+206e6f737563680a66726f626e69636174652071756572790a
+"""
+}

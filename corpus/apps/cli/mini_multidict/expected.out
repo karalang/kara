@@ -1,0 +1,375 @@
+== mini_multidict 7.2.1
+> new query md tag=red tag=blue page=2 tag=red q=it's
+> show query
+  <MultiDict('tag': 'red', 'tag': 'blue', 'page': '2', 'tag': 'red', 'q': "it's")>
+> len query
+  5
+> keys query
+  <_KeysView('tag', 'page', 'q')> len 3
+> values query
+  <_ValuesView('red', 'blue', '2', 'red', "it's")> len 5
+> items query
+  <_ItemsView('tag': 'red', 'tag': 'blue', 'page': '2', 'tag': 'red', 'q': "it's")> len 5
+> getone query tag
+  'red'
+> getall query tag
+  ['red', 'blue', 'red']
+> item query page
+  '2'
+> get query sort
+  None
+> get query sort relevance
+  'relevance'
+> getone query sort
+  error: script.txt:15: KeyError: "Key not found: 'sort'"
+> getone query sort relevance
+  'relevance'
+> getall query sort
+  error: script.txt:17: KeyError: "Key not found: 'sort'"
+> getall query sort []
+  '[]'
+> item query sort
+  error: script.txt:19: KeyError: "Key not found: 'sort'"
+> has query tag
+  True
+> has query Tag
+  False
+> hasitem query tag blue
+  True
+> hasitem query tag green
+  False
+> hasvalue query 2
+  True
+> hasvalue query two
+  False
+> todict query
+  {'tag': ['red', 'blue', 'red'], 'page': ['2'], 'q': ["it's"]}
+> reversed query keys
+  ['q', 'page', 'tag']
+> reversed query values
+  ["it's", 'red', '2', 'blue', 'red']
+> reversed query items
+  [('q', "it's"), ('tag', 'red'), ('page', '2'), ('tag', 'blue'), ('tag', 'red')]
+> new req ci Host=example.org Accept=text/html Accept=application/json X-Trace-Id=abc123 accept=*/*
+> show req
+  <CIMultiDict('Host': 'example.org', 'Accept': 'text/html', 'Accept': 'application/json', 'X-Trace-Id': 'abc123', 'accept': '*/*')>
+> keys req
+  <_KeysView('Host', 'Accept', 'X-Trace-Id')> len 3
+> getall req ACCEPT
+  ['text/html', 'application/json', '*/*']
+> getone req x-trace-id
+  'abc123'
+> has req HOST
+  True
+> has req host
+  True
+> hasitem req ACCEPT text/html
+  True
+> todict req
+  {'Host': ['example.org'], 'Accept': ['text/html', 'application/json', '*/*'], 'X-Trace-Id': ['abc123']}
+> reversed req keys
+  ['X-Trace-Id', 'Accept', 'Host']
+> del req accept
+> show req
+  <CIMultiDict('Host': 'example.org', 'X-Trace-Id': 'abc123')>
+> del req accept
+  error: script.txt:44: KeyError: 'accept'
+> popone req x-trace-id
+  'abc123'
+> popone req x-trace-id gone
+  'gone'
+> popall req nothing
+  error: script.txt:47: KeyError: 'nothing'
+> popall req nothing []
+  '[]'
+> new resp ci Content-Type=text/plain Set-Cookie=a=1
+> add resp Set-Cookie b=2
+> add resp set-cookie c=3
+> add resp Vary Accept
+> show resp
+  <CIMultiDict('Content-Type': 'text/plain', 'Set-Cookie': 'a=1', 'Set-Cookie': 'b=2', 'set-cookie': 'c=3', 'Vary': 'Accept')>
+> set resp CONTENT-TYPE text/html;\scharset=utf-8
+> show resp
+  <CIMultiDict('CONTENT-TYPE': 'text/html; charset=utf-8', 'Set-Cookie': 'a=1', 'Set-Cookie': 'b=2', 'set-cookie': 'c=3', 'Vary': 'Accept')>
+> set resp Set-Cookie session=xyz
+> show resp
+  <CIMultiDict('CONTENT-TYPE': 'text/html; charset=utf-8', 'Set-Cookie': 'session=xyz', 'Vary': 'Accept')>
+> set resp Cache-Control no-store
+> setdefault resp Vary Cookie
+  'Accept'
+> setdefault resp ETag "v1"
+  '"v1"'
+> show resp
+  <CIMultiDict('CONTENT-TYPE': 'text/html; charset=utf-8', 'Set-Cookie': 'session=xyz', 'Vary': 'Accept', 'Cache-Control': 'no-store', 'ETag': '"v1"')>
+> update resp vary=Accept-Encoding vary=Origin vary=Cookie etag="v2"
+> show resp
+  <CIMultiDict('CONTENT-TYPE': 'text/html; charset=utf-8', 'Set-Cookie': 'session=xyz', 'vary': 'Accept-Encoding', 'Cache-Control': 'no-store', 'etag': '"v2"', 'vary': 'Origin', 'vary': 'Cookie')>
+> merge resp ETag="v3" Server=kara Server=kara/0.8
+> show resp
+  <CIMultiDict('CONTENT-TYPE': 'text/html; charset=utf-8', 'Set-Cookie': 'session=xyz', 'vary': 'Accept-Encoding', 'Cache-Control': 'no-store', 'etag': '"v2"', 'vary': 'Origin', 'vary': 'Cookie', 'Server': 'kara', 'Server': 'kara/0.8')>
+> extend resp Link=</a> Link=</b>
+> show resp
+  <CIMultiDict('CONTENT-TYPE': 'text/html; charset=utf-8', 'Set-Cookie': 'session=xyz', 'vary': 'Accept-Encoding', 'Cache-Control': 'no-store', 'etag': '"v2"', 'vary': 'Origin', 'vary': 'Cookie', 'Server': 'kara', 'Server': 'kara/0.8', 'Link': '</a>', 'Link': '</b>')>
+> popitem resp
+  ('Link', '</b>')
+> popall resp link
+  ['</a>']
+> len resp
+  9
+> keys resp
+  <_KeysView('CONTENT-TYPE', 'Set-Cookie', 'vary', 'Cache-Control', 'etag', 'Server')> len 6
+> new form md color=red size=m color=green note=hi color=blue
+> update form color=black
+> show form
+  <MultiDict('color': 'black', 'size': 'm', 'note': 'hi')>
+> new form2 md color=red size=m color=green note=hi color=blue
+> update form2 color=black color=white
+> show form2
+  <MultiDict('color': 'black', 'size': 'm', 'color': 'white', 'note': 'hi')>
+> new form3 md color=red size=m color=green
+> update form3 color=black color=white color=gold size=l size=xl
+> show form3
+  <MultiDict('color': 'black', 'size': 'l', 'color': 'white', 'color': 'gold', 'size': 'xl')>
+> new form4 md a=1
+> update form4 b=2 b=3 a=4
+> show form4
+  <MultiDict('a': '4', 'b': '2', 'b': '3')>
+> merge form4 a=5 c=6 c=7 b=8
+> show form4
+  <MultiDict('a': '4', 'b': '2', 'b': '3', 'c': '6', 'c': '7')>
+> update form4 from form4
+> show form4
+  <MultiDict('a': '4', 'b': '2', 'b': '3', 'c': '6', 'c': '7')>
+> extend form4 from form4
+> show form4
+  <MultiDict('a': '4', 'b': '2', 'b': '3', 'c': '6', 'c': '7', 'a': '4', 'b': '2', 'b': '3', 'c': '6', 'c': '7')>
+> copy req req2
+> add req2 Accept text/plain
+> show req
+  <CIMultiDict('Host': 'example.org')>
+> show req2
+  <CIMultiDict('Host': 'example.org', 'Accept': 'text/plain')>
+> proxy view ci req
+> show view
+  <CIMultiDictProxy('Host': 'example.org')>
+> getall view accept
+  error: script.txt:103: KeyError: "Key not found: 'accept'"
+> add req Accept image/png
+> show view
+  <CIMultiDictProxy('Host': 'example.org', 'Accept': 'image/png')>
+> add view Accept x/y
+  error: script.txt:106: AttributeError: 'CIMultiDictProxy' object has no attribute 'add'
+> set view Host other
+  error: script.txt:107: TypeError: 'CIMultiDictProxy' object does not support item assignment
+> del view Host
+  error: script.txt:108: TypeError: 'CIMultiDictProxy' object does not support item deletion
+> popone view Host
+  error: script.txt:109: AttributeError: 'CIMultiDictProxy' object has no attribute 'popone'
+> clear view
+  error: script.txt:110: AttributeError: 'CIMultiDictProxy' object has no attribute 'clear'
+> copy view snapshot
+> show snapshot
+  <CIMultiDict('Host': 'example.org', 'Accept': 'image/png')>
+> proxy view2 ci view
+> show view2
+  <CIMultiDictProxy('Host': 'example.org', 'Accept': 'image/png')>
+> proxy loose md req
+> show loose
+  <MultiDictProxy('Host': 'example.org', 'Accept': 'image/png')>
+> copy loose plain
+> show plain
+  <MultiDict('Host': 'example.org', 'Accept': 'image/png')>
+> getall plain accept
+  error: script.txt:119: KeyError: "Key not found: 'accept'"
+> getall plain Accept
+  ['image/png']
+> proxy wrong ci query
+  error: script.txt:121: TypeError: ctor requires CIMultiDict or CIMultiDictProxy instance, not <class 'multidict._multidict_py.MultiDict'>
+> proxy wrong2 ci loose
+  error: script.txt:122: TypeError: ctor requires CIMultiDict or CIMultiDictProxy instance, not <class 'multidict._multidict_py.MultiDictProxy'>
+> new lowered md from req
+> getall lowered Accept
+  ['image/png']
+> new raised ci from query
+> getall raised TAG
+  ['red', 'blue', 'red']
+> new mixed ci Etag=a ETAG=b
+> new back md from mixed
+> show back
+  <MultiDict('Etag': 'a', 'ETAG': 'b')>
+> keys back
+  <_KeysView('Etag', 'ETAG')> len 2
+> new from_view ci from view
+> show from_view
+  <CIMultiDict('Host': 'example.org', 'Accept': 'image/png')>
+> new q1 md a=1 b=2
+> new q2 md a=1 b=2
+> new q3 md b=2 a=1
+> new q4 ci A=1 B=2
+> eq q1 q2
+  True
+> eq q1 q3
+  False
+> eq q1 q4
+  True
+> eq q4 q1
+  True
+> eq view req
+  True
+> eq req view
+  True
+> eq loose plain
+  False
+> eqdict q1 a=1 b=2
+  True
+> eqdict q1 b=2 a=1
+  True
+> eqdict q1 a=1
+  False
+> eqdict q4 a=1 b=2
+  False
+> eqdict q4 A=1 B=2
+  True
+> new dup md a=1 a=1
+> eqdict dup a=1
+  False
+> eqdict dup a=1 a=1
+  False
+> new tags ci Tag=red tag=blue Size=m
+> keyset tags and TAG size color
+  {'Size', 'Tag'}
+> keyset tags rand TAG size color
+  {'TAG', 'size'}
+> keyset tags or TAG size color
+  {'Size', 'Tag', 'color'}
+> keyset tags ror TAG size color
+  {'TAG', 'color', 'size'}
+> keyset tags sub TAG color
+  {'Size'}
+> keyset tags rsub TAG color
+  {'color'}
+> keyset tags xor TAG color
+  {'Size', 'color'}
+> keyset tags disjoint color shape
+  True
+> keyset tags disjoint color SIZE
+  False
+> keyset tags and
+  set()
+> keyset tags sub
+  {'Size', 'Tag'}
+> itemset tags and TAG=blue tag=red size=l
+  {('Tag', 'red'), ('tag', 'blue')}
+> itemset tags rand TAG=blue tag=red size=l
+  {('TAG', 'blue'), ('tag', 'red')}
+> itemset tags or TAG=blue size=l
+  {('Size', 'm'), ('Tag', 'red'), ('size', 'l'), ('tag', 'blue')}
+> itemset tags ror TAG=blue size=l
+  {('Size', 'm'), ('TAG', 'blue'), ('Tag', 'red'), ('size', 'l')}
+> itemset tags sub tag=RED tag=red
+  {('Size', 'm'), ('tag', 'blue')}
+> itemset tags rsub TAG=blue size=l
+  {('size', 'l')}
+> itemset tags xor TAG=blue size=l
+  {('Size', 'm'), ('Tag', 'red'), ('size', 'l')}
+> itemset tags disjoint size=l
+  True
+> itemset tags disjoint SIZE=m
+  False
+> keyset query sub tag
+  {'page', 'q'}
+> itemset query and tag=red
+  {('tag', 'red')}
+> popitem form
+  ('note', 'hi')
+> clear form
+> show form
+  <MultiDict()>
+> popitem form
+  error: script.txt:184: KeyError: 'empty multidict'
+> keys form
+  <_KeysView()> len 0
+> todict form
+  {}
+> new query md
+  error: script.txt:189: query exists
+> new
+  error: script.txt:190: usage: new NAME md|ci [K=V ...] | new NAME md|ci from OTHER
+> new x dict a=1
+  error: script.txt:191: usage: new NAME md|ci [K=V ...] | new NAME md|ci from OTHER
+> new x md a
+  error: script.txt:192: bad pair a
+> new x md from
+  error: script.txt:193: usage: ... from OTHER
+> new x md from nosuch
+  error: script.txt:194: no multidict nosuch
+> new x md from query extra
+  error: script.txt:195: usage: ... from OTHER
+> proxy
+  error: script.txt:196: usage: proxy NAME md|ci OF
+> proxy x md nosuch
+  error: script.txt:197: no multidict nosuch
+> copy query
+  error: script.txt:198: usage: copy NAME NEW
+> copy nosuch y
+  error: script.txt:199: no multidict nosuch
+> copy query req
+  error: script.txt:200: req exists
+> show
+  error: script.txt:201: usage: show NAME ...
+> show nosuch
+  error: script.txt:202: no multidict nosuch
+> show query extra
+  error: script.txt:203: show takes 0 words after the name
+> len query extra
+  error: script.txt:204: len takes 0 words after the name
+> keys query extra
+  error: script.txt:205: keys takes 0 words after the name
+> reversed query
+  error: script.txt:206: usage: reversed NAME keys|values|items
+> reversed query sideways
+  error: script.txt:207: usage: reversed NAME keys|values|items
+> has query
+  error: script.txt:208: has takes 1 word after the name
+> hasitem query tag
+  error: script.txt:209: hasitem takes 2 words after the name
+> item query
+  error: script.txt:210: item takes 1 word after the name
+> get query
+  error: script.txt:211: get takes 1 or 2 words after the name
+> get query a b c
+  error: script.txt:212: get takes 1 or 2 words after the name
+> set query a
+  error: script.txt:213: set takes 2 words after the name
+> del query
+  error: script.txt:214: del takes 1 word after the name
+> add query a
+  error: script.txt:215: add takes 2 words after the name
+> setdefault query a
+  error: script.txt:216: setdefault takes 2 words after the name
+> popone query
+  error: script.txt:217: popone takes 1 or 2 words after the name
+> popitem query extra
+  error: script.txt:218: popitem takes 0 words after the name
+> clear query extra
+  error: script.txt:219: clear takes 0 words after the name
+> eq query
+  error: script.txt:220: eq takes 1 word after the name
+> eq query nosuch
+  error: script.txt:221: no multidict nosuch
+> keyset query
+  error: script.txt:222: usage: keyset NAME OP [...]
+> keyset query nand a
+  error: script.txt:223: bad set operation nand
+> itemset query and a
+  error: script.txt:224: bad pair a
+> extend query a
+  error: script.txt:225: bad pair a
+> update query from
+  error: script.txt:226: usage: ... from OTHER
+> merge query from nosuch
+  error: script.txt:227: no multidict nosuch
+> frobnicate query
+  error: script.txt:228: unknown command frobnicate
+== end
+  24 multidicts
