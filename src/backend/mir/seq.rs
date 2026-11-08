@@ -384,9 +384,14 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(self.offset(v, 16)?, cap.into())
     }
 
-    /// The char starting at byte `i` of the text `p[..n]`, or -1 when
-    /// there is none: an ASCII byte in line, anything else through the
-    /// runtime.
+    /// The char starting at byte `i` of the text `p[..n]`, as an `i32`:
+    /// an ASCII byte in line, anything else through the runtime, which
+    /// answers -1 when there is none, and that aborts. Each path checks and
+    /// narrows its own value and the two meet in one `i32` phi, so a test
+    /// of the char that follows (`len_utf8`'s `c < 0x80`, in
+    /// `StrChars.next`) is a test of that phi, and JumpThreading answers it
+    /// on the ASCII edge; through a slot of the runtime's `i64`, narrowed
+    /// after the join, it ran again on every char (B-2026-11-08-6).
     fn char_at_byte(
         &mut self,
         p: PointerValue<'ctx>,
@@ -394,13 +399,13 @@ impl<'ctx> Cx<'ctx, '_> {
         i: IntValue<'ctx>,
     ) -> R<IntValue<'ctx>> {
         let f = self.cur_fn()?;
-        let slot = self.entry_slot(8, "ch")?;
         let (look, fast, slow, done) = (
             self.llcx.append_basic_block(f, "ch.look"),
             self.llcx.append_basic_block(f, "ch.ascii"),
             self.llcx.append_basic_block(f, "ch.slow"),
             self.llcx.append_basic_block(f, "ch.done"),
         );
+        let i32t = self.llcx.i32_type();
         // Unsigned, so a negative index is out of range too.
         let inside = self
             .builder
@@ -429,18 +434,22 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_conditional_branch(ascii, fast, slow)
             .map_err(e)?;
         self.builder.position_at_end(fast);
-        let c = self
-            .builder
-            .build_int_z_extend(b, self.llcx.i64_type(), "")
-            .map_err(e)?;
-        self.store(slot, c.into())?;
+        let a = self.builder.build_int_z_extend(b, i32t, "").map_err(e)?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(slow);
         let c = self.rt_int_reads_args("char_at_byte", &[p.into(), n.into(), i.into()], 64)?;
-        self.store(slot, c.into())?;
+        let ok = self.non_negative(c)?;
+        self.abort_unless(ok, "explicit panic")?;
+        let c = self.builder.build_int_truncate(c, i32t, "").map_err(e)?;
+        let slow_end = self
+            .builder
+            .get_insert_block()
+            .ok_or("the builder is not in a block")?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(done);
-        self.load_i64(slot)
+        let phi = self.builder.build_phi(i32t, "ch").map_err(e)?;
+        phi.add_incoming(&[(&a, fast), (&c, slow_end)]);
+        Ok(phi.as_basic_value().into_int_value())
     }
 
     /// The char ending at byte `i` of the text `p[..n]` (its last byte is
@@ -965,12 +974,6 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (p, n) = self.str_parts(s)?;
                 let i = self.int_arg(i)?;
                 let c = self.char_at_byte(p, n, i)?;
-                let ok = self.non_negative(c)?;
-                self.abort_unless(ok, "explicit panic")?;
-                let c = self
-                    .builder
-                    .build_int_truncate(c, self.llcx.i32_type(), "")
-                    .map_err(e)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, c.into())?;
             }

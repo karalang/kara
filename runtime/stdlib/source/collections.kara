@@ -1003,12 +1003,16 @@ struct StrChars {
 impl Iterator for StrChars {
     type Item = char;
 
+    /// `pos` and `back` are never negative, so the end test is unsigned,
+    /// the same test as `char_at_byte`'s bound when `back` is the length,
+    /// and a char ends inside the text, so `pos` steps without an overflow
+    /// check (B-2026-11-08-6).
     fn next(mut ref self) -> Option[char] {
-        if self.pos >= self.back {
+        if self.pos as u64 >= self.back as u64 {
             return None;
         }
         let c = self.s.char_at_byte(self.pos);
-        self.pos = self.pos + c.len_utf8();
+        self.pos = self.pos.wrapping_add(c.len_utf8());
         Some(c)
     }
 }
@@ -1042,12 +1046,13 @@ struct StrViewChars {
 impl Iterator for StrViewChars {
     type Item = char;
 
+    /// As `StrChars.next`.
     fn next(mut ref self) -> Option[char] {
-        if self.pos >= self.back {
+        if self.pos as u64 >= self.back as u64 {
             return None;
         }
         let c = self.s.char_at_byte(self.pos);
-        self.pos = self.pos + c.len_utf8();
+        self.pos = self.pos.wrapping_add(c.len_utf8());
         Some(c)
     }
 }
