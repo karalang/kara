@@ -255,6 +255,8 @@ if seen.contains(cand) { ... }                  // seen: Set[String], cand: Str
 
 A `String` or `Vec[T]` argument still works, borrowed, because a `String` passes as `Str` and a `Vec[T]` as `Slice[T]` at a call boundary ([design.md Strings](../design.md#strings)). Every other key type is looked up by `K`, as the tables above show. Methods that store a key (`insert`, `entry`) still take an owned `K`, and `range`, `floor` and `ceiling` take `K`.
 
+The same holds for the searches of a sequence of `String` or `Vec[T]` elements: `contains` on a `Slice`, `Vec`, `Array` or `VecDeque`, and `binary_search` where it exists, take the element's view, so `["inc", "dec"].contains(cmd)` with `cmd: Str` and `names.contains(s)` on a `Vec[String]` allocate nothing. The literals of such a list stay `String`s; the argument does not change the element type (review-thread ruling 2026-11-08, B-2026-11-08-55).
+
 This works because a view and its owner hash, compare and order identically: `s.as_str()` and `s` give the same `hash`, `==` and `cmp` results against any other key, and so do `v.as_slice()` and `v`. There is no user-facing trait for this (Rust's `Borrow`). A user key type is looked up by the key type itself; see [deferred.md](../deferred.md).
 
 ## `VecDeque[T]`
