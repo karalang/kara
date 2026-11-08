@@ -1,0 +1,12 @@
+source = "design.md §5 (lossless widening); core-semantics §5.10"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["widening", "assign"]
+class = "a"
+expected_from = "spec"
+rules = ["5.10"]
+backends = []
+env = {}
+note = "A view of a number assigned to a wider number slot is read and widened: `cur = d` with `d: ref i32` from a SortedMap walk into an `i64` local, a tuple-bound local, a struct's `i64` and `f64` fields, a Vec element and through a `mut ref i64`, and a `ref u8` into a `u32`. The assignment stored the reference itself, which borrow checking refused as E0509 (B-2026-11-08-67)."
+bucket = "a"

@@ -1,0 +1,30 @@
+// B-2026-11-08-67: a view of a number assigned to a wider slot is read and widened.
+struct Acc { total: i64, last: f64 }
+
+fn set(dst: mut ref i64, v: ref i32) {
+    *dst = v;
+}
+
+fn main() {
+    let mut m: SortedMap[i64, i32] = SortedMap.new();
+    m.insert(1, 5);
+    m.insert(2, 7);
+    let mut (cur, z) = (0, 0);
+    let mut acc = Acc { total: 0, last: 0.0 };
+    let mut arr: Vec[i64] = [0, 0];
+    let mut wide: i64 = 0;
+    for (x, d) in m.iter() {
+        cur = d;
+        z = z + cur;
+        acc.total = d;
+        acc.last = d;
+        arr[0] = d;
+        set(mut wide, d);
+    }
+    let small: Vec[u8] = [200, 100];
+    let mut s: u32 = 0;
+    for b in small.iter() {
+        s = b;
+    }
+    println(f"{cur} {z} {acc.total} {acc.last} {arr[0]} {wide} {s}");
+}

@@ -6857,7 +6857,32 @@ impl<'l, 'a> Bx<'l, 'a> {
             let (_, tt) = self.strip_ty_full(tt);
             self.operand_at(value, tt)?
         } else {
-            self.expr_operand(value)?
+            // A view of a number stored into a wider number slot is read
+            // and widened: `cur = d` with `d: ref i32`
+            // and `cur: i64` stored the reference itself, which borrow
+            // checking then refused as a view escaping into `cur`
+            // (core semantics §5.10; B-2026-11-08-67).
+            let vt = self.expr_ty(value)?;
+            let tt = self.expr_ty(target)?;
+            let (_, tt) = self.strip_ty_full(tt);
+            let tcx = self.tys().tcx();
+            // Only a number of another width: `r = mut ref b` rebinding a
+            // `mut ref i64` binding is checked as an `i64` target too.
+            let widened = match tcx.kind(vt) {
+                HK::Ref(inner) | HK::MutRef(inner) => {
+                    inner != tt
+                        && matches!(tcx.kind(tt), HK::Int(_) | HK::UInt(_) | HK::Float(_))
+                        && self.widening(inner, tt).is_some()
+                        && self.lossless(inner, tt)
+                }
+                _ => false,
+            };
+            if widened {
+                let op = self.owned_operand(value, tt)?;
+                self.widen(op, tt)
+            } else {
+                self.expr_operand(value)?
+            }
         };
         let op = self.settle(op);
         let place = self.finish_place(pending, true)?;
