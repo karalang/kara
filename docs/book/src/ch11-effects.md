@@ -62,7 +62,7 @@ fn load_data(path: String) -> String {
 }
 
 fn save_report(data: String) {
-    write_file("report.txt", data)    // compiler infers: writes(FileSystem)
+    write_file("report.txt", data);   // compiler infers: writes(FileSystem)
     println("Saved.");                // compiler infers: writes(Stdout)
 }
 ```

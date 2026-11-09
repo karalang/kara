@@ -126,7 +126,7 @@ match ages.get("Alice") {
 
 Unique values:
 
-```kara,ignore
+```kara
 let mut seen = Set.new();
 seen.insert("hello");
 seen.insert("world");
@@ -142,7 +142,7 @@ println(seen.len());     // 2
 
 Fixed-size, mixed-type groups:
 
-```kara,ignore
+```kara
 let pair = (42, "hello");
 let (number, text) = pair;
 

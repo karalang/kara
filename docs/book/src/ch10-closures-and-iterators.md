@@ -19,7 +19,7 @@ Closure parameters take type annotations just like `fn` parameters. When a closu
 
 Functions can accept closures:
 
-```kara,ignore
+```kara
 fn apply_twice(f: Fn(i64) -> i64, x: i64) -> i64 {
     f(f(x))
 }

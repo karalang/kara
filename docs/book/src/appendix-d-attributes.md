@@ -60,7 +60,7 @@ Promote a lint to a hard error within the annotated item.
 
 On an `extern "C"` or `extern "C-unwind"` function: removes `blocks` from the default effect set. Use this for pure-CPU foreign functions (math routines, `strlen`, etc.) that are known not to block.
 
-```kara,ignore
+```kara
 unsafe extern "C" {
     @noblock
     fn sqrt(x: f64) -> f64;
@@ -86,7 +86,7 @@ pub fn kara_entry() { ... }
 
 Prevent dead-code elimination for the annotated symbol even if no Kāra code references it. Use for linker-section entries, interrupt vectors, or other symbols that are referenced only from outside the compiler's visibility (linker scripts, hardware, debuggers). Stays plain (no `#[unsafe(...)]` wrap) — `#[used]` only suppresses DCE, no soundness obligation.
 
-```kara,ignore
+```kara
 #[unsafe(link_section(".vectors"))]
 #[used]
 const VECTOR_TABLE: Array[u32, 16] = [0; 16];
@@ -98,7 +98,7 @@ Place the annotated symbol in a named linker section. Required for embedded targ
 
 The `#[unsafe(...)]` wrap is mandatory: section placement carries layout and aliasing obligations the compiler cannot verify. Bare `#[link_section(...)]` is rejected at parse time.
 
-```kara,ignore
+```kara
 #[unsafe(link_section(".dtcmram"))]
 const LOOKUP: Array[u8, 1024] = [0; 1024];
 ```
@@ -111,7 +111,7 @@ const LOOKUP: Array[u8, 1024] = [0; 1024];
 
 On an `extern` item: rebinds a non-conforming foreign name to a valid Kāra identifier. The Kāra-visible name must follow the identifier case-class rules; the foreign name may be arbitrary ASCII.
 
-```kara,ignore
+```kara
 unsafe extern "C" {
     #[kara_name("GlxFbConfig")]
     type GLXFBConfig;

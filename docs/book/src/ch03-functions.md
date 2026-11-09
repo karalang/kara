@@ -80,7 +80,7 @@ one container type — declare the parameter as `Slice[T]`. A `Vec[T]` or an
 `Array[T, N]` both coerce to a slice at the call, so one signature serves every
 caller:
 
-```kara,ignore
+```kara
 fn sum(xs: Slice[i64]) -> i64 {
     let mut acc = 0i64;
     for x in xs { acc = acc + x; }

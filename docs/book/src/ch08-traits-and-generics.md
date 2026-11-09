@@ -65,7 +65,7 @@ This works for `Vec[i64]`, `Vec[String]`, `Vec[User]` — anything.
 
 ### Generic structs
 
-```kara,ignore
+```kara
 struct Pair[A, B] {
     first: A,
     second: B,

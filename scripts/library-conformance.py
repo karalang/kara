@@ -2,8 +2,10 @@
 """Check the library docs and the examples against the compiler.
 
 scripts/design-conformance.py sweeps docs/design.md. The other code a reader
-copies first had no sweep: the ```kara blocks of docs/library/*.md, README.md
-and the examples' READMEs, and the example programs themselves. This runs
+copies first had no sweep: the ```kara blocks of docs/library/*.md, README.md,
+the examples' READMEs and the book (docs/book/src, its `kara,ignore` blocks
+included: tests/book_snippets.rs skips those), and the example programs
+themselves. This runs
 them, reusing design-conformance's block parser, its wrapping ladder and its
 classification, so a block here means what it means there.
 
@@ -47,6 +49,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "docs" / "library-conformance-baseline.json"
+BOOK = ROOT / "docs" / "book" / "src"
 
 _spec = importlib.util.spec_from_file_location(
     "design_conformance", ROOT / "scripts" / "design-conformance.py")
@@ -59,6 +62,7 @@ def markdown_files():
     files.append(ROOT / "README.md")
     files += sorted(p for p in (ROOT / "examples").rglob("README.md")
                     if "node_modules" not in p.parts)
+    files += sorted((ROOT / "docs" / "book" / "src").glob("*.md"))
     return [f for f in files if "```kara" in f.read_text(encoding="utf-8")]
 
 
@@ -96,8 +100,13 @@ def program_blocks(path):
     """parse_blocks, plus each program block's documented output."""
     lines = path.read_text(encoding="utf-8").split("\n")
     blocks = dc.parse_blocks(path)
+    # The book's `kara,ignore` marks a block tests/book_snippets.rs does not
+    # compile; the ladder here still reads it, as a fragment if it is one.
+    book = BOOK in path.parents
     for b in blocks:
         b.file = path
+        if book:
+            b.info = b.info.replace("ignore", "")
         # parse_blocks records the first code line (fence + 1, 1-based).
         start = b.line - 2
         end = start + len(b.code) + 1

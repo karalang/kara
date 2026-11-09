@@ -31,7 +31,7 @@ different from range-indexing a `Vec`. `s[a..b]` returns a **fresh, owned
 `String`** holding a copy of the bytes in that range (not a borrowed `Slice`,
 and not a `StringSlice` view):
 
-```kara,ignore
+```kara
 let s = "HelloWorld";
 let head = s[0..5];       // "Hello" — a new String
 let tail = s[5..];        // "World"
@@ -51,7 +51,7 @@ Two things to keep in mind:
   (`E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY`) rather than handing back invalid
   UTF-8:
 
-  ```kara,ignore
+  ```kara
   let s = "héllo";         // 'é' occupies bytes 1..3
   let bad = s[0..2];        // panics — byte 2 is mid-character
   ```

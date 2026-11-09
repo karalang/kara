@@ -8,6 +8,48 @@
       "reason": "deliberate: the use-after-move the `karac fix` demo starts from",
       "first_diagnostic": "value 'log' moved here, used again here (moved at line 7:21)"
     },
+    "ab90428d83ba": {
+      "where": "docs/book/src/appendix-d-attributes.md:130",
+      "heading": "Module-level bindings > `#[thread_local]`",
+      "outcome": "REJECTED",
+      "reason": "deferred: module-level `let` is past v1 (deferred.md § systems); the block shows the planned form",
+      "first_diagnostic": "module-level binding name `request_count` is Value-class but module-level `let` / `let mut` bindings introduce Const-class identifiers (SCREAMING_SNAKE_CASE); consider renaming to `REQUEST_COUNT`"
+    },
+    "0dfa14e7448a": {
+      "where": "docs/book/src/ch06-pattern-matching.md:104",
+      "heading": "Pattern Matching > Exhaustiveness",
+      "outcome": "REJECTED",
+      "reason": "deliberate: the chapter's counter-example of a non-exhaustive match",
+      "first_diagnostic": "non-exhaustive match: missing variants: Blue"
+    },
+    "907c3b964d90": {
+      "where": "docs/book/src/ch07-error-handling.md:12",
+      "heading": "Error Handling > Result and the ? operator",
+      "outcome": "REJECTED",
+      "reason": "fragment: a signature with a placeholder body",
+      "first_diagnostic": "function 'parse_port' declares return type 'Result[u16, ParseError]' but its body can complete without producing a value — end it with a tail expression, `return` on every path, or declare no return type"
+    },
+    "e227a6d876c7": {
+      "where": "docs/book/src/ch11-effects.md:130",
+      "heading": "The Effect System > Effect groups",
+      "outcome": "REJECTED",
+      "reason": "fragment: `Data`, `Error` and the `io` group come from the surrounding prose",
+      "first_diagnostic": "undefined type 'Data'"
+    },
+    "84c7ad3b2be5": {
+      "where": "docs/book/src/ch13-modules.md:48",
+      "heading": "Modules and Visibility > Imports",
+      "outcome": "REJECTED",
+      "reason": "package: imports of the chapter's own modules, which a single file cannot have",
+      "first_diagnostic": "unknown module `db.connection`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
+    },
+    "9e6c47690016": {
+      "where": "docs/book/src/ch13-modules.md:65",
+      "heading": "Modules and Visibility > Re-exports",
+      "outcome": "REJECTED",
+      "reason": "package: imports of the chapter's own modules, which a single file cannot have",
+      "first_diagnostic": "unknown module `db.connection`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
+    },
     "6e3b84b61afa": {
       "where": "docs/library/collections.md:161",
       "heading": "Collections > `Map[K, V, H]`",

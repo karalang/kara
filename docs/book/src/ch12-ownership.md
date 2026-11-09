@@ -114,7 +114,7 @@ A slice is a borrowed view into contiguous memory — a pointer and a length, no
 
 Slices let one function work over many container types:
 
-```kara,ignore
+```kara
 fn sum(xs: Slice[i64]) -> i64 {
     let mut acc = 0;
     for x in xs { acc = acc + x; }
