@@ -1337,6 +1337,20 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        // As in `infer_expr`; and a `match`/`if let` over `v.last_mut()` is
+        // noted here too, where a checked one never reaches the infer arm
+        // (B-2026-11-08-46).
+        if matches!(expr.kind, ExprKind::Match { .. } | ExprKind::IfLet { .. }) {
+            self.note_end_mut_rewrite(expr);
+            let errors_before = self.errors.len();
+            let ty = self.check_expr_unexplained(expr, expected);
+            self.explain_rust_binary_search_branches(expr, errors_before);
+            return ty;
+        }
+        self.check_expr_unexplained(expr, expected)
+    }
+
+    fn check_expr_unexplained(&mut self, expr: &Expr, expected: &Type) -> Type {
         self.warn_vec_macro(expr);
         self.note_loose_expr(expr);
         if matches!(expr.kind, ExprKind::Cast { .. }) {
@@ -9853,6 +9867,18 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
+        // A Rust `Ok`/`Err` match over a `binary_search` that fails to check
+        // gives way to Kāra's shape (`rust_binary_search`, B-2026-11-09-14).
+        if matches!(expr.kind, ExprKind::Match { .. } | ExprKind::IfLet { .. }) {
+            let errors_before = self.errors.len();
+            let ty = self.infer_expr_unexplained(expr);
+            self.explain_rust_binary_search_branches(expr, errors_before);
+            return ty;
+        }
+        self.infer_expr_unexplained(expr)
+    }
+
+    fn infer_expr_unexplained(&mut self, expr: &Expr) -> Type {
         self.note_loose_expr(expr);
         self.warn_vec_macro(expr);
         // B-2026-09-14-3: hand `infer_call`'s callee-position marker on to a

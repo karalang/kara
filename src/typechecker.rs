@@ -92,6 +92,7 @@ mod method_user_impl;
 mod method_vec_mutation;
 mod patterns;
 mod refinement_elision;
+mod rust_binary_search;
 mod rust_last_mut;
 mod rust_scan;
 mod stdlib_io;

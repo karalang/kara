@@ -379,6 +379,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `best.min(x + ..)` with `best: i32`) is refused with the same
   `a: i32` annotation `karac fix` applies when the use reads `a` itself; it
   had no edit (kata 2035, B-2026-11-09-15).
+- Rust's `binary_search` taken apart as a `Result` says Kāra's returns
+  `Option[i64]` and names `partition_point`, and `karac fix` rewrites the
+  mechanical shapes: `.unwrap_or_else(|i| i)` to
+  `partition_point(|y| y < v)`, another closure body and a `match` or
+  `if let` over `Ok(i)`/`Err(i)` to a block that tests the index
+  `partition_point` finds. A shape that would evaluate the sequence or
+  the value again, or a `Result`-only method, says why it is not
+  rewritten (B-2026-11-09-14).
 
 - A call on a type parameter that none of its bounds declares
   (`T.build(n)` under `T: Make`) is refused naming the bounds, where it got

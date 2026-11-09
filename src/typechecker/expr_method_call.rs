@@ -1751,6 +1751,14 @@ impl<'a> super::TypeChecker<'a> {
         if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
             self.explain_rust_scan(args, errors_before);
         }
+        if self.errors.len() > errors_before {
+            let end = args_close_span.offset + args_close_span.length;
+            let whole = Span {
+                length: end.saturating_sub(object.span.offset),
+                ..object.span
+            };
+            self.explain_rust_binary_search_call(object, method, args, whole, errors_before);
+        }
         ty
     }
 
