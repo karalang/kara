@@ -133,9 +133,20 @@ trait DoubleEndedIterator: Iterator {
 }
 ```
 
-The iterators over `Vec`, `Array`, `Slice` and `VecDeque`, integer ranges, a `step_by` over an integer range, and a `String`'s `chars()`, `split_whitespace()` and `split(sep)` implement it, which is what `rev` needs. `s.split_whitespace().rev()` yields the words last first, and `s.split(sep).rev()` the same pieces as `split(sep)` in reverse order: when `sep` cannot overlap itself (`","`, `" "`, but not `"aa"`) the back is found with `rfind`, and otherwise by matching forward, so the pieces are always the ones a forward walk finds (Rust's `rsplit` matches from the end instead, and splits `"aaa"` on `"aa"` differently). `(0..7).step_by(2).rev()` yields 6, 4, 2, 0: the values the step reaches, last first, so the back starts at the last value the step gives rather than at the range's end. (UTF-8 decodes backward as well as forward, so a string's chars cost nothing extra to walk from the end.)
+The iterators over `Vec`, `Array`, `Slice` and `VecDeque`, integer ranges, a `step_by` over an integer range, and a `String`'s `chars()`, `split_whitespace()` and `split(sep)` implement it, which is what `rev` needs. So do `map`, `filter`, `cloned` and `rev` over an iterator that does, each taking its items from the back of what it wraps: `v.iter().map(f).rev()` maps the last item first. `s.split_whitespace().rev()` yields the words last first, and `s.split(sep).rev()` the same pieces as `split(sep)` in reverse order: when `sep` cannot overlap itself (`","`, `" "`, but not `"aa"`) the back is found with `rfind`, and otherwise by matching forward, so the pieces are always the ones a forward walk finds (Rust's `rsplit` matches from the end instead, and splits `"aaa"` on `"aa"` differently). `(0..7).step_by(2).rev()` yields 6, 4, 2, 0: the values the step reaches, last first, so the back starts at the last value the step gives rather than at the range's end. (UTF-8 decodes backward as well as forward, so a string's chars cost nothing extra to walk from the end.)
 
-The iterators over a `Vec`, an `Array` and a `Slice` also know how many items are left, so they have `rposition`, as Rust's do:
+An iterator that knows how many items it has left implements `ExactSizeIterator` (in `std.iter`):
+
+```kara
+trait ExactSizeIterator: Iterator {
+    fn len(ref self) -> i64;
+    fn is_empty(ref self) -> bool { self.len() == 0 }
+}
+```
+
+The iterators over a `Vec`, an `Array` and a `Slice`, a `Vec`'s `into_iter()`, and `map`, `cloned`, `rev`, `enumerate` and `zip` over ones that do, implement it. It is what `enumerate().rev()` and `zip(..).rev()` need, as in Rust: an item `enumerate` takes from the back is numbered by how many items are still before it, so `v.iter().enumerate().rev()` yields `(v.len() - 1, last)` first, and `zip` first trims the longer side to the shorter, so its back pairs the same items its front does.
+
+The iterators over a `Vec`, an `Array` and a `Slice` also have `rposition`, as Rust's do:
 
 | Method | Signature | Notes |
 |---|---|---|

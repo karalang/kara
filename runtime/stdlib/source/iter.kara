@@ -461,6 +461,22 @@ impl[I: Iterator] Iterator for IterEnumerate[I] {
     }
 }
 
+/// An item taken from the back is numbered by how many are still before it.
+impl[I: ExactSizeIterator + DoubleEndedIterator] DoubleEndedIterator for IterEnumerate[I] {
+    fn next_back(mut ref self) -> Option[(i64, I.Item)] {
+        match self.it.next_back() {
+            Some(x) => Some((self.i + self.it.len(), x)),
+            None => None,
+        }
+    }
+}
+
+impl[I: ExactSizeIterator] ExactSizeIterator for IterEnumerate[I] {
+    fn len(ref self) -> i64 {
+        self.it.len()
+    }
+}
+
 struct IterStepBy[I] {
     it: I,
     step: i64,
@@ -521,6 +537,33 @@ impl[A: Iterator, B: Iterator] Iterator for IterZip[A, B] {
     }
 }
 
+/// The longer side is trimmed to the shorter first, so the back pairs the
+/// same items the front does, as Rust's `Zip` does.
+impl[A: ExactSizeIterator + DoubleEndedIterator, B: ExactSizeIterator + DoubleEndedIterator] DoubleEndedIterator for IterZip[A, B] {
+    fn next_back(mut ref self) -> Option[(A.Item, B.Item)] {
+        let (la, lb) = (self.a.len(), self.b.len());
+        for _ in lb..la {
+            self.a.next_back();
+        }
+        for _ in la..lb {
+            self.b.next_back();
+        }
+        match self.a.next_back() {
+            Some(x) => match self.b.next_back() {
+                Some(y) => Some((x, y)),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}
+
+impl[A: ExactSizeIterator, B: ExactSizeIterator] ExactSizeIterator for IterZip[A, B] {
+    fn len(ref self) -> i64 {
+        self.a.len().min(self.b.len())
+    }
+}
+
 struct IterMap[I, F, U] {
     it: I,
     f: F,
@@ -534,6 +577,22 @@ impl[I: Iterator, F: MutFn(own I.Item) -> U, U] Iterator for IterMap[I, F, U] {
             Some(x) => Some((self.f)(x)),
             None => None,
         }
+    }
+}
+
+/// Each item mapped as it is taken from the back (`v.iter().map(f).rev()`).
+impl[I: DoubleEndedIterator, F: MutFn(own I.Item) -> U, U] DoubleEndedIterator for IterMap[I, F, U] {
+    fn next_back(mut ref self) -> Option[U] {
+        match self.it.next_back() {
+            Some(x) => Some((self.f)(x)),
+            None => None,
+        }
+    }
+}
+
+impl[I: ExactSizeIterator, F: MutFn(own I.Item) -> U, U] ExactSizeIterator for IterMap[I, F, U] {
+    fn len(ref self) -> i64 {
+        self.it.len()
     }
 }
 
@@ -565,6 +624,17 @@ impl[I: Iterator, F: MutFn(I.Item) -> bool] Iterator for IterFilter[I, F] {
             n = n.wrapping_add((it.pred)(x) as i64);
         }
         n
+    }
+}
+
+impl[I: DoubleEndedIterator, F: MutFn(I.Item) -> bool] DoubleEndedIterator for IterFilter[I, F] {
+    fn next_back(mut ref self) -> Option[I.Item] {
+        while let Some(x) = self.it.next_back() {
+            if (self.pred)(x) {
+                return Some(x);
+            }
+        }
+        None
     }
 }
 
@@ -684,6 +754,24 @@ impl[I: Iterator, V] Iterator for IterCloned[I, V] {
     }
 }
 
+impl[I: DoubleEndedIterator, V] DoubleEndedIterator for IterCloned[I, V] {
+    fn next_back(mut ref self) -> Option[V] {
+        match self.it.next_back() {
+            Some(x) => {
+                let v: V = iter_clone_value(x);
+                Some(v)
+            }
+            None => None,
+        }
+    }
+}
+
+impl[I: ExactSizeIterator, V] ExactSizeIterator for IterCloned[I, V] {
+    fn len(ref self) -> i64 {
+        self.it.len()
+    }
+}
+
 /// The items of `it` read as values: a `ref` to a `Copy` item is read as
 /// the item.
 struct ItemValues[I, V] {
@@ -701,6 +789,24 @@ impl[I: Iterator, V] Iterator for ItemValues[I, V] {
             }
             None => None,
         }
+    }
+}
+
+impl[I: DoubleEndedIterator, V] DoubleEndedIterator for ItemValues[I, V] {
+    fn next_back(mut ref self) -> Option[V] {
+        match self.it.next_back() {
+            Some(x) => {
+                let v: V = iter_read_value(x);
+                Some(v)
+            }
+            None => None,
+        }
+    }
+}
+
+impl[I: ExactSizeIterator, V] ExactSizeIterator for ItemValues[I, V] {
+    fn len(ref self) -> i64 {
+        self.it.len()
     }
 }
 
@@ -853,6 +959,20 @@ trait DoubleEndedIterator: Iterator {
     }
 }
 
+/// An iterator that knows how many items it has left. With
+/// `DoubleEndedIterator` it is what `enumerate().rev()` and `zip(..).rev()`
+/// need: the index of an item taken from the back, and which of two
+/// iterators of different lengths to trim first.
+trait ExactSizeIterator: Iterator {
+    /// How many items are left.
+    fn len(ref self) -> i64;
+
+    /// Whether no item is left.
+    fn is_empty(ref self) -> bool {
+        self.len() == 0
+    }
+}
+
 struct IterRev[I] {
     it: I,
 }
@@ -868,6 +988,12 @@ impl[I: DoubleEndedIterator] Iterator for IterRev[I] {
 impl[I: DoubleEndedIterator] DoubleEndedIterator for IterRev[I] {
     fn next_back(mut ref self) -> Option[I.Item] {
         self.it.next()
+    }
+}
+
+impl[I: ExactSizeIterator] ExactSizeIterator for IterRev[I] {
+    fn len(ref self) -> i64 {
+        self.it.len()
     }
 }
 

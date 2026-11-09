@@ -85,6 +85,12 @@ impl[T] DoubleEndedIterator for VecIterMut[T] {
     }
 }
 
+impl[T] ExactSizeIterator for VecIterMut[T] {
+    fn len(ref self) -> i64 {
+        self.back - self.front
+    }
+}
+
 impl[T: Clone] Slice[T] {
     /// Overwrites every element with a clone of the matching element of
     /// `src`; the lengths must agree (docs/library/collections.md).
@@ -144,6 +150,12 @@ impl[T] DoubleEndedIterator for SliceIter[T] {
     }
 }
 
+impl[T] ExactSizeIterator for SliceIter[T] {
+    fn len(ref self) -> i64 {
+        self.back - self.front
+    }
+}
+
 /// The elements of a slice, front to back, each borrowed to be changed in
 /// place (B-2026-11-06-37). Each element is handed out once.
 struct SliceIterMut[T] {
@@ -186,6 +198,12 @@ impl[T] DoubleEndedIterator for SliceIterMut[T] {
         }
         self.back = self.back - 1;
         Some(mut self.s[self.back])
+    }
+}
+
+impl[T] ExactSizeIterator for SliceIterMut[T] {
+    fn len(ref self) -> i64 {
+        self.back - self.front
     }
 }
 
@@ -307,6 +325,12 @@ impl[T] DoubleEndedIterator for VecIntoIter[T] {
             }
         }
         self.back.pop()
+    }
+}
+
+impl[T] ExactSizeIterator for VecIntoIter[T] {
+    fn len(ref self) -> i64 {
+        self.front.len() + self.back.len()
     }
 }
 
@@ -445,6 +469,12 @@ impl[T] DoubleEndedIterator for VecIter[T] {
         }
         self.back = self.back - 1;
         self.v.get(self.back)
+    }
+}
+
+impl[T] ExactSizeIterator for VecIter[T] {
+    fn len(ref self) -> i64 {
+        self.back - self.front
     }
 }
 
