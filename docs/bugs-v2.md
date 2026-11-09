@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 205 |
+| diagnostics | 206 |
 | false-positive | 167 |
 | perf | 142 |
-| missing-feature | 117 |
+| missing-feature | 118 |
 | soundness | 56 |
 | miscompile | 49 |
 | run-vs-build | 29 |
@@ -75,14 +75,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 330 |
-| mir-llvm | 177 |
+| typecheck | 331 |
+| mir-llvm | 178 |
 | mir | 154 |
 | cli | 92 |
 | ownership | 65 |
 | parser | 54 |
-| interp | 39 |
-| runtime | 30 |
+| interp | 40 |
+| runtime | 31 |
 | effect | 29 |
 | codegen | 22 |
 | resolver | 20 |
@@ -118,6 +118,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-38 | 2026-11-09 | parser+typecheck+cli | medium | A tuple value cannot be assigned to existing places: `(lo, hi) = if c { (lo, mid) } else { (mid + 1, hi) };` (Rust's destructuring assignment) is refused E_ASSIGN_TARGET_NOT_PLACE with advice to drop the parentheses, and `lo, hi = if ..` is then a parse error ("2 target(s) but 1 value(s)"), so the halving step of a binary search carried as a pair has no spelling but a `let` and two assignments | — |
 | B-2026-11-09-39 | 2026-11-09 | typecheck+mir+mir-llvm | medium | A closure whose body fixes nothing about its parameter, handed to a bounded generic `F: Fn(i64) -> i64`, passes `karac check` but types its parameter and result as `()`: `ap(1, |x| { println("a"); x })` stops every backend with "invalid MIR: ap[Fn(()) -> ()]: argument 0 of a Fn call has the wrong type" | — |
 | B-2026-11-09-40 | 2026-11-09 | typecheck+mir | medium | A closure whose body ends in `collect()` takes its target from nowhere: `let to32 = |v: ref Vec[i64]| v.iter().map(|x| x as i32).collect();` used as `take(to32(a))` with `take(v: Vec[i32])`, or `let r: Vec[i64] = f(a)`, checks clean and then stops at lowering with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet"; a Kāra closure cannot declare its return type, so nothing can fix `C` | — |
+| B-2026-11-09-43 | 2026-11-09 | typecheck | medium | `let t = text?;` on a bare (borrowed) `text: Option[String]` parameter is refused as "'?' operator requires `Result` or `Option`, found 'ref Option[String]'" with no fix, about a value that is one; `??` on the same operand already names the borrow and offers `.clone()`, and a `Copy` payload (`n?` on a bare `Option[i64]`) is refused too | — |
+| B-2026-11-09-44 | 2026-11-09 | interp+mir-llvm+runtime | medium | The HTTP client turns a status of 400 or more into `Err(HttpError)` carrying only a message ("<url>: status code 409"): a program cannot read the status, the headers or the body of an error response, so a tus client cannot take `Upload-Offset` from a 409 and a REST client cannot read a JSON error body | — |
 
 ### Relocated
 
