@@ -790,7 +790,7 @@ impl super::Parser {
     }
 
     /// Finish a parallel / destructuring assignment
-    /// `t1, t2, ... = v1, v2, ...;`, entered with the first target `first`
+    /// `t1, t2, ... = v1, v2, ...;` or `t1, t2, ... = tuple;`, entered with the first target `first`
     /// already parsed and the cursor sitting on the first comma.
     ///
     /// Produces a [`StmtKind::MultiAssign`] node. The [`crate::desugar`] pass
@@ -811,7 +811,10 @@ impl super::Parser {
         }
         self.expect(&Token::Semicolon)?;
         let span = self.span_from(&start);
-        if targets.len() != values.len() {
+        // A single value of tuple type is taken apart (design.md § Parallel
+        // assignment, B-2026-11-09-38); its arity is the type checker's to
+        // judge.
+        if targets.len() != values.len() && values.len() != 1 {
             self.error_at(
                 &format!(
                     "parallel assignment has {} target(s) but {} value(s); both sides must list the same number of elements",

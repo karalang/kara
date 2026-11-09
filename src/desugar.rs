@@ -2239,10 +2239,44 @@ pub fn desugar_multi_assigns(items: &mut [Item]) {
 /// Build the block-expr `StmtKind` a parallel assignment lowers to. The
 /// temporaries carry a `__karac_pa_<offset>_<i>` name that user code cannot
 /// collide with and live only inside the synthesized block's scope.
-fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> StmtKind {
+fn expand_multi_assign(targets: Vec<Expr>, mut values: Vec<Expr>, span: Span) -> StmtKind {
     let n = targets.len();
     let mut stmts: Vec<Stmt> = Vec::with_capacity(n * 2);
     let mut temp_names: Vec<String> = Vec::with_capacity(n);
+    // One value for several targets is a tuple, taken apart by a tuple
+    // pattern after the whole of it is evaluated: `lo, hi = if c { (lo, mid) }
+    // else { (mid + 1, hi) };` (design.md § Parallel assignment,
+    // B-2026-11-09-38). The pattern's arity against the tuple's is the type
+    // checker's to judge.
+    if n > 1 && values.len() == 1 {
+        let value = values.pop().expect("one value");
+        let vspan = value.span;
+        let parts: Vec<Pattern> = (0..n)
+            .map(|i| {
+                let name = format!("__karac_pa_{}_{}", span.offset, i);
+                temp_names.push(name.clone());
+                Pattern {
+                    id: crate::ids::NodeId::DUMMY,
+                    kind: PatternKind::Binding(name),
+                    span: vspan,
+                }
+            })
+            .collect();
+        stmts.push(Stmt {
+            id: crate::ids::NodeId::DUMMY,
+            span: vspan,
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
+                    kind: PatternKind::Tuple(parts),
+                    span: vspan,
+                },
+                ty: None,
+                value,
+            },
+        });
+    }
     for (i, value) in values.into_iter().enumerate() {
         let name = format!("__karac_pa_{}_{}", span.offset, i);
         let vspan = value.span;

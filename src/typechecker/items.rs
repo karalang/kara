@@ -12062,8 +12062,24 @@ impl<'a> super::TypeChecker<'a> {
         braceless: bool,
     ) -> Option<super::FixIt> {
         let value = value?;
+        let join = |es: &[Expr]| {
+            es.iter()
+                .map(crate::formatter::render_expr)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        // Any other value is taken apart as a tuple (`lo, hi = if c { .. }
+        // else { .. };`, B-2026-11-09-38), so dropping the target's
+        // parentheses is the whole fix. A braceless arm also needs braces
+        // around the statement, which one edit of the target cannot add.
         let ExprKind::Tuple(values) = &value.kind else {
-            return None;
+            if braceless || places.len() < 2 {
+                return None;
+            }
+            return Some(super::FixIt {
+                span: target.span,
+                replacement: join(places),
+            });
         };
         if places.len() != values.len() || places.len() < 2 {
             return None;
@@ -12072,12 +12088,6 @@ impl<'a> super::TypeChecker<'a> {
         if end <= target.span.offset {
             return None;
         }
-        let join = |es: &[Expr]| {
-            es.iter()
-                .map(crate::formatter::render_expr)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
         Some(super::FixIt {
             span: Span {
                 length: end - target.span.offset,

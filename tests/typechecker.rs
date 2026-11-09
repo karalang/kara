@@ -52655,16 +52655,22 @@ fn index_move_rejects_a_consuming_unwrap_on_an_indexed_element() {
 
 /// B-2026-10-05-47 — the parenthesized-tuple target names its repair,
 /// and `karac fix` must be able to apply it. The fix-it drops the parentheses
-/// on BOTH sides, since `a, b = (c, d)` does not parse (two targets, one
-/// value); applied, the statement type-checks. A tuple-valued RHS that is not
-/// itself a parenthesized tuple of the same arity, and the compound form, have
-/// no multi-assign spelling, so they keep the advice and carry no edit.
+/// on BOTH sides when the value is a parenthesized tuple of the same arity;
+/// applied, the statement type-checks. Any other value is taken apart as a
+/// tuple (`a, b = pair;`, B-2026-11-09-38), so its fix drops the target's
+/// parentheses alone. A tuple literal of another arity, and the compound
+/// form, have no multi-assign spelling, so they keep the advice and carry no
+/// edit.
 #[test]
 fn parenthesized_tuple_assignment_carries_a_fix_it_that_type_checks() {
     for (stmt, fixed) in [
         ("(a, b) = (b, a);", "a, b = b, a;"),
         ("(s[0], s[2]) = (s[2], s[0]);", "s[0], s[2] = s[2], s[0];"),
         ("(a, b, c) = (c, a + 1, b);", "a, b, c = c, a + 1, b;"),
+        (
+            "(a, b) = if a < b { (b, a) } else { (a, b) };",
+            "a, b = if a < b { (b, a) } else { (a, b) };",
+        ),
     ] {
         let src = format!(
             "fn main() {{\n    let mut a = 1;\n    let mut b = 2;\n    let mut c = 3;\n    \
@@ -52687,11 +52693,7 @@ fn parenthesized_tuple_assignment_carries_a_fix_it_that_type_checks() {
         // turns into something the resolver accepts, as `karac check` does.
         typecheck_ok_desugared(&applied);
     }
-    for stmt in [
-        "let pair = (1, 2); (a, b) = pair;",
-        "(a, b) = (1, 2, 3);",
-        "(a, b) += (1, 2);",
-    ] {
+    for stmt in ["(a, b) = (1, 2, 3);", "(a, b) += (1, 2);"] {
         let src = format!("fn main() {{ let mut a = 1; let mut b = 2; {stmt} }}\n");
         let errs = typecheck_errors(&src);
         let hit: Vec<_> = errs
