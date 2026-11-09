@@ -1,0 +1,16 @@
+// `Trait.method(x)` is the call `x.method()` (design.md § Method
+// Resolution, UFCS): `Clone.clone(s)` on a String, a Vec and a derived
+// struct, each a copy the original outlives.
+#[derive(Clone)]
+struct P { x: i64 }
+
+fn main() {
+    let s = "ab";
+    let t: String = Clone.clone(s);
+    let v = Vec[1, 2];
+    let mut w: Vec[i64] = Clone.clone(v);
+    w.push(3);
+    let p = P { x: 4 };
+    let q: P = Clone.clone(p);
+    println(f"{s} {t} {v.len()} {w.len()} {p.x} {q.x}");
+}

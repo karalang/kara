@@ -22,6 +22,12 @@ use super::types::{type_display, ConstArg, DimArg, IntSize, SubstValue, Type, UI
 use super::{FixIt, TypeErrorKind};
 use std::collections::HashMap;
 
+/// The refusal of `Default.default()`, which `check_expr` finds again to add
+/// the fix the expected type gives.
+pub(super) const DEFAULT_NAMES_NO_TYPE: &str =
+    "`Default.default()` names no type: `Default` is implemented per type, and its \
+     `default` is called on the type, `T.default()` (design.md § `Default`)";
+
 impl<'a> super::TypeChecker<'a> {
     /// `Array.from_fn(n, f)` against `expected`, an `Array[T, N]` when the
     /// call has one: `f` is `Fn(i64) -> T` and `n` must be `N`. Without one
@@ -1126,6 +1132,28 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(ty) = self.try_ufcs_method(name, method, args, span, &close) {
                     self.record_expr_type(span, &ty);
                     return ty;
+                }
+                // Rust's `Default::default()`: `Default` is implemented per
+                // type, and its `default` is called on the type (design.md §
+                // `Default`). It was typed as an error with no diagnostic,
+                // and MIR refused the program as "a type that failed to check
+                // is not lowered yet" (B-2026-11-09-32). `check_expr` adds
+                // the fix where the expected type names the type.
+                if name == "Default"
+                    && method == "default"
+                    && args.is_empty()
+                    && self.local_scope.lookup("Default").is_none()
+                    && !self.env.traits.contains_key("Default")
+                    && !self.env.structs.contains_key("Default")
+                    && !self.env.enums.contains_key("Default")
+                {
+                    self.type_error(
+                        DEFAULT_NAMES_NO_TYPE.to_string(),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    self.record_expr_type(span, &Type::Error);
+                    return Type::Error;
                 }
             }
         }

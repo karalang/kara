@@ -4059,6 +4059,14 @@ pub struct TypeChecker<'a> {
     /// Indices into `env.impls` of the baked stdlib's impls, which a library
     /// source's re-statement replaces (redesign A2).
     pub(super) baked_impls: FxHashSet<usize>,
+    /// While the baked library's impls register: their spans are the baked
+    /// text's, not past `library_start`, so they cannot be told from a
+    /// program's by offset.
+    pub(super) registering_baked: bool,
+    /// Whether the impl being registered is the program's own, read by the
+    /// overlap check: a program's impl may not replace a baked library impl
+    /// the way a library source's restatement does (B-2026-11-09-31).
+    pub(super) overlap_from_program: bool,
     /// Set once [`Self::report_empty_prefix_literal`] has reported an
     /// un-inferrable empty collection literal, so the bound-discharge path
     /// does not report the SAME root cause a second time in different words
@@ -4470,6 +4478,8 @@ impl<'a> TypeChecker<'a> {
             weak_store_actual: None,
             retyped_int_literal: None,
             baked_impls: FxHashSet::default(),
+            registering_baked: false,
+            overlap_from_program: false,
             reported_uninferrable_empty_literal: false,
             variant_ctor_in_callee: false,
             variant_lint_deferred: FxHashSet::default(),

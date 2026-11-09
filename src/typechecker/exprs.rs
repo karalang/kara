@@ -1347,7 +1347,54 @@ impl<'a> super::TypeChecker<'a> {
             self.explain_rust_binary_search_branches(expr, errors_before);
             return ty;
         }
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if matches!(&callee.kind, ExprKind::Path { segments, generic_args: None }
+                if segments.len() == 2 && segments[0] == "Default")
+            {
+                let errors_before = self.errors.len();
+                let ty = self.check_expr_unexplained(expr, expected);
+                self.fix_default_default(expr, callee, expected, errors_before);
+                return ty;
+            }
+        }
         self.check_expr_unexplained(expr, expected)
+    }
+
+    /// `let d: Wide = Default.default();`: the fix names the expected type,
+    /// `Wide.default()` (B-2026-11-09-32).
+    fn fix_default_default(
+        &mut self,
+        expr: &Expr,
+        callee: &Expr,
+        expected: &Type,
+        errors_before: usize,
+    ) {
+        let refused = self.errors[errors_before..]
+            .iter()
+            .any(|e| e.span == expr.span && e.message == super::expr_call::DEFAULT_NAMES_NO_TYPE);
+        let named = match expected {
+            Type::Named { .. }
+            | Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Shared(_) => type_display(expected),
+            _ => return,
+        };
+        // A generic type's arguments go on the path as written, not in
+        // value position: `Vec[i64].default()` is not a Kāra expression.
+        if !refused || named.contains('[') {
+            return;
+        }
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(&expr.span),
+            vec![crate::resolver::TextEdit {
+                offset: callee.span.offset,
+                length: "Default".len(),
+                replacement: named,
+            }],
+        );
     }
 
     fn check_expr_unexplained(&mut self, expr: &Expr, expected: &Type) -> Type {

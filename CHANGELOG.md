@@ -20,6 +20,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A program's impl of a library trait for a library type that the library
+  already implements is refused as an overlap, naming the library's impl
+  (design.md § Coherence: the application is exempt from the orphan rule,
+  not the overlap rule). `impl Clone for String { .. }` was accepted and
+  replaced the library's `clone` (B-2026-11-09-31).
 - A float handed to an integer slot through a borrow is refused as it is by
   value: `Vec[u8].contains(d)` or `VecDeque[u8].contains(d)` with `let d =
   1.5`, and a `ref u8` or `mut ref u8` parameter given a float. The
@@ -168,6 +173,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   the right answer), and a declaration in another field order read the
   status from the body. Both backends now fill the fields by name, and
   `headers` holds the response's headers (B-2026-11-09-34).
+- `Clone.clone(x)` is the call `x.clone()` (design.md § Method
+  Resolution). `karac check` typed it as an error without a diagnostic, and
+  `karac run` and `build` then refused the program with "a type that failed
+  to check is not lowered yet" (B-2026-11-09-32).
 - Raw pointers reach a non-`Copy` element: `ptr.mut(xs[i])` takes its
   address without moving it, `p.read()` copies the bits out and `p.write(v)`
   stores without dropping, as design.md § Raw pointers now says. The first
@@ -427,6 +436,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   says the `?` would move the `String` out of the borrow and `karac fix`
   writes `text.clone()?`, as for `??`; a borrowed wrapper whose payload
   and error are `Copy` is read and runs (B-2026-11-09-43).
+- `Default.default()` is refused as naming no type, with a fix to the
+  expected type's own `T.default()` (`let w: W = Default.default();` becomes
+  `W.default()`); it was refused as "a type that failed to check is not
+  lowered yet" (B-2026-11-09-32).
 - A program's inherent impl on a library type that redefines a library
   method (`impl Option[Ordering] { fn is_lt .. }`) draws one error, at the
   program's impl. It also drew a conflicting-impl error placed at the

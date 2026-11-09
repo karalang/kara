@@ -1,0 +1,9 @@
+source = "B-2026-11-09-32"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "ufcs", "clone"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Method Resolution: `Trait.method(x)` is the call `x.method()`. `Clone.clone(s)` was typed as an error with no diagnostic, and MIR refused the program `karac check` passed as \"a type that failed to check is not lowered yet\"."

@@ -93,9 +93,19 @@ impl<'a> super::TypeChecker<'a> {
         let is_type = self.env.structs.contains_key(name) || self.env.enums.contains_key(name);
         let trait_name =
             (!is_type && self.env.traits.contains_key(alias)).then(|| alias.to_string());
+        // `Clone` has no declaration for the impl lookup to narrow to: every
+        // `clone` is its method, so `Clone.clone(s)` is `s.clone()`
+        // (B-2026-11-09-32). It was typed as an error with no diagnostic, and
+        // MIR refused the program `karac check` had passed.
+        let builtin_clone = trait_name.is_none()
+            && !is_type
+            && alias == "Clone"
+            && method == "clone"
+            && self.local_scope.lookup("Clone").is_none();
         let takes_self = match &trait_name {
             Some(t) => self.trait_method_takes_self(t, method)?,
             None if is_type => self.type_method_takes_self(name, method)?,
+            None if builtin_clone => true,
             None => return None,
         };
         if !takes_self {

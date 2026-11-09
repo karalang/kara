@@ -1072,7 +1072,9 @@ impl<'a> super::TypeChecker<'a> {
                 Item::TraitDef(t) => self.env_add_trait(t),
                 Item::ImplBlock(i) => {
                     let n = self.env.impls.len();
+                    self.registering_baked = true;
                     self.env_add_impl(i);
+                    self.registering_baked = false;
                     self.baked_impls.extend(n..self.env.impls.len());
                 }
                 // Baked `distinct type`s (e.g. `Symbol`, `ExitCode`) register
@@ -3185,6 +3187,7 @@ impl<'a> super::TypeChecker<'a> {
         // locked design rationale (rejection over Rust-style
         // specialization).
         let library_start = self.program.library_start.unwrap_or(usize::MAX);
+        self.overlap_from_program = !self.registering_baked && imp.span.offset < library_start;
         let user_impl = |c: &Self, i: usize| {
             !c.baked_impls.contains(&i)
                 && c.env.impls[i]
@@ -3234,6 +3237,51 @@ impl<'a> super::TypeChecker<'a> {
                 return;
             }
         }
+        // The impl overlapped is the library's: a program's impl of a library
+        // trait for a library type is allowed (the application is exempt
+        // from the orphan rule) unless it overlaps one (design.md § Coherence).
+        let overlaps_library = overlap.as_ref().is_some_and(|(_, i)| {
+            self.baked_impls.contains(i)
+                || self.env.impls[*i]
+                    .target_span
+                    .is_none_or(|s| s.offset >= library_start)
+        }) && self.overlap_from_program;
+        // A library type implements the derive-style builtins (`Clone`,
+        // `Display`, ..) without an impl-table entry: `String`'s `Clone` is
+        // the compiler's. A program impl of one of them for a library type
+        // that already has it would replace the library's (B-2026-11-09-31).
+        if overlap.is_none() && self.overlap_from_program && impl_gp_names.is_empty() {
+            if let Some(t) = trait_name.as_deref() {
+                if matches!(
+                    t,
+                    "Clone"
+                        | "Copy"
+                        | "Debug"
+                        | "Display"
+                        | "Hash"
+                        | "Eq"
+                        | "PartialEq"
+                        | "Ord"
+                        | "PartialOrd"
+                        | "Default"
+                ) && !self.program_declares_type(&type_name)
+                    && self.type_satisfies_bound(&lowered_target, t)
+                {
+                    self.type_error(
+                        format!(
+                            "conflicting impl: the standard library already implements `{t}` \
+                             for `{}`; a type implements a trait once, so a program may \
+                             implement a library trait for a library type only where the \
+                             library does not (design.md § Coherence)",
+                            type_display(&lowered_target)
+                        ),
+                        imp.span,
+                        TypeErrorKind::ConflictingImpl,
+                    );
+                    return;
+                }
+            }
+        }
         match overlap.map(|(o, _)| o) {
             None => {}
             // A library source re-stating a baked impl where it does not
@@ -3271,16 +3319,22 @@ impl<'a> super::TypeChecker<'a> {
                             .join(", ")
                     )
                 };
-                self.type_error(
+                let message = if overlaps_library {
+                    format!(
+                        "conflicting impl: the standard library already implements \
+                         `{trait_shown}{args}` for `{type_name}`{with}; a type implements a \
+                         trait once, so a program may implement a library trait for a \
+                         library type only where the library does not (design.md § Coherence)"
+                    )
+                } else {
                     format!(
                         "conflicting impl: `{type_name}` already implements \
                          `{trait_shown}{args}`{with}; a type implements a trait once, and \
                          two impls whose headers unify overlap whatever their bounds \
                          (design.md § Coherence)"
-                    ),
-                    imp.span,
-                    TypeErrorKind::ConflictingImpl,
-                );
+                    )
+                };
+                self.type_error(message, imp.span, TypeErrorKind::ConflictingImpl);
                 return;
             }
             Some(ImplOverlap::MethodRedefinition(names)) => {
@@ -3451,7 +3505,9 @@ impl<'a> super::TypeChecker<'a> {
                 && !source_differs
                 && existing.target_args == target_args
                 && existing.trait_args == trait_args
-                && !(self.library_methods_from_source && self.baked_impls.contains(&i))
+                && !(self.library_methods_from_source
+                    && self.baked_impls.contains(&i)
+                    && !self.overlap_from_program)
             {
                 let assoc = self
                     .env
@@ -3502,6 +3558,24 @@ impl<'a> super::TypeChecker<'a> {
             return Some((ImplOverlap::WholeImpl, i));
         }
         None
+    }
+
+    /// Whether a type named `name` is declared by the program (or a package
+    /// it depends on), not by the library: a builtin, or an item past
+    /// `library_start`, is the library's.
+    fn program_declares_type(&self, name: &str) -> bool {
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        self.program.items.iter().any(|item| {
+            let (n, span) = match item {
+                Item::StructDef(s) => (s.name.as_str(), s.span),
+                Item::EnumDef(e) => (e.name.as_str(), e.span),
+                Item::UnionDef(u) => (u.name.as_str(), u.span),
+                Item::DistinctType(d) => (d.name.as_str(), d.span),
+                Item::TypeAlias(a) => (a.name.as_str(), a.span),
+                _ => return false,
+            };
+            n == name && span.offset < library
+        })
     }
 
     /// Whether a baked impl of `trait_name` for this target already stands:
