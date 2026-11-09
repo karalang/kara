@@ -8027,14 +8027,37 @@ impl<'a> TypeChecker<'a> {
         // literal is still an `f64`, nothing in the language says a `.0` suffix
         // means "integer", and accepting it would make the rule depend on the
         // VALUE rather than the TYPE. `as` remains the way to convert.
-        if matches!(expected, Type::Int(_) | Type::UInt(_)) && matches!(found, Type::Float(_)) {
+        //
+        // The same holds through a borrow (B-2026-11-09-19): a `ref u8` or
+        // `mut ref u8` parameter, and the needle of `Vec[u8].contains`, are
+        // integer slots too. A float handed to one was accepted, and the
+        // backends then compared an integer with a float.
+        let peel = |t: &Type| -> Type {
+            match t {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref().clone(),
+                other => other.clone(),
+            }
+        };
+        let (want, got) = (peel(expected), peel(found));
+        if matches!(want, Type::Int(_) | Type::UInt(_)) && matches!(got, Type::Float(_)) {
+            let advice = if matches!(expected, Type::MutRef(_)) {
+                format!(
+                    "a float is not an integer, so it cannot be written through a \
+                     `{}`",
+                    type_display(expected)
+                )
+            } else {
+                format!(
+                    "a float does not implicitly convert to an integer — use `as {}` \
+                     to truncate",
+                    type_display(&want)
+                )
+            };
             self.type_error_with_types(
                 format!(
-                    "expected '{}', found '{}'; a float does not implicitly \
-                     convert to an integer — use `as {}` to truncate",
+                    "expected '{}', found '{}'; {advice}",
                     type_display(expected),
                     type_display(found),
-                    type_display(expected),
                 ),
                 span,
                 TypeErrorKind::TypeMismatch,

@@ -20,6 +20,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A float handed to an integer slot through a borrow is refused as it is by
+  value: `Vec[u8].contains(d)` or `VecDeque[u8].contains(d)` with `let d =
+  1.5`, and a `ref u8` or `mut ref u8` parameter given a float. The
+  interpreter stopped on comparing an integer with a float and the binary
+  printed `false` (B-2026-11-09-19).
 - A generic body that puts its parameter in an `Atomic` is judged at each
   call that instantiates it: `wrap(1i8)` over `fn wrap[T](x: own T) ->
   Atomic[T]` is refused with E0272, as `Atomic[i8]` written directly is
