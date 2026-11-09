@@ -1,0 +1,92 @@
+// LeetCode #2052: Minimum Cost to Separate Sentence Into Rows -- the same
+// dynamic programming from the end, measured in the sentence's own text:
+// each word's start is found from the spaces in `chars().enumerate()` (the
+// library has no `match_indices`, B-2026-11-09-57), and a row of words
+// `i..j` is as wide as the text from word `i`'s start to the space before
+// word `j`. Each `best[i]` is a `filter` and `map` over the row ends that
+// fit, folded with `min`.
+
+fn minimum_cost(sentence: String, k: i64) -> i64 {
+    // starts[j]: where word j starts; one past the end for j == n
+    let mut starts = [0].to_vec();
+    starts.extend(sentence.chars().enumerate().filter(|(_, c)| c == ' ').map(|(at, _)| at + 1));
+    starts.push(sentence.len() + 1);
+    let n = starts.len() - 1;
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        if starts[n] - 1 - starts[i] <= k {
+            best[i] = 0;
+        } else {
+            best[i] = (i + 1..n)
+                .filter(|j| starts[j] - 1 - starts[i] <= k)
+                .map(|j| (k - (starts[j] - 1 - starts[i])).pow(2) + best[j])
+                .fold(i64.MAX, |a, b| a.min(b));
+        }
+    }
+    best[0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` words of 1 to `longest` letters, joined by single spaces
+fn sentence(count: i64, longest: i64, seed: mut ref i64) -> String {
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let len = next_random(mut seed) % longest + 1;
+        let mut word = String.new();
+        for _ in 0..len {
+            let at = next_random(mut seed) % 26;
+            word.push_str(letters.substring(at, at + 1));
+        }
+        words.push(word);
+    }
+    words.join(" ")
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        ("i love leetcode", 12),
+        ("apples and bananas taste great", 7),
+        ("a", 5),
+        ("a b c d e f", 1),
+        ("ab cd ef gh", 5),
+        ("hello world", 11),
+        ("the quick brown fox jumps over the lazy dog", 10),
+    ];
+    for (text, k) in examples.iter() {
+        println(f"\"{text}\", k {k} -> {minimum_cost(text, k)}");
+    }
+    // 2000 sentences of 1 to 30 words, each k at least the longest word
+    let mut seed = 2052;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let count = next_random(mut seed) % 30 + 1;
+        let longest = next_random(mut seed) % 8 + 1;
+        let text = sentence(count, longest, mut seed);
+        let k = longest + next_random(mut seed) % 20;
+        let cost = minimum_cost(text, k);
+        sum += cost;
+        check = (check * 31 + cost) % 1000000007;
+    }
+    println(f"2000 sentences: sum {sum}, checksum {check}");
+    // 3 sentences of about 5000 characters, the most the constraints
+    // allow: short words in long rows, long words in rows just wide
+    // enough, and one-letter words in rows of 2
+    sum = 0;
+    check = 0;
+    for (count, longest, k) in [(1000, 7, 200), (330, 14, 15), (2500, 1, 2)] {
+        let text = sentence(count, longest, mut seed);
+        let cost = minimum_cost(text, k);
+        sum += cost;
+        check = (check * 31 + cost) % 1000000007;
+    }
+    println(f"3 long sentences: sum {sum}, checksum {check}");
+}

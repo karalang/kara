@@ -1,0 +1,57 @@
+// LeetCode #2052: Minimum Cost to Separate Sentence Into Rows -- the ★ arm
+// as a benchmark. 600 sentences of about 5000 characters, the most the
+// constraints allow, of words up to 10 letters, with rows from 20 to 4000
+// wide; each answered by dynamic programming from the end, every first
+// row grown word by word while it fits.
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn minimum_cost(sentence: String, k: i64) -> i64 {
+    let lens: Vec[i64] = sentence.split(" ").map(|w| w.len()).collect();
+    let n = lens.len();
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        let mut width = -1;
+        let mut least = i64.MAX;
+        let mut j = i;
+        while j < n and width + 1 + lens[j] <= k {
+            width += 1 + lens[j];
+            j += 1;
+            if j == n {
+                least = 0;
+            } else {
+                least = least.min((k - width) * (k - width) + best[j]);
+            }
+        }
+        best[i] = least;
+    }
+    best[0]
+}
+
+fn main() {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut seed = 2052;
+    let mut sum = 0;
+    let mut check = 0;
+    for t in 0..600 {
+        let mut text = String.new();
+        while text.len() < 4990 {
+            if text.len() > 0 {
+                text.push(' ');
+            }
+            let len = next_random(mut seed) % 10 + 1;
+            for _ in 0..len {
+                let at = next_random(mut seed) % 26;
+                text.push(letters[at]);
+            }
+        }
+        let k = 20 + t % 200 * 20;
+        let cost = minimum_cost(text, k);
+        sum += cost;
+        check = (check * 31 + cost) % 1000000007;
+    }
+    println(f"600 sentences: sum {sum}, checksum {check}");
+}

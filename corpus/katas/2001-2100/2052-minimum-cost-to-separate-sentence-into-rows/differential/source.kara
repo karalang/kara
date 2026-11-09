@@ -1,0 +1,329 @@
+// LeetCode #2052: Minimum Cost to Separate Sentence Into Rows -- the
+// differential. The six arms, against the statement read literally: every
+// way to break the words into rows tried, those with a row wider than `k`
+// dropped, and each costed by its rows but the last. 500 sentences of 1 to
+// 12 words, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is at least 0 and at most the cost of filling each row
+//     as full as it goes
+// P3  the sentence with every letter changed, the word lengths kept, has
+//     the same answer
+// P4  a word of `k` letters put first, a full row that costs nothing,
+//     leaves the answer the same
+// P5  a word of `k` letters put last makes every other row paid for: the
+//     answer is the least cost with every row paid, read literally
+// P6  each arm agrees with at least three of the other five
+
+// ---- separate.kara: the ★ arm, dynamic programming from the end
+fn star_minimum_cost(sentence: String, k: i64) -> i64 {
+    let lens: Vec[i64] = sentence.split(" ").map(|w| w.len()).collect();
+    let n = lens.len();
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        let mut width = -1;
+        let mut least = i64.MAX;
+        let mut j = i;
+        while j < n and width + 1 + lens[j] <= k {
+            width += 1 + lens[j];
+            j += 1;
+            if j == n {
+                least = 0;
+            } else {
+                least = least.min((k - width) * (k - width) + best[j]);
+            }
+        }
+        best[i] = least;
+    }
+    best[0]
+}
+
+// ---- separate_memo.kara: a memoized recursion over prefix sums
+fn memo_rest(i: i64, k: i64, ends: Vec[i64], memo: mut ref Vec[Option[i64]]) -> i64 {
+    let n = ends.len() - 1;
+    if let Some(cost) = memo[i] {
+        return cost;
+    }
+    // words i..j laid in one row are `ends[j] - ends[i] - 1` wide
+    let mut least = i64.MAX;
+    if ends[n] - ends[i] - 1 <= k {
+        least = 0;
+    } else {
+        let mut j = i + 1;
+        while j < n and ends[j] - ends[i] - 1 <= k {
+            let gap = k - (ends[j] - ends[i] - 1);
+            least = least.min(gap * gap + memo_rest(j, k, ends, mut memo));
+            j += 1;
+        }
+    }
+    memo[i] = Some(least);
+    least
+}
+
+fn memo_minimum_cost(sentence: String, k: i64) -> i64 {
+    // ends[j]: the letters of the first j words, each with a space after it
+    let mut ends = [0].to_vec();
+    for word in sentence.split(" ") {
+        ends.push(ends[ends.len() - 1] + word.len() + 1);
+    }
+    let mut memo: Vec[Option[i64]] = Vec.filled(ends.len(), None);
+    memo_rest(0, k, ends, mut memo)
+}
+
+// ---- separate_forward.kara: dynamic programming from the front
+fn forward_minimum_cost(sentence: String, k: i64) -> i64 {
+    let lens: Vec[i64] = sentence.split(" ").map(|w| w.len()).collect();
+    let n = lens.len();
+    let mut paid: Vec[i64] = Vec.filled(n + 1, i64.MAX);
+    paid[0] = 0;
+    for j in 1..n + 1 {
+        let mut width = -1;
+        let mut i = j;
+        while i > 0 and width + 1 + lens[i - 1] <= k {
+            width += 1 + lens[i - 1];
+            i -= 1;
+            if paid[i] < i64.MAX {
+                paid[j] = paid[j].min(paid[i] + (k - width) * (k - width));
+            }
+        }
+    }
+    let mut answer = i64.MAX;
+    let mut width = -1;
+    let mut s = n;
+    while s > 0 and width + 1 + lens[s - 1] <= k {
+        width += 1 + lens[s - 1];
+        s -= 1;
+        answer = answer.min(paid[s]);
+    }
+    answer
+}
+
+// ---- separate_dijkstra.kara: a shortest path with a `PriorityQueue`
+fn path_minimum_cost(sentence: String, k: i64) -> i64 {
+    let lens: Vec[i64] = sentence.split(" ").map(|w| w.len()).collect();
+    let n = lens.len();
+    let mut dist: Vec[i64] = Vec.filled(n + 1, i64.MAX);
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    dist[0] = 0;
+    queue.push((0, 0));
+    while let Some((cost, i)) = queue.pop() {
+        if i == n {
+            return cost;
+        }
+        if cost > dist[i] {
+            continue;
+        }
+        let mut width = -1;
+        let mut j = i;
+        while j < n and width + 1 + lens[j] <= k {
+            width += 1 + lens[j];
+            j += 1;
+            let step = if j == n { 0 } else { (k - width) * (k - width) };
+            if cost + step < dist[j] {
+                dist[j] = cost + step;
+                queue.push((cost + step, j));
+            }
+        }
+    }
+    dist[n]
+}
+
+// ---- separate_text.kara: measured in the text, folded with `min`
+fn text_minimum_cost(sentence: String, k: i64) -> i64 {
+    // starts[j]: where word j starts; one past the end for j == n
+    let mut starts = [0].to_vec();
+    starts.extend(sentence.chars().enumerate().filter(|(_, c)| c == ' ').map(|(at, _)| at + 1));
+    starts.push(sentence.len() + 1);
+    let n = starts.len() - 1;
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        if starts[n] - 1 - starts[i] <= k {
+            best[i] = 0;
+        } else {
+            best[i] = (i + 1..n)
+                .filter(|j| starts[j] - 1 - starts[i] <= k)
+                .map(|j| (k - (starts[j] - 1 - starts[i])).pow(2) + best[j])
+                .fold(i64.MAX, |a, b| a.min(b));
+        }
+    }
+    best[0]
+}
+
+// ---- separate_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn minimum_cost(sentence: String, k: i32) -> i32 {
+        let lens: Vec[i32] = sentence.split(" ").map(|w| w.len() as i32).collect();
+        let n = lens.len();
+        let mut dp = Vec.filled(n + 1, i32.MAX);
+        dp[n] = 0;
+        for i in (0..n).rev() {
+            let mut len: i32 = -1;
+            for j in i..n {
+                len += lens[j] + 1;
+                if len > k {
+                    break;
+                }
+                if j == n - 1 {
+                    dp[i] = 0;
+                } else {
+                    dp[i] = dp[i].min((k - len) * (k - len) + dp[j + 1]);
+                }
+            }
+        }
+        dp[0]
+    }
+}
+
+fn solution_minimum_cost(sentence: String, k: i64) -> i64 {
+    Solution.minimum_cost(sentence, k as i32) as i64
+}
+
+// ---- the statement read literally
+
+// the least cost over every way to break the words into rows, the last row
+// paid for too when `last_paid`
+fn literal(sentence: String, k: i64, last_paid: bool) -> i64 {
+    let words: Vec[String] = sentence.split(" ").map(|w| w.to_string()).collect();
+    let n = words.len();
+    let mut least = i64.MAX;
+    for breaks in 0..(1 << (n - 1)) {
+        let mut rows: Vec[String] = [words[0].clone()].to_vec();
+        for i in 1..n {
+            if (breaks >> (i - 1)) & 1 == 1 {
+                rows.push(words[i].clone());
+            } else {
+                let at = rows.len() - 1;
+                rows[at] = f"{rows[at]} {words[i]}";
+            }
+        }
+        if rows.iter().all(|r| r.len() <= k) {
+            let paid = if last_paid { rows.len() } else { rows.len() - 1 };
+            let cost = rows.iter().take(paid).map(|r| (k - r.len()) * (k - r.len())).sum();
+            least = least.min(cost);
+        }
+    }
+    least
+}
+
+fn greedy(sentence: String, k: i64) -> i64 {
+    let lens: Vec[i64] = sentence.split(" ").map(|w| w.len()).collect();
+    let mut cost = 0;
+    let mut width = lens[0];
+    for i in 1..lens.len() {
+        if width + 1 + lens[i] <= k {
+            width += 1 + lens[i];
+        } else {
+            cost += (k - width) * (k - width);
+            width = lens[i];
+        }
+    }
+    cost
+}
+
+fn answer(arm: i64, sentence: String, k: i64) -> i64 {
+    match arm {
+        0 => star_minimum_cost(sentence, k),
+        1 => memo_minimum_cost(sentence, k),
+        2 => forward_minimum_cost(sentence, k),
+        3 => path_minimum_cost(sentence, k),
+        4 => text_minimum_cost(sentence, k),
+        _ => solution_minimum_cost(sentence, k),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` words of 1 to `longest` letters drawn from `letters`
+fn sentence(count: i64, longest: i64, letters: Str, seed: mut ref i64) -> String {
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let len = next_random(mut seed) % longest + 1;
+        let mut word = String.new();
+        for _ in 0..len {
+            let at = next_random(mut seed) % letters.len();
+            word.push_str(letters.substring(at, at + 1));
+        }
+        words.push(word);
+    }
+    words.join(" ")
+}
+
+struct Problem {
+    text: String,
+    k: i64,
+    other: String,
+}
+
+fn main() {
+    let names = ["star", "memo", "forward", "path", "text", "solution"];
+    let mut seed = 2052;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..500 {
+        let count = next_random(mut seed) % 12 + 1;
+        let longest = next_random(mut seed) % 6 + 1;
+        let k = longest + next_random(mut seed) % 12;
+        let draw = seed;
+        let text = sentence(count, longest, "abcdefghijklmnopqrstuvwxyz", mut seed);
+        // the same draws again over other letters: the same word lengths
+        seed = draw;
+        let other = sentence(count, longest, "QRSTUVWXYZ", mut seed);
+        problems.push(Problem { text, k, other });
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in problems.iter() {
+        let truth = literal(p.text, p.k, false);
+        let all_paid = literal(p.text, p.k, true);
+        check = (check * 31 + truth * 7 + all_paid) % 1000000007;
+        let full = "z".repeat(p.k);
+        let first = f"{full} {p.text}";
+        let last = f"{p.text} {full}";
+        let filled = greedy(p.text, p.k);
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, p.text, p.k)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                x == truth,
+                x >= 0 and x <= filled,
+                answer(arm, p.other, p.k) == x,
+                answer(arm, first, p.k) == x,
+                answer(arm, last, p.k) == all_paid,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"\"{p.text}\" k {p.k} arm {names[arm]}: P{k + 1} fails, answer {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"500 sentences: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}
