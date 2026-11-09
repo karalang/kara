@@ -64,6 +64,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `JsonError`, `SendError`, `RecvTimeoutError`, `SendTimeoutError`, and
+  `PoolError[E]` when `E: Display`, implement `Display` and `Error`, as
+  design.md §10 says every standard-library error type does, so `?`
+  converts them into `AnyError`; `Json.parse(t)?` in a function returning
+  `Result[_, AnyError]` was refused (B-2026-11-09-30).
 - **`Slice.split(pred)`** (and so on `Vec` and arrays): the runs between
   the elements `pred` accepts, which are dropped, with Rust's empty runs
   (`[1, 0, 2, 3, 0].split(|x| x == 0)` is `[[1], [2, 3], []]`), so Rust's
@@ -394,6 +399,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A program's inherent impl on a library type that redefines a library
+  method (`impl Option[Ordering] { fn is_lt .. }`) draws one error, at the
+  program's impl. It also drew a conflicting-impl error placed at the
+  library's own impl, past the program's last line, with "in the standard
+  library: " repeated six times (B-2026-11-09-29).
+- `karac test --help` spells the gate `#[test(requires: [...])]`, as the
+  spec does; it said `requires = [...]`, which the parser refuses with a fix
+  to the colon.
 - A defaulted `i64` literal read back out of a collection it was pushed
   into (`left[k].push(a)`, then `x` of `for x in ref left[k]` as
   `best.min(x + ..)` with `best: i32`) is refused with the same

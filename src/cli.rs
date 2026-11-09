@@ -473,7 +473,7 @@ pub enum Command {
         /// (`<module_path>::<fn_name>`) contains this substring run.
         filter: Option<String>,
         /// Promote skipped tests to failures. Tests gated by
-        /// `#[test(requires = [...])]` skip silently when their resources
+        /// `#[test(requires: [...])]` skip silently when their resources
         /// are unavailable; with `--all` the runner instead emits
         /// `test_fail` (with `reason: "unsatisfied_requires"`) and the
         /// process exits non-zero. Used in CI when every required service
@@ -1390,7 +1390,9 @@ impl Pipeline {
                     || matches!(e.kind, crate::typechecker::TypeErrorKind::ConflictingImpl)
             });
             for e in t.errors.iter_mut().filter(|e| !user(&e.span)) {
-                e.message = format!("in the standard library: {}", e.message);
+                if !e.message.starts_with("in the standard library: ") {
+                    e.message = format!("in the standard library: {}", e.message);
+                }
             }
             t.warnings.retain(|e| user(&e.span));
         }

@@ -39,6 +39,15 @@ pub struct JsonError {
     message: String,
 }
 
+/// The message, which says where parsing stopped.
+impl Display for JsonError {
+    fn to_string(ref self) -> String {
+        self.message.clone()
+    }
+}
+
+impl Error for JsonError { }
+
 impl Json {
     /// The value `text` holds, or where and why it is not JSON.
     fn parse(text: Str) -> Result[Json, JsonError] {

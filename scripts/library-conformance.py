@@ -185,6 +185,8 @@ def main():
     args = ap.parse_args()
     if not Path(args.karac).exists():
         sys.exit(f"karac not found at {args.karac} — build it first (cargo build)")
+    # Runs happen in a scratch directory, so a relative --karac must not be.
+    args.karac = str(Path(args.karac).resolve())
 
     blocks = [b for f in markdown_files() for b in program_blocks(f)]
     declared = dc.collect_declared_names(blocks)

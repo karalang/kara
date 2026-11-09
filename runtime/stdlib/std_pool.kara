@@ -32,6 +32,19 @@ pub enum PoolError[+E] {
     CreateFailed(E),
 }
 
+impl[E: Display] Display for PoolError[E] {
+    fn to_string(ref self) -> String {
+        match self {
+            PoolError.Timeout => "timed out waiting for a pooled value",
+            PoolError.Busy => "too many callers already waiting",
+            PoolError.PoolClosed => "pool closed",
+            PoolError.CreateFailed(e) => f"could not create a pooled value: {e}",
+        }
+    }
+}
+
+impl[E: Display] Error for PoolError[E] { }
+
 /// A pool of `T` values, made by a factory that fails with `E`. It has one
 /// owner and no `clone`; share it by reference.
 pub struct Pool[=T, =E] {

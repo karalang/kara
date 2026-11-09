@@ -50,7 +50,7 @@ pub(super) struct DiscoveredTest {
     pub(super) fn_name: String,
     pub(super) qualified: String,
     /// Fully-qualified resource paths (e.g. `"db.UserDB"`) the test
-    /// declares via `#[test(requires = [...])]`. Empty when the test has
+    /// declares via `#[test(requires: [...])]`. Empty when the test has
     /// no `requires` clause; the runner gates execution on the probe
     /// result for each entry.
     pub(super) requires: Vec<String>,
@@ -60,7 +60,7 @@ pub(super) struct DiscoveredTest {
     /// matching provider frame so resource-method calls inside the test
     /// resolve against the fixture. See design.md § Testing.
     pub(super) with_providers: Vec<WithProviderFixture>,
-    /// Per-test timeout in seconds from `#[test(timeout_seconds = N)]`.
+    /// Per-test timeout in seconds from `#[test(timeout_seconds: N)]`.
     /// `None` when the attribute is absent; the runner then falls back to
     /// the kara.toml `[test].timeout_seconds`, the `KARAC_TEST_TIMEOUT_SECS`
     /// env var, and finally the 30 s default (phase-7 line 847 sub-step 3).
@@ -118,7 +118,7 @@ pub(super) fn mangled_test_function_name(
 ///   rejected at the parse site; the synthesized function is
 ///   module-internal regardless.
 /// - the attribute list copied from the TestCase. Slice 4 lifts
-///   `#[test(requires=[...])]` / `#[with_provider(...)]` extraction
+///   `#[test(requires: [...])]` / `#[with_provider(...)]` extraction
 ///   onto `TestCase.attributes`; until then the field carries
 ///   whatever the parser attached without behavior change.
 pub(super) fn lower_test_case_to_function(
@@ -221,7 +221,7 @@ pub(super) fn lower_and_discover_test_cases(tree: &mut ProgramTree) -> Vec<Disco
     tests
 }
 
-/// Pull resource paths out of a `#[test(requires = [a.b, c.d])]` attribute.
+/// Pull resource paths out of a `#[test(requires: [a.b, c.d])]` attribute.
 /// Other `#[test(...)]` arg shapes are tolerated and ignored, so future
 /// slices can add new keys (e.g. `cases = N`) without breaking earlier
 /// runners. Non-path expressions in the array are silently dropped — the
@@ -253,7 +253,7 @@ pub(super) fn extract_requires(attributes: &[crate::ast::Attribute]) -> Vec<Stri
     out
 }
 
-/// Pull the per-test timeout from a `#[test(timeout_seconds = N)]` attribute
+/// Pull the per-test timeout from a `#[test(timeout_seconds: N)]` attribute
 /// (phase-7 line 847 sub-step 3). Returns the first positive integer value
 /// found across the test's attributes; `None` when absent. A non-positive or
 /// non-integer value is ignored (it simply doesn't set a per-test override, so
@@ -283,7 +283,7 @@ pub(super) fn extract_timeout_seconds(attributes: &[crate::ast::Attribute]) -> O
 }
 
 /// Resolve the effective per-test timeout from the precedence chain
-/// (phase-7 line 847): a per-test `#[test(timeout_seconds = N)]` attribute >
+/// (phase-7 line 847): a per-test `#[test(timeout_seconds: N)]` attribute >
 /// the kara.toml `[test].timeout_seconds` > the `KARAC_TEST_TIMEOUT_SECS` env
 /// var > the built-in 30 s default. Each layer is an `Option<u64>` of seconds;
 /// the first present wins.
@@ -791,7 +791,7 @@ pub(super) fn test_fail_fields_with_providers(
     s
 }
 
-/// Intersection of `#[test(requires = [...])]` resources and
+/// Intersection of `#[test(requires: [...])]` resources and
 /// `#[with_provider(...)]` resource paths. Preserves `requires` order so
 /// the conflict list reads in source declaration order.
 pub(super) fn conflict_resources(

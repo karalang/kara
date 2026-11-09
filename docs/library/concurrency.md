@@ -96,7 +96,7 @@ enum SendTimeoutError[T] {
 }
 ```
 
-Both errors tell a closed channel from a timeout, and `send_timeout` hands the value back either way. They take a `std.time` `Duration`, so a program that calls one imports it.
+Both errors tell a closed channel from a timeout, and `send_timeout` hands the value back either way. `SendError`, `RecvTimeoutError` and `SendTimeoutError` implement `Display` and `Error`, so `?` converts them into `AnyError`; their text is `channel full`, `channel closed` or `timed out`. They take a `std.time` `Duration`, so a program that calls one imports it.
 
 **Deferred.** Unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
 

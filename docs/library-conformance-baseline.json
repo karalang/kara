@@ -2,25 +2,18 @@
   "note": "Non-conforming library-doc blocks and examples. Shrink me. `reason` says why each is here; UNTRIAGED means nobody has decided yet.",
   "blocks": {
     "f81e6a2e51be": {
-      "where": "README.md:92",
+      "where": "README.md:94",
       "heading": "What makes Kāra different > An AI-first compiler interface",
       "outcome": "REJECTED",
       "reason": "deliberate: the use-after-move the `karac fix` demo starts from",
       "first_diagnostic": "value 'log' moved here, used again here (moved at line 7:21)"
     },
     "6e3b84b61afa": {
-      "where": "docs/library/collections.md:149",
+      "where": "docs/library/collections.md:161",
       "heading": "Collections > `Map[K, V, H]`",
       "outcome": "REJECTED",
       "reason": "fragment: one chained call over `self.table`, `key` and `row` from the surrounding prose",
       "first_diagnostic": "'self' used outside of impl method"
-    },
-    "82c63792bcd7": {
-      "where": "docs/library/collections.md:332",
-      "heading": "Collections > Fallible allocation",
-      "outcome": "REJECTED",
-      "reason": "fragment: `?` needs an enclosing function returning Result; the ladder wraps in `fn main()`",
-      "first_diagnostic": "'?' requires the enclosing function to return `Result` or `Option`, found '()'"
     },
     "37aca5f38b06": {
       "where": "docs/library/concurrency.md:80",
@@ -37,18 +30,11 @@
       "first_diagnostic": "unknown module `data`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
     },
     "866d552a9220": {
-      "where": "docs/library/io.md:644",
+      "where": "docs/library/io.md:650",
       "heading": "Input and output > Examples",
       "outcome": "RUN-FAILED",
       "reason": "as written: the tool skeleton exits 1 with its usage line when run without an argument",
       "first_diagnostic": null
-    },
-    "524e6ce2d6bd": {
-      "where": "docs/library/json.md:6",
-      "heading": "JSON values (`Json`)",
-      "outcome": "REJECTED",
-      "reason": "fragment: `?` needs an enclosing function returning Result",
-      "first_diagnostic": "'?' requires the enclosing function to return `Result` or `Option`, found '()'"
     },
     "617e79034685": {
       "where": "docs/library/time-random-env.md:35",

@@ -339,7 +339,7 @@ pub struct Manifest {
     /// Optional `[test.resources]` table — maps a fully-qualified resource
     /// path (e.g. `"db.UserDB"`) to the shell command that probes whether
     /// the resource is healthy. Used by `karac test` to gate
-    /// `#[test(requires = [...])]` tests; missing or empty tables fall
+    /// `#[test(requires: [...])]` tests; missing or empty tables fall
     /// back to the env-var probe (`KARA_RESOURCE_*`). Stored as a
     /// `BTreeMap` so iteration order is stable across runs (only matters
     /// when surfaced in diagnostics, but cheap to guarantee).
@@ -349,7 +349,7 @@ pub struct Manifest {
     /// when absent, in which case the runner falls back to the
     /// `KARAC_TEST_TIMEOUT_SECS` env var and then the built-in 30 s
     /// default. Precedence (phase-7 line 847 sub-steps 2+3): a per-test
-    /// `#[test(timeout_seconds = N)]` attribute > this manifest value >
+    /// `#[test(timeout_seconds: N)]` attribute > this manifest value >
     /// the env var > 30 s.
     pub test_timeout_seconds: Option<u64>,
     /// `[package].kara-version` — the minimum compiler version this
@@ -2503,7 +2503,7 @@ fn parse_dependency_inline_table(
 
 /// Parse the optional `[test.resources]` sub-table — `karac test` uses these
 /// shell commands (when present) instead of the env-var probe to decide
-/// whether a `#[test(requires = [...])]` resource is healthy. Wrong shapes
+/// whether a `#[test(requires: [...])]` resource is healthy. Wrong shapes
 /// (the `[test]` parent isn't a table, `resources` isn't a table, or a value
 /// isn't a string) are hard errors so typos in the manifest surface
 /// immediately rather than silently disabling the override.

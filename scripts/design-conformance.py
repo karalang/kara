@@ -258,7 +258,7 @@ def rungs(block):
     # bury a real answer (the shape syntax turns out to be accepted).
     stripped = [re.sub(r"\s*//.*$", "", l).strip().rstrip(";,")
                 for l in block.code]
-    aliases = "\n".join(f"type _Probe{i} = {t};"
+    aliases = "\n".join(f"type ConformanceProbe{i} = {t};"
                          for i, t in enumerate(stripped) if t) + "\n\nfn main() {}\n"
     items = ("items", body, 0)
     items_main = ("items+main", body + "\n\nfn main() {}\n", 0)
@@ -289,7 +289,7 @@ def rungs(block):
 # A signature is not a program, but it IS a declaration, and declarations are
 # checkable. Two probes cover the 60:
 #
-#   (a) `fn name(args) -> R [with E]`  ->  `trait _Probe { <line>; }`
+#   (a) `fn name(args) -> R [with E]`  ->  `trait ConformanceProbe { <line>; }`
 #       A bodiless method declaration is legal in a trait, so this typechecks
 #       the parameter and return types and the effect clause. It catches a
 #       signature naming a type that does not exist. It says NOTHING about
@@ -464,7 +464,7 @@ def signature_probes(decls):
         m_fn = SIG_FN_RE.match(decl)
         if m_fn and "." not in m_fn.group("name"):
             body = re.sub(r"^(?:pub\s+)", "", decl)   # `pub` is not legal on a trait method
-            items.append(f"trait _Probe{n} {{ {body}; }}")
+            items.append(f"trait ConformanceProbe{n} {{ {body}; }}")
             continue
         if m_fn:                                       # `fn io.read_line() -> …`
             calls.append((_call_probe(decl, m_fn), decl))

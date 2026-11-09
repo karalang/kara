@@ -28,3 +28,14 @@ pub enum SendError[+T] {
     Full(T),
     Closed(T),
 }
+
+impl[T] Display for SendError[T] {
+    fn to_string(ref self) -> String {
+        match self {
+            SendError.Full(_) => "channel full",
+            SendError.Closed(_) => "channel closed",
+        }
+    }
+}
+
+impl[T] Error for SendError[T] { }

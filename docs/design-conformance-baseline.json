@@ -2,91 +2,77 @@
   "note": "Non-conforming design.md blocks. Shrink me. `reason` says why a block is here; UNTRIAGED means nobody has decided yet.",
   "blocks": {
     "abde1163d62c": {
-      "line": 588,
+      "line": 589,
       "heading": "4. Modules and packages > Imports",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "unknown module `db.connection`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
     },
     "84325494409a": {
-      "line": 609,
+      "line": 610,
       "heading": "4. Modules and packages > Imports",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "unknown module `db.connection`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
     },
-    "319695619eff": {
-      "line": 2512,
-      "heading": "7. Functions and closures > Destructuring parameters",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
-      "first_diagnostic": "Expected identifier, found DotDot"
-    },
-    "00241a981001": {
-      "line": 2540,
-      "heading": "7. Functions and closures > Returns, `ref` returns and views",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `ref` of a named place as an expression (core-semantics §5.1)",
-      "first_diagnostic": "`ref` is not written at call sites. The parameter's mode is declared on the callee's signature. Remove the `ref` keyword."
-    },
     "015615ccef36": {
-      "line": 2624,
+      "line": 2631,
       "heading": "7. Functions and closures > `*` and `ref` in expressions",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `ref` of a named place as an expression (core-semantics §5.1)",
-      "first_diagnostic": "`ref` is not written at call sites. The parameter's mode is declared on the callee's signature. Remove the `ref` keyword."
+      "first_diagnostic": "undefined name 'heap'"
     },
     "fb3d4f923c49": {
-      "line": 2676,
+      "line": 2683,
       "heading": "7. Functions and closures > Closures",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): typed closure parameters",
-      "first_diagnostic": "Expected Equal, found Colon"
+      "first_diagnostic": "Expected `=`, found `:`"
     },
-    "32f75a25e669": {
-      "line": 2714,
-      "heading": "7. Functions and closures > Function types and kinds",
+    "2bc5da29b2b2": {
+      "line": 3821,
+      "heading": "9. Traits > Operator traits",
       "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
-      "first_diagnostic": "parameter `f` is a non-escaping function value and cannot be bound to a variable: a function-typed parameter may only be called or passed to another non-escaping parameter. Declare it `f: escaping Fn(...)` to store or return it (core-semantics.md §9.3)"
+      "reason": "exhibit: the standard library's own `Ordering` helpers and `impl Option[Ordering]`; a program may not write an inherent impl on a library type",
+      "first_diagnostic": "inherent impl on `Option[Ordering]`, a type this program does not declare: a package may write `impl Type { .. }` only for its own types (design.md § Coherence). Write a trait and implement it for `Option[Ordering]`, or wrap the type in a `distinct type`"
     },
     "e17f7f14296c": {
-      "line": 3885,
+      "line": 3994,
       "heading": "9. Traits > Conversion traits",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "user-defined `impl Into for T` is not allowed; `Into` is derived from `From` via a blanket impl"
     },
     "ba31bf9dbb51": {
-      "line": 4859,
+      "line": 4971,
       "heading": "11. Ownership and sharing > `sync` types",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Session' is already defined in this scope (first defined at 2:8)"
     },
     "11755d38072b": {
-      "line": 6032,
+      "line": 6144,
       "heading": "`unsafe` > `undocumented_unsafe` lint",
       "outcome": "REJECTED",
       "reason": "statement fragment (an `unsafe` block) shown on its own",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "6068a14e526a": {
-      "line": 6077,
+      "line": 6189,
       "heading": "`unsafe` > `unsafe_op_in_unsafe_fn` rule",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the library method `Slice.as_ptr`",
       "first_diagnostic": "no method 'as_ptr' on type 'Slice'"
     },
     "bfc864dc4a9e": {
-      "line": 6550,
+      "line": 6664,
       "heading": "`extern \"C\"` > Opaque foreign types",
       "outcome": "SIGNATURE-MISSING",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `#[kara_name]` renaming an opaque foreign type (CN-8)",
       "first_diagnostic": "`FILE` is Const-class but struct names must be Type-class (PascalCase); consider renaming to `File`"
     },
     "fcac7ba4a8d6": {
-      "line": 6931,
+      "line": 7047,
       "heading": "Execution model > Bounds checks and `get_unchecked`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `get_unchecked` returns a `ref T`, and reads through a `ref` to a `Copy` value (core-semantics §5.10)",

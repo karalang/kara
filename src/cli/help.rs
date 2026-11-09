@@ -780,7 +780,7 @@ ARGS:
 
 OPTIONS:
     --all      Promote skipped tests to failures. By default, tests
-               gated by `#[test(requires = [...])]` are skipped silently
+               gated by `#[test(requires: [...])]` are skipped silently
                when their resources are unavailable. With `--all`, the
                runner emits `test_fail` for them instead and the
                process exits non-zero. Use in CI when every required

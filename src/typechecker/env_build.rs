@@ -3179,14 +3179,57 @@ impl<'a> super::TypeChecker<'a> {
         // `phase-4-interpreter.md` § `impl Option[Ordering]` for the
         // locked design rationale (rejection over Rust-style
         // specialization).
-        match self.impl_overlap_conflict(
-            &trait_name,
-            &type_name,
-            &target_args,
-            &trait_args,
-            (&target_generic_args, &impl_gp_names),
-            &methods,
-        ) {
+        let library_start = self.program.library_start.unwrap_or(usize::MAX);
+        let user_impl = |c: &Self, i: usize| {
+            !c.baked_impls.contains(&i)
+                && c.env.impls[i]
+                    .target_span
+                    .is_some_and(|s| s.offset < library_start)
+        };
+        let overlaps = |only: &dyn Fn(usize) -> bool| {
+            self.impl_overlap_conflict(
+                &trait_name,
+                &type_name,
+                &target_args,
+                &trait_args,
+                (&target_generic_args, &impl_gp_names),
+                (&methods, only),
+            )
+        };
+        let user_overlap = if imp.span.offset >= library_start {
+            overlaps(&|i| user_impl(self, i))
+        } else {
+            None
+        };
+        let overlap = match &user_overlap {
+            Some(_) => None,
+            None => overlaps(&|_| true),
+        };
+        // A library impl that overlaps a program's own impl: the program's
+        // impl is the one at fault, so it is the one named. An inherent impl
+        // on a library type already has its own error (a package writes
+        // inherent impls only for its own types); a trait impl overlapping
+        // the library's is reported at its own target (design.md § Coherence).
+        // Reported at the library's impl instead, it read as a library bug,
+        // and a library impl re-stating a baked one passed silently, leaving
+        // the program's impl to replace the library's.
+        if let Some((_, i)) = &user_overlap {
+            if let Some(user_span) = self.env.impls[*i].target_span {
+                if let Some(t) = trait_name.as_deref() {
+                    self.type_error(
+                        format!(
+                            "conflicting impl: the standard library already implements `{t}` \
+                             for `{type_name}`; a type implements a trait once, so this impl \
+                             overlaps the library's (design.md § Coherence)"
+                        ),
+                        user_span,
+                        TypeErrorKind::ConflictingImpl,
+                    );
+                }
+                return;
+            }
+        }
+        match overlap.map(|(o, _)| o) {
             None => {}
             // A library source re-stating a baked impl where it does not
             // replace it (a package member's check): the baked one stands,
@@ -3362,10 +3405,13 @@ impl<'a> super::TypeChecker<'a> {
         target_args: &[Type],
         trait_args: &[Type],
         (written, params): (&[Type], &[String]),
-        new_methods: &HashMap<String, FunctionSig>,
-    ) -> Option<ImplOverlap> {
+        // The new impl's methods, and which registered impls to compare
+        // it with.
+        (new_methods, only): (&HashMap<String, FunctionSig>, &dyn Fn(usize) -> bool),
+    ) -> Option<(ImplOverlap, usize)> {
         for (i, existing) in self.env.impls.iter().enumerate() {
-            if existing.trait_name != *trait_name || existing.target_type != target_type {
+            if existing.trait_name != *trait_name || existing.target_type != target_type || !only(i)
+            {
                 continue;
             }
             // Two impls overlap only when their headers unify (design.md
@@ -3408,7 +3454,7 @@ impl<'a> super::TypeChecker<'a> {
                     .get(&i)
                     .cloned()
                     .unwrap_or_default();
-                return Some(ImplOverlap::Duplicate(assoc));
+                return Some((ImplOverlap::Duplicate(assoc), i));
             }
             let existing_empty = existing.target_args.is_empty();
             let new_empty = target_args.is_empty();
@@ -3446,9 +3492,9 @@ impl<'a> super::TypeChecker<'a> {
                     continue;
                 }
                 clashing.sort();
-                return Some(ImplOverlap::MethodRedefinition(clashing));
+                return Some((ImplOverlap::MethodRedefinition(clashing), i));
             }
-            return Some(ImplOverlap::WholeImpl);
+            return Some((ImplOverlap::WholeImpl, i));
         }
         None
     }

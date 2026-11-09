@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 203 |
+| diagnostics | 204 |
 | false-positive | 165 |
 | perf | 141 |
-| missing-feature | 113 |
-| soundness | 55 |
+| missing-feature | 114 |
+| soundness | 56 |
 | miscompile | 47 |
 | run-vs-build | 29 |
 | other | 25 |
-| codegen-gap | 24 |
+| codegen-gap | 25 |
 | crash | 19 |
 | leak | 4 |
 | use-after-free | 2 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 320 |
+| typecheck | 323 |
 | mir-llvm | 174 |
-| mir | 149 |
+| mir | 150 |
 | cli | 89 |
 | ownership | 65 |
 | parser | 52 |
@@ -110,6 +110,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-09-26 | 2026-11-09 | mir-llvm | low | A presized push fill whose trip count is not a constant keeps two exits a trip, its bound and its reservation's reach, so LLVM does not vectorize it: kata 484's `(1..=n).collect()` (n = letters.len() + 1) runs 7 instructions an element where Rust's TrustedLen fill is vectorized, and its `s.chars().collect()` runs 14 a char against Rust's 11 | — |
 | B-2026-11-09-28 | 2026-11-09 | typecheck | medium | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | — |
+| B-2026-11-09-29 | 2026-11-09 | typecheck | low | A program's inherent impl on a library type that redefines a library method is also refused at the library's own impl, past the program's end, under "in the standard library: " six times | — |
+| B-2026-11-09-30 | 2026-11-09 | typecheck | medium | JsonError, PoolError, SendError, RecvTimeoutError and SendTimeoutError do not implement `Error`, so `?` cannot convert them into `AnyError` | — |
+| B-2026-11-09-31 | 2026-11-09 | typecheck | medium | A program's `impl Clone for String` is accepted and replaces the library's `clone`: an impl overlapping a baked library trait impl is not refused | — |
+| B-2026-11-09-32 | 2026-11-09 | mir | medium | `Clone.clone(s)` on a `String` passes `karac check`, then `__mir-run` refuses it: "a type that failed to check is not lowered yet" | — |
 
 ### Relocated
 

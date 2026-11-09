@@ -1,0 +1,9 @@
+source = "B-2026-11-09-30"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "errors", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §10 `Error` and `AnyError`: the standard library's error types implement `Error`, so `?` converts each into `AnyError`. JsonError (json.md), RecvTimeoutError (concurrency.md) and PoolError (pool.md) each reach an `AnyError` through `?`, and print the text their library page gives."

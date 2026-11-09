@@ -400,6 +400,32 @@ jobs:
         # fail the build; drop them from the baseline in the same PR.
         run: python3 scripts/design-conformance.py --check
 
+  # The sibling sweep for the code a reader copies next: the ```kara blocks of
+  # docs/library/*.md, README.md and the examples' READMEs, plus
+  # examples/*.kara (checked, run on the MIR interpreter, compared with any
+  # shown or .expected output) and examples/*/kara.toml packages. Known
+  # findings live in docs/library-conformance-baseline.json with a reason;
+  # `--check` fails on a new one. Front-end and interpreter only, so no
+  # `--features llvm` and no runtime archives.
+  library-conformance:
+    name: library docs conformance
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build karac
+        run: cargo build --bin karac
+
+      - name: Check library docs and examples against the compiler
+        run: python3 scripts/library-conformance.py --check
+
   # The `--features llvm` clippy surface — the ENTIRE codegen backend
   # (`src/codegen.rs` + every `src/codegen/*.rs`, the largest and most
   # actively-developed part of the compiler) is gated behind

@@ -20,6 +20,7 @@ fn main() {
         Err(PoolError.Busy) => println("busy"),
         Err(PoolError.CreateFailed(e)) => println("could not connect"),
         Err(PoolError.PoolClosed) => println("shutting down"),
+        Err(_) => println("could not acquire"), // `PoolError` is `#[non_exhaustive]`
     }
 }
 ```
@@ -30,7 +31,7 @@ fn main() {
 |---|---|
 | `Pool[T, E]` | The pool of `T` values, made by a factory that fails with `E`. It has one owner and no `clone`; share it by reference. |
 | `PooledConnection[T]` | One value lent out by the pool. Its field `val: T` is the value itself. Dropping it gives the value back. |
-| `PoolError[E]` | Why `acquire` failed: `Timeout`, `Busy`, `PoolClosed` or `CreateFailed(E)`. |
+| `PoolError[E]` | Why `acquire` failed: `Timeout`, `Busy`, `PoolClosed` or `CreateFailed(E)`. When `E: Display` it implements `Display` and `Error`, so `?` converts it into `AnyError`; its text is `timed out waiting for a pooled value`, `too many callers already waiting`, `pool closed`, or `could not create a pooled value: ` and the factory's error. |
 
 ## `Pool[T, E]`
 

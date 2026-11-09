@@ -64,6 +64,28 @@ pub enum SendTimeoutError[T] {
     TimedOut(T),
 }
 
+impl Display for RecvTimeoutError {
+    fn to_string(ref self) -> String {
+        match self {
+            RecvTimeoutError.Closed => "channel closed",
+            RecvTimeoutError.TimedOut => "timed out",
+        }
+    }
+}
+
+impl Error for RecvTimeoutError { }
+
+impl[T] Display for SendTimeoutError[T] {
+    fn to_string(ref self) -> String {
+        match self {
+            SendTimeoutError.Closed(_) => "channel closed",
+            SendTimeoutError.TimedOut(_) => "timed out",
+        }
+    }
+}
+
+impl[T] Error for SendTimeoutError[T] { }
+
 // What a `select` stands for (core-semantics §11.11): `select_desugar.rs`
 // writes the calls.
 
