@@ -68,3 +68,17 @@ fn kata_2035_receiver_side_annotation_still_wins() {
     assert!(clean, "{text}");
     assert_eq!(out, "2\n");
 }
+
+/// The defaulted binding read back out of a collection it was pushed into
+/// (`left[0].push(a)`, then `x` of `for x in ref left[0]` as `min`'s
+/// argument) gets the same annotation, found through the collection
+/// (B-2026-11-09-15).
+#[test]
+fn kata_2035_a_literal_read_back_out_of_a_collection_gets_its_annotation() {
+    let src = "fn f(nums: Vec[i32]) -> i32 {\n    let mut left = Vec.filled(2, Vec.new());\n    let mut a = 0;\n    a += nums[0];\n    left[0].push(a);\n    let mut best = i32.MAX;\n    for x in ref left[0] {\n        best = best.min(x + nums[1]);\n    }\n    for y in left[0].iter() {\n        best = best.min(*y);\n    }\n    best\n}\n\nfn main() {\n    println(f([3i32, 4i32].to_vec()));\n}";
+    let (first, text, clean, out) = mend(&scratch("pushed"), src);
+    assert!(first.contains("declare it `a: i32`"), "{first}");
+    assert!(text.contains("let mut a: i32 = 0;"), "{text}");
+    assert!(clean, "{text}");
+    assert_eq!(out, "3\n");
+}

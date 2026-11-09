@@ -361,6 +361,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A defaulted `i64` literal read back out of a collection it was pushed
+  into (`left[k].push(a)`, then `x` of `for x in ref left[k]` as
+  `best.min(x + ..)` with `best: i32`) is refused with the same
+  `a: i32` annotation `karac fix` applies when the use reads `a` itself; it
+  had no edit (kata 2035, B-2026-11-09-15).
+
 - A call on a type parameter that none of its bounds declares
   (`T.build(n)` under `T: Make`) is refused naming the bounds, where it got
   an internal "a type that failed to check is not lowered yet"

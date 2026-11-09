@@ -1744,6 +1744,7 @@ impl<'a> super::TypeChecker<'a> {
                 .collect(),
         );
         self.method_call_ends.push(ends);
+        self.note_literal_push(object, method, args);
         let errors_before = self.errors.len();
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
         self.method_call_ends.pop();

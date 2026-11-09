@@ -4004,6 +4004,11 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-08-53). A copy, `let y = x`, is
     /// noted with `x`'s entry, whose `root` names `x` as the binding to fix.
     pub(super) literal_lets: FxHashMap<String, LiteralLet>,
+    /// A collection a `literal_lets` binding was pushed into, by the name of
+    /// the collection's root binding (`left` of `left[k].push(a)`): `a`'s
+    /// entry, so a `for x in left[k]` that reads it back as `x` names `a`
+    /// as the binding to fix (B-2026-11-09-15).
+    pub(super) literal_pushes: FxHashMap<String, LiteralLet>,
     /// `let x = <view>` with no annotation whose value is a read-only
     /// `Slice[T]` written as a postfix expression other than a range
     /// subscript (`s.bytes()`), by name: the initializer's span, where
@@ -4429,6 +4434,7 @@ impl<'a> TypeChecker<'a> {
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
             literal_lets: FxHashMap::default(),
+            literal_pushes: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
             open_collection_let: None,
             literal_collection_uses: FxHashMap::default(),

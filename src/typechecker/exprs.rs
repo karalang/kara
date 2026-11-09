@@ -10416,6 +10416,65 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The binding a collection expression is rooted at: `left` of `left`,
+    /// `left[k]`, `ref left[k]`, `left[k].iter()`.
+    fn collection_root_name(e: &Expr) -> Option<&str> {
+        match &e.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            ExprKind::Index { object, .. } => Self::collection_root_name(object),
+            ExprKind::Unary { operand, .. } => Self::collection_root_name(operand),
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() && matches!(method.as_str(), "iter" | "into_iter") => {
+                Self::collection_root_name(object)
+            }
+            _ => None,
+        }
+    }
+
+    /// `left[k].push(a)` with `a` a [`LiteralLet`]: remembered against
+    /// `left`, so a value read back out of it names `a` (B-2026-11-09-15).
+    pub(super) fn note_literal_push(&mut self, object: &Expr, method: &str, args: &[CallArg]) {
+        if method != "push" || args.len() != 1 {
+            return;
+        }
+        let ExprKind::Identifier(n) = &args[0].value.kind else {
+            return;
+        };
+        let Some(entry) = self.literal_lets.get(n.as_str()).filter(|e| !e.element) else {
+            return;
+        };
+        let entry = entry.clone();
+        if let Some(root) = Self::collection_root_name(object) {
+            self.literal_pushes.insert(root.to_string(), entry);
+        }
+    }
+
+    /// `for x in left[k]` over a collection a literal binding was pushed
+    /// into: `x` reads that binding's value, so a refusal at a use of `x`
+    /// offers the binding's annotation. Returns what `x`'s name held before,
+    /// for the loop's end to restore.
+    pub(super) fn note_literal_for_binding(
+        &mut self,
+        pattern: &Pattern,
+        iterable: &Expr,
+    ) -> Option<(String, Option<super::LiteralLet>)> {
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return None;
+        };
+        let entry = Self::collection_root_name(iterable)
+            .and_then(|root| self.literal_pushes.get(root))
+            .cloned();
+        let prev = match entry {
+            Some(e) => self.literal_lets.insert(name.clone(), e),
+            None => self.literal_lets.remove(name.as_str()),
+        };
+        Some((name.clone(), prev))
+    }
+
     /// Note `let (a, b, ..) = (<literal>, <literal>, ..)` with no
     /// annotation: each name bound straight to a literal element, whose fix
     /// is that literal's suffix (see `TypeChecker::literal_lets`).
@@ -13014,6 +13073,7 @@ impl<'a> super::TypeChecker<'a> {
                     std::mem::replace(&mut self.current_scrutinee_core_borrowed, core_borrowed);
                 self.bind_pattern_types(pattern, &elem_ty);
                 self.current_scrutinee_core_borrowed = prev_core;
+                let saved_literal_let = self.note_literal_for_binding(pattern, iterable);
                 if core_borrowed {
                     // A `Copy` part of the item copies (§4.6), so `*i` on
                     // `for (v, i) in xs.iter()` is an error; the item itself
@@ -13146,6 +13206,12 @@ impl<'a> super::TypeChecker<'a> {
                     match prev {
                         Some(at) => self.core_for_into_iter.insert(n, at),
                         None => self.core_for_into_iter.remove(&n),
+                    };
+                }
+                if let Some((n, prev)) = saved_literal_let {
+                    match prev {
+                        Some(e) => self.literal_lets.insert(n, e),
+                        None => self.literal_lets.remove(&n),
                     };
                 }
                 self.local_scope.pop();
