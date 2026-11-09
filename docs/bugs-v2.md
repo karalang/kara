@@ -59,15 +59,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 204 |
-| false-positive | 165 |
+| false-positive | 167 |
 | perf | 142 |
-| missing-feature | 114 |
+| missing-feature | 116 |
 | soundness | 56 |
-| miscompile | 48 |
+| miscompile | 49 |
 | run-vs-build | 29 |
 | other | 25 |
 | codegen-gap | 25 |
-| crash | 19 |
+| crash | 20 |
 | leak | 4 |
 | use-after-free | 2 |
 
@@ -75,18 +75,18 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 323 |
-| mir-llvm | 175 |
-| mir | 150 |
-| cli | 90 |
+| typecheck | 329 |
+| mir-llvm | 177 |
+| mir | 153 |
+| cli | 92 |
 | ownership | 65 |
-| parser | 52 |
+| parser | 53 |
 | interp | 39 |
 | runtime | 30 |
 | effect | 29 |
 | codegen | 22 |
 | resolver | 19 |
-| other | 6 |
+| other | 7 |
 | autopar | 4 |
 | lexer | 1 |
 ## Current state
@@ -114,6 +114,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-32 | 2026-11-09 | mir | medium | `Clone.clone(s)` on a `String` passes `karac check`, then `__mir-run` refuses it: "a type that failed to check is not lowered yet" | — |
 | B-2026-11-09-33 | 2026-11-09 | cli | medium | kara-lsp: incremental user-code checking -- a completion re-checks the whole buffer and the unpruned library on every request: 186 ms on a 5-line file, 428 ms mid-file in mini_parsy (4.9k lines), 1.54 s in mini_markdown (14.8k lines) | — |
 | B-2026-11-09-34 | 2026-11-09 | mir-llvm | high | A program's own `struct Response { status, body, headers }` (io.md § HTTP server) is also what `Client.get`/`send` return, and the compiled client wrote only fields 0 and 1: `headers` stayed unwritten and its drop freed garbage (`free(): invalid pointer` / SIGSEGV; interpreter right) | — |
+| B-2026-11-09-36 | 2026-11-09 | typecheck | low | `v.iter().fold(None, |acc: Option[i64], x| Some(x))` is refused: the tail `Some(x)` with `x: ref i64` is an `Option[ref i64]`, though `Some(x)` against an `Option[i64]` slot elsewhere reads the scalar as its value (the remainder of the row that stopped it building an address) | — |
+| B-2026-11-09-37 | 2026-11-09 | typecheck+cli+other | low | No iterator or slice has `chunk_by`, yet `v.chunk_by(|a, b| a == b)` on a `Vec` is refused as an iterator adaptor with the machine fix `v.iter().chunk_by(..)`, which is refused in turn ("no method 'chunk_by' on type 'VecIter'") beside a stray "cannot compare '?T2' and '?T3'" | — |
+| B-2026-11-09-38 | 2026-11-09 | parser+typecheck+cli | medium | A tuple value cannot be assigned to existing places: `(lo, hi) = if c { (lo, mid) } else { (mid + 1, hi) };` (Rust's destructuring assignment) is refused E_ASSIGN_TARGET_NOT_PLACE with advice to drop the parentheses, and `lo, hi = if ..` is then a parse error ("2 target(s) but 1 value(s)"), so the halving step of a binary search carried as a pair has no spelling but a `let` and two assignments | — |
+| B-2026-11-09-39 | 2026-11-09 | typecheck+mir+mir-llvm | medium | A closure whose body fixes nothing about its parameter, handed to a bounded generic `F: Fn(i64) -> i64`, passes `karac check` but types its parameter and result as `()`: `ap(1, |x| { println("a"); x })` stops every backend with "invalid MIR: ap[Fn(()) -> ()]: argument 0 of a Fn call has the wrong type" | — |
+| B-2026-11-09-40 | 2026-11-09 | typecheck+mir | medium | A closure whose body ends in `collect()` takes its target from nowhere: `let to32 = |v: ref Vec[i64]| v.iter().map(|x| x as i32).collect();` used as `take(to32(a))` with `take(v: Vec[i32])`, or `let r: Vec[i64] = f(a)`, checks clean and then stops at lowering with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet"; a Kāra closure cannot declare its return type, so nothing can fix `C` | — |
 
 ### Relocated
 
@@ -948,6 +953,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-27 | ownership | low | `let Json.Array(queries) = row[3] else { … };` with `queries` only read is refused with E0515 "cannot move a non-`Copy` value out of a collection ele… | 4e69fdaed4 |
 | B-2026-11-09-29 | typecheck | low | A program's inherent impl on a library type that redefines a library method is also refused at the library's own impl, past the program's end, under… | 8adc0b0e29 |
 | B-2026-11-09-30 | typecheck | medium | JsonError, PoolError, SendError, RecvTimeoutError and SendTimeoutError do not implement `Error`, so `?` cannot convert them into `AnyError` | 8adc0b0e29 |
+| B-2026-11-09-35 | typecheck+mir+mir-llvm | high | A scalar `ref` handed to a type parameter a closure returns solved it as the `ref`: `m.map_or(x, \|k: i64\| k + 1)` with `x: ref i64` made `U` a `ref i… | 5a9b370550 |
 
 </details>
 
