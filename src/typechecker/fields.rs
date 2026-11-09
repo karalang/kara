@@ -426,7 +426,29 @@ impl<'a> super::TypeChecker<'a> {
                         } else {
                             format!("shared struct field '{type_name}.{field}' is not declared mut")
                         };
-                        self.type_error(message, *span, TypeErrorKind::SharedFieldNotMut);
+                        // A `shared struct` declared in this file takes the
+                        // fix at its declaration: `mut` before the field's
+                        // name (kata 2046). A `sync` field never does.
+                        let decl = (!struct_info.is_par)
+                            .then(|| self.shared_field_decl_name_span(&type_name, field))
+                            .flatten();
+                        match decl {
+                            Some(name_span) => self.type_error_with_fix_it(
+                                format!("{message}; declare it `mut {field}` in `{type_name}`"),
+                                *span,
+                                TypeErrorKind::SharedFieldNotMut,
+                                super::FixIt {
+                                    span: Span {
+                                        length: 0,
+                                        ..name_span
+                                    },
+                                    replacement: "mut ".to_string(),
+                                },
+                            ),
+                            None => {
+                                self.type_error(message, *span, TypeErrorKind::SharedFieldNotMut)
+                            }
+                        }
                     }
                     // Substitute the receiver's concrete generic args into the
                     // field's declared type so `b.v` on `b: Box[f64]` resolves
@@ -1932,5 +1954,18 @@ impl<'a> super::TypeChecker<'a> {
             name: enum_name.to_string(),
             args,
         }
+    }
+
+    /// The span of field `field`'s name in the declaration of the shared
+    /// struct `type_name`, when this program declares it at top level.
+    fn shared_field_decl_name_span(&self, type_name: &str, field: &str) -> Option<Span> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::StructDef(s) if s.name == type_name && s.is_shared => s
+                .fields
+                .iter()
+                .find(|f| f.name == field && !f.is_mut)
+                .map(|f| f.name_span),
+            _ => None,
+        })
     }
 }
