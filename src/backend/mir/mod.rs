@@ -2004,6 +2004,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .statics
             .get(i as usize)
             .ok_or_else(|| format!("no static {i}"))?;
+        if let Some(els) = self.const_table(def) {
+            let g = self.const_table_global(&format!("kara.static.{}", def.name), &els)?;
+            let p = g.as_pointer_value();
+            self.statics.insert(i, p);
+            return Ok(p);
+        }
         let l = self.layout(def.ty)?;
         let ty = self.llcx.i8_type().array_type(l.size.max(1) as u32);
         let g = self
@@ -2022,6 +2028,10 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let program = self.program;
         for (i, def) in program.statics.iter().enumerate() {
             let g = self.static_ptr(i as u32)?;
+            // A constant table is its own initializer.
+            if self.const_table(def).is_some() {
+                continue;
+            }
             let f = self.function(&def.init)?;
             self.builder
                 .build_call(f, &[g.into()], "")

@@ -14,10 +14,10 @@ use super::{Cx, R};
 use crate::mir::layout::{self, SHARED_COUNTS, SHARED_STRONG_ONLY};
 use crate::mir::place_ty::place_ty;
 use crate::mir::ty::AdtId;
-use crate::mir::ty::{FloatTy, IntTy};
+use crate::mir::ty::{FloatTy, IntTy, IntrinsicTy};
 use crate::mir::{
-    AbortReason, AggregateKind, BinOp, CastKind, Const, ConstKind, NullOp, Operand, Place,
-    ProjElem, Rvalue, Statement, StatementKind, TerminatorKind, Ty, TyKind, UnOp,
+    AbortReason, AggregateKind, BinOp, CastKind, Const, ConstKind, Local, NullOp, Operand, Place,
+    ProjElem, Rvalue, Statement, StatementKind, StaticDef, TerminatorKind, Ty, TyKind, UnOp,
 };
 
 fn e<T: ToString>(x: T) -> String {
@@ -474,6 +474,139 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     // ── constants ──────────────────────────────────────────────────
+
+    /// The elements of a static `Vec` whose initializer only builds it
+    /// from an array of scalar constants (`Vec[T].from_array(move a)` with
+    /// `a = [c0, c1, ...]`, as `mir::literal_tables` makes for `for step
+    /// in [1, 9]`): the static can then be a constant global, its buffer a
+    /// constant array, instead of a zeroed global filled at startup that
+    /// LLVM knows nothing of (kata 752, B-2026-11-09-5). `None` for any
+    /// other static, or a `let mut` one.
+    pub(super) fn const_table(&self, def: &StaticDef) -> Option<Vec<Const>> {
+        if def.mutable {
+            return None;
+        }
+        let TyKind::Intrinsic(IntrinsicTy::Vec(el)) = self.tys.kind(def.ty) else {
+            return None;
+        };
+        // Element types whose LLVM constant has the element's size.
+        let fits = match self.tys.kind(el) {
+            TyKind::Int(it) => it.bits() <= 64,
+            TyKind::Bool | TyKind::Char => true,
+            TyKind::Float(ft) => matches!(ft, FloatTy::F32 | FloatTy::F64),
+            _ => false,
+        };
+        if !fits {
+            return None;
+        }
+        let body = self.program.bodies.get(&def.init)?;
+        let mut array = None;
+        let mut call = None;
+        for b in &body.blocks {
+            for s in &b.statements {
+                match &s.kind {
+                    StatementKind::Assign(p, Rvalue::Aggregate(AggregateKind::Array(_), ops))
+                        if p.projection.is_empty() && array.is_none() =>
+                    {
+                        array = Some((p.local, ops));
+                    }
+                    StatementKind::StorageLive(_)
+                    | StatementKind::StorageDead(_)
+                    | StatementKind::Nop => {}
+                    _ => return None,
+                }
+            }
+            match &b.terminator.kind {
+                TerminatorKind::Goto { .. } | TerminatorKind::Return => {}
+                TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(f),
+                            ..
+                        }),
+                    args,
+                    destination,
+                    ..
+                } if call.is_none()
+                    && *destination == Place::local(Local::RETURN_PLACE)
+                    && f.name.starts_with("Vec")
+                    && f.name.ends_with(".from_array") =>
+                {
+                    let [Operand::Move(a)] = args.as_slice() else {
+                        return None;
+                    };
+                    call = Some(a.clone());
+                }
+                _ => return None,
+            }
+        }
+        let (a, ops) = array?;
+        if call? != Place::local(a) || ops.is_empty() {
+            return None;
+        }
+        ops.iter()
+            .map(|o| match o {
+                Operand::Const(c)
+                    if c.ty == el
+                        && matches!(c.kind, ConstKind::Scalar(_) | ConstKind::Float(_)) =>
+                {
+                    Some(c.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The constant global [`Self::const_table`] found the elements of:
+    /// `{ptr, len, cap}` with the buffer a constant array and capacity 0,
+    /// the borrowed-literal form, which nothing frees or grows in place.
+    pub(super) fn const_table_global(
+        &self,
+        name: &str,
+        els: &[Const],
+    ) -> R<inkwell::values::GlobalValue<'ctx>> {
+        let mut vals = Vec::with_capacity(els.len());
+        for c in els {
+            vals.push(
+                self.scalar_const(c)?
+                    .ok_or("a table element is not a scalar")?,
+            );
+        }
+        let data = match vals[0].get_type() {
+            BasicTypeEnum::IntType(t) => {
+                t.const_array(&vals.iter().map(|v| v.into_int_value()).collect::<Vec<_>>())
+            }
+            BasicTypeEnum::FloatType(t) => t.const_array(
+                &vals
+                    .iter()
+                    .map(|v| v.into_float_value())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => return Err("a table element is neither an integer nor a float".into()),
+        };
+        let buf = self
+            .module
+            .add_global(data.get_type(), None, &format!("{name}.data"));
+        buf.set_initializer(&data);
+        buf.set_constant(true);
+        buf.set_linkage(Linkage::Private);
+        buf.set_unnamed_addr(true);
+        buf.set_alignment(8);
+        let i64t = self.llcx.i64_type();
+        let header = self.llcx.const_struct(
+            &[
+                buf.as_pointer_value().into(),
+                i64t.const_int(els.len() as u64, false).into(),
+                i64t.const_zero().into(),
+            ],
+            false,
+        );
+        let g = self.module.add_global(header.get_type(), None, name);
+        g.set_initializer(&header);
+        g.set_constant(true);
+        g.set_alignment(8);
+        Ok(g)
+    }
 
     /// A scalar constant as an LLVM value, or `None` for one that is not a
     /// scalar.
