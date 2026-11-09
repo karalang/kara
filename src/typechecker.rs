@@ -8016,6 +8016,33 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // Both still open, of one shape (`last: Option[?B]` for a `fold`
+        // accumulator's `Option[?A]` part, kata 2038): the two variables
+        // are one, as unification makes them. Unified on copies, so a pair
+        // that does not agree is reported below.
+        let expected_now = self.resolved_now(expected);
+        let same_shape = match (&expected_now, &found_now) {
+            (Type::Named { name: a, .. }, Type::Named { name: b, .. }) => a == b,
+            (Type::Tuple(a), Type::Tuple(b)) => a.len() == b.len(),
+            _ => false,
+        };
+        if same_shape
+            && exprs::contains_type_var(&expected_now)
+            && exprs::contains_type_var(&found_now)
+            && !types::contains_type_param(&expected_now)
+            && !types::contains_type_param(&found_now)
+        {
+            let mut subs = self.env.substitutions.clone();
+            let mut const_subs = self.env.const_substitutions.clone();
+            if inference::unify_types(&expected_now, &found_now, &mut subs, &mut const_subs) {
+                self.env.substitutions = subs;
+                self.env.const_substitutions = const_subs;
+                let (want, have) = (self.resolved_now(expected), self.resolved_now(found));
+                if want != *expected || have != *found {
+                    return self.check_assignable(&want, &have, span);
+                }
+            }
+        }
         // B-2026-08-20-13 — a FLOAT never flows implicitly into an INTEGER
         // slot. `types_compatible` treats any int/uint/float pair as
         // compatible and says so explicitly ("bidirectional for compatibility

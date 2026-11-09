@@ -3454,6 +3454,34 @@ impl<'a> super::TypeChecker<'a> {
     /// `Copy` `T`. The refusal is the rule (B-2026-10-12-22: the library side
     /// is the ref); `.cloned()` after the ref side copies its item out, which
     /// is the edit the `.copied()` diagnostic already names.
+    /// The operands of `==` / `!=` with a variable inside one solved by the
+    /// other: both of one named constructor (`Option[?T]` and
+    /// `Option[char]`), neither naming a type parameter. Unified on copies,
+    /// so a pair that does not agree is left for the mismatch report.
+    fn unify_open_compare_operands(&mut self, left: Type, right: Type) -> (Type, Type) {
+        let l = strip_refs_for_compare(&left).clone();
+        let r = strip_refs_for_compare(&right).clone();
+        let same_head = matches!(
+            (&l, &r),
+            (Type::Named { name: a, .. }, Type::Named { name: b, .. }) if a == b
+        );
+        if !same_head
+            || !(super::exprs::contains_type_var(&l) || super::exprs::contains_type_var(&r))
+            || super::types::contains_type_param(&l)
+            || super::types::contains_type_param(&r)
+        {
+            return (left, right);
+        }
+        let mut subs = self.env.substitutions.clone();
+        let mut const_subs = self.env.const_substitutions.clone();
+        if super::inference::unify_types(&l, &r, &mut subs, &mut const_subs) {
+            self.env.substitutions = subs;
+            self.env.const_substitutions = const_subs;
+            return (self.resolved_now(&left), self.resolved_now(&right));
+        }
+        (left, right)
+    }
+
     fn report_compare_mismatch(
         &mut self,
         (left, left_ty): (&Expr, &Type),
@@ -5117,6 +5145,11 @@ impl<'a> super::TypeChecker<'a> {
                 // (B-2026-11-08-44).
                 let left_ty = self.settle_nested_literals(&left_ty);
                 let right_ty = self.settle_nested_literals(&right_ty);
+                // Two values of one constructor, one still open
+                // (`before == Some(c)` with `before: Option[?T]` a `fold`
+                // accumulator's part), are one type: the comparison solves
+                // it, as Rust's does (kata 2038).
+                let (left_ty, right_ty) = self.unify_open_compare_operands(left_ty, right_ty);
                 // Comparison auto-derefs reference operands so a value can be
                 // compared against a borrow of the same type (`String ==
                 // ref String`); the comparison only reads through the borrow.
