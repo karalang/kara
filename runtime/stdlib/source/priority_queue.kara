@@ -61,10 +61,9 @@
 // queue can be handed to a generic consumer without the direction
 // entering its signature.
 //
-// Ordering is `T: Ord` on the impl block; the comparison helper
-// `outranks` takes INDICES rather than values so a non-`Copy` `T`
-// (`String`, a nested `Vec`) is never moved out of the backing store to
-// be compared.
+// Ordering is `T: Ord` on the impl block. The sifts compare elements in
+// place or against the one element they carry in a hole, so a non-`Copy`
+// `T` (`String`, a nested `Vec`) is never cloned to be compared.
 
 struct PriorityQueue[=T] {
     xs: Vec[T],
@@ -122,16 +121,6 @@ impl[T: Ord] PriorityQueue[T] {
         self.xs.clear();
     }
 
-    // Does the element at `i` sit closer to the root than the one at `j`?
-    // The ONE place the two directions differ. Indices, not values: a
-    // `String` element is compared in place, never moved out to compare.
-    fn outranks(ref self, i: i64, j: i64) -> bool {
-        if self.max {
-            return self.xs[i] > self.xs[j];
-        }
-        return self.xs[i] < self.xs[j];
-    }
-
     // `Vec.swap` rather than the read-and-reassign spelling: exchanging two
     // elements through index reads (`let t = xs[i]; xs[i] = xs[j]; xs[j] = t`)
     // is the form design.md § "The index operator (`expr[i]`)" rejects for a
@@ -153,24 +142,7 @@ impl[T: Ord] PriorityQueue[T] {
     // Sift the element at `start` down until the heap property holds
     // below it.
     fn sift_down(mut ref self, start: i64) {
-        let n = self.xs.len();
-        let mut i = start;
-        while true {
-            let l = 2 * i + 1;
-            let r = 2 * i + 2;
-            let mut best = i;
-            if l < n and self.outranks(l, best) {
-                best = l;
-            }
-            if r < n and self.outranks(r, best) {
-                best = r;
-            }
-            if best == i {
-                return;
-            }
-            self.swap(i, best);
-            i = best;
-        }
+        pq_sift_down(mut self.xs, start, self.max);
     }
 
     fn push(mut ref self, x: own T) {
@@ -237,36 +209,119 @@ impl[T: Ord] PriorityQueue[T] {
 // `self` they were reloaded every level and each index was checked against
 // the reloaded length (B-2026-11-08-10, kata 480). Each direction has its
 // own loop, so `max` is tested once, not once a level.
+//
+// Each sift moves a hole, as Rust's `BinaryHeap` does, rather than swapping
+// (B-2026-11-08-87): the element being sifted is read out once into `x`,
+// each element it passes moves one level into the hole, and `x` is written
+// into the slot where it settles. A swap a level moved three elements, and
+// one of more than a word went through a stack slot. While the hole is
+// open its slot holds a stale copy of the element that moved out of it, so
+// the `defer` that fills it is the guard: a `cmp` that panics inside an
+// isolating group (core-semantics §11.12) runs it at teardown, and the
+// slice holds every element exactly once, as it did with the swaps. The
+// hole itself is never compared.
 
 // Sift the element at `from` up toward `start` until the heap property
 // holds above it.
 fn pq_sift_up[T: Ord](xs: mut Slice[T], start: i64, from: i64, max: bool) {
-    let mut i = from;
+    let p: *mut T = ptr.mut(xs[from]);
+    let base: *mut T = ptr.mut(xs[0]);
+    let mut hole = from;
+    // Safety: `from` is in bounds (indexed above). Its slot keeps the bits
+    // until the defer below writes `x` back into the hole.
+    let x = unsafe { p.read() };
+    // Safety: `hole` is always an index on the path, in bounds, whose bits
+    // were copied out; writing `x` there leaves each element in the slice
+    // once.
+    defer {
+        unsafe {
+            base.offset(hole).write(x);
+        }
+    }
     if max {
-        while i > start {
-            let parent = (i - 1) / 2;
-            if xs[i] > xs[parent] {
-                xs.swap(i, parent);
-                i = parent;
+        while hole > start {
+            let parent = (hole - 1) / 2;
+            if x > xs[parent] {
+                // Safety: `parent` was indexed in bounds above, and `hole`
+                // holds a stale copy.
+                unsafe {
+                    base.offset(hole).write(base.offset(parent).read());
+                }
+                hole = parent;
             } else {
-                return;
+                break;
             }
         }
     } else {
-        while i > start {
-            let parent = (i - 1) / 2;
-            if xs[i] < xs[parent] {
-                xs.swap(i, parent);
-                i = parent;
+        while hole > start {
+            let parent = (hole - 1) / 2;
+            if x < xs[parent] {
+                // Safety: as above.
+                unsafe {
+                    base.offset(hole).write(base.offset(parent).read());
+                }
+                hole = parent;
             } else {
-                return;
+                break;
+            }
+        }
+    }
+}
+
+// Sift the element at `start` down until the heap property holds below it:
+// at each level the better child moves up into the hole if it outranks the
+// element being sifted.
+fn pq_sift_down[T: Ord](xs: mut Slice[T], start: i64, max: bool) {
+    let n = xs.len();
+    let p: *mut T = ptr.mut(xs[start]);
+    let base: *mut T = ptr.mut(xs[0]);
+    let mut hole = start;
+    // Safety: as in `pq_sift_up`.
+    let x = unsafe { p.read() };
+    // Safety: as in `pq_sift_up`.
+    defer {
+        unsafe {
+            base.offset(hole).write(x);
+        }
+    }
+    let mut c = 2 * hole + 1;
+    if max {
+        while c < n {
+            if c + 1 < n and xs[c + 1] > xs[c] {
+                c = c + 1;
+            }
+            if xs[c] > x {
+                // Safety: `c` was indexed in bounds above.
+                unsafe {
+                    base.offset(hole).write(base.offset(c).read());
+                }
+                hole = c;
+                c = 2 * hole + 1;
+            } else {
+                break;
+            }
+        }
+    } else {
+        while c < n {
+            if c + 1 < n and xs[c + 1] < xs[c] {
+                c = c + 1;
+            }
+            if xs[c] < x {
+                // Safety: as above.
+                unsafe {
+                    base.offset(hole).write(base.offset(c).read());
+                }
+                hole = c;
+                c = 2 * hole + 1;
+            } else {
+                break;
             }
         }
     }
 }
 
 // Floyd's pop, as Rust's `BinaryHeap::pop` and Python's `heapq` do it:
-// walk the slot at `start` down to a leaf along the better child, one
+// walk the hole at `start` down to a leaf along the better child, one
 // comparison a level, then sift the element carried there back up, no
 // higher than `start`. The element swapped into the root comes from the
 // bottom and usually belongs near it, so this compares about half as often
@@ -276,28 +331,76 @@ fn pq_sift_up[T: Ord](xs: mut Slice[T], start: i64, from: i64, max: bool) {
 // compiles to a conditional move rather than a branch on random keys.
 fn pq_sift_to_bottom[T: Ord](xs: mut Slice[T], start: i64, max: bool) {
     let n = xs.len();
-    let mut i = start;
-    let mut c = 2 * i + 1;
+    if start >= n {
+        return;
+    }
+    let p: *mut T = ptr.mut(xs[start]);
+    let base: *mut T = ptr.mut(xs[0]);
+    let mut hole = start;
+    // Safety: as in `pq_sift_up`.
+    let x = unsafe { p.read() };
+    // Safety: as in `pq_sift_up`.
+    defer {
+        unsafe {
+            base.offset(hole).write(x);
+        }
+    }
+    let mut c = 2 * hole + 1;
     if max {
         while c + 1 < n {
             c = c + (xs[c] <= xs[c + 1]) as i64;
-            xs.swap(i, c);
-            i = c;
-            c = 2 * i + 1;
+            // Safety: `c` and `c + 1` were indexed in bounds above.
+            unsafe {
+                base.offset(hole).write(base.offset(c).read());
+            }
+            hole = c;
+            c = 2 * hole + 1;
         }
     } else {
         while c + 1 < n {
             c = c + (xs[c] >= xs[c + 1]) as i64;
-            xs.swap(i, c);
-            i = c;
-            c = 2 * i + 1;
+            // Safety: as above.
+            unsafe {
+                base.offset(hole).write(base.offset(c).read());
+            }
+            hole = c;
+            c = 2 * hole + 1;
         }
     }
     if c + 1 == n {
-        xs.swap(i, c);
-        i = c;
+        // Safety: `c` is `n - 1`, the last slot.
+        unsafe {
+            base.offset(hole).write(base.offset(c).read());
+        }
+        hole = c;
     }
-    pq_sift_up(mut xs, start, i, max);
+    if max {
+        while hole > start {
+            let parent = (hole - 1) / 2;
+            if x > xs[parent] {
+                // Safety: `parent` was indexed in bounds above.
+                unsafe {
+                    base.offset(hole).write(base.offset(parent).read());
+                }
+                hole = parent;
+            } else {
+                break;
+            }
+        }
+    } else {
+        while hole > start {
+            let parent = (hole - 1) / 2;
+            if x < xs[parent] {
+                // Safety: as above.
+                unsafe {
+                    base.offset(hole).write(base.offset(parent).read());
+                }
+                hole = parent;
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 // "Every collection implements FromIterator" (docs/library/collections.md,

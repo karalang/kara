@@ -6289,6 +6289,8 @@ Keeping construction safe means hot paths, such as taking a field address inside
 
 `null`, `null_mut`, `dangling`, `dangling_mut`, `from_exposed` and `from_exposed_mut` are ordinary generic functions. Their pointee type `T` comes from the expected type, usually an annotation (`let p: *const u8 = ptr.null();`), because Kāra has no call-site type arguments ([§8](#8-type-inference-and-generics)). Only `const` and `mut` are place-taking special forms.
 
+`ptr.mut(xs[i])` takes an element's address and moves nothing, whatever the element type. `p.read()` copies the pointee's bits out and `p.write(v)` stores `v` without dropping what was there, as Rust's `ptr::read` and `ptr::write` do, for a non-`Copy` pointee too: that each value ends up owned exactly once is the promise the `unsafe` block makes. `PriorityQueue` moves its elements along a sift path this way (B-2026-11-08-87).
+
 **Why a `ptr` module rather than special syntax.** Rust's `&raw const x` form was rejected because the leading `&` makes it look like ordinary borrow creation, and the whole point is that it is not a borrow. A call-shaped form is unambiguous to a reviewer: `ptr.const(x)` is a pointer constructor. The cost, that `ptr` is a module name local bindings can shadow, is minor.
 
 #### Pointer provenance

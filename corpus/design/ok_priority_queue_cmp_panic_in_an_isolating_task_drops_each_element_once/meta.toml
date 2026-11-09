@@ -1,0 +1,9 @@
+source = "B-2026-11-08-87"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "priority-queue", "drop", "isolating", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "core-semantics 11.12: a panic in an isolating group tears its task down, running its defers and drops. PriorityQueue's sift_up holds the pushed element in a hole guarded by a defer, so the panicking cmp(0, 1) at the root leaves the heap [1, 0, 2, 3, 9, 8, 7, 6, 5] (5 and 3 moved down a level, 0 written into the hole at index 1) and its drop prints each key once in index order. The first half pops 1, 2, 3 (each dropped as its arm ends) and drops the sorted rest 5..9 once. Layouts worked by hand from the heap algorithm."

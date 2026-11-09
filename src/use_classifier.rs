@@ -2323,6 +2323,12 @@ impl<'a> UseClassifier<'a> {
         if crate::ownership::is_gpu_readonly_buffer_call(method_call) {
             return true;
         }
+        // `ptr.mut(place)` / `ptr.const(place)` take the address of a place;
+        // the place is not moved, so `ptr.mut(xs[0])` of a non-`Copy`
+        // element is not a move out of the collection.
+        if crate::ownership::is_ptr_place_call(method_call) {
+            return true;
+        }
         // A built-in `String` method reads its arguments, as the ownership
         // twin decides (B-2026-10-15-23).
         if crate::ownership::numeric_parse_arg_is_borrow(method_call, arg_index) {

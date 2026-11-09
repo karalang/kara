@@ -1,0 +1,46 @@
+// `ptr.mut(xs[i])` of a non-`Copy` element, `p.read()` and `p.write(v)`
+// (design.md § Raw pointers): a rotation of three elements through raw
+// pointers runs no `Drop` body, and each element is dropped exactly once
+// when the vector goes.
+struct Tok {
+    name: String,
+}
+
+impl Drop for Tok {
+    fn drop(mut ref self) {
+        println(f"drop {self.name}");
+    }
+}
+
+// Move the element at `a` to `c`, the one at `c` to `b` and the one at `b`
+// to `a`.
+fn rotate3[T](xs: mut Slice[T], a: i64, b: i64, c: i64) {
+    let p: *mut T = ptr.mut(xs[0]);
+    // Safety: a, b and c are distinct indices inside the slice; each slot is
+    // read once and written once, and the last write fills the slot read first.
+    unsafe {
+        let x = p.offset(a).read();
+        p.offset(a).write(p.offset(b).read());
+        p.offset(b).write(p.offset(c).read());
+        p.offset(c).write(x);
+    }
+}
+
+fn main() {
+    let mut v: Vec[Tok] = Vec.new();
+    v.push(Tok { name: "a" });
+    v.push(Tok { name: "b" });
+    v.push(Tok { name: "c" });
+    v.push(Tok { name: "d" });
+    rotate3(mut v, 0, 1, 3);
+    println("rotated");
+    for t in v {
+        println(t.name);
+    }
+    let mut s: Vec[String] = Vec.new();
+    s.push("x");
+    s.push("y");
+    s.push("z");
+    rotate3(mut s, 2, 0, 1);
+    println(f"{s[0]} {s[1]} {s[2]}");
+}

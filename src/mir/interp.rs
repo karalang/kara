@@ -13279,7 +13279,13 @@ impl<'a> Interp<'a> {
                     let (addr, ty) = self
                         .resolve(body, p, Mode::Write)?
                         .expect("write mode never probes");
-                    if self.owns_drop(self.slot_ref(&addr)?, ty) {
+                    // `p.write(v)` overwrites without dropping, as Rust's
+                    // `ptr::write` does: the bits it replaces were read out
+                    // (`p.read()`) and live on elsewhere, which the `unsafe`
+                    // block vouches for.
+                    if self.owns_drop(self.slot_ref(&addr)?, ty)
+                        && !super::place_ty::is_raw_pointee(body, self.tys, p)
+                    {
                         let what = pretty::place(body, self.tys, p);
                         return err(format!(
                             "assignment overwrites {what}, which still owns a value"

@@ -1,0 +1,87 @@
+// PriorityQueue's sifts move a hole (B-2026-11-08-87): the element being
+// sifted is read out, the elements it passes move into the hole, and a
+// `defer` writes it back where it settles. When a user `cmp` panics inside
+// an isolating group, the task's teardown (core-semantics §11.12) runs that
+// defer first, so the queue it then drops holds every element exactly once.
+struct Tok {
+    k: i64,
+}
+
+impl Drop for Tok {
+    fn drop(mut ref self) {
+        println(f"drop {self.k}");
+    }
+}
+
+impl PartialEq for Tok {
+    fn eq(ref self, other: ref Tok) -> bool {
+        self.k == other.k
+    }
+}
+
+impl Eq for Tok {}
+
+impl PartialOrd for Tok {
+    fn partial_cmp(ref self, other: ref Tok) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+// Comparing 0 with 1 panics; every other pair compares by key.
+impl Ord for Tok {
+    fn cmp(ref self, other: ref Tok) -> Ordering {
+        if self.k + other.k == 1 and self.k * other.k == 0 {
+            panic("cmp 0 with 1");
+        }
+        self.k.cmp(other.k)
+    }
+}
+
+fn fill(q: mut ref PriorityQueue[Tok]) {
+    q.push(Tok { k: 5 });
+    q.push(Tok { k: 3 });
+    q.push(Tok { k: 8 });
+    q.push(Tok { k: 1 });
+    q.push(Tok { k: 9 });
+    q.push(Tok { k: 2 });
+    q.push(Tok { k: 7 });
+    q.push(Tok { k: 6 });
+}
+
+fn main() {
+    // A queue that never panics: each pop hands its element out once, and
+    // what is left drops once with the queue.
+    let mut q: PriorityQueue[Tok] = PriorityQueue.new();
+    fill(mut q);
+    let mut i = 0;
+    while i < 3 {
+        match q.pop() {
+            Some(t) => println(f"pop {t.k}"),
+            None => println("empty"),
+        }
+        i = i + 1;
+    }
+    {
+        let rest = q.into_sorted_vec();
+        println(f"{rest.len()} left");
+    }
+    println("--");
+    // The heap is [1, 3, 2, 5, 9, 8, 7, 6]. Pushing 0 at index 8 moves 5
+    // and then 3 down into the hole; comparing 0 with 1 at the root panics
+    // with the hole at index 1, where teardown's run of the defer puts 0.
+    let g = TaskGroup.isolating();
+    let h = g.spawn(|| {
+        let mut q: PriorityQueue[Tok] = PriorityQueue.new();
+        fill(mut q);
+        println("pushing 0");
+        q.push(Tok { k: 0 });
+        println("unreachable");
+        0
+    });
+    match h.join() {
+        Ok(_) => println("task finished"),
+        Err(TaskFailed.Panicked { message, location }) => println(f"task panicked: {message}"),
+        Err(TaskFailed.Cancelled) => println("task cancelled"),
+    }
+    println("main goes on");
+}

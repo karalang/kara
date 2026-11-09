@@ -134,6 +134,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- Raw pointers reach a non-`Copy` element: `ptr.mut(xs[i])` takes its
+  address without moving it, `p.read()` copies the bits out and `p.write(v)`
+  stores without dropping, as design.md § Raw pointers now says. The first
+  was refused as a move out of the collection, the second as a move out of
+  a borrowed place, and the MIR interpreter stopped at the third
+  (B-2026-11-09-19).
 - `T.from(x)` under `T: From[X]` and `T.try_from(x)` under `T: TryFrom[X]`
   call the instance's conversion: the library's `From` and `TryFrom` now
   declare `from` and `try_from` as design.md § Conversion traits writes
@@ -311,6 +317,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- **`PriorityQueue` sifts move a hole** instead of swapping a level at a
+  time, as Rust's `BinaryHeap` does: the element being sifted is read out
+  once, each element it passes moves one level, and a `defer` writes it
+  back where it settles, which is also what a `cmp` that panics inside an
+  isolating group runs at teardown. On x86 (callgrind) kata 632 went from
+  2.59G to 2.16G instructions, 743 from 2.11G to 1.86G, 480 from 4.33G to
+  3.93G and 786 from 7.93G to 6.70G (B-2026-11-08-87).
 - `<`, `<=`, `>` and `>=` on a tuple of integers, `bool`s and `char`s
   compare element by element instead of building an `Ordering` for each:
   a `PriorityQueue` of tuples sifts with one compare and branch an element

@@ -214,7 +214,9 @@ impl<'a> Validator<'a> {
                 // has no place behind it to reborrow through.
                 let dyn_view = matches!(self.tys.kind(ty), TyKind::MutRef(d)
                     if matches!(self.tys.kind(d), TyKind::Dyn { .. }));
-                if !self.tys.is_copy(ty) && !dyn_view {
+                // `p.read()` copies the pointee's bits, `Copy` or not.
+                let raw_read = super::place_ty::is_raw_pointee(self.body, self.tys, p);
+                if !self.tys.is_copy(ty) && !dyn_view && !raw_read {
                     self.err(format!(
                         "copy of {} whose type {} is not Copy",
                         pretty::place(self.body, self.tys, p),

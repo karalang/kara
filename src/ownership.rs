@@ -295,6 +295,18 @@ pub(crate) fn arg_is_borrow_by_method_name(
 /// NOT listed, deliberately: `dispatch` (its buffer feeds a map that returns a
 /// fresh buffer), and `upload` / `download`, which really do move ownership
 /// across the host/device boundary.
+/// `ptr.mut(place)` / `ptr.const(place)`: the special forms that take a
+/// place's address. Their argument is a place, never a value, so it is
+/// read, not consumed. `mut` and `const` are keywords, so no user method
+/// shares the names.
+pub(crate) fn is_ptr_place_call(expr: &Expr) -> bool {
+    let ExprKind::MethodCall { object, method, .. } = &expr.kind else {
+        return false;
+    };
+    matches!(&object.kind, ExprKind::Identifier(n) if n == "ptr")
+        && matches!(method.as_str(), "mut" | "const")
+}
+
 pub(crate) fn is_gpu_readonly_buffer_call(expr: &Expr) -> bool {
     let ExprKind::MethodCall { object, method, .. } = &expr.kind else {
         return false;

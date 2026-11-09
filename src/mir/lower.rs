@@ -20636,10 +20636,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         let ot = self.expr_ty(object)?;
         match (method, args) {
             ("read" | "read_unaligned" | "read_volatile", []) => {
+                // A bitwise copy whatever the pointee: `p.read()` hands out
+                // the value and leaves the bits behind, as Rust's
+                // `ptr::read` does, so it is never a move out of `*p` (which
+                // the borrow check refuses for a non-`Copy` pointee). Who
+                // owns which copy afterwards is the `unsafe` block's promise.
                 let pp = self.expr_place(object, false)?.project(ProjElem::Deref);
-                let t = self.place_type(&pp);
-                let op = self.use_place(pp, t);
-                self.assign(dest, Rvalue::Use(op));
+                self.assign(dest, Rvalue::Use(Operand::Copy(pp)));
             }
             ("write" | "write_unaligned" | "write_volatile", [v]) => {
                 let pp = self.expr_place(object, false)?.project(ProjElem::Deref);

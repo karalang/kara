@@ -1,0 +1,25 @@
+pop 1
+drop 1
+pop 2
+drop 2
+pop 3
+drop 3
+5 left
+drop 5
+drop 6
+drop 7
+drop 8
+drop 9
+--
+pushing 0
+drop 1
+drop 0
+drop 2
+drop 3
+drop 9
+drop 8
+drop 7
+drop 6
+drop 5
+task panicked: cmp 0 with 1
+main goes on

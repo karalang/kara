@@ -1,0 +1,9 @@
+source = "B-2026-11-08-87"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "raw-pointers", "unsafe", "drop"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md raw pointers: ptr.mut(xs[i]) moves nothing; p.read() copies the bits out and p.write(v) does not drop the old value, for a non-Copy pointee too. rotate3(0,1,3) of [a,b,c,d] gives [b,d,c,a] with no drop during the rotation, and each Tok drops exactly once when v goes; rotate3(2,0,1) of [x,y,z] gives [y,z,x]."

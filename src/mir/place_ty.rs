@@ -121,6 +121,17 @@ fn element(tys: &TyInterner, cur: PlaceTy) -> Result<PlaceTy, String> {
 
 /// Does the path to `place` pass through a `shared` handle? Moving out of
 /// such a place is forbidden (core semantics §3.7).
+/// Is `place` the pointee of a raw pointer (`*p`, `p: *const T` or
+/// `*mut T`)? A copy out of it is `p.read()`, the bitwise read an `unsafe`
+/// block vouches for, whatever the pointee type.
+pub fn is_raw_pointee(body: &Body, tys: &TyInterner, place: &Place) -> bool {
+    matches!(place.projection.as_slice(), [ProjElem::Deref])
+        && matches!(
+            tys.kind(body.locals[place.local.index()].ty),
+            TyKind::RawPtr { .. }
+        )
+}
+
 pub fn passes_through_shared(body: &Body, tys: &TyInterner, place: &Place) -> bool {
     let mut cur = PlaceTy {
         ty: body.locals[place.local.index()].ty,
