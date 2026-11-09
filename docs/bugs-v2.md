@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 201 |
 | false-positive | 164 |
-| perf | 138 |
+| perf | 139 |
 | missing-feature | 113 |
 | soundness | 55 |
 | miscompile | 47 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 317 |
-| mir-llvm | 172 |
+| mir-llvm | 173 |
 | mir | 149 |
 | cli | 89 |
 | ownership | 64 |
@@ -106,11 +106,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
-| B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
 | B-2026-11-09-19 | 2026-11-09 | mir | medium | `v.contains(d)` with a float needle on a `Vec[u8]` (`let d = 1.5`) passes `karac check`; the interpreter then stops with "Eq on Int(1) and Float(1.5)" and the binary prints `false`, while `Set[u8].contains(d)` and a `u8` parameter refuse the same float | — |
 | B-2026-11-09-21 | 2026-11-09 | typecheck | low | `Option` accepts `Result`'s `is_ok()` and `is_err()` (as `is_some`/`is_none`), though docs/library/core-types.md lists them on `Result` only, so Rust's `xs.binary_search(v).is_ok()` passes unremarked and gets no `.is_some()` fix | — |
+| B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 
 ### Relocated
 
@@ -140,6 +140,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary at exactly two workers runs 1.22x slower than at one on the M5 (143.1 ms against 117.6 ms at eb17818b45, from 1.6-2.6x), ATTRIBUTED to macOS's xzone allocator: free() reads mach_absolute_time on each of simplify()'s per-iteration buffer frees, not the pool; Linux scales cleanly |
 | B-2026-11-01-22 | 2026-11-01 | mir-llvm | low | Kata 116's populate-next-right-pointers loop runs legacy's instruction count on the MIR backend but 1.23x its cycles (M5), 1.08x wall on x86: WONTFIX, DELIBERATE: core-semantics §7 drops a struct's fields in reverse declaration order (next, right, left), legacy dropped them in declaration order, and the resulting free order is the whole gap |
 | B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.28x legacy's instructions on the MIR backend (x86 callgrind; was 1.41x on M5): a deliberate trade, since legacy's IPSCCP fold needs a monotone fact MIR's step shape loses and the i1-branch form that recovers 1.23x costs kata 139 10% |
+| B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` reloads its Vec header after the first recursive call: 1.23x checked Rust's instructions on x86, where every remedy tried (readonly, header by value) is slower; 473 and 498 were fixed by `ref` noalias (d308599fbb) |
 
 </details>
 
