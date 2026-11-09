@@ -8,10 +8,7 @@
 // O(26 + total letters).
 
 fn shortest_completing_word(license_plate: String, words: Vec[String]) -> String {
-    let mut need: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        need.push(0);
-    }
+    let mut need = [0; 26];
     for b in license_plate.bytes().iter() {
         let c = *b;
         if c >= b'a' and c <= b'z' {
@@ -25,10 +22,7 @@ fn shortest_completing_word(license_plate: String, words: Vec[String]) -> String
         if best != -1 and words[i].len() >= words[best].len() {
             continue;
         }
-        let mut have: Vec[i64] = Vec.new();
-        for _ in 0..26 {
-            have.push(0);
-        }
+        let mut have = [0; 26];
         for b in words[i].bytes().iter() {
             have[(*b - b'a') as i64] += 1;
         }
@@ -128,7 +122,7 @@ fn main() {
         let got = shortest_completing_word(plate, words);
         lengths += got.len();
         for b in got.bytes().iter() {
-            check = (check * 31 + *b as i64) % 1000000007;
+            check = (check * 31 + *b) % 1000000007;
         }
     }
     println(f"30 lists of 1000 words: answers {lengths} letters long in all, checksum {check}");
@@ -146,7 +140,7 @@ fn main() {
         let got = shortest_completing_word(plate, words);
         total += got.len();
         for b in got.bytes().iter() {
-            check = (check * 31 + *b as i64) % 1000000007;
+            check = (check * 31 + *b) % 1000000007;
         }
     }
     println(f"300 random lists: answers {total} letters long in all, checksum {check}");

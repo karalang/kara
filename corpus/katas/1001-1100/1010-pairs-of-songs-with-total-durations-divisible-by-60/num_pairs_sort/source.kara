@@ -6,7 +6,7 @@
 // by two binary searches in the part after it; counting only later songs
 // counts each pair once. O(n log n).
 
-fn num_pairs(time: ref Vec[i64]) -> i64 {
+fn num_pairs(time: Vec[i64]) -> i64 {
     let mut rem: Vec[i64] = time.iter().map(|t| t % 60).collect();
     rem.sort();
     let n = rem.len();
@@ -19,7 +19,7 @@ fn num_pairs(time: ref Vec[i64]) -> i64 {
 }
 
 // the first index from `lo` whose value is at least `v`
-fn first_at_least(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
+fn first_at_least(rem: Vec[i64], lo: i64, v: i64) -> i64 {
     let mut a = lo;
     let mut b = rem.len();
     while a < b {
@@ -34,7 +34,7 @@ fn first_at_least(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
 }
 
 // the first index from `lo` whose value is above `v`
-fn first_above(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
+fn first_above(rem: Vec[i64], lo: i64, v: i64) -> i64 {
     let mut a = lo;
     let mut b = rem.len();
     while a < b {
@@ -55,22 +55,22 @@ fn next_random(seed: mut ref i64) -> i64 {
     *seed / 65536
 }
 
-fn show(nums: ref Vec[i64]) -> String {
+fn show(nums: Vec[i64]) -> String {
     let parts: Vec[String] = nums.iter().map(|x| x.to_string()).collect();
     "[" + parts.join(",") + "]"
 }
 
 fn main() {
     // LeetCode's two examples, then a few more
-    let examples: Vec[Vec[i64]] = vec![
-        vec![30, 20, 150, 100, 40],
-        vec![60, 60, 60],
-        vec![1],
-        vec![30, 30],
-        vec![59, 1, 61, 119, 2],
-        vec![120, 180, 240, 300, 360],
-        vec![10, 50, 110, 70, 20, 40, 30, 90],
-        vec![500, 40, 100, 20, 499, 1],
+    let examples: Vec[Vec[i64]] = [
+        [30, 20, 150, 100, 40],
+        [60, 60, 60],
+        [1],
+        [30, 30],
+        [59, 1, 61, 119, 2],
+        [120, 180, 240, 300, 360],
+        [10, 50, 110, 70, 20, 40, 30, 90],
+        [500, 40, 100, 20, 499, 1],
     ];
     for time in examples.iter() {
         println(f"time = {show(time)} -> {num_pairs(time)}");
@@ -86,18 +86,18 @@ fn main() {
         cycle.push(1 + i % 500);
         sevens.push(7);
     }
-    let large: Vec[(String, Vec[i64])] = vec![
-        ("60000 songs of 60".to_string(), sixties),
-        ("60000 songs of 30 and 90".to_string(), thirties),
-        ("60000 songs cycling 1..500".to_string(), cycle),
-        ("60000 songs of 7".to_string(), sevens),
+    let large: Vec[(String, Vec[i64])] = [
+        ("60000 songs of 60", sixties),
+        ("60000 songs of 30 and 90", thirties),
+        ("60000 songs cycling 1..500", cycle),
+        ("60000 songs of 7", sevens),
     ];
     for (name, time) in large.iter() {
         println(f"{name} -> {num_pairs(time)}");
     }
     // random playlists, durations from 1 to 500
     let mut seed = 1010;
-    let groups: Vec[(i64, i64)] = vec![(3000, 10), (300, 1000), (5, 60000)];
+    let groups: Vec[(i64, i64)] = [(3000, 10), (300, 1000), (5, 60000)];
     for (count, most) in groups.iter() {
         let mut songs = 0;
         let mut total = 0;

@@ -7,10 +7,7 @@
 
 fn partition_labels(s: String) -> Vec[i64] {
     let chars: Vec[char] = s.chars().collect();
-    let mut last: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        last.push(0);
-    }
+    let mut last = [0; 26];
     for i in 0..chars.len() {
         last[chars[i] as i64 - 'a' as i64] = i;
     }

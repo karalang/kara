@@ -5,7 +5,7 @@
 // them, one letter at a time, checking each triple against the allowed
 // set. The pyramid can be built if some row survives to width one.
 
-fn grow(row: String, i: i64, part: String, allowed: ref Set[String], out: mut ref Set[String]) {
+fn grow(row: String, i: i64, part: String, allowed: Set[String], out: mut ref Set[String]) {
     if i + 1 == row.len() {
         out.insert(part.clone());
         return;
@@ -50,10 +50,8 @@ fn next_random(seed: mut ref i64) -> i64 {
     *seed / 65536
 }
 
-fn letter(x: i64) -> String {
-    let mut s = String.new();
-    s.push((b'A' + x as u8) as char);
-    s
+fn letter(x: i64) -> char {
+    (b'A' + x as u8) as char
 }
 
 fn show(bottom: String, allowed: Vec[String]) {
@@ -77,14 +75,14 @@ fn main() {
         let width = 2 + next_random(mut seed) % 5;
         let mut bottom = String.new();
         for _ in 0..width {
-            bottom.push_str(letter(next_random(mut seed) % 6));
+            bottom.push(letter(next_random(mut seed) % 6));
         }
         let count = next_random(mut seed) % 60;
         let mut allowed: Vec[String] = Vec.new();
         for _ in 0..count {
             let mut t = String.new();
             for _ in 0..3 {
-                t.push_str(letter(next_random(mut seed) % 6));
+                t.push(letter(next_random(mut seed) % 6));
             }
             allowed.push(t);
         }

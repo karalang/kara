@@ -4,8 +4,8 @@
 // The five arms, copied, against the statement read literally and five
 // more properties. See README.md § Differential.
 
-fn pairs_star(time: ref Vec[i64]) -> i64 {
-    let mut seen: Vec[i64] = Vec.filled(60, 0);
+fn pairs_star(time: Vec[i64]) -> i64 {
+    let mut seen = [0; 60];
     let mut pairs = 0;
     for t in time.iter() {
         let r = t % 60;
@@ -15,8 +15,8 @@ fn pairs_star(time: ref Vec[i64]) -> i64 {
     pairs
 }
 
-fn pairs_tally(time: ref Vec[i64]) -> i64 {
-    let mut count: Vec[i64] = Vec.filled(60, 0);
+fn pairs_tally(time: Vec[i64]) -> i64 {
+    let mut count = [0; 60];
     for t in time.iter() {
         count[t % 60] += 1;
     }
@@ -27,7 +27,7 @@ fn pairs_tally(time: ref Vec[i64]) -> i64 {
     pairs
 }
 
-fn pairs_map(time: ref Vec[i64]) -> i64 {
+fn pairs_map(time: Vec[i64]) -> i64 {
     let mut seen: Map[i64, i64] = Map.new();
     let mut pairs = 0;
     for t in time.iter() {
@@ -45,7 +45,7 @@ fn pairs_map(time: ref Vec[i64]) -> i64 {
     pairs
 }
 
-fn pairs_sort(time: ref Vec[i64]) -> i64 {
+fn pairs_sort(time: Vec[i64]) -> i64 {
     let mut rem: Vec[i64] = time.iter().map(|t| t % 60).collect();
     rem.sort();
     let n = rem.len();
@@ -58,7 +58,7 @@ fn pairs_sort(time: ref Vec[i64]) -> i64 {
 }
 
 // the first index from `lo` whose value is at least `v`
-fn first_at_least(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
+fn first_at_least(rem: Vec[i64], lo: i64, v: i64) -> i64 {
     let mut a = lo;
     let mut b = rem.len();
     while a < b {
@@ -73,7 +73,7 @@ fn first_at_least(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
 }
 
 // the first index from `lo` whose value is above `v`
-fn first_above(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
+fn first_above(rem: Vec[i64], lo: i64, v: i64) -> i64 {
     let mut a = lo;
     let mut b = rem.len();
     while a < b {
@@ -87,8 +87,8 @@ fn first_above(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
     a
 }
 
-fn pairs_durations(time: ref Vec[i64]) -> i64 {
-    let mut count: Vec[i64] = Vec.filled(501, 0);
+fn pairs_durations(time: Vec[i64]) -> i64 {
+    let mut count = [0; 501];
     for t in time.iter() {
         count[t] += 1;
     }
@@ -111,13 +111,13 @@ fn pairs_durations(time: ref Vec[i64]) -> i64 {
     pairs
 }
 
-fn arms(time: ref Vec[i64]) -> Vec[i64] {
-    vec![pairs_star(time), pairs_tally(time), pairs_map(time), pairs_sort(time), pairs_durations(time)]
+fn arms(time: Vec[i64]) -> Vec[i64] {
+    [pairs_star(time), pairs_tally(time), pairs_map(time), pairs_sort(time), pairs_durations(time)]
 }
 
 // The statement read literally: the indices i < j with
 // (time[i] + time[j]) % 60 == 0
-fn statement(time: ref Vec[i64]) -> i64 {
+fn statement(time: Vec[i64]) -> i64 {
     let mut pairs = 0;
     for i in 0..time.len() {
         for j in (i + 1)..time.len() {
@@ -136,7 +136,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 fn main() {
     let names = ["star", "tally", "map", "sort", "durations"];
-    let mut failures: Vec[i64] = vec![0; 6];
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
     let mut checks = 0;
     let mut rows = 0;
     let mut songs = 0;

@@ -3,8 +3,8 @@
 // rounds counts the pairs of every playlist, starting from a different
 // one, and folds each count into a checksum.
 
-fn num_pairs(time: ref Vec[i64]) -> i64 {
-    let mut seen: Vec[i64] = Vec.filled(60, 0);
+fn num_pairs(time: Vec[i64]) -> i64 {
+    let mut seen = [0; 60];
     let mut pairs = 0;
     for t in time.iter() {
         let r = t % 60;

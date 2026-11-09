@@ -71,7 +71,7 @@ fn main() {
         let answer = custom_sort_string(order, s);
         total += answer.len();
         for b in answer.bytes() {
-            check = (check * 131 + b as i64) % 1000000007;
+            check = (check * 131 + b) % 1000000007;
         }
     }
     println(f"300 random strings: {total} letters, checksum {check}");

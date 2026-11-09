@@ -17,7 +17,7 @@
 // P6  each arm agrees with at least three of the other five
 
 // ---- lexi.kara: the ★ arm: a union-find whose root is the smallest letter
-fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+fn find(parent: mut ref Array[i64, 26], x: i64) -> i64 {
     let mut root = x;
     while parent[root] != root {
         root = parent[root];
@@ -32,7 +32,10 @@ fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
 }
 
 fn star_arm(s1: String, s2: String, base: String) -> String {
-    let mut parent: Vec[i64] = (0..26).collect();
+    let mut parent = [0; 26];
+    for i in 0..26 {
+        parent[i] = i;
+    }
     for (a, b) in s1.bytes().iter().zip(s2.bytes().iter()) {
         let ra = find(mut parent, a - b'a');
         let rb = find(mut parent, b - b'a');
@@ -51,7 +54,7 @@ fn star_arm(s1: String, s2: String, base: String) -> String {
 }
 
 // ---- lexi_recursive.kara: a recursive find
-fn find_rec(parent: mut ref Vec[i64], x: i64) -> i64 {
+fn find_rec(parent: mut ref Array[i64, 26], x: i64) -> i64 {
     if parent[x] != x {
         let root = find_rec(mut parent, parent[x]);
         parent[x] = root;
@@ -60,7 +63,10 @@ fn find_rec(parent: mut ref Vec[i64], x: i64) -> i64 {
 }
 
 fn recursive_arm(s1: String, s2: String, base: String) -> String {
-    let mut parent: Vec[i64] = (0..26).collect();
+    let mut parent = [0; 26];
+    for i in 0..26 {
+        parent[i] = i;
+    }
     let (b1, b2) = (s1.bytes(), s2.bytes());
     for i in 0..b1.len() {
         let ra = find_rec(mut parent, b1[i] - b'a');
@@ -78,7 +84,7 @@ fn graph_arm(s1: String, s2: String, base: String) -> String {
         edges[a].push(b);
         edges[b].push(a);
     }
-    let mut smallest: Vec[i64] = Vec.filled(26, -1);
+    let mut smallest = [-1; 26];
     for start in 0..26 {
         if smallest[start] >= 0 {
             continue;
@@ -163,7 +169,7 @@ fn map_arm(s1: String, s2: String, base: String) -> String {
 // ---- lexi_solution.kara: LeetCode's Rust template, carried by karac fix
 struct Solution {}
 
-fn solution_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+fn solution_find(parent: mut ref Array[i64, 26], x: i64) -> i64 {
     if parent[x] != x {
         parent[x] = solution_find(mut parent, parent[x]);
     }
@@ -172,7 +178,10 @@ fn solution_find(parent: mut ref Vec[i64], x: i64) -> i64 {
 
 impl Solution {
     pub fn smallest_equivalent_string(s1: String, s2: String, base_str: String) -> String {
-        let mut parent: Vec[i64] = (0..26).collect();
+        let mut parent = [0; 26];
+        for i in 0..26 {
+            parent[i] = i;
+        }
         let (b1, b2) = (s1.bytes(), s2.bytes());
         for i in 0..b1.len() {
             let a = solution_find(mut parent, (b1[i] - b'a'));

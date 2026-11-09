@@ -3,7 +3,7 @@
 // letter of its class: a union hangs the larger root under the smaller,
 // and a find compresses the path it walks. O((n + m) α(26)).
 
-fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+fn find(parent: mut ref Array[i64, 26], x: i64) -> i64 {
     let mut root = x;
     while parent[root] != root {
         root = parent[root];
@@ -18,7 +18,10 @@ fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
 }
 
 fn smallest_equivalent(s1: String, s2: String, base: String) -> String {
-    let mut parent: Vec[i64] = (0..26).collect();
+    let mut parent = [0; 26];
+    for i in 0..26 {
+        parent[i] = i;
+    }
     for (a, b) in s1.bytes().iter().zip(s2.bytes().iter()) {
         let ra = find(mut parent, a - b'a');
         let rb = find(mut parent, b - b'a');

@@ -5,10 +5,7 @@
 // ---- ★ arm ----------------------------------------------------------
 
 fn shortest_completing_word_star(license_plate: String, words: Vec[String]) -> String {
-    let mut need: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        need.push(0);
-    }
+    let mut need = [0; 26];
     for b in license_plate.bytes().iter() {
         let c = *b;
         if c >= b'a' and c <= b'z' {
@@ -22,10 +19,7 @@ fn shortest_completing_word_star(license_plate: String, words: Vec[String]) -> S
         if best != -1 and words[i].len() >= words[best].len() {
             continue;
         }
-        let mut have: Vec[i64] = Vec.new();
-        for _ in 0..26 {
-            have.push(0);
-        }
+        let mut have = [0; 26];
         for b in words[i].bytes().iter() {
             have[(*b - b'a') as i64] += 1;
         }
@@ -85,10 +79,7 @@ fn shortest_completing_word_markoff(license_plate: String, words: Vec[String]) -
 // ---- bysize arm -----------------------------------------------------
 
 fn shortest_completing_word_bysize(license_plate: String, words: Vec[String]) -> String {
-    let mut need: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        need.push(0);
-    }
+    let mut need = [0; 26];
     for b in license_plate.to_lowercase().bytes().iter() {
         if *b >= b'a' and *b <= b'z' {
             need[(*b - b'a') as i64] += 1;
@@ -103,10 +94,7 @@ fn shortest_completing_word_bysize(license_plate: String, words: Vec[String]) ->
     }
     for len in 1..16 {
         for i in by_length[len].iter() {
-            let mut have: Vec[i64] = Vec.new();
-            for _ in 0..26 {
-                have.push(0);
-            }
+            let mut have = [0; 26];
             for b in words[*i].bytes().iter() {
                 have[(*b - b'a') as i64] += 1;
             }

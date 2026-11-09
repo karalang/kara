@@ -3,7 +3,7 @@
 // the root on the way back. The smaller root wins a union, so a root is the
 // smallest letter of its class. O((n + m) α(26)).
 
-fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+fn find(parent: mut ref Array[i64, 26], x: i64) -> i64 {
     if parent[x] != x {
         let root = find(mut parent, parent[x]);
         parent[x] = root;
@@ -12,7 +12,10 @@ fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
 }
 
 fn smallest_equivalent(s1: String, s2: String, base: String) -> String {
-    let mut parent: Vec[i64] = (0..26).collect();
+    let mut parent = [0; 26];
+    for i in 0..26 {
+        parent[i] = i;
+    }
     let (b1, b2) = (s1.bytes(), s2.bytes());
     for i in 0..b1.len() {
         let ra = find(mut parent, b1[i] - b'a');

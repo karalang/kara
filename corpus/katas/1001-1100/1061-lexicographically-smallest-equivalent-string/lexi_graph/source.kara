@@ -10,7 +10,7 @@ fn smallest_equivalent(s1: String, s2: String, base: String) -> String {
         edges[a].push(b);
         edges[b].push(a);
     }
-    let mut smallest: Vec[i64] = Vec.filled(26, -1);
+    let mut smallest = [-1; 26];
     for start in 0..26 {
         if smallest[start] >= 0 {
             continue;

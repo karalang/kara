@@ -6,17 +6,11 @@
 // ---- ★ arm ----------------------------------------------------------
 
 fn custom_sort_string_star(order: String, s: String) -> String {
-    let mut count: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        count.push(0);
-    }
+    let mut count = [0; 26];
     for b in s.bytes() {
         count[(b - b'a') as i64] += 1;
     }
-    let mut named: Vec[bool] = Vec.new();
-    for _ in 0..26 {
-        named.push(false);
-    }
+    let mut named = [false; 26];
     let mut out = String.new();
     for c in order.chars() {
         let at = (c as i64) - ('a' as i64);
@@ -36,10 +30,7 @@ fn custom_sort_string_star(order: String, s: String) -> String {
 // ---- sort_by arm ----------------------------------------------------
 
 fn custom_sort_string_sortby(order: String, s: String) -> String {
-    let mut rank: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        rank.push(26);
-    }
+    let mut rank = [26; 26];
     let mut place = 0;
     for c in order.chars() {
         rank[(c as i64) - ('a' as i64)] = place;
@@ -143,11 +134,8 @@ fn definition(order: String, s: String) -> String {
     out
 }
 
-fn letter_counts(s: String) -> Vec[i64] {
-    let mut count: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        count.push(0);
-    }
+fn letter_counts(s: String) -> Array[i64, 26] {
+    let mut count = [0; 26];
     for b in s.bytes() {
         count[(b - b'a') as i64] += 1;
     }

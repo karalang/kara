@@ -5,7 +5,7 @@
 
 struct Solution {}
 
-fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+fn find(parent: mut ref Array[i64, 26], x: i64) -> i64 {
     if parent[x] != x {
         parent[x] = find(mut parent, parent[x]);
     }
@@ -14,7 +14,10 @@ fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
 
 impl Solution {
     pub fn smallest_equivalent_string(s1: String, s2: String, base_str: String) -> String {
-        let mut parent: Vec[i64] = (0..26).collect();
+        let mut parent = [0; 26];
+        for i in 0..26 {
+            parent[i] = i;
+        }
         let (b1, b2) = (s1.bytes(), s2.bytes());
         for i in 0..b1.len() {
             let a = find(mut parent, (b1[i] - b'a'));

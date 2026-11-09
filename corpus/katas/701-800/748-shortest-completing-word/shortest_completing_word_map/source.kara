@@ -123,7 +123,7 @@ fn main() {
         let got = shortest_completing_word(plate, words);
         lengths += got.len();
         for b in got.bytes().iter() {
-            check = (check * 31 + *b as i64) % 1000000007;
+            check = (check * 31 + *b) % 1000000007;
         }
     }
     println(f"30 lists of 1000 words: answers {lengths} letters long in all, checksum {check}");
@@ -141,7 +141,7 @@ fn main() {
         let got = shortest_completing_word(plate, words);
         total += got.len();
         for b in got.bytes().iter() {
-            check = (check * 31 + *b as i64) % 1000000007;
+            check = (check * 31 + *b) % 1000000007;
         }
     }
     println(f"300 random lists: answers {total} letters long in all, checksum {check}");

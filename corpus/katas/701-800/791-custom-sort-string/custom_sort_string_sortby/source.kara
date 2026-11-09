@@ -5,10 +5,7 @@
 // stable sort, so letters of equal rank keep their order in s.
 // O(n log n).
 fn custom_sort_string(order: String, s: String) -> String {
-    let mut rank: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        rank.push(26);
-    }
+    let mut rank = [26; 26];
     let mut place = 0;
     for c in order.chars() {
         rank[(c as i64) - ('a' as i64)] = place;
@@ -66,7 +63,7 @@ fn main() {
         let answer = custom_sort_string(order, s);
         total += answer.len();
         for b in answer.bytes() {
-            check = (check * 131 + b as i64) % 1000000007;
+            check = (check * 131 + b) % 1000000007;
         }
     }
     println(f"300 random strings: {total} letters, checksum {check}");

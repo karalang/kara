@@ -5,7 +5,7 @@
 // letter at a time; when it is complete, ask the same of it. Every row
 // asked about is remembered with its answer, yes or no.
 
-fn can_finish(row: String, tops: ref Map[String, String], memo: mut ref Map[String, bool]) -> bool {
+fn can_finish(row: String, tops: Map[String, String], memo: mut ref Map[String, bool]) -> bool {
     if row.len() == 1 {
         return true;
     }
@@ -18,7 +18,7 @@ fn can_finish(row: String, tops: ref Map[String, String], memo: mut ref Map[Stri
     answer
 }
 
-fn extend(row: String, i: i64, above: String, tops: ref Map[String, String], memo: mut ref Map[String, bool]) -> bool {
+fn extend(row: String, i: i64, above: String, tops: Map[String, String], memo: mut ref Map[String, bool]) -> bool {
     if i + 1 == row.len() {
         return can_finish(above, tops, mut memo);
     }
@@ -56,10 +56,8 @@ fn next_random(seed: mut ref i64) -> i64 {
     *seed / 65536
 }
 
-fn letter(x: i64) -> String {
-    let mut s = String.new();
-    s.push((b'A' + x as u8) as char);
-    s
+fn letter(x: i64) -> char {
+    (b'A' + x as u8) as char
 }
 
 fn show(bottom: String, allowed: Vec[String]) {
@@ -83,14 +81,14 @@ fn main() {
         let width = 2 + next_random(mut seed) % 5;
         let mut bottom = String.new();
         for _ in 0..width {
-            bottom.push_str(letter(next_random(mut seed) % 6));
+            bottom.push(letter(next_random(mut seed) % 6));
         }
         let count = next_random(mut seed) % 60;
         let mut allowed: Vec[String] = Vec.new();
         for _ in 0..count {
             let mut t = String.new();
             for _ in 0..3 {
-                t.push_str(letter(next_random(mut seed) % 6));
+                t.push(letter(next_random(mut seed) % 6));
             }
             allowed.push(t);
         }

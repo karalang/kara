@@ -6,17 +6,11 @@
 // letters in order is accepted; this one keeps the rest as they were,
 // which is what every arm here gives. O(n + 26).
 fn custom_sort_string(order: String, s: String) -> String {
-    let mut count: Vec[i64] = Vec.new();
-    for _ in 0..26 {
-        count.push(0);
-    }
+    let mut count = [0; 26];
     for b in s.bytes() {
         count[(b - b'a') as i64] += 1;
     }
-    let mut named: Vec[bool] = Vec.new();
-    for _ in 0..26 {
-        named.push(false);
-    }
+    let mut named = [false; 26];
     let mut out = String.new();
     for c in order.chars() {
         let at = (c as i64) - ('a' as i64);
@@ -76,7 +70,7 @@ fn main() {
         let answer = custom_sort_string(order, s);
         total += answer.len();
         for b in answer.bytes() {
-            check = (check * 131 + b as i64) % 1000000007;
+            check = (check * 131 + b) % 1000000007;
         }
     }
     println(f"300 random strings: {total} letters, checksum {check}");

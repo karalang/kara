@@ -3,7 +3,7 @@
 // 200,000 random pyramids six blocks wide, each with 40 to 119 random
 // allowed triples, counting the ones that can be built.
 
-fn row_code(row: ref Vec[i64]) -> i64 {
+fn row_code(row: Vec[i64]) -> i64 {
     let mut code = 1;
     for x in row.iter() {
         code = code * 6 + *x;
@@ -11,7 +11,7 @@ fn row_code(row: ref Vec[i64]) -> i64 {
     code
 }
 
-fn fill(row: ref Vec[i64], i: i64, next: mut ref Vec[i64], table: ref Vec[i64], dead: mut ref Set[i64]) -> bool {
+fn fill(row: Vec[i64], i: i64, next: mut ref Vec[i64], table: Vec[i64], dead: mut ref Set[i64]) -> bool {
     if i + 1 == row.len() {
         return build(next, table, mut dead);
     }
@@ -31,7 +31,7 @@ fn fill(row: ref Vec[i64], i: i64, next: mut ref Vec[i64], table: ref Vec[i64], 
     false
 }
 
-fn build(row: ref Vec[i64], table: ref Vec[i64], dead: mut ref Set[i64]) -> bool {
+fn build(row: Vec[i64], table: Vec[i64], dead: mut ref Set[i64]) -> bool {
     if row.len() == 1 {
         return true;
     }
@@ -54,7 +54,7 @@ fn pyramid_transition(bottom: String, allowed: Vec[String]) -> bool {
     }
     for triple in allowed.iter() {
         let b = triple.bytes();
-        let pair = (b[0] - b'A') as i64 * 6 + (b[1] - b'A') as i64;
+        let pair = (b[0] - b'A') as i64 * 6 + (b[1] - b'A');
         table[pair] = table[pair] | (1 << (b[2] - b'A') as i64);
     }
     let mut row: Vec[i64] = Vec.new();
@@ -70,10 +70,8 @@ fn next_random(seed: mut ref i64) -> i64 {
     *seed / 65536
 }
 
-fn letter(x: i64) -> String {
-    let mut s = String.new();
-    s.push((b'A' + x as u8) as char);
-    s
+fn letter(x: i64) -> char {
+    (b'A' + x as u8) as char
 }
 
 fn main() {
@@ -84,14 +82,14 @@ fn main() {
     for round in 0..rounds {
         let mut bottom = String.new();
         for _ in 0..6 {
-            bottom.push_str(letter(next_random(mut seed) % 6));
+            bottom.push(letter(next_random(mut seed) % 6));
         }
         let count = 40 + next_random(mut seed) % 80;
         let mut allowed: Vec[String] = Vec.new();
         for _ in 0..count {
             let mut t = String.new();
             for _ in 0..3 {
-                t.push_str(letter(next_random(mut seed) % 6));
+                t.push(letter(next_random(mut seed) % 6));
             }
             allowed.push(t);
         }
