@@ -2960,6 +2960,9 @@ pub struct TypeChecker<'a> {
     /// The edit that copies each `Str` piece before a `collect` into a
     /// `Vec[String]`, by the call's span (B-2026-10-18-35).
     pub(super) collect_strings_fixes: FxHashMap<SpanKey, FixIt>,
+    /// The literal's type that makes a `collect`'s items the narrower
+    /// integer its target holds, with why, by the call's span (kata 2055).
+    pub(super) collect_literal_fixes: FxHashMap<SpanKey, (FixIt, String)>,
     /// Where `.into_iter()` goes when a call's type parameter must be an
     /// `Iterator` and is solved to a collection: the end of the argument, or
     /// of the closure body, that solves it, by the call's span and the
@@ -4263,6 +4266,7 @@ impl<'a> TypeChecker<'a> {
             core_ref_results: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
             collect_strings_fixes: FxHashMap::default(),
+            collect_literal_fixes: FxHashMap::default(),
             into_iter_sites: FxHashMap::default(),
             into_iter_hinted: false,
             flatten_hinted: false,

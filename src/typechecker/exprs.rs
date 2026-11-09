@@ -6946,6 +6946,25 @@ impl<'a> super::TypeChecker<'a> {
                             trait_name,
                             render(&want),
                         );
+                        // A `map` whose results read the elements of a
+                        // collection filled with a defaulted literal: that
+                        // literal's type (kata 2055).
+                        if trait_name == "FromIterator" {
+                            if let Some((fix, why)) = self
+                                .collect_literal_fixes
+                                .get(&SpanKey::from_span(&d.span))
+                                .cloned()
+                            {
+                                message.push_str(&format!(": {why}"));
+                                self.type_error_with_fix_it(
+                                    message,
+                                    d.span,
+                                    TypeErrorKind::TypeMismatch,
+                                    fix,
+                                );
+                                continue;
+                            }
+                        }
                         // B-2026-10-18-35: lent pieces collected into owned
                         // `String`s are copied first.
                         let fix = (trait_name == "FromIterator" && render(&want) == "StringSlice")
@@ -8940,7 +8959,11 @@ impl<'a> super::TypeChecker<'a> {
         let Some(item) = self.library_iter_item(object) else {
             return;
         };
-        let Type::TypeVar(id) = resolve_type_var_top(&item, &self.env.substitutions) else {
+        let item_now = resolve_type_var_top(&item, &self.env.substitutions);
+        if item_now == Type::Int(IntSize::I64) {
+            self.collect_literal_fix(expr, object, &elem);
+        }
+        let Type::TypeVar(id) = item_now else {
             return;
         };
         let Some(kind) = inference::literal_var_kind(id) else {
@@ -8959,6 +8982,59 @@ impl<'a> super::TypeChecker<'a> {
                 &mut self.env.substitutions,
                 &mut self.env.const_substitutions,
             );
+        }
+    }
+
+    /// `queries.iter().map(|q| prefix[r] - prefix[l]).collect()` into a
+    /// `Vec[i32]`, with `prefix` filled with a literal that took the default
+    /// `i64`: the `map` closure's results read the literal's elements, so
+    /// the fix is that literal's type, as for a narrowing return (kata
+    /// 2055's Rust arm; B-2026-11-08-53). Recorded for the `FromIterator`
+    /// bound, which is discharged later.
+    fn collect_literal_fix(&mut self, expr: &Expr, object: &Expr, elem: &Type) {
+        let elem = resolve_type_var_top(elem, &self.env.substitutions);
+        if !matches!(elem, Type::Int(_) | Type::UInt(_)) || elem == Type::Int(IntSize::I64) {
+            return;
+        }
+        let ExprKind::MethodCall { method, args, .. } = &object.kind else {
+            return;
+        };
+        if method != "map" || args.len() != 1 {
+            return;
+        }
+        let ExprKind::Closure { body, .. } = &args[0].value.kind else {
+            return;
+        };
+        fn tails<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match &e.kind {
+                ExprKind::Block(b) => {
+                    if let Some(t) = &b.final_expr {
+                        tails(t, out);
+                    }
+                }
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    if let Some(t) = &then_block.final_expr {
+                        tails(t, out);
+                    }
+                    if let Some(e) = else_branch {
+                        tails(e, out);
+                    }
+                }
+                _ => out.push(e),
+            }
+        }
+        let mut found = Vec::new();
+        tails(body, &mut found);
+        let fix = found
+            .into_iter()
+            .find_map(|t| self.literal_let_annotation(t, &Type::Int(IntSize::I64), &elem));
+        if let Some((_, fix, why)) = fix {
+            self.collect_literal_fixes
+                .insert(SpanKey::from_span(&expr.span), (fix, why));
         }
     }
 
