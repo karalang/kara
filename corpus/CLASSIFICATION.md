@@ -2819,6 +2819,13 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/1001-1100/1074-number-of-submatrices-that-sum-to-target/submatrix_sum_iter`
 - `katas/1001-1100/1074-number-of-submatrices-that-sum-to-target/submatrix_sum_solution`
 - `katas/1001-1100/1074-number-of-submatrices-that-sum-to-target/submatrix_sum_sorted`
+- `katas/1001-1100/1078-occurrences-after-bigram/differential`
+- `katas/1001-1100/1078-occurrences-after-bigram/occurrences`
+- `katas/1001-1100/1078-occurrences-after-bigram/occurrences_find`
+- `katas/1001-1100/1078-occurrences-after-bigram/occurrences_scan`
+- `katas/1001-1100/1078-occurrences-after-bigram/occurrences_solution`
+- `katas/1001-1100/1078-occurrences-after-bigram/occurrences_windows`
+- `katas/1001-1100/1078-occurrences-after-bigram/occurrences_zip`
 - `katas/101-200/113-path-sum-ii/bench/path_sum_ii`
 - `katas/1401-1500/1500-design-a-file-sharing-system/differential`
 - `katas/1401-1500/1500-design-a-file-sharing-system/files`

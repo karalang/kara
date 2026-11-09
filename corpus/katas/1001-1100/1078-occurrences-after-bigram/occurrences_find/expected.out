@@ -1,0 +1,14 @@
+"alice is a good girl she is a good student" a good -> [girl, student]
+"we will we will rock you" we will -> [we, rock]
+"a a a a" a a -> [a, a]
+"a b" a b -> []
+"a b c" a b -> [c]
+"x y z x y" x y -> [z]
+"ab abc ab abc abd" ab abc -> [ab, abd]
+"jkypmsxd jkypmsxd kcyxdfnoa jkypmsxd kcyxdfnoa jkypmsxd kcyxdfnoa kcyxdfnoa jkypmsxd kcyxdfnoa" kcyxdfnoa jkypmsxd -> [kcyxdfnoa, kcyxdfnoa, kcyxdfnoa]
+"one two three" two three -> []
+"aa a aa a aa" a aa -> [a]
+3000 texts up to 40 characters: 9531 words found, 13136 letters, checksum 138742229
+1000 texts up to 1000 characters: 11966 words found, 57193 letters, checksum 898050172
+500 a's after a a: 498
+ab c 200 times after c ab: 199, after ab c: 200

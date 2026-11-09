@@ -1,0 +1,341 @@
+// LeetCode #1078: Occurrences After Bigram -- the differential: the six
+// arms against the statement read literally, under six properties, over
+// 2000 random problems drawn before any arm answers.
+
+// ---- occurrences.kara ----
+
+fn star_arm(text: String, first: String, second: String) -> Vec[String] {
+    let words: Vec[Str] = text.split(" ").collect();
+    let mut out: Vec[String] = [];
+    for i in 2..words.len() {
+        if words[i - 2] == first and words[i - 1] == second {
+            out.push(words[i].to_string());
+        }
+    }
+    out
+}
+
+// ---- occurrences_windows.kara ----
+
+fn windows_arm(text: String, first: String, second: String) -> Vec[String] {
+    let words: Vec[String] = text.split(" ").map(|w| w.to_string()).collect();
+    words.windows(3)
+        .iter()
+        .filter(|w| w[0] == first and w[1] == second)
+        .map(|w| w[2].clone())
+        .collect()
+}
+
+// ---- occurrences_scan.kara ----
+
+fn scan_same(text: String, start: i64, end: i64, word: String) -> bool {
+    end - start == word.len() and text.substring(start, end) == word
+}
+
+fn scan_arm(text: String, first: String, second: String) -> Vec[String] {
+    let bytes = text.bytes();
+    let n = bytes.len();
+    let mut out: Vec[String] = [];
+    // the two words before the current one, as [start, end) pairs; -1 for none
+    let mut a_start = -1;
+    let mut a_end = -1;
+    let mut b_start = -1;
+    let mut b_end = -1;
+    let mut start = 0;
+    for i in 0..n + 1 {
+        if i == n or bytes[i] == b' ' {
+            if a_start >= 0 and scan_same(text, a_start, a_end, first) and scan_same(text, b_start, b_end, second) {
+                out.push(text.substring(start, i));
+            }
+            a_start = b_start;
+            a_end = b_end;
+            b_start = start;
+            b_end = i;
+            start = i + 1;
+        }
+    }
+    out
+}
+
+// ---- occurrences_find.kara ----
+
+fn find_arm(text: String, first: String, second: String) -> Vec[String] {
+    let padded = f" {text} ";
+    let pattern = f" {first} {second} ";
+    let mut out: Vec[String] = [];
+    let mut from = 0;
+    loop {
+        match padded.substring(from, padded.len()).find(pattern) {
+            None => break,
+            Some(at) => {
+                let begin = from + at + pattern.len();
+                if begin < padded.len() {
+                    let rest = padded.substring(begin, padded.len());
+                    let end = begin + rest.find(" ").unwrap_or(rest.len());
+                    out.push(padded.substring(begin, end));
+                }
+                // on to the space after `first`, where the next bigram may start
+                from = from + at + first.len() + 1;
+            }
+        }
+    }
+    out
+}
+
+// ---- occurrences_zip.kara ----
+
+fn zip_arm(text: String, first: String, second: String) -> Vec[String] {
+    let words: Vec[String] = text.split_whitespace().map(|w| w.to_string()).collect();
+    words.iter()
+        .zip(words.iter().skip(1))
+        .zip(words.iter().skip(2))
+        .filter(|((a, b), _)| a == first and b == second)
+        .map(|(_, c)| c.clone())
+        .collect()
+}
+
+// ---- occurrences_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn find_ocurrences(text: String, first: String, second: String) -> Vec[String] {
+        let words: Vec[Str] = text.split(" ").collect();
+        let mut ans: Vec[String] = Vec.new();
+        for i in 2..words.len() {
+            if words[i - 2] == first and words[i - 1] == second {
+                ans.push(words[i].to_string());
+            }
+        }
+        ans
+    }
+}
+
+fn solution_arm(text: String, first: String, second: String) -> Vec[String] {
+    Solution.find_ocurrences(text.clone(), first.clone(), second.clone())
+}
+
+// ---- the harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, text: String, first: String, second: String) -> Vec[String] {
+    match which {
+        0 => star_arm(text, first, second),
+        1 => windows_arm(text, first, second),
+        2 => scan_arm(text, first, second),
+        3 => find_arm(text, first, second),
+        4 => zip_arm(text, first, second),
+        _ => solution_arm(text, first, second),
+    }
+}
+
+// The words of the text, read character by character up to each space.
+fn words_of(text: String) -> Vec[String] {
+    let mut words: Vec[String] = [];
+    let mut word = String.new();
+    for c in text.chars() {
+        if c == ' ' {
+            words.push(word);
+            word = String.new();
+        } else {
+            word.push(c);
+        }
+    }
+    words.push(word);
+    words
+}
+
+// The statement read literally: for every three places one after another
+// in the text, the third word when the first is `first` and the second is
+// `second`.
+fn literally(text: String, first: String, second: String) -> Vec[String] {
+    let words = words_of(text);
+    let mut out: Vec[String] = [];
+    for i in 0..words.len() {
+        for j in 0..words.len() {
+            for k in 0..words.len() {
+                if j == i + 1 and k == j + 1 and words[i] == first and words[j] == second {
+                    out.push(words[k].clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+// Every letter moved on by `by` in the first `k` letters.
+fn renamed(s: String, k: i64, by: i64) -> String {
+    let mut out = String.new();
+    for c in s.bytes() {
+        if c == b' ' {
+            out.push(' ');
+        } else {
+            out.push((b'a' + (((c - b'a') + by) % k) as u8) as char);
+        }
+    }
+    out
+}
+
+fn random_word(longest: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..next_random(mut seed) % longest + 1 {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+struct Problem {
+    text: String,
+    first: String,
+    second: String,
+    // a second text over the same vocabulary, for P4
+    other: String,
+    k: i64,
+    by: i64,
+}
+
+fn random_text(vocabulary: Vec[String], limit: i64, seed: mut ref i64) -> Vec[String] {
+    let mut words: Vec[String] = [];
+    let mut length = -1;
+    let target = next_random(mut seed) % limit + 1;
+    loop {
+        let w = vocabulary[next_random(mut seed) % vocabulary.len()].clone();
+        if words.len() > 0 and length + 1 + w.len() > target {
+            break;
+        }
+        length += 1 + w.len();
+        words.push(w);
+    }
+    words
+}
+
+fn random_problem(size: i64, longest: i64, k: i64, limit: i64, seed: mut ref i64) -> Problem {
+    let mut vocabulary: Vec[String] = [];
+    for _ in 0..size {
+        vocabulary.push(random_word(longest, k, mut seed));
+    }
+    let words = random_text(vocabulary, limit, mut seed);
+    let other = random_text(vocabulary, limit, mut seed);
+    let mut pair: Vec[String] = [];
+    for _ in 0..2 {
+        if next_random(mut seed) % 3 < 2 {
+            pair.push(words[next_random(mut seed) % words.len()].clone());
+        } else {
+            pair.push(vocabulary[next_random(mut seed) % size].clone());
+        }
+    }
+    let by = next_random(mut seed) % k;
+    Problem { text: words.join(" "), first: pair[0].clone(), second: pair[1].clone(), other: other.join(" "), k: k, by: by }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let text = p.text.clone();
+    let first = p.first.clone();
+    let second = p.second.clone();
+    let want = literally(text, first, second);
+    let words = words_of(text);
+    // a word that is no word of either text: a letter past the alphabet
+    let sep = "z".repeat(11);
+    let ends_with_bigram = words.len() >= 2 and words[words.len() - 2] == first and words[words.len() - 1] == second;
+    for w in 0..6 {
+        let answer = arm(w, text, first, second);
+        let what = f"arm {w}, \"{text}\" {first} {second} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        // P2: the letters renamed rename the answer
+        let moved = arm(w, renamed(text, p.k, p.by), renamed(first, p.k, p.by), renamed(second, p.k, p.by));
+        let moved_want: Vec[String] = answer.iter().map(|a| renamed(a, p.k, p.by)).collect();
+        expect(mut t, 2, moved == moved_want, f"P2 {what}: renamed by {p.by} -> {moved}");
+        // P3: every answer is a word of the text, and there are at most n - 2
+        let bound = if words.len() >= 2 { words.len() - 2 } else { 0 };
+        let all_words = answer.iter().all(|a| words.contains(a));
+        expect(mut t, 3, all_words and answer.len() <= bound, f"P3 {what}: {words.len()} words");
+        // P4: two texts joined by a word neither has answer one after the other
+        let joined = arm(w, f"{text} {sep} {p.other}", first, second);
+        let mut joined_want = answer.clone();
+        if ends_with_bigram {
+            joined_want.push(sep.clone());
+        }
+        for a in arm(w, p.other, first, second).iter() {
+            joined_want.push(a.clone());
+        }
+        expect(mut t, 4, joined == joined_want, f"P4 {what}: joined with \"{p.other}\" -> {joined}");
+        // P5: the text cut after any word answers a prefix of the answer
+        let mut prefix_ok = true;
+        for cut in 1..words.len() {
+            let part = arm(w, words[0..cut].to_vec().join(" "), first, second);
+            if part.len() > answer.len() or part != answer[0..part.len()].to_vec() {
+                prefix_ok = false;
+            }
+        }
+        expect(mut t, 5, prefix_ok, f"P5 {what}: a prefix answers more or other words");
+        // P6: over every bigram of the text the answers number n - 2 in all
+        let mut seen: Set[String] = Set.new();
+        let mut total = 0;
+        for i in 1..words.len() {
+            if seen.insert(f"{words[i - 1]} {words[i]}") {
+                total += arm(w, text, words[i - 1], words[i]).len();
+            }
+        }
+        expect(mut t, 6, total == bound, f"P6 {what}: every bigram's answers number {total}, not {bound}");
+    }
+    t.cases += 1;
+    let mut fold = want.len();
+    for a in want.iter() {
+        for c in a.bytes() {
+            fold = (fold * 31 + c) % 1000000007;
+        }
+        fold = (fold * 31 + 32) % 1000000007;
+    }
+    t.check = (t.check * 31 + fold) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1000 texts up to 30 characters over a vocabulary of 1
+    // to 4 words of 1 or 2 letters out of two, and 1000 up to 120 over up
+    // to 8 words of up to 4 letters out of up to four. Every choice is
+    // drawn before any arm answers.
+    let mut seed = 10781;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let p = if i < 1000 {
+            random_problem(next_random(mut seed) % 4 + 1, 2, 2, 30, mut seed)
+        } else {
+            let k = next_random(mut seed) % 4 + 1;
+            random_problem(next_random(mut seed) % 8 + 1, 4, k, 120, mut seed)
+        };
+        problems.push(p);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

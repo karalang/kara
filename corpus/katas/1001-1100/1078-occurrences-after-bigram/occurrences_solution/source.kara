@@ -1,0 +1,135 @@
+// LeetCode #1078: Occurrences After Bigram -- LeetCode's Rust template,
+// written as Rust writes it and carried to Kāra by `karac fix`: the text
+// split on ' ' into `Vec<&str>`, and every word after a `first`, `second`
+// pair pushed as an owned string. O(n).
+
+struct Solution {}
+
+impl Solution {
+    pub fn find_ocurrences(text: String, first: String, second: String) -> Vec[String] {
+        let words: Vec[Str] = text.split(" ").collect();
+        let mut ans: Vec[String] = Vec.new();
+        for i in 2..words.len() {
+            if words[i - 2] == first and words[i - 1] == second {
+                ans.push(words[i].to_string());
+            }
+        }
+        ans
+    }
+}
+
+fn find_occurrences(text: String, first: String, second: String) -> Vec[String] {
+    Solution.find_ocurrences(text.clone(), first.clone(), second.clone())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A word of 1 to `longest` letters over the first `k` letters.
+fn random_word(longest: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..next_random(mut seed) % longest + 1 {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+// A text of words drawn from a vocabulary of `size` random words, at most
+// `limit` characters with its single spaces; then `first` and `second`,
+// each a word of the text two times in three and a word of the vocabulary
+// otherwise, so that bigrams recur and sometimes overlap.
+fn random_problem(size: i64, longest: i64, k: i64, limit: i64, seed: mut ref i64) -> (String, String, String) {
+    let mut vocabulary: Vec[String] = [];
+    for _ in 0..size {
+        vocabulary.push(random_word(longest, k, mut seed));
+    }
+    let mut words: Vec[String] = [];
+    let mut length = -1;
+    let target = next_random(mut seed) % limit + 1;
+    loop {
+        let w = vocabulary[next_random(mut seed) % size].clone();
+        if words.len() > 0 and length + 1 + w.len() > target {
+            break;
+        }
+        length += 1 + w.len();
+        words.push(w);
+    }
+    let pick = |seed: mut ref i64| {
+        if next_random(mut seed) % 3 < 2 {
+            words[next_random(mut seed) % words.len()].clone()
+        } else {
+            vocabulary[next_random(mut seed) % size].clone()
+        }
+    };
+    let first = pick(mut seed);
+    let second = pick(mut seed);
+    (words.join(" "), first, second)
+}
+
+// An answer folded to one number.
+fn checksum(words: Vec[String]) -> i64 {
+    let mut check = words.len();
+    for w in words.iter() {
+        for c in w.bytes() {
+            check = (check * 31 + c) % 1000000007;
+        }
+        check = (check * 31 + 32) % 1000000007;
+    }
+    check
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples: Vec[(String, String, String)] = [
+        ("alice is a good girl she is a good student", "a", "good"),
+        ("we will we will rock you", "we", "will"),
+        ("a a a a", "a", "a"),
+        ("a b", "a", "b"),
+        ("a b c", "a", "b"),
+        ("x y z x y", "x", "y"),
+        ("ab abc ab abc abd", "ab", "abc"),
+        ("jkypmsxd jkypmsxd kcyxdfnoa jkypmsxd kcyxdfnoa jkypmsxd kcyxdfnoa kcyxdfnoa jkypmsxd kcyxdfnoa", "kcyxdfnoa", "jkypmsxd"),
+        ("one two three", "two", "three"),
+        ("aa a aa a aa", "a", "aa"),
+    ];
+    for (text, first, second) in examples.iter() {
+        println(f"\"{text}\" {first} {second} -> {find_occurrences(text, first, second)}");
+    }
+    let mut seed = 1078;
+    let mut found = 0;
+    let mut letters = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let (text, first, second) = random_problem(next_random(mut seed) % 4 + 1, 2, 2, 40, mut seed);
+        let out = find_occurrences(text, first, second);
+        found += out.len();
+        for w in out.iter() {
+            letters += w.len();
+        }
+        check = (check * 31 + checksum(out)) % 1000000007;
+    }
+    println(f"3000 texts up to 40 characters: {found} words found, {letters} letters, checksum {check}");
+    found = 0;
+    letters = 0;
+    check = 0;
+    for _ in 0..1000 {
+        let k = next_random(mut seed) % 3 + 1;
+        let (text, first, second) = random_problem(next_random(mut seed) % 12 + 1, 10, k, 1000, mut seed);
+        let out = find_occurrences(text, first, second);
+        found += out.len();
+        for w in out.iter() {
+            letters += w.len();
+        }
+        check = (check * 31 + checksum(out)) % 1000000007;
+    }
+    println(f"1000 texts up to 1000 characters: {found} words found, {letters} letters, checksum {check}");
+    // the longest: 500 a's, and 1000 characters of alternating words
+    let a500 = ["a"; 500].join(" ");
+    println(f"500 a's after a a: {find_occurrences(a500, "a", "a").len()}");
+    let ab = ["ab c"; 200].join(" ") + " ab";
+    println(f"ab c 200 times after c ab: {find_occurrences(ab, "c", "ab").len()}, after ab c: {find_occurrences(ab, "ab", "c").len()}");
+}

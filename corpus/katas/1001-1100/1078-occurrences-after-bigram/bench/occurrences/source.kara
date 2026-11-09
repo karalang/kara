@@ -1,0 +1,83 @@
+// LeetCode #1078 bench: the ★ arm (split into views, then a window over the words)
+// on 100 texts of up to 1000 characters drawn once, each asked about 8
+// bigrams, 6 of them on average its own; every round asks all 800 in an
+// order that changes with the round, and every answer is folded into a
+// checksum.
+
+fn find_occurrences(text: String, first: String, second: String) -> Vec[String] {
+    let words: Vec[Str] = text.split(" ").collect();
+    let mut out: Vec[String] = [];
+    for i in 2..words.len() {
+        if words[i - 2] == first and words[i - 1] == second {
+            out.push(words[i].to_string());
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(longest: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..next_random(mut seed) % longest + 1 {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    let rounds = 300;
+    let mut seed = 1078;
+    let mut vocabulary: Vec[String] = [];
+    for _ in 0..12 {
+        vocabulary.push(random_word(4, 3, mut seed));
+    }
+    let mut texts: Vec[String] = [];
+    let mut firsts: Vec[String] = [];
+    let mut seconds: Vec[String] = [];
+    let mut owner: Vec[i64] = [];
+    for t in 0..100 {
+        let mut words: Vec[String] = [];
+        let mut length = -1;
+        loop {
+            let w = vocabulary[next_random(mut seed) % 12].clone();
+            if length + 1 + w.len() > 1000 {
+                break;
+            }
+            length += 1 + w.len();
+            words.push(w);
+        }
+        for _ in 0..8 {
+            if next_random(mut seed) % 4 < 3 {
+                let at = next_random(mut seed) % (words.len() - 1);
+                firsts.push(words[at].clone());
+                seconds.push(words[at + 1].clone());
+            } else {
+                firsts.push(vocabulary[next_random(mut seed) % 12].clone());
+                seconds.push(vocabulary[next_random(mut seed) % 12].clone());
+            }
+            owner.push(t);
+        }
+        texts.push(words.join(" "));
+    }
+    let queries = firsts.len();
+    let mut found = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for j in 0..queries {
+            let q = (j * 7 + r) % queries;
+            let out = find_occurrences(texts[owner[q]], firsts[q], seconds[q]);
+            found += out.len();
+            for w in out.iter() {
+                for c in w.bytes() {
+                    check = (check * 31 + c) % 1000000007;
+                }
+            }
+            check = (check * 31 + out.len()) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of {queries} bigrams over 100 texts: {found} words found, checksum {check}");
+}
