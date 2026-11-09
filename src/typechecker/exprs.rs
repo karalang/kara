@@ -5315,11 +5315,20 @@ impl<'a> super::TypeChecker<'a> {
                 // parameter a type a number cannot be (`m.get(1) == Some(5)`
                 // seeds `T = ref i64`): the literal keeps its own type there,
                 // and the mismatch is the comparison's to report.
+                // A negative literal (`map_or(-1, ..)`) is the negation of
+                // one, and is open the same way (kata 2057).
+                let literal_value = match &arg.value.kind {
+                    ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        operand,
+                    } => &operand.kind,
+                    k => k,
+                };
                 let literal_arg = matches!(
-                    arg.value.kind,
+                    literal_value,
                     ExprKind::Integer(_, None) | ExprKind::Float(_, None)
                 ) && {
-                    let kind = if matches!(arg.value.kind, ExprKind::Integer(..)) {
+                    let kind = if matches!(literal_value, ExprKind::Integer(..)) {
                         super::inference::LiteralKind::Int
                     } else {
                         super::inference::LiteralKind::Float
