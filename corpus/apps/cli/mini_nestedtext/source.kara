@@ -1,0 +1,1540 @@
+// mini_nestedtext: a NestedText loader, the indentation-based format for
+// settings files whose values are only strings, lists and dictionaries, so
+// nothing needs quoting or escaping. The loader of nestedtext 3.8: every
+// line kind, multi-line keys and strings, the inline `[…]` and `{…}` forms,
+// the duplicate-key policies, key normalization, the keymap that says where
+// each key and value came from, and every error with inform's codicil.
+// It loads a small web shop's settings files and then runs single cases.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+import std.json.{Json};
+
+// ------------------------------------------------------------ values
+
+/// A loaded value; `Null` only for an empty document read as `any`.
+#[derive(Clone)]
+enum Val {
+    Null,
+    Str(String),
+    List(Vec[Val]),
+    Dict(Vec[(String, Val)]),
+}
+
+/// Python's truth of a loaded value: an empty string, list or dict is false.
+fn truthy(v: Val) -> bool {
+    match v {
+        Val.Null => false,
+        Val.Str(s) => not s.is_empty(),
+        Val.List(xs) => not xs.is_empty(),
+        Val.Dict(fs) => not fs.is_empty(),
+    }
+}
+
+fn has_key(fields: Slice[(String, Val)], key: Str) -> bool {
+    for (k, _) in fields.iter() {
+        if k == key {
+            return true;
+        }
+    }
+    false
+}
+
+/// `d[key] = value`: replaces in place, else appends.
+fn set_key(fields: mut ref Vec[(String, Val)], key: own String, value: own Val) {
+    for i in 0..fields.len() {
+        if fields[i].0 == key {
+            fields[i] = (key, value);
+            return;
+        }
+    }
+    fields.push((key, value));
+}
+
+/// One key of a path into the data: a dictionary key or a list index.
+#[derive(Clone, PartialEq)]
+enum Key {
+    Name(String),
+    Index(i64),
+}
+
+fn with_key(keys: Slice[Key], k: own Key) -> Vec[Key] {
+    let mut out: Vec[Key] = keys.to_vec();
+    out.push(k);
+    out
+}
+
+// ------------------------------------------------------------ text helpers
+
+/// `str.isspace()`, which is also what `\s` and `str.strip()` use.
+fn is_py_space(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 133 or n == 160 or n == 5760
+        or (n >= 8192 and n <= 8202) or n == 8232 or n == 8233 or n == 8239 or n == 8287
+        or n == 12288
+}
+
+/// `unicodedata.name(c, "")` for the white-space characters.
+fn space_name(c: char) -> Str {
+    match c as i64 {
+        32 => "SPACE",
+        160 => "NO-BREAK SPACE",
+        5760 => "OGHAM SPACE MARK",
+        8192 => "EN QUAD",
+        8193 => "EM QUAD",
+        8194 => "EN SPACE",
+        8195 => "EM SPACE",
+        8196 => "THREE-PER-EM SPACE",
+        8197 => "FOUR-PER-EM SPACE",
+        8198 => "SIX-PER-EM SPACE",
+        8199 => "FIGURE SPACE",
+        8200 => "PUNCTUATION SPACE",
+        8201 => "THIN SPACE",
+        8202 => "HAIR SPACE",
+        8232 => "LINE SEPARATOR",
+        8233 => "PARAGRAPH SEPARATOR",
+        8239 => "NARROW NO-BREAK SPACE",
+        8287 => "MEDIUM MATHEMATICAL SPACE",
+        12288 => "IDEOGRAPHIC SPACE",
+        _ => "",
+    }
+}
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        let d = (n >> shift) & 15;
+        out.push(digits.chars().nth(d) ?? '0');
+        shift -= 4;
+    }
+    out
+}
+
+/// Python's `repr` of a one-character white-space string.
+fn space_repr(c: char) -> String {
+    let n = c as i64;
+    if c == ' ' {
+        return "' '";
+    }
+    let body = match c {
+        '\t' => "\\t",
+        '\n' => "\\n",
+        '\r' => "\\r",
+        _ => if n < 256 { f"\\x{hex_digits(n, 2)}" } else { f"\\u{hex_digits(n, 4)}" },
+    };
+    f"'{body}'"
+}
+
+fn sub(cs: Slice[char], start: i64, end: i64) -> String {
+    let mut out = String.new();
+    for i in start..end {
+        out.push(cs[i]);
+    }
+    out
+}
+
+fn py_strip(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    sub(cs, a, b)
+}
+
+fn py_rstrip(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut b = cs.len();
+    while b > 0 and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    sub(cs, 0, b)
+}
+
+fn char_len(s: Str) -> i64 {
+    s.chars().count()
+}
+
+/// inform's `full_stop`: a period unless the text already ends in one of
+/// `.?!`; a trailing backslash is dropped instead.
+fn full_stop(s: Str) -> String {
+    let t = py_rstrip(s);
+    if t.ends_with("\\") {
+        let cs: Vec[char] = t.chars().collect();
+        return sub(cs, 0, cs.len() - 1);
+    }
+    if t.ends_with(".") or t.ends_with("?") or t.ends_with("!") {
+        return t;
+    }
+    f"{t}."
+}
+
+/// `textwrap.fill(text)`: greedy lines of at most 70 characters.
+fn fill(text: Str) -> String {
+    let mut lines: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for word in text.split(" ") {
+        if word.is_empty() {
+            continue;
+        }
+        if cur.is_empty() {
+            cur = word.to_string();
+        } else if char_len(cur) + 1 + char_len(word) <= 70 {
+            cur.push(' ');
+            cur.push_str(word);
+        } else {
+            lines.push(cur);
+            cur = word.to_string();
+        }
+    }
+    if not cur.is_empty() {
+        lines.push(cur);
+    }
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ lines
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Kind {
+    Blank,
+    Comment,
+    ListItem,
+    StringItem,
+    KeyItem,
+    InlineDict,
+    InlineList,
+    DictItem,
+    Unrecognized,
+}
+
+/// One line of the document, as `Lines.read_lines` classifies it.
+#[derive(Clone)]
+struct Line {
+    text: String,
+    lineno: i64,
+    kind: Kind,
+    depth: i64,
+    key: String,
+    value: String,
+    // The meaningful line before this one (`prev_line`), and the next line
+    // of the same multi-line key or string (`next_line`), as indexes.
+    prev_line: Option[i64],
+    next_line: Option[i64],
+}
+
+/// The dict-item pattern `(?P<key>[^\s].*?)\s*:(?:\ (?P<value>.*))?` as a
+/// full match: the shortest key whose run of white space is followed by a
+/// colon that ends the line or is followed by a space.
+fn match_dict_item(s: Str) -> Option[(String, String)] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    if n == 0 or is_py_space(cs[0]) {
+        return None;
+    }
+    for k in 1..n {
+        let mut j = k;
+        while j < n and is_py_space(cs[j]) {
+            j += 1;
+        }
+        if j < n and cs[j] == ':' {
+            if j + 1 == n {
+                return Some((sub(cs, 0, k), String.new()));
+            }
+            if cs[j + 1] == ' ' {
+                return Some((sub(cs, 0, k), sub(cs, j + 2, n)));
+            }
+        }
+    }
+    None
+}
+
+/// What follows the two-character tag of an item line (`- `, `> `, `: `).
+fn after_tag(stripped: Str) -> String {
+    let cs: Vec[char] = stripped.chars().collect();
+    if cs.len() <= 2 {
+        return String.new();
+    }
+    sub(cs, 2, cs.len())
+}
+
+fn is_item(kind: Kind) -> bool {
+    match kind {
+        Kind.Blank | Kind.Comment | Kind.Unrecognized => false,
+        _ => true,
+    }
+}
+
+/// `io.StringIO(content, newline=None)` read line by line, then classified.
+fn read_lines(content: Str, support_inlines: bool) -> Vec[Line] {
+    let text = content.replace("\r\n", "\n").replace("\r", "\n");
+    let mut raw: Vec[String] = text.split("\n").map(|l| l.to_string()).collect();
+    if raw.last().map(|l| l.is_empty()) ?? false {
+        raw.pop();
+    }
+    let mut lines: Vec[Line] = Vec.new();
+    let mut prev_line: Option[i64] = None;
+    let mut last_line: Option[i64] = None;
+    let mut lineno = 0;
+    for line in raw.into_iter() {
+        let mut stripped: Str = line.as_str();
+        while let Some(rest) = stripped.strip_prefix(" ") {
+            stripped = rest;
+        }
+        let depth = line.len() - stripped.len();
+        let mut key = String.new();
+        let mut value = String.new();
+        let kind = if stripped.is_empty() {
+            Kind.Blank
+        } else if stripped.starts_with("#") {
+            Kind.Comment
+        } else if stripped == "-" or stripped.starts_with("- ") {
+            value = after_tag(stripped);
+            Kind.ListItem
+        } else if stripped == ">" or stripped.starts_with("> ") {
+            value = after_tag(stripped);
+            Kind.StringItem
+        } else if stripped == ":" or stripped.starts_with(": ") {
+            value = after_tag(stripped);
+            Kind.KeyItem
+        } else if support_inlines and (stripped.starts_with("[") or stripped.starts_with("{")) {
+            value = stripped.to_string();
+            if stripped.starts_with("{") { Kind.InlineDict } else { Kind.InlineList }
+        } else {
+            match match_dict_item(stripped) {
+                Some((k, v)) => {
+                    key = k;
+                    value = v;
+                    Kind.DictItem
+                }
+                None => {
+                    value = line.clone();
+                    Kind.Unrecognized
+                }
+            }
+        };
+        let index = lines.len();
+        lines.push(Line {
+            text: line,
+            lineno: lineno,
+            kind: kind,
+            depth: depth,
+            key: key,
+            value: value,
+            prev_line: prev_line,
+            next_line: None,
+        });
+        if is_item(kind) {
+            prev_line = Some(index);
+            if let Some(last) = last_line {
+                let same = lines[last].depth == depth and lines[last].kind == kind;
+                if same and (kind == Kind.KeyItem or kind == Kind.StringItem) {
+                    lines[last].next_line = Some(index);
+                }
+            }
+        }
+        if kind != Kind.Blank and kind != Kind.Comment {
+            last_line = Some(index);
+        }
+        lineno += 1;
+    }
+    lines
+}
+
+// ------------------------------------------------------------ errors
+
+/// A NestedTextError: `str(e)` and the line and column it names.
+struct NtError {
+    text: String,
+    lineno: i64,
+    colno: Option[i64],
+}
+
+fn render_line(line: Line) -> String {
+    f"{line.lineno + 1:>4} ❬{line.text}❭"
+}
+
+/// inform's `indent`: four spaces before each line, trailing white space
+/// removed.
+fn indent(text: Str) -> String {
+    let parts: Vec[String] = text.split("\n").map(|l| py_rstrip(f"    {l}")).collect();
+    parts.join("\n")
+}
+
+// ------------------------------------------------------------ locations
+
+/// Where a key and its value were found (nestedtext's `Location`).
+#[derive(Clone)]
+struct Location {
+    line: Option[i64],
+    col: i64,
+    key_line: Option[i64],
+    key_col: Option[i64],
+}
+
+fn at_line(line: i64, col: i64) -> Location {
+    Location { line: Some(line), col: col, key_line: None, key_col: None }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum OnDup {
+    Error,
+    Ignore,
+    Replace,
+    Dedup,
+}
+
+/// Why an inline parse stopped: the line ran out (Python's `IndexError`),
+/// or a reported error.
+enum Stop {
+    Eol,
+    Fail(NtError),
+}
+
+/// The line an inline value is parsed from.
+struct Inline {
+    line: i64,
+    chars: Vec[char],
+    starting_col: i64,
+}
+
+// ------------------------------------------------------------ the loader
+
+struct Loader {
+    lines: Vec[Line],
+    next: Option[i64],
+    source: Option[String],
+    on_dup: OnDup,
+    // The de-duplicating callback's state: a count for each key.
+    dedup: Vec[(String, i64)],
+    normalize: bool,
+    keymap: Vec[(Vec[Key], Location)],
+}
+
+impl Loader {
+    /// `report()`: the message with its culprit, and the codicil that shows
+    /// the line (and the meaningful one before it) with a pointer.
+    fn report(ref self, message: Str, line: i64, colno: Option[i64], codicil: Str, suppress_prev: bool) -> NtError {
+        let l = ref self.lines[line];
+        let mut parts: Vec[String] = Vec.new();
+        if not codicil.is_empty() {
+            parts.push(codicil.to_string());
+        }
+        let text = match colno {
+            Some(col) => {
+                if not suppress_prev {
+                    if let Some(p) = l.prev_line {
+                        parts.push(render_line(self.lines[p]));
+                    }
+                }
+                let shown = l.text.replace("\t", "→");
+                parts.push(f"{l.lineno + 1:>4} ❬{shown}❭");
+                parts.push(f"      {" ".repeat(col)}▲");
+                parts.join("\n")
+            }
+            None => render_line(l),
+        };
+        let culprit = match self.source {
+            Some(s) => f"{s}, {l.lineno + 1}",
+            None => f"{l.lineno + 1}",
+        };
+        NtError { text: f"{culprit}: {message}\n{indent(text)}", lineno: l.lineno, colno: colno }
+    }
+
+    fn fail(ref self, message: Str, line: i64, colno: Option[i64]) -> NtError {
+        self.report(full_stop(message), line, colno, "", false)
+    }
+
+    fn kind_of_next(ref self) -> Option[Kind] {
+        self.next.map(|i| self.lines[i].kind)
+    }
+
+    fn still_within_level(ref self, depth: i64) -> bool {
+        match self.next {
+            Some(i) => self.lines[i].depth >= depth,
+            None => false,
+        }
+    }
+
+    fn still_within_string(ref self, depth: i64) -> bool {
+        match self.next {
+            Some(i) => self.lines[i].kind == Kind.StringItem and self.lines[i].depth >= depth,
+            None => false,
+        }
+    }
+
+    fn still_within_key(ref self, line: i64, depth: i64) -> Result[bool, NtError] {
+        match self.next {
+            Some(i) => Ok(self.lines[i].kind == Kind.KeyItem and self.lines[i].depth == depth),
+            None => Err(self.fail("indented value must follow multi-line key", line, None)),
+        }
+    }
+
+    fn depth_of_next(ref self) -> i64 {
+        match self.next {
+            Some(i) => self.lines[i].depth,
+            None => 0,
+        }
+    }
+
+    /// The next meaningful line after `from`, skipping blanks and comments.
+    fn meaningful_from(ref self, from: i64) -> Option[i64] {
+        for i in from..self.lines.len() {
+            let k = self.lines[i].kind;
+            if k != Kind.Blank and k != Kind.Comment {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn get_next(mut ref self) -> Result[i64, NtError] {
+        let Some(line) = self.next else {
+            return Err(NtError { text: "no next line", lineno: 0, colno: None });
+        };
+        if self.lines[line].kind == Kind.Unrecognized {
+            return Err(self.unrecognized_line(line));
+        }
+        self.next = self.meaningful_from(line + 1);
+        Ok(line)
+    }
+
+    fn unrecognized_line(ref self, line: i64) -> NtError {
+        let l = ref self.lines[line];
+        let cs: Vec[char] = l.text.chars().collect();
+        let mut at = 0;
+        while cs[at] == ' ' {
+            at += 1;
+        }
+        let first = cs[at];
+        if is_py_space(first) {
+            let name = space_name(first);
+            let desc = if name.is_empty() { String.new() } else { f" ({name})" };
+            return self.report(
+                f"invalid character in indentation: {space_repr(first)}{desc}.",
+                line,
+                Some(at),
+                "Only simple spaces are allowed in indentation.",
+                false,
+            );
+        }
+        self.fail("unrecognized line.", line, Some(at))
+    }
+
+    fn indentation_error(ref self, line: i64, depth: i64) -> NtError {
+        let l = ref self.lines[line];
+        let mut codicil = String.new();
+        let msg = match l.prev_line {
+            None if depth == 0 => "top-level content must start in column 1.",
+            Some(p) if not self.lines[p].value.is_empty() and self.lines[p].depth < l.depth
+                and (self.lines[p].kind == Kind.ListItem or self.lines[p].kind == Kind.DictItem) => {
+                let obs = if py_strip(self.lines[p].value).is_empty() {
+                    ", which in this case consists only of whitespace"
+                } else {
+                    ""
+                };
+                codicil = fill(f"An indent may only follow a dictionary or list item that does not already have a value{obs}.");
+                "invalid indentation."
+            }
+            Some(p) if self.lines[p].depth > l.depth => "invalid indentation, partial dedent.",
+            _ => "invalid indentation.",
+        };
+        self.report(full_stop(fill(msg)), line, Some(depth), codicil, false)
+    }
+
+    fn normalize_key(ref self, key: own String) -> String {
+        if self.normalize {
+            key.to_lowercase().replace(" ", "_")
+        } else {
+            key
+        }
+    }
+
+    /// `KeyPolicy.process_duplicate`: `None` drops the item.
+    fn process_duplicate(mut ref self, key: own String, line: i64, colno: i64) -> Result[Option[String], NtError] {
+        match self.on_dup {
+            OnDup.Error => Err(self.report(f"duplicate key: {key}.", line, Some(colno), "", false)),
+            OnDup.Ignore => Ok(None),
+            OnDup.Replace => Ok(Some(key)),
+            OnDup.Dedup => {
+                let mut count = 1;
+                for (k, n) in self.dedup.iter() {
+                    if k == key {
+                        count = n;
+                    }
+                }
+                count += 1;
+                let mut found = false;
+                for i in 0..self.dedup.len() {
+                    if self.dedup[i].0 == key {
+                        self.dedup[i].1 = count;
+                        found = true;
+                    }
+                }
+                if not found {
+                    self.dedup.push((key.clone(), count));
+                }
+                Ok(Some(f"{key} — #{count}"))
+            }
+        }
+    }
+
+    fn add_keymap(mut ref self, keys: own Vec[Key], loc: own Location) {
+        for i in 0..self.keymap.len() {
+            if self.keymap[i].0 == keys {
+                self.keymap[i] = (keys, loc);
+                return;
+            }
+        }
+        self.keymap.push((keys, loc));
+    }
+
+    fn read_value(mut ref self, depth: i64, keys: Slice[Key]) -> Result[(Val, Location), NtError] {
+        match self.kind_of_next() {
+            Some(Kind.ListItem) => self.read_list(depth, keys),
+            Some(Kind.DictItem) | Some(Kind.KeyItem) => self.read_dict(depth, keys),
+            Some(Kind.StringItem) => self.read_string(depth),
+            Some(Kind.InlineDict) | Some(Kind.InlineList) => self.read_inline(keys),
+            _ => {
+                let line = self.get_next()?;
+                Err(self.unrecognized_line(line))
+            }
+        }
+    }
+
+    fn read_list(mut ref self, depth: i64, keys: Slice[Key]) -> Result[(Val, Location), NtError] {
+        let mut values: Vec[Val] = Vec.new();
+        let mut index = 0;
+        let first_line = self.next ?? 0;
+        while self.still_within_level(depth) {
+            let line = self.get_next()?;
+            if self.lines[line].depth != depth {
+                return Err(self.indentation_error(line, depth));
+            }
+            if self.lines[line].kind != Kind.ListItem {
+                return Err(self.fail("expected list item.", line, Some(depth)));
+            }
+            let new_keys = with_key(keys, Key.Index(index));
+            let value = self.lines[line].value.clone();
+            if not value.is_empty() {
+                values.push(Val.Str(value));
+                self.add_keymap(new_keys, Location { line: Some(line), col: depth + 2, key_line: None, key_col: Some(depth) });
+            } else {
+                let depth_of_next = self.depth_of_next();
+                if depth_of_next > depth {
+                    let mut (value, loc) = self.read_value(depth_of_next, new_keys)?;
+                    loc.key_line = Some(line);
+                    loc.key_col = Some(depth);
+                    values.push(value);
+                    self.add_keymap(new_keys, loc);
+                } else {
+                    values.push(Val.Str(String.new()));
+                    self.add_keymap(new_keys, Location { line: Some(line), col: depth + 1, key_line: None, key_col: Some(depth) });
+                }
+            }
+            index += 1;
+        }
+        Ok((Val.List(values), at_line(first_line, self.lines[first_line].depth)))
+    }
+
+    #[allow(mutual_recursion_note)]
+    fn read_dict(mut ref self, depth: i64, keys: Slice[Key]) -> Result[(Val, Location), NtError] {
+        let mut values: Vec[(String, Val)] = Vec.new();
+        let first_line = self.next ?? 0;
+        while self.still_within_level(depth) {
+            let line = self.get_next()?;
+            if self.lines[line].depth != depth {
+                return Err(self.indentation_error(line, depth));
+            }
+            let kind = self.lines[line].kind;
+            if kind != Kind.DictItem and kind != Kind.KeyItem {
+                return Err(self.fail("expected dictionary item.", line, Some(depth)));
+            }
+            let (original_key, value) = if kind == Kind.KeyItem {
+                (self.read_key(line, depth)?, String.new())
+            } else {
+                (self.lines[line].key.clone(), self.lines[line].value.clone())
+            };
+            let mut key = self.normalize_key(original_key);
+            if has_key(values, key) {
+                match self.process_duplicate(key, line, depth)? {
+                    Some(k) => key = k,
+                    None => continue,
+                }
+            }
+            let new_keys = with_key(keys, Key.Name(key.clone()));
+            let mut (value, loc) = if not value.is_empty() {
+                (Val.Str(value), at_line(line, depth + char_len(key) + 2))
+            } else {
+                let depth_of_next = self.depth_of_next();
+                if depth_of_next > depth {
+                    self.read_value(depth_of_next, new_keys)?
+                } else if kind == Kind.DictItem {
+                    (Val.Str(String.new()), at_line(line, depth + char_len(key) + 1))
+                } else {
+                    return Err(self.fail("multiline key requires a value.", line, Some(depth)));
+                }
+            };
+            set_key(mut values, key, value);
+            loc.key_line = Some(line);
+            loc.key_col = Some(depth);
+            self.add_keymap(new_keys, loc);
+        }
+        Ok((Val.Dict(values), at_line(first_line, self.lines[first_line].depth)))
+    }
+
+    fn read_key(mut ref self, first: i64, depth: i64) -> Result[String, NtError] {
+        let mut data: Vec[String] = [self.lines[first].value.clone()];
+        let mut line = first;
+        while self.still_within_key(line, depth)? {
+            line = self.get_next()?;
+            data.push(self.lines[line].value.clone());
+        }
+        Ok(data.join("\n"))
+    }
+
+    fn read_string(mut ref self, depth: i64) -> Result[(Val, Location), NtError] {
+        let mut data: Vec[String] = Vec.new();
+        let mut loc = Location { line: self.next, col: 0, key_line: None, key_col: Some(depth) };
+        while self.still_within_string(depth) {
+            let line = self.get_next()?;
+            data.push(self.lines[line].value.clone());
+            if self.lines[line].depth != depth {
+                return Err(self.indentation_error(line, depth));
+            }
+        }
+        let value = data.join("\n");
+        loc.col = depth + (if value.is_empty() { 1 } else { 2 });
+        Ok((Val.Str(value), loc))
+    }
+
+    fn read_inline(mut ref self, keys: Slice[Key]) -> Result[(Val, Location), NtError] {
+        let line = self.get_next()?;
+        let it = Inline {
+            line: line,
+            chars: self.lines[line].value.chars().collect(),
+            starting_col: self.lines[line].depth,
+        };
+        let max_index = it.chars.len();
+        match self.parse_inline_value(it, keys, 0, "") {
+            Ok((values, loc, index)) => {
+                if index < max_index {
+                    let extra = sub(it.chars, index, max_index);
+                    let noun = if char_len(extra) == 1 { "character" } else { "characters" };
+                    return Err(self.inline_error(f"extra {noun} after closing delimiter: ‘{extra}’", it, index));
+                }
+                Ok((values, loc))
+            }
+            Err(Stop.Eol) => Err(self.inline_error("line ended without closing delimiter", it, max_index)),
+            Err(Stop.Fail(e)) => Err(e),
+        }
+    }
+
+    // -------------------------------------------------------- inline forms
+
+    fn inline_error(ref self, message: Str, it: Inline, index: i64) -> NtError {
+        self.report(full_stop(message), it.line, Some(index + it.starting_col), "", true)
+    }
+
+    fn stop(ref self, message: Str, it: Inline, index: i64) -> Stop {
+        Stop.Fail(self.inline_error(message, it, index))
+    }
+
+    fn location(ref self, it: Inline, index: i64) -> Location {
+        at_line(it.line, index + it.starting_col)
+    }
+
+    fn parse_inline_value(mut ref self, it: Inline, keys: Slice[Key], index: i64, forbidden: Str) -> Result[(Val, Location, i64), Stop] {
+        match char_at(it, index)? {
+            '{' => self.parse_inline_dict(it, keys, index),
+            '[' => self.parse_inline_list(it, keys, index),
+            _ => self.parse_inline_str(it, index, forbidden),
+        }
+    }
+
+    #[allow(mutual_recursion_note)]
+    fn parse_inline_dict(mut ref self, it: Inline, keys: Slice[Key], start: i64) -> Result[(Val, Location, i64), Stop] {
+        let mut index = start + 1;
+        let mut values: Vec[(String, Val)] = Vec.new();
+        let mut need_another = false;
+        while char_at(it, index)? != '}' {
+            let prev_index = index;
+            let (orig_key, value, loc, next) = self.parse_inline_dict_item(it, keys, index)?;
+            index = next;
+            let key = self.normalize_key(orig_key);
+            let mut chosen = Some(key.clone());
+            if has_key(values, key) {
+                // The column given is the item's own index in the text, not
+                // moved by the line's indentation.
+                chosen = self.process_duplicate(key, it.line, prev_index).map_err(|e| Stop.Fail(e))?;
+            }
+            if let Some(k) = chosen {
+                set_key(mut values, k.clone(), value);
+                self.add_keymap(with_key(keys, Key.Name(k)), loc);
+            }
+            need_another = false;
+            let c = char_at(it, index)?;
+            if c != ',' and c != '}' {
+                return Err(self.stop(f"expected ‘,’ or ‘}}’, found ‘{c}’", it, index));
+            }
+            if c == ',' {
+                index += 1;
+                need_another = true;
+            }
+        }
+        if need_another {
+            return Err(self.stop("expected value", it, index));
+        }
+        Ok((Val.Dict(values), self.location(it, start), adjust_index(it, index + 1)))
+    }
+
+    fn parse_inline_dict_item(mut ref self, it: Inline, keys: Slice[Key], start: i64) -> Result[(String, Val, Location, i64), Stop] {
+        let forbidden = "{}[],:";
+        let mut index = start;
+        let key_index = adjust_index(it, index);
+        let mut key = String.new();
+        if not is_one_of(forbidden, char_at(it, index)?) {
+            let (k, _, next) = self.parse_inline_str(it, index, forbidden)?;
+            if let Val.Str(s) = k {
+                key = s;
+            }
+            index = next;
+        }
+        let c = char_at(it, index)?;
+        if c != ':' {
+            return Err(self.stop(f"expected ‘:’, found ‘{c}’", it, index));
+        }
+        index = adjust_index(it, index + 1);
+        let c = char_at(it, index)?;
+        // The value's own keys are the dictionary's, not the item's.
+        let mut (value, loc) = if c == ',' or c == '}' {
+            (Val.Str(String.new()), self.location(it, index))
+        } else {
+            let (v, l, next) = self.parse_inline_value(it, keys, index, forbidden)?;
+            index = next;
+            (v, l)
+        };
+        loc.key_col = Some(key_index + it.starting_col);
+        Ok((key, value, loc, index))
+    }
+
+    fn parse_inline_list(mut ref self, it: Inline, keys: Slice[Key], start: i64) -> Result[(Val, Location, i64), Stop] {
+        let forbidden = "{}[],";
+        let mut index = start + 1;
+        if char_at(it, index)? == ']' {
+            return Ok((Val.List(Vec.new()), self.location(it, start), adjust_index(it, index + 1)));
+        }
+        let mut key = 0;
+        let mut values: Vec[Val] = Vec.new();
+        let mut value = Val.Str(String.new());
+        let mut loc = self.location(it, index);
+        loop {
+            let new_keys = with_key(keys, Key.Index(key));
+            let c = char_at(it, index)?;
+            if c == ',' or c == ']' {
+                values.push(value);
+                self.add_keymap(new_keys, loc);
+                key += 1;
+                if c == ']' {
+                    return Ok((Val.List(values), self.location(it, start), adjust_index(it, index + 1)));
+                }
+                index += 1;
+                loc = self.location(it, index);
+                index = adjust_index(it, index);
+                value = Val.Str(String.new());
+            } else if truthy(value) {
+                return Err(self.stop(f"expected ‘,’ or ‘]’, found ‘{c}’", it, index));
+            } else if c == '}' {
+                return Err(self.stop("expected value", it, index));
+            } else {
+                let (v, l, next) = self.parse_inline_value(it, new_keys, index, forbidden)?;
+                value = v;
+                loc = l;
+                index = next;
+            }
+        }
+    }
+
+    fn parse_inline_str(ref self, it: Inline, start: i64, forbidden: Str) -> Result[(Val, Location, i64), Stop] {
+        let mut index = start;
+        while not is_one_of(forbidden, char_at(it, index)?) {
+            index = adjust_index(it, index + 1);
+        }
+        let value = py_strip(sub(it.chars, start, index));
+        Ok((Val.Str(value), self.location(it, start), index))
+    }
+}
+
+fn is_one_of(set: Str, c: char) -> bool {
+    set.chars().any(|f| f == c)
+}
+
+/// `self.text[index]`, where running off the end is Python's `IndexError`.
+fn char_at(it: Inline, index: i64) -> Result[char, Stop] {
+    if index < it.chars.len() {
+        Ok(it.chars[index])
+    } else {
+        Err(Stop.Eol)
+    }
+}
+
+/// Moves an index past spaces and tabs.
+fn adjust_index(it: Inline, start: i64) -> i64 {
+    let mut index = start;
+    while index < it.chars.len() and (it.chars[index] == ' ' or it.chars[index] == '\t') {
+        index += 1;
+    }
+    index
+}
+
+// ------------------------------------------------------------ loads
+
+/// How a document is loaded: `loads()`'s keyword arguments.
+struct Options {
+    top: String,
+    on_dup: OnDup,
+    normalize: bool,
+    source: Option[String],
+    inlines: bool,
+}
+
+/// `loads(content, top, ...)`, with the keymap it fills.
+fn loads(content: Str, opts: Options) -> Result[(Val, Vec[(Vec[Key], Location)]), NtError] {
+    let lines = read_lines(content, opts.inlines);
+    let mut loader = Loader {
+        lines: lines,
+        next: None,
+        source: opts.source.clone(),
+        on_dup: opts.on_dup,
+        dedup: Vec.new(),
+        normalize: opts.normalize,
+        keymap: Vec.new(),
+    };
+    loader.next = loader.meaningful_from(0);
+    // The top of the data is located at the first value line, or at the
+    // last blank or comment line when there is none.
+    let top_line = match loader.next {
+        Some(i) => Some(i),
+        None => if loader.lines.is_empty() { None } else { Some(loader.lines.len() - 1) },
+    };
+    loader.keymap.push((Vec.new(), Location { line: top_line, col: 0, key_line: None, key_col: None }));
+    let next_is = loader.kind_of_next();
+    let top = opts.top.as_str();
+    let value = match top {
+        "any" => {
+            if next_is.is_none() {
+                Val.Null
+            } else {
+                loader.read_value(0, Vec.new())?.0
+            }
+        }
+        "dict" => match next_is {
+            Some(Kind.DictItem) | Some(Kind.KeyItem) | Some(Kind.InlineDict) => loader.read_value(0, Vec.new())?.0,
+            None => Val.Dict(Vec.new()),
+            _ => {
+                let line = loader.get_next()?;
+                return Err(loader.fail("content must start with key or brace ({).", line, None));
+            }
+        },
+        "list" => match next_is {
+            Some(Kind.ListItem) | Some(Kind.InlineList) => loader.read_value(0, Vec.new())?.0,
+            None => Val.List(Vec.new()),
+            _ => {
+                let line = loader.get_next()?;
+                return Err(loader.fail("content must start with dash (-) or bracket ([).", line, None));
+            }
+        },
+        _ => match next_is {
+            Some(Kind.StringItem) => loader.read_value(0, Vec.new())?.0,
+            None => Val.Str(String.new()),
+            _ => {
+                let line = loader.get_next()?;
+                return Err(loader.fail("content must start with greater-than sign (>).", line, None));
+            }
+        },
+    };
+    if loader.next.is_some() {
+        let line = loader.get_next()?;
+        return Err(loader.fail("extra content", line, None));
+    }
+    Ok((value, loader.keymap))
+}
+
+// ------------------------------------------------------------ the keymap
+
+fn find_location(keymap: Slice[(Vec[Key], Location)], keys: Slice[Key]) -> Option[Location] {
+    for (k, loc) in keymap.iter() {
+        if k.as_slice() == keys {
+            return Some(loc.clone());
+        }
+    }
+    None
+}
+
+/// `Location.as_tuple(kind)`'s line and column.
+fn token_at(loc: Location, kind: Str) -> (Option[i64], i64) {
+    if kind == "key" {
+        (loc.key_line.or(loc.line), loc.key_col ?? loc.col)
+    } else {
+        (loc.line, loc.col)
+    }
+}
+
+/// `Location.get_line_numbers(kind, sep="-")`: the token's first line and,
+/// for a multi-line key or string, its last.
+fn line_numbers(lines: Slice[Line], loc: Location, kind: Str) -> String {
+    let (start, _) = token_at(loc, kind);
+    let Some(first) = start else {
+        return String.new();
+    };
+    let mut last = first;
+    while let Some(n) = lines[last].next_line {
+        last = n;
+    }
+    if first == last {
+        f"{lines[first].lineno + 1}"
+    } else {
+        f"{lines[first].lineno + 1}-{lines[last].lineno + 1}"
+    }
+}
+
+/// `Location.as_line(kind)`: the line, and a pointer to the token's column
+/// (no further than the end of the line).
+fn as_line(lines: Slice[Line], loc: Location, kind: Str) -> String {
+    let (start, col) = token_at(loc, kind);
+    let Some(i) = start else {
+        return String.new();
+    };
+    let l = ref lines[i];
+    let width = char_len(l.text);
+    let col = if width < col { width } else { col };
+    f"{render_line(l)}\n      {" ".repeat(col)}▲"
+}
+
+// ------------------------------------------------------------ JSON out
+
+fn json_string(s: Str) -> String {
+    let mut out = "\"";
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            _ => {
+                if (c as i64) < 32 {
+                    out.push_str(f"\\u{hex_digits(c as i64, 4)}");
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `json.dumps(v, ensure_ascii=False)`, or with `indent=2` when `level` is
+/// given.
+fn dumps(v: Val, level: Option[i64]) -> String {
+    match v {
+        Val.Null => "null",
+        Val.Str(s) => json_string(s),
+        Val.List(xs) => {
+            if xs.is_empty() {
+                return "[]";
+            }
+            let items: Vec[String] = xs.iter().map(|x| dumps(x, level.map(|n| n + 1))).collect();
+            wrap("[", items, "]", level)
+        }
+        Val.Dict(fs) => {
+            if fs.is_empty() {
+                return "{}";
+            }
+            let items: Vec[String] = fs
+                .iter()
+                .map(|(k, x)| f"{json_string(k)}: {dumps(x, level.map(|n| n + 1))}")
+                .collect();
+            wrap("{", items, "}", level)
+        }
+    }
+}
+
+fn wrap(open: Str, items: Slice[String], close: Str, level: Option[i64]) -> String {
+    match level {
+        None => f"{open}{items.join(", ")}{close}",
+        Some(n) => {
+            let inner = " ".repeat(2 * (n + 1));
+            let joined = items.join(f",\n{inner}");
+            f"{open}\n{inner}{joined}\n{" ".repeat(2 * n)}{close}"
+        }
+    }
+}
+
+fn json_keys(keys: Slice[Key]) -> String {
+    let parts: Vec[String] = keys
+        .iter()
+        .map(|k| match k {
+            Key.Name(s) => json_string(s),
+            Key.Index(i) => f"{i}",
+        })
+        .collect();
+    f"[{parts.join(", ")}]"
+}
+
+// ------------------------------------------------------------ the report
+
+fn show_error(e: NtError, lead: Str) {
+    for line in e.text.split("\n") {
+        if line.is_empty() {
+            println(py_rstrip(lead));
+        } else {
+            println(f"{lead}{line}");
+        }
+    }
+    let colno = match e.colno {
+        Some(c) => f"{c}",
+        None => "None",
+    };
+    println(f"{lead}lineno {e.lineno}, colno {colno}");
+}
+
+fn json_text(j: Json) -> String {
+    match j {
+        Json.String(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+/// The options object of a load or a case, and how the report shows it.
+fn options_of(top: Str, j: Json) -> (Options, String) {
+    let mut opts = Options { top: top.to_string(), on_dup: OnDup.Error, normalize: false, source: None, inlines: true };
+    let mut shown: Vec[String] = Vec.new();
+    if let Json.Object(fields) = j {
+        for (k, v) in fields.iter() {
+            let text = match v {
+                Json.Bool(true) => "True",
+                Json.Bool(false) => "False",
+                _ => json_text(v),
+            };
+            match k.as_str() {
+                "on_dup" => {
+                    opts.on_dup = match text.as_str() {
+                        "ignore" => OnDup.Ignore,
+                        "replace" => OnDup.Replace,
+                        "dedup" => OnDup.Dedup,
+                        _ => OnDup.Error,
+                    };
+                }
+                "normalize" => opts.normalize = text == "True",
+                "source" => opts.source = Some(text.clone()),
+                "dialect" => opts.inlines = not text.contains("i"),
+                _ => {}
+            }
+            shown.push(f"{k}={text}");
+        }
+    }
+    (opts, shown.join(", "))
+}
+
+fn keys_of(j: Json) -> Vec[Key] {
+    let mut keys: Vec[Key] = Vec.new();
+    if let Json.Array(xs) = j {
+        for x in xs.iter() {
+            match x {
+                Json.Int(i) => keys.push(Key.Index(i)),
+                Json.String(s) => keys.push(Key.Name(s.clone())),
+                _ => {}
+            }
+        }
+    }
+    keys
+}
+
+fn read_jsonl(path: Str) -> Result[Vec[Vec[Json]], String] {
+    let text = fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")?;
+    let mut rows: Vec[Vec[Json]] = Vec.new();
+    for line in text.split("\n") {
+        if line.is_empty() {
+            continue;
+        }
+        let j = Json.parse(line).map_err(|e| f"{path}: bad JSON: {e.message}")?;
+        let Json.Array(parts) = j else {
+            return Err(f"{path}: a line is not a list");
+        };
+        rows.push(parts);
+    }
+    Ok(rows)
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/files").map_err(|e| f"cannot create data/files: {e}")?;
+    write_data()?;
+    println("== files");
+    for row in read_jsonl("data/loads.jsonl")?.iter() {
+        let name = json_text(row[0]);
+        let top = json_text(row[1]);
+        let mut (opts, shown) = options_of(top, row[2]);
+        opts.source = Some(name.clone());
+        let tail = if shown.is_empty() { String.new() } else { f" ({shown})" };
+        println(f"load {name} as {top}{tail}");
+        let path = f"data/files/{name}";
+        let text = fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")?;
+        let (value, keymap) = match loads(text, opts) {
+            Ok(r) => r,
+            Err(e) => {
+                show_error(e, "  error: ");
+                continue;
+            }
+        };
+        let lines = read_lines(text, opts.inlines);
+        for line in dumps(value, Some(0)).split("\n") {
+            println(f"  {line}");
+        }
+        let Json.Array(queries) = ref row[3] else {
+            continue;
+        };
+        for q in queries.iter() {
+            let Json.Array(parts) = q else {
+                continue;
+            };
+            let keys = keys_of(parts[0]);
+            let kind = json_text(parts[1]);
+            println(f"  where {json_keys(keys)} {kind}:");
+            let Some(loc) = find_location(keymap, keys) else {
+                println("    not found");
+                continue;
+            };
+            let (line, col) = token_at(loc, kind);
+            let lineno = match line {
+                Some(i) => lines[i].lineno,
+                None => 0,
+            };
+            println(f"    at ({lineno}, {col}), lines {line_numbers(lines, loc, kind)}");
+            for text in as_line(lines, loc, kind).split("\n") {
+                println(f"    {text}");
+            }
+        }
+    }
+    println("== cases");
+    for row in read_jsonl("data/cases.jsonl")?.iter() {
+        let name = json_text(row[0]);
+        let (opts, _) = options_of(json_text(row[1]), row[2]);
+        match loads(json_text(row[3]), opts) {
+            Ok((value, _)) => println(f"{name}: {dumps(value, None)}"),
+            Err(e) => {
+                println(f"{name}: error");
+                show_error(e, "  ");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/cases.jsonl", file_0())?;
+    put_bytes("data/files/broken.nt", file_1())?;
+    put_bytes("data/files/contacts.nt", file_2())?;
+    put_bytes("data/files/deploy.nt", file_3())?;
+    put_bytes("data/files/inventory.nt", file_4())?;
+    put_bytes("data/files/matrix.nt", file_5())?;
+    put_bytes("data/files/notes.nt", file_6())?;
+    put_bytes("data/files/settings.nt", file_7())?;
+    put_bytes("data/files/settings_dup.nt", file_8())?;
+    put_bytes("data/loads.jsonl", file_9())?;
+    Ok(())
+}
+
+// data/cases.jsonl
+fn file_0() -> String {
+    """
+5b22666c61742064696374222c202264696374222c207b7d2c2022613a20315c6e623a20325c6e225d0a5b22636f6c6f
+6e20696e2076616c7565222c202264696374222c207b7d2c202275726c3a20687474703a2f2f73686f702e6578616d70
+6c653a383038302f615c6e225d0a5b227370616365206265666f726520636f6c6f6e222c202264696374222c207b7d2c
+20226b65792020203a2020765c6e225d0a5b22746162206265666f726520636f6c6f6e222c202264696374222c207b7d
+2c2022615c743a20625c6e225d0a5b226e6f20737061636520616674657220636f6c6f6e222c202264696374222c207b
+7d2c2022613a625c6e225d0a5b22636f6c6f6e20696e73696465206b6579222c202264696374222c207b7d2c2022613a
+623a20635c6e225d0a5b2274616220616674657220636f6c6f6e222c202264696374222c207b7d2c2022613a5c74625c
+6e225d0a5b22656d7074792076616c7565222c202264696374222c207b7d2c2022613a5c6e623a20785c6e225d0a5b22
+76616c7565206f66206f6e65207370616365222c202264696374222c207b7d2c2022613a205c6e623a20205c6e225d0a
+5b22747261696c696e6720737061636573206b657074222c202264696374222c207b7d2c2022613a207820205c6e225d
+0a5b226861736820696e2076616c7565222c202264696374222c207b7d2c2022613a2023206e6f74206120636f6d6d65
+6e745c6e225d0a5b2264617368206b6579222c202264696374222c207b7d2c20222d613a20625c6e2d3e3a20635c6e3e
+3a20645c6e225d0a5b226c697374206974656d73222c2022616e79222c207b7d2c20222d5c6e2d20785c6e2d2020795c
+6e2d20613a20625c6e225d0a5b226461736820776974686f7574207370616365222c2022616e79222c207b7d2c20222d
+785c6e225d0a5b226e6573746564206c69737473222c2022616e79222c207b7d2c20222d5c6e20202d20615c6e20202d
+20625c6e2d20635c6e225d0a5b22737472696e67206c696e6573222c2022616e79222c207b7d2c20223e20615c6e3e5c
+6e3e2020625c6e3e205c6e225d0a5b22737472696e6720776974686f7574207370616365222c2022616e79222c207b7d
+2c20223e615c6e225d0a5b22636f6d6d656e747320616e6420626c616e6b73222c2022616e79222c207b7d2c20222320
+635c6e5c6e2020202320696e64656e7465645c6e225d0a5b22636f6d6d656e7420696e736964652064696374222c2022
+64696374222c207b7d2c2022613a5c6e2020202023206e6f74655c6e202020202d20785c6e5c6e202020202d20795c6e
+225d0a5b2263726c66222c202264696374222c207b7d2c2022613a20315c725c6e623a20325c725c6e225d0a5b226c6f
+6e65206372222c202264696374222c207b7d2c2022613a20315c72623a5c7220202d20785c72225d0a5b226e6f206669
+6e616c206e65776c696e65222c202264696374222c207b7d2c2022613a20315c6e623a2032225d0a5b2262797465206f
+72646572206d61726b222c202264696374222c207b7d2c20225c7566656666613a20625c6e225d0a5b22756e69636f64
+65206b6579222c202264696374222c207b7d2c20226361665c75303065393a2063725c75303065386d655c6e5c753635
+65355c75363732633a205c75386139655c6e225d0a5b226c696e6520736570617261746f7220696e2076616c7565222c
+202264696374222c207b7d2c2022613a20785c7532303238795c6e225d0a5b226d756c74696c696e65206b6579222c20
+2264696374222c207b7d2c20223a20615c6e3a20625c6e202020203e20765c6e225d0a5b226d756c74696c696e65206b
+657920776974682064696374222c202264696374222c207b7d2c20223a2066697273745c6e3a5c6e3a2074686972645c
+6e20202020783a20315c6e6e6578743a20325c6e225d0a5b226d756c74696c696e65206b6579206e656564732076616c
+7565222c202264696374222c207b7d2c20223a206b5c6e623a20635c6e225d0a5b226d756c74696c696e65206b657920
+617420656e64222c202264696374222c207b7d2c2022613a20315c6e3a206b5c6e225d0a5b226d756c74696c696e6520
+6b6579206465657065722070617274222c202264696374222c207b7d2c20223a206b5c6e20203a206a5c6e225d0a5b22
+746f70206c6576656c20696e64656e746564222c202264696374222c207b7d2c20222020613a20625c6e225d0a5b2269
+6e64656e742061667465722076616c7565222c202264696374222c207b7d2c2022613a20785c6e2020623a20795c6e22
+5d0a5b22696e64656e7420616674657220626c616e6b2076616c7565222c202264696374222c207b7d2c2022613a2020
+205c6e202020202d20785c6e225d0a5b22696e64656e74206166746572206c6973742076616c7565222c2022616e7922
+2c207b7d2c20222d20615c6e20202d20625c6e225d0a5b227061727469616c20646564656e74222c202264696374222c
+207b7d2c2022613a5c6e20202020623a20315c6e2020633a20325c6e225d0a5b2264656570657220737472696e67206c
+696e65222c2022616e79222c207b7d2c20223e20615c6e20203e20625c6e225d0a5b2274616220696e64656e74222c20
+2264696374222c207b7d2c2022613a5c6e5c74623a20635c6e225d0a5b226e6f2d627265616b20737061636520696e64
+656e74222c202264696374222c207b7d2c2022613a5c6e5c753030613020623a20635c6e225d0a5b226964656f677261
+7068696320737061636520696e64656e74222c202264696374222c207b7d2c20225c7533303030613a20625c6e225d0a
+5b22766572746963616c2074616220696e64656e74222c202264696374222c207b7d2c2022613a5c6e20205c75303030
+62623a20315c6e225d0a5b22756e7265636f676e697a6564206c696e65222c202264696374222c207b7d2c2022613a20
+625c6e6a75737420776f7264735c6e225d0a5b22756e7265636f676e697a656420616674657220636f6d6d656e74222c
+202264696374222c207b7d2c2022613a20625c6e2320635c6e706c61696e5c6e225d0a5b226c697374207468656e2064
+696374222c2022616e79222c207b7d2c20222d20615c6e623a20635c6e225d0a5b2264696374207468656e206c697374
+222c2022616e79222c207b7d2c2022613a20625c6e2d20635c6e225d0a5b22737472696e67207468656e206c69737422
+2c2022616e79222c207b7d2c20223e20615c6e2d20625c6e225d0a5b22696e6c696e65207468656e2064696374222c20
+22616e79222c207b7d2c20225b615d5c6e623a20635c6e225d0a5b22746f70206469637420676976656e206c69737422
+2c202264696374222c207b7d2c20222d20615c6e225d0a5b22746f70206c69737420676976656e2064696374222c2022
+6c697374222c207b7d2c2022613a20625c6e225d0a5b22746f702073747220676976656e2064696374222c2022737472
+222c207b7d2c2022613a20625c6e225d0a5b22746f70206469637420676976656e20737472696e67222c202264696374
+222c207b7d2c20223e20615c6e225d0a5b22746f7020616e7920776f7264222c2022616e79222c207b7d2c2022785c6e
+225d0a5b22656d7074792064696374222c202264696374222c207b7d2c2022225d0a5b22656d707479206c697374222c
+20226c697374222c207b7d2c20225c6e5c6e225d0a5b22656d70747920737472222c2022737472222c207b7d2c202223
+206f6e6c79206120636f6d6d656e745c6e225d0a5b22656d70747920616e79222c2022616e79222c207b7d2c2022225d
+0a5b22746f7020737472222c2022737472222c207b7d2c20223e206f6e655c6e3e2074776f5c6e225d0a5b22746f7020
+6c69737420696e6c696e65222c20226c697374222c207b7d2c20225b612c20625d5c6e225d0a5b22746f702064696374
+20696e6c696e65222c202264696374222c207b7d2c20227b613a20627d5c6e225d0a5b22746f702073747220696e6c69
+6e65222c2022737472222c207b7d2c20225b615d5c6e225d0a5b22696e6c696e6520656d7074696573222c2022616e79
+222c207b7d2c20222d5c6e20205b5d5c6e2d5c6e20207b7d5c6e2d5c6e20205b205d5c6e225d0a5b22696e6c696e6520
+656d70747920646963742077697468207370616365222c2022616e79222c207b7d2c20227b207d5c6e225d0a5b22696e
+6c696e65206c697374222c2022616e79222c207b7d2c20225b612c62202c63205d5c6e225d0a5b22696e6c696e65206c
+69737420686f6c6573222c2022616e79222c207b7d2c20222d5c6e20205b612c202c20625d5c6e2d5c6e20205b612c20
+622c5d5c6e2d5c6e20205b2c5d5c6e225d0a5b22696e6c696e65206c6973742073706163657320696e206974656d222c
+2022616e79222c207b7d2c20225b6120622c20633a645d5c6e225d0a5b22696e6c696e652076616c7565206166746572
+20656d707479222c2022616e79222c207b7d2c20222d5c6e20205b5b5d20785d5c6e2d5c6e20205b7b7d207b6b3a2076
+7d5d5c6e225d0a5b22696e6c696e6520657874726120636861726163746572222c2022616e79222c207b7d2c20225b61
+5d20625c6e225d0a5b22696e6c696e652065787472612063686172616374657273222c2022616e79222c207b7d2c2022
+7b613a20317d20203b3b5c6e225d0a5b22696e6c696e6520756e636c6f736564222c2022616e79222c207b7d2c20225b
+612c205b622c20635d5c6e225d0a5b22696e6c696e65206f70656e206272616365222c2022616e79222c207b7d2c2022
+7b5c6e225d0a5b22696e6c696e65206e6573746564222c2022616e79222c207b7d2c20227b613a20312c20623a205b78
+2c20795d2c20633a207b643a20657d7d5c6e225d0a5b22696e6c696e65206469637420747261696c696e6720636f6d6d
+61222c2022616e79222c207b7d2c20227b613a20312c7d5c6e225d0a5b22696e6c696e65206469637420747261696c69
+6e6720636f6d6d61207370616365222c2022616e79222c207b7d2c20227b613a20312c207d5c6e225d0a5b22696e6c69
+6e652064696374206e6f20636f6c6f6e222c2022616e79222c207b7d2c20227b6120317d5c6e225d0a5b22696e6c696e
+6520646963742074776f20636f6c6f6e73222c2022616e79222c207b7d2c20227b613a20623a20637d5c6e225d0a5b22
+696e6c696e65206469637420656d707479206b6579222c2022616e79222c207b7d2c20227b3a20762c206b3a7d5c6e22
+5d0a5b22696e6c696e652064696374207469676874222c2022616e79222c207b7d2c20227b613a627d5c6e225d0a5b22
+696e6c696e652064696374206c697374207468656e206a756e6b222c2022616e79222c207b7d2c20227b613a205b625d
+20637d5c6e225d0a5b22696e6c696e65206c697374206272616365222c2022616e79222c207b7d2c20225b617d5c6e22
+5d0a5b22696e6c696e65206c697374206c6f6e65206272616365222c2022616e79222c207b7d2c20225b7d5c6e225d0a
+5b22696e6c696e6520746162222c2022616e79222c207b7d2c20225b612c5c74625d5c6e225d0a5b22696e6c696e6520
+746162206572726f72222c202264696374222c207b7d2c20226b3a5c6e20205b612c5c74625d20785c6e225d0a5b2269
+6e6c696e6520776964652063686172616374657273222c2022616e79222c207b7d2c20225b5c75363565355c75363732
+632c205c75386139655d20785c6e225d0a5b22696e6c696e6520696e20646963742076616c7565222c20226469637422
+2c207b7d2c20226b3a5c6e202020205b782c20795d5c6e6d3a206e5c6e225d0a5b22696e6c696e65207468656e206465
+65706572222c202264696374222c207b7d2c20226b3a5c6e20205b785d5c6e202020202d20795c6e225d0a5b22696e6c
+696e652d6c6f6f6b696e672076616c7565222c202264696374222c207b7d2c20226b3a205b612c20625d5c6e6d3a207b
+633a20647d5c6e225d0a5b22696e6c696e65206469616c656374206f6666222c2022616e79222c207b226469616c6563
+74223a202269227d2c20227b613a20627d5c6e225d0a5b22696e6c696e65206469616c656374206f6666206c69737422
+2c2022616e79222c207b226469616c656374223a202269227d2c20225b612c20625d5c6e225d0a5b2264757020657272
+6f72222c202264696374222c207b7d2c20226e616d65313a2076616c7565315c6e6e616d65313a2076616c7565325c6e
+6e616d65333a2076616c7565335c6e225d0a5b22647570206572726f72207769746820736f75726365222c2022646963
+74222c207b22736f75726365223a202273686f702e6e74227d2c2022613a20315c6e613a20325c6e225d0a5b22647570
+2069676e6f7265222c202264696374222c207b226f6e5f647570223a202269676e6f7265227d2c20226b65793a207631
+5c6e6b65793a2076325c6e6e616d653a2076345c6e6e616d653a2076355c6e225d0a5b22647570207265706c61636522
+2c202264696374222c207b226f6e5f647570223a20227265706c616365227d2c20226b65793a2076315c6e6f74686572
+3a20785c6e6b65793a2076325c6e225d0a5b22647570206465647570222c202264696374222c207b226f6e5f64757022
+3a20226465647570227d2c20226b65793a2076315c6e6b65793a2076325c6e6b65793a2076335c6e6e616d653a207634
+5c6e6e616d653a2076355c6e225d0a5b2264757020646564757020636f6c6c69646573222c202264696374222c207b22
+6f6e5f647570223a20226465647570227d2c20226b3a20315c6e6b205c75323031342023323a20785c6e6b3a20325c6e
+225d0a5b226475702069676e6f726520696e64656e7465642076616c7565222c202264696374222c207b226f6e5f6475
+70223a202269676e6f7265227d2c2022613a20315c6e613a5c6e20202d20785c6e225d0a5b22647570206e6573746564
+222c202264696374222c207b7d2c2022783a5c6e2020613a20315c6e2020613a20325c6e225d0a5b22647570206d756c
+74696c696e65206b6579222c202264696374222c207b7d2c20223a206b5c6e202020203e20315c6e6b3a20325c6e225d
+0a5b226475702074776f2d6c696e65206b6579222c202264696374222c207b7d2c20223a20615c6e3a20625c6e20203e
+20765c6e3a20615c6e3a20625c6e20203e20775c6e225d0a5b2264757020696e6c696e65222c2022616e79222c207b7d
+2c20227b613a20312c20613a20327d5c6e225d0a5b2264757020696e6c696e6520696e64656e746564222c2022646963
+74222c207b7d2c20226b3a5c6e202020207b613a20312c2020613a20327d5c6e225d0a5b2264757020696e6c696e6520
+7265706c616365222c2022616e79222c207b226f6e5f647570223a20227265706c616365227d2c20227b613a20312c20
+623a20322c20613a20337d5c6e225d0a5b2264757020696e6c696e652069676e6f7265222c2022616e79222c207b226f
+6e5f647570223a202269676e6f7265227d2c20227b613a20312c20623a20322c20613a20337d5c6e225d0a5b22647570
+20696e6c696e65206465647570222c2022616e79222c207b226f6e5f647570223a20226465647570227d2c20227b613a
+20312c20613a20327d5c6e225d0a5b22647570206e6f726d616c697a6564222c202264696374222c207b226e6f726d61
+6c697a65223a20747275657d2c20224c6f67204c6576656c3a2064656275675c6e6c6f67206c6576656c3a207761726e
+5c6e225d0a5b22647570206e6f726d616c697a656420696e6c696e65222c2022616e79222c207b226e6f726d616c697a
+65223a20747275657d2c20227b4c6f67204c6576656c3a2064656275672c204c4f47204c4556454c3a207761726e7d5c
+6e225d0a5b2264757020756e69636f646520696e6c696e65222c2022616e79222c207b7d2c20227b6361665c75303065
+393a20312c206361665c75303065393a20327d5c6e225d0a
+"""
+}
+
+// data/files/broken.nt
+fn file_1() -> String {
+    """
+736572766963653a2073686f702d776f726b65720a7175657565733a0a202020202d206f72646572730a092d20726566
+756e64730a
+"""
+}
+
+// data/files/contacts.nt
+fn file_2() -> String {
+    """
+232057686f20746f2063616c6c2061626f7574207468652073686f702e0a5a6fc3ab204dc3bc6c6c65723a0a20202020
+726f6c653a206f6e2d63616c6c206c6561640a2020202070686f6e653a0a20202020202020206d6f62696c653a202b33
+312036203030303020303030310a20202020202020206465736b3a206578742e203231340a2020202061646472657373
+3a0a20202020202020203e204b65697a65727367726163687420310a20202020202020203e203130313520434a20416d
+7374657264616d0a20202020202020203e204e65746865726c616e64730ae69d8ee99bb73a0a20202020726f6c653a20
+7061796d656e74730a2020202070686f6e653a0a20202020202020206d6f62696c653a202b3836203130302030303030
+20303030320a202020206c616e6775616765733a205b7a682c20656e5d0a20202020686f7572733a0a20202020202020
+205b30393a30302d31373a3030204353542c20e591a8e4b880e588b0e591a8e4ba945d0a53616d204fe280994e65696c
+3a0a20202020726f6c653a0a2020202070686f6e653a0a20202020202020206465736b3a206578742e203130310a2020
+20206e6f7465733a0a20202020202020203e205072656665727320656d61696c2e0a20202020202020203e2020202841
+6e73776572732077697468696e2061206461792e290a
+"""
+}
+
+// data/files/deploy.nt
+fn file_3() -> String {
+    """
+23204465706c6f792073657474696e677320666f72207468652073686f7027732041504920736572766963652e0a7365
+72766963653a2073686f702d6170690a76657273696f6e3a20322e31342e300a6f776e65723a20706c6174666f726d20
+7465616d0a6e6f74653a20726574726965733a20332c206261636b6f66663a206578706f6e656e7469616c0a686f7374
+733a0a202020202d206170692d312e696e7465726e616c2e6578616d706c650a202020202d206170692d322e696e7465
+726e616c2e6578616d706c650a202020202d0a20202020202020206e616d653a206170692d63616e6172792e696e7465
+726e616c2e6578616d706c650a20202020202020207765696768743a20350a706f7274733a0a202020205b38302c2034
+34332c20383434335d0a6c696d6974733a0a202020207b6370753a203530306d2c206d656d6f72793a203147692c2062
+757273743a207d0a656e763a0a202020204c4f475f4c4556454c3a20696e666f0a2020202044415441424153455f5552
+4c3a20706f7374677265733a2f2f73686f703a6e6f742d612d7265616c2d70617373776f72644064622e696e7465726e
+616c2e6578616d706c652f73686f700a20202020464541545552455f464c4147533a207b6e65775f636865636b6f7574
+3a206f6e2c20626574615f62616e6e65723a206f66667d0a6d6f74643a0a202020203e2057656c636f6d6520746f2073
+686f702d6170692e0a202020203e0a202020203e204d61696e74656e616e63652077696e646f773a2053756e64617973
+2030323a3030e2809330343a3030205554432e0a0a6865616c746820636865636b733a0a202020203a20474554202f68
+65616c74687a0a202020203a20286c6f61642062616c616e636572290a2020202020202020696e74657276616c3a2031
+30730a202020202020202074696d656f75743a2032730a20202020474554202f72656164793a207b696e74657276616c
+3a203330737d0a
+"""
+}
+
+// data/files/inventory.nt
+fn file_4() -> String {
+    """
+7765623a0a20202020686f73743a207765622d312e696e7465726e616c2e6578616d706c650a20202020686f73743a20
+7765622d322e696e7465726e616c2e6578616d706c650a20202020726f6c653a2066726f6e74656e640a64623a0a2020
+2020686f73743a2064622d312e696e7465726e616c2e6578616d706c650a20202020686f73743a2064622d322e696e74
+65726e616c2e6578616d706c650a20202020686f73743a2064622d332e696e7465726e616c2e6578616d706c650a
+"""
+}
+
+// data/files/matrix.nt
+fn file_5() -> String {
+    """
+23204349206d61747269783a206f6e6520656e74727920706572206a6f622e0a2d0a202020206e616d653a20756e6974
+0a20202020707974686f6e3a0a20202020202020205b332e31312c20332e31322c20332e31335d0a202020206f733a20
+7562756e74752d6c61746573740a0a2d0a202020206e616d653a20696e746567726174696f6e0a202020207365727669
+6365733a0a20202020202020202d20706f7374677265733a31360a20202020202020202d2072656469733a370a202020
+20656e763a0a20202020202020207b44423a20706f7374677265732c2043414348453a2072656469737d0a2020202061
+6c6c6f77206661696c7572653a0a2d0a202020206e616d653a20646f63730a2020202072756e3a0a2020202020202020
+3e206d616b652068746d6c0a20202020202020203e206d616b65206c696e6b636865636b0a20202020746167733a205b
+5d0a2d206c696e740a
+"""
+}
+
+// data/files/notes.nt
+fn file_6() -> String {
+    """
+3e2052656c6561736520322e31342e300a3e0a3e202d20436865636b6f7574206b6565707320746865206261736b6574
+207768656e207468652073657373696f6e20657870697265732e0a3e202020496e64656e746564206c696e6573206b65
+6570207468656972207370616365732e0a3e202d205468652063616e6172792074616b6573203525206f662074726166
+6669632e0a
+"""
+}
+
+// data/files/settings.nt
+fn file_7() -> String {
+    """
+4c6f67204c6576656c3a2064656275670a4d617820436f6e6e656374696f6e733a2032300a526571756573742054696d
+656f75743a203135730a43616368653a0a2020202054696d6520546f204c6976653a203330300a202020204261636b65
+6e643a2072656469730a
+"""
+}
+
+// data/files/settings_dup.nt
+fn file_8() -> String {
+    """
+4c6f67204c6576656c3a2064656275670a4d617820436f6e6e656374696f6e733a2032300a6c6f67206c6576656c3a20
+7761726e0a
+"""
+}
+
+// data/loads.jsonl
+fn file_9() -> String {
+    """
+5b226465706c6f792e6e74222c202264696374222c207b7d2c205b5b5b2273657276696365225d2c202276616c756522
+5d2c205b5b226e6f7465225d2c202276616c7565225d2c205b5b22686f737473222c20322c2022776569676874225d2c
+20226b6579225d2c205b5b22686f737473222c20325d2c20226b6579225d2c205b5b22686f737473222c20325d2c2022
+76616c7565225d2c205b5b22706f727473222c20315d2c202276616c7565225d2c205b5b22706f727473225d2c202276
+616c7565225d2c205b5b226c696d697473222c20226275727374225d2c202276616c7565225d2c205b5b226c696d6974
+73222c20226d656d6f7279225d2c20226b6579225d2c205b5b22656e76222c2022464541545552455f464c414753225d
+2c202276616c7565225d2c205b5b226d6f7464225d2c202276616c7565225d2c205b5b226d6f7464225d2c20226b6579
+225d2c205b5b226865616c746820636865636b73222c2022474554202f6865616c74687a5c6e286c6f61642062616c61
+6e63657229225d2c20226b6579225d2c205b5b226865616c746820636865636b73222c2022474554202f6865616c7468
+7a5c6e286c6f61642062616c616e63657229222c202274696d656f7574225d2c202276616c7565225d2c205b5b226865
+616c746820636865636b73222c2022474554202f7265616479222c2022696e74657276616c225d2c202276616c756522
+5d2c205b5b22686f737473222c20395d2c202276616c7565225d2c205b5b5d2c202276616c7565225d5d5d0a5b22636f
+6e74616374732e6e74222c202264696374222c207b7d2c205b5b5b225a6f5c7530306562204d5c75303066636c6c6572
+222c202261646472657373225d2c202276616c7565225d2c205b5b225c75363734655c7539366637222c2022686f7572
+73222c20315d2c202276616c7565225d2c205b5b225c75363734655c7539366637222c20226c616e677561676573225d
+2c202276616c7565225d2c205b5b2253616d204f5c75323031394e65696c222c2022726f6c65225d2c202276616c7565
+225d2c205b5b2253616d204f5c75323031394e65696c222c20226e6f746573225d2c202276616c7565225d5d5d0a5b22
+6d61747269782e6e74222c20226c697374222c207b7d2c205b5b5b302c2022707974686f6e222c20325d2c202276616c
+7565225d2c205b5b312c2022616c6c6f77206661696c757265225d2c202276616c7565225d2c205b5b312c2022656e76
+222c20224341434845225d2c20226b6579225d2c205b5b322c202272756e225d2c202276616c7565225d2c205b5b322c
+202274616773225d2c202276616c7565225d2c205b5b335d2c202276616c7565225d2c205b5b335d2c20226b6579225d
+5d5d0a5b226d61747269782e6e74222c202264696374222c207b7d2c205b5d5d0a5b226e6f7465732e6e74222c202273
+7472222c207b7d2c205b5b5b5d2c202276616c7565225d5d5d0a5b226e6f7465732e6e74222c2022616e79222c207b7d
+2c205b5d5d0a5b2273657474696e67732e6e74222c202264696374222c207b226e6f726d616c697a65223a2074727565
+7d2c205b5b5b226c6f675f6c6576656c225d2c202276616c7565225d2c205b5b226361636865222c202274696d655f74
+6f5f6c697665225d2c202276616c7565225d2c205b5b226361636865222c202274696d655f746f5f6c697665225d2c20
+226b6579225d5d5d0a5b2273657474696e67732e6e74222c202264696374222c207b7d2c205b5b5b224c6f67204c6576
+656c225d2c202276616c7565225d5d5d0a5b2273657474696e67735f6475702e6e74222c202264696374222c207b226e
+6f726d616c697a65223a20747275657d2c205b5d5d0a5b2273657474696e67735f6475702e6e74222c20226469637422
+2c207b226e6f726d616c697a65223a20747275652c20226f6e5f647570223a20227265706c616365227d2c205b5b5b22
+6c6f675f6c6576656c225d2c202276616c7565225d2c205b5b226c6f675f6c6576656c225d2c20226b6579225d5d5d0a
+5b22696e76656e746f72792e6e74222c202264696374222c207b7d2c205b5d5d0a5b22696e76656e746f72792e6e7422
+2c202264696374222c207b226f6e5f647570223a202269676e6f7265227d2c205b5d5d0a5b22696e76656e746f72792e
+6e74222c202264696374222c207b226f6e5f647570223a20227265706c616365227d2c205b5d5d0a5b22696e76656e74
+6f72792e6e74222c202264696374222c207b226f6e5f647570223a20226465647570227d2c205b5b5b226462222c2022
+686f7374205c7532303134202333225d2c202276616c7565225d2c205b5b226462222c2022686f7374205c7532303134
+202334225d2c20226b6579225d5d5d0a5b2262726f6b656e2e6e74222c202264696374222c207b7d2c205b5d5d0a5b22
+62726f6b656e2e6e74222c202264696374222c207b226469616c656374223a202269227d2c205b5d5d0a
+"""
+}

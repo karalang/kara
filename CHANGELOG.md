@@ -396,6 +396,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   the value again, or a `Result`-only method, says why it is not
   rewritten (B-2026-11-09-14).
 
+- A `let … else` that destructures an element (`let Json.Array(xs) =
+  row[3] else { … };`), or a plain `let` with a struct or variant pattern
+  over one, gets the fix `ref row[3]` when its bindings are only read, as
+  `let t = row[3];` already did; it was refused with no fix
+  (B-2026-11-09-27).
 - A call on a type parameter that none of its bounds declares
   (`T.build(n)` under `T: Make`) is refused naming the bounds, where it got
   an internal "a type that failed to check is not lowered yet"

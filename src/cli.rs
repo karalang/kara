@@ -2393,7 +2393,13 @@ impl Pipeline {
                 {
                     continue;
                 }
-                e.message += "; the binding is only read, so the fix borrows the field";
+                let key = crate::resolver::SpanKey::from_span(&e.span);
+                let what = if ownership.core_read_only_index_elements.contains(&key) {
+                    "element"
+                } else {
+                    "field"
+                };
+                e.message += &format!("; the binding is only read, so the fix borrows the {what}");
                 e.suggestion = Some("write `ref` before it to borrow it in place".to_string());
                 e.replacement = Some(Box::new(crate::resolver::TextEdit {
                     offset: e.span.offset,

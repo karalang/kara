@@ -1,0 +1,691 @@
+== files
+load deploy.nt as dict
+  {
+    "service": "shop-api",
+    "version": "2.14.0",
+    "owner": "platform team",
+    "note": "retries: 3, backoff: exponential",
+    "hosts": [
+      "api-1.internal.example",
+      "api-2.internal.example",
+      {
+        "name": "api-canary.internal.example",
+        "weight": "5"
+      }
+    ],
+    "ports": [
+      "80",
+      "443",
+      "8443"
+    ],
+    "limits": {
+      "cpu": "500m",
+      "memory": "1Gi",
+      "burst": ""
+    },
+    "env": {
+      "LOG_LEVEL": "info",
+      "DATABASE_URL": "postgres://shop:not-a-real-password@db.internal.example/shop",
+      "FEATURE_FLAGS": "{new_checkout: on, beta_banner: off}"
+    },
+    "motd": "Welcome to shop-api.\n\nMaintenance window: Sundays 02:00–04:00 UTC.",
+    "health checks": {
+      "GET /healthz\n(load balancer)": {
+        "interval": "10s",
+        "timeout": "2s"
+      },
+      "GET /ready": "{interval: 30s}"
+    }
+  }
+  where ["service"] value:
+    at (1, 9), lines 2
+       2 ❬service: shop-api❭
+                   ▲
+  where ["note"] value:
+    at (4, 6), lines 5
+       5 ❬note: retries: 3, backoff: exponential❭
+                ▲
+  where ["hosts", 2, "weight"] key:
+    at (10, 8), lines 11
+      11 ❬        weight: 5❭
+                  ▲
+  where ["hosts", 2] key:
+    at (8, 4), lines 9
+       9 ❬    -❭
+              ▲
+  where ["hosts", 2] value:
+    at (9, 8), lines 10
+      10 ❬        name: api-canary.internal.example❭
+                  ▲
+  where ["ports", 1] value:
+    at (12, 9), lines 13
+      13 ❬    [80, 443, 8443]❭
+                   ▲
+  where ["ports"] value:
+    at (12, 4), lines 13
+      13 ❬    [80, 443, 8443]❭
+              ▲
+  where ["limits", "burst"] value:
+    at (14, 36), lines 15
+      15 ❬    {cpu: 500m, memory: 1Gi, burst: }❭
+                                              ▲
+  where ["limits", "memory"] key:
+    at (14, 16), lines 15
+      15 ❬    {cpu: 500m, memory: 1Gi, burst: }❭
+                          ▲
+  where ["env", "FEATURE_FLAGS"] value:
+    at (18, 19), lines 19
+      19 ❬    FEATURE_FLAGS: {new_checkout: on, beta_banner: off}❭
+                             ▲
+  where ["motd"] value:
+    at (20, 6), lines 21-23
+      21 ❬    > Welcome to shop-api.❭
+                ▲
+  where ["motd"] key:
+    at (19, 0), lines 20
+      20 ❬motd:❭
+          ▲
+  where ["health checks", "GET /healthz\n(load balancer)"] key:
+    at (25, 4), lines 26-27
+      26 ❬    : GET /healthz❭
+              ▲
+  where ["health checks", "GET /healthz\n(load balancer)", "timeout"] value:
+    at (28, 17), lines 29
+      29 ❬        timeout: 2s❭
+                           ▲
+  where ["health checks", "GET /ready", "interval"] value:
+    not found
+  where ["hosts", 9] value:
+    not found
+  where [] value:
+    at (1, 0), lines 2
+       2 ❬service: shop-api❭
+          ▲
+load contacts.nt as dict
+  {
+    "Zoë Müller": {
+      "role": "on-call lead",
+      "phone": {
+        "mobile": "+31 6 0000 0001",
+        "desk": "ext. 214"
+      },
+      "address": "Keizersgracht 1\n1015 CJ Amsterdam\nNetherlands"
+    },
+    "李雷": {
+      "role": "payments",
+      "phone": {
+        "mobile": "+86 100 0000 0002"
+      },
+      "languages": "[zh, en]",
+      "hours": [
+        "09:00-17:00 CST",
+        "周一到周五"
+      ]
+    },
+    "Sam O’Neil": {
+      "role": "",
+      "phone": {
+        "desk": "ext. 101"
+      },
+      "notes": "Prefers email.\n  (Answers within a day.)"
+    }
+  }
+  where ["Zoë Müller", "address"] value:
+    at (7, 10), lines 8-10
+       8 ❬        > Keizersgracht 1❭
+                    ▲
+  where ["李雷", "hours", 1] value:
+    at (16, 26), lines 17
+      17 ❬        [09:00-17:00 CST, 周一到周五]❭
+                                    ▲
+  where ["李雷", "languages"] value:
+    at (14, 15), lines 15
+      15 ❬    languages: [zh, en]❭
+                         ▲
+  where ["Sam O’Neil", "role"] value:
+    at (18, 9), lines 19
+      19 ❬    role:❭
+                   ▲
+  where ["Sam O’Neil", "notes"] value:
+    at (22, 10), lines 23-24
+      23 ❬        > Prefers email.❭
+                    ▲
+load matrix.nt as list
+  [
+    {
+      "name": "unit",
+      "python": [
+        "3.11",
+        "3.12",
+        "3.13"
+      ],
+      "os": "ubuntu-latest"
+    },
+    {
+      "name": "integration",
+      "services": [
+        "postgres:16",
+        "redis:7"
+      ],
+      "env": {
+        "DB": "postgres",
+        "CACHE": "redis"
+      },
+      "allow failure": ""
+    },
+    {
+      "name": "docs",
+      "run": "make html\nmake linkcheck",
+      "tags": "[]"
+    },
+    "lint"
+  ]
+  where [0, "python", 2] value:
+    at (4, 21), lines 5
+       5 ❬        [3.11, 3.12, 3.13]❭
+                               ▲
+  where [1, "allow failure"] value:
+    at (14, 18), lines 15
+      15 ❬    allow failure:❭
+                            ▲
+  where [1, "env", "CACHE"] key:
+    at (13, 23), lines 14
+      14 ❬        {DB: postgres, CACHE: redis}❭
+                                 ▲
+  where [2, "run"] value:
+    at (18, 10), lines 19-20
+      19 ❬        > make html❭
+                    ▲
+  where [2, "tags"] value:
+    at (20, 10), lines 21
+      21 ❬    tags: []❭
+                    ▲
+  where [3] value:
+    at (21, 2), lines 22
+      22 ❬- lint❭
+            ▲
+  where [3] key:
+    at (21, 0), lines 22
+      22 ❬- lint❭
+          ▲
+load matrix.nt as dict
+  error: matrix.nt, 2: content must start with key or brace ({).
+  error:        2 ❬-❭
+  error: lineno 1, colno None
+load notes.nt as str
+  "Release 2.14.0\n\n- Checkout keeps the basket when the session expires.\n  Indented lines keep their spaces.\n- The canary takes 5% of traffic."
+  where [] value:
+    at (0, 0), lines 1-5
+       1 ❬> Release 2.14.0❭
+          ▲
+load notes.nt as any
+  "Release 2.14.0\n\n- Checkout keeps the basket when the session expires.\n  Indented lines keep their spaces.\n- The canary takes 5% of traffic."
+load settings.nt as dict (normalize=True)
+  {
+    "log_level": "debug",
+    "max_connections": "20",
+    "request_timeout": "15s",
+    "cache": {
+      "time_to_live": "300",
+      "backend": "redis"
+    }
+  }
+  where ["log_level"] value:
+    at (0, 11), lines 1
+       1 ❬Log Level: debug❭
+                     ▲
+  where ["cache", "time_to_live"] value:
+    at (4, 18), lines 5
+       5 ❬    Time To Live: 300❭
+                            ▲
+  where ["cache", "time_to_live"] key:
+    at (4, 4), lines 5
+       5 ❬    Time To Live: 300❭
+              ▲
+load settings.nt as dict
+  {
+    "Log Level": "debug",
+    "Max Connections": "20",
+    "Request Timeout": "15s",
+    "Cache": {
+      "Time To Live": "300",
+      "Backend": "redis"
+    }
+  }
+  where ["Log Level"] value:
+    at (0, 11), lines 1
+       1 ❬Log Level: debug❭
+                     ▲
+load settings_dup.nt as dict (normalize=True)
+  error: settings_dup.nt, 3: duplicate key: log_level.
+  error:        2 ❬Max Connections: 20❭
+  error:        3 ❬log level: warn❭
+  error:           ▲
+  error: lineno 2, colno 0
+load settings_dup.nt as dict (normalize=True, on_dup=replace)
+  {
+    "log_level": "warn",
+    "max_connections": "20"
+  }
+  where ["log_level"] value:
+    at (2, 11), lines 3
+       3 ❬log level: warn❭
+                     ▲
+  where ["log_level"] key:
+    at (2, 0), lines 3
+       3 ❬log level: warn❭
+          ▲
+load inventory.nt as dict
+  error: inventory.nt, 3: duplicate key: host.
+  error:        2 ❬    host: web-1.internal.example❭
+  error:        3 ❬    host: web-2.internal.example❭
+  error:               ▲
+  error: lineno 2, colno 4
+load inventory.nt as dict (on_dup=ignore)
+  {
+    "web": {
+      "host": "web-1.internal.example",
+      "role": "frontend"
+    },
+    "db": {
+      "host": "db-1.internal.example"
+    }
+  }
+load inventory.nt as dict (on_dup=replace)
+  {
+    "web": {
+      "host": "web-2.internal.example",
+      "role": "frontend"
+    },
+    "db": {
+      "host": "db-3.internal.example"
+    }
+  }
+load inventory.nt as dict (on_dup=dedup)
+  {
+    "web": {
+      "host": "web-1.internal.example",
+      "host — #2": "web-2.internal.example",
+      "role": "frontend"
+    },
+    "db": {
+      "host": "db-1.internal.example",
+      "host — #3": "db-2.internal.example",
+      "host — #4": "db-3.internal.example"
+    }
+  }
+  where ["db", "host — #3"] value:
+    at (6, 15), lines 7
+       7 ❬    host: db-2.internal.example❭
+                         ▲
+  where ["db", "host — #4"] key:
+    at (7, 4), lines 8
+       8 ❬    host: db-3.internal.example❭
+              ▲
+load broken.nt as dict
+  error: broken.nt, 4: invalid character in indentation: '\t'.
+  error:     Only simple spaces are allowed in indentation.
+  error:        3 ❬    - orders❭
+  error:        4 ❬→- refunds❭
+  error:           ▲
+  error: lineno 3, colno 0
+load broken.nt as dict (dialect=i)
+  error: broken.nt, 4: invalid character in indentation: '\t'.
+  error:     Only simple spaces are allowed in indentation.
+  error:        3 ❬    - orders❭
+  error:        4 ❬→- refunds❭
+  error:           ▲
+  error: lineno 3, colno 0
+== cases
+flat dict: {"a": "1", "b": "2"}
+colon in value: {"url": "http://shop.example:8080/a"}
+space before colon: {"key": " v"}
+tab before colon: {"a": "b"}
+no space after colon: error
+  1: unrecognized line.
+         1 ❬a:b❭
+            ▲
+  lineno 0, colno 0
+colon inside key: {"a:b": "c"}
+tab after colon: error
+  1: unrecognized line.
+         1 ❬a:→b❭
+            ▲
+  lineno 0, colno 0
+empty value: {"a": "", "b": "x"}
+value of one space: {"a": "", "b": " "}
+trailing spaces kept: {"a": "x  "}
+hash in value: {"a": "# not a comment"}
+dash key: {"-a": "b", "->": "c", ">": "d"}
+list items: ["", "x", " y", "a: b"]
+dash without space: error
+  1: unrecognized line.
+         1 ❬-x❭
+            ▲
+  lineno 0, colno 0
+nested lists: [["a", "b"], "c"]
+string lines: "a\n\n b\n"
+string without space: error
+  1: unrecognized line.
+         1 ❬>a❭
+            ▲
+  lineno 0, colno 0
+comments and blanks: null
+comment inside dict: {"a": ["x", "y"]}
+crlf: {"a": "1", "b": "2"}
+lone cr: {"a": "1", "b": ["x"]}
+no final newline: {"a": "1", "b": "2"}
+byte order mark: {"﻿a": "b"}
+unicode key: {"café": "crème", "日本": "語"}
+line separator in value: {"a": "x y"}
+multiline key: {"a\nb": "v"}
+multiline key with dict: {"first\n\nthird": {"x": "1"}, "next": "2"}
+multiline key needs value: error
+  1: multiline key requires a value.
+         1 ❬: k❭
+            ▲
+  lineno 0, colno 0
+multiline key at end: error
+  2: indented value must follow multi-line key.
+         2 ❬: k❭
+  lineno 1, colno None
+multiline key deeper part: error
+  2: indented value must follow multi-line key.
+         2 ❬  : j❭
+  lineno 1, colno None
+top level indented: error
+  1: top-level content must start in column 1.
+         1 ❬  a: b❭
+            ▲
+  lineno 0, colno 0
+indent after value: error
+  2: invalid indentation.
+      An indent may only follow a dictionary or list item that does not
+      already have a value.
+         1 ❬a: x❭
+         2 ❬  b: y❭
+            ▲
+  lineno 1, colno 0
+indent after blank value: error
+  2: invalid indentation.
+      An indent may only follow a dictionary or list item that does not
+      already have a value, which in this case consists only of whitespace.
+         1 ❬a:   ❭
+         2 ❬    - x❭
+            ▲
+  lineno 1, colno 0
+indent after list value: error
+  2: invalid indentation.
+      An indent may only follow a dictionary or list item that does not
+      already have a value.
+         1 ❬- a❭
+         2 ❬  - b❭
+            ▲
+  lineno 1, colno 0
+partial dedent: error
+  3: invalid indentation, partial dedent.
+         2 ❬    b: 1❭
+         3 ❬  c: 2❭
+            ▲
+  lineno 2, colno 0
+deeper string line: error
+  2: invalid indentation.
+         1 ❬> a❭
+         2 ❬  > b❭
+            ▲
+  lineno 1, colno 0
+tab indent: error
+  2: invalid character in indentation: '\t'.
+      Only simple spaces are allowed in indentation.
+         1 ❬a:❭
+         2 ❬→b: c❭
+            ▲
+  lineno 1, colno 0
+no-break space indent: error
+  2: invalid character in indentation: '\xa0' (NO-BREAK SPACE).
+      Only simple spaces are allowed in indentation.
+         1 ❬a:❭
+         2 ❬  b: c❭
+            ▲
+  lineno 1, colno 0
+ideographic space indent: error
+  1: invalid character in indentation: '\u3000' (IDEOGRAPHIC SPACE).
+      Only simple spaces are allowed in indentation.
+         1 ❬　a: b❭
+            ▲
+  lineno 0, colno 0
+vertical tab indent: error
+  2: invalid character in indentation: '\x0b'.
+      Only simple spaces are allowed in indentation.
+         1 ❬a:❭
+         2 ❬  b: 1❭
+              ▲
+  lineno 1, colno 2
+unrecognized line: error
+  2: unrecognized line.
+         1 ❬a: b❭
+         2 ❬just words❭
+            ▲
+  lineno 1, colno 0
+unrecognized after comment: error
+  3: unrecognized line.
+         1 ❬a: b❭
+         3 ❬plain❭
+            ▲
+  lineno 2, colno 0
+list then dict: error
+  2: expected list item.
+         1 ❬- a❭
+         2 ❬b: c❭
+            ▲
+  lineno 1, colno 0
+dict then list: error
+  2: expected dictionary item.
+         1 ❬a: b❭
+         2 ❬- c❭
+            ▲
+  lineno 1, colno 0
+string then list: error
+  2: extra content.
+         2 ❬- b❭
+  lineno 1, colno None
+inline then dict: error
+  2: extra content.
+         2 ❬b: c❭
+  lineno 1, colno None
+top dict given list: error
+  1: content must start with key or brace ({).
+         1 ❬- a❭
+  lineno 0, colno None
+top list given dict: error
+  1: content must start with dash (-) or bracket ([).
+         1 ❬a: b❭
+  lineno 0, colno None
+top str given dict: error
+  1: content must start with greater-than sign (>).
+         1 ❬a: b❭
+  lineno 0, colno None
+top dict given string: error
+  1: content must start with key or brace ({).
+         1 ❬> a❭
+  lineno 0, colno None
+top any word: error
+  1: unrecognized line.
+         1 ❬x❭
+            ▲
+  lineno 0, colno 0
+empty dict: {}
+empty list: []
+empty str: ""
+empty any: null
+top str: "one\ntwo"
+top list inline: ["a", "b"]
+top dict inline: {"a": "b"}
+top str inline: error
+  1: content must start with greater-than sign (>).
+         1 ❬[a]❭
+  lineno 0, colno None
+inline empties: [[], {}, [""]]
+inline empty dict with space: error
+  1: expected ‘:’, found ‘}’.
+         1 ❬{ }❭
+              ▲
+  lineno 0, colno 2
+inline list: ["a", "b", "c"]
+inline list holes: [["a", "", "b"], ["a", "b", ""], ["", ""]]
+inline list spaces in item: ["a b", "c:d"]
+inline value after empty: [["x"], [{"k": "v"}]]
+inline extra character: error
+  1: extra character after closing delimiter: ‘b’.
+         1 ❬[a] b❭
+                ▲
+  lineno 0, colno 4
+inline extra characters: error
+  1: extra characters after closing delimiter: ‘;;’.
+         1 ❬{a: 1}  ;;❭
+                    ▲
+  lineno 0, colno 8
+inline unclosed: error
+  1: line ended without closing delimiter.
+         1 ❬[a, [b, c]❭
+                      ▲
+  lineno 0, colno 10
+inline open brace: error
+  1: line ended without closing delimiter.
+         1 ❬{❭
+             ▲
+  lineno 0, colno 1
+inline nested: {"a": "1", "b": ["x", "y"], "c": {"d": "e"}}
+inline dict trailing comma: error
+  1: expected value.
+         1 ❬{a: 1,}❭
+                  ▲
+  lineno 0, colno 6
+inline dict trailing comma space: error
+  1: expected ‘:’, found ‘}’.
+         1 ❬{a: 1, }❭
+                   ▲
+  lineno 0, colno 7
+inline dict no colon: error
+  1: expected ‘:’, found ‘}’.
+         1 ❬{a 1}❭
+                ▲
+  lineno 0, colno 4
+inline dict two colons: error
+  1: expected ‘,’ or ‘}’, found ‘:’.
+         1 ❬{a: b: c}❭
+                 ▲
+  lineno 0, colno 5
+inline dict empty key: {"": "v", "k": ""}
+inline dict tight: {"a": "b"}
+inline dict list then junk: error
+  1: expected ‘,’ or ‘}’, found ‘c’.
+         1 ❬{a: [b] c}❭
+                    ▲
+  lineno 0, colno 8
+inline list brace: error
+  1: expected ‘,’ or ‘]’, found ‘}’.
+         1 ❬[a}❭
+              ▲
+  lineno 0, colno 2
+inline list lone brace: error
+  1: expected value.
+         1 ❬[}❭
+             ▲
+  lineno 0, colno 1
+inline tab: ["a", "b"]
+inline tab error: error
+  2: extra character after closing delimiter: ‘x’.
+         2 ❬  [a,→b] x❭
+                     ▲
+  lineno 1, colno 9
+inline wide characters: error
+  1: extra character after closing delimiter: ‘x’.
+         1 ❬[日本, 語] x❭
+                    ▲
+  lineno 0, colno 8
+inline in dict value: {"k": ["x", "y"], "m": "n"}
+inline then deeper: error
+  3: invalid indentation.
+         2 ❬  [x]❭
+         3 ❬    - y❭
+            ▲
+  lineno 2, colno 0
+inline-looking value: {"k": "[a, b]", "m": "{c: d}"}
+inline dialect off: {"{a": "b}"}
+inline dialect off list: error
+  1: unrecognized line.
+         1 ❬[a, b]❭
+            ▲
+  lineno 0, colno 0
+dup error: error
+  2: duplicate key: name1.
+         1 ❬name1: value1❭
+         2 ❬name1: value2❭
+            ▲
+  lineno 1, colno 0
+dup error with source: error
+  shop.nt, 2: duplicate key: a.
+         1 ❬a: 1❭
+         2 ❬a: 2❭
+            ▲
+  lineno 1, colno 0
+dup ignore: {"key": "v1", "name": "v4"}
+dup replace: {"key": "v2", "other": "x"}
+dup dedup: {"key": "v1", "key — #2": "v2", "key — #3": "v3", "name": "v4", "name — #2": "v5"}
+dup dedup collides: {"k": "1", "k — #2": "2"}
+dup ignore indented value: error
+  3: invalid indentation.
+         2 ❬a:❭
+         3 ❬  - x❭
+            ▲
+  lineno 2, colno 0
+dup nested: error
+  3: duplicate key: a.
+         2 ❬  a: 1❭
+         3 ❬  a: 2❭
+              ▲
+  lineno 2, colno 2
+dup multiline key: error
+  3: duplicate key: k.
+         2 ❬    > 1❭
+         3 ❬k: 2❭
+            ▲
+  lineno 2, colno 0
+dup two-line key: error
+  4: duplicate key: a
+  b.
+         3 ❬  > v❭
+         4 ❬: a❭
+            ▲
+  lineno 3, colno 0
+dup inline: error
+  1: duplicate key: a.
+         1 ❬{a: 1, a: 2}❭
+                  ▲
+  lineno 0, colno 6
+dup inline indented: error
+  2: duplicate key: a.
+         1 ❬k:❭
+         2 ❬    {a: 1,  a: 2}❭
+                  ▲
+  lineno 1, colno 6
+dup inline replace: {"a": "3", "b": "2"}
+dup inline ignore: {"a": "1", "b": "2"}
+dup inline dedup: {"a": "1", "a — #2": "2"}
+dup normalized: error
+  2: duplicate key: log_level.
+         1 ❬Log Level: debug❭
+         2 ❬log level: warn❭
+            ▲
+  lineno 1, colno 0
+dup normalized inline: error
+  1: duplicate key: log_level.
+         1 ❬{Log Level: debug, LOG LEVEL: warn}❭
+                              ▲
+  lineno 0, colno 18
+dup unicode inline: error
+  1: duplicate key: café.
+         1 ❬{café: 1, café: 2}❭
+                     ▲
+  lineno 0, colno 9

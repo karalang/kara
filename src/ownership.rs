@@ -1175,6 +1175,11 @@ pub struct OwnershipCheckResult {
     /// write to a binding without `mut` makes it one of
     /// [`Self::core_written_index_lets`].
     pub core_only_read_index_lets: HashMap<SpanKey, index_let::WrittenIndexLet>,
+    /// Each of [`Self::core_read_only_index_lets`] whose initializer is a
+    /// whole element (`v[i]`) rather than a field of one, so the repair
+    /// borrows the element. Only a `let … else` reaches the ownership
+    /// pass's refusal that way (B-2026-11-09-27).
+    pub core_read_only_index_elements: HashSet<SpanKey>,
     /// Representation for each binding/parameter: "owned (stack)", "ref (borrow)",
     /// "shared (Rc)", "shared (Arc)". Key: "function_name.binding_name".
     pub representations: HashMap<String, String>,
@@ -1783,6 +1788,8 @@ pub struct OwnershipChecker<'a> {
     pub(crate) core_written_index_lets: HashMap<SpanKey, index_let::WrittenIndexLet>,
     /// See [`OwnershipCheckResult::core_only_read_index_lets`].
     pub(crate) core_only_read_index_lets: HashMap<SpanKey, index_let::WrittenIndexLet>,
+    /// See [`OwnershipCheckResult::core_read_only_index_elements`].
+    pub(crate) core_read_only_index_elements: HashSet<SpanKey>,
     /// The key of each `m[k] = v` on a map, which moves into the map before
     /// `v` runs (core semantics §8.2): the value's span, and the statement's
     /// span and hoisted spelling for a use of the key inside `v`
@@ -2298,6 +2305,7 @@ impl<'a> OwnershipChecker<'a> {
             core_read_only_index_lets: HashSet::new(),
             core_written_index_lets: HashMap::new(),
             core_only_read_index_lets: HashMap::new(),
+            core_read_only_index_elements: HashSet::new(),
             map_assign_keys: HashMap::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
@@ -2599,6 +2607,7 @@ impl<'a> OwnershipChecker<'a> {
             core_read_only_index_lets: self.core_read_only_index_lets,
             core_written_index_lets: self.core_written_index_lets,
             core_only_read_index_lets: self.core_only_read_index_lets,
+            core_read_only_index_elements: self.core_read_only_index_elements,
             representations,
             rc_values: self.rc_values,
             arc_values: self.arc_values,
@@ -3349,6 +3358,7 @@ impl<'a> OwnershipChecker<'a> {
                 &mut self.core_read_only_index_lets,
                 &mut self.core_written_index_lets,
                 &mut self.core_only_read_index_lets,
+                &mut self.core_read_only_index_elements,
             );
             index_let::index_lets(&f.body, &classification, &mut found);
         }

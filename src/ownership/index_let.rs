@@ -66,6 +66,8 @@ pub(super) struct IndexLets<'a> {
     /// of the binding in `writes`: one the ownership pass finds writing
     /// (`t.items.push(x)` with `t` not `mut`) makes the let a written one.
     pub only_read: &'a mut HashMap<SpanKey, WrittenIndexLet>,
+    /// The `read_only` lets whose initializer is a whole element `v[i]`.
+    pub elements: &'a mut HashSet<SpanKey>,
 }
 
 impl<'a> IndexLets<'a> {
@@ -74,6 +76,7 @@ impl<'a> IndexLets<'a> {
         read_only: &'a mut HashSet<SpanKey>,
         written: &'a mut HashMap<SpanKey, WrittenIndexLet>,
         only_read: &'a mut HashMap<SpanKey, WrittenIndexLet>,
+        elements: &'a mut HashSet<SpanKey>,
     ) -> Self {
         let mut writable = HashSet::new();
         if matches!(f.self_param, Some(SelfParam::MutRef)) {
@@ -90,6 +93,7 @@ impl<'a> IndexLets<'a> {
             read_only,
             written,
             only_read,
+            elements,
         }
     }
 
@@ -125,14 +129,24 @@ fn mut_lets_in(ch: Child<'_>, out: &mut HashSet<String>) {
 /// only read and written through (into `written`).
 pub(super) fn index_lets(body: &Block, c: &Classification, out: &mut IndexLets<'_>) {
     for stmt in &body.stmts {
-        let StmtKind::Let {
-            is_mut: false,
-            pattern,
-            ty: None,
-            value,
-        } = &stmt.kind
-        else {
-            continue;
+        // A `let … else` whose pattern binds parts of an element
+        // (`let Json.Array(xs) = v[i] else { … };`) moves them out the same
+        // way, and borrows the same way when they are only read
+        // (B-2026-11-09-27).
+        let (pattern, value) = match &stmt.kind {
+            StmtKind::Let {
+                is_mut: false,
+                pattern,
+                ty: None,
+                value,
+            }
+            | StmtKind::LetElse {
+                pattern,
+                ty: None,
+                value,
+                ..
+            } => (pattern, value),
+            _ => continue,
         };
         // A destructuring `let (a, b) = v[i];` borrows the same way when
         // every part is only read (B-2026-10-24-38).
@@ -218,6 +232,9 @@ pub(super) fn index_lets(body: &Block, c: &Classification, out: &mut IndexLets<'
             continue;
         }
         out.read_only.insert(key);
+        if std::ptr::eq(indexed, value) {
+            out.elements.insert(key);
+        }
         if mutable {
             let borrowable = !used_while_held(body, &root, end, &uses);
             out.only_read.insert(
@@ -411,16 +428,25 @@ fn indexed_place(e: &Expr) -> Option<&Expr> {
     }
 }
 
-/// The names a pattern of plain bindings, `_` and tuples of them binds, or
-/// `false` for any other pattern.
+/// The names a pattern of plain bindings, `_`, and tuples, variants and
+/// structs of them binds, or `false` for any other pattern.
 fn simple_bindings<'p>(p: &'p Pattern, out: &mut Vec<&'p str>) -> bool {
     match &p.kind {
         PatternKind::Binding(n) => {
             out.push(n.as_str());
             true
         }
-        PatternKind::Wildcard => true,
-        PatternKind::Tuple(ps) => ps.iter().all(|p| simple_bindings(p, out)),
+        PatternKind::Wildcard | PatternKind::Literal(_) => true,
+        PatternKind::Tuple(ps) | PatternKind::TupleVariant { patterns: ps, .. } => {
+            ps.iter().all(|p| simple_bindings(p, out))
+        }
+        PatternKind::Struct { fields, .. } => fields.iter().all(|f| match &f.pattern {
+            Some(p) => simple_bindings(p, out),
+            None => {
+                out.push(f.name.as_str());
+                true
+            }
+        }),
         _ => false,
     }
 }
