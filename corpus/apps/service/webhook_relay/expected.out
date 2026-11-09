@@ -1,0 +1,46 @@
+servers up: true
+push: 202 {"status":"queued","seq":1}
+wrong secret: error http://127.0.0.1:47749/hooks/github: status code 401
+invoice: 202 {"status":"queued","seq":2}
+unknown source: error http://127.0.0.1:47749/hooks/gitlab: status code 404
+no signature: error http://127.0.0.1:47749/hooks/github: status code 401
+malformed json: error http://127.0.0.1:47749/hooks/github: status code 422
+array body: error http://127.0.0.1:47749/hooks/github: status code 422
+no event: error http://127.0.0.1:47749/hooks/github: status code 422
+redelivered push: 200 {"status":"duplicate","delivery":"d-1001"}
+poison: 202 {"status":"queued","seq":3}
+issue: 202 {"status":"queued","seq":4}
+refund: 202 {"status":"queued","seq":5}
+no delivery id: error http://127.0.0.1:47749/hooks/github: status code 400
+bad delivery id: error http://127.0.0.1:47749/hooks/github: status code 400
+get on a hook: error http://127.0.0.1:47749/hooks/github: status code 405
+health: 200 {"spooled":5}
+spool:
+  0001-github-d-1001.json {"source":"github","delivery":"d-1001","event":"push","payload":{"event":"push","ref":"refs/heads/main","commits":[{"id":"a1b2c3","message":"fix: résumé parser"}],"forced":false}}
+  0002-billing-d-1003.json {"source":"billing","delivery":"d-1003","event":"invoice.paid","payload":{"event":"invoice.paid","invoice":"in_0042","amount":1999,"currency":"eur"}}
+  0003-billing-d-1008.json {"source":"billing","delivery":"d-1008","event":"poison","payload":{"event":"poison","note":"downstream always rejects this"}}
+  0004-github-d-1009.json {"source":"github","delivery":"d-1009","event":"issues","payload":{"event":"issues","action":"opened","number":7,"labels":["bug","p1"]}}
+  0005-billing-d-1010.json {"source":"billing","delivery":"d-1010","event":"refund.created","payload":{"event":"refund.created","amount":250.5,"reason":null}}
+forwarding:
+  0001-github-d-1001.json attempt 1: http://127.0.0.1:47750/ingest: status code 503
+  0002-billing-d-1003.json attempt 1: http://127.0.0.1:47750/ingest: status code 503
+  0003-billing-d-1008.json attempt 1: http://127.0.0.1:47750/ingest: status code 500
+  0003-billing-d-1008.json attempt 2: http://127.0.0.1:47750/ingest: status code 500
+  0003-billing-d-1008.json attempt 3: http://127.0.0.1:47750/ingest: status code 500
+  0003-billing-d-1008.json dead-lettered after 3 attempts
+  0004-github-d-1009.json attempt 1: http://127.0.0.1:47750/ingest: status code 503
+delivered 4, dead 1
+delivered.log:
+  0001-github-d-1001.json attempts=2
+  0002-billing-d-1003.json attempts=2
+  0004-github-d-1009.json attempts=2
+  0005-billing-d-1010.json attempts=1
+dead letters:
+  0003-billing-d-1008.json
+downstream received:
+  d-1001 github push attempt=2
+  d-1003 billing invoice.paid attempt=2
+  d-1009 github issues attempt=2
+  d-1010 billing refund.created attempt=1
+health after: 200 {"spooled":0}
+done

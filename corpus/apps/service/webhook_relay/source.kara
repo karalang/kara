@@ -1,0 +1,370 @@
+// webhook_relay: a webhook ingress that verifies GitHub-style HMAC
+// signatures and spools accepted deliveries to disk, a forwarder that
+// relays the spool to a downstream service with retries and a
+// dead-letter directory, and a flaky downstream, all over loopback.
+
+import std.sync.{TaskGroup};
+import std.time.{Duration, sleep};
+import std.json.{Json};
+import std.crypto.hmac.{hmac_sha256};
+import std.crypto.{constant_time_eq};
+import std.encoding.{hex_encode};
+
+const IN_ADDR: Str = "127.0.0.1:47749";
+const DOWN_ADDR: Str = "127.0.0.1:47750";
+const IN_URL: Str = "http://127.0.0.1:47749";
+const DOWN_URL: Str = "http://127.0.0.1:47750";
+const RELAY: Str = "relay";
+const DOWN: Str = "down";
+const MAX_ATTEMPTS: i64 = 3;
+
+// Obviously fake secrets, one per source.
+const SECRETS: Array[(Str, Str), 2] = [("github", "fake-secret-gh-0001"), ("billing", "fake-secret-bill-0002")];
+
+struct Response {
+    status: i64,
+    body: String,
+    headers: Vec[(String, String)],
+}
+
+fn json_reply(status: i64, body: Json) -> Response {
+    Response { status, body: body.clone().stringify(), headers: Vec.new() }
+}
+
+fn error(status: i64, message: own String) -> Response {
+    json_reply(status, Json.Object([("error", Json.String(message))].to_vec()))
+}
+
+fn secret_of(source: Str) -> Option[Str] {
+    for (s, k) in SECRETS {
+        if s == source {
+            return Some(k);
+        }
+    }
+    None
+}
+
+fn sign(secret: Str, body: Str) -> String {
+    f"sha256={hex_encode(hmac_sha256(secret.bytes(), body.bytes()))}"
+}
+
+fn read_text(path: Str, default: Str) -> String {
+    fs.read_to_string(path) ?? default.to_string()
+}
+
+// Writes through a temporary file and a rename, so a reader never sees
+// half a file.
+fn write_atomic(path: Str, text: Str) {
+    let tmp = f"{path}.tmp";
+    let _ = fs.write(tmp.as_str(), text);
+    let _ = fs.rename(tmp.as_str(), path);
+}
+
+fn append_line(path: Str, line: Str) {
+    match File.append(path) {
+        Ok(f) => {
+            let text = f"{line}\n";
+            let bytes = text.bytes();
+            let mut done = 0;
+            while done < bytes.len() {
+                match f.write(bytes[done..]) {
+                    Ok(n) => done += n,
+                    Err(_) => return,
+                }
+            }
+        }
+        Err(_) => {}
+    }
+}
+
+fn next_seq() -> i64 {
+    let path = f"{RELAY}/seq";
+    let n = i64.parse(read_text(path.as_str(), "0").as_str()).unwrap_or(0) + 1;
+    write_atomic(path.as_str(), f"{n}");
+    n
+}
+
+fn field(doc: Json, name: Str) -> Option[Json] {
+    match doc {
+        Json.Object(fields) => {
+            for (k, v) in fields {
+                if k == name {
+                    return Some(v.clone());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn valid_id(id: Str) -> bool {
+    if id.len() == 0 {
+        return false;
+    }
+    id.chars().all(|c| c.is_ascii_alphanumeric() or c == '-')
+}
+
+fn count_json(dir: Str) -> i64 {
+    match fs.read_dir(dir) {
+        Ok(names) => names.iter().filter(|n| n.ends_with(".json")).count(),
+        Err(_) => 0,
+    }
+}
+
+fn ingress(req: Request) -> Response {
+    let method = req.method();
+    let path = req.path();
+    if path == "/health" {
+        let n = count_json(f"{RELAY}/spool".as_str());
+        return json_reply(200, Json.Object([("spooled", Json.Int(n))].to_vec()));
+    }
+    let Some(source) = path.strip_prefix("/hooks/") else {
+        return error(404, "not found");
+    };
+    if method != "POST" {
+        return error(405, "use POST");
+    }
+    let Some(secret) = secret_of(source) else {
+        return error(404, f"unknown source {source}");
+    };
+    let delivery = req.header("X-Delivery-Id") ?? String.new();
+    if not valid_id(delivery.as_str()) {
+        return error(400, "missing or invalid X-Delivery-Id");
+    }
+    let sig = req.header("X-Hub-Signature-256") ?? String.new();
+    if not sig.starts_with("sha256=") {
+        return error(401, "missing signature");
+    }
+    let body = req.body();
+    if not constant_time_eq(sig.bytes(), sign(secret, body.as_str()).bytes()) {
+        return error(401, "bad signature");
+    }
+    let doc = match Json.parse(body.as_str()) {
+        Ok(d) => d,
+        Err(_) => return error(422, "invalid json"),
+    };
+    let event = match field(doc, "event") {
+        Some(Json.String(e)) => e,
+        _ => return error(422, "missing event"),
+    };
+    let seen = f"{RELAY}/seen/{delivery}";
+    if fs.exists(seen.as_str()) {
+        return json_reply(200, Json.Object([
+            ("status", Json.String("duplicate")),
+            ("delivery", Json.String(delivery)),
+        ].to_vec()));
+    }
+    write_atomic(seen.as_str(), source);
+    let seq = next_seq();
+    let record = Json.Object([
+        ("source", Json.String(source.to_string())),
+        ("delivery", Json.String(delivery.clone())),
+        ("event", Json.String(event)),
+        ("payload", doc),
+    ].to_vec());
+    write_atomic(f"{RELAY}/spool/{seq:04}-{source}-{delivery}.json".as_str(), record.stringify().as_str());
+    json_reply(202, Json.Object([
+        ("status", Json.String("queued")),
+        ("seq", Json.Int(seq)),
+    ].to_vec()))
+}
+
+// The flaky service the relay delivers to.
+fn downstream(req: Request) -> Response {
+    let method = req.method();
+    let path = req.path();
+    if path == "/received" and method == "GET" {
+        return Response { status: 200, body: read_text(f"{DOWN}/received.log".as_str(), ""), headers: Vec.new() };
+    }
+    if path != "/ingest" or method != "POST" {
+        return error(404, "not found");
+    }
+    let doc = match Json.parse(req.body().as_str()) {
+        Ok(d) => d,
+        Err(_) => return error(400, "invalid json"),
+    };
+    let text = |name: Str| {
+        match field(doc, name) {
+            Some(Json.String(s)) => s,
+            _ => String.new(),
+        }
+    };
+    let delivery = text("delivery");
+    let counter = f"{DOWN}/attempts-{delivery}";
+    let attempts = i64.parse(read_text(counter.as_str(), "0").as_str()).unwrap_or(0) + 1;
+    write_atomic(counter.as_str(), f"{attempts}");
+    if text("event") == "poison" {
+        return error(500, "cannot process");
+    }
+    let last = delivery.chars().last() ?? ' ';
+    if attempts == 1 and "13579".contains(last.to_string()) {
+        return error(503, "warming up");
+    }
+    let attempt = req.header("X-Relay-Attempt") ?? "?";
+    append_line(f"{DOWN}/received.log".as_str(), f"{delivery} {text("source")} {text("event")} attempt={attempt}".as_str());
+    json_reply(200, Json.Object([("ok", Json.Bool(true))].to_vec()))
+}
+
+// The client side.
+
+fn send(c: Client, method: Str, url: Str, headers: Vec[(String, String)], body: Str) -> Result[String, String] {
+    let mut b = c.request(method.to_string(), url.to_string());
+    for (k, v) in headers {
+        b = b.header(k.clone(), v.clone());
+    }
+    if body.len() > 0 {
+        b = b.body(body.to_string());
+    }
+    match b.timeout(5000).send() {
+        Ok(resp) => Ok(f"{resp.status} {resp.body}"),
+        Err(e) => Err(e.message()),
+    }
+}
+
+fn show(label: Str, r: Result[String, String]) {
+    match r {
+        Ok(text) => println(f"{label}: {text}"),
+        Err(msg) => println(f"{label}: error {msg}"),
+    }
+}
+
+fn deliver(c: Client, label: Str, source: Str, delivery: Str, body: Str, secret: Str) {
+    let mut headers: Vec[(String, String)] = Vec.new();
+    if delivery.len() > 0 {
+        headers.push(("X-Delivery-Id", delivery.to_string()));
+    }
+    if secret.len() > 0 {
+        headers.push(("X-Hub-Signature-256", sign(secret, body)));
+    }
+    headers.push(("Content-Type", "application/json"));
+    show(label, send(c, "POST", f"{IN_URL}/hooks/{source}".as_str(), headers, body));
+}
+
+// Relays the spool in order; returns (delivered, dead).
+fn forward(c: Client) -> (i64, i64) {
+    let mut delivered = 0;
+    let mut dead = 0;
+    let names = fs.read_dir(f"{RELAY}/spool".as_str()) ?? Vec.new();
+    for name in names {
+        if not name.ends_with(".json") {
+            continue;
+        }
+        let path = f"{RELAY}/spool/{name}";
+        let body = read_text(path.as_str(), "");
+        let mut done = false;
+        for attempt in 1..=MAX_ATTEMPTS {
+            let headers = [
+                ("X-Relay-Attempt", f"{attempt}"),
+                ("Content-Type", "application/json"),
+            ].to_vec();
+            match send(c, "POST", f"{DOWN_URL}/ingest".as_str(), headers, body.as_str()) {
+                Ok(_) => {
+                    append_line(f"{RELAY}/delivered.log".as_str(), f"{name} attempts={attempt}".as_str());
+                    let _ = fs.remove_file(path.as_str());
+                    delivered += 1;
+                    done = true;
+                    break;
+                }
+                Err(msg) => {
+                    println(f"  {name} attempt {attempt}: {msg}");
+                    sleep(Duration.ms(5 * (1 << (attempt - 1))));
+                }
+            }
+        }
+        if not done {
+            let _ = fs.rename(path.as_str(), f"{RELAY}/dead/{name}".as_str());
+            println(f"  {name} dead-lettered after {MAX_ATTEMPTS} attempts");
+            dead += 1;
+        }
+    }
+    (delivered, dead)
+}
+
+fn obj(pairs: Vec[(Str, Json)]) -> String {
+    let fields: Vec[(String, Json)] = pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+    Json.Object(fields).stringify()
+}
+
+fn s(text: Str) -> Json {
+    Json.String(text.to_string())
+}
+
+fn main() {
+    for d in [RELAY, DOWN] {
+        let _ = fs.remove_dir_all(d);
+    }
+    for d in [f"{RELAY}/spool", f"{RELAY}/seen", f"{RELAY}/dead", DOWN.to_string()] {
+        let _ = fs.create_dir_all(d.as_str());
+    }
+    let group = TaskGroup.new();
+    group.spawn(|| Server.serve(IN_ADDR.to_string(), ingress));
+    group.spawn(|| Server.serve(DOWN_ADDR.to_string(), downstream));
+    let c = Client.new();
+    let mut up = false;
+    for _ in 0..100 {
+        if send(c, "GET", f"{IN_URL}/health".as_str(), Vec.new(), "").is_ok() and send(c, "GET", f"{DOWN_URL}/received".as_str(), Vec.new(), "").is_ok() {
+            up = true;
+            break;
+        }
+        sleep(Duration.ms(20));
+    }
+    println(f"servers up: {up}");
+
+    let gh = secret_of("github") ?? "";
+    let bill = secret_of("billing") ?? "";
+    let push = obj([
+        ("event", s("push")),
+        ("ref", s("refs/heads/main")),
+        ("commits", Json.Array([Json.Object([("id", s("a1b2c3")), ("message", s("fix: résumé parser"))].to_vec())].to_vec())),
+        ("forced", Json.Bool(false)),
+    ].to_vec());
+    let paid = obj([("event", s("invoice.paid")), ("invoice", s("in_0042")), ("amount", Json.Int(1999)), ("currency", s("eur"))].to_vec());
+    let issues = obj([("event", s("issues")), ("action", s("opened")), ("number", Json.Int(7)), ("labels", Json.Array([s("bug"), s("p1")].to_vec()))].to_vec());
+    let refund = obj([("event", s("refund.created")), ("amount", Json.Number(250.5)), ("reason", Json.Null)].to_vec());
+    let poison = obj([("event", s("poison")), ("note", s("downstream always rejects this"))].to_vec());
+    deliver(c, "push", "github", "d-1001", push.as_str(), gh);
+    deliver(c, "wrong secret", "github", "d-1002", push.as_str(), bill);
+    deliver(c, "invoice", "billing", "d-1003", paid.as_str(), bill);
+    deliver(c, "unknown source", "gitlab", "d-1004", push.as_str(), gh);
+    deliver(c, "no signature", "github", "d-1005", push.as_str(), "");
+    deliver(c, "malformed json", "github", "d-1006", "{\"event\": ", gh);
+    deliver(c, "array body", "github", "d-1007", "[1, 2]", gh);
+    deliver(c, "no event", "github", "d-1012", obj([("action", s("opened"))].to_vec()).as_str(), gh);
+    deliver(c, "redelivered push", "github", "d-1001", push.as_str(), gh);
+    deliver(c, "poison", "billing", "d-1008", poison.as_str(), bill);
+    deliver(c, "issue", "github", "d-1009", issues.as_str(), gh);
+    deliver(c, "refund", "billing", "d-1010", refund.as_str(), bill);
+    deliver(c, "no delivery id", "github", "", push.as_str(), gh);
+    deliver(c, "bad delivery id", "github", "d 1011", push.as_str(), gh);
+    show("get on a hook", send(c, "GET", f"{IN_URL}/hooks/github".as_str(), Vec.new(), ""));
+    show("health", send(c, "GET", f"{IN_URL}/health".as_str(), Vec.new(), ""));
+
+    println("spool:");
+    for name in fs.read_dir(f"{RELAY}/spool".as_str()) ?? Vec.new() {
+        let path = f"{RELAY}/spool/{name}";
+        println(f"  {name} {read_text(path.as_str(), "")}");
+    }
+    println("forwarding:");
+    let (delivered, dead) = forward(c);
+    println(f"delivered {delivered}, dead {dead}");
+    println("delivered.log:");
+    for line in read_text(f"{RELAY}/delivered.log".as_str(), "").lines() {
+        println(f"  {line}");
+    }
+    println("dead letters:");
+    for name in fs.read_dir(f"{RELAY}/dead".as_str()) ?? Vec.new() {
+        println(f"  {name}");
+    }
+    println("downstream received:");
+    let got = send(c, "GET", f"{DOWN_URL}/received".as_str(), Vec.new(), "") ?? String.new();
+    for line in (got.strip_prefix("200 ") ?? "").lines() {
+        println(f"  {line}");
+    }
+    show("health after", send(c, "GET", f"{IN_URL}/health".as_str(), Vec.new(), ""));
+    group.cancel();
+    for d in [RELAY, DOWN] {
+        let _ = fs.remove_dir_all(d);
+    }
+    println("done");
+}

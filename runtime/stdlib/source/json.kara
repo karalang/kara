@@ -21,6 +21,7 @@
 
 /// A JSON value (the baked file's tree, restated so that the program's
 /// `Json` is this one and its `parse` resolves to the body below).
+#[derive(Clone)]
 pub enum Json {
     Null,
     Bool(bool),

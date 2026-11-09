@@ -29,6 +29,7 @@
 // The Kāra `Json` value tree. Variants follow the JSON spec verbatim;
 // `Object` is a `Vec[(String, Json)]` rather than a `Map[String, Json]`
 // to preserve insertion order per locked design (ii).
+#[derive(Clone)]
 pub enum Json {
     Null,
     Bool(bool),

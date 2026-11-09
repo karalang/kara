@@ -2123,6 +2123,14 @@ impl<'a> super::TypeChecker<'a> {
             _ => return None,
         };
         let decl = self.env.user_type_decl_spans.get(type_name)?;
+        // A library type is not the program's to derive on: say what it
+        // lacks instead of where to add a derive (B-2026-11-09-48).
+        if decl.offset >= self.program.library_start.unwrap_or(usize::MAX) {
+            msg.push_str(&format!(
+                ": the library's `{type_name}` does not implement `{tr}`"
+            ));
+            return None;
+        }
         let derived = match (
             self.env.structs.get(type_name),
             self.env.enums.get(type_name),

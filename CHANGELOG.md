@@ -69,6 +69,8 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `Json` implements `Clone`, so a field of a parsed body can be copied out
+  of a borrowed tree (B-2026-11-09-48).
 - `JsonError`, `SendError`, `RecvTimeoutError`, `SendTimeoutError`, and
   `PoolError[E]` when `E: Display`, implement `Display` and `Error`, as
   design.md §10 says every standard-library error type does, so `?`
@@ -165,6 +167,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- String literals in `[..].to_vec()` take the `Str` a `Vec[Str]` (or
+  `Vec[(Str, T)]`) parameter wants; `total(["a", "b"].to_vec())` was
+  refused as a `Vec[String]` (B-2026-11-09-49).
 - A program that declares its own `Response` to send headers (io.md §
   HTTP server) gets it back from the HTTP client too, and the compiled
   client wrote only the library's two fields there: the program's
@@ -430,6 +435,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A library type without a trait is named as the library's: `e.clone()` on
+  a `JsonError` says "the library's `JsonError` does not implement
+  `Clone`" instead of advising a derive on the library's declaration
+  (B-2026-11-09-48).
 - `text?` on a bare `text: Option[String]` parameter (a borrow, since
   parameters borrow by default) was refused as "'?' operator requires
   `Result` or `Option`, found 'ref Option[String]'", with no fix. It now

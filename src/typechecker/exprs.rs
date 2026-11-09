@@ -1413,6 +1413,9 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(ty) = self.d5_give_away_to_vec(expr, expected) {
             return ty;
         }
+        if let Some(ty) = self.str_elements_to_vec(expr, expected) {
+            return ty;
+        }
         if self.char_literal_for_str(expr, expected) {
             return expected.clone();
         }
@@ -1847,6 +1850,50 @@ impl<'a> super::TypeChecker<'a> {
         self.record_expr_type(&expr.span, wanted);
         self.record_node_type(expr.id, wanted);
         Some(expected.clone())
+    }
+
+    /// `["a", "b"].to_vec()` where a `Vec[Str]` is wanted, or a `Vec` of an
+    /// element holding a `Str` (`Vec[(Str, Json)]`): each element of the
+    /// array literal is checked against `E`, so a string literal in it is
+    /// the `Str` the slot wants (design.md § String literals) rather than a
+    /// `String` that mismatches the whole `Vec` (B-2026-11-09-49). Leaves a
+    /// hint for the literal and lets the call be checked as usual.
+    fn str_elements_to_vec(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return None;
+        };
+        let ExprKind::ArrayLiteral(items) = &object.kind else {
+            return None;
+        };
+        if method != "to_vec" || !args.is_empty() || items.is_empty() {
+            return None;
+        }
+        let wanted = match expected {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        let Type::Named { name, args: targs } = wanted else {
+            return None;
+        };
+        let [elem] = targs.as_slice() else {
+            return None;
+        };
+        if name != "Vec" || contains_type_var(elem) || !mentions_str_view(elem) {
+            return None;
+        }
+        if object.id.is_dummy() {
+            return None;
+        }
+        // The literal reads the hint when the call is inferred as usual,
+        // which also resolves `to_vec` for the lowering.
+        self.array_element_hint = Some((object.id, elem.clone()));
+        None
     }
 
     /// Whether `e` names a bare parameter, or a binding out of one, that
@@ -14440,6 +14487,19 @@ impl<'a> super::TypeChecker<'a> {
                         name: "Vec".to_string(),
                         args: vec![Type::Error],
                     }
+                } else if let Some(elem) = self
+                    .array_element_hint
+                    .take_if(|(id, _)| *id == expr.id)
+                    .map(|(_, t)| t)
+                {
+                    for e in elements {
+                        self.check_expr(e, &elem);
+                    }
+                    self.record_collection_literal(expr, "Vec", elements);
+                    Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![elem],
+                    }
                 } else {
                     // `let v = [0, 7];` leaves its number literals open, as
                     // `[0; 26]` does, for a later use to fix: an argument, a
@@ -14857,6 +14917,19 @@ pub(super) fn is_dyn_slot(t: &Type) -> bool {
 /// A tuple type with a `dyn` slot among its elements.
 pub(super) fn tuple_has_dyn_slot(t: &Type) -> bool {
     matches!(t, Type::Tuple(slots) if slots.iter().any(|s| is_dyn_slot(s) || tuple_has_dyn_slot(s)))
+}
+
+/// Whether `ty` holds a `Str` anywhere: itself, a tuple element, or a type
+/// argument.
+fn mentions_str_view(ty: &Type) -> bool {
+    match ty {
+        Type::Named { name, args } => {
+            (name == "StringSlice" && args.is_empty()) || args.iter().any(mentions_str_view)
+        }
+        Type::Tuple(ts) => ts.iter().any(mentions_str_view),
+        Type::Array { element, .. } => mentions_str_view(element),
+        _ => false,
+    }
 }
 
 pub(super) fn is_str_view(ty: &Type) -> bool {

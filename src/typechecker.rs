@@ -4041,6 +4041,10 @@ pub struct TypeChecker<'a> {
     /// repeat literal (`[0; 26]`) or `Vec.filled(n, 0)`: its element's
     /// number literal stays open for a later use to fix (B-2026-11-08-57).
     pub(super) open_collection_let: Option<crate::ids::NodeId>,
+    /// The element type an array literal takes from the `Vec[E]` its
+    /// `.to_vec()` is checked against, keyed by the literal's node
+    /// (B-2026-11-09-49).
+    pub(super) array_element_hint: Option<(crate::ids::NodeId, Type)>,
     /// The spans of identifiers that read a fill's binding in
     /// `literal_lets` (`cnt` of `let cnt = [0; 26]`), by span: a refusal
     /// at the whole collection names it (B-2026-11-08-57).
@@ -4472,6 +4476,7 @@ impl<'a> TypeChecker<'a> {
             literal_pushes: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
             open_collection_let: None,
+            array_element_hint: None,
             literal_collection_uses: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),
             str_retyped_uses: FxHashSet::default(),
