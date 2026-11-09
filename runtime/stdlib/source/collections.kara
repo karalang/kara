@@ -271,6 +271,30 @@ impl[T] Slice[T] {
         runs.push(self[start..n]);
         runs
     }
+
+    /// The consecutive runs in which `same` accepts each adjacent pair, as
+    /// Rust's `slice::chunk_by`: `[1, 1, 2].chunk_by(|a, b| a == b)` is
+    /// `[[1, 1], [2]]`. An empty slice gives no runs
+    /// (docs/library/collections.md, B-2026-11-09-37).
+    fn chunk_by(self, same: own MutFn(T, T) -> bool) -> Vec[Slice[T]] {
+        let mut same = same;
+        let n = self.len();
+        let mut runs: Vec[Slice[T]] = Vec.new();
+        if n == 0 {
+            return runs;
+        }
+        let mut start = 0;
+        let mut i = 1;
+        while i < n {
+            if not same(self[i - 1], self[i]) {
+                runs.push(self[start..i]);
+                start = i;
+            }
+            i = i + 1;
+        }
+        runs.push(self[start..n]);
+        runs
+    }
 }
 
 impl[T: Display] Slice[T] {
