@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 197 |
 | false-positive | 162 |
-| perf | 131 |
+| perf | 138 |
 | missing-feature | 113 |
 | soundness | 54 |
 | miscompile | 46 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 312 |
-| mir-llvm | 167 |
-| mir | 145 |
+| mir-llvm | 172 |
+| mir | 147 |
 | cli | 87 |
 | ownership | 63 |
 | parser | 51 |
@@ -111,20 +111,16 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-46 | 2026-11-08 | typecheck | low | Rust's `match ans.last_mut() { Some(last) if last[1] == prev && last[2] == avg => last[1] = pos, _ => ans.push(..) }` gets `no method 'last_mut' on type 'Vec': write through an index instead` with no machine fix, though the index form it describes is mechanical for this shape | — |
 | B-2026-11-08-47 | 2026-11-08 | typecheck | low | A sequence has no `split` by a predicate: Rust's `line.split(|&ch| ch == '#')` over a `&Vec<char>` is refused "no method 'split' on type 'Vec'" with no fix and no other spelling named, and draws two cascade errors on the closures that read the pieces | — |
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
-| B-2026-11-08-67 | 2026-11-08 | mir | low | Assigning the `ref i32` a `SortedMap` walk yields to an `i64` local, `cur = d`, is refused E0509 "a view ... is stored in an escaping closure, a `shared` value or a channel", though `cur` is a plain local | — |
 | B-2026-11-08-72 | 2026-11-08 | mir-llvm | low | Kata 540's binary search divides `(low + high) / 2` and tests `mid % 2 == 1` as signed `i64`s, 3 instructions a step more than Rust's `usize` (8.08G against 6.21G on x86, 1.53x on the M5), though the loop keeps both indices non-negative | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
 | B-2026-11-08-76 | 2026-11-08 | typecheck | medium | A user type that implements both `Iterable` and `IntoIterator` cannot be the subject of a bare `for`: "type 'Bag' cannot be iterated by a `for` loop: it implements `IntoIterator` but not `Iterator`, and `for` never calls `into_iter`"; design.md §9 says `for x in c` over a non-Iterator borrows through `Iterable`, which `Vec` (implementing both) already does, and the same type with only `Iterable` loops fine | — |
-| B-2026-11-08-83 | 2026-11-08 | mir+mir-llvm | medium | A borrow of a `shared` field that stays live across a recursive call makes recursion quadratic in depth: the run-time flag table is a linear list, and every `shared enum` payload binding takes a flag although enum payloads are never `mut` | — |
-| B-2026-11-08-84 | 2026-11-08 | mir-llvm | high | Index assignment into a `Vec[dyn Trait]` (`xs[i] = v`) leaves a freed block in the slot on the LLVM backend: heap-use-after-free on the next call through it, a segfault or exit 101 in plain builds | — |
-| B-2026-11-08-85 | 2026-11-08 | mir-llvm+runtime | medium | `sort()` on a Vec of tuples runs about 3.3x Rust's stable `sort`: anything but a plain integer goes to the runtime's byte-wise `merge_sort` with the comparator called through a pointer, so katas 2015 and 2021 (sorted event triples and pairs) bench at 2.07x and 2.46x Rust under overflow checks while a Vec[i64] sort beats Rust | — |
 | B-2026-11-08-86 | 2026-11-08 | typecheck | medium | A range of bare literals takes `i64` where it is written, so `(1..=5).collect()` (or `.filter(..)`, `.map(..)` first) into a `Vec[i32]` return or binding is refused with "`C: FromIterator[i64]` is not satisfied" and no fix, though design.md § Type inference lets a return or an annotation fix a literal's type | — |
 | B-2026-11-08-87 | 2026-11-08 | mir-llvm | low | PriorityQueue's sift-to-bottom loop still takes 18 instructions a level against Rust BinaryHeap's 9-12 after B-2026-11-08-10: a swap (2 loads, 2 stores, 2 bounds checks) where Rust moves a hole, and an overflow check on `2 * i + 1` (kata 480: 4.36G instructions against Rust's 3.63G) | — |
 | B-2026-11-08-88 | 2026-11-08 | typecheck+cli | low | A plain list literal's element literal is not fixed by where the binding goes (the remainder of B-2026-11-08-57): `let mut v = [0, 0]; g(mut v)` with `g(a: mut ref Vec[i32])`, and `let v = [0, 7]; g(v)` into a `ref Vec[i32]`, are refused as `Vec[i64]`, with no machine fix | — |
 | B-2026-11-09-1 | 2026-11-09 | mir-llvm | low | A tuple comparison (`a >= b` on `(i64, i64, i64)`) lowers through `cmp`'s Ordering: each element takes setg/inc/cmp/cmov (about 7 instructions) where Rust's lexicographic `PartialOrd` is a compare and a branch, and a 24-byte `swap` goes through a stack slot (kata 632: 2.91G instructions against checked Rust's 1.72G on x86) | — |
-| B-2026-11-09-2 | 2026-11-09 | mir-llvm | low | A by-value function's `mut ref Vec[i64]` parameter gets no `noalias` (mark_noalias skips by-value signatures), so every store into an element reloads the Vec's data pointer and length and re-checks the bound: kata 695's union-find `join` executes 1.54G instructions against Rust's 0.86G (whole bench 1.28x checked Rust on x86) | — |
 | B-2026-11-09-4 | 2026-11-09 | typecheck | medium | `T.from(x)` under a `T: From[X]` bound is refused with an internal message ("a type that failed to check is not lowered yet" at the callee `T.from`), so a generic body cannot convert into its parameter; `karac check` reports the same internal message | — |
 | B-2026-11-09-5 | 2026-11-09 | mir-llvm | low | A literal table of constants iterated in a hot loop (`for step in [1, 9]`) is slower promoted to a static (src/mir/literal_tables.rs) than built in place: the static is a zero-initialized mutable global filled at startup, so LLVM reloads its pointer and length and bounds-checks each step of a 2-step loop it no longer unrolls (kata 752: 6.38G instructions, 4.61G with KARAC_MIR_LITERAL_TABLES=0, checked Rust 4.85G) | — |
+| B-2026-11-09-12 | 2026-11-09 | mir-llvm | low | `PriorityQueue`'s sifts swap elements a level at a time where Rust's `BinaryHeap` moves a hole, three element copies a level against one: kata 786 runs 1.34x and kata 778 1.22x checked Rust on x86 | — |
 
 ### Relocated
 
@@ -908,6 +904,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-66 | mir | low | `rest = rest[1..]` on a `Slice[T]` local is refused E0516 ("cannot assign to `rest` while .. | 76bc1b9842 |
 | B-2026-11-08-69 | typecheck+mir | high | A number literal checked against a closure's return type or a map entry's value keeps its default `i64`: `let g: Fn() -> i32 = \|\| 5` returns an `i64`… | 1de47226fa |
 | B-2026-11-08-70 | typecheck | medium | A call to a method returning `Self` in an impl of a `shared struct` is refused against any annotation: `let y: Node = Node.new(2);` and `Some(Node.ne… | a4aa93dce |
+| B-2026-11-08-67 | mir | low | Assigning the `ref i32` a `SortedMap` walk yields to an `i64` local, `cur = d`, is refused E0509 "a view .. | bb6dcf8503 |
 | B-2026-11-08-71 | mir-llvm | low | Kata 520's `word.chars().filter(\|c\| c.is_ascii_uppercase()).count()` branches on each char's answer and overflow-tests the count, where Rust's `Filte… | b8e953e4f9 |
 | B-2026-11-08-68 | parser | medium | A closure whose whole body is an assignment (Rust's `m.entry(k).and_modify(\|v\| *v += 1)`, `.for_each(\|x\| last = *x)`) stops the parser at the operato… | 5fe8006173 |
 | B-2026-11-08-74 | typecheck | medium | A float format spec without a precision is refused (`{x:>8}`, `{x:+}`, `{x:<5}` on an f64: "a float format spec needs a precision"), and any spec on… | 4be4cb4b9c |
@@ -918,8 +915,18 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-80 | mir | low | A missing field in `Json.deserialize` is reported by its Kāra name, not its JSON key: a `#[serde(rename: "userName")] name: String` field absent from… | ef6cd921e9 |
 | B-2026-11-08-81 | runtime | medium | `s.chars().last()` walks the whole string: `StrChars` and `StrViewChars` take `Iterator.last`'s default rather than reading from the back, so kata 20… | 89d9feafb3 |
 | B-2026-11-08-82 | typecheck | medium | Map, SortedMap, Set and SortedSet do not implement PartialEq/Eq, and the refusal suggests `#[derive(PartialEq)]` on a std type | 68aa472f3f |
+| B-2026-11-08-83 | mir+mir-llvm | medium | A borrow of a `shared` field that stays live across a recursive call makes recursion quadratic in depth: the run-time flag table is a linear list, an… | d308599fbb |
+| B-2026-11-08-84 | mir-llvm | high | Index assignment into a `Vec[dyn Trait]` (`xs[i] = v`) leaves a freed block in the slot on the LLVM backend: heap-use-after-free on the next call thr… | d308599fbb |
+| B-2026-11-08-85 | mir-llvm+runtime | medium | `sort()` on a Vec of tuples runs about 3.3x Rust's stable `sort`: anything but a plain integer goes to the runtime's byte-wise `merge_sort` with the… | d308599fbb |
 | B-2026-11-08-89 | typecheck | high | A `Vec[(i64, i64)]` is accepted for a `Vec[(i64, u64)]` parameter (a tuple inside a generic argument is compared by the value rule, not the layout ru… | ee2d9fee79 |
+| B-2026-11-09-2 | mir-llvm | low | A by-value function's `mut ref Vec[i64]` parameter gets no `noalias` (mark_noalias skips by-value signatures), so every store into an element reloads… | d308599fbb |
 | B-2026-11-09-3 | mir | high | Inside a generic body, `T.default()` (any `T.f(..)` path call) with `T` a type parameter calls the program's own `struct T`'s `f` at every instance w… | ef6cd921e9 |
+| B-2026-11-09-6 | mir | low | A counting loop that starts at a local, `for i in low..low + k`, is not presized: `mir::presize` takes only a constant start, so kata 658's window co… | d308599fbb |
+| B-2026-11-09-7 | mir-llvm | low | `i64.parse` of a negative number calls the runtime: the in-line decimal parse takes only digits, so kata 682's `-` scores each paid a runtime call (1… | d308599fbb |
+| B-2026-11-09-8 | mir-llvm | low | A by-value function's `ref Vec` parameter gets no `noalias`, so every store into another vector reloads its header and re-tests its bounds: kata 718'… | d308599fbb |
+| B-2026-11-09-9 | mir-llvm | low | `String.push_str` is a runtime call and a `memcpy` call per append: kata 763's strings built a letter at a time run 1.84x checked Rust on x86 | d308599fbb |
+| B-2026-11-09-10 | mir | low | A vector made before its loop's bound is worked out (`let mut seat_of = Vec.new(); for _ in 0..row.len() { seat_of.push(0) }`) is not presized, since… | d308599fbb |
+| B-2026-11-09-11 | mir-llvm | low | A library body's located function (`<fn>.at`, every library body a program calls) gets none of the parameter attributes the plain function gets: no `… | d308599fbb |
 
 </details>
 
