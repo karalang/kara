@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 204 |
+| diagnostics | 205 |
 | false-positive | 167 |
 | perf | 142 |
-| missing-feature | 116 |
+| missing-feature | 117 |
 | soundness | 56 |
 | miscompile | 49 |
 | run-vs-build | 29 |
@@ -75,17 +75,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 329 |
+| typecheck | 330 |
 | mir-llvm | 177 |
-| mir | 153 |
+| mir | 154 |
 | cli | 92 |
 | ownership | 65 |
-| parser | 53 |
+| parser | 54 |
 | interp | 39 |
 | runtime | 30 |
 | effect | 29 |
 | codegen | 22 |
-| resolver | 19 |
+| resolver | 20 |
 | other | 7 |
 | autopar | 4 |
 | lexer | 1 |
@@ -954,6 +954,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-29 | typecheck | low | A program's inherent impl on a library type that redefines a library method is also refused at the library's own impl, past the program's end, under… | 8adc0b0e29 |
 | B-2026-11-09-30 | typecheck | medium | JsonError, PoolError, SendError, RecvTimeoutError and SendTimeoutError do not implement `Error`, so `?` cannot convert them into `AnyError` | 8adc0b0e29 |
 | B-2026-11-09-35 | typecheck+mir+mir-llvm | high | A scalar `ref` handed to a type parameter a closure returns solved it as the `ref`: `m.map_or(x, \|k: i64\| k + 1)` with `x: ref i64` made `U` a `ref i… | 5a9b370550 |
+| B-2026-11-09-41 | typecheck+mir | medium | `PriorityQueue` has no `iter`, `into_iter`, `for`, `Clone` or `Display`, though collections.md says every collection works with `for` and is `Display… | 2f62c55005 |
+| B-2026-11-09-42 | parser+resolver | low | Rust's `heap.into_iter().map(\|Reverse(s)\| s)` gets no fix for the `Reverse` parameter, and `or_insert_with(BinaryHeap::new)` is not seen as a heap's… | 2f62c55005 |
 
 </details>
 
