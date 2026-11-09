@@ -1382,12 +1382,14 @@ impl<'a> super::TypeChecker<'a> {
         }
         let mut ty = self.check_expr_inner(expr, expected);
         self.open_literal_expr = saved_open;
+        self.collect_fixes_literal_items(expr, expected);
         if deferred {
             self.variant_lint_deferred.remove(&expr.id);
         }
         // A literal's variable the slot could not take keeps its default.
         if self.unbound_literal_var(Self::peel_borrow(&ty)).is_some()
             && !contains_type_var(expected)
+            && !self.names_open_callee_param(expected)
         {
             ty = self.settle_literals(&ty);
             self.record_expr_type(&expr.span, &ty);
@@ -8574,6 +8576,52 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// A `collect()` into a declared collection of numbers fixes the items'
+    /// literal: `(1..=5).collect()` returned as a `Vec[i32]` is a range of
+    /// `i32` (design.md § Type inference, B-2026-11-08-86), decided here,
+    /// before the body's end gives the literal its default.
+    fn collect_fixes_literal_items(&mut self, expr: &Expr, expected: &Type) {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return;
+        };
+        if method != "collect" || !args.is_empty() {
+            return;
+        }
+        let want = resolve_type_var_top(expected, &self.env.substitutions);
+        let elem = match Self::peel_borrow(&want) {
+            Type::Named { name, args }
+                if matches!(name.as_str(), "Vec" | "Set" | "SortedSet" | "VecDeque")
+                    && !args.is_empty() =>
+            {
+                args[0].clone()
+            }
+            _ => return,
+        };
+        let Some(item) = self.library_iter_item(object) else {
+            return;
+        };
+        let Type::TypeVar(id) = resolve_type_var_top(&item, &self.env.substitutions) else {
+            return;
+        };
+        let Some(kind) = inference::literal_var_kind(id) else {
+            return;
+        };
+        if inference::literal_takes(kind, &elem) {
+            unify_types(
+                &Type::TypeVar(id),
+                &elem,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
+        }
+    }
+
     pub(super) fn library_iter_item(&self, object: &Expr) -> Option<Type> {
         if !self.library_methods_from_source {
             return None;
@@ -13664,6 +13712,24 @@ impl<'a> super::TypeChecker<'a> {
                         .is_some_and(|e| Self::unsuffixed_int_literal_value(e).is_some())
                 };
                 let (start_ty, end_ty) = match (start.as_deref(), end.as_deref()) {
+                    // Two literal bounds are one number no use has fixed yet:
+                    // `(1..=5).collect()` returned as a `Vec[i32]` makes a
+                    // range of `i32` (design.md § Type inference,
+                    // B-2026-11-08-86).
+                    (Some(s), Some(e)) if is_lit(start) && is_lit(end) => {
+                        let st = self.infer_expr_open(s);
+                        let et = self.infer_expr_open(e);
+                        if unify_types(
+                            &st,
+                            &et,
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        ) {
+                            (Some(st.clone()), Some(st))
+                        } else {
+                            (Some(st), Some(et))
+                        }
+                    }
                     (Some(s), Some(e)) if is_lit(start) && !is_lit(end) => {
                         let et = self.infer_expr(e);
                         let bound = super::expr_ops::deref_integer_scalar(et.clone());
@@ -14015,7 +14081,30 @@ impl<'a> super::TypeChecker<'a> {
                         args: vec![Type::Error],
                     }
                 } else {
-                    let first_ty = self.infer_collection_elements(elements);
+                    // `let v = [0, 7];` leaves its number literals open, as
+                    // `[0; 26]` does, for a later use to fix: an argument, a
+                    // return, an assignment (design.md §8 Literals;
+                    // B-2026-11-08-88).
+                    let open = self.open_collection_let == Some(expr.id)
+                        && !expr.id.is_dummy()
+                        && elements
+                            .iter()
+                            .all(|e| Self::unsuffixed_int_literal_value(e).is_some());
+                    let first_ty = if open {
+                        let first = self.infer_expr_open(&elements[0]);
+                        for e in &elements[1..] {
+                            let t = self.infer_expr_open(e);
+                            unify_types(
+                                &first,
+                                &t,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            );
+                        }
+                        first
+                    } else {
+                        self.infer_collection_elements(elements)
+                    };
                     let first_ty = self.literal_element_by_value(first_ty);
                     self.record_collection_literal(expr, "Vec", elements);
                     Type::Named {

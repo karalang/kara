@@ -1,0 +1,35 @@
+// design.md §8 Literals: an argument fixes a literal's type, and a list
+// literal's numbers are literals like any other. An unannotated `let` of a
+// list of bare numbers takes its element type from where the binding goes
+// (B-2026-11-08-88, the remainder of B-2026-11-08-57).
+fn bump(a: mut ref Vec[i32]) {
+    a[0] = a[0] + 1;
+}
+
+fn second(a: Vec[i32]) -> i32 {
+    a[1]
+}
+
+fn top(a: Vec[u64]) -> u64 {
+    a[0]
+}
+
+fn main() {
+    let mut counts = [0, 0];
+    bump(mut counts);
+    println(counts);
+    let pair = [0, 7];
+    println(second(pair));
+    let big = [18446744073709551615];
+    println(top(big));
+    // Nothing fixes these, so they keep the default.
+    let plain = [1, 2, 3];
+    println(plain.len());
+    // A view of an open list looked up among `Vec[i64]`s is a view of i64s.
+    let rows: Vec[Vec[i64]] = [[3, 1], [0, 3]];
+    let wide = [0, 3, 1, 2];
+    println(rows.contains(wide[1..3]));
+    let mut nested: Vec[Vec[u64]] = Vec.new();
+    nested.push([18446744073709551615]);
+    println(nested);
+}

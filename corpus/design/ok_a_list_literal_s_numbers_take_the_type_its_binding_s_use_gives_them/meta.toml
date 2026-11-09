@@ -1,0 +1,9 @@
+source = "B-2026-11-08-88"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "inference"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §8 Literals: an argument fixes a literal, list elements included. [0, 0] into mut ref Vec[i32], [0, 7] into Vec[i32], a u64 past i64::MAX into Vec[u64]; an unused list keeps i64; a slice of an open list is found among Vec[i64]s; a nested u64 list pushes."

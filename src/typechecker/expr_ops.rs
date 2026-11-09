@@ -3150,9 +3150,36 @@ impl<'a> super::TypeChecker<'a> {
                     .first()
                     .map(|p| peel(&self.subst_operator_self_in(p, left, name, Some(*i))))
             };
+            // A right operand holding a literal no use has fixed yet
+            // (`p * (1..3)`, a range of literals) is the impl's whose `rhs`
+            // it unifies with (B-2026-11-08-86).
+            let unifies = |r: &Type| {
+                let mut subs = self.env.substitutions.clone();
+                let mut consts = self.env.const_substitutions.clone();
+                super::exprs::contains_type_var(&right)
+                    && !matches!(right, Type::TypeVar(_))
+                    && super::inference::unify_types(r, &right, &mut subs, &mut consts)
+                    && super::types::numeric_args_agree(
+                        &super::inference::resolve_type_vars(
+                            r,
+                            &subs,
+                            &HashMap::new(),
+                            &consts,
+                            &HashMap::new(),
+                        ),
+                        &super::inference::resolve_type_vars(
+                            &right,
+                            &subs,
+                            &HashMap::new(),
+                            &consts,
+                            &HashMap::new(),
+                        ),
+                    )
+            };
             let pick = sigs
                 .iter()
                 .find(|c| rhs(c).is_some_and(|r| r == right))
+                .or_else(|| sigs.iter().find(|c| rhs(c).is_some_and(|r| unifies(&r))))
                 .or_else(|| {
                     sigs.iter()
                         .find(|c| rhs(c).is_some_and(|r| types_compatible(&r, &right)))

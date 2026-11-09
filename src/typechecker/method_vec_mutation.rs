@@ -726,7 +726,7 @@ impl<'a> super::TypeChecker<'a> {
         if is_open_value(arg) && super::exprs::expectation_is_concrete(&slot) {
             return self.check_expr(arg, &slot);
         }
-        self.infer_expr(arg)
+        self.infer_needle(arg, &slot)
     }
 
     pub(super) fn infer_element_arg(&mut self, arg: &Expr, elem: &Type) -> Type {

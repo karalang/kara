@@ -1349,7 +1349,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "contains" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_needle(&arg.value, &elem);
                     // B-2026-08-14-1 — reject an implicit NARROWING into the
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
@@ -1390,7 +1390,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "binary_search" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_needle(&arg.value, &elem);
                     // B-2026-08-14-1 — reject an implicit NARROWING into the
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
@@ -1889,7 +1889,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "contains" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_needle(&arg.value, &elem);
                     // B-2026-08-14-1 — reject an implicit NARROWING into the
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
@@ -1930,7 +1930,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "binary_search" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_needle(&arg.value, &elem);
                     // B-2026-08-14-1 — reject an implicit NARROWING into the
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.

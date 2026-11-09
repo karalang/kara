@@ -1,0 +1,9 @@
+source = "B-2026-11-08-86"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iterators", "inference"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: a range of bare literals takes its element type from the collection or sum it feeds: odds 1..=9 into Vec[i32], doubled into Vec[i32], a Set[i32] probe in the filter, six u8 bytes 250..=255, an i32 sum, and three u64 values past i64::MAX."

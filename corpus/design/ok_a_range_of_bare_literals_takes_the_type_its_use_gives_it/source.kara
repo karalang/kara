@@ -1,0 +1,25 @@
+// design.md § Type inference: an integer literal starts open and a later use
+// (a return, an annotation, a generic call's result) fixes its type. A range
+// of bare literals is no different: its element is whatever the collection it
+// is collected into holds (B-2026-11-08-86).
+fn odds() -> Vec[i32] {
+    (1..=9).filter(|x| x % 2 == 1).collect()
+}
+
+fn bytes() -> Set[u8] {
+    (250..=255).collect()
+}
+
+fn main() {
+    println(odds());
+    let doubled: Vec[i32] = (1..=5).map(|x| x * 2).collect();
+    println(doubled);
+    let seen: Set[i32] = (1..=4).collect();
+    let hits: Vec[i32] = (1..=6).filter(|x| seen.contains(x)).collect();
+    println(hits);
+    println(bytes().len());
+    let total: i32 = (1..=5).sum();
+    println(total);
+    let wide: Vec[u64] = (18446744073709551613..=18446744073709551615).collect();
+    println(wide);
+}

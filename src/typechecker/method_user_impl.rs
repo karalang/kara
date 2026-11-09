@@ -2084,7 +2084,11 @@ impl<'a> super::TypeChecker<'a> {
         };
         let key = resolve_type_var_top(key, &self.env.substitutions);
         let errors = self.errors.len();
-        let arg_ty = self.infer_expr(&args[0].value);
+        let arg_ty = if param == "T" {
+            self.infer_needle(&args[0].value, &key)
+        } else {
+            self.infer_expr(&args[0].value)
+        };
         let arg_ty = match arg_ty {
             Type::Ref(inner) | Type::MutRef(inner) => *inner,
             t => t,

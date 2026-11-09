@@ -296,6 +296,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   by a bare `for`**, as `Vec` is (design.md § `Iterator` and `Iterable`): it
   was refused as "implements `IntoIterator` but not `Iterator`"
   (B-2026-11-08-76).
+- **A range of bare literals takes the type its use gives it.**
+  `fn f() -> Vec[i32] { (1..=5).collect() }`, and the same through
+  `filter` and `map`, into a `Set[u8]` or an `i32` sum, were refused as
+  "`C: FromIterator[i64]` is not satisfied"; the range now stays open until
+  the collect fixes it, as a lone literal does (design.md § Type inference,
+  B-2026-11-08-86). A lookup's needle fixes a literal as any argument does,
+  so `seen.contains(x)` on a `Set[i32]` or a `Vec[i32]` takes an
+  unannotated `let x = 3` (or a range's item) as `i32`.
+- **A list literal's numbers take the type its binding's use gives them.**
+  `let mut v = [0, 0]; g(mut v)` into `mut ref Vec[i32]`, and `[0, 7]` into a
+  `Vec[i32]` argument, were refused as 'found Vec[i64]' (design.md §8,
+  B-2026-11-08-88).
 
 ### Performance
 

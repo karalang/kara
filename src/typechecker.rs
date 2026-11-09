@@ -7713,6 +7713,20 @@ impl<'a> TypeChecker<'a> {
         true
     }
 
+    /// Whether `t` names a type parameter that is a callee's own, not yet
+    /// solved by its call and named back for a closure's check (`map`'s `U`),
+    /// rather than a rigid parameter of the enclosing item or `Self`. A
+    /// literal checked against one stays open for the call's unification
+    /// (B-2026-11-08-86).
+    pub(super) fn names_open_callee_param(&self, t: &Type) -> bool {
+        let mut names = Vec::new();
+        expr_method_call::collect_type_param_names(t, &mut names);
+        !names.is_empty()
+            && names
+                .iter()
+                .all(|n| n != "Self" && !self.enclosing_bounds.contains_key(n))
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // An unannotated collection's element or key takes a `Copy`
         // reference's value (design.md §8, B-2026-11-08-19).
@@ -7747,13 +7761,18 @@ impl<'a> TypeChecker<'a> {
         // toward a parameter still being solved.
         // A number is never a parameter's type, so one no use has fixed yet
         // takes its default before it is compared with one (B-2026-11-07-3).
+        // A callee's own parameter that the call has not solved yet, named
+        // back for a closure's check (`map`'s `U` for `|x| x` over a range
+        // of literals), is still being solved: the literal stays open for
+        // the call's unification (B-2026-11-08-86).
         let settled;
-        let found = if types::contains_type_param(expected) {
-            settled = self.settle_literals(found);
-            &settled
-        } else {
-            found
-        };
+        let found =
+            if types::contains_type_param(expected) && !self.names_open_callee_param(expected) {
+                settled = self.settle_literals(found);
+                &settled
+            } else {
+                found
+            };
         let have = inference::resolve_type_vars(
             found,
             &self.env.substitutions,

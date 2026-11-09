@@ -63,9 +63,10 @@ impl<'a> super::TypeChecker<'a> {
             (Type::TypeVar(_), Type::Slice { .. }) => true,
             (Type::Str, Type::Named { name, args }) => name == "StringSlice" && args.is_empty(),
             (Type::Named { name, args }, Type::Slice { element, .. }) => {
+                let element = resolve_type_var_top(element, &self.env.substitutions);
                 name == "Vec"
                     && args.len() == 1
-                    && super::types::types_compatible(&args[0], element)
+                    && super::types::types_compatible(&args[0], &element)
             }
             _ => false,
         }
@@ -77,6 +78,67 @@ impl<'a> super::TypeChecker<'a> {
     /// (docs/library/collections.md, "Lookup by view"; B-2026-11-08-55). An
     /// element type not yet solved is left to the plain check, which solves
     /// it from the needle.
+    /// A probe fixes the literals its needle still leaves open, as a store
+    /// would (design.md §8): a view of a list whose literals no use has fixed
+    /// yet (`wide[1..2]` of `let wide = [0, 3, 1, 2]`) looked up among
+    /// `Vec[T]`s is a view of `T`s (B-2026-11-08-88), and a bare open
+    /// literal needle takes the slot's type.
+    pub(super) fn settle_view_literals(&mut self, slot: &Type, needle: &Type) {
+        let slot = resolve_type_var_top(slot, &self.env.substitutions);
+        let needle = crate::typechecker::peel_probe_ref(needle);
+        let (open, target) = match (&slot, &needle) {
+            (Type::Named { name, args }, Type::Slice { element, .. })
+                if name == "Vec" && args.len() == 1 =>
+            {
+                (
+                    resolve_type_var_top(element, &self.env.substitutions),
+                    args[0].clone(),
+                )
+            }
+            // A needle that is itself an open literal (`x` of a
+            // `(1..=6).filter(|x| seen.contains(x))` over a `Set[i32]`) is
+            // fixed by the slot it is looked up in (B-2026-11-08-86).
+            _ => (
+                resolve_type_var_top(&needle, &self.env.substitutions),
+                slot.clone(),
+            ),
+        };
+        if let Type::TypeVar(id) = open {
+            if super::inference::literal_var_kind(id)
+                .is_some_and(|k| super::inference::literal_takes(k, &target))
+            {
+                unify_types(
+                    &Type::TypeVar(id),
+                    &target,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+            }
+        }
+    }
+
+    /// A probe's needle (`s.contains(x)`, `v.contains(w[1..2])`): an
+    /// argument fixes a literal's type (design.md §8 Literals), so a needle
+    /// whose literals are still open takes the slot's type, and anything left
+    /// open after that is decided now, as any inferred value's literal is.
+    pub(super) fn infer_needle(&mut self, arg: &Expr, slot: &Type) -> Type {
+        let ty = self.infer_expr_open(arg);
+        self.settle_view_literals(slot, &ty);
+        let mut ids = Vec::new();
+        super::exprs::type_var_ids(&ty, &mut ids);
+        if ids.iter().any(|id| {
+            super::inference::literal_var_kind(*id).is_some()
+                && matches!(
+                    resolve_type_var_top(&Type::TypeVar(*id), &self.env.substitutions),
+                    Type::TypeVar(_)
+                )
+        }) {
+            self.settle_literals(&ty)
+        } else {
+            self.resolved_now(&ty)
+        }
+    }
+
     pub(super) fn is_elem_view(&self, elem: &Type, needle: &Type) -> bool {
         let elem = resolve_type_var_top(elem, &self.env.substitutions);
         !matches!(elem, Type::TypeVar(_)) && self.is_key_view(&elem, needle)
