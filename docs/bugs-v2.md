@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 142 |
 | missing-feature | 114 |
 | soundness | 56 |
-| miscompile | 47 |
+| miscompile | 48 |
 | run-vs-build | 29 |
 | other | 25 |
 | codegen-gap | 25 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 323 |
-| mir-llvm | 174 |
+| mir-llvm | 175 |
 | mir | 150 |
 | cli | 90 |
 | ownership | 65 |
@@ -113,6 +113,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-31 | 2026-11-09 | typecheck | medium | A program's `impl Clone for String` is accepted and replaces the library's `clone`: an impl overlapping a baked library trait impl is not refused | — |
 | B-2026-11-09-32 | 2026-11-09 | mir | medium | `Clone.clone(s)` on a `String` passes `karac check`, then `__mir-run` refuses it: "a type that failed to check is not lowered yet" | — |
 | B-2026-11-09-33 | 2026-11-09 | cli | medium | kara-lsp: incremental user-code checking -- a completion re-checks the whole buffer and the unpruned library on every request: 186 ms on a 5-line file, 428 ms mid-file in mini_parsy (4.9k lines), 1.54 s in mini_markdown (14.8k lines) | — |
+| B-2026-11-09-34 | 2026-11-09 | mir-llvm | high | A program's own `struct Response { status, body, headers }` (io.md § HTTP server) is also what `Client.get`/`send` return, and the compiled client wrote only fields 0 and 1: `headers` stayed unwritten and its drop freed garbage (`free(): invalid pointer` / SIGSEGV; interpreter right) | — |
 
 ### Relocated
 
