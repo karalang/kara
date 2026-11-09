@@ -10937,9 +10937,50 @@ impl<'a> super::TypeChecker<'a> {
         }
         // The names the value reads, each with whether it is read as an
         // element (`v[i]`).
+        // `dist.iter().max().unwrap()`: a chain that only walks the
+        // collection named at its root and picks one of its elements, so it
+        // reads an element as `dist[i]` does (kata 2050's Rust arm).
+        fn element_of(e: &Expr) -> Option<&str> {
+            const PICK: &[&str] = &[
+                "unwrap",
+                "unwrap_or",
+                "expect",
+                "max",
+                "min",
+                "sum",
+                "product",
+                "next",
+                "last",
+                "first",
+                "copied",
+                "cloned",
+                "rev",
+            ];
+            let mut at = e;
+            let mut walked = false;
+            while let ExprKind::MethodCall { object, method, .. } = &at.kind {
+                match method.as_str() {
+                    "iter" | "into_iter" | "first" | "last" | "get"
+                        if matches!(object.kind, ExprKind::Identifier(_)) =>
+                    {
+                        walked = true
+                    }
+                    m if PICK.contains(&m) => {}
+                    _ => return None,
+                }
+                at = object;
+            }
+            match &at.kind {
+                ExprKind::Identifier(n) if walked => Some(n.as_str()),
+                _ => None,
+            }
+        }
         fn names<'e>(e: &'e Expr, out: &mut Vec<(&'e str, bool)>) {
             match &e.kind {
                 ExprKind::Identifier(n) => out.push((n.as_str(), false)),
+                ExprKind::MethodCall { .. } if element_of(e).is_some() => {
+                    out.extend(element_of(e).map(|n| (n, true)))
+                }
                 ExprKind::Index { object, .. } => {
                     if let ExprKind::Identifier(n) = &object.kind {
                         out.push((n.as_str(), true));
@@ -10951,8 +10992,11 @@ impl<'a> super::TypeChecker<'a> {
                     names(right, out);
                 }
                 // `(total - a).abs()`: a numeric method keeps its
-                // receiver's type.
-                ExprKind::MethodCall { object, .. } => names(object, out),
+                // receiver's type. Not past a walk of a collection, whose
+                // `count()` or `len()` is no element of it.
+                ExprKind::MethodCall { object, .. } if element_of(object).is_none() => {
+                    names(object, out)
+                }
                 _ => {}
             }
         }
