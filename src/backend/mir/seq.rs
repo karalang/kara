@@ -87,7 +87,7 @@ impl<'ctx> Cx<'ctx, '_> {
         v: PointerValue<'ctx>,
         x: PointerValue<'ctx>,
         et: Ty,
-        room: Option<IntValue<'ctx>>,
+        room: Option<(IntValue<'ctx>, bool)>,
     ) -> R<()> {
         let size = self.layout(et)?.size;
         if size == 0 {
@@ -100,7 +100,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .builder
             .build_int_compare(IntPredicate::UGE, len, cap, "full")
             .map_err(e)?;
-        if let Some(room) = room {
+        if let Some((room, _)) = room {
             let within = self
                 .builder
                 .build_int_compare(IntPredicate::SLT, len, room, "within")
@@ -112,10 +112,19 @@ impl<'ctx> Cx<'ctx, '_> {
         let buf = self.load_ptr(v)?;
         let at = self.elem_ptr(buf, len, size)?;
         self.copy(at, x, et)?;
-        let len = self
-            .builder
-            .build_int_add(len, self.i64(1), "")
-            .map_err(e)?;
+        // `len < cap` here, and a capacity's bytes fit an `isize`, so the
+        // bump cannot wrap. In a fill copy whose room is its exact length,
+        // saying so (`nsw`) lets LLVM compare the fill's lengths against
+        // that reach, signed, and drop the growth path (B-2026-11-09-26).
+        // Elsewhere it only moved registers around: kata 459's search
+        // spilled a base, and a reserved fill indexed later lost LLVM's
+        // proof of its length.
+        let len = if matches!(room, Some((_, true))) {
+            self.builder.build_int_nsw_add(len, self.i64(1), "")
+        } else {
+            self.builder.build_int_add(len, self.i64(1), "")
+        }
+        .map_err(e)?;
         self.store(lenp, len.into())
     }
 

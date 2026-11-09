@@ -4,8 +4,9 @@
 //! the legacy backend (kata 20's bracket runs, B-2026-10-31-42). The
 //! second run refills the same vector after a counter reset, to a bound
 //! `depth - 1`. The pins: the program prints the same under both
-//! backends, each run's push in the fill function's IR compares the
-//! length with the room (`%within`), and with the pass off
+//! backends, each run's push in the fill function's IR (and its loop
+//! copy's) compares the length with the room (`%within`), and with the
+//! pass off
 //! (`KARAC_MIR_PRESIZE=0`) none does, so the pin can fail.
 #![cfg(feature = "llvm")]
 
@@ -121,7 +122,9 @@ fn a_presized_fill_skips_the_capacity_check() {
             .filter(|l| l.trim_start().starts_with("%within") && l.contains("icmp slt"))
             .count()
     };
-    assert_eq!(within(&ir), 2, "{}", ir.join("\n"));
+    // Each run's push, and the push of the copy `presize` makes of its
+    // loop for when the room covers every trip (B-2026-11-09-26).
+    assert_eq!(within(&ir), 4, "{}", ir.join("\n"));
     let Some((off, ran)) = build(&d, "0") else {
         return;
     };

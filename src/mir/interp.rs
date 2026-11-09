@@ -1770,8 +1770,8 @@ impl<'a> Interp<'a> {
             }
             // A push in a fill `mir::presize` reserved room for, whose
             // third argument is that room: a push here.
-            ("Vec", "push") | ("Vec", "__push_within")
-                if args.len() == 2 || (method == "__push_within" && args.len() == 3) =>
+            ("Vec", "push") | ("Vec", "__push_within") | ("Vec", "__push_exact")
+                if args.len() == 2 || (method != "push" && args.len() == 3) =>
             {
                 let mut args = args.into_iter();
                 let (Some(v), Some(val)) = (args.next(), args.next()) else {

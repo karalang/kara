@@ -1223,7 +1223,7 @@ impl Chain<'_> {
         };
         // `__push_within` is a push in a fill `mir::presize` reserved for;
         // the loop's tasks are lowered afresh, each pushing its own `Vec`.
-        let within = f.name.ends_with("].__push_within");
+        let within = f.name.ends_with("].__push_within") || f.name.ends_with("].__push_exact");
         if !(f.name.starts_with("Vec[") && (f.name.ends_with("].push") || within)) {
             return None;
         }

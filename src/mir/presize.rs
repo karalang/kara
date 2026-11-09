@@ -84,11 +84,31 @@ struct Plan {
     /// A text whose `len()` is the bound, worked out where the
     /// reservation is made (`plan_chars`), and the type of a borrow of it.
     len_of: Option<(Place, Ty)>,
+    /// What [`version`] needs to copy the loop for a reservation that
+    /// covers every trip.
+    version: Option<Version>,
+}
+
+/// A presized loop [`version`] can copy.
+struct Version {
+    /// The loop's blocks.
+    blocks: Vec<bool>,
+    header: usize,
+    /// The seed pushes `delta` counts.
+    seeds: i128,
+    /// The counter and the block of its unchecked `i = i + 1`, when the
+    /// guard `i < bound` runs before the step on every trip: the step
+    /// then cannot overflow, and the copy takes it as a checked add,
+    /// which the backend emits as `add nsw` (B-2026-11-09-26).
+    step: Option<(Local, usize)>,
 }
 
 /// Adds a `presize` after each `Vec.new()` a counting loop fills, and
-/// after the iterator of each chars walk that fills a vector.
-pub fn presize_pushes(body: &mut Body, tys: &TyInterner) {
+/// after the iterator of each chars walk that fills a vector. With
+/// `copies`, a fill whose reservation can cover every trip also gets the
+/// loop copy [`version`] makes; auto-par's recording build leaves it out,
+/// since each copy would be a loop of its own to judge.
+pub fn presize_pushes(body: &mut Body, tys: &TyInterner, copies: bool) {
     if body.blocks.is_empty() {
         return;
     }
@@ -114,7 +134,10 @@ pub fn presize_pushes(body: &mut Body, tys: &TyInterner) {
             }
         }
     }
-    for p in plans {
+    for mut p in plans {
+        if !copies {
+            p.version = None;
+        }
         apply(body, tys, p);
     }
 }
@@ -599,6 +622,11 @@ fn plan(
         },
         other: writes.other.clone(),
     };
+    let unchecked = plain_increment(body, &steps, i)
+        .filter(|&(cb, c)| {
+            mask(c, bits) == 1 && op == BinOp::Lt && cb != g && dominates(idom, g, cb)
+        })
+        .map(|(cb, _)| (i, cb));
     let step = match increment(body, &steps, i) {
         Some((cb, _, c)) => mask(c, bits) == 1 && dominates_latches(cb),
         // A range `for` steps with an unchecked add: its guard keeps `i`
@@ -708,6 +736,7 @@ fn plan(
         };
         let adj = i128::from(op == BinOp::Le);
         let delta = seeds + adj - k;
+        let mut seeds_in = seeds;
         // `for i in s..s + n`: the bound less the start is `n`
         // (B-2026-11-09-6).
         let bound = match from {
@@ -780,6 +809,7 @@ fn plan(
                             Some(b) => {
                                 nb = chain[0];
                                 delta -= seeds;
+                                seeds_in = 0;
                                 b
                             }
                             None => continue,
@@ -801,6 +831,12 @@ fn plan(
             delta,
             fills: fill_blocks,
             len_of: None,
+            version: Some(Version {
+                blocks: lp.blocks.clone(),
+                header: lp.header,
+                seeds: seeds_in,
+                step: unchecked,
+            }),
         });
     }
     out
@@ -1087,6 +1123,7 @@ fn plan_chars(body: &Body, tys: &TyInterner, preds: &[Vec<usize>], lp: &Loop) ->
             delta: 0,
             fills,
             len_of: Some((text.clone(), body.local(r.local).ty)),
+            version: None,
         });
     }
     out
@@ -1096,8 +1133,19 @@ fn plan_chars(body: &Body, tys: &TyInterner, preds: &[Vec<usize>], lp: &Loop) ->
 /// Vec.presize(move r, bound, delta) -> t`. A chars walk's reservation
 /// follows `it = String.chars(..)` instead, after `t = &text;
 /// n = String.len(move t)` works out its bound.
-fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
+fn apply(body: &mut Body, tys: &TyInterner, mut p: Plan) {
     let vty = body.local(p.v).ty;
+    // A copy of the loop needs the bound as an `i64` to add to the length
+    // (a text's length is worked out here, and its fill is not a `Vec`'s).
+    let i64t = tys.intern(TyKind::Int(super::ty::IntTy::I64));
+    let versioned_bound = match &p.bound {
+        Operand::Const(c) if c.ty == i64t => Some(p.bound.clone()),
+        Operand::Copy(q) if q.projection.is_empty() && body.local(q.local).ty == i64t => {
+            Some(p.bound.clone())
+        }
+        _ => None,
+    }
+    .filter(|_| p.len_of.is_none());
     let x = BasicBlock(body.blocks.len() as u32);
     let info = body.blocks[p.new_block].terminator.source_info;
     // After `Vec.new()`'s call, or on a filled vector's way into the loop.
@@ -1124,9 +1172,9 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
     let r = fresh(tys.intern(TyKind::MutRef(vty)));
     let room = fresh(tys.intern(TyKind::Int(super::ty::IntTy::I64)));
     // A text's length, worked out first: `t = &text; n = String.len(move t)`.
-    let mut bound = p.bound;
+    let mut bound = p.bound.clone();
     let mut added = vec![x];
-    let text = p.len_of.map(|(text, ref_ty)| {
+    let text = p.len_of.take().map(|(text, ref_ty)| {
         (
             text,
             fresh(ref_ty),
@@ -1210,7 +1258,7 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
     // The fill's pushes know the length the room reaches: inside the loop
     // `v` is only read besides them, so its length only grows and its
     // capacity stays at least that, and a push below it has space.
-    for b in p.fills {
+    for &b in &p.fills {
         let TerminatorKind::Call { func, args, .. } = &mut body.blocks[b].terminator.kind else {
             continue;
         };
@@ -1232,6 +1280,371 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
         inst.name = format!("{base}.__push_within");
         inst.def = DefId(u32::MAX);
         args.push(Operand::Copy(Place::local(room)));
+    }
+    if let (Some(v), Some(bound)) = (p.version.take(), versioned_bound) {
+        version(body, tys, &p, v, bound, room, info);
+    }
+}
+
+/// Is `v` the receiver of an `index` or `index_mut` call anywhere in
+/// `body`, through a borrow of the whole local?
+fn indexed(body: &Body, v: Local) -> bool {
+    let borrows: Vec<Local> = body
+        .blocks
+        .iter()
+        .flat_map(|b| &b.statements)
+        .filter_map(|s| match &s.kind {
+            StatementKind::Assign(d, Rvalue::Ref(_, q))
+                if d.projection.is_empty() && *q == Place::local(v) =>
+            {
+                Some(d.local)
+            }
+            _ => None,
+        })
+        .collect();
+    body.blocks.iter().any(|b| {
+        let TerminatorKind::Call { func, args, .. } = &b.terminator.kind else {
+            return false;
+        };
+        let Operand::Const(Const {
+            kind: ConstKind::FnDef(inst),
+            ..
+        }) = func
+        else {
+            return false;
+        };
+        (inst.name.ends_with(".index") || inst.name.ends_with(".index_mut"))
+            && matches!(args.first(), Some(Operand::Move(r) | Operand::Copy(r))
+                if r.projection.is_empty() && borrows.contains(&r.local))
+    })
+}
+
+/// Copies a presized fill's loop for when the reservation covers every
+/// trip (B-2026-11-09-26). `room` is the length the reservation reaches,
+/// clamped to [`MAX_ROOM_BYTES`], so LLVM cannot show a push below it
+/// from the loop's own bound, and each trip keeps both tests, which stops
+/// the loop vectorizing (kata 484's fill, 7 instructions an element). On
+/// the way in, `exact = len(v) + bound + delta - seeds` is the length the
+/// last trip leaves; when `exact <= room` the copy runs, its pushes taking
+/// `exact` as their reach, which the loop's bound implies. A push at or
+/// past `exact` still tests the capacity, so a wrong count costs time,
+/// not memory; and `exact` wrapping only makes it smaller.
+fn version(
+    body: &mut Body,
+    tys: &TyInterner,
+    p: &Plan,
+    Version {
+        blocks: in_loop,
+        header,
+        seeds,
+        step,
+    }: Version,
+    bound: Operand,
+    room: Local,
+    info: SourceInfo,
+) {
+    if std::env::var("KARAC_MIR_PRESIZE_VERSION").as_deref() == Ok("0") {
+        return;
+    }
+    // Only a vector of scalars can store several pushes at once; a text's
+    // pushes encode a character each, and a copy of their loop is only
+    // more code (kata 459's main spilled a register for one).
+    let TyKind::Intrinsic(IntrinsicTy::Vec(et)) = tys.kind(body.local(p.v).ty) else {
+        return;
+    };
+    if !matches!(
+        tys.kind(et),
+        TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_)
+    ) {
+        return;
+    }
+    // Past the copies' join LLVM no longer knows the vector's length, which
+    // a vector the function goes on to index needs to drop its checks
+    // (kata 718's DP, `run[j]` with `j <= n`, ran 1.8x the instructions).
+    if indexed(body, p.v) {
+        return;
+    }
+    let i64t = tys.intern(TyKind::Int(super::ty::IntTy::I64));
+    let n = in_loop.len();
+    // The one way into the loop from outside it.
+    let entries: Vec<usize> = (0..body.blocks.len())
+        .filter(|&b| b >= n || !in_loop[b])
+        .filter(|&b| {
+            body.blocks[b]
+                .terminator
+                .kind
+                .successors()
+                .iter()
+                .any(|t| t.index() == header)
+        })
+        .collect();
+    let [entry] = entries[..] else {
+        return;
+    };
+    let vty = body.local(p.v).ty;
+    let step_ty = step.map(|(i, _)| body.local(i).ty);
+    let mut fresh = |ty| {
+        let l = Local(body.locals.len() as u32);
+        body.locals.push(LocalDecl {
+            ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Temp,
+            source_info: info,
+        });
+        l
+    };
+    let r = fresh(tys.intern(TyKind::Ref(vty)));
+    let len = fresh(i64t);
+    let sum = fresh(i64t);
+    let exact = fresh(i64t);
+    let fits = fresh(tys.intern(TyKind::Bool));
+    let pair = step_ty.map(|t| fresh(tys.intern(TyKind::Tuple(vec![t, tys.intern(TyKind::Bool)]))));
+    // The copy of each loop block, by index.
+    let mut copy = vec![usize::MAX; n];
+    for (b, c) in copy.iter_mut().enumerate() {
+        if in_loop[b] {
+            *c = body.blocks.len();
+            let data = body.blocks[b].clone();
+            body.blocks.push(data);
+        }
+    }
+    let to_copy = |t: &mut BasicBlock| {
+        if t.index() < n && in_loop[t.index()] {
+            *t = BasicBlock(copy[t.index()] as u32);
+        }
+    };
+    for b in (0..n).filter(|&b| in_loop[b]) {
+        let c = copy[b];
+        match &mut body.blocks[c].terminator.kind {
+            TerminatorKind::Goto { target } => to_copy(target),
+            TerminatorKind::SwitchInt { targets, .. } => {
+                for (_, t) in targets.values.iter_mut() {
+                    to_copy(t);
+                }
+                to_copy(&mut targets.otherwise);
+            }
+            TerminatorKind::Call {
+                target: Some(t), ..
+            } => to_copy(t),
+            TerminatorKind::Drop { target, .. } => to_copy(target),
+            _ => {}
+        }
+        // The copy's pushes reach `exact`, as `__push_exact`.
+        if p.fills.contains(&b) {
+            if let TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                args,
+                ..
+            } = &mut body.blocks[c].terminator.kind
+            {
+                if let Some(base) = inst.name.strip_suffix(".__push_within") {
+                    inst.name = format!("{base}.__push_exact");
+                    if let Some(last) = args.last_mut() {
+                        *last = Operand::Copy(Place::local(exact));
+                    }
+                }
+            }
+        }
+    }
+    // The copy's step, `i = i + 1` under `i < bound`, as the checked
+    // `t = i +? 1`, an overflow abort on `t.1`, and `i = t.0`: the add
+    // cannot overflow, and a checked add of a constant is emitted as
+    // `add nsw`, which lets LLVM count the copy's trips. The abort edge
+    // keeps `t.0` a value `range_bounds` follows (kata 718's DP indexes
+    // the filled vector off its counter).
+    let mut split: Option<(usize, [usize; 2])> = None;
+    if let (Some((i, cb)), Some(pair)) = (step, pair) {
+        let ity = body.local(i).ty;
+        let c = copy[cb];
+        let at = body.blocks[c].statements.iter().position(|s| {
+            matches!(&s.kind, StatementKind::Assign(d, Rvalue::BinaryOp(BinOp::Add, Operand::Copy(a), Operand::Const(_)))
+                if *d == Place::local(i) && *a == Place::local(i))
+        });
+        if let Some(at) = at {
+            let si = body.blocks[c].statements[at].source_info;
+            let StatementKind::Assign(_, Rvalue::BinaryOp(_, a, k)) =
+                body.blocks[c].statements[at].kind.clone()
+            else {
+                unreachable!("matched above");
+            };
+            let rest = body.blocks.len();
+            let abort = rest + 1;
+            let mut tail = body.blocks[c].statements.split_off(at);
+            tail[0].kind = StatementKind::Assign(
+                Place::local(i),
+                Rvalue::Use(Operand::Copy(Place::local(pair).field(0, ity))),
+            );
+            let bool_t = tys.intern(TyKind::Bool);
+            let head = &mut body.blocks[c];
+            head.statements.push(Statement {
+                kind: StatementKind::Assign(
+                    Place::local(pair),
+                    Rvalue::CheckedBinaryOp(BinOp::Add, a, k),
+                ),
+                source_info: si,
+            });
+            let term = std::mem::replace(
+                &mut head.terminator,
+                Terminator {
+                    kind: TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(pair).field(1, bool_t)),
+                        targets: SwitchTargets::if_else(
+                            BasicBlock(abort as u32),
+                            BasicBlock(rest as u32),
+                        ),
+                    },
+                    source_info: si,
+                },
+            );
+            body.blocks.push(BasicBlockData {
+                statements: tail,
+                terminator: term,
+            });
+            body.blocks.push(BasicBlockData {
+                statements: Vec::new(),
+                terminator: Terminator {
+                    kind: TerminatorKind::Abort {
+                        reason: AbortReason::Overflow,
+                    },
+                    source_info: si,
+                },
+            });
+            split = Some((cb, [rest, abort]));
+        }
+    }
+    // `len = Vec.len(&v)`, then the test, on the edge into the loop.
+    let check = body.blocks.len();
+    let test = check + 1;
+    let assign = |l: Local, rv: Rvalue| Statement {
+        kind: StatementKind::Assign(Place::local(l), rv),
+        source_info: info,
+    };
+    body.blocks.push(BasicBlockData {
+        statements: vec![assign(
+            r,
+            Rvalue::Ref(BorrowKind::Shared, Place::local(p.v)),
+        )],
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                func: Operand::Const(Const {
+                    ty: tys.intern(TyKind::Unit),
+                    kind: ConstKind::FnDef(InstanceId {
+                        def: DefId(u32::MAX),
+                        args: Vec::new(),
+                        name: format!("{}.len", tys.display(vty)),
+                    }),
+                }),
+                args: vec![Operand::Move(Place::local(r))],
+                destination: Place::local(len),
+                target: Some(BasicBlock(test as u32)),
+                unwind: UnwindAction::Abort,
+            },
+            source_info: info,
+        },
+    });
+    let konst = |v: i128| {
+        Operand::Const(Const {
+            ty: i64t,
+            kind: ConstKind::Scalar(v as u64 as u128),
+        })
+    };
+    body.blocks.push(BasicBlockData {
+        statements: vec![
+            assign(
+                sum,
+                Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(len)), bound),
+            ),
+            assign(
+                exact,
+                Rvalue::BinaryOp(
+                    BinOp::Add,
+                    Operand::Copy(Place::local(sum)),
+                    konst(p.delta - seeds),
+                ),
+            ),
+            assign(
+                fits,
+                Rvalue::BinaryOp(
+                    BinOp::Le,
+                    Operand::Copy(Place::local(exact)),
+                    Operand::Copy(Place::local(room)),
+                ),
+            ),
+        ],
+        terminator: Terminator {
+            kind: TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(fits)),
+                targets: SwitchTargets::if_else(
+                    BasicBlock(copy[header] as u32),
+                    BasicBlock(header as u32),
+                ),
+            },
+            source_info: info,
+        },
+    });
+    let into = |t: &mut BasicBlock| {
+        if t.index() == header {
+            *t = BasicBlock(check as u32);
+        }
+    };
+    match &mut body.blocks[entry].terminator.kind {
+        TerminatorKind::Goto { target } => into(target),
+        TerminatorKind::SwitchInt { targets, .. } => {
+            for (_, t) in targets.values.iter_mut() {
+                into(t);
+            }
+            into(&mut targets.otherwise);
+        }
+        TerminatorKind::Call {
+            target: Some(t), ..
+        } => into(t),
+        TerminatorKind::Drop { target, .. } => into(target),
+        _ => {}
+    }
+    // A region branch holding a loop block holds its copy, and one holding
+    // the entry holds the test.
+    let entry_bb = BasicBlock(entry as u32);
+    // A loop block's copy, and the blocks its step was split into.
+    let copies_of = |b: usize| {
+        let mut out = vec![BasicBlock(copy[b] as u32)];
+        if let Some((_, extra)) = split.filter(|&(cb, _)| cb == b) {
+            out.extend(extra.map(|x| BasicBlock(x as u32)));
+        }
+        out
+    };
+    for region in body
+        .par_regions
+        .iter_mut()
+        .chain(body.auto_par_candidates.iter_mut())
+    {
+        for branch in &mut region.branches {
+            let mut more = Vec::new();
+            for b in branch.iter() {
+                if b.index() < n && in_loop[b.index()] {
+                    more.extend(copies_of(b.index()));
+                }
+                if *b == entry_bb {
+                    more.extend([BasicBlock(check as u32), BasicBlock(test as u32)]);
+                }
+            }
+            branch.extend(more);
+        }
+    }
+    for region in &mut body.provided {
+        let mut more = Vec::new();
+        for b in &region.blocks {
+            if b.index() < n && in_loop[b.index()] {
+                more.extend(copies_of(b.index()));
+            }
+            if *b == entry_bb {
+                more.extend([BasicBlock(check as u32), BasicBlock(test as u32)]);
+            }
+        }
+        region.blocks.extend(more);
     }
 }
 

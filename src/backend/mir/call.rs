@@ -1541,12 +1541,14 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // A push in a fill `presize` reserved `room` for: below it the
             // buffer has space by construction.
-            ("Vec", "__push_within") => {
+            // `__push_exact` is one in a copy of such a fill whose room is
+            // the fill's exact final length (`mir::presize::version`).
+            ("Vec", m @ ("__push_within" | "__push_exact")) => {
                 let v = self.ref_arg(&args[0])?;
                 let et = self.vec_elem(name, &args[0])?;
                 let x = self.operand_as(&args[1], et)?;
                 let room = self.int_arg(&args[2])?;
-                self.vec_push_within(v, x, et, Some(room))
+                self.vec_push_within(v, x, et, Some((room, m == "__push_exact")))
             }
             ("Vec", "push") => {
                 let v = self.ref_arg(&args[0])?;

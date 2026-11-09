@@ -15666,9 +15666,10 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// through `RangeInclusive.next` and grows the vector as it goes, 12
     /// instructions an element on kata 484 (B-2026-11-08-61).
     ///
-    /// `a..=b` runs as `a..b + 1` below the type's largest value, so the
-    /// loop has one exit and LLVM vectorizes it; at the largest value it
-    /// runs `a..b` and pushes `b` after.
+    /// `a..=b` runs as `a..b + 1` below the type's largest value, a loop
+    /// of its own with that one bound, so LLVM can count its pushes
+    /// against it and vectorize it (B-2026-11-09-26); at the largest value
+    /// a second loop runs `a..b` and pushes `b` after.
     fn collect_range(
         &mut self,
         e: &'a Expr,
@@ -15687,67 +15688,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 kind: ConstKind::Scalar(v),
             })
         };
+        // A start the loops copy: a constant as it is, anything else read
+        // once into a local.
+        let start = match start {
+            Operand::Const(_) => start,
+            other => {
+                let s = self.temp(t);
+                self.assign(s, Rvalue::Use(other));
+                Operand::Copy(Place::local(s))
+            }
+        };
         let end_t = self.temp(t);
         self.assign(end_t, Rvalue::Use(end));
-        let top = match self.tys().kind(t) {
-            super::ty::TyKind::Int(it) => {
-                Some(u128::MAX >> (128 - (it.bits() - u32::from(it.signed()))))
-            }
-            _ => None,
-        };
-        // The exclusive bound, and whether `b` itself is pushed after.
-        let (bound, extra) = match (inclusive, top) {
-            (false, _) => (end_t, None),
-            (true, top) => {
-                let bound = self.temp(t);
-                let extra = self.temp(bool_t);
-                let at_top = self.b.new_block();
-                let join = self.b.new_block();
-                if let Some(top) = top {
-                    let below = self.temp(bool_t);
-                    self.assign(
-                        below,
-                        Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(Place::local(end_t)), konst(top)),
-                    );
-                    let under = self.b.new_block();
-                    self.goto_with(
-                        TerminatorKind::SwitchInt {
-                            discr: Operand::Copy(Place::local(below)),
-                            targets: SwitchTargets::if_else(under, at_top),
-                        },
-                        under,
-                    );
-                    self.assign(
-                        bound,
-                        Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(end_t)), konst(1)),
-                    );
-                    self.assign(
-                        extra,
-                        Rvalue::Use(Operand::Const(Const {
-                            ty: bool_t,
-                            kind: ConstKind::Scalar(0),
-                        })),
-                    );
-                    self.goto(join);
-                } else {
-                    self.goto(at_top);
-                }
-                self.cur = at_top;
-                self.assign(bound, Rvalue::Use(Operand::Copy(Place::local(end_t))));
-                self.assign(
-                    extra,
-                    Rvalue::BinaryOp(BinOp::Le, start.clone(), Operand::Copy(Place::local(end_t))),
-                );
-                self.goto(join);
-                self.cur = join;
-                (bound, Some(extra))
-            }
-        };
         let v = self.scoped_temp(vt);
-        self.call_native(&format!("{name}.new"), vec![], Place::local(v));
-        // The counter starts on the loop's way in, where `presize` looks.
-        let i = self.temp(t);
-        self.assign(i, Rvalue::Use(start));
         let mt = self.tys().tcx().reference(vt, true);
         let unit_t = self.unit();
         let push = |this: &mut Self, x: Local| {
@@ -15763,47 +15716,94 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Place::local(u),
             );
         };
-        let head = self.b.new_block();
-        let body_bb = self.b.new_block();
-        let exit = self.b.new_block();
-        self.goto(head);
-        self.cur = head;
-        let c = self.temp(bool_t);
-        self.assign(
-            c,
-            Rvalue::BinaryOp(
-                BinOp::Lt,
-                Operand::Copy(Place::local(i)),
-                Operand::Copy(Place::local(bound)),
-            ),
-        );
-        self.goto_with(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::local(c)),
-                targets: SwitchTargets::if_else(body_bb, exit),
-            },
-            body_bb,
-        );
-        push(self, i);
-        self.assign(
-            i,
-            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), konst(1)),
-        );
-        self.goto(head);
-        self.cur = exit;
-        if let Some(extra) = extra {
+        // `v = Vec.new()` and a push of each of `start..bound`, from the
+        // current block, ending in the loop's exit.
+        let fill = |this: &mut Self, bound: Local| {
+            this.call_native(&format!("{name}.new"), vec![], Place::local(v));
+            let i = this.temp(t);
+            this.assign(i, Rvalue::Use(start.clone()));
+            let head = this.b.new_block();
+            let body_bb = this.b.new_block();
+            let exit = this.b.new_block();
+            this.goto(head);
+            this.cur = head;
+            let c = this.temp(bool_t);
+            this.assign(
+                c,
+                Rvalue::BinaryOp(
+                    BinOp::Lt,
+                    Operand::Copy(Place::local(i)),
+                    Operand::Copy(Place::local(bound)),
+                ),
+            );
+            this.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(c)),
+                    targets: SwitchTargets::if_else(body_bb, exit),
+                },
+                body_bb,
+            );
+            push(this, i);
+            this.assign(
+                i,
+                Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), konst(1)),
+            );
+            this.goto(head);
+            this.cur = exit;
+        };
+        let top = match self.tys().kind(t) {
+            super::ty::TyKind::Int(it) => {
+                Some(u128::MAX >> (128 - (it.bits() - u32::from(it.signed()))))
+            }
+            _ => None,
+        };
+        if !inclusive {
+            fill(self, end_t);
+        } else {
+            let join = self.b.new_block();
+            let at_top = self.b.new_block();
+            if let Some(top) = top {
+                let below = self.temp(bool_t);
+                self.assign(
+                    below,
+                    Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(Place::local(end_t)), konst(top)),
+                );
+                let under = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(below)),
+                        targets: SwitchTargets::if_else(under, at_top),
+                    },
+                    under,
+                );
+                let bound = self.temp(t);
+                self.assign(
+                    bound,
+                    Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(end_t)), konst(1)),
+                );
+                fill(self, bound);
+                self.goto(join);
+            } else {
+                self.goto(at_top);
+            }
+            self.cur = at_top;
+            fill(self, end_t);
+            let extra = self.temp(bool_t);
+            self.assign(
+                extra,
+                Rvalue::BinaryOp(BinOp::Le, start.clone(), Operand::Copy(Place::local(end_t))),
+            );
             let last = self.b.new_block();
-            let done = self.b.new_block();
             self.goto_with(
                 TerminatorKind::SwitchInt {
                     discr: Operand::Copy(Place::local(extra)),
-                    targets: SwitchTargets::if_else(last, done),
+                    targets: SwitchTargets::if_else(last, join),
                 },
                 last,
             );
             push(self, end_t);
-            self.goto(done);
-            self.cur = done;
+            self.goto(join);
+            self.cur = join;
         }
         self.assign(dest, Rvalue::Use(Operand::Move(Place::local(v))));
         self.pop_scope()
@@ -29384,7 +29384,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             crate::mir::popcount::count_bit_loops(body, &lowered.tys);
         }
         if presize {
-            crate::mir::presize::presize_pushes(body, &lowered.tys);
+            crate::mir::presize::presize_pushes(body, &lowered.tys, !lowered.auto_par_record);
         }
         if halving && !coroutines.contains(&body.instance.name) {
             crate::mir::halving::halve_non_negative(body, &lowered.tys, &|n| !names.contains(n));
