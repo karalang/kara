@@ -139,7 +139,7 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   stores without dropping, as design.md § Raw pointers now says. The first
   was refused as a move out of the collection, the second as a move out of
   a borrowed place, and the MIR interpreter stopped at the third
-  (B-2026-11-09-19).
+  (B-2026-11-09-20).
 - `T.from(x)` under `T: From[X]` and `T.try_from(x)` under `T: TryFrom[X]`
   call the instance's conversion: the library's `From` and `TryFrom` now
   declare `from` and `try_from` as design.md § Conversion traits writes

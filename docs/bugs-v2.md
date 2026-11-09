@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 201 |
-| false-positive | 163 |
+| false-positive | 164 |
 | perf | 138 |
 | missing-feature | 113 |
 | soundness | 55 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 316 |
 | mir-llvm | 172 |
-| mir | 148 |
+| mir | 149 |
 | cli | 89 |
 | ownership | 64 |
 | parser | 52 |
@@ -109,7 +109,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
-| B-2026-11-08-87 | 2026-11-08 | mir-llvm | low | PriorityQueue's sift-to-bottom loop still takes 18 instructions a level against Rust BinaryHeap's 9-12 after B-2026-11-08-10: a swap (2 loads, 2 stores, 2 bounds checks) where Rust moves a hole, and an overflow check on `2 * i + 1` (kata 480: 4.36G instructions against Rust's 3.63G) | — |
 | B-2026-11-09-14 | 2026-11-09 | typecheck+cli | medium | Rust's `binary_search` taken apart as a `Result` has no fix: `xs.binary_search(&v).unwrap_or_else(|x| x)` is refused with "expected 'OnceFn() -> i64', found 'Fn(?T) -> ?T'" and `match xs.binary_search(&v) { Ok(i) => .., Err(i) => .. }` with a generic pattern error, though Kāra's `binary_search` returns `Option[i64]` and `partition_point(|y| y < v)` is the insertion point | — |
 | B-2026-11-09-19 | 2026-11-09 | mir | medium | `v.contains(d)` with a float needle on a `Vec[u8]` (`let d = 1.5`) passes `karac check`; the interpreter then stops with "Eq on Int(1) and Float(1.5)" and the binary prints `false`, while `Set[u8].contains(d)` and a `u8` parameter refuse the same float | — |
 
@@ -916,6 +915,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-84 | mir-llvm | high | Index assignment into a `Vec[dyn Trait]` (`xs[i] = v`) leaves a freed block in the slot on the LLVM backend: heap-use-after-free on the next call thr… | d308599fbb |
 | B-2026-11-08-85 | mir-llvm+runtime | medium | `sort()` on a Vec of tuples runs about 3.3x Rust's stable `sort`: anything but a plain integer goes to the runtime's byte-wise `merge_sort` with the… | d308599fbb |
 | B-2026-11-08-86 | typecheck | medium | A range of bare literals takes `i64` where it is written, so `(1..=5).collect()` (or `.filter(..)`, `.map(..)` first) into a `Vec[i32]` return or bin… | 1a8ab6b981 |
+| B-2026-11-08-87 | mir-llvm | low | PriorityQueue's sift-to-bottom loop still takes 18 instructions a level against Rust BinaryHeap's 9-12 after B-2026-11-08-10: a swap (2 loads, 2 stor… | f6dfaaa342 |
 | B-2026-11-08-88 | typecheck+cli | low | A plain list literal's element literal is not fixed by where the binding goes (the remainder of B-2026-11-08-57): `let mut v = [0, 0]; g(mut v)` with… | 1a8ab6b981 |
 | B-2026-11-08-89 | typecheck | high | A `Vec[(i64, i64)]` is accepted for a `Vec[(i64, u64)]` parameter (a tuple inside a generic argument is compared by the value rule, not the layout ru… | ee2d9fee79 |
 | B-2026-11-09-1 | mir-llvm | low | A tuple comparison (`a >= b` on `(i64, i64, i64)`) lowers through `cmp`'s Ordering: each element takes setg/inc/cmp/cmov (about 7 instructions) where… | 6d16b370c8 |
@@ -934,6 +934,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-16 | ownership | medium | A move inside a `let … else` else block is reported E0500 "value 'x' moved here, used again here (moved at line L)" against a move of the same bindin… | 6db1634956 |
 | B-2026-11-09-17 | typecheck | low | `.slice(a, b)` on a `Vec`, an array or a slice (JavaScript's spelling of a run of elements) gets a bare "no method 'slice' on type 'Vec'", with no po… | e9cca2f951 |
 | B-2026-11-09-18 | typecheck | low | `c as u8` on a `char` (LeetCode's Rust template for 1079, `count[(c as u8 - b'A') as usize]`) is refused with a help naming `c as u32 as u8` but no m… | 10ef8e8c7a |
+| B-2026-11-09-20 | mir | low | A raw pointer cannot reach a non-`Copy` element: `ptr.mut(xs[i])` is refused as a move out of the collection, `p.read()` as a move out of a borrowed… | f6dfaaa342 |
 
 </details>
 
