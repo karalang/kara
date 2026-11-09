@@ -1,0 +1,9 @@
+"cat and  dog" -> 3
+"!this  1-s b8d!" -> 0
+"alice and  bob are playing stone-game10" -> 5
+"he bought 2 pencils, 3 erasers, and 1  pencil-sharpener." -> 6
+"a-b-c a- -a a-b. a-b! ab, a!b ., ,. - !" -> 4
+"  x  " -> 1
+"a--b a-. -. q-r-," -> 0
+2000 sentences: 4205 valid words, checksum 522516690
+3000 long sentences: 133397 valid words, checksum 113443179

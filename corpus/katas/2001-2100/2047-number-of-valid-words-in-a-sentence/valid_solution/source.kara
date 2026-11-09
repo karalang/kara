@@ -1,0 +1,104 @@
+// LeetCode #2047: Number of Valid Words in a Sentence -- LeetCode's Rust
+// template (`sentence.split_whitespace().filter(|w| Self::valid(w))`, a
+// byte walk over `w.as_bytes()` with `u8::is_ascii_digit` and
+// `is_ascii_lowercase`, `||` and `&&`, `as i32`), carried by `karac fix` in
+// two rounds. The adapter below hands the harness's `Str` to it.
+
+struct Solution {}
+
+impl Solution {
+    pub fn count_valid_words(sentence: String) -> i32 {
+        sentence.split_whitespace().filter(|w| Solution.valid(w)).count() as i32
+    }
+
+    fn valid(w: Str) -> bool {
+        let b = w.bytes();
+        let n = b.len();
+        let mut hyphen = false;
+        for i in 0..n {
+            let c = b[i];
+            if c.is_ascii_digit() {
+                return false;
+            }
+            if c == b'-' {
+                if hyphen or i == 0 or i == n - 1 or not b[i - 1].is_ascii_lowercase() or not b[i + 1].is_ascii_lowercase() {
+                    return false;
+                }
+                hyphen = true;
+            }
+            if (c == b'!' or c == b'.' or c == b',') and i != n - 1 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn count_valid_words(sentence: Str) -> i64 {
+    Solution.count_valid_words(sentence.to_string())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a sentence of `len` characters from `alphabet`, most of them letters,
+// with at least one token
+fn draw(len: i64, alphabet: Str, seed: mut ref i64) -> String {
+    let symbols: Vec[char] = alphabet.chars().collect();
+    let mut s = String.new();
+    for _ in 0..len {
+        let r = next_random(mut seed) % 100;
+        if r < 60 {
+            s.push(symbols[next_random(mut seed) % 3]);
+        } else if r < 80 {
+            s.push(' ');
+        } else {
+            s.push(symbols[next_random(mut seed) % symbols.len()]);
+        }
+    }
+    s.push('a');
+    s
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        "cat and  dog",
+        "!this  1-s b8d!",
+        "alice and  bob are playing stone-game10",
+        "he bought 2 pencils, 3 erasers, and 1  pencil-sharpener.",
+        "a-b-c a- -a a-b. a-b! ab, a!b ., ,. - !",
+        "  x  ",
+        "a--b a-. -. q-r-,",
+    ];
+    for s in examples.iter() {
+        println(f"\"{s}\" -> {count_valid_words(s)}");
+    }
+    // 2000 sentences of 1 to 40 characters, every kind of symbol
+    let mut seed = 2047;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let len = next_random(mut seed) % 40;
+        let s = draw(len, "abc-!.,0123456789", mut seed);
+        let n = count_valid_words(s);
+        total += n;
+        check = (check * 31 + n) % 1000000007;
+    }
+    println(f"2000 sentences: {total} valid words, checksum {check}");
+    // 3000 sentences of 1000 characters, the longest the constraints allow,
+    // letters weighted towards hyphens and marks
+    total = 0;
+    check = 0;
+    for _ in 0..3000 {
+        let s = draw(999, "ab---!!..,,9", mut seed);
+        let n = count_valid_words(s);
+        total += n;
+        check = (check * 31 + n) % 1000000007;
+    }
+    println(f"3000 long sentences: {total} valid words, checksum {check}");
+}

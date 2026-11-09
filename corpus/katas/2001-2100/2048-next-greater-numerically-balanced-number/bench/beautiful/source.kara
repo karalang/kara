@@ -1,0 +1,40 @@
+// LeetCode #2048: Next Greater Numerically Balanced Number -- the ★ arm as
+// a benchmark. 1000 values of `n` spread over the constraints' range, 0 to
+// 10^6, each answered by counting upward from `n + 1` and testing every
+// number's digit counts: about 150 million numbers tested.
+
+fn is_balanced(x: i64) -> bool {
+    let mut counts = [0; 10];
+    let mut y = x;
+    while y > 0 {
+        counts[y % 10] += 1;
+        y /= 10;
+    }
+    for d in 0..10 {
+        if counts[d] != 0 and counts[d] != d {
+            return false;
+        }
+    }
+    true
+}
+
+fn next_beautiful_number(n: i64) -> i64 {
+    let mut x = n + 1;
+    while not is_balanced(x) {
+        x += 1;
+    }
+    x
+}
+
+fn main() {
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for k in 0..1000 {
+        let x = next_beautiful_number(k * 1000 + k * 7 % 1000);
+        calls += 1;
+        sum += x;
+        check = (check * 31 + x) % 1000000007;
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

@@ -1,0 +1,147 @@
+// LeetCode #2046: Sort Linked List Already Sorted Using Absolute Values --
+// a merge. The list is split into its negatives, reversed as they are taken
+// off so that they rise, and the rest, which rise already; then the two
+// sorted lists are merged as in a merge sort's last step, behind a dummy
+// head. O(n).
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn merge(a: Option[ListNode], b: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut (x, y) = (a, b);
+    loop {
+        match (x, y) {
+            (Some(p), Some(q)) => {
+                if p.val <= q.val {
+                    tail.next = Some(p);
+                    tail = p;
+                    x = p.next;
+                } else {
+                    tail.next = Some(q);
+                    tail = q;
+                    y = q.next;
+                }
+            }
+            (Some(_), None) => {
+                tail.next = x;
+                break;
+            }
+            (None, _) => {
+                tail.next = y;
+                break;
+            }
+        }
+    }
+    dummy.next
+}
+
+fn sort_linked_list(head: Option[ListNode]) -> Option[ListNode] {
+    let mut negatives: Option[ListNode] = None;
+    let rest = ListNode { val: 0, next: None };
+    let mut tail = rest;
+    let mut cur = head;
+    while let Some(node) = cur {
+        cur = node.next;
+        if node.val < 0 {
+            node.next = negatives;
+            negatives = Some(node);
+        } else {
+            node.next = None;
+            tail.next = Some(node);
+            tail = node;
+        }
+    }
+    merge(negatives, rest.next)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: v, next: head });
+    }
+    head
+}
+
+fn values_of(head: Option[ListNode]) -> Vec[i64] {
+    let mut out = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        out.push(node.val);
+        cur = node.next;
+    }
+    out
+}
+
+// `n` values from -top to top, sorted by absolute value; equal absolute
+// values keep the order they were drawn in
+fn draw(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        values.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    values.sort_by_key(|v| v.abs());
+    values
+}
+
+fn fold_in(check: i64, values: Vec[i64]) -> i64 {
+    let mut c = check;
+    for v in values.iter() {
+        c = (c * 31 + v + 5001) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [0, 2, -5, 5, 10, -10].to_vec(),
+        [0, 1, 2].to_vec(),
+        [1].to_vec(),
+        [-1].to_vec(),
+        [-1, -2, -3, -4].to_vec(),
+        [1, -1, 2, -2, 3, -3].to_vec(),
+        [0, 0, -3, 3, -3, 5000, -5000].to_vec(),
+        [-7, 8, -9].to_vec(),
+    ].to_vec();
+    for values in examples.into_iter() {
+        let shown = f"{values}";
+        println(f"{shown} -> {values_of(sort_linked_list(build(values)))}");
+    }
+    // 2000 lists of 1 to 20 values, each from -top to top
+    let mut seed = 2046;
+    let mut negatives = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 20 + 1;
+        let top = next_random(mut seed) % 30 + 1;
+        let sorted = values_of(sort_linked_list(build(draw(n, top, mut seed))));
+        negatives += sorted.iter().filter(|v| v < 0).count();
+        check = fold_in(check, sorted);
+    }
+    println(f"2000 short lists: {negatives} negatives, checksum {check}");
+    // 4 lists of 100000 values, the most the constraints allow: values up
+    // to 5000, 100, 1 and 5000 with every one negative
+    negatives = 0;
+    check = 0;
+    for r in 0..4 {
+        let mut values = draw(100000, [5000, 100, 1, 5000][r], mut seed);
+        if r == 3 {
+            values = values.iter().map(|v| -v.abs()).collect();
+        }
+        let sorted = values_of(sort_linked_list(build(values)));
+        negatives += sorted.iter().filter(|v| v < 0).count();
+        check = fold_in(check, sorted);
+    }
+    println(f"4 long lists: {negatives} negatives, checksum {check}");
+}

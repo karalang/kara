@@ -1,0 +1,307 @@
+// LeetCode #2046: Sort Linked List Already Sorted Using Absolute Values --
+// the differential. The five arms that check, against the statement read
+// literally: the list's values in non-decreasing order, found by taking the
+// smallest left, one at a time. The Rust template's arm is blocked (see the
+// README) and not here. 1500 lists of 1 to 12 values, from -1..1 up to
+// -20..20, sorted by absolute value, each with a larger value to append,
+// every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  every value negated gives the answer negated and reversed
+// P3  a value of larger absolute value appended lands first if negative,
+//     last if not
+// P4  the head dropped drops one copy of its value from the answer
+// P5  every value doubled doubles the answer
+// P6  each arm agrees with at least two of the other four
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+// ---- sort.kara: the ★ arm, each negative after the head moved to the front
+fn star_sort_linked_list(head: Option[ListNode]) -> Option[ListNode] {
+    let Some(first) = head else {
+        return None;
+    };
+    let mut front = first;
+    let mut prev = first;
+    let mut cur = first.next;
+    while let Some(node) = cur {
+        cur = node.next;
+        if node.val < 0 {
+            // unlink it and put it in front
+            prev.next = node.next;
+            node.next = Some(front);
+            front = node;
+        } else {
+            prev = node;
+        }
+    }
+    Some(front)
+}
+
+// ---- sort_split.kara: negatives prepended, the rest appended, then joined
+fn split_sort_linked_list(head: Option[ListNode]) -> Option[ListNode] {
+    let mut negatives: Option[ListNode] = None;
+    let mut last_negative: Option[ListNode] = None;
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut cur = head;
+    while let Some(node) = cur {
+        cur = node.next;
+        if node.val < 0 {
+            if last_negative.is_none() {
+                last_negative = Some(node);
+            }
+            node.next = negatives;
+            negatives = Some(node);
+        } else {
+            node.next = None;
+            tail.next = Some(node);
+            tail = node;
+        }
+    }
+    match last_negative {
+        Some(last) => {
+            last.next = dummy.next;
+            negatives
+        }
+        None => dummy.next,
+    }
+}
+
+// ---- sort_values.kara: the values sorted and written back
+fn values_sort_linked_list(head: Option[ListNode]) -> Option[ListNode] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    values.sort();
+    cur = head;
+    for v in values.iter() {
+        let Some(node) = cur else {
+            break;
+        };
+        node.val = v;
+        cur = node.next;
+    }
+    head
+}
+
+// ---- sort_nodes.kara: the nodes in a Vec, reordered and relinked
+fn nodes_sort_linked_list(head: Option[ListNode]) -> Option[ListNode] {
+    let mut nodes: Vec[ListNode] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        nodes.push(node);
+        cur = node.next;
+    }
+    let mut order: Vec[ListNode] = nodes.iter().rev().filter(|n| n.val < 0).cloned().collect();
+    order.extend(nodes.iter().filter(|n| n.val >= 0).cloned());
+    for i in 0..order.len() {
+        order[i].next = if i + 1 < order.len() { Some(order[i + 1]) } else { None };
+    }
+    order.first().cloned()
+}
+
+// ---- sort_merge.kara: the negatives reversed, merged with the rest
+fn merge_merge(a: Option[ListNode], b: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut (x, y) = (a, b);
+    loop {
+        match (x, y) {
+            (Some(p), Some(q)) => {
+                if p.val <= q.val {
+                    tail.next = Some(p);
+                    tail = p;
+                    x = p.next;
+                } else {
+                    tail.next = Some(q);
+                    tail = q;
+                    y = q.next;
+                }
+            }
+            (Some(_), None) => {
+                tail.next = x;
+                break;
+            }
+            (None, _) => {
+                tail.next = y;
+                break;
+            }
+        }
+    }
+    dummy.next
+}
+
+fn merge_sort_linked_list(head: Option[ListNode]) -> Option[ListNode] {
+    let mut negatives: Option[ListNode] = None;
+    let rest = ListNode { val: 0, next: None };
+    let mut tail = rest;
+    let mut cur = head;
+    while let Some(node) = cur {
+        cur = node.next;
+        if node.val < 0 {
+            node.next = negatives;
+            negatives = Some(node);
+        } else {
+            node.next = None;
+            tail.next = Some(node);
+            tail = node;
+        }
+    }
+    merge_merge(negatives, rest.next)
+}
+
+// ---- the statement read literally
+
+fn literal(values: Vec[i64]) -> Vec[i64] {
+    let mut left = values.clone();
+    let mut out: Vec[i64] = Vec.new();
+    while not left.is_empty() {
+        let mut at = 0;
+        for i in 1..left.len() {
+            if left[i] < left[at] {
+                at = i;
+            }
+        }
+        out.push(left.remove(at));
+    }
+    out
+}
+
+fn build(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: v, next: head });
+    }
+    head
+}
+
+fn values_of(head: Option[ListNode]) -> Vec[i64] {
+    let mut out = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        out.push(node.val);
+        cur = node.next;
+    }
+    out
+}
+
+fn answer(arm: i64, values: Vec[i64]) -> Vec[i64] {
+    let list = build(values);
+    let sorted = match arm {
+        0 => star_sort_linked_list(list),
+        1 => split_sort_linked_list(list),
+        2 => values_sort_linked_list(list),
+        3 => nodes_sort_linked_list(list),
+        _ => merge_sort_linked_list(list),
+    };
+    values_of(sorted)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    values: Vec[i64],
+    extra: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 12 + 1;
+    let top = next_random(mut seed) % 20 + 1;
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        values.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    values.sort_by_key(|v| v.abs());
+    let size = top + 1 + next_random(mut seed) % 5;
+    let extra = if next_random(mut seed) % 2 == 0 { size } else { -size };
+    Problem { values, extra }
+}
+
+fn main() {
+    let names = ["star", "split", "values", "nodes", "merge"];
+    let mut seed = 2046;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let values = prob.values.clone();
+        let truth = literal(values);
+        for v in truth.iter() {
+            check = (check * 31 + v + 21) % 1000000007;
+        }
+        let negated: Vec[i64] = values.iter().map(|v| -v).collect();
+        let mut appended = values.clone();
+        appended.push(prob.extra);
+        let rest: Vec[i64] = values.iter().skip(1).collect();
+        let doubled: Vec[i64] = values.iter().map(|v| 2 * v).collect();
+        let got: Vec[Vec[i64]] = (0..5).map(|arm| answer(arm, values)).collect();
+        for arm in 0..5 {
+            let x = got[arm].clone();
+            let mut same = 0;
+            for other in 0..5 {
+                if other != arm and got[other] == x {
+                    same += 1;
+                }
+            }
+            let flipped: Vec[i64] = x.iter().rev().map(|v| -v).collect();
+            let mut grown: Vec[i64] = Vec.new();
+            if prob.extra < 0 {
+                grown.push(prob.extra);
+            }
+            grown.extend(x.iter());
+            if prob.extra > 0 {
+                grown.push(prob.extra);
+            }
+            let mut shrunk = x.clone();
+            if let Some(at) = shrunk.iter().position(|v| v == values[0]) {
+                shrunk.remove(at);
+            }
+            let twice: Vec[i64] = x.iter().map(|v| 2 * v).collect();
+            let verdicts = [
+                x == truth,
+                answer(arm, negated) == flipped,
+                answer(arm, appended) == grown,
+                answer(arm, rest) == shrunk,
+                answer(arm, doubled) == twice,
+                same >= 2,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"list {p} arm {names[arm]}: P{k + 1} fails, answer {x}, literal {truth}, values {values}, extra {prob.extra}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 lists: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

@@ -1,0 +1,144 @@
+// LeetCode #2046: Sort Linked List Already Sorted Using Absolute Values --
+// LeetCode's Rust template (`Option<Box<ListNode>>`, `i32` values, the
+// negatives and the rest split onto two stacks, the rest reversed, and a
+// `&mut` cursor walked to the negatives' tail to append it), carried by
+// `karac fix` in three rounds. Blocked by B-2026-11-09-45: the cursor walk
+// has no Kāra spelling. The harness converts its `i64` values at `build`
+// and `values_of`.
+
+// Definition for singly-linked list.
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct ListNode {
+    pub val: i32,
+    pub next: Option[ListNode],
+}
+
+impl ListNode {
+    #[inline]
+    fn new(val: i32) -> Self {
+        ListNode { next: None, val }
+    }
+}
+
+struct Solution {}
+
+impl Solution {
+    pub fn sort_linked_list(head: own Option[ListNode]) -> Option[ListNode] {
+        let mut neg: Option[ListNode] = None;
+        let mut pos: Option[ListNode] = None;
+        let mut cur = head;
+        while let Some(node) = cur {
+            let mut node = node;
+            cur = node.next.take();
+            if node.val < 0 {
+                node.next = neg;
+                neg = Some(node);
+            } else {
+                node.next = pos;
+                pos = Some(node);
+            }
+        }
+        let mut ans: Option[ListNode] = None;
+        while let Some(node) = pos {
+            let mut node = node;
+            pos = node.next.take();
+            node.next = ans;
+            ans = Some(node);
+        }
+        let mut tail = mut ref neg;
+        while tail.is_some() {
+            tail = mut ref tail.as_mut().unwrap().next;
+        }
+        *tail = ans;
+        neg
+    }
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: v as i32, next: head });
+    }
+    head
+}
+
+fn values_of(head: own Option[ListNode]) -> Vec[i64] {
+    let mut out = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        out.push(node.val as i64);
+        cur = node.next;
+    }
+    out
+}
+
+// `n` values from -top to top, sorted by absolute value; equal absolute
+// values keep the order they were drawn in
+fn draw(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        values.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    values.sort_by_key(|v| v.abs());
+    values
+}
+
+fn fold_in(check: i64, values: Vec[i64]) -> i64 {
+    let mut c = check;
+    for v in values.iter() {
+        c = (c * 31 + v + 5001) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [0, 2, -5, 5, 10, -10].to_vec(),
+        [0, 1, 2].to_vec(),
+        [1].to_vec(),
+        [-1].to_vec(),
+        [-1, -2, -3, -4].to_vec(),
+        [1, -1, 2, -2, 3, -3].to_vec(),
+        [0, 0, -3, 3, -3, 5000, -5000].to_vec(),
+        [-7, 8, -9].to_vec(),
+    ].to_vec();
+    for values in examples.into_iter() {
+        let shown = f"{values}";
+        println(f"{shown} -> {values_of(Solution.sort_linked_list(build(values)))}");
+    }
+    // 2000 lists of 1 to 20 values, each from -top to top
+    let mut seed = 2046;
+    let mut negatives = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 20 + 1;
+        let top = next_random(mut seed) % 30 + 1;
+        let sorted = values_of(Solution.sort_linked_list(build(draw(n, top, mut seed))));
+        negatives += sorted.iter().filter(|v| v < 0).count();
+        check = fold_in(check, sorted);
+    }
+    println(f"2000 short lists: {negatives} negatives, checksum {check}");
+    // 4 lists of 100000 values, the most the constraints allow: values up
+    // to 5000, 100, 1 and 5000 with every one negative
+    negatives = 0;
+    check = 0;
+    for r in 0..4 {
+        let mut values = draw(100000, [5000, 100, 1, 5000][r], mut seed);
+        if r == 3 {
+            values = values.iter().map(|v| -v.abs()).collect();
+        }
+        let sorted = values_of(Solution.sort_linked_list(build(values)));
+        negatives += sorted.iter().filter(|v| v < 0).count();
+        check = fold_in(check, sorted);
+    }
+    println(f"4 long lists: {negatives} negatives, checksum {check}");
+}

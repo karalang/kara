@@ -1,0 +1,62 @@
+// LeetCode #2046: Sort Linked List Already Sorted Using Absolute Values --
+// the ★ arm as a benchmark. 20000 rounds, each building a fresh list of 1000
+// `shared struct` nodes, sorted by absolute value with signs set by the
+// round, and sorting it in place by moving every negative after the head
+// to the front; each result folded into a checksum. 20 million nodes built,
+// walked, relinked and freed. The Rust mirror's nodes are Rc<RefCell<..>>,
+// C's malloc'd, Go's *Node.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn sort_linked_list(head: Option[ListNode]) -> Option[ListNode] {
+    let Some(first) = head else {
+        return None;
+    };
+    let mut front = first;
+    let mut prev = first;
+    let mut cur = first.next;
+    while let Some(node) = cur {
+        cur = node.next;
+        if node.val < 0 {
+            prev.next = node.next;
+            node.next = Some(front);
+            front = node;
+        } else {
+            prev = node;
+        }
+    }
+    Some(front)
+}
+
+// value j of round r: magnitude j / 2, negative when (7 j + r) % 3 == 0
+fn build(m: i64, round: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut j = m - 1;
+    while j >= 0 {
+        let v = if (7 * j + round) % 3 == 0 { -(j / 2) } else { j / 2 };
+        head = Some(ListNode { val: v, next: head });
+        j -= 1;
+    }
+    head
+}
+
+fn main() {
+    let rounds = 20000;
+    let m = 1000;
+    let mut negatives = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let mut cur = sort_linked_list(build(m, r));
+        while let Some(node) = cur {
+            if node.val < 0 {
+                negatives += 1;
+            }
+            check = (check * 31 + node.val + 1000) % 1000000007;
+            cur = node.next;
+        }
+    }
+    println(f"{rounds} rounds: {negatives} negatives, checksum {check}");
+}

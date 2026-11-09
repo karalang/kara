@@ -1,0 +1,106 @@
+// LeetCode #2048: Next Greater Numerically Balanced Number -- for each set
+// of digits that could make the answer (digit `d` used `d` times), the
+// least arrangement above `n` built directly: one digit longer than `n`, it
+// is the digits in rising order; as long as `n`, it keeps the longest
+// prefix of `n` it can, then puts the least digit above `n`'s next one, then
+// the rest in rising order. The least of those over all sets is the answer.
+
+// the least number above `n`, with `n`'s digits `target`, that uses each
+// digit `d` exactly `counts[d]` times and has as many digits
+fn least_above(counts: Vec[i64], target: Vec[i64]) -> Option[i64] {
+    let len = target.len();
+    // the prefix kept is `target[0..p]`, longest first
+    for p in (0..len).rev() {
+        let mut left = counts.clone();
+        let mut fits = true;
+        for i in 0..p {
+            left[target[i]] -= 1;
+            if left[target[i]] < 0 {
+                fits = false;
+            }
+        }
+        if not fits {
+            continue;
+        }
+        let Some(up) = (target[p] + 1..10).find(|d| left[d] > 0) else {
+            continue;
+        };
+        left[up] -= 1;
+        let mut x = 0;
+        for i in 0..p {
+            x = x * 10 + target[i];
+        }
+        x = x * 10 + up;
+        for d in 0..10 {
+            for _ in 0..left[d] {
+                x = x * 10 + d;
+            }
+        }
+        return Some(x);
+    }
+    None
+}
+
+fn next_beautiful_number(n: i64) -> i64 {
+    let target: Vec[i64] = n.to_string().chars().map(|c| c.to_digit(10).unwrap() as i64).collect();
+    let mut best = i64.MAX;
+    for mask in 1..128 {
+        let mut counts: Vec[i64] = Vec.filled(10, 0);
+        let mut length = 0;
+        for d in 1..8 {
+            if mask & (1 << (d - 1)) != 0 {
+                counts[d] = d;
+                length += d;
+            }
+        }
+        if length == target.len() + 1 {
+            let mut x = 0;
+            for d in 1..8 {
+                for _ in 0..counts[d] {
+                    x = x * 10 + d;
+                }
+            }
+            best = best.min(x);
+        } else if length == target.len() {
+            if let Some(x) = least_above(counts, target) {
+                best = best.min(x);
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    for n in [1, 1000, 3000, 0, 22, 1224443, 1000000, 666665, 122333, 4444] {
+        println(f"{n} -> {next_beautiful_number(n)}");
+    }
+    // 300 values of n below 600000
+    let mut seed = 2048;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = (next_random(mut seed) * 32768 + next_random(mut seed)) % 600000;
+        let x = next_beautiful_number(n);
+        sum += x;
+        check = (check * 31 + x) % 1000000007;
+    }
+    println(f"300 values below 600000: sum {sum}, checksum {check}");
+    // the values of n from which the next one is furthest away: 666666,
+    // the largest balanced number with six digits, and 999999 and 10^6
+    sum = 0;
+    check = 0;
+    for n in [666666, 999999, 1000000] {
+        let x = next_beautiful_number(n);
+        sum += x;
+        check = (check * 31 + x) % 1000000007;
+    }
+    println(f"3 values far from the next: sum {sum}, checksum {check}");
+}

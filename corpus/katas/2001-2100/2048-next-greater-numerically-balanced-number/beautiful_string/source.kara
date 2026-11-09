@@ -1,0 +1,55 @@
+// LeetCode #2048: Next Greater Numerically Balanced Number -- the walk
+// upward from `n + 1` again, each number tested through its decimal text:
+// `x.to_string()`, its characters counted into a `Map[char, i64]`, and
+// every count compared with the digit it counts.
+
+fn is_balanced(x: i64) -> bool {
+    let mut counts: Map[char, i64] = Map.new();
+    for c in x.to_string().chars() {
+        counts[c] = counts.get(c).unwrap_or(0) + 1;
+    }
+    counts.iter().all(|(c, k)| c.to_digit(10).unwrap() as i64 == k)
+}
+
+fn next_beautiful_number(n: i64) -> i64 {
+    let mut x = n + 1;
+    while not is_balanced(x) {
+        x += 1;
+    }
+    x
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    for n in [1, 1000, 3000, 0, 22, 1224443, 1000000, 666665, 122333, 4444] {
+        println(f"{n} -> {next_beautiful_number(n)}");
+    }
+    // 300 values of n below 600000
+    let mut seed = 2048;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = (next_random(mut seed) * 32768 + next_random(mut seed)) % 600000;
+        let x = next_beautiful_number(n);
+        sum += x;
+        check = (check * 31 + x) % 1000000007;
+    }
+    println(f"300 values below 600000: sum {sum}, checksum {check}");
+    // the values of n from which the next one is furthest away: 666666,
+    // the largest balanced number with six digits, and 999999 and 10^6
+    sum = 0;
+    check = 0;
+    for n in [666666, 999999, 1000000] {
+        let x = next_beautiful_number(n);
+        sum += x;
+        check = (check * 31 + x) % 1000000007;
+    }
+    println(f"3 values far from the next: sum {sum}, checksum {check}");
+}

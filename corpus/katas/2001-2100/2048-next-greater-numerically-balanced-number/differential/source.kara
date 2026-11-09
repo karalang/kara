@@ -1,0 +1,349 @@
+// LeetCode #2048: Next Greater Numerically Balanced Number -- the
+// differential. The six arms, against the statement read literally: every
+// number after `n` written out, and each digit in it compared with how many
+// times it occurs there, until one number passes. 100 values of `n` below
+// 30000, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  asked again from one below the answer, the answer is the same
+// P3  asked from n + 1, the answer is the same unless n + 1 was it, and
+//     then it is larger
+// P4  the answer's digits, counted, are each used as many times as their
+//     value
+// P5  the answer has as many digits as n + 1 or one more
+// P6  each arm agrees with at least three of the other five
+
+// ---- beautiful.kara: the ★ arm, upward from n + 1, digits counted
+fn star_is_balanced(x: i64) -> bool {
+    let mut counts = [0; 10];
+    let mut y = x;
+    while y > 0 {
+        counts[y % 10] += 1;
+        y /= 10;
+    }
+    for d in 0..10 {
+        if counts[d] != 0 and counts[d] != d {
+            return false;
+        }
+    }
+    true
+}
+
+fn star_next_beautiful_number(n: i64) -> i64 {
+    let mut x = n + 1;
+    while not star_is_balanced(x) {
+        x += 1;
+    }
+    x
+}
+
+// ---- beautiful_table.kara: every balanced number listed, `partition_point`
+// every distinct arrangement of `left`'s digits after `prefix`
+fn table_arrange(prefix: i64, left: mut ref Vec[i64], out: mut ref Vec[i64]) {
+    if left.iter().all(|c| c == 0) {
+        out.push(prefix);
+        return;
+    }
+    for d in 1..8 {
+        if left[d] > 0 {
+            left[d] -= 1;
+            table_arrange(prefix * 10 + d, mut left, mut out);
+            left[d] += 1;
+        }
+    }
+}
+
+fn table_all_balanced() -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    // the sets of digits 1 to 7 as bit masks
+    for mask in 1..128 {
+        let mut left: Vec[i64] = Vec.filled(8, 0);
+        let mut length = 0;
+        for d in 1..8 {
+            if mask & (1 << (d - 1)) != 0 {
+                left[d] = d;
+                length += d;
+            }
+        }
+        if length <= 7 {
+            table_arrange(0, mut left, mut out);
+        }
+    }
+    out.sort();
+    out
+}
+
+fn table_next_beautiful_number(n: i64) -> i64 {
+    let table = table_all_balanced();
+    table[table.partition_point(|x| x <= n)]
+}
+
+// ---- beautiful_perm.kara: each digit set stepped by next permutation
+// the next arrangement of `ds` in rising order; false after the last
+fn perm_next_permutation(ds: mut ref Vec[i64]) -> bool {
+    let n = ds.len();
+    let mut i = n - 1;
+    while i > 0 and ds[i - 1] >= ds[i] {
+        i -= 1;
+    }
+    if i == 0 {
+        return false;
+    }
+    let mut j = n - 1;
+    while ds[j] <= ds[i - 1] {
+        j -= 1;
+    }
+    ds.swap(i - 1, j);
+    ds[i..n].reverse();
+    true
+}
+
+fn perm_value(ds: Vec[i64]) -> i64 {
+    ds.iter().fold(0, |acc, d| acc * 10 + d)
+}
+
+fn perm_next_beautiful_number(n: i64) -> i64 {
+    let length = n.to_string().len();
+    let mut best = i64.MAX;
+    for len in [length, length + 1] {
+        for mask in 1..128 {
+            let mut ds: Vec[i64] = Vec.new();
+            for d in 1..8 {
+                if mask & (1 << (d - 1)) != 0 {
+                    for _ in 0..d {
+                        ds.push(d);
+                    }
+                }
+            }
+            if ds.len() != len {
+                continue;
+            }
+            loop {
+                let x = perm_value(ds);
+                if x > n {
+                    best = best.min(x);
+                    break;
+                }
+                if not perm_next_permutation(mut ds) {
+                    break;
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- beautiful_string.kara: upward, the text counted into a Map
+fn text_is_balanced(x: i64) -> bool {
+    let mut counts: Map[char, i64] = Map.new();
+    for c in x.to_string().chars() {
+        counts[c] = counts.get(c).unwrap_or(0) + 1;
+    }
+    counts.iter().all(|(c, k)| c.to_digit(10).unwrap() as i64 == k)
+}
+
+fn text_next_beautiful_number(n: i64) -> i64 {
+    let mut x = n + 1;
+    while not text_is_balanced(x) {
+        x += 1;
+    }
+    x
+}
+
+// ---- beautiful_greedy.kara: the least arrangement above n, built
+// the least number above `n`, with `n`'s digits `target`, that uses each
+// digit `d` exactly `counts[d]` times and has as many digits
+fn greedy_least_above(counts: Vec[i64], target: Vec[i64]) -> Option[i64] {
+    let len = target.len();
+    // the prefix kept is `target[0..p]`, longest first
+    for p in (0..len).rev() {
+        let mut left = counts.clone();
+        let mut fits = true;
+        for i in 0..p {
+            left[target[i]] -= 1;
+            if left[target[i]] < 0 {
+                fits = false;
+            }
+        }
+        if not fits {
+            continue;
+        }
+        let Some(up) = (target[p] + 1..10).find(|d| left[d] > 0) else {
+            continue;
+        };
+        left[up] -= 1;
+        let mut x = 0;
+        for i in 0..p {
+            x = x * 10 + target[i];
+        }
+        x = x * 10 + up;
+        for d in 0..10 {
+            for _ in 0..left[d] {
+                x = x * 10 + d;
+            }
+        }
+        return Some(x);
+    }
+    None
+}
+
+fn greedy_next_beautiful_number(n: i64) -> i64 {
+    let target: Vec[i64] = n.to_string().chars().map(|c| c.to_digit(10).unwrap() as i64).collect();
+    let mut best = i64.MAX;
+    for mask in 1..128 {
+        let mut counts: Vec[i64] = Vec.filled(10, 0);
+        let mut length = 0;
+        for d in 1..8 {
+            if mask & (1 << (d - 1)) != 0 {
+                counts[d] = d;
+                length += d;
+            }
+        }
+        if length == target.len() + 1 {
+            let mut x = 0;
+            for d in 1..8 {
+                for _ in 0..counts[d] {
+                    x = x * 10 + d;
+                }
+            }
+            best = best.min(x);
+        } else if length == target.len() {
+            if let Some(x) = greedy_least_above(counts, target) {
+                best = best.min(x);
+            }
+        }
+    }
+    best
+}
+
+// ---- beautiful_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn next_beautiful_number(n: i32) -> i32 {
+        (n + 1..).find(|x| Solution.is_balanced(x)).unwrap()
+    }
+
+    fn is_balanced(x: own i32) -> bool {
+        let mut x = x;
+        let mut cnt = [0; 10];
+        while x > 0 {
+            cnt[(x % 10) as usize] += 1;
+            x /= 10;
+        }
+        (0..10).all(|d| cnt[d] == 0 or cnt[d] == d as i32)
+    }
+}
+
+fn solution_next_beautiful_number(n: i64) -> i64 {
+    Solution.next_beautiful_number(n as i32)
+}
+
+// ---- the statement read literally
+
+fn literal(n: i64) -> i64 {
+    let mut x = n + 1;
+    loop {
+        let text = x.to_string();
+        let digits: Vec[char] = text.chars().collect();
+        let mut balanced = true;
+        for c in digits.iter() {
+            let times = digits.iter().filter(|e| e == c).count();
+            if times != c.to_digit(10).unwrap() as i64 {
+                balanced = false;
+            }
+        }
+        if balanced {
+            return x;
+        }
+        x += 1;
+    }
+}
+
+fn counted(x: i64) -> bool {
+    let mut counts = [0; 10];
+    let mut y = x;
+    while y > 0 {
+        counts[y % 10] += 1;
+        y /= 10;
+    }
+    x > 0 and (0..10).all(|d| counts[d] == 0 or counts[d] == d)
+}
+
+fn digits_of(x: i64) -> i64 {
+    x.to_string().len()
+}
+
+fn answer(arm: i64, n: i64) -> i64 {
+    match arm {
+        0 => star_next_beautiful_number(n),
+        1 => table_next_beautiful_number(n),
+        2 => perm_next_beautiful_number(n),
+        3 => text_next_beautiful_number(n),
+        4 => greedy_next_beautiful_number(n),
+        _ => solution_next_beautiful_number(n),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "table", "perm", "text", "greedy", "solution"];
+    let mut seed = 2048;
+    let mut problems: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        problems.push(next_random(mut seed) % 30000);
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let n = problems[p];
+        let truth = literal(n);
+        check = (check * 31 + truth) % 1000000007;
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, n)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let after = answer(arm, n + 1);
+            let verdicts = [
+                x == truth,
+                x > n and answer(arm, x - 1) == x,
+                if n + 1 < x { after == x } else { after > x },
+                counted(x),
+                digits_of(x) == digits_of(n + 1) or digits_of(x) == digits_of(n + 1) + 1,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"n {n} arm {names[arm]}: P{k + 1} fails, answer {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"100 values: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

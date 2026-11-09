@@ -1,0 +1,94 @@
+// LeetCode #2048: Next Greater Numerically Balanced Number -- the answer
+// has as many digits as `n` or one more. For each length, each set of
+// digits that fills it (digit `d` used `d` times) is written smallest
+// first, and stepped through its arrangements in rising order by the next
+// permutation, until one passes `n`; the least of those is the answer.
+
+// the next arrangement of `ds` in rising order; false after the last
+fn next_permutation(ds: mut ref Vec[i64]) -> bool {
+    let n = ds.len();
+    let mut i = n - 1;
+    while i > 0 and ds[i - 1] >= ds[i] {
+        i -= 1;
+    }
+    if i == 0 {
+        return false;
+    }
+    let mut j = n - 1;
+    while ds[j] <= ds[i - 1] {
+        j -= 1;
+    }
+    ds.swap(i - 1, j);
+    ds[i..n].reverse();
+    true
+}
+
+fn value(ds: Vec[i64]) -> i64 {
+    ds.iter().fold(0, |acc, d| acc * 10 + d)
+}
+
+fn next_beautiful_number(n: i64) -> i64 {
+    let length = n.to_string().len();
+    let mut best = i64.MAX;
+    for len in [length, length + 1] {
+        for mask in 1..128 {
+            let mut ds: Vec[i64] = Vec.new();
+            for d in 1..8 {
+                if mask & (1 << (d - 1)) != 0 {
+                    for _ in 0..d {
+                        ds.push(d);
+                    }
+                }
+            }
+            if ds.len() != len {
+                continue;
+            }
+            loop {
+                let x = value(ds);
+                if x > n {
+                    best = best.min(x);
+                    break;
+                }
+                if not next_permutation(mut ds) {
+                    break;
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    for n in [1, 1000, 3000, 0, 22, 1224443, 1000000, 666665, 122333, 4444] {
+        println(f"{n} -> {next_beautiful_number(n)}");
+    }
+    // 300 values of n below 600000
+    let mut seed = 2048;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = (next_random(mut seed) * 32768 + next_random(mut seed)) % 600000;
+        let x = next_beautiful_number(n);
+        sum += x;
+        check = (check * 31 + x) % 1000000007;
+    }
+    println(f"300 values below 600000: sum {sum}, checksum {check}");
+    // the values of n from which the next one is furthest away: 666666,
+    // the largest balanced number with six digits, and 999999 and 10^6
+    sum = 0;
+    check = 0;
+    for n in [666666, 999999, 1000000] {
+        let x = next_beautiful_number(n);
+        sum += x;
+        check = (check * 31 + x) % 1000000007;
+    }
+    println(f"3 values far from the next: sum {sum}, checksum {check}");
+}

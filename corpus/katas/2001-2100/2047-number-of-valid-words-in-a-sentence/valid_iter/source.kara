@@ -1,0 +1,87 @@
+// LeetCode #2047: Number of Valid Words in a Sentence -- as one iterator
+// chain: the tokens filtered by a closure that asks of every character, by
+// `chars().enumerate().all(..)`, whether it may stand where it stands, with
+// the hyphen count checked apart.
+
+fn count_valid_words(sentence: Str) -> i64 {
+    sentence
+        .split_whitespace()
+        .filter(|token| {
+            let cs: Vec[char] = token.chars().collect();
+            let n = cs.len();
+            let letter = |i: i64| i >= 0 and i < n and cs[i].is_ascii_lowercase();
+            cs.iter().filter(|c| c == '-').count() <= 1
+                and cs.iter().enumerate().all(|(i, c)| match c {
+                    '0'..='9' => false,
+                    '-' => letter(i - 1) and letter(i + 1),
+                    '!' | '.' | ',' => i == n - 1,
+                    _ => true,
+                })
+        })
+        .count()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a sentence of `len` characters from `alphabet`, most of them letters,
+// with at least one token
+fn draw(len: i64, alphabet: Str, seed: mut ref i64) -> String {
+    let symbols: Vec[char] = alphabet.chars().collect();
+    let mut s = String.new();
+    for _ in 0..len {
+        let r = next_random(mut seed) % 100;
+        if r < 60 {
+            s.push(symbols[next_random(mut seed) % 3]);
+        } else if r < 80 {
+            s.push(' ');
+        } else {
+            s.push(symbols[next_random(mut seed) % symbols.len()]);
+        }
+    }
+    s.push('a');
+    s
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        "cat and  dog",
+        "!this  1-s b8d!",
+        "alice and  bob are playing stone-game10",
+        "he bought 2 pencils, 3 erasers, and 1  pencil-sharpener.",
+        "a-b-c a- -a a-b. a-b! ab, a!b ., ,. - !",
+        "  x  ",
+        "a--b a-. -. q-r-,",
+    ];
+    for s in examples.iter() {
+        println(f"\"{s}\" -> {count_valid_words(s)}");
+    }
+    // 2000 sentences of 1 to 40 characters, every kind of symbol
+    let mut seed = 2047;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let len = next_random(mut seed) % 40;
+        let s = draw(len, "abc-!.,0123456789", mut seed);
+        let n = count_valid_words(s);
+        total += n;
+        check = (check * 31 + n) % 1000000007;
+    }
+    println(f"2000 sentences: {total} valid words, checksum {check}");
+    // 3000 sentences of 1000 characters, the longest the constraints allow,
+    // letters weighted towards hyphens and marks
+    total = 0;
+    check = 0;
+    for _ in 0..3000 {
+        let s = draw(999, "ab---!!..,,9", mut seed);
+        let n = count_valid_words(s);
+        total += n;
+        check = (check * 31 + n) % 1000000007;
+    }
+    println(f"3000 long sentences: {total} valid words, checksum {check}");
+}
