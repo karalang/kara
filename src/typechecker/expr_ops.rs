@@ -6100,6 +6100,24 @@ impl<'a> super::TypeChecker<'a> {
             type_display(wrapper),
             type_display(&payload),
         );
+        self.reject_out_of_borrow_operand(
+            left,
+            wrapper,
+            message,
+            TypeErrorKind::NilCoalesceNotWrapped,
+        );
+    }
+
+    /// Refuse `left`, a borrowed `Option` / `Result` operand of `??` or `?`,
+    /// with `message`, offering `.clone()` after it when the operand is a
+    /// postfix expression and the wrapper can be cloned.
+    fn reject_out_of_borrow_operand(
+        &mut self,
+        left: &Expr,
+        wrapper: &Type,
+        message: String,
+        kind: TypeErrorKind,
+    ) {
         let postfix = matches!(
             left.kind,
             ExprKind::Identifier(_)
@@ -6121,14 +6139,9 @@ impl<'a> super::TypeChecker<'a> {
                 },
                 replacement: ".clone()".to_string(),
             };
-            self.type_error_with_fix_it(
-                message,
-                left.span,
-                TypeErrorKind::NilCoalesceNotWrapped,
-                fix,
-            );
+            self.type_error_with_fix_it(message, left.span, kind, fix);
         } else {
-            self.type_error(message, left.span, TypeErrorKind::NilCoalesceNotWrapped);
+            self.type_error(message, left.span, kind);
         }
     }
 
@@ -6391,6 +6404,56 @@ impl<'a> super::TypeChecker<'a> {
         let inner_ty = self.infer_expr(inner);
         if inner_ty == Type::Error {
             return Type::Error;
+        }
+        // B-2026-11-09-43 — `text?` on a bare `text: Option[String]`
+        // parameter, which reads as `ref Option[String]` under D5: `?`
+        // yields the payload by value and propagates the error by value,
+        // so it moves both out of the borrow (core-semantics §3.7). As
+        // with `??` (B-2026-10-28-32), the refusal says so and offers
+        // `.clone()` on the operand, instead of "requires `Result` or
+        // `Option`" about a value that is one.
+        let resolved = resolve_type_var_top(&inner_ty, &self.env.substitutions);
+        if let Type::Ref(wrapper) | Type::MutRef(wrapper) = &resolved {
+            if let Type::Named { name, args } = &**wrapper {
+                if name == "Option" || name == "Result" {
+                    let moved: Vec<Type> = args
+                        .iter()
+                        .map(|t| resolve_type_var_top(t, &self.env.substitutions))
+                        .filter(|t| {
+                            !matches!(t, Type::TypeVar(_) | Type::Error)
+                                && !self.index_read_part_counts_or_copies(t)
+                        })
+                        .collect();
+                    // A `Copy` (or counted) payload and error are read
+                    // out of the borrow, as `??` reads them.
+                    if moved.is_empty() {
+                        return self.resolve_question((**wrapper).clone(), span);
+                    }
+                    let what = if name == "Option" {
+                        "payload"
+                    } else {
+                        "value or error"
+                    };
+                    let mut shown: Vec<String> = moved.iter().map(type_display).collect();
+                    shown.dedup();
+                    let detail = if shown.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ('{}')", shown.join("', '"))
+                    };
+                    self.reject_out_of_borrow_operand(
+                        inner,
+                        wrapper,
+                        format!(
+                            "'?' on a borrowed '{}' would move its {what}{detail} out of the \
+                             borrow: take a copy with `.clone()` first (core-semantics §3.7)",
+                            type_display(wrapper),
+                        ),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+            }
         }
         self.resolve_question(inner_ty, span)
     }

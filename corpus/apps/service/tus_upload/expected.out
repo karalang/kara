@@ -1,0 +1,48 @@
+server up: true
+options: 204 tus-checksum-algorithm=sha1,sha256 tus-extension=creation,termination,checksum tus-max-size=1048576 tus-resumable=1.0.0 tus-version=1.0.0
+payload a: 3293 bytes, payload b: 2201 bytes
+create without Tus-Resumable: error http://127.0.0.1:47748/files/: status code 412
+create too large: error http://127.0.0.1:47748/files/: status code 413
+create bad length: error http://127.0.0.1:47748/files/: status code 400
+create no length: error http://127.0.0.1:47748/files/: status code 400
+create bad metadata: error http://127.0.0.1:47748/files/: status code 400
+create duplicate key: error http://127.0.0.1:47748/files/: status code 400
+create a: 201 location=/files/u0001 tus-resumable=1.0.0
+head a: 200 cache-control=no-store tus-resumable=1.0.0 upload-length=3293 upload-metadata=filename ZWRnZS1sYXRlbmN5LmNzdg==,filetype dGV4dC9jc3Y=,is_confidential upload-offset=0
+a patch 0..1000: 204 tus-resumable=1.0.0 upload-offset=1000
+a stale offset: error http://127.0.0.1:47748/files/u0001: status code 409
+a wrong content type: error http://127.0.0.1:47748/files/u0001: status code 415
+a bad checksum: error http://127.0.0.1:47748/files/u0001: status code 460
+a unknown algorithm: error http://127.0.0.1:47748/files/u0001: status code 400
+a past the end: error http://127.0.0.1:47748/files/u0001: status code 400
+a bad offset header: error http://127.0.0.1:47748/files/u0001: status code 400
+a get: error http://127.0.0.1:47748/files/u0001: status code 405
+a head after errors: 200 cache-control=no-store tus-resumable=1.0.0 upload-length=3293 upload-metadata=filename ZWRnZS1sYXRlbmN5LmNzdg==,filetype dGV4dC9jc3Y=,is_confidential upload-offset=1000
+a patch 1000..2000: 204 tus-resumable=1.0.0 upload-offset=2000
+a patch 2000..3000: 204 tus-resumable=1.0.0 upload-offset=3000
+a patch 3000..3293: 204 tus-resumable=1.0.0 upload-offset=3293
+a uploaded to 3293 of 3293
+head a done: 200 cache-control=no-store tus-resumable=1.0.0 upload-length=3293 upload-metadata=filename ZWRnZS1sYXRlbmN5LmNzdg==,filetype dGV4dC9jc3Y=,is_confidential upload-offset=3293
+a patch when complete: error http://127.0.0.1:47748/files/u0001: status code 400
+create b: 201 location=/files/u0002 tus-resumable=1.0.0
+b patch 0..700: 204 tus-resumable=1.0.0 upload-offset=700
+b patch 700..1400: 204 tus-resumable=1.0.0 upload-offset=1400
+b patch 1400..2100: 204 tus-resumable=1.0.0 upload-offset=2100
+b patch 2100..2201: 204 tus-resumable=1.0.0 upload-offset=2201
+b uploaded to 2201 of 2201
+create empty: 201 location=/files/u0003 tus-resumable=1.0.0
+head empty: 200 cache-control=no-store tus-resumable=1.0.0 upload-length=0 upload-metadata=filename ZW1wdHkudHh0 upload-offset=0
+a on disk: 3293 bytes, sha256 48c9387ec4eab5a2, matches true
+a lines: 91, last: 2026-11-09T10:01:29Z,edge-2,WARN,888
+delete b: 204 tus-resumable=1.0.0
+head b: error http://127.0.0.1:47748/files/u0002: status code 404
+patch b: error http://127.0.0.1:47748/files/u0002: status code 404
+delete b again: error http://127.0.0.1:47748/files/u0002: status code 404
+head bad id: error http://127.0.0.1:47748/files/..%2Fnext: status code 404
+put a: error http://127.0.0.1:47748/files/u0001: status code 405
+  next 1
+  u0001.bin 3293
+  u0001.info 93
+  u0003.bin 0
+  u0003.info 40
+done

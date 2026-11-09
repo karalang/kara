@@ -421,6 +421,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `text?` on a bare `text: Option[String]` parameter (a borrow, since
+  parameters borrow by default) was refused as "'?' operator requires
+  `Result` or `Option`, found 'ref Option[String]'", with no fix. It now
+  says the `?` would move the `String` out of the borrow and `karac fix`
+  writes `text.clone()?`, as for `??`; a borrowed wrapper whose payload
+  and error are `Copy` is read and runs (B-2026-11-09-43).
 - A program's inherent impl on a library type that redefines a library
   method (`impl Option[Ordering] { fn is_lt .. }`) draws one error, at the
   program's impl. It also drew a conflicting-impl error placed at the

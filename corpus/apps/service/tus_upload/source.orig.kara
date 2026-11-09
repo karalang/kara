@@ -1,0 +1,444 @@
+// tus_upload: a tus 1.0.0 resumable-upload server (the core protocol with
+// the creation, termination and checksum extensions) storing uploads on
+// disk, and a client that drives it through std.http over loopback.
+
+import std.sync.{TaskGroup};
+import std.time.{Duration, sleep};
+import std.encoding.{base64_encode, base64_decode, hex_encode};
+import std.crypto.sha2.{sha256};
+import std.crypto.legacy.{sha1};
+
+const ADDR: Str = "127.0.0.1:47748";
+const BASE: Str = "http://127.0.0.1:47748";
+const ROOT: Str = "tus_data";
+const MAX_SIZE: i64 = 1048576;
+const EXTENSIONS: Str = "creation,termination,checksum";
+const ALGORITHMS: Str = "sha1,sha256";
+
+// The server's answer, with headers (io.md § HTTP server).
+struct Response {
+    status: i64,
+    body: String,
+    headers: Vec[(String, String)],
+}
+
+fn reply(status: i64, body: Str, extra: Vec[(String, String)]) -> Response {
+    let mut headers = [("Tus-Resumable".to_string(), "1.0.0".to_string())].to_vec();
+    for (k, v) in extra.iter() {
+        headers.push((k.clone(), v.clone()));
+    }
+    Response { status, body: body.to_string(), headers }
+}
+
+fn header(name: Str, value: Str) -> (String, String) {
+    (name.to_string(), value.to_string())
+}
+
+// A decimal length or offset: digits only, at most 15 of them.
+fn parse_length(text: Option[String]) -> Option[i64] {
+    let t = text?;
+    if t.len() == 0 || t.len() > 15 {
+        return None;
+    }
+    for c in t.chars() {
+        if c < '0' || c > '9' {
+            return None;
+        }
+    }
+    i64.parse(t.as_str()).ok()
+}
+
+// The pairs of an `Upload-Metadata` header, or None when it is malformed:
+// `key base64,key base64,key` with distinct keys.
+fn parse_metadata(text: Str) -> Option[Vec[(String, String)]] {
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    if text.trim().len() == 0 {
+        return Some(pairs);
+    }
+    for item in text.split(",") {
+        let parts: Vec[Str] = item.trim().split(" ").collect();
+        let key = parts[0];
+        if key.len() == 0 || parts.len() > 2 || pairs.iter().any(|(k, _)| k == key) {
+            return None;
+        }
+        let mut value = String.new();
+        if parts.len() == 2 {
+            let raw = base64_decode(parts[1]).ok()?;
+            value = String.from_utf8(raw).ok()?;
+        }
+        pairs.push((key.to_string(), value));
+    }
+    Some(pairs)
+}
+
+fn upload_id(path: Str) -> Option[String] {
+    let rest = path.strip_prefix("/files/")?;
+    if rest.len() == 0 {
+        return None;
+    }
+    for c in rest.chars() {
+        if not (c.is_ascii_alphanumeric() || c == '-') {
+            return None;
+        }
+    }
+    Some(rest.to_string())
+}
+
+// An upload's declared length and its raw metadata header.
+fn read_info(id: Str) -> Option[(i64, String)] {
+    let text = fs.read_to_string(f"{ROOT}/{id}.info").ok()?;
+    let lines: Vec[Str] = text.split("\n").collect();
+    let length = i64.parse(lines[0].strip_prefix("length=")?).ok()?;
+    let meta = lines[1].strip_prefix("metadata=")?;
+    Some((length, meta.to_string()))
+}
+
+fn offset_of(id: Str) -> i64 {
+    match fs.metadata(f"{ROOT}/{id}.bin") {
+        Ok(m) => m.len,
+        Err(_) => 0,
+    }
+}
+
+fn next_id() -> String {
+    let path = f"{ROOT}/next";
+    let n = match fs.read_to_string(path.as_str()) {
+        Ok(t) => i64.parse(t.as_str()).unwrap_or(1),
+        Err(_) => 1,
+    };
+    let _ = fs.write(path.as_str(), f"{n + 1}");
+    f"u{n:04}"
+}
+
+// None when the checksum matches, else the status and the reason.
+fn check_sum(header: Str, body: Str) -> Option[(i64, String)] {
+    let parts: Vec[Str] = header.split(" ").collect();
+    if parts.len() != 2 {
+        return Some((400, "malformed Upload-Checksum".to_string()));
+    }
+    let algo = parts[0];
+    let got = match algo {
+        "sha1" => base64_encode(sha1(body.bytes())),
+        "sha256" => base64_encode(sha256(body.bytes())),
+        _ => return Some((400, f"unsupported checksum algorithm {algo}")),
+    };
+    if got != parts[1] {
+        return Some((460, "checksum mismatch".to_string()));
+    }
+    None
+}
+
+fn append(path: Str, body: Str) -> Result[(), IoError] {
+    let f = File.append(path)?;
+    let bytes = body.bytes();
+    let mut done = 0;
+    while done < bytes.len() {
+        done += f.write(bytes[done..])?;
+    }
+    Ok(())
+}
+
+fn handle(req: Request) -> Response {
+    let method = req.method();
+    let path = req.path();
+    if method == "OPTIONS" {
+        return reply(204, "", [
+            header("Tus-Version", "1.0.0"),
+            header("Tus-Extension", EXTENSIONS),
+            header("Tus-Max-Size", f"{MAX_SIZE}"),
+            header("Tus-Checksum-Algorithm", ALGORITHMS),
+        ].to_vec());
+    }
+    if req.header("Tus-Resumable".to_string()) != Some("1.0.0".to_string()) {
+        return reply(412, "unsupported tus version", [header("Tus-Version", "1.0.0")].to_vec());
+    }
+    if path == "/files/" || path == "/files" {
+        if method != "POST" {
+            return reply(405, "method not allowed", [header("Allow", "POST, OPTIONS")].to_vec());
+        }
+        let Some(length) = parse_length(req.header("Upload-Length".to_string())) else {
+            return reply(400, "missing or invalid Upload-Length", Vec.new());
+        };
+        if length > MAX_SIZE {
+            return reply(413, f"upload of {length} bytes exceeds {MAX_SIZE}", Vec.new());
+        }
+        let raw_meta = req.header("Upload-Metadata".to_string()) ?? String.new();
+        if parse_metadata(raw_meta.as_str()).is_none() {
+            return reply(400, "malformed Upload-Metadata", Vec.new());
+        }
+        let id = next_id();
+        let _ = fs.write(f"{ROOT}/{id}.info", f"length={length}\nmetadata={raw_meta}\n");
+        let _ = fs.write(f"{ROOT}/{id}.bin", "");
+        return reply(201, "", [header("Location", f"/files/{id}")].to_vec());
+    }
+    let Some(id) = upload_id(path.as_str()) else {
+        return reply(404, "not found", Vec.new());
+    };
+    if method != "HEAD" && method != "PATCH" && method != "DELETE" {
+        return reply(405, "method not allowed", [header("Allow", "HEAD, PATCH, DELETE, OPTIONS")].to_vec());
+    }
+    let Some((length, meta)) = read_info(id.as_str()) else {
+        return reply(404, f"no upload {id}", Vec.new());
+    };
+    if method == "HEAD" {
+        let mut hs = [
+            header("Upload-Offset", f"{offset_of(id.as_str())}"),
+            header("Upload-Length", f"{length}"),
+            header("Cache-Control", "no-store"),
+        ].to_vec();
+        if meta.len() > 0 {
+            hs.push(header("Upload-Metadata", meta.as_str()));
+        }
+        return reply(200, "", hs);
+    }
+    if method == "DELETE" {
+        let _ = fs.remove_file(f"{ROOT}/{id}.info");
+        let _ = fs.remove_file(f"{ROOT}/{id}.bin");
+        return reply(204, "", Vec.new());
+    }
+    if req.header("Content-Type".to_string()) != Some("application/offset+octet-stream".to_string()) {
+        return reply(415, "PATCH needs Content-Type: application/offset+octet-stream", Vec.new());
+    }
+    let Some(claimed) = parse_length(req.header("Upload-Offset".to_string())) else {
+        return reply(400, "missing or invalid Upload-Offset", Vec.new());
+    };
+    let have = offset_of(id.as_str());
+    if claimed != have {
+        return reply(409, f"offset {claimed} does not match {have}", [header("Upload-Offset", f"{have}")].to_vec());
+    }
+    let body = req.body();
+    if have + body.len() > length {
+        return reply(400, f"{have} + {body.len()} bytes exceeds Upload-Length {length}", Vec.new());
+    }
+    if let Some(sum) = req.header("Upload-Checksum".to_string()) {
+        if let Some((status, why)) = check_sum(sum.as_str(), body.as_str()) {
+            return reply(status, why.as_str(), Vec.new());
+        }
+    }
+    match append(f"{ROOT}/{id}.bin", body.as_str()) {
+        Ok(()) => reply(204, "", [header("Upload-Offset", f"{have + body.len()}")].to_vec()),
+        Err(e) => reply(500, f"write failed: {e}", Vec.new()),
+    }
+}
+
+// The client.
+
+const SHOWN: Array[Str, 11] = [
+    "tus-resumable", "tus-version", "tus-extension", "tus-max-size",
+    "tus-checksum-algorithm", "location", "upload-offset", "upload-length",
+    "upload-metadata", "cache-control", "allow",
+];
+
+// One request's outcome: the status and the shown headers, or the
+// client's error message.
+struct Sent {
+    ok: bool,
+    status: i64,
+    shown: Vec[String],
+    offset: Option[String],
+    location: Option[String],
+}
+
+fn send(c: Client, method: Str, path: Str, headers: Vec[(String, String)], body: Str) -> Sent {
+    let url = f"{BASE}{path}";
+    let mut b = c.request(method.to_string(), url.clone());
+    for (k, v) in headers.iter() {
+        b = b.header(k.clone(), v.clone());
+    }
+    if body.len() > 0 {
+        b = b.body(body.to_string());
+    }
+    match b.timeout(5000).send() {
+        Ok(resp) => {
+            let mut shown: Vec[String] = resp
+                .headers
+                .iter()
+                .filter(|(k, _)| SHOWN.contains(k.to_lowercase().as_str()))
+                .map(|(k, v)| f"{k.to_lowercase()}={v}")
+                .collect();
+            shown.sort();
+            Sent {
+                ok: true,
+                status: resp.status,
+                shown,
+                offset: resp.header("Upload-Offset".to_string()),
+                location: resp.header("Location".to_string()),
+            }
+        }
+        Err(e) => Sent { ok: false, status: 0, shown: [e.message()].to_vec(), offset: None, location: None },
+    }
+}
+
+fn show(label: Str, r: Sent) {
+    if r.ok {
+        println(f"{label}: {r.status} {r.shown.join(" ")}");
+    } else {
+        println(f"{label}: error {r.shown[0]}");
+    }
+}
+
+fn tus() -> Vec[(String, String)] {
+    [header("Tus-Resumable", "1.0.0")].to_vec()
+}
+
+fn with(base: Vec[(String, String)], more: Vec[(String, String)]) -> Vec[(String, String)] {
+    let mut all = base.clone();
+    for h in more.iter() {
+        all.push(h.clone());
+    }
+    all
+}
+
+fn payload(seed0: i64, rows: i64) -> String {
+    let hosts = ["edge-1", "edge-2", "api-3", "db-4"];
+    let levels = ["INFO", "INFO", "INFO", "WARN", "ERROR"];
+    let mut out = "ts,host,level,latency_ms\n".to_string();
+    let mut seed = seed0;
+    for i in 0..rows {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let host = hosts[seed % 4];
+        let level = levels[(seed / 7) % 5];
+        let latency = (seed / 13) % 900 + 3;
+        out.push_str(f"2026-11-09T10:{i / 60:02}:{i % 60:02}Z,{host},{level},{latency}\n");
+    }
+    out
+}
+
+fn b64(text: Str) -> String {
+    base64_encode(text.bytes())
+}
+
+fn digest(algo: Str, text: Str) -> String {
+    let sum = if algo == "sha1" {
+        base64_encode(sha1(text.bytes()))
+    } else {
+        base64_encode(sha256(text.bytes()))
+    };
+    f"{algo} {sum}"
+}
+
+fn patch(c: Client, id: Str, offset: i64, chunk: Str, extra: Vec[(String, String)]) -> Sent {
+    let hs = with(with(tus(), [
+        header("Upload-Offset", f"{offset}"),
+        header("Content-Type", "application/offset+octet-stream"),
+    ].to_vec()), extra);
+    send(c, "PATCH", f"/files/{id}", hs, chunk)
+}
+
+// Uploads `data` from the server's offset in chunks of `chunk` bytes.
+fn upload_rest(c: Client, label: Str, id: Str, data: Str, chunk: i64, algo: Str) -> i64 {
+    let head = send(c, "HEAD", f"/files/{id}", tus(), "");
+    let mut offset = i64.parse((head.offset ?? "0".to_string()).as_str()).unwrap_or(0);
+    while offset < data.len() {
+        let end = if offset + chunk < data.len() { offset + chunk } else { data.len() };
+        let piece = data[offset..end];
+        let r = patch(c, id, offset, piece, [header("Upload-Checksum", digest(algo, piece).as_str())].to_vec());
+        let ok = r.ok;
+        let next = r.offset.clone();
+        show(f"{label} patch {offset}..{end}", r);
+        if not ok {
+            break;
+        }
+        offset = i64.parse((next ?? "0".to_string()).as_str()).unwrap_or(0);
+    }
+    offset
+}
+
+fn id_of(location: Option[String]) -> String {
+    let loc = location ?? String.new();
+    (loc.strip_prefix("/files/") ?? "").to_string()
+}
+
+fn main() {
+    let _ = fs.remove_dir_all(ROOT);
+    let _ = fs.create_dir_all(ROOT);
+    let group = TaskGroup.new();
+    group.spawn(|| Server.serve(ADDR.to_string(), handle));
+    let c = Client.new();
+    let mut up = false;
+    for _ in 0..100 {
+        if send(c, "OPTIONS", "/files/", Vec.new(), "").ok {
+            up = true;
+            break;
+        }
+        sleep(Duration.ms(20));
+    }
+    println(f"server up: {up}");
+    show("options", send(c, "OPTIONS", "/files/", Vec.new(), ""));
+
+    let a = payload(7, 90);
+    let b = payload(11, 60);
+    println(f"payload a: {a.len()} bytes, payload b: {b.len()} bytes");
+
+    show("create without Tus-Resumable", send(c, "POST", "/files/", [header("Upload-Length", "10")].to_vec(), ""));
+    show("create too large", send(c, "POST", "/files/", with(tus(), [header("Upload-Length", "2097152")].to_vec()), ""));
+    show("create bad length", send(c, "POST", "/files/", with(tus(), [header("Upload-Length", "12x")].to_vec()), ""));
+    show("create no length", send(c, "POST", "/files/", tus(), ""));
+    show("create bad metadata", send(c, "POST", "/files/", with(tus(), [header("Upload-Length", "5"), header("Upload-Metadata", "filename not*base64")].to_vec()), ""));
+    show("create duplicate key", send(c, "POST", "/files/", with(tus(), [header("Upload-Length", "5"), header("Upload-Metadata", f"k {b64("x")},k {b64("y")}".as_str())].to_vec()), ""));
+
+    let meta_a = f"filename {b64("edge-latency.csv")},filetype {b64("text/csv")},is_confidential";
+    let r = send(c, "POST", "/files/", with(tus(), [header("Upload-Length", f"{a.len()}"), header("Upload-Metadata", meta_a.as_str())].to_vec()), "");
+    let id_a = id_of(r.location.clone());
+    let loc_a = f"/files/{id_a}";
+    show("create a", r);
+    show("head a", send(c, "HEAD", loc_a.as_str(), tus(), ""));
+
+    let first = a[0..1000];
+    show("a patch 0..1000", patch(c, id_a.as_str(), 0, first, [header("Upload-Checksum", digest("sha1", first).as_str())].to_vec()));
+    show("a stale offset", patch(c, id_a.as_str(), 0, a[0..10], Vec.new()));
+    show("a wrong content type", send(c, "PATCH", loc_a.as_str(), with(tus(), [header("Upload-Offset", "1000"), header("Content-Type", "text/plain")].to_vec()), a[1000..1100]));
+    let corrupt = f"{a[1000..1499]}!";
+    show("a bad checksum", patch(c, id_a.as_str(), 1000, a[1000..1500], [header("Upload-Checksum", digest("sha1", corrupt.as_str()).as_str())].to_vec()));
+    show("a unknown algorithm", patch(c, id_a.as_str(), 1000, a[1000..1500], [header("Upload-Checksum", "md5 AAAA")].to_vec()));
+    let over = f"{a[1000..]}overflow";
+    show("a past the end", patch(c, id_a.as_str(), 1000, over.as_str(), Vec.new()));
+    show("a bad offset header", patch(c, id_a.as_str(), -1, a[1000..1010], Vec.new()));
+    show("a get", send(c, "GET", loc_a.as_str(), tus(), ""));
+    show("a head after errors", send(c, "HEAD", loc_a.as_str(), tus(), ""));
+    let end = upload_rest(c, "a", id_a.as_str(), a.as_str(), 1000, "sha1");
+    println(f"a uploaded to {end} of {a.len()}");
+    show("head a done", send(c, "HEAD", loc_a.as_str(), tus(), ""));
+    show("a patch when complete", patch(c, id_a.as_str(), a.len(), "x", Vec.new()));
+
+    let r = send(c, "POST", "/files", with(tus(), [header("Upload-Length", f"{b.len()}")].to_vec()), "");
+    let id_b = id_of(r.location.clone());
+    let loc_b = f"/files/{id_b}";
+    show("create b", r);
+    let end = upload_rest(c, "b", id_b.as_str(), b.as_str(), 700, "sha256");
+    println(f"b uploaded to {end} of {b.len()}");
+
+    let r = send(c, "POST", "/files/", with(tus(), [header("Upload-Length", "0"), header("Upload-Metadata", f"filename {b64("empty.txt")}".as_str())].to_vec()), "");
+    let loc_e = f"/files/{id_of(r.location.clone())}";
+    show("create empty", r);
+    show("head empty", send(c, "HEAD", loc_e.as_str(), tus(), ""));
+
+    let on_disk = fs.read_to_string(f"{ROOT}/{id_a}.bin") ?? String.new();
+    let sum = hex_encode(sha256(on_disk.bytes()));
+    println(f"a on disk: {on_disk.len()} bytes, sha256 {sum[0..16]}, matches {on_disk == a}");
+    let lines: Vec[Str] = on_disk.split("\n").collect();
+    println(f"a lines: {lines.len() - 1}, last: {lines[lines.len() - 2]}");
+
+    show("delete b", send(c, "DELETE", loc_b.as_str(), tus(), ""));
+    show("head b", send(c, "HEAD", loc_b.as_str(), tus(), ""));
+    show("patch b", patch(c, id_b.as_str(), 0, "x", Vec.new()));
+    show("delete b again", send(c, "DELETE", loc_b.as_str(), tus(), ""));
+    show("head bad id", send(c, "HEAD", "/files/..%2Fnext", tus(), ""));
+    show("put a", send(c, "PUT", loc_a.as_str(), tus(), ""));
+
+    match fs.read_dir(ROOT) {
+        Ok(names) => {
+            for name in names.iter() {
+                let size = match fs.metadata(f"{ROOT}/{name}") {
+                    Ok(m) => m.len,
+                    Err(_) => -1,
+                };
+                println(f"  {name} {size}");
+            }
+        }
+        Err(e) => println(f"read_dir failed: {e}"),
+    }
+    group.cancel();
+    let _ = fs.remove_dir_all(ROOT);
+    println("done");
+}
