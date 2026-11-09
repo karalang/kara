@@ -37,6 +37,8 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `cloned` | `fn cloned(own self) -> Option[T]` on `Option[ref T]`, `where T: Clone` | An owned copy of a viewed value: `m.get(k).cloned() ?? d` gives a default for a non-`Copy` value |
 | `flatten` | `fn flatten(own self) -> Option[T]` on `Option[Option[T]]` | |
 
+`is_ok` and `is_err` are `Result` methods. On an `Option` they are deprecated spellings of `is_some` and `is_none`: `karac check` warns and `karac fix` rewrites them. They become an error at the next minor release, as `vec!` and `mut` on a plain field do (review-thread ruling 2026-11-09, B-2026-11-09-21).
+
 ## `Result[T, E]`
 
 | Method | Signature | Notes |
