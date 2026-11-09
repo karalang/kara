@@ -7983,7 +7983,25 @@ impl<'a> TypeChecker<'a> {
             let found = &found_now;
             let mut subs = self.env.substitutions.clone();
             let mut const_subs = self.env.const_substitutions.clone();
-            if inference::unify_types(expected, found, &mut subs, &mut const_subs) {
+            // A `ref` scalar, alone or as a tuple's part, reads as its
+            // value, as the tuple literal's own check took it, so it solves
+            // the slot's variables as the value: `(x, Some(y))` with
+            // `x: ref i64` for `fold`'s `(i64, Option[?T])` accumulator, and
+            // `x` for `fold(0, ..)`'s literal (kata 2036). A bare `ref` for
+            // any other variable stays one: that slot may hold the borrow.
+            let literal_slot = matches!(
+                inference::resolve_type_var_top(expected, &self.env.substitutions),
+                Type::TypeVar(id) if inference::literal_var_kind(id).is_some()
+            );
+            let peeled = Some(Self::peel_scalar_refs_in_tuple(found))
+                .filter(|p| p != found && (matches!(found, Type::Tuple(_)) || literal_slot));
+            let unified = inference::unify_types(expected, found, &mut subs, &mut const_subs)
+                || peeled.as_ref().is_some_and(|p| {
+                    subs = self.env.substitutions.clone();
+                    const_subs = self.env.const_substitutions.clone();
+                    inference::unify_types(expected, p, &mut subs, &mut const_subs)
+                });
+            if unified {
                 self.env.substitutions = subs;
                 self.env.const_substitutions = const_subs;
                 let resolved = inference::resolve_type_vars(

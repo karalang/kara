@@ -3849,8 +3849,11 @@ impl<'a> super::TypeChecker<'a> {
                 // two cannot drift into disagreeing about what coerces.
                 if let Type::Ref(inner) | Type::MutRef(inner) = &body_ty {
                     let inner = (**inner).clone();
+                    // A slot the tail solved as the `ref` keeps it.
+                    let want = self.resolved_now(expected_ret);
                     if Self::scalar_reads_as_value(&inner)
-                        && self.is_subtype_with_projections(expected_ret, &inner)
+                        && !matches!(want, Type::Ref(_) | Type::MutRef(_))
+                        && self.is_subtype_with_projections(&want, &inner)
                     {
                         body_ty = inner;
                     }
@@ -3861,7 +3864,13 @@ impl<'a> super::TypeChecker<'a> {
                 // is that type too (kata 2021).
                 if let Type::Tuple(_) = &body_ty {
                     let peeled = Self::peel_scalar_refs_in_tuple(&body_ty);
-                    if peeled != body_ty && self.is_subtype_with_projections(expected_ret, &peeled)
+                    // The slot as the tail's check solved it: a variable in
+                    // `expected_ret` the tail's parts pinned is that type.
+                    // A slot the tail solved with `ref` parts keeps them.
+                    let want = self.resolved_now(expected_ret);
+                    if peeled != body_ty
+                        && Self::peel_scalar_refs_in_tuple(&want) == want
+                        && self.is_subtype_with_projections(&want, &peeled)
                     {
                         body_ty = peeled;
                     }
@@ -5225,6 +5234,16 @@ impl<'a> super::TypeChecker<'a> {
         // slot: unified, they bound the callee's `T` to the enum's `T`, and
         // an argument or bound that solved it later could not
         // (B-2026-10-18-24). It still gets pass 2's check.
+        // The same for one inside a tuple (`fold((0, None), ..)`): its
+        // enum's own parameters become fresh variables there, so a later
+        // argument (the closure's return) solves them (kata 2036).
+        if self.library_methods_from_source {
+            for (arg, t) in args.iter().zip(arg_tys.iter_mut()) {
+                if let (ExprKind::Tuple(_), Some(ty)) = (&arg.value.kind, t.as_mut()) {
+                    *ty = self.freshen_undecided_in_tuple(&arg.value, ty);
+                }
+            }
+        }
         let undecided_variant: Vec<bool> = args
             .iter()
             .zip(arg_tys.iter())
@@ -5258,6 +5277,21 @@ impl<'a> super::TypeChecker<'a> {
                 // An unannotated collection's element or key takes a
                 // `Copy` reference's value (B-2026-11-08-19).
                 if self.solve_collection_var_by_value(sub_param_ty, arg_ty) {
+                    continue;
+                }
+                // A scalar `ref` for a parameter a function argument also
+                // returns (`map_or(x, |m| x.max(m))`'s `U`, `fold(x, ..)`'s
+                // `B`) is its value: the closure's tail is the value, so a
+                // `U` solved as the `ref` lent the value out as an address
+                // (kata 2036).
+                if self.library_methods_from_source
+                    && self.solve_closure_result_param_by_value(
+                        formal,
+                        sub_param_ty,
+                        arg_ty,
+                        params,
+                    )
+                {
                     continue;
                 }
                 unify_types(
@@ -5351,9 +5385,24 @@ impl<'a> super::TypeChecker<'a> {
             // read the enclosing item's rigid `T` (B-2026-10-27-34). The
             // enclosing item's own parameters a receiver brought in
             // (`VecIntoIter[(K, V)]`) are named back: they are its.
+            // So does one a non-function argument's slot mentions (`fold`'s
+            // `B` in `init: own B`): named back, its parameter typed `A`
+            // unified the slot's `?A` with that name and never reached the
+            // closure's return, which is what solves `fold(None, |acc, x|
+            // Some(x))`'s accumulator (kata 2036). One only a closure
+            // returns (`map`'s `U`) is named back: the closure's tail is
+            // what it is. The argument's own slot does not count: a closure
+            // handed to `f: F` with `F: Fn(i64) -> i64` is checked against
+            // the bound, which needs `F` named back.
+            let mut in_value_slot: Vec<String> = Vec::new();
+            for (j, t) in params.iter().enumerate() {
+                if j != i && !matches!(t, Type::Function { .. } | Type::OnceFunction { .. }) {
+                    super::expr_method_call::collect_type_param_names(t, &mut in_value_slot);
+                }
+            }
             let shadows = |n: &String| {
                 formal_generic_params.is_some_and(|f| f.contains(n))
-                    && self.enclosing_bounds.contains_key(n)
+                    && (self.enclosing_bounds.contains_key(n) || in_value_slot.contains(n))
             };
             let unshadowed: std::collections::HashMap<_, _>;
             let names = if arg_ty_opt.is_none() && id_to_name.values().any(shadows) {
@@ -6276,6 +6325,44 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// [`Self::solve_collection_var_by_value`]'s sibling for a callee's
+    /// own parameter `p` (the `formal` slot) that a function-typed
+    /// parameter returns: a scalar `ref` handed to it solves it as the
+    /// scalar.
+    fn solve_closure_result_param_by_value(
+        &mut self,
+        formal: &Type,
+        slot: &Type,
+        value: &Type,
+        params: &[Type],
+    ) -> bool {
+        let Type::TypeParam(p) = formal else {
+            return false;
+        };
+        let returned = params.iter().any(|t| match t {
+            Type::Function { return_type, .. } | Type::OnceFunction { return_type, .. } => {
+                matches!(return_type.as_ref(), Type::TypeParam(r) if r == p)
+            }
+            _ => false,
+        });
+        if !returned {
+            return false;
+        }
+        let Type::TypeVar(id) =
+            super::inference::resolve_type_var_top(slot, &self.env.substitutions)
+        else {
+            return false;
+        };
+        let Type::Ref(inner) = self.resolved_now(value) else {
+            return false;
+        };
+        if !Self::scalar_reads_as_value(&inner) {
+            return false;
+        }
+        self.env.substitutions.insert(id, *inner);
+        true
+    }
+
     pub(super) fn solve_collection_var_by_value(&mut self, slot: &Type, value: &Type) -> bool {
         // A slot this already solved takes the same reference again: the
         // `entry` key is inferred against its slot, then checked against it.
@@ -6845,7 +6932,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// `t` with each `ref` to a scalar that reads as a value, at the top or
     /// as a part of a tuple (nested), replaced by the scalar.
-    fn peel_scalar_refs_in_tuple(t: &Type) -> Type {
+    pub(super) fn peel_scalar_refs_in_tuple(t: &Type) -> Type {
         match t {
             Type::Ref(inner) | Type::MutRef(inner) if Self::scalar_reads_as_value(inner) => {
                 (**inner).clone()
@@ -7436,6 +7523,36 @@ impl<'a> super::TypeChecker<'a> {
 
     /// A bare unit variant of a generic enum whose parameters nothing has
     /// decided: `None`, typed as `Option[T]` with the enum's own `T`.
+    /// A tuple literal's type with each element that is a bare unit variant
+    /// of a generic enum (`None`) given fresh variables for the enum's own
+    /// parameters, as [`Self::is_undecided_unit_variant`] judges them.
+    fn freshen_undecided_in_tuple(&mut self, arg: &Expr, ty: &Type) -> Type {
+        let (ExprKind::Tuple(items), Type::Tuple(tys)) = (&arg.kind, ty) else {
+            return ty.clone();
+        };
+        if items.len() != tys.len() {
+            return ty.clone();
+        }
+        let mut out = Vec::with_capacity(tys.len());
+        for (item, t) in items.iter().zip(tys) {
+            if self.is_undecided_unit_variant(item, t) {
+                let Type::Named { name, args } = t else {
+                    unreachable!("checked by is_undecided_unit_variant")
+                };
+                let fresh = args.iter().map(|_| self.env.fresh_type_var()).collect();
+                out.push(Type::Named {
+                    name: name.clone(),
+                    args: fresh,
+                });
+            } else if matches!(item.kind, ExprKind::Tuple(_)) {
+                out.push(self.freshen_undecided_in_tuple(item, t));
+            } else {
+                out.push(t.clone());
+            }
+        }
+        Type::Tuple(out)
+    }
+
     fn is_undecided_unit_variant(&self, arg: &Expr, ty: &Type) -> bool {
         if !matches!(arg.kind, ExprKind::Identifier(_) | ExprKind::Path { .. }) {
             return false;
