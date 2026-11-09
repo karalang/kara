@@ -699,8 +699,15 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 } else {
-                    for arg in args {
+                    for (i, arg) in args.iter().enumerate() {
                         let arg_ty = self.infer_expr(&arg.value);
+                        // A char, as Rust's `s.replace(c, "")` takes one, gets
+                        // the same `c.to_string()` fix as `find` and
+                        // `contains` (B-2026-11-09-25).
+                        let method = (i == 0).then_some("replace");
+                        if self.char_pattern_for_str(method, &arg.value, &arg_ty) {
+                            continue;
+                        }
                         if !is_str_like(&arg_ty) && arg_ty != Type::Error {
                             self.type_error(
                                 format!(
@@ -737,6 +744,10 @@ impl<'a> super::TypeChecker<'a> {
                     for (i, arg) in args.iter().enumerate() {
                         let arg_ty = self.infer_expr(&arg.value);
                         if i < 2 {
+                            let method = (i == 0).then_some("replacen");
+                            if self.char_pattern_for_str(method, &arg.value, &arg_ty) {
+                                continue;
+                            }
                             if !is_str_like(&arg_ty) && arg_ty != Type::Error {
                                 self.type_error(
                                     format!(
