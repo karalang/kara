@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 197 |
+| diagnostics | 199 |
 | false-positive | 162 |
 | perf | 138 |
 | missing-feature | 113 |
 | soundness | 54 |
-| miscompile | 46 |
+| miscompile | 47 |
 | run-vs-build | 29 |
 | other | 24 |
 | codegen-gap | 24 |
@@ -75,17 +75,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 312 |
+| typecheck | 314 |
 | mir-llvm | 172 |
 | mir | 147 |
-| cli | 87 |
+| cli | 89 |
 | ownership | 63 |
-| parser | 51 |
+| parser | 52 |
 | interp | 39 |
 | runtime | 30 |
 | effect | 29 |
 | codegen | 22 |
-| resolver | 18 |
+| resolver | 19 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
@@ -121,6 +121,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-4 | 2026-11-09 | typecheck | medium | `T.from(x)` under a `T: From[X]` bound is refused with an internal message ("a type that failed to check is not lowered yet" at the callee `T.from`), so a generic body cannot convert into its parameter; `karac check` reports the same internal message | — |
 | B-2026-11-09-5 | 2026-11-09 | mir-llvm | low | A literal table of constants iterated in a hot loop (`for step in [1, 9]`) is slower promoted to a static (src/mir/literal_tables.rs) than built in place: the static is a zero-initialized mutable global filled at startup, so LLVM reloads its pointer and length and bounds-checks each step of a 2-step loop it no longer unrolls (kata 752: 6.38G instructions, 4.61G with KARAC_MIR_LITERAL_TABLES=0, checked Rust 4.85G) | — |
 | B-2026-11-09-12 | 2026-11-09 | mir-llvm | low | `PriorityQueue`'s sifts swap elements a level at a time where Rust's `BinaryHeap` moves a hole, three element copies a level against one: kata 786 runs 1.34x and kata 778 1.22x checked Rust on x86 | — |
+| B-2026-11-09-14 | 2026-11-09 | typecheck+cli | medium | Rust's `binary_search` taken apart as a `Result` has no fix: `xs.binary_search(&v).unwrap_or_else(|x| x)` is refused with "expected 'OnceFn() -> i64', found 'Fn(?T) -> ?T'" and `match xs.binary_search(&v) { Ok(i) => .., Err(i) => .. }` with a generic pattern error, though Kāra's `binary_search` returns `Option[i64]` and `partition_point(|y| y < v)` is the insertion point | — |
+| B-2026-11-09-15 | 2026-11-09 | typecheck+cli | low | A defaulted `i64` literal that reaches a narrower slot through a collection (`let mut a = 0; a += nums[i]; left[k].push(a)`, then `best.min(x + ..)` for `x` in `left[k]`, `best: i32`) is refused at the `min` with no edit; the fix is `a: i32` at the binding, two hops away | — |
 
 ### Relocated
 
@@ -927,6 +929,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-9 | mir-llvm | low | `String.push_str` is a runtime call and a `memcpy` call per append: kata 763's strings built a letter at a time run 1.84x checked Rust on x86 | d308599fbb |
 | B-2026-11-09-10 | mir | low | A vector made before its loop's bound is worked out (`let mut seat_of = Vec.new(); for _ in 0..row.len() { seat_of.push(0) }`) is not presized, since… | d308599fbb |
 | B-2026-11-09-11 | mir-llvm | low | A library body's located function (`<fn>.at`, every library body a program calls) gets none of the parameter attributes the plain function gets: no `… | d308599fbb |
+| B-2026-11-09-13 | parser+resolver | high | `karac fix` turns a plain Rust `BinaryHeap` into a smallest-first `PriorityQueue.new()` whenever any other heap in the program wraps its items in `Re… | 4899210bd7 |
 
 </details>
 
