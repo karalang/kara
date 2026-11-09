@@ -459,56 +459,20 @@ pub(super) fn path_str(segments: &[String]) -> String {
 }
 
 /// True iff emitting `name` bare would lex as a keyword / reserved-future-use
-/// word (i.e. anything other than `Token::Identifier`). The list mirrors the
-/// keyword table in `src/lexer.rs::identifier()` plus the reserved-future-use
-/// set; structural markers (`self`/`Self`/`_`/...) are excluded because they
-/// cannot reach the formatter as a plain `name` — the lexer rejects raw
-/// escapes for them.
+/// word (i.e. anything other than `Token::Identifier`). The lexer is asked
+/// rather than a list kept here: a hand copy of its keyword table outlived
+/// the 2026-10-07 contextual-keyword change, so `let group = 1` came out as
+/// `let r#group = 1`, and every soft word (`seq`, `resource`, `with`, ...)
+/// with it (B-2026-11-09-52). Structural markers (`self`/`Self`/`_`/...) are
+/// excluded because they cannot reach the formatter as a plain `name`: the
+/// lexer rejects raw escapes for them.
 pub(super) fn needs_raw_escape(name: &str) -> bool {
     // A structural marker (`own`, ...) cannot take `r#`; where one appears
     // as a name the parser reads it bare.
     crate::token::is_raw_escapable(name)
-        && matches!(
-            name,
-            // Declarations
-            "fn" | "struct" | "enum" | "trait" | "impl" | "mod" | "use" | "import"
-        | "const" | "type" | "distinct"
-        // Visibility
-        | "pub" | "private"
-        // Control flow
-        | "if" | "else" | "match" | "while" | "for" | "in" | "loop"
-        | "return" | "break" | "continue"
-        | "defer" | "errdefer" | "asm" | "global_asm"
-        // Bindings
-        | "let" | "mut"
-        // Logical (keyword forms)
-        | "and" | "or" | "not"
-        // Ownership
-        | "own" | "ref" | "weak" | "lock" | "move"
-        // Effects
-        | "effect" | "resource" | "verb"
-        | "reads" | "writes" | "sends" | "receives" | "allocates" | "panics"
-        | "blocks" | "suspends"
-        | "with" | "transparent" | "stable" | "seq" | "par" | "yield"
-        // Type system
-        | "as" | "where" | "dyn"
-        // Contracts
-        | "requires" | "ensures" | "invariant"
-        // Safety
-        | "unsafe" | "extern"
-        // Shared / layout
-        | "shared" | "layout" | "group"
-        // Comptime
-        | "comptime"
-        // Bool literals
-        | "true" | "false"
-        // Providers / misc
-        | "providers" | "alias" | "independent"
-        // Reserved-for-future-use numeric types
-        | "f16" | "bf16"
-        // Reserved-for-future-use keywords
-        | "gen" | "become" | "do" | "final" | "override" | "priv" | "try"
-        | "typeof" | "virtual" | "async" | "await" | "pure" | "box"
+        && !matches!(
+            crate::lexer::Lexer::new(name).next_token().token,
+            crate::token::Token::Identifier { .. }
         )
 }
 
