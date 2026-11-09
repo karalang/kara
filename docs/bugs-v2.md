@@ -60,8 +60,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 206 |
 | false-positive | 167 |
-| perf | 142 |
-| missing-feature | 118 |
+| perf | 143 |
+| missing-feature | 119 |
 | soundness | 56 |
 | miscompile | 49 |
 | run-vs-build | 29 |
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 331 |
+| typecheck | 332 |
 | mir-llvm | 178 |
-| mir | 154 |
+| mir | 155 |
 | cli | 92 |
 | ownership | 65 |
 | parser | 54 |
-| interp | 40 |
+| interp | 41 |
 | runtime | 31 |
 | effect | 29 |
 | codegen | 22 |
@@ -117,6 +117,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-39 | 2026-11-09 | typecheck+mir+mir-llvm | medium | A closure whose body fixes nothing about its parameter, handed to a bounded generic `F: Fn(i64) -> i64`, passes `karac check` but types its parameter and result as `()`: `ap(1, |x| { println("a"); x })` stops every backend with "invalid MIR: ap[Fn(()) -> ()]: argument 0 of a Fn call has the wrong type" | — |
 | B-2026-11-09-40 | 2026-11-09 | typecheck+mir | medium | A closure whose body ends in `collect()` takes its target from nowhere: `let to32 = |v: ref Vec[i64]| v.iter().map(|x| x as i32).collect();` used as `take(to32(a))` with `take(v: Vec[i32])`, or `let r: Vec[i64] = f(a)`, checks clean and then stops at lowering with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet"; a Kāra closure cannot declare its return type, so nothing can fix `C` | — |
 | B-2026-11-09-44 | 2026-11-09 | interp+mir-llvm+runtime | medium | The HTTP client turns a status of 400 or more into `Err(HttpError)` carrying only a message ("<url>: status code 409"): a program cannot read the status, the headers or the body of an error response, so a tus client cannot take `Upload-Offset` from a 409 and a REST client cannot read a JSON error body | — |
+| B-2026-11-09-45 | 2026-11-09 | typecheck+mir | medium | A `mut ref` cursor cannot walk to a list's tail: Rust's `let mut tail = &mut list; while tail.is_some() { tail = &mut tail.as_mut().unwrap().next; } *tail = rest;` has no Kāra spelling, since `Option` has no `as_mut`, and the natural `while let Some(n) = tail { tail = mut ref n.next; }` (or the same as a `match` in a `loop`) is refused E0516 by both borrow checks: the rebinding reads as a use of `tail` while `tail` still borrows from itself | — |
+| B-2026-11-09-46 | 2026-11-09 | interp | medium | `karac __mir-run` builds an owned (non-`shared`) recursive list in quadratic time: `head = Some(N { v: i, next: head })` n times takes 3.2 s at n = 5000, 13.8 s at 10000 and 56 s at 20000, where the same program with `shared struct N` takes 0.29 s at 20000 and the compiled backend is linear | — |
 
 ### Relocated
 
