@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 145 |
 | missing-feature | 126 |
 | soundness | 56 |
-| miscompile | 51 |
+| miscompile | 52 |
 | run-vs-build | 30 |
 | other | 27 |
 | codegen-gap | 26 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 344 |
-| mir-llvm | 184 |
+| mir-llvm | 185 |
 | mir | 161 |
 | cli | 94 |
 | ownership | 67 |
@@ -127,6 +127,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-73 | 2026-11-09 | interp+mir-llvm+runtime | low | `set_read_timeout` on a socket a `Network` fake opened returns `Err(Unsupported)`, so a TCP client that sets a timeout, as io.md tells a client to, cannot be tested against a fake without ignoring the error | — |
 | B-2026-11-09-79 | 2026-11-09 | typecheck | low | A write through a read-only `Slice` binding is refused without a code since 34d42091dd: `error[typecheck]` where the corpus expects E0200 | — |
 | B-2026-11-09-80 | 2026-11-09 | ownership | low | An escaping closure capturing a borrow is refused without a code: `error[ownership]: an escaping closure captures `r` by move` where the corpus expects E0516 | — |
+| B-2026-11-09-82 | 2026-11-09 | mir-llvm | high | Under `KARAC_AUTO_PAR=0` a write through a `mut Slice` view of a `Vec` is lost: `poke(mut w[2..4])` with `xs[0] = 99` leaves `w` as `1 2 3 4` in a program that has any `for` loop; `as_slice_mut()` in a tuple field and `iter_mut()` over a range view lose theirs too | — |
 
 ### Relocated
 
