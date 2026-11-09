@@ -2385,7 +2385,8 @@ impl Parser {
         }
         // Only where the NEXT token reads as something that follows a name
         // (`;`, `,`, a closer, `:`, `.`, `(`, `[`, an operator, an
-        // assignment, a bitwise operator), and in a pattern also `in`, `=>`,
+        // assignment or compound assignment (the bitwise ones too, kata
+        // 2044's `or |= nums[i]`), a bitwise operator), and in a pattern also `in`, `=>`,
         // `if` and `@`. Malformed code also puts keywords here -- the `let` of
         // an unsupported `if let ... and let Some(x) = e` chain, a stray
         // `else {` -- and retyping those as names would trade one honest
@@ -2410,6 +2411,11 @@ impl Parser {
                     | Token::StarEqual
                     | Token::SlashEqual
                     | Token::PercentEqual
+                    | Token::AmpEqual
+                    | Token::PipeEqual
+                    | Token::CaretEqual
+                    | Token::LessLessEqual
+                    | Token::GreaterGreaterEqual
                     | Token::Plus
                     | Token::Minus
                     | Token::Star
