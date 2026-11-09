@@ -12,7 +12,6 @@ mod common;
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::process::Command;
 
 /// A server on a free loopback port answering `n` requests with a 200,
 /// a body naming the request line's method, and two headers.
@@ -90,6 +89,7 @@ fn a_client_response_fills_a_programs_own_response_by_name_interpreted() {
 #[cfg(feature = "llvm")]
 #[test]
 fn a_client_response_fills_a_programs_own_response_by_name_compiled() {
+    use std::process::Command;
     let src = program(server(2));
     let lowered = karac::mir::lower::build_source(&src).expect("MIR");
     karac::mir::lower::compiled_check(&lowered).expect("checks");
