@@ -341,14 +341,21 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                 }
             }
-            TyKind::Float(_) => {
+            TyKind::Float(ft) => {
                 let x = self.load(p, t)?;
                 let x = self.float_of(x, t)?;
                 f = self
                     .builder
                     .build_float_cast(x, self.llcx.f64_type(), "")
                     .map_err(e)?;
-                4
+                // An `f32` without a precision shows its own shortest digits
+                // (B-2026-11-08-74); the widening is exact, so the runtime
+                // narrows it back.
+                if matches!(ft, FloatTy::F32) {
+                    6
+                } else {
+                    4
+                }
             }
             _ => {
                 self.rt("fmt_begin", &[])?;

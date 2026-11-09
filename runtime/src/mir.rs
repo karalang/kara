@@ -558,8 +558,9 @@ pub unsafe extern "C" fn karac_mir_fmt_spec(
     unsafe { string_of(out, t.as_slice()) };
 }
 
-/// The number `karac_mir_fmt_spec` was handed (`kind` 0 to 4; a 64-bit
-/// one in the low half of `wide`), written to `t`.
+/// The number `karac_mir_fmt_spec` was handed (`kind` 0 to 4, or 6 for an
+/// `f32` widened to `f`; a 64-bit one in the low half of `wide`), written to
+/// `t`.
 fn spec_number(
     fs: &crate::fmt::format_spec::FormatSpec,
     kind: i32,
@@ -571,6 +572,7 @@ fn spec_number(
     match kind {
         0 | 1 => fs.write_int64(wide as u64, kind == 0, &mut t),
         2 | 3 => fs.write_int128(wide, kind == 2, &mut t),
+        6 => fs.write_float32(f as f32, &mut t),
         _ => fs.write_float(f, &mut t),
     }
 }

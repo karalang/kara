@@ -71,6 +71,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `Json.deserialize(text: Str)` takes a view, so a line of `text.lines()`
   or a slice reads without `.to_string()`; a `String` still passes
   (B-2026-11-08-79).
+- **Fill, align and width pad any value.** `{x:>8}` and `{x:+}` on a float,
+  `{flag:>6}` on a `bool` and `{c:^3}` on a `char` were refused ("a float
+  format spec needs a precision", "format specifiers apply to int, float,
+  and string values only"). A float without `.precision` now pads its
+  `Display` text (`{nan:>5}` is `  NaN`, an `f32` its own shortest digits);
+  `+` and `0` stay numbers-only, `type` integers-only and `.precision`
+  floats-only, each still an error at the hole (design.md §3 Format
+  specifiers; B-2026-11-08-74).
+
 - **`Map`, `SortedMap`, `Set` and `SortedSet` compare with `==`.** Two
   maps are equal when they hold the same keys with equal values, two sets
   when they hold the same elements, whatever the insertion or iteration

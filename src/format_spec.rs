@@ -470,11 +470,30 @@ impl FormatSpec {
         String::from_utf8(out).unwrap_or_default()
     }
 
+    /// [`Self::apply_float`] on an `f32`: without a precision, its own
+    /// shortest digits, as its `Display` shows them.
+    pub fn apply_float32(&self, v: f32) -> String {
+        let mut out = Vec::new();
+        self.write_float32(v, &mut out);
+        String::from_utf8(out).unwrap_or_default()
+    }
+
+    /// [`Self::apply_float32`], appended to `out`.
+    pub fn write_float32(&self, v: f32, out: &mut impl Out) {
+        self.write_float_as(f64::from(v), true, out)
+    }
+
     /// [`Self::apply_float`], appended to `out`. The digits are Rust's
-    /// `{v:.p}` with a precision and its `{v}` without one, an integral
-    /// value showing one fractional digit to match the bare-float
-    /// rendering; written by `float_text`, which cannot panic.
+    /// `{v:.p}` with a precision, and the value's `Display` text without one
+    /// (design.md §3: `{x:>8}` pads what `{x}` prints, B-2026-11-08-74);
+    /// written by `float_text`, which cannot panic.
     pub fn write_float(&self, v: f64, out: &mut impl Out) {
+        self.write_float_as(v, false, out)
+    }
+
+    /// [`Self::write_float`], the digits without a precision an `f32`'s
+    /// when `single`.
+    fn write_float_as(&self, v: f64, single: bool, out: &mut impl Out) {
         // `+` signs every non-negative value except a NaN, which Rust renders
         // unsigned (`format!("{:+}", f64::NAN)` is `NaN`); so does `-`.
         let sign: &[u8] = if v.is_nan() {
@@ -489,7 +508,7 @@ impl FormatSpec {
         let have = match self.width {
             Some(_) => {
                 let mut count = Count(sign.len());
-                Self::float_digits(self.precision, v, &mut count);
+                Self::float_digits(self.precision, v, single, &mut count);
                 count.0
             }
             None => 0,
@@ -499,23 +518,25 @@ impl FormatSpec {
                 if have < width {
                     out.put(sign);
                     out.repeat(b"0", width - have);
-                    return Self::float_digits(self.precision, v, out);
+                    return Self::float_digits(self.precision, v, single, out);
                 }
             }
         }
         let (left, right) = self.pad_amounts(have, false);
         self.write_fill(out, left);
         out.put(sign);
-        Self::float_digits(self.precision, v, out);
+        Self::float_digits(self.precision, v, single, out);
         self.write_fill(out, right);
     }
 
     /// `v`'s magnitude, as [`Self::write_float`] shows it.
-    fn float_digits(precision: Option<usize>, v: f64, out: &mut impl Out) {
+    fn float_digits(precision: Option<usize>, v: f64, single: bool, out: &mut impl Out) {
         match precision {
             Some(p) if v.is_finite() => float_text::write_fixed(out, v, p),
-            None if v.is_finite() && v.fract() == 0.0 => float_text::write_fixed(out, v, 1),
-            _ => float_text::write_rust_plain(out, v),
+            Some(_) => float_text::write_rust_plain(out, v),
+            // The sign is written apart, so the magnitude's `Display`.
+            None if single => float_text::write_display_f32(out, v.abs() as f32),
+            None => float_text::write_display_f64(out, v.abs()),
         }
     }
 
@@ -960,15 +981,8 @@ mod tests {
         pub fn apply_float(fs: &FormatSpec, v: f64) -> String {
             let body = match fs.precision {
                 Some(p) => format!("{v:.*}", p),
-                None => {
-                    // Match the interpreter/codegen bare-float rendering: an integral
-                    // value still shows one fractional digit.
-                    if v.fract() == 0.0 && v.is_finite() {
-                        format!("{v:.1}")
-                    } else {
-                        format!("{v}")
-                    }
-                }
+                // The value's `Display` text (design.md §3, B-2026-11-08-74).
+                None => display_f64(v),
             };
             // `+` signs every non-negative value except a NaN, which Rust renders
             // unsigned (`format!("{:+}", f64::NAN)` is `NaN`).

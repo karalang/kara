@@ -49,6 +49,10 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
     while let Type::Ref(t) | Type::MutRef(t) = ty {
         ty = t;
     }
+    // design.md §3 "Which parts apply to which values" (B-2026-11-08-74):
+    // fill, align and width pad any value's `Display` text; `+` and `0` are
+    // for numbers, `type` for integers, `.precision` for floats. A float
+    // without a precision pads its `Display` text.
     let is_int = matches!(ty, Type::Int(_) | Type::UInt(_));
     let is_float = matches!(ty, Type::Float(_));
     // `Str` is the string view, and formats as the string (B-2026-10-14-66).
@@ -67,12 +71,6 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
                 "format spec `{spec_raw}`: a radix type (x/X/o) is not valid for a float"
             ));
         }
-        if fs.precision.is_none() {
-            return Err(format!(
-                "format spec `{spec_raw}`: a float format spec needs a precision \
-                 (e.g. `{{x:.2}}` or `{{x:8.2}}`)"
-            ));
-        }
         return Ok(());
     }
     if is_str {
@@ -83,8 +81,8 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
         }
         if fs.precision.is_some() {
             return Err(format!(
-                "format spec `{spec_raw}`: precision (`.N`) on a string is not yet supported \
-                 (planned follow-up); width and alignment are available"
+                "format spec `{spec_raw}`: precision (`.N`) on a string is not in v1; \
+                 width and alignment are available"
             ));
         }
         if fs.zero_pad {
@@ -99,9 +97,20 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
         }
         return Ok(());
     }
+    let part = if fs.radix != crate::format_spec::Radix::Dec {
+        "a radix type (x/X/o/b), which is for integers,"
+    } else if fs.precision.is_some() {
+        "precision (`.N`), which is for floats,"
+    } else if fs.plus {
+        "the sign flag (`+`), which is for numbers,"
+    } else if fs.zero_pad {
+        "zero-pad (`0`), which is for numbers,"
+    } else {
+        return Ok(());
+    };
     Err(format!(
-        "format spec `{spec_raw}`: format specifiers apply to int, float, and string values \
-         only (got `{}`)",
+        "format spec `{spec_raw}`: {part} is not valid for a `{}`; fill, align and width \
+         apply to it (design.md §3 Format specifiers)",
         type_display(ty)
     ))
 }

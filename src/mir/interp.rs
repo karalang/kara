@@ -22,7 +22,7 @@ use super::parse::MirModule;
 use super::place_ty::place_ty;
 use super::pretty;
 use super::syntax::*;
-use super::ty::{AdtId, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
+use super::ty::{AdtId, FloatTy, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
 use super::validate::validate;
 
 #[path = "comptime_natives.rs"]
@@ -2867,6 +2867,7 @@ impl<'a> Interp<'a> {
                     (TyKind::Int(IntTy::I128), Value::Int(i)) => fs.apply_int128(*i),
                     (TyKind::Int(IntTy::U128), Value::Int(i)) => fs.apply_uint128(*i as u128),
                     (_, Value::Int(i)) => fs.apply_int(*i as i64),
+                    (TyKind::Float(FloatTy::F32), Value::Float(f)) => fs.apply_float32(*f as f32),
                     (_, Value::Float(f)) => fs.apply_float(*f),
                     _ => {
                         let shown = self.display_typed(&v, t)?;
