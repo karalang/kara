@@ -1,0 +1,11 @@
+source = "corpus/core/ok_a_let_else_branch_moves_what_the_rest_moves"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["move", "let-else"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "B-2026-11-09-16: core-semantics.md §3.2, a use after move is one the move reaches on some path; a `let … else` else branch and the statements after it are different paths. Expected output worked by hand."

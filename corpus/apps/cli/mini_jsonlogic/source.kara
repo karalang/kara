@@ -1,0 +1,1259 @@
+// mini_jsonlogic: a JsonLogic rules engine, the JSON rule format feature
+// flag services and form validators share between server and browser. The
+// operations of panzi-json-logic's Python port with its JavaScript-style
+// coercions (loose equality, `+` on strings, `"%.15g"` number text), the
+// short-circuit and list forms, and `var` paths, deciding a web shop's
+// feature flags for a few users and then running single cases.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.hex_decode;
+import std.json.{Json};
+
+// ------------------------------------------------------------ values
+
+/// A Python value as `json.loads` makes it: `Int` and `Float` stay apart,
+/// and an object keeps its keys in order.
+#[derive(Clone)]
+enum Val {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[Val]),
+    Obj(Vec[(String, Val)]),
+}
+
+fn from_json(j: own Json) -> Val {
+    match j {
+        Json.Null => Val.Null,
+        Json.Bool(b) => Val.Bool(b),
+        Json.Int(i) => Val.Int(i),
+        Json.Number(f) => Val.Float(f),
+        Json.String(s) => Val.Str(s),
+        Json.Array(xs) => Val.List(xs.into_iter().map(|x| from_json(x)).collect()),
+        Json.Object(fields) => Val.Obj(fields.into_iter().map(|(k, v)| (k, from_json(v))).collect()),
+    }
+}
+
+fn get_key(fields: Slice[(String, Val)], key: Str) -> Option[Val] {
+    for (k, v) in fields.iter() {
+        if k == key {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+// ------------------------------------------------------------ text
+
+/// Python's `repr` of a string, for the operation names the cases use.
+fn py_repr(s: Str) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == '\\' or c == q {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push(q);
+    out
+}
+
+fn hex4(n: i64) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = "\\u".to_string();
+    for shift in [12, 8, 4, 0] {
+        let d = (n >> shift) & 15;
+        out.push_str(digits[d..d + 1]);
+    }
+    out
+}
+
+/// `json.dumps` of a string: ASCII only, as `ensure_ascii` writes it.
+fn json_string(s: Str) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            _ => {
+                let n = c as i64;
+                if n >= 32 and n <= 126 {
+                    out.push(c);
+                } else if n < 65536 {
+                    out.push_str(hex4(n));
+                } else {
+                    let v = n - 65536;
+                    out.push_str(hex4(55296 + (v >> 10)));
+                    out.push_str(hex4(56320 + (v & 1023)));
+                }
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `json.dumps` with its default separators; NaN and the infinities as
+/// Python writes them.
+fn dumps(v: ref Val) -> String {
+    match v {
+        Val.Null => "null".to_string(),
+        Val.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
+        Val.Int(i) => f"{i}",
+        Val.Float(x) => {
+            if x.is_nan() {
+                "NaN".to_string()
+            } else if x.is_infinite() {
+                if x > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+            } else {
+                f"{x}"
+            }
+        }
+        Val.Str(s) => json_string(s),
+        Val.List(xs) => {
+            let parts: Vec[String] = xs.iter().map(|x| dumps(x)).collect();
+            f"[{parts.join(", ")}]"
+        }
+        Val.Obj(fields) => {
+            let parts: Vec[String] = fields.iter().map(|(k, x)| f"{json_string(k)}: {dumps(x)}").collect();
+            "{" + parts.join(", ") + "}"
+        }
+    }
+}
+
+/// `"%.15g" % x`: fifteen significant digits, correctly rounded (half to
+/// even on an exact tie), trailing zeros dropped, and an exponent when the
+/// decimal exponent is below -4 or at least 15.
+fn format_g15(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf".to_string() } else { "-inf".to_string() };
+    }
+    let sign = if x.is_sign_negative() { "-" } else { "" };
+    let a = x.abs();
+    if a == 0.0 {
+        return f"{sign}0";
+    }
+    // Every digit of the exact binary value: a double has at most 1074
+    // digits after the point.
+    let text = f"{a:.1100}";
+    let (whole, frac) = text.split_once(".").unwrap();
+    let all: Vec[char] = whole.chars().chain(frac.chars()).collect();
+    let mut first = 0;
+    while all[first] == '0' {
+        first += 1;
+    }
+    let mut exp = whole.len() - 1 - first;
+    let mut digits: Vec[i64] = Vec.new();
+    for k in first..first + 15 {
+        digits.push(if k < all.len() { (all[k] as i64) - ('0' as i64) } else { 0 });
+    }
+    let rest = if first + 15 < all.len() { all[first + 15..].to_vec() } else { Vec.new() };
+    let up = if rest.is_empty() or rest[0] < '5' {
+        false
+    } else if rest[0] > '5' or rest[1..].iter().any(|c| *c != '0') {
+        true
+    } else {
+        digits[14] % 2 == 1
+    };
+    if up {
+        let mut k = 14;
+        loop {
+            digits[k] += 1;
+            if digits[k] < 10 {
+                break;
+            }
+            digits[k] = 0;
+            if k == 0 {
+                digits.insert(0, 1);
+                digits.pop();
+                exp += 1;
+                break;
+            }
+            k -= 1;
+        }
+    }
+    while digits.len() > 1 and digits[digits.len() - 1] == 0 {
+        digits.pop();
+    }
+    let mut ds = String.new();
+    for d in digits.iter() {
+        ds.push_str(f"{d}");
+    }
+    if exp < -4 or exp >= 15 {
+        let mant = if ds.len() > 1 { f"{ds[0..1]}.{ds[1..]}" } else { ds.clone() };
+        let esign = if exp < 0 { "-" } else { "+" };
+        let e = exp.abs();
+        let epad = if e < 10 { f"0{e}" } else { f"{e}" };
+        return f"{sign}{mant}e{esign}{epad}";
+    }
+    if exp < 0 {
+        let mut zeros = String.new();
+        for _ in 0..(-exp - 1) {
+            zeros.push('0');
+        }
+        return f"{sign}0.{zeros}{ds}";
+    }
+    let int_len = exp + 1;
+    if ds.len() <= int_len {
+        let mut s = ds.clone();
+        while s.len() < int_len {
+            s.push('0');
+        }
+        f"{sign}{s}"
+    } else {
+        f"{sign}{ds[0..int_len]}.{ds[int_len..]}"
+    }
+}
+
+// ------------------------------------------------------------ coercions
+
+/// Python's `float(s)`: surrounding whitespace, a sign, `inf`, `infinity`
+/// or `nan` in any case, or decimal digits with single underscores between
+/// them, a point and an exponent.
+fn py_float(s: Str) -> Option[f64] {
+    let t = s.trim();
+    let (neg, body) = if let Some(r) = t.strip_prefix("-") {
+        (true, r)
+    } else if let Some(r) = t.strip_prefix("+") {
+        (false, r)
+    } else {
+        (false, t)
+    };
+    let low = body.to_lowercase();
+    if low == "inf" or low == "infinity" {
+        return Some(if neg { -f64.INFINITY } else { f64.INFINITY });
+    }
+    if low == "nan" {
+        return Some(f64.NAN);
+    }
+    let cs: Vec[char] = body.chars().collect();
+    let mut clean = String.new();
+    let mut i = 0;
+    let mut int_digits = 0;
+    let mut frac_digits = 0;
+    // A run of digits with single underscores between them.
+    while i < cs.len() and cs[i].is_ascii_digit() {
+        clean.push(cs[i]);
+        int_digits += 1;
+        i += 1;
+        if i + 1 < cs.len() and cs[i] == '_' and cs[i + 1].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    if i < cs.len() and cs[i] == '.' {
+        clean.push('.');
+        i += 1;
+        while i < cs.len() and cs[i].is_ascii_digit() {
+            clean.push(cs[i]);
+            frac_digits += 1;
+            i += 1;
+            if i + 1 < cs.len() and cs[i] == '_' and cs[i + 1].is_ascii_digit() {
+                i += 1;
+            }
+        }
+    }
+    if int_digits + frac_digits == 0 {
+        return None;
+    }
+    if i < cs.len() and (cs[i] == 'e' or cs[i] == 'E') {
+        clean.push('e');
+        i += 1;
+        if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+            clean.push(cs[i]);
+            i += 1;
+        }
+        let mut exp_digits = 0;
+        while i < cs.len() and cs[i].is_ascii_digit() {
+            clean.push(cs[i]);
+            exp_digits += 1;
+            i += 1;
+            if i + 1 < cs.len() and cs[i] == '_' and cs[i + 1].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        if exp_digits == 0 {
+            return None;
+        }
+    }
+    if i != cs.len() {
+        return None;
+    }
+    let x = f64.parse(clean).ok()?;
+    Some(if neg { -x } else { x })
+}
+
+fn is_num(v: ref Val) -> bool {
+    match v {
+        Val.Int(_) | Val.Float(_) | Val.Bool(_) => true,
+        _ => false,
+    }
+}
+
+/// The value of an int-like number (an `int` or a `bool`).
+fn int_of(v: ref Val) -> Option[i64] {
+    match v {
+        Val.Int(i) => Some(i),
+        Val.Bool(b) => Some(if b { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn f64_of(v: ref Val) -> f64 {
+    match v {
+        Val.Int(i) => i as f64,
+        Val.Bool(b) => if b { 1.0 } else { 0.0 },
+        Val.Float(x) => x,
+        _ => f64.NAN,
+    }
+}
+
+/// `to_number`: numbers (booleans among them) as they are, `None` as 0, a
+/// list by its one item, text through `float()`, and NaN for the rest.
+fn to_number(v: ref Val) -> Val {
+    match v {
+        Val.Int(_) | Val.Float(_) | Val.Bool(_) => v.clone(),
+        Val.Null => Val.Int(0),
+        Val.List(xs) => {
+            if xs.is_empty() {
+                Val.Int(0)
+            } else if xs.len() > 1 {
+                Val.Float(f64.NAN)
+            } else {
+                to_number(xs[0])
+            }
+        }
+        Val.Obj(_) => Val.Float(f64.NAN),
+        Val.Str(s) => {
+            let low = s.trim().to_lowercase();
+            if low == "inf" or low == "-inf" or low == "+inf" {
+                return Val.Float(f64.NAN);
+            }
+            Val.Float(py_float(s) ?? f64.NAN)
+        }
+    }
+}
+
+/// `to_string`: text as it is, a float through `"%.15g"`, and a boolean
+/// through `str()`, since a Python `bool` is an `int`.
+fn to_string(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        Val.Float(x) => format_g15(x),
+        Val.Int(i) => f"{i}",
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        Val.Null => "null".to_string(),
+        Val.List(xs) => {
+            let parts: Vec[String] = xs.iter().map(|x| to_string(x)).collect();
+            parts.join(",")
+        }
+        Val.Obj(_) => "[object Object]".to_string(),
+    }
+}
+
+fn to_bool(v: ref Val) -> bool {
+    match v {
+        Val.Null => false,
+        Val.Bool(b) => b,
+        Val.Float(x) => not x.is_nan() and x != 0.0,
+        Val.Int(i) => i != 0,
+        Val.Str(s) => not s.is_empty(),
+        Val.List(xs) => not xs.is_empty(),
+        Val.Obj(_) => true,
+    }
+}
+
+// Python's comparisons between numbers of any of the three kinds.
+
+fn num_lt(a: ref Val, b: ref Val) -> bool {
+    match (int_of(a), int_of(b)) {
+        (Some(x), Some(y)) => x < y,
+        _ => f64_of(a) < f64_of(b),
+    }
+}
+
+fn num_eq(a: ref Val, b: ref Val) -> bool {
+    match (int_of(a), int_of(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => f64_of(a) == f64_of(b),
+    }
+}
+
+/// Python's `==`: numbers across kinds, lists item by item, dicts by their
+/// keys and values in any order.
+fn py_eq(a: ref Val, b: ref Val) -> bool {
+    if is_num(a) and is_num(b) {
+        return num_eq(a, b);
+    }
+    match (a, b) {
+        (Val.Null, Val.Null) => true,
+        (Val.Str(x), Val.Str(y)) => x == y,
+        (Val.List(xs), Val.List(ys)) => {
+            if xs.len() != ys.len() {
+                return false;
+            }
+            for k in 0..xs.len() {
+                if not py_eq(xs[k], ys[k]) {
+                    return false;
+                }
+            }
+            true
+        }
+        (Val.Obj(xs), Val.Obj(ys)) => {
+            if xs.len() != ys.len() {
+                return false;
+            }
+            for (k, v) in xs.iter() {
+                match get_key(ys, k) {
+                    Some(w) => {
+                        if not py_eq(v, w) {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn same_kind(a: ref Val, b: ref Val) -> bool {
+    match (a, b) {
+        (Val.Null, Val.Null) | (Val.Bool(_), Val.Bool(_)) | (Val.Int(_), Val.Int(_)) => true,
+        (Val.Float(_), Val.Float(_)) | (Val.Str(_), Val.Str(_)) => true,
+        (Val.List(_), Val.List(_)) | (Val.Obj(_), Val.Obj(_)) => true,
+        _ => false,
+    }
+}
+
+fn is_container(v: ref Val) -> bool {
+    match v {
+        Val.List(_) | Val.Obj(_) => true,
+        _ => false,
+    }
+}
+
+/// `op_equals`, the loose `==`. Two lists or objects are never the same
+/// object here (README.md).
+fn loose_eq(a: ref Val, b: ref Val) -> bool {
+    if same_kind(a, b) {
+        if is_container(a) {
+            return false;
+        }
+        return py_eq(a, b);
+    }
+    if is_num(a) {
+        return num_eq(a, if is_num(b) { b.clone() } else { to_number(b) });
+    }
+    if is_num(b) {
+        return num_eq(to_number(a), b);
+    }
+    match (a, b) {
+        (Val.Null, _) | (_, Val.Null) => false,
+        (Val.Str(s), _) => s == to_string(b),
+        (_, Val.Str(s)) => to_string(a) == s,
+        _ => false,
+    }
+}
+
+/// One of `<`, `<=`, `>`, `>=` between two values: numbers against the
+/// other side as a number, then text against the other side as text, then
+/// both as numbers.
+fn compare(op: Str, a: ref Val, b: ref Val) -> bool {
+    let (x, y, text) = if is_num(a) {
+        (a.clone(), to_number(b), false)
+    } else if is_num(b) {
+        (to_number(a), b.clone(), false)
+    } else if let Val.Str(_) = a {
+        (a.clone(), Val.Str(to_string(b)), true)
+    } else if let Val.Str(_) = b {
+        (Val.Str(to_string(a)), b.clone(), true)
+    } else {
+        (to_number(a), to_number(b), false)
+    };
+    if text {
+        let (Val.Str(s), Val.Str(t)) = (x, y) else {
+            return false;
+        };
+        return match op {
+            "<" => s < t,
+            "<=" => s <= t,
+            ">" => s > t,
+            _ => s >= t,
+        };
+    }
+    match op {
+        "<" => num_lt(x, y),
+        "<=" => num_lt(x, y) or num_eq(x, y),
+        ">" => num_lt(y, x),
+        _ => num_lt(y, x) or num_eq(x, y),
+    }
+}
+
+// ------------------------------------------------------------ arithmetic
+
+fn arith(op: Str, a: ref Val, b: ref Val) -> Result[Val, String] {
+    if let (Some(x), Some(y)) = (int_of(a), int_of(b)) {
+        return match op {
+            "+" => Ok(Val.Int(x + y)),
+            "-" => Ok(Val.Int(x - y)),
+            "*" => Ok(Val.Int(x * y)),
+            "/" => {
+                if y == 0 {
+                    return Err("ZeroDivisionError: division by zero".to_string());
+                }
+                Ok(Val.Float((x as f64) / (y as f64)))
+            }
+            _ => {
+                if y == 0 {
+                    return Err("ZeroDivisionError: integer modulo by zero".to_string());
+                }
+                let mut r = x % y;
+                if r != 0 and (r < 0) != (y < 0) {
+                    r += y;
+                }
+                Ok(Val.Int(r))
+            }
+        };
+    }
+    let x = f64_of(a);
+    let y = f64_of(b);
+    match op {
+        "+" => Ok(Val.Float(x + y)),
+        "-" => Ok(Val.Float(x - y)),
+        "*" => Ok(Val.Float(x * y)),
+        "/" => {
+            if y == 0.0 {
+                return Err("ZeroDivisionError: float division by zero".to_string());
+            }
+            Ok(Val.Float(x / y))
+        }
+        _ => {
+            if y == 0.0 {
+                return Err("ZeroDivisionError: float modulo by zero".to_string());
+            }
+            let mut m = x % y;
+            if m != 0.0 {
+                if (y < 0.0) != (m < 0.0) {
+                    m += y;
+                }
+            } else {
+                m = 0.0.copysign(y);
+            }
+            Ok(Val.Float(m))
+        }
+    }
+}
+
+fn negate(v: ref Val) -> Val {
+    match int_of(v) {
+        Some(i) => Val.Int(-i),
+        None => Val.Float(-f64_of(v)),
+    }
+}
+
+// ------------------------------------------------------------ var
+
+/// A list or text's length, and its item at `i` (a character of text).
+fn seq_len(v: ref Val) -> Option[i64] {
+    match v {
+        Val.List(xs) => Some(xs.len()),
+        Val.Str(s) => Some(s.chars().count()),
+        _ => None,
+    }
+}
+
+fn seq_item(v: ref Val, i: i64) -> Val {
+    match v {
+        Val.List(xs) => xs[i].clone(),
+        Val.Str(s) => Val.Str(s.char_at(i).unwrap().to_string()),
+        _ => Val.Null,
+    }
+}
+
+/// A path component that `int(prop, 10)` reads back as itself: `0`, or a
+/// digit 1 to 9 and more digits.
+fn canonical_index(prop: Str) -> Option[i64] {
+    if prop.is_empty() or not prop.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if prop.len() > 1 and prop.starts_with("0") {
+        return None;
+    }
+    i64.parse(prop).ok()
+}
+
+fn op_var(data: ref Val, key: ref Val, default: ref Val) -> Val {
+    match key {
+        Val.Null => return data.clone(),
+        Val.Str(s) => {
+            if s.is_empty() {
+                return data.clone();
+            }
+        }
+        _ => {}
+    }
+    if is_num(key) {
+        let Some(n) = seq_len(data) else {
+            // An object's keys are text, so a number finds nothing there.
+            return default.clone();
+        };
+        let x = f64_of(key);
+        if x.is_nan() {
+            return default.clone();
+        }
+        let index = i64.checked_from(x) ?? -1;
+        if not num_eq(Val.Int(index), key) or index < 0 or index >= n {
+            return default.clone();
+        }
+        return seq_item(data, index);
+    }
+    let mut cur = data.clone();
+    for prop in to_string(key).split(".") {
+        if let Some(n) = seq_len(cur) {
+            if prop == "length" {
+                return Val.Int(n);
+            }
+            let Some(index) = canonical_index(prop) else {
+                return default.clone();
+            };
+            if index >= n {
+                return default.clone();
+            }
+            cur = seq_item(cur, index);
+        } else if let Val.Obj(fields) = cur {
+            cur = get_key(fields, prop) ?? Val.Null;
+        } else {
+            return default.clone();
+        }
+    }
+    if let Val.Null = cur {
+        return default.clone();
+    }
+    cur
+}
+
+fn op_missing(data: ref Val, args: Slice[Val]) -> Val {
+    let keys: Vec[Val] = match args.first() {
+        Some(Val.List(xs)) => xs.clone(),
+        _ => args.to_vec(),
+    };
+    let mut missing: Vec[Val] = Vec.new();
+    for key in keys.iter() {
+        let value = op_var(data, key, Val.Null);
+        let absent = match value {
+            Val.Null => true,
+            Val.Str(s) => s.is_empty(),
+            _ => false,
+        };
+        if absent {
+            missing.push(key.clone());
+        }
+    }
+    Val.List(missing)
+}
+
+// ------------------------------------------------------------ apply
+
+/// Argument `i`, or `None` past the end (the operations' defaults).
+fn arg(args: Slice[Val], i: i64) -> Val {
+    if i < args.len() { args[i].clone() } else { Val.Null }
+}
+
+fn is_null(v: ref Val) -> bool {
+    match v {
+        Val.Null => true,
+        _ => false,
+    }
+}
+
+const BUILTINS: Array[Str, 25] = [
+    "==", "!=", "===", "!==", "<", ">", "<=", ">=", "!", "!!", "+", "*", "-", "/", "%",
+    "in", "min", "max", "cat", "log", "var", "substr", "merge", "missing", "missing_some",
+];
+
+fn apply(logic: ref Val, data: ref Val) -> Result[Val, String] {
+    let fields = match logic {
+        Val.List(items) => {
+            let mut out: Vec[Val] = Vec.new();
+            for item in items.iter() {
+                out.push(apply(item, data)?);
+            }
+            return Ok(Val.List(out));
+        }
+        Val.Obj(fields) => fields,
+        _ => return Ok(logic.clone()),
+    };
+    if fields.len() != 1 {
+        return Ok(logic.clone());
+    }
+    let (op, raw) = ref fields[0];
+    let args: Vec[Val] = match raw {
+        Val.List(xs) => xs.clone(),
+        _ => [raw.clone()],
+    };
+    match op.as_str() {
+        "if" | "?:" => {
+            let argc = args.len();
+            let mut index = 0;
+            while index < argc - 1 {
+                if to_bool(apply(args[index], data)?) {
+                    return apply(args[index + 1], data);
+                }
+                index += 2;
+            }
+            if index >= argc {
+                return Ok(Val.Null);
+            }
+            return apply(args[index], data);
+        }
+        "and" | "or" => {
+            let mut current = Val.Null;
+            for a in args.iter() {
+                current = apply(a, data)?;
+                if to_bool(current) == (op == "or") {
+                    return Ok(current);
+                }
+            }
+            return Ok(current);
+        }
+        "filter" | "map" => {
+            if args.len() < (if op == "filter" { 2 } else { 1 }) {
+                return Ok(Val.List(Vec.new()));
+            }
+            let Val.List(items) = apply(args[0], data)? else {
+                return Ok(Val.List(Vec.new()));
+            };
+            let sublogic = arg(args, 1);
+            let mut out: Vec[Val] = Vec.new();
+            for item in items.iter() {
+                let r = apply(sublogic, item)?;
+                if op == "map" {
+                    out.push(r);
+                } else if to_bool(r) {
+                    out.push(item.clone());
+                }
+            }
+            return Ok(Val.List(out));
+        }
+        "reduce" => {
+            if args.is_empty() {
+                return Ok(Val.Null);
+            }
+            let init = arg(args, 2);
+            let Val.List(items) = apply(args[0], data)? else {
+                return Ok(init);
+            };
+            let sublogic = arg(args, 1);
+            let mut acc = init;
+            for item in items.iter() {
+                let context = Val.Obj([("accumulator".to_string(), acc), ("current".to_string(), item.clone())]);
+                acc = apply(sublogic, context)?;
+            }
+            return Ok(acc);
+        }
+        "all" | "some" | "none" => {
+            let empty = op == "none";
+            if args.len() < 2 {
+                return Ok(Val.Bool(empty));
+            }
+            let Val.List(items) = apply(args[0], data)? else {
+                return Ok(Val.Bool(empty));
+            };
+            if op == "all" {
+                if items.is_empty() {
+                    return Ok(Val.Bool(false));
+                }
+                for item in items.iter() {
+                    if not to_bool(apply(args[1], item)?) {
+                        return Ok(Val.Bool(false));
+                    }
+                }
+                return Ok(Val.Bool(true));
+            }
+            for item in items.iter() {
+                if to_bool(apply(args[1], item)?) {
+                    return Ok(Val.Bool(not empty));
+                }
+            }
+            return Ok(Val.Bool(empty));
+        }
+        _ => {}
+    }
+    let mut values: Vec[Val] = Vec.new();
+    for a in args.iter() {
+        values.push(apply(a, data)?);
+    }
+    builtin(op, data, values)
+}
+
+fn builtin(op: Str, data: ref Val, args: Vec[Val]) -> Result[Val, String] {
+    let a = arg(args, 0);
+    let b = arg(args, 1);
+    let c = arg(args, 2);
+    match op {
+        "==" => Ok(Val.Bool(loose_eq(a, b))),
+        "!=" => Ok(Val.Bool(not loose_eq(a, b))),
+        "===" => Ok(Val.Bool(py_eq(a, b))),
+        "!==" => Ok(Val.Bool(not py_eq(a, b))),
+        "<" | ">" | "<=" | ">=" => {
+            if is_null(c) {
+                return Ok(Val.Bool(compare(op, a, b)));
+            }
+            Ok(Val.Bool(compare(op, a, b) and compare(op, b, c)))
+        }
+        "!" => Ok(Val.Bool(not to_bool(a))),
+        "!!" => Ok(Val.Bool(to_bool(a))),
+        "+" | "*" => {
+            let mut value = Val.Int(if op == "+" { 0 } else { 1 });
+            for x in args.iter() {
+                value = arith(op, value, to_number(x))?;
+            }
+            Ok(value)
+        }
+        "-" => {
+            if is_null(b) {
+                return Ok(negate(to_number(a)));
+            }
+            arith("-", to_number(a), to_number(b))
+        }
+        "/" | "%" => arith(op, to_number(a), to_number(b)),
+        "in" => match b {
+            Val.List(xs) => Ok(Val.Bool(xs.iter().any(|x| py_eq(a, x)))),
+            Val.Str(s) => Ok(Val.Bool(s.contains(to_string(a)))),
+            _ => Ok(Val.Bool(false)),
+        },
+        "min" | "max" => {
+            if args.is_empty() {
+                return Ok(Val.Float(f64.NAN));
+            }
+            let mut best = to_number(args[0]);
+            for x in args[1..].iter() {
+                let n = to_number(x);
+                let better = if op == "min" { num_lt(n, best) } else { num_lt(best, n) };
+                if better {
+                    best = n;
+                }
+            }
+            Ok(best)
+        }
+        "cat" => {
+            let mut out = String.new();
+            for x in args.iter() {
+                out.push_str(to_string(x));
+            }
+            Ok(Val.Str(out))
+        }
+        "log" => {
+            println(dumps(a));
+            Ok(a)
+        }
+        "var" => {
+            if args.len() > 2 {
+                return Err(f"TypeError: op_var() takes from 0 to 3 positional arguments but {args.len() + 1} were given");
+            }
+            Ok(op_var(data, a, b))
+        }
+        "substr" => Ok(Val.Str(substr(to_string(a), to_number(b), c))),
+        "merge" => {
+            let mut items: Vec[Val] = Vec.new();
+            for x in args.iter() {
+                match x {
+                    Val.List(xs) => items.extend(xs.iter().cloned()),
+                    _ => items.push(x.clone()),
+                }
+            }
+            Ok(Val.List(items))
+        }
+        "missing" => Ok(op_missing(data, args)),
+        "missing_some" => {
+            let Val.List(keys) = b else {
+                return Ok(Val.List(Vec.new()));
+            };
+            let need = to_number(a);
+            let Val.List(missing) = op_missing(data, [Val.List(keys.clone())]) else {
+                return Ok(Val.List(Vec.new()));
+            };
+            let found = Val.Int(keys.len() - missing.len());
+            if num_lt(need, found) or num_eq(need, found) {
+                return Ok(Val.List(Vec.new()));
+            }
+            Ok(Val.List(missing))
+        }
+        _ => {
+            if op.contains(".") {
+                let first = op.split(".").next().unwrap();
+                if BUILTINS.iter().any(|n| *n == first) {
+                    return Err("TypeError: 'function' object is not subscriptable".to_string());
+                }
+                return Err(f"ReferenceError: Unrecognized operation: {py_repr(first)}");
+            }
+            Err(f"ReferenceError: Unrecognized operation: {py_repr(op)}")
+        }
+    }
+}
+
+/// `int()` of a number: toward zero.
+fn trunc_of(v: ref Val) -> i64 {
+    match int_of(v) {
+        Some(i) => i,
+        None => i64.checked_from(f64_of(v)) ?? 0,
+    }
+}
+
+/// `op_substr`, in characters.
+fn substr(text: Str, index: Val, length: Val) -> String {
+    let cs: Vec[char] = text.chars().collect();
+    let n = cs.len();
+    let start = if f64_of(index).is_nan() {
+        0
+    } else if num_lt(index, Val.Int(0)) {
+        let back = negate(index);
+        if num_lt(back, Val.Int(n)) { n - trunc_of(back) } else { 0 }
+    } else {
+        let i = trunc_of(index);
+        if i >= n { n } else { i }
+    };
+    let end = if is_null(length) {
+        n
+    } else {
+        let len = to_number(length);
+        if f64_of(len).is_nan() {
+            start
+        } else {
+            let k = trunc_of(len);
+            if k < 0 {
+                if n + k < start { start } else { n + k }
+            } else {
+                start + k
+            }
+        }
+    };
+    let end = if end > n { n } else { end };
+    let start = if start > end { end } else { start };
+    cs[start..end].iter().collect()
+}
+
+// ------------------------------------------------------------ main
+
+fn result_text(logic: ref Val, data: ref Val) -> String {
+    match apply(logic, data) {
+        Ok(v) => dumps(v),
+        Err(e) => f"error {e}",
+    }
+}
+
+fn parse(path: Str) -> Result[Val, String] {
+    let text = fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")?;
+    parse_text(text).map_err(|e| f"{path}: {e}")
+}
+
+fn parse_text(text: Str) -> Result[Val, String] {
+    let j = Json.parse(text).map_err(|e| f"bad JSON: {e.message}")?;
+    Ok(from_json(j))
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data").map_err(|e| f"cannot create data: {e}")?;
+    write_data()?;
+    let flags = parse("data/flags.json")?;
+    let users = parse("data/users.json")?;
+    let (Val.Obj(flags), Val.List(users)) = (flags, users) else {
+        return Err("flags must be an object and users a list".to_string());
+    };
+    println("== flags");
+    for user in users.iter() {
+        let name = match user {
+            Val.Obj(fields) => to_string(get_key(fields, "name") ?? Val.Null),
+            _ => "?".to_string(),
+        };
+        println(f"user {name}");
+        for (flag, logic) in flags.iter() {
+            println(f"  {flag}: {result_text(logic, user)}");
+        }
+    }
+    println("== cases");
+    let text = fs.read_to_string("data/cases.jsonl").map_err(|e| f"cannot read data/cases.jsonl: {e}")?;
+    for line in text.split("\n") {
+        if line.is_empty() {
+            continue;
+        }
+        let Val.List(parts) = parse_text(line)? else {
+            return Err(f"bad case: {line}");
+        };
+        let name = to_string(parts[0]);
+        println(f"{name}: {result_text(parts[1], parts[2])}");
+    }
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/cases.jsonl", file_0())?;
+    put_bytes("data/flags.json", file_1())?;
+    put_bytes("data/users.json", file_2())?;
+    Ok(())
+}
+
+// data/cases.jsonl
+fn file_0() -> String {
+    """
+5b226c69746572616c222c2034322c206e756c6c5d0a5b226c69746572616c206c697374222c205b312c207b22766172
+223a202261227d2c202278225d2c207b2261223a20747275657d5d0a5b2274776f206b6579732069732064617461222c
+207b22766172223a202261222c2022636174223a202262227d2c207b2261223a20317d5d0a5b22656d707479206f626a
+656374222c207b7d2c206e756c6c5d0a5b22756e6b6e6f776e206f70222c207b2266726f626e6963617465223a205b31
+5d7d2c206e756c6c5d0a5b22646f7474656420756e6b6e6f776e222c207b226e6f2e73756368223a205b315d7d2c206e
+756c6c5d0a5b22646f74746564206b6e6f776e222c207b226361742e78223a205b315d7d2c206e756c6c5d0a5b227661
+722070617468222c207b22766172223a2022757365722e616464726573732e63697479227d2c207b2275736572223a20
+7b2261646472657373223a207b2263697479223a20224c656964656e227d7d7d5d0a5b227661722064656661756c7422
+2c207b22766172223a205b22757365722e7a6970222c20223030303030225d7d2c207b2275736572223a207b7d7d5d0a
+5b227661722077686f6c65222c207b22766172223a2022227d2c207b2261223a205b312c20325d7d5d0a5b2276617220
+6e756c6c206b6579222c207b22766172223a206e756c6c7d2c205b335d5d0a5b2276617220696e646578222c207b2276
+6172223a20317d2c205b2261222c202262222c202263225d5d0a5b2276617220696e6465782070617468222c207b2276
+6172223a20226974656d732e312e6e616d65227d2c207b226974656d73223a205b7b226e616d65223a202278227d2c20
+7b226e616d65223a202279227d5d7d5d0a5b2276617220666c6f617420696e646578222c207b22766172223a20312e30
+7d2c205b2261222c202262225d5d0a5b22766172206672616374696f6e222c207b22766172223a205b312e352c20226e
+6f6e65225d7d2c205b2261222c202262225d5d0a5b22766172207472756520696e646578222c207b22766172223a2074
+7275657d2c205b2261222c202262225d5d0a5b22766172206e65676174697665222c207b22766172223a205b2d312c20
+226e6f6e65225d7d2c205b2261222c202262225d5d0a5b2276617220737472696e6720696e646578222c207b22766172
+223a202231227d2c202268656c6c6f225d0a5b22766172206c656e677468222c207b22766172223a2022746167732e6c
+656e677468227d2c207b2274616773223a205b2261222c202262222c202263225d7d5d0a5b227661722074657874206c
+656e677468222c207b22766172223a2022776f72642e6c656e677468227d2c207b22776f7264223a20226e61c3af7665
+227d5d0a5b227661722070616464656420696e646578222c207b22766172223a205b223031222c20226e6f7065225d7d
+2c205b2261222c202262225d5d0a5b2276617220696e746f206e756d626572222c207b22766172223a205b22612e6222
+2c202264225d7d2c207b2261223a20357d5d0a5b22766172206e756d626572206f6e206f626a656374222c207b227661
+72223a205b302c202264225d7d2c207b2230223a20227a65726f227d5d0a5b22766172206e756c6c2076616c7565222c
+207b22766172223a205b2261222c202264225d7d2c207b2261223a206e756c6c7d5d0a5b2276617220746f6f206d616e
+79222c207b22766172223a205b2261222c20312c20325d7d2c207b2261223a20317d5d0a5b226571206e756d20737472
+222c207b223d3d223a205b312c202231225d7d2c206e756c6c5d0a5b226571206e756d20737472207370616365222c20
+7b223d3d223a205b312c2022203120225d7d2c206e756c6c5d0a5b22657120626f6f6c20737472222c207b223d3d223a
+205b747275652c202231225d7d2c206e756c6c5d0a5b2265712073747220626f6f6c222c207b223d3d223a205b223022
+2c2066616c73655d7d2c206e756c6c5d0a5b226571206e756c6c206e756c6c222c207b223d3d223a205b6e756c6c2c20
+6e756c6c5d7d2c206e756c6c5d0a5b226571206e756c6c207a65726f222c207b223d3d223a205b6e756c6c2c20305d7d
+2c206e756c6c5d0a5b226571206c69737420737472222c207b223d3d223a205b5b312c20325d2c2022312c32225d7d2c
+206e756c6c5d0a5b226571206c697374206c697374222c207b223d3d223a205b5b315d2c205b315d5d7d2c206e756c6c
+5d0a5b226571206c697374206e756d222c207b223d3d223a205b5b375d2c20375d7d2c206e756c6c5d0a5b226571206f
+626a20737472222c207b223d3d223a205b7b22766172223a20226f227d2c20225b6f626a656374204f626a6563745d22
+5d7d2c207b226f223a207b2261223a20317d7d5d0a5b226f626a65637420697320616e206f70222c207b223d3d223a20
+5b7b2261223a20317d2c20225b6f626a656374204f626a6563745d225d7d2c206e756c6c5d0a5b22657120666c6f6174
+20696e74222c207b223d3d223a205b322e302c20325d7d2c206e756c6c5d0a5b22657120756e64657273636f7265222c
+207b223d3d223a205b313030302c2022315f303030225d7d2c206e756c6c5d0a5b226e65222c207b22213d223a205b31
+2c202232225d7d2c206e756c6c5d0a5b2273747269637420696e7420666c6f6174222c207b223d3d3d223a205b312c20
+312e305d7d2c206e756c6c5d0a5b2273747269637420626f6f6c20696e74222c207b223d3d3d223a205b747275652c20
+315d7d2c206e756c6c5d0a5b22737472696374206e756d20737472222c207b223d3d3d223a205b312c202231225d7d2c
+206e756c6c5d0a5b22737472696374206c69737473222c207b223d3d3d223a205b5b312c205b325d5d2c205b312c205b
+325d5d5d7d2c206e756c6c5d0a5b22737472696374206e6f74222c207b22213d3d223a205b312c202231225d7d2c206e
+756c6c5d0a5b226c74222c207b223c223a205b312c20325d7d2c206e756c6c5d0a5b226c7420737472206e756d222c20
+7b223c223a205b223130222c20395d7d2c206e756c6c5d0a5b226c7420737472696e6773222c207b223c223a205b2261
+70706c65222c202262616e616e61225d7d2c206e756c6c5d0a5b226c7420737472206c697374222c207b223c223a205b
+2261222c205b2262225d5d7d2c206e756c6c5d0a5b226c74206e756c6c73222c207b223c223a205b6e756c6c2c206e75
+6c6c5d7d2c206e756c6c5d0a5b226c74206e756c6c20737472222c207b223c223a205b6e756c6c2c202278225d7d2c20
+6e756c6c5d0a5b226c74206f626a65637473222c207b223c223a205b7b7d2c20315d7d2c206e756c6c5d0a5b22626574
+7765656e222c207b223c223a205b312c20352c2031305d7d2c206e756c6c5d0a5b226265747765656e2065646765222c
+207b223c3d223a205b312c20312c20315d7d2c206e756c6c5d0a5b226265747765656e206e756c6c222c207b223c223a
+205b312c20322c206e756c6c5d7d2c206e756c6c5d0a5b226774222c207b223e223a205b2262222c202261225d7d2c20
+6e756c6c5d0a5b226765206d69786564222c207b223e3d223a205b322c2022322e30225d7d2c206e756c6c5d0a5b2267
+74206e616e222c207b223e223a205b22616263222c20305d7d2c206e756c6c5d0a5b226e6f7420656d707479206c6973
+74222c207b2221223a205b5b5d5d7d2c206e756c6c5d0a5b226e6f74206c697374222c207b2221223a205b5b305d5d7d
+2c206e756c6c5d0a5b226e6f74206f626a656374222c207b2221223a207b7d7d2c206e756c6c5d0a5b22646f75626c65
+2062616e67222c207b222121223a205b2230225d7d2c206e756c6c5d0a5b2262616e67207a65726f20666c6f6174222c
+207b2221223a20302e307d2c206e756c6c5d0a5b22616e64222c207b22616e64223a205b312c202261222c205b5d2c20
+2262225d7d2c206e756c6c5d0a5b22616e6420616c6c222c207b22616e64223a205b312c202261222c20747275655d7d
+2c206e756c6c5d0a5b22616e6420656d707479222c207b22616e64223a205b5d7d2c206e756c6c5d0a5b226f72222c20
+7b226f72223a205b302c2022222c202278222c202279225d7d2c206e756c6c5d0a5b226f72206e6f6e65222c207b226f
+72223a205b302c2066616c73655d7d2c206e756c6c5d0a5b22696620636861696e222c207b226966223a205b66616c73
+652c20312c206e756c6c2c20322c202278222c20332c20345d7d2c206e756c6c5d0a5b226966206e6f20656c7365222c
+207b226966223a205b66616c73652c20315d7d2c206e756c6c5d0a5b2269662062617265222c207b226966223a207472
+75657d2c206e756c6c5d0a5b227465726e617279222c207b223f3a223a205b7b22766172223a20226f6b227d2c202279
+6573222c20226e6f225d7d2c207b226f6b223a205b305d7d5d0a5b2261646420696e7473222c207b222b223a205b312c
+20322c20335d7d2c206e756c6c5d0a5b226164642073747273222c207b222b223a205b2231222c2022322e35225d7d2c
+206e756c6c5d0a5b2261646420626f6f6c73222c207b222b223a205b747275652c20747275655d7d2c206e756c6c5d0a
+5b22616464206e756c6c222c207b222b223a205b6e756c6c2c20345d7d2c206e756c6c5d0a5b2261646420656d707479
+222c207b222b223a205b5d7d2c206e756c6c5d0a5b22616464206a756e6b222c207b222b223a205b312c20226f6e6522
+5d7d2c206e756c6c5d0a5b2261646420696e66696e697479222c207b222b223a205b312c2022496e66696e697479225d
+7d2c206e756c6c5d0a5b2261646420696e66222c207b222b223a205b312c2022696e66225d7d2c206e756c6c5d0a5b22
+616464206c697374222c207b222b223a205b5b325d2c20335d7d2c206e756c6c5d0a5b226d756c222c207b222a223a20
+5b322c202233222c20302e355d7d2c206e756c6c5d0a5b226d756c20626f6f6c222c207b222a223a205b747275652c20
+66616c73655d7d2c206e756c6c5d0a5b226d696e7573222c207b222d223a205b31302c20345d7d2c206e756c6c5d0a5b
+226e6567617465222c207b222d223a202237227d2c206e756c6c5d0a5b226e6567617465206e756c6c2062222c207b22
+2d223a205b352c206e756c6c5d7d2c206e756c6c5d0a5b226e656761746520626f6f6c222c207b222d223a205b747275
+655d7d2c206e756c6c5d0a5b22646976222c207b222f223a205b372c20325d7d2c206e756c6c5d0a5b22646976206578
+616374222c207b222f223a205b382c20345d7d2c206e756c6c5d0a5b22646976207a65726f222c207b222f223a205b31
+2c20305d7d2c206e756c6c5d0a5b2264697620666c6f6174207a65726f222c207b222f223a205b312e352c20305d7d2c
+206e756c6c5d0a5b22646976206e616e207a65726f222c207b222f223a205b2278222c20305d7d2c206e756c6c5d0a5b
+226d6f64222c207b2225223a205b372c20335d7d2c206e756c6c5d0a5b226d6f64206e65676174697665222c207b2225
+223a205b2d372c20335d7d2c206e756c6c5d0a5b226d6f6420666c6f6174222c207b2225223a205b2d372e352c20325d
+7d2c206e756c6c5d0a5b226d6f6420666c6f61742064697669736f72222c207b2225223a205b372c202d322e355d7d2c
+206e756c6c5d0a5b226d6f64207a65726f222c207b2225223a205b312c20305d7d2c206e756c6c5d0a5b226d6f642066
+6c6f6174207a65726f222c207b2225223a205b312e302c20305d7d2c206e756c6c5d0a5b226d6f64206578616374206e
+6567222c207b2225223a205b2d342e302c20325d7d2c206e756c6c5d0a5b226d696e222c207b226d696e223a205b332c
+202231222c20325d7d2c206e756c6c5d0a5b226d696e206669727374222c207b226d696e223a205b312c20312e302c20
+747275655d7d2c206e756c6c5d0a5b226d617820626f6f6c222c207b226d6178223a205b747275652c20305d7d2c206e
+756c6c5d0a5b226d6178206e616e206669727374222c207b226d6178223a205b2278222c20355d7d2c206e756c6c5d0a
+5b226d6178206e616e206c61746572222c207b226d6178223a205b352c202278222c20395d7d2c206e756c6c5d0a5b22
+6d696e20656d707479222c207b226d696e223a205b5d7d2c206e756c6c5d0a5b2274696e79222c207b222a223a205b30
+2e312c2031652d30355d7d2c206e756c6c5d0a5b2262696720666c6f6174222c207b222a223a205b3132333435363738
+2c20313030303030303030302e302c2031305d7d2c206e756c6c5d0a5b227468697264222c207b222f223a205b312c20
+335d7d2c206e756c6c5d0a5b22636174222c207b22636174223a205b2249206c6f766520222c207b22766172223a2022
+78227d2c202221225d7d2c207b2278223a2022706965227d5d0a5b2263617420636f65726365222c207b22636174223a
+205b312c20322e352c206e756c6c2c20747275652c2066616c73652c205b312c205b322c20335d5d2c207b2276617222
+3a20226f227d5d7d2c207b226f223a207b226b223a20317d7d5d0a5b2263617420666c6f6174222c207b22636174223a
+205b7b222f223a205b312c20335d7d2c202220222c2031652b32312c202220222c20302e312c202220222c2031652d30
+372c202220222c203130302e305d7d2c206e756c6c5d0a5b2263617420707265636973696f6e222c207b22636174223a
+205b7b222a223a205b3132333435363738392c20313030303030302c2031305d7d5d7d2c206e756c6c5d0a5b22737562
+737472222c207b22737562737472223a205b226a736f6e6c6f676963222c20345d7d2c206e756c6c5d0a5b2273756273
+7472206e6567222c207b22737562737472223a205b226a736f6e6c6f676963222c202d355d7d2c206e756c6c5d0a5b22
+737562737472206c656e222c207b22737562737472223a205b226a736f6e6c6f676963222c20312c20335d7d2c206e75
+6c6c5d0a5b22737562737472206e6567206c656e222c207b22737562737472223a205b226a736f6e6c6f676963222c20
+342c202d325d7d2c206e756c6c5d0a5b227375627374722070617374222c207b22737562737472223a205b2261626322
+2c2031302c20325d7d2c206e756c6c5d0a5b2273756273747220666172206e6567222c207b22737562737472223a205b
+22616263222c202d31305d7d2c206e756c6c5d0a5b22737562737472206e616e222c207b22737562737472223a205b22
+616263222c202278222c202279225d7d2c206e756c6c5d0a5b2273756273747220756e69636f6465222c207b22737562
+737472223a205b226e61c3af766520636166c3a9222c202d342c20335d7d2c206e756c6c5d0a5b227375627374722066
+6c6f6174222c207b22737562737472223a205b22616263646566222c20312e392c20322e395d7d2c206e756c6c5d0a5b
+22737562737472206e756d626572222c207b22737562737472223a205b31323334352c20312c20325d7d2c206e756c6c
+5d0a5b22696e20737472222c207b22696e223a205b22537072696e67222c2022537072696e676669656c64225d7d2c20
+6e756c6c5d0a5b22696e20737472206e756d222c207b22696e223a205b312c2022613162225d7d2c206e756c6c5d0a5b
+22696e206c697374222c207b22696e223a205b2262222c205b2261222c202262225d5d7d2c206e756c6c5d0a5b22696e
+206c697374206c6f6f7365222c207b22696e223a205b312c205b747275655d5d7d2c206e756c6c5d0a5b22696e206c69
+7374206e6573746564222c207b22696e223a205b5b315d2c205b5b315d2c20325d5d7d2c206e756c6c5d0a5b22696e20
+6f74686572222c207b22696e223a205b2261222c207b22766172223a20226f227d5d7d2c207b226f223a207b2261223a
+20317d7d5d0a5b226d65726765222c207b226d65726765223a205b5b312c20325d2c20332c205b5b345d5d2c206e756c
+6c5d7d2c206e756c6c5d0a5b226d6572676520656d707479222c207b226d65726765223a205b5d7d2c206e756c6c5d0a
+5b226d6170222c207b226d6170223a205b7b22766172223a20227873227d2c207b222a223a205b7b22766172223a2022
+227d2c20325d7d5d7d2c207b227873223a205b312c20322c20335d7d5d0a5b226d6170206e6f74206c697374222c207b
+226d6170223a205b7b22766172223a20227873227d2c20315d7d2c207b227873223a2022616263227d5d0a5b226d6170
+206e6f206c6f676963222c207b226d6170223a205b5b312c20325d5d7d2c206e756c6c5d0a5b2266696c746572222c20
+7b2266696c746572223a205b7b22766172223a20227873227d2c207b223e223a205b7b22766172223a2022227d2c2031
+5d7d5d7d2c207b227873223a205b302c20312c20322c20335d7d5d0a5b2266696c7465722073686f7274222c207b2266
+696c746572223a205b5b315d5d7d2c206e756c6c5d0a5b22726564756365222c207b22726564756365223a205b7b2276
+6172223a20227873227d2c207b222b223a205b7b22766172223a202263757272656e74227d2c207b22766172223a2022
+616363756d756c61746f72227d5d7d2c20305d7d2c207b227873223a205b312c20322c20335d7d5d0a5b227265647563
+652072617720696e6974222c207b22726564756365223a205b5b5d2c20312c207b222b223a205b312c20315d7d5d7d2c
+206e756c6c5d0a5b22726564756365206e6f74206c697374222c207b22726564756365223a205b352c20312c2022696e
+6974225d7d2c206e756c6c5d0a5b2272656475636520636f6e74657874222c207b22726564756365223a205b5b312c20
+325d2c207b22766172223a202263757272656e74227d5d7d2c206e756c6c5d0a5b2272656475636520656d707479222c
+207b22726564756365223a205b5d7d2c206e756c6c5d0a5b22616c6c222c207b22616c6c223a205b5b312c20322c2033
+5d2c207b223e223a205b7b22766172223a2022227d2c20305d7d5d7d2c206e756c6c5d0a5b22616c6c20656d70747922
+2c207b22616c6c223a205b5b5d2c20747275655d7d2c206e756c6c5d0a5b22736f6d65222c207b22736f6d65223a205b
+7b22766172223a20227873227d2c207b223d3d223a205b7b22766172223a2022227d2c202262225d7d5d7d2c207b2278
+73223a205b2261222c202262225d7d5d0a5b226e6f6e65222c207b226e6f6e65223a205b5b312c20325d2c207b223e22
+3a205b7b22766172223a2022227d2c20355d7d5d7d2c206e756c6c5d0a5b226e6f6e65206e6f74206c697374222c207b
+226e6f6e65223a205b227873222c20747275655d7d2c206e756c6c5d0a5b22736f6d652073686f7274222c207b22736f
+6d65223a205b5b315d5d7d2c206e756c6c5d0a5b226d697373696e67222c207b226d697373696e67223a205b2261222c
+202262222c2022632e64225d7d2c207b2261223a20312c202263223a207b2264223a2022227d7d5d0a5b226d69737369
+6e67206c697374222c207b226d697373696e67223a205b5b2278222c202279225d5d7d2c207b2279223a20307d5d0a5b
+226d697373696e67206e756d626572222c207b226d697373696e67223a205b302c20325d7d2c205b2268657265222c20
+6e756c6c5d5d0a5b226d697373696e6720736f6d65222c207b226d697373696e675f736f6d65223a205b312c205b2261
+222c202262225d5d7d2c207b2262223a20327d5d0a5b226d697373696e6720736f6d652073686f7274222c207b226d69
+7373696e675f736f6d65223a205b322c205b2261222c202262222c202263225d5d7d2c207b2262223a20327d5d0a5b22
+6d697373696e6720736f6d65206a756e6b222c207b226d697373696e675f736f6d65223a205b2274776f222c205b2261
+225d5d7d2c207b7d5d0a5b226d697373696e6720736f6d65206e6f206c697374222c207b226d697373696e675f736f6d
+65223a205b312c202261225d7d2c206e756c6c5d0a5b226d697373696e6720696e206966222c207b226966223a205b7b
+226d697373696e67223a202278227d2c20226e6565642078222c20226f6b225d7d2c207b2278223a2066616c73657d5d
+0a5b226c6f67222c207b226c6f67223a207b22636174223a205b22636166c3a920222c20332e305d7d7d2c206e756c6c
+5d0a5b226c6f67206f626a656374222c207b222b223a205b312c207b226c6f67223a207b22766172223a20226f2e6e22
+7d7d5d7d2c207b226f223a207b226e223a20327d7d5d0a5b226c6f67206e6f7468696e67222c207b226c6f67223a205b
+5d7d2c206e756c6c5d0a5b226c6f67207370656369616c222c207b226c6f67223a205b7b222f223a205b7b222b223a20
+5b312c2022496e66696e697479225d7d2c20315d7d5d7d2c206e756c6c5d0a
+"""
+}
+
+// data/flags.json
+fn file_1() -> String {
+    """
+7b0a2020226e65775f636865636b6f7574223a207b0a2020202022616e64223a205b0a2020202020207b0a2020202020
+202020223d3d223a205b0a202020202020202020207b0a20202020202020202020202022766172223a2022636f756e74
+7279220a202020202020202020207d2c0a20202020202020202020224e4c220a20202020202020205d0a202020202020
+7d2c0a2020202020207b0a2020202020202020223e3d223a205b0a202020202020202020207b0a202020202020202020
+20202022766172223a20226f7264657273220a202020202020202020207d2c0a20202020202020202020330a20202020
+202020205d0a2020202020207d0a202020205d0a20207d2c0a202022626574615f62616e6e6572223a207b0a20202020
+22696e223a205b0a2020202020207b0a202020202020202022766172223a2022706c616e220a2020202020207d2c0a20
+20202020205b0a20202020202020202262657461222c0a2020202020202020227374616666220a2020202020205d0a20
+2020205d0a20207d2c0a202022667265655f7368697070696e67223a207b0a20202020226f72223a205b0a2020202020
+207b0a2020202020202020223e223a205b0a202020202020202020207b0a202020202020202020202020227265647563
+65223a205b0a20202020202020202020202020207b0a2020202020202020202020202020202022766172223a20226361
+7274220a20202020202020202020202020207d2c0a20202020202020202020202020207b0a2020202020202020202020
+2020202020222b223a205b0a2020202020202020202020202020202020207b0a20202020202020202020202020202020
+2020202022766172223a2022616363756d756c61746f72220a2020202020202020202020202020202020207d2c0a2020
+202020202020202020202020202020207b0a202020202020202020202020202020202020202022766172223a20226375
+7272656e742e7072696365220a2020202020202020202020202020202020207d0a202020202020202020202020202020
+205d0a20202020202020202020202020207d2c0a2020202020202020202020202020300a202020202020202020202020
+5d0a202020202020202020207d2c0a2020202020202020202035300a20202020202020205d0a2020202020207d2c0a20
+20202020207b0a2020202020202020223d3d223a205b0a202020202020202020207b0a20202020202020202020202022
+766172223a2022706c616e220a202020202020202020207d2c0a2020202020202020202022676f6c64220a2020202020
+2020205d0a2020202020207d0a202020205d0a20207d2c0a2020226167655f67617465223a207b0a20202020223c3d22
+3a205b0a20202020202031382c0a2020202020207b0a202020202020202022766172223a2022616765220a2020202020
+207d2c0a2020202020203132300a202020205d0a20207d2c0a2020226e656564735f70726f66696c65223a207b0a2020
+2020226d697373696e675f736f6d65223a205b0a202020202020322c0a2020202020205b0a202020202020202022656d
+61696c222c0a20202020202020202270686f6e65222c0a202020202020202022616464726573732e63697479220a2020
+202020205d0a202020205d0a20207d2c0a2020226c6174655f6e69676874223a207b0a20202020226966223a205b0a20
+20202020207b0a2020202020202020223c223a205b0a202020202020202020207b0a2020202020202020202020202276
+6172223a2022686f7572220a202020202020202020207d2c0a20202020202020202020360a20202020202020205d0a20
+20202020207d2c0a202020202020747275652c0a2020202020207b0a2020202020202020223e3d223a205b0a20202020
+2020202020207b0a20202020202020202020202022766172223a2022686f7572220a202020202020202020207d2c0a20
+20202020202020202032320a20202020202020205d0a2020202020207d2c0a202020202020747275652c0a2020202020
+2066616c73650a202020205d0a20207d2c0a20202262756c6b5f6275796572223a207b0a2020202022736f6d65223a20
+5b0a2020202020207b0a202020202020202022766172223a202263617274220a2020202020207d2c0a2020202020207b
+0a2020202020202020223e3d223a205b0a202020202020202020207b0a20202020202020202020202022766172223a20
+22717479220a202020202020202020207d2c0a2020202020202020202031300a20202020202020205d0a202020202020
+7d0a202020205d0a20207d2c0a202022616c6c5f6469676974616c223a207b0a2020202022616c6c223a205b0a202020
+2020207b0a202020202020202022766172223a202263617274220a2020202020207d2c0a2020202020207b0a20202020
+2020202022766172223a20226469676974616c220a2020202020207d0a202020205d0a20207d2c0a2020227669705f65
+6d61696c223a207b0a2020202022696e223a205b0a20202020202022407669702e222c0a2020202020207b0a20202020
+2020202022766172223a2022656d61696c220a2020202020207d0a202020205d0a20207d0a7d0a
+"""
+}
+
+// data/users.json
+fn file_2() -> String {
+    """
+5b0a20207b0a20202020226e616d65223a2022616e61222c0a2020202022636f756e747279223a20224e4c222c0a2020
+2020226f7264657273223a20352c0a2020202022706c616e223a2022676f6c64222c0a2020202022616765223a203334
+2c0a2020202022656d61696c223a2022616e61407669702e6578616d706c652e6f7267222c0a2020202022686f757222
+3a2032332c0a202020202263617274223a205b0a2020202020207b0a2020202020202020227072696365223a2032302c
+0a202020202020202022717479223a20312c0a2020202020202020226469676974616c223a20747275650a2020202020
+207d2c0a2020202020207b0a2020202020202020227072696365223a2031322e352c0a20202020202020202271747922
+3a20322c0a2020202020202020226469676974616c223a20747275650a2020202020207d0a202020205d0a20207d2c0a
+20207b0a20202020226e616d65223a2022626f222c0a2020202022636f756e747279223a20226e6c222c0a2020202022
+6f7264657273223a202237222c0a2020202022706c616e223a202262657461222c0a2020202022616765223a20223137
+222c0a202020202270686f6e65223a2022222c0a2020202022686f7572223a20392c0a202020202263617274223a205b
+0a2020202020207b0a2020202020202020227072696365223a2034302c0a202020202020202022717479223a2031322c
+0a2020202020202020226469676974616c223a2066616c73650a2020202020207d2c0a2020202020207b0a2020202020
+202020227072696365223a2031352c0a202020202020202022717479223a20310a2020202020207d0a202020205d0a20
+207d2c0a20207b0a20202020226e616d65223a20226379222c0a2020202022636f756e747279223a20224e4c222c0a20
+202020226f7264657273223a20332e302c0a2020202022706c616e223a206e756c6c2c0a2020202022616765223a2031
+32302c0a2020202022656d61696c223a20226379406578616d706c652e6f7267222c0a202020202270686f6e65223a20
+223535352d30313030222c0a202020202261646472657373223a207b0a2020202020202263697479223a202255747265
+636874220a202020207d2c0a2020202022686f7572223a202235222c0a202020202263617274223a205b5d0a20207d2c
+0a20207b0a20202020226e616d65223a2022646565222c0a2020202022616765223a205b0a20202020202034320a2020
+20205d2c0a2020202022686f7572223a206e756c6c2c0a202020202263617274223a20226e6f6e65220a20207d0a5d0a
+"""
+}

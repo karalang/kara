@@ -1,0 +1,34 @@
+// A `let … else` whose else branch moves a binding, followed by a move of
+// the same binding where the pattern matched. The two moves are on
+// different paths, so neither reaches the other (core-semantics.md §3.2)
+// and the program is accepted.
+
+struct Token {
+    text: String,
+}
+
+fn pick(line: own Option[String], fallback: own Token) -> Token {
+    let Some(text) = line else {
+        return fallback;
+    };
+    let unused = fallback;
+    println(f"dropping {unused.text}");
+    Token { text }
+}
+
+fn first(words: own Vec[String], fallback: own Token) -> Token {
+    let Some(w) = words.into_iter().next() else {
+        let kept = fallback;
+        return kept;
+    };
+    let gone = fallback;
+    println(f"replacing {gone.text}");
+    Token { text: w }
+}
+
+fn main() {
+    println(pick(Some("word"), Token { text: "fallback" }).text);
+    println(pick(None, Token { text: "fallback" }).text);
+    println(first(["a", "b"], Token { text: "spare" }).text);
+    println(first(Vec.new(), Token { text: "spare" }).text);
+}

@@ -953,6 +953,17 @@ impl<'a> CfgBuilder<'a> {
                 // when the pattern FAILS, so the new bindings are not
                 // visible inside it — the shadow frame is pushed after.
                 self.lower_block(else_block, else_entry, exit, loops);
+                // The rest of the enclosing block runs only when the
+                // pattern MATCHES: a block of its own beside the else
+                // branch. Continuing in `after` made the else branch a
+                // successor of every later statement, so a move after the
+                // `let .. else` read as reaching a use inside the else
+                // block (B-2026-11-09-16).
+                let after = {
+                    let cont = self.new_block();
+                    self.add_edge(after, cont);
+                    cont
+                };
                 // Same shadow rule as `Let`: re-bound names start a
                 // fresh binding identity for the rest of the enclosing
                 // block (frame popped by `lower_block`).

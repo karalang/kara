@@ -2761,6 +2761,8 @@ fn main() -> () {
             // `==` on a map or set calls the library's `map_eq` and its kin
             // (B-2026-11-08-82).
             "ok_maps_and_sets_compare_by_content",
+            // `Vec.into_iter` is the library's (B-2026-11-09-16).
+            "ok_a_let_else_branch_moves_what_the_rest_moves",
             // A `collect()` kept by a `ref` binding is refused by the
             // checker's temporary rule (§5.5, B-2026-11-08-43).
             "err_collect_temporary_kept_by_ref_let",

@@ -1,0 +1,203 @@
+== flags
+user ana
+  new_checkout: true
+  beta_banner: false
+  free_shipping: true
+  age_gate: true
+  needs_profile: ["phone", "address.city"]
+  late_night: true
+  bulk_buyer: false
+  all_digital: true
+  vip_email: true
+user bo
+  new_checkout: false
+  beta_banner: true
+  free_shipping: true
+  age_gate: false
+  needs_profile: ["email", "phone", "address.city"]
+  late_night: false
+  bulk_buyer: true
+  all_digital: false
+  vip_email: false
+user cy
+  new_checkout: true
+  beta_banner: false
+  free_shipping: false
+  age_gate: true
+  needs_profile: []
+  late_night: true
+  bulk_buyer: false
+  all_digital: false
+  vip_email: false
+user dee
+  new_checkout: false
+  beta_banner: false
+  free_shipping: false
+  age_gate: true
+  needs_profile: ["email", "phone", "address.city"]
+  late_night: true
+  bulk_buyer: false
+  all_digital: false
+  vip_email: false
+== cases
+literal: 42
+literal list: [1, true, "x"]
+two keys is data: {"var": "a", "cat": "b"}
+empty object: {}
+unknown op: error ReferenceError: Unrecognized operation: 'frobnicate'
+dotted unknown: error ReferenceError: Unrecognized operation: 'no'
+dotted known: error TypeError: 'function' object is not subscriptable
+var path: "Leiden"
+var default: "00000"
+var whole: {"a": [1, 2]}
+var null key: [3]
+var index: "b"
+var index path: "y"
+var float index: "b"
+var fraction: "none"
+var true index: "b"
+var negative: "none"
+var string index: "e"
+var length: 3
+var text length: 5
+var padded index: "nope"
+var into number: "d"
+var number on object: "d"
+var null value: "d"
+var too many: error TypeError: op_var() takes from 0 to 3 positional arguments but 4 were given
+eq num str: true
+eq num str space: true
+eq bool str: true
+eq str bool: true
+eq null null: true
+eq null zero: true
+eq list str: true
+eq list list: false
+eq list num: true
+eq obj str: true
+object is an op: error ReferenceError: Unrecognized operation: 'a'
+eq float int: true
+eq underscore: true
+ne: true
+strict int float: true
+strict bool int: true
+strict num str: false
+strict lists: true
+strict not: true
+lt: true
+lt str num: false
+lt strings: true
+lt str list: true
+lt nulls: false
+lt null str: true
+lt objects: false
+between: true
+between edge: true
+between null: true
+gt: true
+ge mixed: true
+gt nan: false
+not empty list: true
+not list: false
+not object: false
+double bang: true
+bang zero float: true
+and: []
+and all: true
+and empty: null
+or: "x"
+or none: false
+if chain: 3
+if no else: null
+if bare: true
+ternary: "yes"
+add ints: 6
+add strs: 3.5
+add bools: 2
+add null: 4
+add empty: 0
+add junk: NaN
+add infinity: Infinity
+add inf: NaN
+add list: 5
+mul: 3.0
+mul bool: 0
+minus: 6
+negate: -7.0
+negate null b: -5
+negate bool: -1
+div: 3.5
+div exact: 2.0
+div zero: error ZeroDivisionError: division by zero
+div float zero: error ZeroDivisionError: float division by zero
+div nan zero: error ZeroDivisionError: float division by zero
+mod: 1
+mod negative: 2
+mod float: 0.5
+mod float divisor: -0.5
+mod zero: error ZeroDivisionError: integer modulo by zero
+mod float zero: error ZeroDivisionError: float modulo by zero
+mod exact neg: 0.0
+min: 1.0
+min first: 1
+max bool: true
+max nan first: NaN
+max nan later: 9
+min empty: NaN
+tiny: 1.0000000000000002e-06
+big float: 1.2345678e+17
+third: 0.3333333333333333
+cat: "I love pie!"
+cat coerce: "12.5nullTrueFalse1,2,3[object Object]"
+cat float: "0.333333333333333 1e+21 0.1 1e-07 100"
+cat precision: "1234567890000000"
+substr: "logic"
+substr neg: "logic"
+substr len: "son"
+substr neg len: "log"
+substr past: ""
+substr far neg: "abc"
+substr nan: ""
+substr unicode: "caf"
+substr float: "bc"
+substr number: "23"
+in str: true
+in str num: true
+in list: true
+in list loose: true
+in list nested: true
+in other: false
+merge: [1, 2, 3, [4], null]
+merge empty: []
+map: [2, 4, 6]
+map not list: []
+map no logic: [null, null]
+filter: [2, 3]
+filter short: []
+reduce: 6
+reduce raw init: {"+": [1, 1]}
+reduce not list: "init"
+reduce context: 2
+reduce empty: null
+all: true
+all empty: false
+some: true
+none: true
+none not list: true
+some short: false
+missing: ["b", "c.d"]
+missing list: ["x"]
+missing number: [2]
+missing some: []
+missing some short: ["a", "c"]
+missing some junk: ["a"]
+missing some no list: []
+missing in if: "ok"
+"caf\u00e9 3"
+log: "caf\u00e9 3"
+2
+log object: 3
+null
+log nothing: null
+Infinity
+log special: Infinity

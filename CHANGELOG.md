@@ -150,6 +150,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - A missing field in `Json.deserialize` is named by its key in the input,
   `missing field `userName`` for a field renamed `userName`, not by its Kāra
   name (B-2026-11-08-80).
+- A binding moved inside a `let … else` else block and moved again after
+  the `let … else` is accepted: the else block diverges, so the two moves
+  are on different paths. It was refused as a use after move, and `karac
+  fix` wrote a needless `.clone()` at the later move (B-2026-11-09-16).
 - The element literal of `let cnt = [0; 26];` and `let ans = Vec.filled(n,
   0);` is fixed by where the collection goes, as a scalar's is (design.md
   §8 Literals): returned as an `Array[i32, 26]`, or handed to a
