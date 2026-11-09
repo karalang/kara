@@ -27,6 +27,7 @@
 
 use std::path::Path;
 
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIFile, DIFlags, DIFlagsConstants, DWARFEmissionKind,
     DWARFSourceLanguage, DebugInfoBuilder,
@@ -35,7 +36,7 @@ use inkwell::module::{FlagBehavior, Linkage};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 
-use super::{Cx, R};
+use super::{noalias_flag, Cx, R};
 use crate::mir::{ConstKind, Operand, TerminatorKind};
 use crate::token::Span;
 
@@ -275,7 +276,8 @@ impl<'ctx> Cx<'ctx, '_> {
             .ok_or_else(|| format!("no body named `{name}`"))?;
         let place: [BasicMetadataTypeEnum<'ctx>; 2] =
             [self.ptr_ty().into(), self.llcx.i64_type().into()];
-        let ty = match self.value_sig(body) {
+        let sig = self.value_sig(body);
+        let ty = match &sig {
             Some((params, ret)) => {
                 let mut ps: Vec<BasicMetadataTypeEnum> = Vec::new();
                 if self.ret_in_memory(body) {
@@ -305,6 +307,21 @@ impl<'ctx> Cx<'ctx, '_> {
             ty,
             Some(Linkage::Internal),
         );
+        // The attributes the plain function's parameters carry: a located
+        // body (every library body a program calls) went without them, so
+        // `PriorityQueue.push`'s `mut ref self` was reloaded, and its
+        // bounds tested, on every level of the sift (kata 778,
+        // B-2026-11-09-11).
+        if let Some((params, _)) = &sig {
+            if self.ret_in_memory(body) && noalias_flag() {
+                let k = Attribute::get_named_enum_kind_id("noalias");
+                f.add_attribute(
+                    AttributeLoc::Param(0),
+                    self.llcx.create_enum_attribute(k, 0),
+                );
+            }
+            self.mark_deref_params(body, params, f)?;
+        }
         self.lfns.insert(name.to_string(), f);
         self.schedule(body);
         Ok(f)

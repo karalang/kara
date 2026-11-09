@@ -1,0 +1,12 @@
+source = "core-semantics §6.2"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["shared", "panic", "enum"]
+class = "a"
+expected_from = "spec"
+rules = ["6.2"]
+backends = []
+env = {}
+note = "§6.2 through a `shared enum` payload: a `mut ref` pattern writes `E.Name.0` through one handle while a `match` through another holds it, so the borrow flag panics after printing `x!`. The flag pass flags an enum variant's field only where some body writes it or lends it `mut` (B-2026-11-08-83): this program does, so the conflict is still caught."
+bucket = "a"

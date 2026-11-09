@@ -724,8 +724,10 @@ impl<'ctx> Cx<'ctx, '_> {
     /// integer of at most 64 bits or an `f64`.
     /// `T.parse(s)` for an integer `T` of at most 64 bits: 1 with the
     /// number at `slot`, else 0. One to 18 ASCII digits are read inline,
-    /// since they cannot overflow an i64 and need only `T`'s range check;
-    /// any other text (a sign, whitespace, junk, more digits) goes to
+    /// since they cannot overflow an i64 and need only `T`'s range check,
+    /// and for a signed `T` a `-` before them too (kata 682's negative
+    /// scores each paid a runtime call, B-2026-11-09-7); any other text
+    /// (a `+`, whitespace, junk, more digits) goes to
     /// `karac_mir_parse_int`, which gives the same verdict on these
     /// (B-2026-10-18-34).
     fn parse_decimal(
@@ -738,26 +740,55 @@ impl<'ctx> Cx<'ctx, '_> {
         let i8t = self.llcx.i8_type();
         let i64t = self.llcx.i64_type();
         let f = self.cur_fn()?;
+        let sign = self.llcx.append_basic_block(f, "dec.sign");
         let head = self.llcx.append_basic_block(f, "dec");
         let body = self.llcx.append_basic_block(f, "dec.digit");
         let fast = self.llcx.append_basic_block(f, "dec.done");
         let slow = self.llcx.append_basic_block(f, "dec.slow");
         let join = self.llcx.append_basic_block(f, "dec.join");
-        // 1 <= n <= 18, as one unsigned compare of n - 1 < 18.
+        // 1 <= n <= 18 (19 with a sign), as one unsigned compare of n - 1.
+        let longest = if it.signed() { 19 } else { 18 };
         let n1 = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
         let short = self
             .builder
-            .build_int_compare(IntPredicate::ULT, n1, self.i64(18), "")
+            .build_int_compare(IntPredicate::ULT, n1, self.i64(longest), "")
             .map_err(e)?;
-        let pre = self.builder.get_insert_block().ok_or("no insert block")?;
         self.builder
-            .build_conditional_branch(short, head, slow)
+            .build_conditional_branch(short, sign, slow)
+            .map_err(e)?;
+        // A leading `-` of a signed type, then 1 to 18 digits after it.
+        self.builder.position_at_end(sign);
+        let neg = if it.signed() {
+            let b0 = self
+                .builder
+                .build_load(i8t, s, "")
+                .map_err(e)?
+                .into_int_value();
+            self.builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    b0,
+                    i8t.const_int(u64::from(b'-'), false),
+                    "neg",
+                )
+                .map_err(e)?
+        } else {
+            self.llcx.bool_type().const_zero()
+        };
+        let start = self.builder.build_int_z_extend(neg, i64t, "").map_err(e)?;
+        let digits = self.builder.build_int_sub(n1, start, "").map_err(e)?;
+        let some = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, digits, self.i64(18), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(some, head, slow)
             .map_err(e)?;
         self.builder.position_at_end(head);
         let i = self.builder.build_phi(i64t, "i").map_err(e)?;
         let acc = self.builder.build_phi(i64t, "acc").map_err(e)?;
-        i.add_incoming(&[(&self.i64(0), pre)]);
-        acc.add_incoming(&[(&self.i64(0), pre)]);
+        i.add_incoming(&[(&start, sign)]);
+        acc.add_incoming(&[(&self.i64(0), sign)]);
         let iv = i.as_basic_value().into_int_value();
         let av = acc.as_basic_value().into_int_value();
         let more = self
@@ -792,7 +823,8 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder
             .build_conditional_branch(digit, head, slow)
             .map_err(e)?;
-        // All digits: the value is non-negative and below 10^18.
+        // All digits: the magnitude is below 10^18, negated after a `-`,
+        // which reaches one further (`-128` for an `i8`).
         self.builder.position_at_end(fast);
         let fits = match (it.bits(), it.signed()) {
             (64, _) => i8t.const_int(1, false),
@@ -802,14 +834,24 @@ impl<'ctx> Cx<'ctx, '_> {
                 } else {
                     (1u64 << bits) - 1
                 };
+                let max = self
+                    .builder
+                    .build_int_add(self.i64(max), start, "")
+                    .map_err(e)?;
                 let ok = self
                     .builder
-                    .build_int_compare(IntPredicate::ULE, av, self.i64(max), "")
+                    .build_int_compare(IntPredicate::ULE, av, max, "")
                     .map_err(e)?;
                 self.builder.build_int_z_extend(ok, i8t, "").map_err(e)?
             }
         };
-        self.builder.build_store(slot, av).map_err(e)?;
+        let negated = self.builder.build_int_neg(av, "").map_err(e)?;
+        let v = self
+            .builder
+            .build_select(neg, negated, av, "")
+            .map_err(e)?
+            .into_int_value();
+        self.builder.build_store(slot, v).map_err(e)?;
         let fast_end = self.builder.get_insert_block().ok_or("no insert block")?;
         self.builder.build_unconditional_branch(join).map_err(e)?;
         self.builder.position_at_end(slow);

@@ -92,6 +92,11 @@ pub(super) enum Shim {
     /// buffer of `size`-byte elements grown by one, its new buffer and
     /// capacity (`seq.rs`'s `grow_by_one`). Cold and never inlined.
     GrowByOne { size: u64 },
+    /// `{ptr, i64} (ptr buf, i64 len, i64 cap, i64 more)`: a `String`'s
+    /// buffer with room made for `more` bytes, its new buffer and capacity
+    /// (`seq.rs`'s `string_append`). Cold and never inlined, so an append
+    /// site keeps no header slot of its own for the runtime's reserve.
+    StrReserve,
 }
 
 #[derive(Default)]
@@ -257,9 +262,18 @@ impl<'ctx> Cx<'ctx, '_> {
                         .fn_type(&[p.into(), i64t.into(), i64t.into()], false),
                 )
             }
+            Shim::StrReserve => {
+                let i64t = self.llcx.i64_type();
+                (
+                    "str_reserve".to_string(),
+                    self.llcx
+                        .struct_type(&[p.into(), i64t.into()], false)
+                        .fn_type(&[p.into(), i64t.into(), i64t.into(), i64t.into()], false),
+                )
+            }
         };
         let f = self.module.add_function(&name, ty, Some(Linkage::Internal));
-        if matches!(s, Shim::GrowByOne { .. }) {
+        if matches!(s, Shim::GrowByOne { .. } | Shim::StrReserve) {
             for a in ["noinline", "cold"] {
                 let k = Attribute::get_named_enum_kind_id(a);
                 f.add_attribute(
@@ -408,6 +422,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.builder.build_return(None).map_err(e)?;
                 }
                 Shim::GrowByOne { size } => self.build_grow_by_one(f, size)?,
+                Shim::StrReserve => self.build_str_reserve(f)?,
             }
         }
         Ok(())
@@ -936,6 +951,12 @@ impl<'ctx> Cx<'ctx, '_> {
         a: PointerValue<'ctx>,
         b: PointerValue<'ctx>,
     ) -> R<inkwell::values::IntValue<'ctx>> {
+        // A plain `sort()`: the element type in the comparator's place
+        // stands for its own order, compared in line (B-2026-11-08-85).
+        if fty == el && !by_key {
+            let op = self.own_order(el);
+            return self.cmp_call(op, a, b, el);
+        }
         // `ctx` is where the function value is (the closure itself, or an
         // erased value), as `callee_of` would find it.
         let c = match self.tys.kind(fty) {

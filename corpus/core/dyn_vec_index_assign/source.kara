@@ -1,0 +1,34 @@
+trait Job {
+    fn name(self) -> String;
+}
+struct Loud { s: String }
+impl Drop for Loud {
+    fn drop(mut ref self) { println(f"drop {self.s}"); }
+}
+impl Job for Loud {
+    fn name(self) -> String { self.s.clone() }
+}
+struct Quiet { n: i64 }
+impl Job for Quiet {
+    fn name(self) -> String { f"quiet {self.n}" }
+}
+fn make(s: own String) -> dyn Job {
+    Loud { s: s }
+}
+fn main() {
+    let mut xs: Vec[dyn Job] = Vec.new();
+    xs.push(Loud { s: "one" });
+    xs.push(Loud { s: "two" });
+    xs.push(Quiet { n: 3 });
+    xs[0] = Loud { s: "three" };
+    println(f"now {xs[0].name()} {xs[1].name()} {xs[2].name()}");
+    xs[1] = make("four");
+    let n: dyn Job = Quiet { n: 5 };
+    let i = 2 - 2;
+    xs[i] = n;
+    xs[2] = Loud { s: "six" };
+    for x in xs.iter() {
+        println(x.name());
+    }
+    println("end");
+}

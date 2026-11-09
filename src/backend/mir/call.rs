@@ -1570,7 +1570,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("String", "push_str") => {
                 let v = self.ref_arg(&args[0])?;
                 let (s, n) = self.str_parts(&args[1])?;
-                self.rt("string_push_str", &[v.into(), s.into(), n.into()])?;
+                self.string_append(v, s, n)?;
                 self.drop_moved(&args[1..])
             }
             ("String", "push") => {
@@ -1885,6 +1885,25 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.elem_ptr(buf, i, size)?;
                 let d = self.place_ptr(dest)?;
                 self.store_ref(d, at, el)
+            }
+            // `xs[i] = v` into a `Vec[dyn T]`: the old element moved out
+            // to `dest`, the new one moved in (B-2026-11-08-84).
+            ("Vec", "__replace") => {
+                let v = self.ref_arg(&args[0])?;
+                let el = self.vec_elem(name, &args[0])?;
+                let size = self.layout(el)?.size;
+                let i = self.int_arg(&args[1])?;
+                let len = self.load_i64(self.offset(v, 8)?)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, i, len, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let buf = self.load_ptr(v)?;
+                let at = self.elem_ptr(buf, i, size)?;
+                let d = self.place_ptr(dest)?;
+                self.copy(d, at, el)?;
+                self.store_operand(at, &args[2])
             }
             ("Vec", "get") => {
                 let v = self.ref_arg(&args[0])?;

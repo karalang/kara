@@ -33,6 +33,9 @@
 //!   and the loop mentioning `v` but pushes (seeds, each one more element).
 //!
 //! Then the loop runs `bound - k` trips (`+ 1` for `<=`), one push each.
+//! A start that is a local `s` rather than a constant counts when the
+//! bound is `s + n` (`for i in low..low + k`): the loop then runs `n`
+//! trips, and `n` is reserved for.
 //! A vector with no `Vec.new()` on the chain (a second fill of it) is
 //! reserved for the trips at the loop's way in instead.
 //!
@@ -309,6 +312,85 @@ fn offset_bound(body: &Body, b: &Operand, bits: u32, signed: bool) -> Option<(Op
     Some((Operand::Copy(n.clone()), off))
 }
 
+/// For a loop counting from `copy s` (written in chain block
+/// `start_block`) to a `bound` that copies, through whole-local copies,
+/// `t.0` of `t = s + n` (checked, or not, either order): `n`, when `s`
+/// holds at the add what it holds at the start, and `n` holds there what
+/// it holds where the reservation is made (chain block `nb`). Neither may
+/// then be written in the loop, nor `s` in the chain from the nearer of
+/// the two writes in, nor `n` from `nb` or the add, whichever is
+/// farther from the loop.
+fn counted_past(
+    body: &Body,
+    bound: &Operand,
+    s: Local,
+    start_block: usize,
+    nb: usize,
+    chain: &[usize],
+    in_loop: &impl Fn(usize) -> bool,
+) -> Option<Local> {
+    let Operand::Copy(p) = bound else {
+        return None;
+    };
+    if !p.projection.is_empty() {
+        return None;
+    }
+    let mut l = p.local;
+    let mut sum = None;
+    for _ in 0..4 {
+        let [(bi, Some(si))] = defs(body, l)?[..] else {
+            return None;
+        };
+        let StatementKind::Assign(_, rv) = &body.blocks[bi].statements[si].kind else {
+            return None;
+        };
+        match rv {
+            Rvalue::Use(Operand::Copy(x)) if x.projection.is_empty() => l = x.local,
+            Rvalue::Use(Operand::Copy(f)) => {
+                let [ProjElem::Field(FieldIdx(0), _)] = f.projection.as_slice() else {
+                    return None;
+                };
+                let [(ab, Some(asi))] = defs(body, f.local)?[..] else {
+                    return None;
+                };
+                let StatementKind::Assign(_, Rvalue::CheckedBinaryOp(BinOp::Add, a, b)) =
+                    &body.blocks[ab].statements[asi].kind
+                else {
+                    return None;
+                };
+                sum = Some((ab, a, b));
+                break;
+            }
+            Rvalue::BinaryOp(BinOp::Add, a, b) => {
+                sum = Some((bi, a, b));
+                break;
+            }
+            _ => return None,
+        }
+    }
+    let (add_block, a, b) = sum?;
+    let whole = |o: &Operand| match o {
+        Operand::Copy(x) if x.projection.is_empty() => Some(x.local),
+        _ => None,
+    };
+    let n = match (whole(a)?, whole(b)?) {
+        (x, n) if x == s => n,
+        (n, x) if x == s => n,
+        _ => return None,
+    };
+    let at = |b: usize| chain.iter().position(|&c| c == b);
+    let (pa, ps, pn) = (at(add_block)?, at(start_block)?, at(nb)?);
+    // No write of `x` in the loop, nor in the chain blocks from the loop
+    // out to position `upto`.
+    let still = |x: Local, upto: usize| {
+        defs(body, x).is_some_and(|ds| {
+            ds.iter()
+                .all(|&(bi, _)| !in_loop(bi) && at(bi).is_none_or(|q| q > upto))
+        })
+    };
+    (still(s, pa.max(ps)) && still(n, pa.max(pn))).then_some(n)
+}
+
 /// The one write of `l`, when it is a statement `l = rv`.
 fn sole_assign(body: &Body, l: Local) -> Option<&Rvalue> {
     let [(bi, Some(si))] = defs(body, l)?[..] else {
@@ -538,12 +620,16 @@ fn plan(
             .max_by_key(|&&(_, si)| si)
             .copied()
     });
-    let k = start.and_then(|(bi, si)| match &body.blocks[bi].statements[si].kind {
-        StatementKind::Assign(_, Rvalue::Use(o)) => int_const(o),
+    let start_op = start.and_then(|(bi, si)| match &body.blocks[bi].statements[si].kind {
+        StatementKind::Assign(_, Rvalue::Use(o)) => Some((bi, o)),
         _ => None,
     });
-    let Some(k) = k else {
-        return out;
+    // `i = copy s` from a local: the trips are counted only off a bound
+    // `s + n` (below), and the loop starts at `s`, so at `k = 0` of `n`.
+    let (k, from) = match start_op {
+        Some((_, o)) if int_const(o).is_some() => (int_const(o).unwrap_or(0), None),
+        Some((bi, Operand::Copy(p))) if p.projection.is_empty() => (0, Some((p.local, bi))),
+        _ => return out,
     };
     let k = signed_value(k, bits, signed);
     if k < 0 {
@@ -613,7 +699,7 @@ fn plan(
         // A vector the loop goes on filling (a second run of pushes into
         // it, B-2026-10-31-42) is reserved for the loop's trips at the
         // way in.
-        let nb = match new_block {
+        let mut nb = match new_block {
             Some(nb) => nb,
             None => {
                 seeds = 0;
@@ -622,11 +708,22 @@ fn plan(
         };
         let adj = i128::from(op == BinOp::Le);
         let delta = seeds + adj - k;
+        // `for i in s..s + n`: the bound less the start is `n`
+        // (B-2026-11-09-6).
+        let bound = match from {
+            Some((s, start_block)) => {
+                match counted_past(body, &bound, s, start_block, nb, &chain, &in_loop) {
+                    Some(n) => Operand::Copy(Place::local(n)),
+                    None => continue,
+                }
+            }
+            None => bound.clone(),
+        };
         // `i < n - 1`: the guard works its bound out of a still `n` on
         // every trip, so `n` is reserved for, less the constant.
-        let (bound, delta) = match offset_bound(body, &bound, bits, signed) {
-            Some((b, c)) => (b, delta + c),
-            None => (bound.clone(), delta),
+        let (bound, mut delta) = match offset_bound(body, &bound, bits, signed) {
+            Some((b, c)) if from.is_none() => (b, delta + c),
+            _ => (bound, delta),
         };
         // The bound, holding at `Vec.new()` what it holds at the guard.
         // A range `for` copies a literal bound into a local.
@@ -664,12 +761,30 @@ fn plan(
                     // too, however often it is written elsewhere: Pascal's
                     // row `while j <= i` under an outer `i = i + 1`
                     // (B-2026-11-01-21).
-                    let held = |x: Local| {
-                        settled(body, idom, nb, x)
-                            .or_else(|| unwritten_since(body, x, nb, &chain, &in_loop))
+                    let (chain, in_loop) = (&chain, &in_loop);
+                    let found = |at: usize| {
+                        let held = |x: Local| {
+                            settled(body, idom, at, x)
+                                .or_else(|| unwritten_since(body, x, at, chain, in_loop))
+                        };
+                        held(p.local).or_else(|| copied_from(body, p.local, held))
                     };
-                    let Some(b) = held(p.local).or_else(|| copied_from(body, p.local, held)) else {
-                        continue;
+                    // A bound worked out after `Vec.new()` (`for _ in
+                    // 0..row.len()` with `seat_of` made first) holds its
+                    // value at the loop's way in, so the vector is
+                    // reserved for the trips there, past its seeds, as a
+                    // second fill is (B-2026-11-09-10).
+                    let b = match found(nb) {
+                        Some(b) => b,
+                        None if new_block.is_some() && chain[0] != nb => match found(chain[0]) {
+                            Some(b) => {
+                                nb = chain[0];
+                                delta -= seeds;
+                                b
+                            }
+                            None => continue,
+                        },
+                        None => continue,
                     };
                     if !matches!(tys.kind(body.local(b).ty), TyKind::Int(t) if t.bits() <= 64) {
                         continue;

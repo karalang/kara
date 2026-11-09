@@ -130,7 +130,11 @@ fn mir_pair_results_and_sret_results_keep_parameters_in_registers() {
     // `info` takes its result slot, then `nodes` and `best` as the
     // references themselves (dereferenceable for a `Vec` and an `i64`,
     // B-2026-11-05-4) and `node` as an integer.
-    let refs = "ptr align 8 dereferenceable(24) %1, i64 %2, ptr align 8 dereferenceable(8) %3)";
+    // `nodes` is `noalias` as well, a `Vec` header frozen by its borrow
+    // (B-2026-11-09-8); `best`, a `mut ref i64`, takes no borrow
+    // flag and so stays unmarked (B-2026-11-09-2).
+    let refs =
+        "ptr noalias align 8 dereferenceable(24) %1, i64 %2, ptr align 8 dereferenceable(8) %3)";
     assert!(
         ir.contains(&format!("@kara.info(ptr noalias %0, {refs}"))
             || ir.contains(&format!("@kara.info(ptr %0, {refs}")),

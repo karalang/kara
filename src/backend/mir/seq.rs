@@ -119,6 +119,52 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(lenp, len.into())
     }
 
+    /// Appends the `n` bytes at `s` to the `String` at `v` in line: the
+    /// bytes are copied straight in while they fit, and only a full
+    /// buffer (or a borrowed literal, whose capacity is 0) goes to the
+    /// runtime's reservation. Through `karac_mir_string_push_str` every
+    /// append cost a call and a `memcpy` call, most of a string built a
+    /// letter at a time (kata 763, B-2026-11-09-9); in line, a slice whose
+    /// length LLVM can work out is copied as that many bytes.
+    pub(super) fn string_append(
+        &mut self,
+        v: PointerValue<'ctx>,
+        s: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> R<()> {
+        let lenp = self.offset(v, 8)?;
+        let len = self.load_i64(lenp)?;
+        let cap = self.load_i64(self.offset(v, 16)?)?;
+        let need = self.builder.build_int_add(len, n, "need").map_err(e)?;
+        let short = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cap, need, "short")
+            .map_err(e)?;
+        self.if_then(short, |cx| {
+            let ptr = cx.load_ptr(v)?;
+            let grow = cx.shim_fn(Shim::StrReserve);
+            let words = cx
+                .builder
+                .build_call(
+                    grow,
+                    &[ptr.into(), len.into(), cap.into(), n.into()],
+                    "grown",
+                )
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_struct_value();
+            let buf = cx.builder.build_extract_value(words, 0, "").map_err(e)?;
+            let cap = cx.builder.build_extract_value(words, 1, "").map_err(e)?;
+            cx.store(v, buf)?;
+            cx.store(cx.offset(v, 16)?, cap)
+        })?;
+        let buf = self.load_ptr(v)?;
+        let at = self.elem_ptr(buf, len, 1)?;
+        self.builder.build_memcpy(at, 1, s, 1, n).map_err(e)?;
+        self.store(lenp, need.into())
+    }
+
     /// Grow the `Vec` or `String` at `v` (holding `len` of `cap`) by one
     /// `size`-byte element: [`Self::reserve_via_copy`] with the header
     /// already loaded.
@@ -153,6 +199,41 @@ impl<'ctx> Cx<'ctx, '_> {
         let cap = self.builder.build_extract_value(words, 1, "").map_err(e)?;
         self.store(v, buf)?;
         self.store(self.offset(v, 16)?, cap)
+    }
+
+    /// The body of [`Shim::StrReserve`]: the header `{buf, len, cap}`
+    /// with room made for `more` bytes through the runtime's reserve, its
+    /// new buffer and capacity returned.
+    pub(super) fn build_str_reserve(&mut self, f: FunctionValue<'ctx>) -> R<()> {
+        let word = |i: u32| f.get_nth_param(i).ok_or("str_reserve is missing a word");
+        let ptr = word(0)?.into_pointer_value();
+        let len = word(1)?.into_int_value();
+        let cap = word(2)?.into_int_value();
+        let more = word(3)?.into_int_value();
+        let v = self.entry_slot(24, "hdr")?;
+        self.store(v, ptr.into())?;
+        self.store(self.offset(v, 8)?, len.into())?;
+        self.store(self.offset(v, 16)?, cap.into())?;
+        self.reserve_header(v, ptr, len, cap, more, self.i64(1))?;
+        let buf = self.load_ptr(v)?;
+        let cap = self.load_i64(self.offset(v, 16)?)?;
+        let ty = f
+            .get_type()
+            .get_return_type()
+            .ok_or("str_reserve returns nothing")?;
+        let mut out = ty.into_struct_type().get_undef();
+        out = self
+            .builder
+            .build_insert_value(out, buf, 0, "")
+            .map_err(e)?
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, cap, 1, "")
+            .map_err(e)?
+            .into_struct_value();
+        self.builder.build_return(Some(&out)).map_err(e)?;
+        Ok(())
     }
 
     /// The body of [`Shim::GrowByOne`]: the header `{buf, len, cap}` in a
@@ -1599,7 +1680,11 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Sorts the `n` elements of `el` (`size` bytes each) at `buf` in
     /// their own order: integers, `char`s and `bool`s straight through
-    /// the runtime's slice sort, anything else by [`Self::sort_cmp`].
+    /// the runtime's slice sort, anything else by the emitted merge sort
+    /// `sort_by` uses, with the element type standing for its own order,
+    /// so the comparison is inlined rather than called per pair through
+    /// the runtime's (kata 587's tuples, B-2026-11-08-85).
+    /// `KARAC_MIR_SORT_SHIM=0` keeps the runtime's sort.
     fn sort_own_order(
         &mut self,
         buf: PointerValue<'ctx>,
@@ -1617,6 +1702,19 @@ impl<'ctx> Cx<'ctx, '_> {
             Some(signed) if self.user_cmp_body(el).is_none() && matches!(size, 1 | 2 | 4 | 8) => {
                 let kind = size * 8 + if signed { 256 } else { 0 };
                 self.rt("sort_int", &[buf.into(), n.into(), self.i64(kind).into()])
+            }
+            _ if size > 0 && std::env::var("KARAC_MIR_SORT_SHIM").as_deref() != Ok("0") => {
+                let sort = self.shim_fn(Shim::PartSort {
+                    f: el,
+                    by_key: false,
+                    el,
+                    size,
+                });
+                let ctx = self.ptr_ty().const_null();
+                self.builder
+                    .build_call(sort, &[buf.into(), n.into(), ctx.into()], "")
+                    .map_err(e)?;
+                Ok(())
             }
             _ => {
                 let cmp = self.sort_cmp(el);

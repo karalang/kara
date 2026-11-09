@@ -36,13 +36,14 @@ use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
 
 /// Inserts the borrow-flag operations into an elaborated `body`.
 /// `has_receiver` is the borrow checker's.
-/// `mut_field(struct, index)` says whether a handle may write a struct's
-/// field: one declared `mut`, or an `Atomic` or `Mutex`.
+/// `mut_field(adt, variant, index)` says whether a handle may write a
+/// field: a struct's (`variant` `None`) declared `mut`, or an `Atomic` or
+/// `Mutex`; an enum variant's that some body writes ([`written_payloads`]).
 pub fn insert_borrow_flags(
     body: &mut Body,
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
-    mut_field: &dyn Fn(&str, u32) -> bool,
+    mut_field: &dyn Fn(&str, Option<u32>, u32) -> bool,
 ) {
     let track = |k: BorrowKind, p: &Place| !flagged_prefixes(body, tys, p, k, mut_field).is_empty();
     let (loans, live) = loan_liveness(body, tys, has_receiver, &track);
@@ -355,7 +356,7 @@ fn flagged_prefixes(
     tys: &TyInterner,
     place: &Place,
     kind: BorrowKind,
-    mut_field: &dyn Fn(&str, u32) -> bool,
+    mut_field: &dyn Fn(&str, Option<u32>, u32) -> bool,
 ) -> Vec<(Place, BorrowKind)> {
     let mut out: Vec<(Place, BorrowKind)> = (1..=place.projection.len())
         .map(|i| Place {
@@ -373,12 +374,13 @@ fn flagged_prefixes(
 
 /// Whether the field `place` names can be written or lent `mut` at all: a
 /// struct's field only when declared `mut` or interior-mutable
-/// (B-2026-11-08-14).
+/// (B-2026-11-08-14), an enum variant's only when some body writes it or
+/// lends it `mut` ([`written_payloads`]; `mut_field` answers both).
 fn may_be_written(
     body: &Body,
     tys: &TyInterner,
     place: &Place,
-    mut_field: &dyn Fn(&str, u32) -> bool,
+    mut_field: &dyn Fn(&str, Option<u32>, u32) -> bool,
 ) -> bool {
     let Some((ProjElem::Field(f, _), base)) = place.projection.split_last() else {
         return true;
@@ -394,12 +396,66 @@ fn may_be_written(
         return true;
     };
     let adt = tys.adt(a);
-    adt.is_enum || mut_field(&adt.name, f.0)
+    mut_field(&adt.name, b.variant.filter(|_| adt.is_enum), f.0)
+}
+
+/// The fields of `shared enum` variants some body of `bodies` writes or
+/// lends `mut`, as `(enum, variant, field)`: a `mut ref` pattern binding
+/// a payload, or a store into one. A variant's field has no `mut` to
+/// declare, and an enum payload that nothing writes needs no flag: a tree
+/// walk that held a payload binding across its recursive call took one
+/// per frame (B-2026-11-08-83).
+pub fn written_payloads<'a>(
+    bodies: impl IntoIterator<Item = &'a Body>,
+    tys: &TyInterner,
+) -> std::collections::HashSet<(String, u32, u32)> {
+    let mut out = std::collections::HashSet::new();
+    for body in bodies {
+        let mut note = |p: &Place| {
+            for (k, el) in p.projection.iter().enumerate() {
+                let ProjElem::Field(f, _) = el else {
+                    continue;
+                };
+                let base = Place {
+                    local: p.local,
+                    projection: p.projection[..k].to_vec(),
+                };
+                let Ok(b) = place_ty(body, tys, &base) else {
+                    continue;
+                };
+                let (TyKind::Shared(a), Some(v)) = (tys.kind(b.ty), b.variant) else {
+                    continue;
+                };
+                let adt = tys.adt(a);
+                if adt.is_enum {
+                    out.insert((adt.name.clone(), v, f.0));
+                }
+            }
+        };
+        for data in &body.blocks {
+            for s in &data.statements {
+                match &s.kind {
+                    StatementKind::Assign(d, rv) => {
+                        note(d);
+                        if let Rvalue::Ref(BorrowKind::Mut, q) = rv {
+                            note(q);
+                        }
+                    }
+                    StatementKind::SetDiscriminant(p, _) => note(p),
+                    _ => {}
+                }
+            }
+            if let TerminatorKind::Call { destination, .. } = &data.terminator.kind {
+                note(destination);
+            }
+        }
+    }
+    out
 }
 
 /// §6.2: a field is read as a value, and so takes no flag, when its type
 /// is `Copy` or counted (a handle, or a handle aggregate).
-fn takes_flag(tys: &TyInterner, t: Ty) -> bool {
+pub fn takes_flag(tys: &TyInterner, t: Ty) -> bool {
     !tys.is_copy(t) && !counted(tys, t)
 }
 
@@ -531,6 +587,38 @@ mod tests {
         };
         assert_eq!(acquires("shared struct Tree { kids: Vec[i64] }"), 0);
         assert_eq!(acquires("shared struct Tree { mut kids: Vec[i64] }"), 1);
+    }
+
+    /// A `shared enum` payload takes a flag only in a program that writes
+    /// that variant's field somewhere (B-2026-11-08-83): the tree walk
+    /// holding `op` across its recursive calls took one per frame.
+    #[test]
+    fn mir_flags_skip_an_enum_payload_nothing_writes() {
+        let acquires = |extra: &str, call: &str| -> usize {
+            let src = format!(
+                "shared enum E {{ Num(i64), Bin(String, E, E) }}\nfn f(e: E) -> i64 {{\n    match e {{\n        E.Bin(op, l, r) => {{ let a = f(l); let b = f(r); a + b + op.len() }}\n        E.Num(n) => n,\n    }}\n}}\n{extra}\nfn main() {{\n    let e = E.Bin(\"+\", E.Num(1), E.Num(2));\n    {call}\n    println(f(e));\n}}\n"
+            );
+            let l = crate::mir::lower::build_source(&src).unwrap_or_else(|e| panic!("{e}"));
+            let body = l
+                .program
+                .bodies
+                .values()
+                .find(|b| b.instance.name == "f")
+                .expect("f");
+            body.blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .filter(|s| {
+                    matches!(
+                        s.kind,
+                        crate::mir::StatementKind::BorrowFlag(crate::mir::FlagOp::Acquire { .. })
+                    )
+                })
+                .count()
+        };
+        assert_eq!(acquires("", ""), 0);
+        let poke = "fn poke(e: E) {\n    match e {\n        E.Bin(mut ref op, _, _) => op.push('!'),\n        E.Num(_) => {}\n    }\n}";
+        assert!(acquires(poke, "poke(e);") > 0);
     }
 
     /// The text form round-trips, and the validator refuses a flag on a

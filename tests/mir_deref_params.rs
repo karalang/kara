@@ -63,7 +63,10 @@ fn build(dir: &Path, on: bool) -> (bool, Option<PathBuf>) {
         .lines()
         .find(|l| l.starts_with("define") && l.contains("@kara.gaps("))
         .unwrap_or_else(|| panic!("{tag}: no definition of gaps\n{ir}"));
-    let marked = def.contains("ptr align 8 dereferenceable(24) %0");
+    // A `ref Vec` is `noalias` too, its header frozen by the borrow
+    // (B-2026-11-09-8), and `KARAC_MIR_DEREF_PARAM=0` drops both.
+    let marked = def.contains("ptr align 8 dereferenceable(24) %0")
+        || def.contains("ptr noalias align 8 dereferenceable(24) %0");
     let ran = common::link_or_skip(if built.status.success() {
         Ok(())
     } else {

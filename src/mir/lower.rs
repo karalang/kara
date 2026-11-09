@@ -6840,6 +6840,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let targs = self.tys().tcx().list(args);
                 return self.index_set(target, object, index, value, base, &targs);
             }
+            // A `Vec[dyn T]`'s element is replaced by the native, not
+            // through `index_mut`'s view (B-2026-11-08-84).
+            if let HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } = k
+            {
+                let el = self.tys().tcx().list(args)[0];
+                if matches!(self.tys().tcx().kind(el), HK::Dyn { .. }) {
+                    return self.dyn_index_set(object, index, value, base, el);
+                }
+            }
             // A user type's `impl IndexSet` (B-2026-10-14-47).
             if let Some((d, inst_args)) =
                 self.user_operator_method(base, "IndexSet", "index_set", index)?
@@ -6954,6 +6966,46 @@ impl<'l, 'a> Bx<'l, 'a> {
                 next,
             );
         }
+        Ok(())
+    }
+
+    /// `xs[i] = v` into a `Vec[dyn T]`: `__replace(&mut xs, i, v)`, which
+    /// moves `v` into the slot and hands back the value it held, then
+    /// that value's drop. A `mut ref dyn T` is a view, the value's block
+    /// and table, so a store through `index_mut`'s view wrote the view:
+    /// the old block was freed and stayed in the slot (B-2026-11-08-84).
+    fn dyn_index_set(
+        &mut self,
+        object: &'a Expr,
+        index: &'a Expr,
+        value: &'a Expr,
+        base: Ty,
+        el: Ty,
+    ) -> R<()> {
+        let recv = self.recv_place(object, true)?;
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let idx = self.index_operand(object, index)?;
+        let idx = self.cast_index(idx, usize_t);
+        let op = self.expr_operand(value)?;
+        let op = self.settle(op);
+        // The value made a `dyn T` in a slot of its own.
+        let v = self.temp(el);
+        self.assign(Place::local(v), Rvalue::Use(op));
+        let mut rest = vec![idx, Operand::Move(Place::local(v))];
+        let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+        ops.extend(rest);
+        let old = self.temp(el);
+        let name = format!("{}.__replace", self.tys().display(base));
+        self.call_native(&name, ops, Place::local(old));
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Drop {
+                place: Place::local(old),
+                target: next,
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
         Ok(())
     }
 
@@ -28361,6 +28413,7 @@ fn result_borrows(
             Some(
                 "take"
                     | "replace"
+                    | "__replace"
                     | "pop"
                     | "pop_front"
                     | "pop_back"
@@ -29011,6 +29064,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             .as_ref()
             .unwrap_or(&Default::default()),
     );
+    // The `shared enum` payloads a body writes, which alone take flags.
+    let written_payloads =
+        crate::mir::flags::written_payloads(lowered.program.bodies.values(), &lowered.tys);
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
@@ -29034,8 +29090,13 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         // §6.2's run-time borrow flags, on the elaborated body.
         // `KARAC_MIR_FLAG_ALL_FIELDS=1` flags a field that is not `mut` too.
         let writable = &lowered.writable_fields;
-        let writable =
-            |adt: &str, f: u32| flag_all_fields || writable.contains(&(adt.to_string(), f));
+        let writable = |adt: &str, v: Option<u32>, f: u32| {
+            flag_all_fields
+                || match v {
+                    Some(v) => written_payloads.contains(&(adt.to_string(), v, f)),
+                    None => writable.contains(&(adt.to_string(), f)),
+                }
+        };
         crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver, &writable);
         crate::mir::flags::narrow_call_flags(body, &lowered.tys, &|n| !names.contains(n));
         if let Some(f) = lowered.frozen_locals.get(&body.instance.name) {

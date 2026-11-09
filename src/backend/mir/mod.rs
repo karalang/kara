@@ -65,7 +65,7 @@ use inkwell::IntPredicate;
 use crate::mir::coroutine;
 use crate::mir::interp::{self, Program};
 use crate::mir::layout::{self, Layout};
-use crate::mir::ty::{FloatTy, TyKind};
+use crate::mir::ty::{FloatTy, IntrinsicTy, TyKind};
 use crate::mir::{
     AggregateKind, Body, Const, ConstKind, Operand, Place, Rvalue, StatementKind, TerminatorKind,
     Ty, TyInterner,
@@ -133,6 +133,20 @@ pub fn compile_mir_with<'ctx>(
 /// The named metadata marking a module with a binary-search midpoint
 /// stated (`Cx::assume_midpoint`), whose passes then run twice.
 pub const MIDPOINT_MARK: &str = "karac.midpoint";
+
+/// Whether a by-value function's `ref T` parameters of a frozen `T` are
+/// marked `noalias` (`Cx::mark_deref_params`); `KARAC_MIR_NOALIAS_REF=0`
+/// turns it off.
+pub fn noalias_ref_flag() -> bool {
+    std::env::var("KARAC_MIR_NOALIAS_REF").as_deref() != Ok("0")
+}
+
+/// Whether a by-value function's `mut ref T` parameters of a `T` that
+/// takes a borrow flag are marked `noalias` (`Cx::mark_deref_params`);
+/// `KARAC_MIR_NOALIAS_MUTREF=0` turns it off.
+pub fn noalias_mutref_flag() -> bool {
+    std::env::var("KARAC_MIR_NOALIAS_MUTREF").as_deref() != Ok("0")
+}
 
 /// Whether direct-call parameters are marked `noalias` and promoted
 /// (`Cx::mark_noalias`); `KARAC_MIR_NOALIAS=0` turns it off.
@@ -1064,6 +1078,14 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// `time_series[i]` reloaded that pointer every trip; the deeper
     /// chain made the x86 cmov converter branch the loop's `min`, 2.8x
     /// slower (B-2026-11-05-4). `KARAC_MIR_DEREF_PARAM=0` leaves them out.
+    ///
+    /// A `ref T` whose `T` holds nothing a shared borrow lets change (see
+    /// [`Self::frozen_inline`]) is `noalias` too, as Rust marks a `&T`
+    /// without an `UnsafeCell`: the borrow keeps its bytes as they are for
+    /// the call, so a store through any other pointer cannot reach them.
+    /// Kata 718's DP loop stored into its own row vector and so reloaded
+    /// both inputs' `Vec` headers, and tested their bounds, on every step
+    /// (B-2026-11-09-8). `KARAC_MIR_NOALIAS_REF=0` leaves it out.
     fn mark_deref_params(
         &self,
         body: &Body,
@@ -1102,8 +1124,63 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                     self.llcx.create_enum_attribute(k, v),
                 );
             }
+            // A `mut ref` is the only way to its pointee for the call: the
+            // borrow checker rejects a second path through one handle
+            // place, and through another handle a `T` that takes a borrow
+            // flag panics before it is read or written (§6.2). A `Copy`
+            // or counted `T` takes no flag, so a `mut` field of a shared
+            // value of that type may be read through another handle while
+            // the `mut ref` lives, and stays unmarked (kata 695's
+            // union-find reloaded its `mut ref Vec` header after every
+            // store into it, B-2026-11-09-2).
+            let frozen = matches!(self.tys.kind(ty), TyKind::Ref(_))
+                && noalias_ref_flag()
+                && self.frozen_inline(t, 0);
+            let exclusive = matches!(self.tys.kind(ty), TyKind::MutRef(_))
+                && noalias_mutref_flag()
+                && crate::mir::flags::takes_flag(self.tys, t);
+            if frozen || exclusive {
+                let k = Attribute::get_named_enum_kind_id("noalias");
+                f.add_attribute(
+                    AttributeLoc::Param(here),
+                    self.llcx.create_enum_attribute(k, 0),
+                );
+            }
         }
         Ok(())
+    }
+
+    /// Whether a value of `t` keeps its own bytes while a shared borrow of
+    /// it lives: numbers, `bool`s, `char`s, the headers of a `Vec`, a
+    /// `String` and a `VecDeque` (their elements are behind a pointer, which
+    /// `noalias` does not reach), a `shared` or `weak` handle, and tuples,
+    /// arrays and `Option`s of those. Anything else (a user type, a map or
+    /// set, an `Atomic`, a `Mutex`) may change in place behind a shared
+    /// borrow, or is not checked here.
+    fn frozen_inline(&self, t: Ty, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match self.tys.kind(t) {
+            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Unit => true,
+            TyKind::Intrinsic(
+                IntrinsicTy::String | IntrinsicTy::Vec(_) | IntrinsicTy::VecDeque(_),
+            ) => true,
+            TyKind::Shared(_) | TyKind::Weak(_) => true,
+            TyKind::Tuple(ts) => ts.iter().all(|&p| self.frozen_inline(p, depth + 1)),
+            TyKind::Array(e, _) => self.frozen_inline(e, depth + 1),
+            TyKind::Adt(a) if self.tys.adt(a).name == "Option" => {
+                let adt = self.tys.adt(a);
+                adt.variants.iter().enumerate().all(|(v, var)| {
+                    (0..var.fields.len() as u32).all(|i| {
+                        self.tys
+                            .field_ty(t, Some(v as u32), i)
+                            .is_some_and(|ft| self.frozen_inline(ft, depth + 1))
+                    })
+                })
+            }
+            _ => false,
+        }
     }
 
     /// Tells LLVM that each `ref T` / `mut ref T` parameter points at a

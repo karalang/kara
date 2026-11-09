@@ -1,0 +1,11 @@
+source = "design.md § dyn Trait"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["dyn", "drop", "assign"]
+class = "a"
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § dyn Trait ('Assign the owned dyn Trait itself, which drops the old value first'), with core-semantics.md §7: `xs[i] = v` into a `Vec[dyn Job]` drops the element it replaces, once, and the slot holds the new value: a concrete value, one a `-> dyn Job` function returns, and an existing `dyn Job` binding, replacing a value with a `Drop` and one without. The compiled store went through `index_mut`'s view, so the slot kept the freed block (B-2026-11-08-84)."
+bucket = "a"

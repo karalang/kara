@@ -1,0 +1,20 @@
+shared enum E { Name(String), Num(i64) }
+fn poke(e: E) {
+    match e {
+        E.Name(mut ref s) => s.push('!'),
+        E.Num(_) => {}
+    }
+}
+fn main() {
+    let a = E.Name("x");
+    let b = a;
+    poke(b);
+    match a {
+        E.Name(s) => {
+            println(f"{s}");
+            poke(b);
+            println(f"{s}");
+        }
+        E.Num(_) => {}
+    }
+}

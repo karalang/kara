@@ -1680,6 +1680,18 @@ impl<'a> Interp<'a> {
                 [v, i] => self.vec_index(name, v, i),
                 _ => err(format!("{name} takes a reference and an index")),
             },
+            // `xs[i] = v` into a `Vec[dyn T]`: the old element out, the
+            // new one in (B-2026-11-08-84).
+            ("Vec", "__replace") => match args.as_slice() {
+                [v, i, x] => {
+                    let Value::Ref(at) = self.vec_index(name, v, i)? else {
+                        return err(format!("{name}: no slot"));
+                    };
+                    let x = x.clone();
+                    Ok(std::mem::replace(self.slot_mut(&at)?, x))
+                }
+                _ => err(format!("{name} takes a reference, an index and a value")),
+            },
             // A `chars()` cursor step, which must not copy the text.
             // `ascii_at_byte` is the `ascii_chars` pass's `char_at_byte`
             // over a text it proved ASCII: the same char.

@@ -2727,6 +2727,10 @@ fn main() -> () {
             // of such results a reference, in the check the build runs with
             // the library (core semantics §4.6, B-2026-10-28-25).
             "ok_match_result_is_a_ref",
+            // A `mut ref` pattern binding writes the shared enum's payload
+            // under the core ownership rules (§4.6), which the build applies
+            // (B-2026-11-08-83).
+            "panic_shared_enum_payload_alias",
             // `Option.replace` is option.kara's (B-2026-11-02-27).
             "ok_owned_place_into_ref_slot",
             // `Receiver.recv` is sync.kara's (B-2026-11-02-37).

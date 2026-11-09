@@ -13,9 +13,11 @@
 //! with it, and no access takes a lock: one process-wide table behind the
 //! pool's lock serialized every task that wrote a `mut` field of its own
 //! `shared` values (kata 133's par lane ran 16x slower at four workers than
-//! at one, B-2026-11-01-25). Few flags are held at once (one per live loan
-//! of a flagged field), so they sit in a short list, and a check with none
-//! held returns at once.
+//! at one, B-2026-11-01-25). The flags are keyed by the field's address:
+//! a recursion over `shared` data that holds a loan across its call holds
+//! one flag per frame, and a list searched on every acquire made it
+//! quadratic in the depth (B-2026-11-08-83). A check with none held
+//! returns at once.
 //!
 //! A coroutine's resume body has no frame slots of its own to remember
 //! what it took, so the `_in` entry points keep that here, by the
@@ -23,6 +25,34 @@
 //! (B-2026-10-20-14).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// A field's address hashed by one multiply, its high half folded into
+/// the low bits the table indexes by: addresses are aligned, so their own
+/// low bits are mostly zero.
+#[derive(Default)]
+struct AddrHash(u64);
+
+impl Hasher for AddrHash {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(self.0.rotate_left(8) ^ u64::from(b));
+        }
+    }
+    fn write_u64(&mut self, n: u64) {
+        let h = n.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 = h ^ (h >> 32);
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+
+type Flags = HashMap<usize, Flag, BuildHasherDefault<AddrHash>>;
 
 /// One flagged field: how many readers hold it, or whether a writer does,
 /// and where the borrow that took it was made: a `file:line:col` constant
@@ -30,7 +60,6 @@ use std::cell::RefCell;
 /// own), which a conflict names (design.md §11, B-2026-11-04-81). Readers
 /// that join a held flag keep the first one's place.
 struct Flag {
-    addr: usize,
     readers: u32,
     writer: bool,
     at: usize,
@@ -48,7 +77,7 @@ struct Hold {
 /// A task's flags and its coroutine frames' holds.
 #[derive(Default)]
 pub(crate) struct Table {
-    flags: Vec<Flag>,
+    flags: Flags,
     holds: Vec<Hold>,
 }
 
@@ -56,7 +85,7 @@ thread_local! {
     /// The running task's table (outside every task, the thread's own).
     static TABLE: RefCell<Table> = const {
         RefCell::new(Table {
-            flags: Vec::new(),
+            flags: HashMap::with_hasher(BuildHasherDefault::new()),
             holds: Vec::new(),
         })
     };
@@ -68,7 +97,7 @@ pub(crate) fn swap_table(t: Table) -> Table {
     TABLE.with(|c| std::mem::replace(&mut *c.borrow_mut(), t))
 }
 
-fn flags<R>(f: impl FnOnce(&mut Vec<Flag>) -> R) -> R {
+fn flags<R>(f: impl FnOnce(&mut Flags) -> R) -> R {
     TABLE.with(|c| f(&mut c.borrow_mut().flags))
 }
 
@@ -93,7 +122,7 @@ pub extern "C" fn karac_mir_flag_acquire(
     let addr = addr as usize;
     let mutable = mutable != 0;
     flags(|fl| {
-        match fl.iter_mut().find(|f| f.addr == addr) {
+        match fl.get_mut(&addr) {
             Some(f) if conflicts(f, mutable) => return 1,
             Some(f) => {
                 if mutable {
@@ -103,13 +132,15 @@ pub extern "C" fn karac_mir_flag_acquire(
                 }
             }
             None => {
-                fl.push(Flag {
+                fl.insert(
                     addr,
-                    readers: u32::from(!mutable),
-                    writer: mutable,
-                    at: at as usize,
-                    at_len,
-                });
+                    Flag {
+                        readers: u32::from(!mutable),
+                        writer: mutable,
+                        at: at as usize,
+                        at_len,
+                    },
+                );
             }
         }
         0
@@ -122,17 +153,16 @@ pub extern "C" fn karac_mir_flag_acquire(
 pub extern "C" fn karac_mir_flag_release(addr: *const u8, mutable: u8) {
     let addr = addr as usize;
     flags(|fl| {
-        let Some(i) = fl.iter().position(|f| f.addr == addr) else {
+        let Some(f) = fl.get_mut(&addr) else {
             return;
         };
-        let f = &mut fl[i];
         if mutable != 0 {
             f.writer = false;
         } else {
             f.readers = f.readers.saturating_sub(1);
         }
         if f.readers == 0 && !f.writer {
-            fl.swap_remove(i);
+            fl.remove(&addr);
         }
     })
 }
@@ -143,10 +173,10 @@ pub extern "C" fn karac_mir_flag_release(addr: *const u8, mutable: u8) {
 pub extern "C" fn karac_mir_flag_check(addr: *const u8, mutable: u8) -> u8 {
     let addr = addr as usize;
     flags(|fl| {
-        u8::from(
-            fl.iter()
-                .any(|f| f.addr == addr && conflicts(f, mutable != 0)),
-        )
+        if fl.is_empty() {
+            return 0;
+        }
+        u8::from(fl.get(&addr).is_some_and(|f| conflicts(f, mutable != 0)))
     })
 }
 
@@ -161,11 +191,7 @@ pub extern "C" fn karac_mir_flag_check(addr: *const u8, mutable: u8) -> u8 {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_flag_conflict(addr: *const u8, head: *const u8, head_len: u64) {
     let addr = addr as usize;
-    let (at, at_len) = flags(|fl| {
-        fl.iter()
-            .find(|f| f.addr == addr)
-            .map_or((0, 0), |f| (f.at, f.at_len))
-    });
+    let (at, at_len) = flags(|fl| fl.get(&addr).map_or((0, 0), |f| (f.at, f.at_len)));
     let mut msg = crate::lean_vec::LeanVec::<u8>::new();
     // SAFETY: the caller's contract.
     msg.extend_from_slice(unsafe { std::slice::from_raw_parts(head, head_len as usize) });
@@ -259,6 +285,30 @@ mod tests {
         assert_eq!(karac_mir_flag_check(a, 0), 1);
         karac_mir_flag_release(a, 1);
         assert_eq!(karac_mir_flag_check(a, 1), 0);
+    }
+
+    /// Many flags held at once, as a recursion holding one per frame
+    /// does (B-2026-11-08-83): each is found by its own address.
+    #[test]
+    fn many_flags_are_kept_apart() {
+        let at = |i: usize| (0x10_0000 + 24 * i) as *const u8;
+        for i in 0..5000 {
+            assert_eq!(
+                karac_mir_flag_acquire(at(i), u8::from(i % 2 == 0), NO_AT, 0),
+                0
+            );
+        }
+        for i in 0..5000 {
+            assert_eq!(karac_mir_flag_check(at(i), 1), 1);
+            assert_eq!(karac_mir_flag_check(at(i), 0), u8::from(i % 2 == 0));
+        }
+        assert_eq!(karac_mir_flag_check(at(5000), 1), 0);
+        for i in (0..5000).rev() {
+            karac_mir_flag_release(at(i), u8::from(i % 2 == 0));
+        }
+        for i in 0..5000 {
+            assert_eq!(karac_mir_flag_check(at(i), 1), 0);
+        }
     }
 
     #[test]
