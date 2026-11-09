@@ -1607,10 +1607,19 @@ impl<'a> Lcx<'a> {
                 },
             );
         }
+        // Only a gated module whose text says `compiler_builtin` has a
+        // method `note_builtin_owns` records, so the others stay unparsed.
+        let gated = (0..crate::prelude::GATED_STDLIB_SOURCES.len())
+            .filter(|&i| {
+                crate::prelude::GATED_STDLIB_SOURCES[i]
+                    .1
+                    .contains("compiler_builtin")
+            })
+            .map(crate::prelude::gated_stdlib_program);
         let baked = crate::prelude::STDLIB_PROGRAMS
             .iter()
             .map(|(_, p)| p)
-            .chain(crate::prelude::GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| p));
+            .chain(gated);
         for p in baked {
             self.note_builtin_owns(p);
         }

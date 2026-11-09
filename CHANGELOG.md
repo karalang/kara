@@ -358,6 +358,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   nothing, and equal elements are the same bits. Kata 1058's bench went
   from 1.44x to 1.08x Rust's `sort_by` (B-2026-11-06-34).
 
+- `karac check` no longer parses the 22 gated `std` modules (`std.web`,
+  `std.pool`, `std.crypto`, ...) a program does not import: each is parsed
+  when something asks for it. A check of a 3-line program runs 5% fewer
+  instructions (B-2026-11-09-28).
+
 - `<`, `<=`, `>` and `>=` on a tuple of integers, `bool`s and `char`s
   compare element by element instead of building an `Ordering` for each:
   a `PriorityQueue` of tuples sifts with one compare and branch an element

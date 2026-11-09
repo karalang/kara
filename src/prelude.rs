@@ -1476,7 +1476,7 @@ pub static STDLIB_VARIANCE: LazyLock<HashMap<String, Vec<Variance>>> = LazyLock:
     let programs = STDLIB_PROGRAMS
         .iter()
         .map(|(_, p)| p)
-        .chain(GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| p));
+        .chain(GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| *p));
     for program in programs {
         for item in &program.items {
             let (name, generics) = match item {
@@ -1514,10 +1514,32 @@ pub fn stdlib_variance(name: &str) -> Option<&'static [Variance]> {
 /// program text, so its items keep offsets of their own once spliced into a
 /// program and a diagnostic in one is known to be the module's
 /// (B-2026-10-15-107): parsed from 0, they shared the program's offsets.
-pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, Program)>> = LazyLock::new(|| {
-    let mut out = Vec::with_capacity(GATED_STDLIB_SOURCES.len());
-    for (i, &(path, src)) in GATED_STDLIB_SOURCES.iter().enumerate() {
-        let parsed = crate::parse_at_offset(src, gated_span_base(i));
+pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, &'static Program)>> =
+    LazyLock::new(|| {
+        GATED_STDLIB_SOURCES
+            .iter()
+            .enumerate()
+            .map(|(i, &(path, _))| {
+                let path: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+                (path, gated_stdlib_program(i))
+            })
+            .collect()
+    });
+
+/// The parsed module at `index` of [`GATED_STDLIB_SOURCES`], parsed the
+/// first time it is asked for: a caller that needs one module, or only the
+/// modules whose text names something, does not parse the other twenty
+/// (B-2026-11-09-28). [`GATED_STDLIB_PROGRAMS`] is every one of them.
+pub fn gated_stdlib_program(index: usize) -> &'static Program {
+    static ONE: LazyLock<Vec<std::sync::OnceLock<Program>>> = LazyLock::new(|| {
+        GATED_STDLIB_SOURCES
+            .iter()
+            .map(|_| std::sync::OnceLock::new())
+            .collect()
+    });
+    ONE[index].get_or_init(|| {
+        let (path, src) = GATED_STDLIB_SOURCES[index];
+        let parsed = crate::parse_at_offset(src, gated_span_base(index));
         if !parsed.errors.is_empty() {
             let msgs = parsed
                 .errors
@@ -1531,11 +1553,9 @@ pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, Program)>> = LazyLo
                 msgs
             );
         }
-        let path: Vec<String> = path.iter().map(|s| s.to_string()).collect();
-        out.push((path, parsed.program));
-    }
-    out
-});
+        parsed.program
+    })
+}
 
 /// Where the spans of the [`GATED_STDLIB_SOURCES`] entry at `index` start: a
 /// quarter of the address range up, with room for a 16 MiB module each.
@@ -1561,9 +1581,14 @@ pub fn marks_cross_task_fn(program: &crate::ast::Program, key: &crate::resolver:
     let Some(d) = key.0.checked_sub(gated_span_base(0)) else {
         return false;
     };
-    GATED_STDLIB_PROGRAMS
-        .get(d >> 24)
-        .is_some_and(|(_, p)| p.cross_task_fn_types.contains(key))
+    // A baked module's span lies above every gated one: asking about it
+    // must not parse the gated modules (B-2026-11-09-28).
+    if d >> 24 >= GATED_STDLIB_SOURCES.len() {
+        return false;
+    }
+    gated_stdlib_program(d >> 24)
+        .cross_task_fn_types
+        .contains(key)
 }
 
 /// The gated module whose text a span at `offset` lies in, with that
@@ -3851,7 +3876,7 @@ mod tests {
             .chain(
                 GATED_STDLIB_PROGRAMS
                     .iter()
-                    .map(|(path, p)| (path.join("."), p)),
+                    .map(|(path, p)| (path.join("."), *p)),
             )
             .collect();
         for (name, program) in &programs {

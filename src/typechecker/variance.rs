@@ -450,7 +450,11 @@ mod tests {
         let programs = crate::prelude::STDLIB_PROGRAMS
             .iter()
             .map(|(_, p)| p)
-            .chain(crate::prelude::GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| p));
+            .chain(
+                crate::prelude::GATED_STDLIB_PROGRAMS
+                    .iter()
+                    .map(|(_, p)| *p),
+            );
         for program in programs {
             for item in &program.items {
                 let (kind, name, gp) = match item {
