@@ -522,7 +522,7 @@ A callback stored in a field is escaping, so it cannot capture a provider (core-
 
 ### Provider-Rooted Resources (trait-based injection)
 
-> **Superseded for v1 (2026-10-20).** Providers were brought forward to v1 and their rules are now [core-semantics.md §14](core-semantics.md): the provider is a hidden borrowed parameter, specialised per provider type, so there is no shared handle, no vtable and no per-task provider stack, and a missing provider is a compile error rather than the runtime panic below. Trait-less provider use is not v1: a resource needs a trait bound to be bound. This section stays as the record of the earlier design and of the parts still on this track (`#[test(requires: ..)]`, deterministic-replay tooling, overriding `FileSystem`, `Network` and the standard streams).
+> **Superseded for v1 (2026-10-20).** Providers were brought forward to v1 and their rules are now [core-semantics.md §14](core-semantics.md): the provider is a hidden borrowed parameter, specialised per provider type, so there is no shared handle, no vtable and no per-task provider stack, and a missing provider is a compile error rather than the runtime panic below. Trait-less provider use is not v1: a resource needs a trait bound to be bound. This section stays as the record of the earlier design. Overriding `FileSystem`, `Network` and the standard streams, and `#[test(requires: ..)]`, have since come to v1 too (core-semantics §14.10 to §14.14); deterministic-replay tooling is the part still on this track.
 
 Resources are backed by swappable trait implementations. No algebraic effect handlers:
 
