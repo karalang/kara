@@ -763,8 +763,7 @@ const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[
         "extend",
         "every char or string of a collection or iterator, appended",
     ),
-    // B-2026-11-09-57: specified by the review thread on 2026-11-09, ahead of
-    // the 2001+ kata thread's implementation.
+    // B-2026-11-09-57: in the Kāra library the v2 check and MIR read.
     ("char_indices", "each scalar value with its byte offset"),
     (
         "match_indices",

@@ -1327,6 +1327,19 @@ impl StringSlice {
     fn splitn(self, n: i64, sep: Str) -> StrSplitN {
         StrSplitN { inner: self.split(sep), left: n }
     }
+
+    /// Each char with its byte offset, a valid place to cut with `s[a..b]`;
+    /// `rev()` walks them back to front (B-2026-11-09-57).
+    fn char_indices(self) -> StrCharIndices {
+        StrCharIndices { s: self, pos: 0, back: self.len() }
+    }
+
+    /// Every non-overlapping match of `pat`, left to right, with its byte
+    /// offset, the match a view into the text. An empty `pat` matches at
+    /// every char boundary, the end included (B-2026-11-09-57).
+    fn match_indices(self, pat: Str) -> StrMatchIndices {
+        StrMatchIndices { s: self, pat: pat, pos: 0 }
+    }
 }
 
 impl String {
@@ -1402,6 +1415,85 @@ impl String {
     /// `splitn` of the text as a `Str`: each piece is a view into `self`.
     fn splitn(ref self, n: i64, sep: Str) -> StrSplitN {
         self.as_str().splitn(n, sep)
+    }
+
+    /// `char_indices` of the text as a `Str`.
+    fn char_indices(ref self) -> StrCharIndices {
+        self.as_str().char_indices()
+    }
+
+    /// `match_indices` of the text as a `Str`: each match is a view into
+    /// `self`.
+    fn match_indices(ref self, pat: Str) -> StrMatchIndices {
+        self.as_str().match_indices(pat)
+    }
+}
+
+/// The chars of a `Str` with their byte offsets: `char_indices`.
+struct StrCharIndices {
+    s: Str,
+    pos: i64,
+    back: i64,
+}
+
+impl Iterator for StrCharIndices {
+    type Item = (i64, char);
+
+    fn next(mut ref self) -> Option[(i64, char)] {
+        if self.pos >= self.back {
+            return None;
+        }
+        let at = self.pos;
+        let c = self.s.char_at_byte(at);
+        self.pos = at + c.len_utf8();
+        Some((at, c))
+    }
+}
+
+impl DoubleEndedIterator for StrCharIndices {
+    fn next_back(mut ref self) -> Option[(i64, char)] {
+        if self.back <= self.pos {
+            return None;
+        }
+        let c = self.s.char_before_byte(self.back);
+        self.back = self.back - c.len_utf8();
+        Some((self.back, c))
+    }
+}
+
+/// The non-overlapping matches of `pat` in a `Str`, left to right, with
+/// their byte offsets: `match_indices`. What is left to search starts at
+/// `pos`; past the end, nothing is. An empty `pat` matches at each char
+/// boundary in turn, the end included.
+struct StrMatchIndices {
+    s: Str,
+    pat: Str,
+    pos: i64,
+}
+
+impl Iterator for StrMatchIndices {
+    type Item = (i64, Str);
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        let n = self.s.len();
+        if self.pos > n {
+            return None;
+        }
+        let at = self.pos;
+        if self.pat.is_empty() {
+            self.pos = if at == n { n + 1 } else { at + self.s.char_at_byte(at).len_utf8() };
+            return Some((at, self.s.slice(at, at)));
+        }
+        match self.s.find_at_byte(self.pat, at) {
+            Some(i) => {
+                self.pos = i + self.pat.len();
+                Some((i, self.s.slice(i, self.pos)))
+            }
+            None => {
+                self.pos = n + 1;
+                None
+            }
+        }
     }
 }
 
