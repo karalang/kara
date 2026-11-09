@@ -7653,6 +7653,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             {
                 Ok(self.captured_field(object, field).expect("checked"))
             }
+            // `i64.MAX` lent to a `ref` parameter is a value, not a field
+            // of a local `i64`: built in a temporary, which is lent.
+            ExprKind::FieldAccess { .. } if self.int_limit_of(e).is_some() => self.temp_place(e),
             ExprKind::FieldAccess { object, field } => {
                 // A field of a `shared` value is written through any
                 // handle to it (core-semantics §5.9), so the handle is
