@@ -15613,6 +15613,193 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.pop_scope()
     }
 
+    /// `a..b` or `a..=b` when `e`, its `collect()`, builds a `Vec` of the
+    /// integer type both bounds have.
+    #[allow(clippy::type_complexity)]
+    fn collects_range_vec(
+        &mut self,
+        e: &'a Expr,
+        range: &'a Expr,
+    ) -> R<Option<(&'a Expr, &'a Expr, bool)>> {
+        let (left, right, inclusive): (&'a Expr, &'a Expr, bool) = match &range.kind {
+            ExprKind::Binary {
+                op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
+                left,
+                right,
+            } => (left, right, *op == AstBinOp::RangeInclusive),
+            ExprKind::Range {
+                start: Some(left),
+                end: Some(right),
+                inclusive,
+            } => (left, right, *inclusive),
+            _ => return Ok(None),
+        };
+        let vt = self.expr_ty(e)?;
+        let lt = self.expr_ty(left)?;
+        let rt = self.expr_ty(right)?;
+        let tcx = self.tys().tcx();
+        let HK::Intrinsic {
+            kind: IntrinsicKind::Vec,
+            args,
+        } = tcx.kind(vt)
+        else {
+            return Ok(None);
+        };
+        let elem = tcx.list(args)[0];
+        let int = matches!(tcx.kind(elem), HK::Int(_) | HK::UInt(_));
+        Ok((int && lt == elem && rt == elem).then_some((left, right, inclusive)))
+    }
+
+    /// `(a..b).collect()` (`..=` when `inclusive`) into a `Vec` of the
+    /// bounds' integer type: `Vec.new()` and one push per value, the loop
+    /// [`Self::range_loop`] makes for `for i in a..b { v.push(i) }`, which
+    /// `presize` reserves for. The library's `collect` pulls each value
+    /// through `RangeInclusive.next` and grows the vector as it goes, 12
+    /// instructions an element on kata 484 (B-2026-11-08-61).
+    ///
+    /// `a..=b` runs as `a..b + 1` below the type's largest value, so the
+    /// loop has one exit and LLVM vectorizes it; at the largest value it
+    /// runs `a..b` and pushes `b` after.
+    fn collect_range(
+        &mut self,
+        e: &'a Expr,
+        (left, right, inclusive): (&'a Expr, &'a Expr, bool),
+        dest: Place,
+    ) -> R<()> {
+        let vt = self.expr_ty(e)?;
+        let name = self.tys().display(vt);
+        self.push_scope();
+        let (start, end, t) = self.range_bounds(left, Some(right))?;
+        let end = end.expect("a bounded range");
+        let bool_t = self.tys().bool();
+        let konst = |v: u128| {
+            Operand::Const(Const {
+                ty: t,
+                kind: ConstKind::Scalar(v),
+            })
+        };
+        let end_t = self.temp(t);
+        self.assign(end_t, Rvalue::Use(end));
+        let top = match self.tys().kind(t) {
+            super::ty::TyKind::Int(it) => {
+                Some(u128::MAX >> (128 - (it.bits() - u32::from(it.signed()))))
+            }
+            _ => None,
+        };
+        // The exclusive bound, and whether `b` itself is pushed after.
+        let (bound, extra) = match (inclusive, top) {
+            (false, _) => (end_t, None),
+            (true, top) => {
+                let bound = self.temp(t);
+                let extra = self.temp(bool_t);
+                let at_top = self.b.new_block();
+                let join = self.b.new_block();
+                if let Some(top) = top {
+                    let below = self.temp(bool_t);
+                    self.assign(
+                        below,
+                        Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(Place::local(end_t)), konst(top)),
+                    );
+                    let under = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::SwitchInt {
+                            discr: Operand::Copy(Place::local(below)),
+                            targets: SwitchTargets::if_else(under, at_top),
+                        },
+                        under,
+                    );
+                    self.assign(
+                        bound,
+                        Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(end_t)), konst(1)),
+                    );
+                    self.assign(
+                        extra,
+                        Rvalue::Use(Operand::Const(Const {
+                            ty: bool_t,
+                            kind: ConstKind::Scalar(0),
+                        })),
+                    );
+                    self.goto(join);
+                } else {
+                    self.goto(at_top);
+                }
+                self.cur = at_top;
+                self.assign(bound, Rvalue::Use(Operand::Copy(Place::local(end_t))));
+                self.assign(
+                    extra,
+                    Rvalue::BinaryOp(BinOp::Le, start.clone(), Operand::Copy(Place::local(end_t))),
+                );
+                self.goto(join);
+                self.cur = join;
+                (bound, Some(extra))
+            }
+        };
+        let v = self.scoped_temp(vt);
+        self.call_native(&format!("{name}.new"), vec![], Place::local(v));
+        // The counter starts on the loop's way in, where `presize` looks.
+        let i = self.temp(t);
+        self.assign(i, Rvalue::Use(start));
+        let mt = self.tys().tcx().reference(vt, true);
+        let unit_t = self.unit();
+        let push = |this: &mut Self, x: Local| {
+            let r = this.temp(mt);
+            this.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
+            let u = this.temp(unit_t);
+            this.call_native(
+                &format!("{name}.push"),
+                vec![
+                    Operand::Move(Place::local(r)),
+                    Operand::Copy(Place::local(x)),
+                ],
+                Place::local(u),
+            );
+        };
+        let head = self.b.new_block();
+        let body_bb = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        let c = self.temp(bool_t);
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(bound)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(body_bb, exit),
+            },
+            body_bb,
+        );
+        push(self, i);
+        self.assign(
+            i,
+            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), konst(1)),
+        );
+        self.goto(head);
+        self.cur = exit;
+        if let Some(extra) = extra {
+            let last = self.b.new_block();
+            let done = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(extra)),
+                    targets: SwitchTargets::if_else(last, done),
+                },
+                last,
+            );
+            push(self, end_t);
+            self.goto(done);
+            self.cur = done;
+        }
+        self.assign(dest, Rvalue::Use(Operand::Move(Place::local(v))));
+        self.pop_scope()
+    }
+
     /// `for x in a` over a fixed-size array, by position: `x` is a copy of
     /// each element (`how` is `None`, the elements are `Copy`) or a
     /// reference to it (`Some(mutable)`).
@@ -21715,6 +21902,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         if method == "collect" && args.is_empty() && self.collects_char_vec(e)? {
             if let Some(text) = self.chars_of(object)? {
                 return self.collect_chars(e, text, dest);
+            }
+        }
+        // A bounded integer range into a `Vec` of its type, as a counting
+        // loop of pushes, which `presize` reserves for and LLVM vectorizes.
+        if method == "collect" && args.is_empty() {
+            if let Some((left, right, inclusive)) = self.collects_range_vec(e, object)? {
+                return self.collect_range(e, (left, right, inclusive), dest);
             }
         }
         // One of several impls for single instantiations of one type

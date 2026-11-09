@@ -24,11 +24,13 @@
 //! Then `h <s n = len`, so `h as usize <u len` exactly when `h >= 0`.
 
 use super::syntax::*;
-use super::ty::{TyInterner, TyKind};
+use super::ty::{IntrinsicTy, TyInterner, TyKind};
 
 /// How far a proof walks: blocks up from the call, and joins into a flag.
 const WALK: usize = 32;
 const JOIN_DEPTH: usize = 4;
+/// How many copies a counter or a length is followed through.
+const COPIES: usize = 4;
 
 /// The blocks of `body` whose terminator is an index call whose upper
 /// bound is proved; codegen checks only the lower one there.
@@ -80,18 +82,17 @@ fn proven(
         }
         _ => None,
     })?;
+    if !frozen(body, tys, &x) {
+        return None;
+    }
+    // The value the call casts is the one the guard compared, through the
+    // copies a `for` loop makes of its counter (`i = copy counter`).
+    let h = through_copies(b, ci, h)?;
     match tys.kind(body.locals[h.index()].ty) {
         TyKind::Int(i) if i.signed() => {}
         _ => return None,
     }
-    if !frozen(body, tys, &x) {
-        return None;
-    }
-    // The value the call casts is the one the guard compared.
-    if b.statements[..ci].iter().any(|s| writes(s, h)) {
-        return None;
-    }
-    let n = length_of(body, base, &x)?;
+    let is_length = |y: Local| length_of(body, base, &x, y, COPIES);
     // Up from the call, through one-predecessor blocks.
     let mut w = bi;
     for _ in 0..WALK {
@@ -115,7 +116,7 @@ fn proven(
                     if targets.otherwise.index() == w && other.index() != w);
                 if taken_when_set {
                     let facts = implied(body, preds, p, pb.statements.len(), c.local, 0);
-                    if facts.is_none_or(|f| f.contains(&(h, n))) {
+                    if facts.is_none_or(|f| f.iter().any(|&(a, y)| a == h && is_length(y))) {
                         return Some(());
                     }
                 }
@@ -241,11 +242,25 @@ pub fn length_locals(body: &Body, native: impl Fn(&str) -> bool) -> Vec<bool> {
     out
 }
 
-/// The local `n` assigned once in the body, by `{base}.len(&x)`.
-fn length_of(body: &Body, base: &str, x: &Place) -> Option<Local> {
+/// Whether `y` is assigned once in the body, by `{base}.len(&x)` or by a
+/// copy of such a local (a `for` loop's saved end, `end = copy n`), so
+/// it holds `x`'s length wherever it is read: `x` cannot change.
+fn length_of(body: &Body, base: &str, x: &Place, y: Local, depth: usize) -> bool {
+    if !assigned_once(body, y) {
+        return false;
+    }
     let want = format!("{base}.len");
-    let mut found = None;
     for b in &body.blocks {
+        for s in &b.statements {
+            if let StatementKind::Assign(p, Rvalue::Use(Operand::Copy(z))) = &s.kind {
+                if p.local == y {
+                    return p.projection.is_empty()
+                        && z.projection.is_empty()
+                        && depth > 0
+                        && length_of(body, base, x, z.local, depth - 1);
+                }
+            }
+        }
         let TerminatorKind::Call {
             func,
             args,
@@ -255,33 +270,63 @@ fn length_of(body: &Body, base: &str, x: &Place) -> Option<Local> {
         else {
             continue;
         };
-        if fn_name(func) != Some(want.as_str()) || !destination.projection.is_empty() {
+        if destination.local != y {
             continue;
         }
-        let [a] = args.as_slice() else { continue };
-        let Some(r) = operand_local(a) else { continue };
-        let Some((_, p)) = defining(b, b.statements.len(), r, |rv| match rv {
+        if fn_name(func) != Some(want.as_str()) || !destination.projection.is_empty() {
+            return false;
+        }
+        let [a] = args.as_slice() else { return false };
+        let Some(r) = operand_local(a) else {
+            return false;
+        };
+        return defining(b, b.statements.len(), r, |rv| match rv {
             Rvalue::Ref(BorrowKind::Shared, p) => Some(p.clone()),
             _ => None,
-        }) else {
-            continue;
-        };
-        if p == *x && assigned_once(body, destination.local) {
-            found = Some(destination.local);
-        }
+        })
+        .is_some_and(|(_, p)| p == *x);
     }
-    found
+    false
 }
 
-/// Whether `x` is `*r` for a shared reference `r` written at most once.
+/// The local whose value `h` holds at statement `k` of `b`: `h` itself
+/// when nothing in `b` before `k` writes it, or what `h = copy g` copied
+/// when nothing after that copy writes `g` (a few copies deep).
+fn through_copies(b: &BasicBlockData, k: usize, h: Local) -> Option<Local> {
+    let mut h = h;
+    let mut upto = k;
+    for _ in 0..=COPIES {
+        let Some(j) = b.statements[..upto].iter().rposition(|s| writes(s, h)) else {
+            return Some(h);
+        };
+        let StatementKind::Assign(p, Rvalue::Use(Operand::Copy(g))) = &b.statements[j].kind else {
+            return None;
+        };
+        if p.local != h || !p.projection.is_empty() || !g.projection.is_empty() {
+            return None;
+        }
+        if b.statements[j + 1..k].iter().any(|s| writes(s, g.local)) {
+            return None;
+        }
+        h = g.local;
+        upto = j;
+    }
+    None
+}
+
+/// Whether `x`'s length is fixed while it can be indexed: `x` is `*r` for
+/// a shared reference `r` written at most once, or a local vector written
+/// once, whole, and never borrowed mutably (kata 459's `let cs: Vec[char]
+/// = s.chars().collect()`, B-2026-11-08-61).
 fn frozen(body: &Body, tys: &TyInterner, x: &Place) -> bool {
-    let [ProjElem::Deref] = x.projection.as_slice() else {
-        return false;
-    };
     let r = x.local;
     let param = (1..=body.arg_count).contains(&r.index());
-    matches!(tys.kind(body.locals[r.index()].ty), TyKind::Ref(_))
-        && assigns(body, r) == usize::from(!param)
+    let once = assigns(body, r) == usize::from(!param);
+    match (x.projection.as_slice(), tys.kind(body.locals[r.index()].ty)) {
+        ([ProjElem::Deref], TyKind::Ref(_)) => once,
+        ([], TyKind::Intrinsic(IntrinsicTy::Vec(_))) => once,
+        _ => false,
+    }
 }
 
 fn assigned_once(body: &Body, l: Local) -> bool {
