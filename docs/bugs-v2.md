@@ -120,7 +120,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-47 | 2026-11-09 | mir-llvm | low | `s.chars().collect()` into a Vec[char] runs 14 instructions a char against Rust's 11: the UTF-8 decode loop tests the reserved length on each push, and the loop copy B-2026-11-09-26 gives counted fills does not apply because the char count is not known at the way in | — |
 | B-2026-11-09-50 | 2026-11-09 | typecheck+mir | low | `let v: Vec[Str] = ["a", "b"].to_vec();` is refused as a reference to a temporary that outlives its statement (typecheck §5.5, and E0516 in MIR borrowck once that passes), though the `Vec` holds static literals and borrows nothing from the array | — |
 | B-2026-11-09-51 | 2026-11-09 | mir-llvm | low | Kata 1087's bench (20 million short words cloned into vectors and freed) runs 26% behind `rustc -O -C overflow-checks=on -C target-cpu=x86-64-v3` with the same allocations: 13.65G instructions against 10.45G, the extra in glibc's malloc slow path (14.8M `_int_malloc` calls against 2.7M) and in `malloc_consolidate` (0.72G, none in Rust) | — |
-| B-2026-11-09-52 | 2026-11-09 | cli | low | `karac fmt` writes the 30 soft words as raw identifiers: `let group = 1` comes out as `let r#group = 1`, and so does every binding, field, parameter or function named `seq`, `resource`, `with`, `stable`, `layout`, `alias`, `reads`, `requires` and the rest, though each lexes as a plain identifier | — |
 
 ### Relocated
 
@@ -966,6 +965,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-43 | typecheck | medium | `let t = text?;` on a bare (borrowed) `text: Option[String]` parameter is refused as "'?' operator requires `Result` or `Option`, found 'ref Option[S… | b490bc1d36 |
 | B-2026-11-09-48 | typecheck | medium | `Json` has no `.clone()`: `Some(v.clone())` on a field of a parsed request body is refused as "no method 'clone' on type 'Json': `Json` does not deri… | b8b6871a6c |
 | B-2026-11-09-49 | typecheck | medium | `["a", "b"].to_vec()` passed to a `Vec[Str]` parameter, or `[("event", v)].to_vec()` to a `Vec[(Str, Json)]` one, is refused as "expected 'Vec[Str]',… | b8b6871a6c |
+| B-2026-11-09-52 | cli | low | `karac fmt` writes the 30 soft words as raw identifiers: `let group = 1` comes out as `let r#group = 1`, and so does every binding, field, parameter… | 7732ad152a |
 
 </details>
 
