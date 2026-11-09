@@ -1,0 +1,9 @@
+source = "B-2026-11-09-75"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "iterators", "numerics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Associated types: `chain[J: Iterator[Item = Self.Item]]` ties the two sides' items, and an item type is a layout, so `ref i64` items do not answer for `ref f64` ones. Check accepted it and the binary read the i64's bits as an f64 (`[1.5, 5e-324]`). The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -6,7 +6,7 @@ fn make(path: String) -> Holder with reads(FileSystem) panics {{
         Err(_) => panic("open-failed"),
     }}
 }}
-fn main() with reads(FileSystem) writes(FileSystem) panics {{
+fn main() with reads(FileSystem) writes(FileSystem) panics writes(Stdout) {{
     let mut buf: Array[u8, 4] = [0u8; 4];
     let mut i: i64 = 0i64;
     let mut n: i64 = 0i64;

@@ -5415,6 +5415,10 @@ impl<'a> Interp<'a> {
             }
             Err(Stop::Abort(AbortReason::Panic))
         };
+        // A `BoundedChannel { handle_id: 0 }` written by hand, not made by
+        // `new`: it fails closed, `send` refusing as `Full` and `recv`
+        // finding nothing (bounded_channel.kara).
+        let hand_rolled = |id: i128| base == "BoundedChannel" && id == 0;
         match (base, method) {
             ("Channel", "new" | "bounded") => {
                 let cap = match args.as_slice() {
@@ -5454,6 +5458,9 @@ impl<'a> Interp<'a> {
                 // `BoundedChannel.drop`, registered by the builder for the
                 // `#[compiler_builtin]` Drop impl.
                 let id = self.chan_id(args.first(), name)?;
+                if hand_rolled(id) {
+                    return Ok(Value::Unit);
+                }
                 self.end_dropped(id, true)?;
                 self.end_dropped(id, false)?;
                 Ok(Value::Unit)
@@ -5473,6 +5480,13 @@ impl<'a> Interp<'a> {
                     return err(format!("{name} takes a value"));
                 };
                 let id = self.chan_id(Some(recv), name)?;
+                if hand_rolled(id) {
+                    if let Some(t) = arg_tys.get(1) {
+                        self.drop_value(v.clone(), *t)?;
+                    }
+                    let e = self.variant_named(ret, Some("Err"), "Full", Vec::new())?;
+                    return self.variant_named(ret, None, "Err", vec![e]);
+                }
                 let c = self.chan_mut(id, name)?;
                 let full = (c.bounded || c.cap > 0) && c.queue.len() >= c.cap;
                 let closed = !c.bounded && c.receivers == 0;
@@ -5517,6 +5531,9 @@ impl<'a> Interp<'a> {
             }
             (_, "recv" | "recv_blocking" | "try_recv") => {
                 let id = self.chan_id(args.first(), name)?;
+                if hand_rolled(id) {
+                    return self.option(ret, None);
+                }
                 let v = self.chan_mut(id, name)?.queue.pop_front();
                 if v.is_some() {
                     self.chan_epoch += 1;

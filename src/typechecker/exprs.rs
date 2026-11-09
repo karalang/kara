@@ -27,10 +27,10 @@ use super::inference::{
 use super::types::FloatSize;
 use super::types::{
     contains_type_param, float_width_rank, impl_args_match, impl_table_key,
-    int_coercion_is_widening, int_signed_width, is_integer, lub_block_type, type_display,
-    type_is_fully_concrete, type_to_concrete_or_param_name, type_to_mono_mangle_token,
-    types_compatible, ConstArg, ConstVarId, DimArg, IntSize, ScrutineeMode, SubstValue, Type,
-    TypeVarId, UIntSize,
+    int_coercion_is_widening, int_signed_width, is_integer, lub_block_type, numeric_args_agree,
+    type_display, type_is_fully_concrete, type_to_concrete_or_param_name,
+    type_to_mono_mangle_token, types_compatible, ConstArg, ConstVarId, DimArg, IntSize,
+    ScrutineeMode, SubstValue, Type, TypeVarId, UIntSize,
 };
 use super::BreakFrame;
 use super::TypeErrorKind;
@@ -8026,33 +8026,24 @@ impl<'a> super::TypeChecker<'a> {
             // when it is an open variable (`Vec.from_iter(0..3)`), and is read
             // at its default otherwise, so `(0..3).chain(b.iter())` is still
             // `i64` against `ref i64` (B-2026-11-08-86).
-            let (required, found) = {
-                let mut pair = [required, found];
-                for i in 0..2 {
-                    let other = self.resolved_now(&pair[1 - i]);
-                    if let Some((id, kind)) = self.unbound_literal_var(&pair[i]) {
-                        if inference::literal_takes(kind, &other)
-                            || matches!(other, Type::TypeVar(_))
-                        {
-                            unify_types(
-                                &Type::TypeVar(id),
-                                &other,
-                                &mut self.env.substitutions,
-                                &mut self.env.const_substitutions,
-                            );
-                            pair[i] = self.resolved_now(&pair[i]);
-                        } else if assoc_eq_bound_is_comparable(&other) {
-                            pair[i] = self.settle_literals(&pair[i]);
-                        }
-                    }
-                }
-                let [r, f] = pair;
-                (r, f)
-            };
+            // The same holds under a borrow or inside a tuple or generic
+            // argument: two literal lists chained (`v.iter().chain(w.iter())`)
+            // yield `ref` of two open variables, which are one.
+            let (required, found) =
+                if self.has_open_literal(&required) || self.has_open_literal(&found) {
+                    self.pair_open_literals(&required, &found);
+                    (self.resolved_now(&required), self.resolved_now(&found))
+                } else {
+                    (required, found)
+                };
             if !assoc_eq_bound_is_comparable(&required) {
                 continue;
             }
-            if types_compatible(&found, &required) {
+            // An item is a layout, not a value flowing into a slot: `i64`
+            // items do not answer for `f64` ones, under a borrow either.
+            if types_compatible(&found, &required)
+                && numeric_args_agree(peel_borrows(&found), peel_borrows(&required))
+            {
                 continue;
             }
             // `a.iter().chain(b.into_iter())`: one side yields `ref T`, the
@@ -11647,6 +11638,68 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// The literal variable `t` is, unbound, with its kind.
+    /// Whether `t` holds a literal variable nothing fixed yet.
+    fn has_open_literal(&self, t: &Type) -> bool {
+        let mut ids = Vec::new();
+        type_var_ids(&self.resolved_now(t), &mut ids);
+        ids.iter()
+            .any(|id| inference::literal_var_kind(*id).is_some())
+    }
+
+    /// Matches `a` against `b` part by part and, where one side is a literal
+    /// variable nothing fixed yet, fixes it by the other side's number,
+    /// unifies it with the other side's open variable, or reads it at its
+    /// default against anything else comparable (B-2026-11-08-86).
+    fn pair_open_literals(&mut self, a: &Type, b: &Type) {
+        let (a, b) = (self.resolved_now(a), self.resolved_now(b));
+        for (this, other) in [(&a, &b), (&b, &a)] {
+            let other = self.resolved_now(other);
+            if let Some((id, kind)) = self.unbound_literal_var(this) {
+                // An open variable takes it, unless it is a literal of the
+                // other kind (`[1.5]` chained with `[1]`), which both settle.
+                let open = matches!(
+                    other,
+                    Type::TypeVar(o) if inference::literal_var_kind(o).is_none_or(|k| k == kind)
+                );
+                if inference::literal_takes(kind, &other) || open {
+                    unify_types(
+                        &Type::TypeVar(id),
+                        &other,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                } else if assoc_eq_bound_is_comparable(&other)
+                    || self.unbound_literal_var(&other).is_some()
+                {
+                    self.settle_literals(this);
+                    self.settle_literals(&other);
+                }
+            }
+        }
+        match (&a, &b) {
+            (Type::Ref(x), Type::Ref(y))
+            | (Type::MutRef(x), Type::MutRef(y))
+            | (Type::Rc(x), Type::Rc(y))
+            | (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+            | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+                self.pair_open_literals(x, y)
+            }
+            (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => {
+                for (x, y) in xs.iter().zip(ys) {
+                    self.pair_open_literals(x, y);
+                }
+            }
+            (Type::Named { name: n, args: xs }, Type::Named { name: m, args: ys })
+                if n == m && xs.len() == ys.len() =>
+            {
+                for (x, y) in xs.iter().zip(ys) {
+                    self.pair_open_literals(x, y);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn unbound_literal_var(
         &self,
         t: &Type,
@@ -15007,6 +15060,14 @@ fn type_contains_assoc_projection(ty: &Type) -> bool {
 /// comparison would be against a placeholder — see
 /// `discharge_assoc_type_eq_bounds` for why those are skipped rather than
 /// reported.
+/// `t` under its `ref` / `mut ref` layers.
+fn peel_borrows(mut t: &Type) -> &Type {
+    while let Type::Ref(inner) | Type::MutRef(inner) = t {
+        t = inner;
+    }
+    t
+}
+
 fn assoc_eq_bound_is_comparable(ty: &Type) -> bool {
     !matches!(
         ty,

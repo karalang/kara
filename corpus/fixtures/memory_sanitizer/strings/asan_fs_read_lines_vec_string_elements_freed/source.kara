@@ -7,7 +7,7 @@ fn count_bytes(path: own String) -> Result[i64, IoError] with reads(FileSystem) 
     }
     Ok(total)
 }
-fn main() with reads(FileSystem) writes(FileSystem) {
+fn main() with reads(FileSystem) writes(FileSystem) writes(Stdout) {
     match fs.write("/tmp/karac_asan_b38_read_lines.txt", "alpha-line\nbeta-line\n\ndelta-line\n") {
         Ok(_) => {
             let mut i: i64 = 0i64;

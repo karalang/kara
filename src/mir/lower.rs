@@ -27730,6 +27730,7 @@ pub fn library_source(src: &str) -> (String, usize) {
         lib.push('\n');
         lib.push_str(text);
     }
+    blank_float_wrapper_froms(&mut lib, &ours);
     for text in baked {
         // A `//!` header is a module doc comment, legal only at the top, and
         // the baked spelling `Unit` is `()` outside the stdlib.
@@ -27888,6 +27889,31 @@ fn for_each_library_body(
 /// text whose program is `user_len` bytes: the baked modules after them
 /// keep their bodies, since a derive or `proto_schema` runs its `comptime`
 /// body at check.
+/// The library's `f64_wrapper_from` / `f32_wrapper_from` (`F64.from` named
+/// as a value) blanked out, for a program that declares its own `F64` /
+/// `F32`: the wrapper spells the prelude type, which the program's
+/// declaration shadows, so it no longer typechecks (B-2026-11-09-76).
+/// Blanked rather than removed, so every library offset stays where it is.
+fn blank_float_wrapper_froms(lib: &mut String, ours: &[String]) {
+    for (ty, wrapper) in [("F64", "f64_wrapper_from"), ("F32", "f32_wrapper_from")] {
+        if !ours.iter().any(|n| n == ty) {
+            continue;
+        }
+        let head = format!("\nfn {wrapper}(");
+        let Some(start) = lib.find(&head).map(|i| i + 1) else {
+            continue;
+        };
+        let Some(len) = lib[start..].find("\n}").map(|i| i + 2) else {
+            continue;
+        };
+        let blank: String = lib[start..start + len]
+            .chars()
+            .map(|c| if c == '\n' { '\n' } else { ' ' })
+            .collect();
+        lib.replace_range(start..start + len, &blank);
+    }
+}
+
 pub fn library_sources_end(user_len: usize) -> usize {
     user_len
         + crate::prelude::LIBRARY_SOURCES

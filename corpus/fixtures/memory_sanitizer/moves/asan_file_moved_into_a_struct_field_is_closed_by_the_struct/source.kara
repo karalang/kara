@@ -1,6 +1,6 @@
 
 struct Holder {{ f: File }}
-fn main() with reads(FileSystem) {{
+fn main() with reads(FileSystem) writes(Stdout) {{
     let mut i: i64 = 0i64;
     let mut n: i64 = 0i64;
     while i < 40i64 {{

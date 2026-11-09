@@ -1,0 +1,6 @@
+fn main() {
+    let a: Vec[f64] = [1.5];
+    let b: Vec[i64] = [1];
+    let c: Vec[f64] = a.iter().chain(b.iter()).cloned().collect();
+    println(c.len());
+}
