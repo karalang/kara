@@ -6206,6 +6206,76 @@ impl<'a> super::TypeChecker<'a> {
             self.reject_nil_coalesce_out_of_borrow(left, &l_ty, &payload);
         }
 
+        // `a ?? b == c` is `a ?? (b == c)`: `??` binds loosest of all
+        // (design.md § `?` and `??`). When the payload is no `bool`, the
+        // comparison cannot be the fallback, and the author meant
+        // `(a ?? b) == c`. Say so once, with that edit, and type it that way,
+        // rather than three mismatches that never name the precedence
+        // (B-2026-11-09-94).
+        if let ExprKind::Binary {
+            op: op @ (BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq),
+            left: fallback,
+            right: other,
+        } = &right.kind
+        {
+            let payload_now = resolve_type_var_top(&payload, &self.env.substitutions);
+            let payload_view = match &payload_now {
+                Type::Ref(v) | Type::MutRef(v) => (**v).clone(),
+                t => t.clone(),
+            };
+            if payload_view != Type::Bool
+                && payload_view != Type::Error
+                && !matches!(payload_view, Type::TypeVar(_))
+            {
+                let fb_ty = if super::exprs::is_str_view(&payload_view)
+                    && matches!(fallback.kind, ExprKind::StringLit(_))
+                {
+                    self.check_expr(fallback, &payload)
+                } else {
+                    self.infer_expr(fallback)
+                };
+                self.infer_expr(other);
+                if fb_ty != Type::Error {
+                    self.check_assignable(&payload, &fb_ty, fallback.span);
+                }
+                let sym = match op {
+                    BinOp::Eq => "==",
+                    BinOp::NotEq => "!=",
+                    BinOp::Lt => "<",
+                    BinOp::LtEq => "<=",
+                    BinOp::Gt => ">",
+                    _ => ">=",
+                };
+                let close = fallback.span.offset + fallback.span.length;
+                self.error_fix_diffs.insert(
+                    SpanKey::from_span(span),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: left.span.offset,
+                            length: 0,
+                            replacement: "(".to_string(),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: close,
+                            length: 0,
+                            replacement: ")".to_string(),
+                        },
+                    ],
+                );
+                self.type_error(
+                    format!(
+                        "`??` binds more loosely than `{sym}`: `a ?? b {sym} c` is \
+                         `a ?? (b {sym} c)`, whose `bool` fallback cannot stand in for \
+                         the '{}' it unwraps; write `(a ?? b) {sym} c` to compare the value",
+                        type_display(&payload_view)
+                    ),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Bool;
+            }
+        }
+
         // A string literal is a `Str` where a `Str` is expected (design.md §
         // String literals), and the fallback of an `Option[Str]` is one:
         // `parent(p) ?? ""`.

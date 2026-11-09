@@ -2839,6 +2839,7 @@ impl super::Parser {
             self.collect_leading_doc_comments();
             let start = self.current_span();
             let attributes = self.parse_attributes();
+            self.recover_marker_as_field_name();
             let is_pub = self.eat_pub();
             let is_private = !is_pub && self.eat(&Token::Private);
             let mut_keyword_span = if self.check(&Token::Mut) {

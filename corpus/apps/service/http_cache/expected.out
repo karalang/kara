@@ -1,0 +1,138 @@
+== self-test: cache-control
+  max-age=60                         max-age Some(60) s-maxage None no-store false no-cache false private false revalidate false stale-if-error 0
+  public, max-age=0, s-maxage=30     max-age Some(0) s-maxage Some(30) no-store false no-cache false private false revalidate false stale-if-error 0
+  no-store                           max-age None s-maxage None no-store true no-cache false private false revalidate false stale-if-error 0
+  private, max-age=600               max-age Some(600) s-maxage None no-store false no-cache false private true revalidate false stale-if-error 0
+  no-cache, must-revalidate          max-age None s-maxage None no-store false no-cache true private false revalidate true stale-if-error 0
+  max-age="20", stale-if-error=300   max-age Some(20) s-maxage None no-store false no-cache false private false revalidate false stale-if-error 300
+  MAX-AGE=5, Proxy-Revalidate        max-age Some(5) s-maxage None no-store false no-cache false private false revalidate true stale-if-error 0
+  max-age=soon                       max-age None s-maxage None no-store false no-cache false private false revalidate false stale-if-error 0
+== self-test: a fake origin, times chosen
+  t=0   GET /doc       200 MISS        the document age 0
+  t=4   GET /doc       200 HIT         the document age 4
+  t=5   GET /doc       304 HIT          age 5
+  t=6   GET /doc       200 REVALIDATED the document age 0
+  t=17  GET /doc       200 REVALIDATED the document age 0
+  t=20  GET /doc       200 HIT         the document age 3
+  t=0   GET /aged      200 MISS        aged 1 age 7
+  t=2   GET /aged      200 HIT         aged 1 age 9
+  t=3   GET /aged      200 UPDATED     aged 2 age 7
+  t=0   GET /shared    200 MISS        shared age 0
+  t=20  GET /shared    200 HIT         shared age 20
+  t=0   GET /gone      404 MISS        no such page age 0
+  t=1   GET /gone      404 HIT         no such page age 1
+  t=0   GET /flaky     200 MISS        flaky ok age 0
+  t=4   GET /flaky     200 STALE       flaky ok age 4
+  t=8   GET /flaky     503 ERROR       unavailable
+  t=0   GET /strict    200 MISS        strict ok age 0
+  t=4   GET /strict    504 ERROR       origin unavailable and the entry must be revalidated
+  t=0   GET /nocache   200 MISS        check me age 0
+  t=1   GET /nocache   200 REVALIDATED check me age 0
+  t=0   GET /lang      200 MISS        bonjour age 0
+  t=0   GET /lang      200 MISS        hello age 0
+  t=1   GET /lang      200 HIT         bonjour age 1
+  t=0   GET /doc2      200 PASS        the document
+  t=0   GET /public    200 MISS        for everyone age 0
+  t=1   GET /public    200 HIT         for everyone age 1
+  t=21  GET /doc       200 BYPASS      the document
+  t=30  GET /a         200 MISS        body of /a ...................... age 0
+  t=30  GET /b         200 MISS        body of /b ...................... age 0
+  t=30  GET /doc       200 MISS        the document age 0
+  t=31  GET /c         200 MISS        body of /c ...................... age 0
+  t=31  GET /d         200 MISS        body of /d ...................... age 0
+  t=31  GET /missing   404 PASS        not found
+  t=32  PURGE /doc     403 PURGE       purge needs the token
+  t=32  PURGE /doc     200 PURGE       purged 1
+  t=32  PURGE /doc     404 PURGE       /doc is not cached
+  t=33  DELETE /d      200 PASS        body of /d ......................
+  t=33  GET /d         200 MISS        body of /d ...................... age 0
+  3 keys, 99 bytes
+  /b 200 33 bytes lifetime 60s 
+  /c 200 33 bytes lifetime 60s 
+  /d 200 33 bytes lifetime 60s 
+  event: error /flaky: stale for 6s, past stale-if-error
+  event: error /strict: must revalidate, origin said 502
+  event: pass /doc2: authorization
+  event: evict /doc (12 bytes)
+  event: evict /aged (6 bytes)
+  event: evict /shared (6 bytes)
+  event: evict /gone (12 bytes)
+  event: evict /flaky (8 bytes)
+  event: evict /strict (9 bytes)
+  event: evict /nocache (8 bytes)
+  event: evict /lang (5 bytes)
+  event: evict /lang (7 bytes)
+  event: evict /public (12 bytes)
+  event: evict /a (33 bytes)
+  event: pass /missing: no freshness or validator
+  event: purge /doc (1 variants)
+  event: invalidate /d after DELETE (1 variants)
+  labels: BYPASS 1, ERROR 2, HIT 8, MISS 16, PASS 3, PURGE 3, REVALIDATED 3, STALE 1, UPDATED 1
+== live: 2 servers up
+  GET /static/app.js -> 200 MISS console.log('app v1');
+  GET /static/app.js -> 200 HIT console.log('app v1');
+  GET /static/app.js If-None-Match: "js-1" -> 304 HIT 
+  GET /news -> 200 MISS headline 1
+  GET /news -> 200 HIT headline 1
+  GET /flaky -> 200 MISS flaky ok
+  GET /strict -> 200 MISS strict ok
+  GET /account -> 200 PASS your account
+  GET /account -> 200 PASS your account
+  GET /cart -> 200 PASS cart 1
+  GET /cart -> 200 PASS cart 2
+  GET /greeting Accept-Language: fr-CA -> 200 MISS bonjour
+  GET /greeting Accept-Language: en -> 200 MISS hello
+  GET /greeting Accept-Language: fr-CA -> 200 HIT bonjour
+  GET /everything -> 200 PASS varies on all
+  GET /items -> 200 MISS items after 0 posts
+  GET /items -> 200 HIT items after 0 posts
+  POST /items -> 201 PASS created
+  GET /items -> 200 MISS items after 1 posts
+  GET /report -> 200 PASS xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  GET /archive -> 200 MISS the archive
+  GET /archive -> 200 REVALIDATED the archive
+  GET /missing -> error: http://127.0.0.1:47754/missing: status code 502
+== live: a second later
+  GET /static/app.js -> 200 REVALIDATED console.log('app v1');
+  GET /news -> 200 UPDATED headline 2
+  GET /flaky -> 200 STALE flaky ok
+  GET /strict -> error: http://127.0.0.1:47754/strict: status code 504
+  GET /items Cache-Control: no-cache -> 200 UPDATED items after 1 posts
+  PURGE /static/app.js -> error: http://127.0.0.1:47754/static/app.js: status code 403
+  PURGE /static/app.js X-Purge-Token: test-purge-token -> 200 PURGE purged 1
+  GET /static/app.js -> 200 MISS console.log('app v1');
+== live: cache
+  7 keys, 91 bytes
+  /archive 200 11 bytes lifetime 0s 
+  /flaky 200 8 bytes lifetime 1s 
+  /greeting 200 7 bytes lifetime 60s accept-language=fr-CA
+  /greeting 200 5 bytes lifetime 60s accept-language=en
+  /items 200 19 bytes lifetime 60s 
+  /news 200 10 bytes lifetime 1s 
+  /static/app.js 200 22 bytes lifetime 1s 
+  /strict 200 9 bytes lifetime 1s 
+  event: pass /account: private
+  event: pass /account: private
+  event: pass /cart: no-store
+  event: pass /cart: no-store
+  event: pass /everything: vary *
+  event: invalidate /items after POST (1 variants)
+  event: pass /report: too big (300 bytes)
+  event: error /strict: must revalidate, origin said 502
+  event: purge /static/app.js (1 variants)
+  labels: ERROR 2, HIT 5, MISS 10, PASS 7, PURGE 2, REVALIDATED 2, STALE 1, UPDATED 2
+== live: origin hits
+  GET /account 2
+  GET /archive 2
+  GET /cart 2
+  GET /everything 1
+  GET /flaky 2
+  GET /greeting 2
+  GET /items 3
+  GET /missing 1
+  GET /news 2
+  GET /report 1
+  GET /static/app.js 3
+  GET /strict 2
+  POST /items 1
+done

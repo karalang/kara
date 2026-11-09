@@ -8565,8 +8565,15 @@ impl<'a> TypeChecker<'a> {
                 Type::Ref(t) => t.as_ref(),
                 t => t,
             };
+            // A `ref Str` too: a `for (k, v) in pairs.iter()` element of a
+            // `Slice[(Str, Str)]` handed to `RequestBuilder.header`
+            // (B-2026-11-09-95).
+            let found_view = match inference::resolve_type_var_top(found, &self.env.substitutions) {
+                Type::Ref(t) | Type::MutRef(t) => *t,
+                t => t,
+            };
             let is_view = matches!(
-                inference::resolve_type_var_top(found, &self.env.substitutions),
+                found_view,
                 Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
             );
             if *want == Type::Str && is_view {
@@ -8585,9 +8592,10 @@ impl<'a> TypeChecker<'a> {
                 }
                 self.type_error_with_fix_it(
                     format!(
-                        "expected '{}', found 'Str': `.to_string()` copies the text into a \
+                        "expected '{}', found '{}': `.to_string()` copies the text into a \
                          `String`",
-                        type_display(expected)
+                        type_display(expected),
+                        type_display(found)
                     ),
                     span,
                     TypeErrorKind::TypeMismatch,

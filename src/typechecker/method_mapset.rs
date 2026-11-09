@@ -148,7 +148,22 @@ impl<'a> super::TypeChecker<'a> {
             args: type_args,
         } = obj_ty_for_named
         {
-            if name == "Entry" {
+            // A program's own `Entry` (a cache's or a log's, which is a
+            // common name) keeps its own methods: only the map entry's four
+            // names are the map entry's (B-2026-11-09-93).
+            let users_entry = self.env.structs.contains_key("Entry")
+                || self
+                    .env
+                    .enums
+                    .get("Entry")
+                    .is_some_and(|e| !e.variants.iter().any(|(v, _)| v == "Occupied"));
+            if name == "Entry"
+                && (!users_entry
+                    || matches!(
+                        method,
+                        "or_insert" | "or_insert_with" | "and_modify" | "or_default"
+                    ))
+            {
                 let key = type_args.first().cloned().unwrap_or(Type::Error);
                 let val = type_args.get(1).cloned().unwrap_or(Type::Error);
                 return Some(self.infer_entry_method(

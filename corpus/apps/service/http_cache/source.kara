@@ -1,0 +1,840 @@
+// http_cache: a caching reverse proxy in the shape of Varnish or nginx's
+// proxy_cache. It stores what an origin's Cache-Control lets a shared cache
+// keep, answers fresh hits itself with an Age, revalidates stale entries
+// with If-None-Match and If-Modified-Since, keeps one entry per Vary
+// variant, serves stale on an origin error inside stale-if-error, drops an
+// entry an unsafe method touched, purges on request and evicts the least
+// recently used entries past a byte budget. Its logic is tested first
+// against a fake origin on a fake Network with times it chooses, then run
+// between a real client and a real origin on loopback.
+
+import std.sync.{TaskGroup, Mutex};
+import std.time.{Duration, Instant, sleep};
+
+const ORIGIN_ADDR: Str = "127.0.0.1:47753";
+const CACHE_ADDR: Str = "127.0.0.1:47754";
+const PURGE_TOKEN: Str = "test-purge-token";
+
+// The client's and the server's response, with its headers.
+struct Response {
+    status: i64,
+    body: String,
+    headers: Vec[(String, String)],
+}
+
+fn header_of(headers: Vec[(String, String)], name: Str) -> Option[String] {
+    for (k, v) in headers.iter() {
+        if k.to_lowercase() == name.to_lowercase() {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+const HOP_BY_HOP: Array[Str, 9] = [
+    "connection", "keep-alive", "proxy-connection", "te", "trailer",
+    "transfer-encoding", "upgrade", "content-length", "host",
+];
+
+fn end_to_end(name: Str) -> bool {
+    not HOP_BY_HOP.contains(name.to_lowercase().as_str())
+}
+
+// ---------------------------------------------------------- cache-control
+
+struct Directives {
+    max_age: Option[i64],
+    s_maxage: Option[i64],
+    no_store: bool,
+    no_cache: bool,
+    is_private: bool,
+    public: bool,
+    must_revalidate: bool,
+    stale_if_error: i64,
+}
+
+fn unquote(s: Str) -> Str {
+    match s.strip_prefix("\"") {
+        Some(t) => t.strip_suffix("\"").unwrap_or(s),
+        None => s,
+    }
+}
+
+fn parse_cache_control(value: Str) -> Directives {
+    let mut d = Directives {
+        max_age: None,
+        s_maxage: None,
+        no_store: false,
+        no_cache: false,
+        is_private: false,
+        public: false,
+        must_revalidate: false,
+        stale_if_error: 0,
+    };
+    for part in value.split(",") {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (name, arg) = match part.split_once("=") {
+            Some((n, a)) => (n.trim().to_lowercase(), unquote(a.trim())),
+            None => (part.to_lowercase(), ""),
+        };
+        match name.as_str() {
+            "max-age" => d.max_age = i64.parse(arg).ok(),
+            "s-maxage" => d.s_maxage = i64.parse(arg).ok(),
+            "no-store" => d.no_store = true,
+            "no-cache" => d.no_cache = true,
+            "private" => d.is_private = true,
+            "public" => d.public = true,
+            "must-revalidate" | "proxy-revalidate" => d.must_revalidate = true,
+            "stale-if-error" => d.stale_if_error = i64.parse(arg).unwrap_or(0),
+            _ => {}
+        }
+    }
+    d
+}
+
+// ------------------------------------------------------------------ store
+
+#[derive(Clone)]
+struct Entry {
+    status: i64,
+    body: String,
+    headers: Vec[(String, String)],
+    // Each header the response varies on, with the value the request that
+    // filled the entry had for it.
+    vary: Vec[(String, String)],
+    stored_ms: i64,
+    age_s: i64,
+    lifetime_s: i64,
+    no_cache: bool,
+    must_revalidate: bool,
+    stale_if_error_s: i64,
+    used: i64,
+}
+
+impl Entry {
+    fn age(self, now_ms: i64) -> i64 {
+        self.age_s + (now_ms - self.stored_ms) / 1000
+    }
+
+    fn fresh(self, now_ms: i64) -> bool {
+        not self.no_cache and self.age(now_ms) < self.lifetime_s
+    }
+
+    fn matches(self, req: Request) -> bool {
+        self.vary.iter().all(|(name, value)| (req.header(name.clone()) ?? "") == value)
+    }
+}
+
+struct State {
+    entries: Map[String, Vec[Entry]],
+    bytes: i64,
+    tick: i64,
+    events: Vec[String],
+    labels: Map[String, i64],
+}
+
+sync struct Cache {
+    origin: String,
+    budget: i64,
+    max_object: i64,
+    start: Instant,
+    state: Mutex[State],
+}
+
+fn new_cache(origin: Str, budget: i64, max_object: i64) -> Cache {
+    Cache {
+        origin: origin.to_string(),
+        budget,
+        max_object,
+        start: Instant.now(),
+        state: Mutex.new(State {
+            entries: Map.new(),
+            bytes: 0,
+            tick: 0,
+            events: Vec.new(),
+            labels: Map.new(),
+        }),
+    }
+}
+
+impl Cache {
+    // The variant of `key` this request matches, marked as used.
+    fn find(self, key: Str, req: Request) -> Option[Entry] {
+        let g = self.state.lock();
+        g.value.tick += 1;
+        let tick = g.value.tick;
+        let variants = g.value.entries.get_mut(key)?;
+        for e in variants.iter_mut() {
+            if e.matches(req) {
+                e.used = tick;
+                return Some(e.clone());
+            }
+        }
+        None
+    }
+
+    fn event(self, text: own String) {
+        let g = self.state.lock();
+        g.value.events.push(text);
+    }
+
+    // Stores `e` in place of the variant it replaces, then evicts the
+    // least recently used entries until the bodies fit the budget.
+    fn put(self, key: Str, e: own Entry) {
+        let g = self.state.lock();
+        let st = g.value;
+        st.tick += 1;
+        let mut e = e;
+        e.used = st.tick;
+        let size = e.body.len();
+        let variants = st.entries.entry(key.to_string()).or_insert(Vec.new());
+        if let Some(i) = variants.iter().position(|v| v.vary == e.vary) {
+            st.bytes -= variants[i].body.len();
+            variants.remove(i);
+        }
+        variants.push(e);
+        st.bytes += size;
+        while st.bytes > self.budget {
+            let mut oldest: Option[(String, i64, i64)] = None;
+            for (k, vs) in st.entries.iter() {
+                for (i, v) in vs.iter().enumerate() {
+                    if oldest.is_none() or v.used < oldest.clone().unwrap().2 {
+                        oldest = Some((k.clone(), i, v.used));
+                    }
+                }
+            }
+            let (k, i, _) = oldest.unwrap();
+            let vs = st.entries.get_mut(k).unwrap();
+            let gone = vs.remove(i);
+            st.bytes -= gone.body.len();
+            if vs.is_empty() {
+                st.entries.remove(k);
+            }
+            st.events.push(f"evict {k} ({gone.body.len()} bytes)");
+        }
+    }
+
+    // Drops every variant of `key`; returns how many there were.
+    fn invalidate(self, key: Str) -> i64 {
+        let g = self.state.lock();
+        match g.value.entries.remove(key) {
+            Some(vs) => {
+                for v in vs.iter() {
+                    g.value.bytes -= v.body.len();
+                }
+                vs.len()
+            }
+            None => 0,
+        }
+    }
+
+    fn count(self, label: Str) {
+        let g = self.state.lock();
+        let n = g.value.labels.get(label).unwrap_or(0);
+        g.value.labels.insert(label.to_string(), n + 1);
+    }
+}
+
+// --------------------------------------------------------------- handling
+
+fn with_label(headers: own Vec[(String, String)], label: Str) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for (k, v) in headers.into_iter() {
+        if end_to_end(k) {
+            out.push((k, v));
+        }
+    }
+    out.push(("X-Cache", label.to_string()));
+    out
+}
+
+// A stored entry as the cache serves it, its Age the stored one plus the
+// time it has spent here.
+fn reply(e: Entry, label: Str, now_ms: i64) -> Response {
+    let mut headers: Vec[(String, String)] = e.headers.iter().filter(|(k, _)| k.to_lowercase() != "age").cloned().collect();
+    headers.push(("Age", e.age(now_ms).to_string()));
+    Response { status: e.status, body: e.body.clone(), headers: with_label(headers, label) }
+}
+
+fn pass(r: Response, label: Str) -> Response {
+    Response { status: r.status, body: r.body.clone(), headers: with_label(r.headers.clone(), label) }
+}
+
+fn answer(status: i64, body: Str, label: Str) -> Response {
+    Response {
+        status,
+        body: body.to_string(),
+        headers: with_label([("Content-Type", "text/plain")].to_vec(), label),
+    }
+}
+
+// A request to the origin for `key`: the client's end-to-end headers but
+// its own validators, then `extra`.
+fn fetch(cache: Cache, req: Request, key: Str, extra: Vec[(String, String)]) -> Result[Response, String] {
+    let c = Client.new();
+    let mut b = c.request(req.method(), f"{cache.origin}{key}").timeout(1000);
+    for (k, v) in req.headers() {
+        let lower = k.to_lowercase();
+        if end_to_end(lower) and lower != "if-none-match" and lower != "if-modified-since" {
+            b = b.header(k, v);
+        }
+    }
+    for (k, v) in extra {
+        b = b.header(k.clone(), v.clone());
+    }
+    if req.method() != "GET" {
+        b = b.body(req.body());
+    }
+    match b.send() {
+        Ok(r) => Ok(r),
+        Err(e) => Err(e.message()),
+    }
+}
+
+const STORABLE: Array[i64, 5] = [200, 203, 301, 404, 410];
+
+// The entry a response makes, or why a shared cache may not keep it.
+fn to_entry(cache: Cache, req: Request, r: Response, now_ms: i64) -> Result[Entry, String] {
+    let cc = parse_cache_control(header_of(r.headers, "cache-control") ?? "");
+    if not STORABLE.contains(r.status) {
+        return Err(f"status {r.status}");
+    }
+    if cc.no_store {
+        return Err("no-store");
+    }
+    if cc.is_private {
+        return Err("private");
+    }
+    let vary = header_of(r.headers, "vary") ?? "";
+    if vary.trim() == "*" {
+        return Err("vary *");
+    }
+    if req.header("Authorization").is_some() and not cc.public and cc.s_maxage.is_none() {
+        return Err("authorization");
+    }
+    let has_validator = header_of(r.headers, "etag").is_some() or header_of(r.headers, "last-modified").is_some();
+    let lifetime = match cc.s_maxage.or(cc.max_age) {
+        Some(s) => s,
+        None if has_validator => 0,
+        None => return Err("no freshness or validator"),
+    };
+    if r.body.len() > cache.max_object {
+        return Err(f"too big ({r.body.len()} bytes)");
+    }
+    let mut varied: Vec[(String, String)] = Vec.new();
+    for name in vary.split(",") {
+        let name = name.trim().to_lowercase();
+        if not name.is_empty() {
+            varied.push((name.clone(), req.header(name) ?? ""));
+        }
+    }
+    Ok(Entry {
+        status: r.status,
+        body: r.body.clone(),
+        headers: r.headers.clone(),
+        vary: varied,
+        stored_ms: now_ms,
+        age_s: header_of(r.headers, "age").and_then(|a| i64.parse(a).ok()).unwrap_or(0),
+        lifetime_s: lifetime,
+        no_cache: cc.no_cache,
+        must_revalidate: cc.must_revalidate,
+        stale_if_error_s: cc.stale_if_error,
+        used: 0,
+    })
+}
+
+fn store(cache: Cache, req: Request, key: Str, r: Response, now_ms: i64, label: Str) -> Response {
+    match to_entry(cache, req, r, now_ms) {
+        Ok(e) => {
+            cache.put(key, e.clone());
+            reply(e, label, now_ms)
+        }
+        Err(why) => {
+            cache.event(f"pass {key}: {why}");
+            pass(r, "PASS")
+        }
+    }
+}
+
+// A 304 refreshes the stored headers it repeats and restarts the entry's
+// freshness.
+fn refreshed(e: own Entry, r: Response, now_ms: i64) -> Entry {
+    let mut e = e;
+    for (k, v) in r.headers.iter() {
+        if not end_to_end(k) {
+            continue;
+        }
+        match e.headers.iter().position(|(n, _)| n.to_lowercase() == k.to_lowercase()) {
+            Some(i) => e.headers[i] = (k.clone(), v.clone()),
+            None => e.headers.push((k.clone(), v.clone())),
+        }
+    }
+    let cc = parse_cache_control(header_of(e.headers, "cache-control") ?? "");
+    e.lifetime_s = cc.s_maxage.or(cc.max_age).unwrap_or(0);
+    e.no_cache = cc.no_cache;
+    e.must_revalidate = cc.must_revalidate;
+    e.stale_if_error_s = cc.stale_if_error;
+    e.stored_ms = now_ms;
+    e.age_s = 0;
+    e
+}
+
+// The origin failed: a stale entry may still answer inside its
+// stale-if-error window, unless it must be revalidated.
+fn on_error(cache: Cache, key: Str, e: Entry, now_ms: i64, failed: Response) -> Response {
+    let stale_for = e.age(now_ms) - e.lifetime_s;
+    if e.must_revalidate {
+        cache.event(f"error {key}: must revalidate, origin said {failed.status}");
+        return answer(504, "origin unavailable and the entry must be revalidated", "ERROR");
+    }
+    if stale_for <= e.stale_if_error_s {
+        return reply(e, "STALE", now_ms);
+    }
+    cache.event(f"error {key}: stale for {stale_for}s, past stale-if-error");
+    pass(failed, "ERROR")
+}
+
+fn client_has_it(req: Request, e: Entry) -> bool {
+    match (req.header("If-None-Match"), header_of(e.headers, "etag")) {
+        (Some(asked), Some(tag)) => asked == tag,
+        _ => false,
+    }
+}
+
+fn not_modified(e: Entry, label: Str, now_ms: i64) -> Response {
+    let mut r = reply(e, label, now_ms);
+    r.status = 304;
+    r.body = String.new();
+    r
+}
+
+fn revalidate(cache: Cache, req: Request, key: Str, e: own Entry, now_ms: i64) -> Response {
+    let mut extra: Vec[(String, String)] = Vec.new();
+    if let Some(tag) = header_of(e.headers, "etag") {
+        extra.push(("If-None-Match", tag));
+    }
+    if let Some(when) = header_of(e.headers, "last-modified") {
+        extra.push(("If-Modified-Since", when));
+    }
+    match fetch(cache, req, key, extra) {
+        Ok(r) if r.status == 304 => {
+            let e = refreshed(e, r, now_ms);
+            cache.put(key, e.clone());
+            if client_has_it(req, e) {
+                return not_modified(e, "REVALIDATED", now_ms);
+            }
+            reply(e, "REVALIDATED", now_ms)
+        }
+        Ok(r) if r.status >= 500 => on_error(cache, key, e, now_ms, r),
+        Ok(r) => {
+            cache.invalidate(key);
+            store(cache, req, key, r, now_ms, "UPDATED")
+        }
+        Err(msg) => on_error(cache, key, e, now_ms, answer(502, msg, "ERROR")),
+    }
+}
+
+fn serve_get(cache: Cache, req: Request, key: Str, now_ms: i64) -> Response {
+    let asked = parse_cache_control(req.header("Cache-Control") ?? "");
+    if asked.no_store {
+        return match fetch(cache, req, key, Vec.new()) {
+            Ok(r) => pass(r, "BYPASS"),
+            Err(msg) => answer(502, msg, "ERROR"),
+        };
+    }
+    match cache.find(key, req) {
+        Some(e) if e.fresh(now_ms) and not asked.no_cache => {
+            if client_has_it(req, e) {
+                return not_modified(e, "HIT", now_ms);
+            }
+            reply(e, "HIT", now_ms)
+        }
+        Some(e) => revalidate(cache, req, key, e, now_ms),
+        None => match fetch(cache, req, key, Vec.new()) {
+            Ok(r) => store(cache, req, key, r, now_ms, "MISS"),
+            Err(msg) => answer(502, msg, "ERROR"),
+        },
+    }
+}
+
+fn purge(cache: Cache, req: Request, key: Str) -> Response {
+    if req.header("X-Purge-Token") != Some(PURGE_TOKEN.to_string()) {
+        return answer(403, "purge needs the token", "PURGE");
+    }
+    let n = cache.invalidate(key);
+    if n == 0 {
+        return answer(404, f"{key} is not cached", "PURGE");
+    }
+    cache.event(f"purge {key} ({n} variants)");
+    answer(200, f"purged {n}", "PURGE")
+}
+
+// An unsafe method goes to the origin, and a success drops what the cache
+// holds for its target (RFC 9111 §4.4).
+fn write_through(cache: Cache, req: Request, key: Str) -> Response {
+    match fetch(cache, req, key, Vec.new()) {
+        Ok(r) => {
+            if r.status < 400 {
+                let n = cache.invalidate(key);
+                if n > 0 {
+                    cache.event(f"invalidate {key} after {req.method()} ({n} variants)");
+                }
+            }
+            pass(r, "PASS")
+        }
+        Err(msg) => answer(502, msg, "ERROR"),
+    }
+}
+
+fn handle(cache: Cache, req: Request, now_ms: i64) -> Response {
+    let key = req.url();
+    let r = match req.method().as_str() {
+        "GET" => serve_get(cache, req, key, now_ms),
+        "PURGE" => purge(cache, req, key),
+        _ => write_through(cache, req, key),
+    };
+    cache.count(header_of(r.headers, "x-cache") ?? "?");
+    r
+}
+
+// ------------------------------------------------------------------ report
+
+fn print_state(cache: Cache) {
+    let g = cache.state.lock();
+    let st = g.value;
+    let mut keys: Vec[String] = st.entries.keys().cloned().collect();
+    keys.sort();
+    println(f"  {keys.len()} keys, {st.bytes} bytes");
+    for k in keys.iter() {
+        for v in st.entries[k].iter() {
+            let pairs: Vec[String] = v.vary.iter().map(|(n, x)| f"{n}={x}").collect();
+            let vary = pairs.join(",");
+            println(f"  {k} {v.status} {v.body.len()} bytes lifetime {v.lifetime_s}s {vary}");
+        }
+    }
+    for e in st.events.iter() {
+        println(f"  event: {e}");
+    }
+    let mut labels: Vec[(String, i64)] = st.labels.iter().map(|(k, n)| (k.clone(), *n)).collect();
+    labels.sort();
+    let shown: Vec[String] = labels.iter().map(|(k, n)| f"{k} {n}").collect();
+    println(f"  labels: {shown.join(", ")}");
+}
+
+// ------------------------------------------------------------- fake origin
+
+struct FakeOrigin {
+    hits: Map[String, i64],
+    seen: Vec[String],
+}
+
+fn page(status: i64, body: Str, headers: Slice[(Str, Str)]) -> Response {
+    let mut hs: Vec[(String, String)] = Vec.new();
+    for (k, v) in headers.iter() {
+        hs.push((k.to_string(), v.to_string()));
+    }
+    Response { status, body: body.to_string(), headers: hs }
+}
+
+impl NetworkProvider for FakeOrigin {
+    fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
+        let path = req.url().strip_prefix("http://origin.test").unwrap_or("").to_string();
+        let n = self.hits.get(path).unwrap_or(0) + 1;
+        self.hits.insert(path.clone(), n);
+        let mut line = f"{req.method()} {path}";
+        for (k, v) in req.headers().iter() {
+            line = f"{line} [{k}: {v}]";
+        }
+        self.seen.push(line);
+        let inm = req.header("If-None-Match") ?? "";
+        let r = match path.as_str() {
+            "/doc" | "/doc2" => {
+                if inm == "\"a\"" {
+                    page(304, "", [("ETag", "\"a\""), ("Cache-Control", "max-age=10")])
+                } else {
+                    page(200, "the document", [("ETag", "\"a\""), ("Cache-Control", "max-age=10")])
+                }
+            }
+            "/public" => page(200, "for everyone", [("Cache-Control", "public, max-age=10")]),
+            "/aged" => page(200, f"aged {n}", [("Age", "7"), ("Cache-Control", "max-age=10")]),
+            "/shared" => page(200, "shared", [("Cache-Control", "max-age=0, s-maxage=30")]),
+            "/gone" => page(404, "no such page", [("Cache-Control", "max-age=5")]),
+            "/flaky" => if n == 1 {
+                page(200, "flaky ok", [("Cache-Control", "max-age=2, stale-if-error=5")])
+            } else {
+                page(503, "unavailable", [])
+            },
+            "/strict" => if n == 1 {
+                page(200, "strict ok", [("Cache-Control", "max-age=2, must-revalidate")])
+            } else {
+                return Err(HttpError { message: "http://origin.test/strict: connection refused" });
+            },
+            "/nocache" => if inm == "\"n1\"" {
+                page(304, "", [("ETag", "\"n1\"")])
+            } else {
+                page(200, "check me", [("ETag", "\"n1\""), ("Cache-Control", "no-cache")])
+            },
+            "/lang" => {
+                let lang = req.header("Accept-Language") ?? "en";
+                let body = if lang == "fr" { "bonjour" } else { "hello" };
+                page(200, body, [("Vary", "Accept-Language"), ("Cache-Control", "max-age=60")])
+            }
+            "/a" | "/b" | "/c" | "/d" => page(200, f"body of {path} ......................", [("Cache-Control", "max-age=60")]),
+            _ => page(404, "not found", []),
+        };
+        Ok(r)
+    }
+}
+
+fn get(path: Str) -> Request {
+    Request.new("GET", path.to_string())
+}
+
+fn show(cache: Cache, req: Request, at_s: i64) {
+    let what = f"{req.method()} {req.url()}";
+    let r = handle(cache, req, at_s * 1000);
+    let label = header_of(r.headers, "x-cache") ?? "?";
+    let age = header_of(r.headers, "age").map(|a| f" age {a}").unwrap_or(String.new());
+    println(f"  t={at_s:<3} {what:<14} {r.status} {label:<11} {r.body}{age}");
+}
+
+fn self_test() {
+    println("== self-test: cache-control");
+    let headers = [
+        "max-age=60",
+        "public, max-age=0, s-maxage=30",
+        "no-store",
+        "private, max-age=600",
+        "no-cache, must-revalidate",
+        "max-age=\"20\", stale-if-error=300",
+        "MAX-AGE=5, Proxy-Revalidate",
+        "max-age=soon",
+    ];
+    for h in headers.iter() {
+        let d = parse_cache_control(h);
+        println(f"  {h:<34} max-age {d.max_age} s-maxage {d.s_maxage} no-store {d.no_store} no-cache {d.no_cache} private {d.is_private} revalidate {d.must_revalidate} stale-if-error {d.stale_if_error}");
+    }
+
+    println("== self-test: a fake origin, times chosen");
+    let cache = new_cache("http://origin.test", 120, 80);
+    let origin = FakeOrigin { hits: Map.new(), seen: Vec.new() };
+    with_provider[Network](origin, || {
+        show(cache, get("/doc"), 0);
+        show(cache, get("/doc"), 4);
+        show(cache, get("/doc").with_header("If-None-Match", "\"a\""), 5);
+        show(cache, get("/doc").with_header("Cache-Control", "no-cache"), 6);
+        show(cache, get("/doc"), 17);
+        show(cache, get("/doc"), 20);
+        show(cache, get("/aged"), 0);
+        show(cache, get("/aged"), 2);
+        show(cache, get("/aged"), 3);
+        show(cache, get("/shared"), 0);
+        show(cache, get("/shared"), 20);
+        show(cache, get("/gone"), 0);
+        show(cache, get("/gone"), 1);
+        show(cache, get("/flaky"), 0);
+        show(cache, get("/flaky"), 4);
+        show(cache, get("/flaky"), 8);
+        show(cache, get("/strict"), 0);
+        show(cache, get("/strict"), 4);
+        show(cache, get("/nocache"), 0);
+        show(cache, get("/nocache"), 1);
+        show(cache, get("/lang").with_header("Accept-Language", "fr"), 0);
+        show(cache, get("/lang"), 0);
+        show(cache, get("/lang").with_header("Accept-Language", "fr"), 1);
+        show(cache, get("/doc2").with_header("Authorization", "Bearer fake"), 0);
+        show(cache, get("/public").with_header("Authorization", "Bearer fake"), 0);
+        show(cache, get("/public").with_header("Authorization", "Bearer fake"), 1);
+        show(cache, get("/doc").with_header("Cache-Control", "no-store"), 21);
+        show(cache, get("/a"), 30);
+        show(cache, get("/b"), 30);
+        show(cache, get("/doc"), 30);
+        show(cache, get("/c"), 31);
+        show(cache, get("/d"), 31);
+        show(cache, get("/missing"), 31);
+        show(cache, Request.new("PURGE", "/doc"), 32);
+        show(cache, Request.new("PURGE", "/doc").with_header("X-Purge-Token", PURGE_TOKEN.to_string()), 32);
+        show(cache, Request.new("PURGE", "/doc").with_header("X-Purge-Token", PURGE_TOKEN.to_string()), 32);
+        show(cache, Request.new("DELETE", "/d"), 33);
+        show(cache, get("/d"), 33);
+    });
+    print_state(cache);
+}
+
+// ----------------------------------------------------------------- origin
+
+sync struct Hits {
+    counts: Mutex[Map[String, i64]],
+}
+
+impl Hits {
+    fn next(self, key: Str) -> i64 {
+        let g = self.counts.lock();
+        let n = g.value.get(key).unwrap_or(0) + 1;
+        g.value.insert(key.to_string(), n);
+        n
+    }
+
+    fn seen(self, key: Str) -> i64 {
+        self.counts.lock().value.get(key).unwrap_or(0)
+    }
+}
+
+fn text(status: i64, body: Str, headers: Slice[(Str, Str)]) -> Response {
+    let mut r = page(status, body, headers);
+    r.headers.push(("Content-Type", "text/plain"));
+    r
+}
+
+const JS_TAG: Str = "\"js-1\"";
+const LAST_MODIFIED: Str = "Tue, 03 Nov 2026 10:00:00 GMT";
+
+// The real origin. Each path answers as a site's pages do, and some change
+// or fail on chosen hits.
+fn origin(hits: Hits, req: ref Request) -> Response {
+    let path = req.path();
+    let method = req.method();
+    let n = hits.next(f"{method} {path}");
+    let inm = req.header("If-None-Match") ?? "";
+    match path.as_str() {
+        "/static/app.js" => {
+            if inm == JS_TAG {
+                return text(304, "", [("ETag", JS_TAG), ("Cache-Control", "public, max-age=1")]);
+            }
+            text(200, "console.log('app v1');", [("ETag", JS_TAG), ("Cache-Control", "public, max-age=1")])
+        }
+        "/news" => {
+            let tag = f"\"news-{n}\"";
+            if inm == tag {
+                return text(304, "", [("ETag", tag.as_str())]);
+            }
+            text(200, f"headline {n}", [("ETag", tag.as_str()), ("Cache-Control", "max-age=1")])
+        }
+        "/account" => text(200, "your account", [("Cache-Control", "private, max-age=60")]),
+        "/cart" => text(200, f"cart {n}", [("Cache-Control", "no-store")]),
+        "/greeting" => {
+            let lang = req.header("Accept-Language") ?? "en";
+            let body = if lang.starts_with("fr") { "bonjour" } else { "hello" };
+            text(200, body, [("Vary", "Accept-Language"), ("Cache-Control", "max-age=60")])
+        }
+        "/everything" => text(200, "varies on all", [("Vary", "*"), ("Cache-Control", "max-age=60")]),
+        "/items" => {
+            if method == "POST" {
+                return text(201, "created", []);
+            }
+            let posts = hits.seen("POST /items");
+            text(200, f"items after {posts} posts", [("Cache-Control", "max-age=60")])
+        }
+        "/report" => text(200, "x".repeat(300), [("Cache-Control", "max-age=60")]),
+        "/flaky" => if n == 1 {
+            text(200, "flaky ok", [("Cache-Control", "max-age=1, stale-if-error=60")])
+        } else {
+            text(503, "flaky down", [])
+        },
+        "/strict" => if n == 1 {
+            text(200, "strict ok", [("Cache-Control", "max-age=1, must-revalidate")])
+        } else {
+            text(503, "strict down", [])
+        },
+        "/archive" => {
+            if req.header("If-Modified-Since") == Some(LAST_MODIFIED.to_string()) {
+                return text(304, "", []);
+            }
+            text(200, "the archive", [("Last-Modified", LAST_MODIFIED)])
+        }
+        _ => text(404, "not found", []),
+    }
+}
+
+// ------------------------------------------------------------------- run
+
+fn call(c: Client, method: Str, path: Str, headers: Slice[(Str, Str)]) {
+    let mut b = c.request(method.to_string(), f"http://{CACHE_ADDR}{path}").timeout(3000);
+    for (k, v) in headers.iter() {
+        b = b.header(k.to_string(), v.to_string());
+    }
+    let pairs: Vec[String] = headers.iter().map(|(k, v)| f" {k}: {v}").collect();
+    let shown = pairs.join("");
+    match b.send() {
+        Ok(r) => {
+            let label = r.header("X-Cache") ?? "?";
+            println(f"  {method} {path}{shown} -> {r.status} {label} {r.body}");
+        }
+        Err(e) => println(f"  {method} {path}{shown} -> error: {e.message()}"),
+    }
+}
+
+fn main() {
+    self_test();
+
+    let hits = Hits { counts: Mutex.new(Map.new()) };
+    let cache = new_cache(f"http://{ORIGIN_ADDR}", 256, 200);
+    let group = TaskGroup.new();
+    group.spawn(|| Server.serve(ORIGIN_ADDR.to_string(), |req| origin(hits, req)));
+    group.spawn(|| Server.serve(CACHE_ADDR.to_string(), |req| handle(cache, req, cache.start.elapsed().as_ms())));
+    let mut up = 0;
+    for _ in 0..100 {
+        up = 0;
+        for addr in [ORIGIN_ADDR, CACHE_ADDR] {
+            if TcpStream.connect(addr).is_ok() {
+                up += 1;
+            }
+        }
+        if up == 2 {
+            break;
+        }
+        sleep(Duration.ms(20));
+    }
+    println(f"== live: {up} servers up");
+
+    let c = Client.new();
+    call(c, "GET", "/static/app.js", []);
+    call(c, "GET", "/static/app.js", []);
+    call(c, "GET", "/static/app.js", [("If-None-Match", JS_TAG)]);
+    call(c, "GET", "/news", []);
+    call(c, "GET", "/news", []);
+    call(c, "GET", "/flaky", []);
+    call(c, "GET", "/strict", []);
+    call(c, "GET", "/account", []);
+    call(c, "GET", "/account", []);
+    call(c, "GET", "/cart", []);
+    call(c, "GET", "/cart", []);
+    call(c, "GET", "/greeting", [("Accept-Language", "fr-CA")]);
+    call(c, "GET", "/greeting", [("Accept-Language", "en")]);
+    call(c, "GET", "/greeting", [("Accept-Language", "fr-CA")]);
+    call(c, "GET", "/everything", []);
+    call(c, "GET", "/items", []);
+    call(c, "GET", "/items", []);
+    call(c, "POST", "/items", []);
+    call(c, "GET", "/items", []);
+    call(c, "GET", "/report", []);
+    call(c, "GET", "/archive", []);
+    call(c, "GET", "/archive", []);
+    call(c, "GET", "/missing", []);
+
+    println("== live: a second later");
+    sleep(Duration.ms(1100));
+    call(c, "GET", "/static/app.js", []);
+    call(c, "GET", "/news", []);
+    call(c, "GET", "/flaky", []);
+    call(c, "GET", "/strict", []);
+    call(c, "GET", "/items", [("Cache-Control", "no-cache")]);
+    call(c, "PURGE", "/static/app.js", []);
+    call(c, "PURGE", "/static/app.js", [("X-Purge-Token", PURGE_TOKEN)]);
+    call(c, "GET", "/static/app.js", []);
+
+    println("== live: cache");
+    print_state(cache);
+    println("== live: origin hits");
+    let g = hits.counts.lock();
+    let mut seen: Vec[(String, i64)] = g.value.iter().map(|(k, n)| (k.clone(), *n)).collect();
+    seen.sort();
+    for (k, n) in seen.iter() {
+        println(f"  {k} {n}");
+    }
+    group.cancel();
+    println("done");
+}

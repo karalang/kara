@@ -61,6 +61,34 @@ fn split_format_spec(raw: &str) -> (String, Option<String>) {
 
 use super::{starts_upper, ParseError};
 
+/// The span of `len` bytes starting `from` bytes into an f-string hole
+/// `raw`, which starts at byte `offset`, `line`, `column` of the source.
+fn hole_span(
+    raw: &str,
+    from: usize,
+    len: usize,
+    offset: usize,
+    line: usize,
+    column: usize,
+) -> Span {
+    let mut l = line;
+    let mut c = column;
+    for ch in raw[..from].chars() {
+        if ch == '\n' {
+            l += 1;
+            c = 1;
+        } else {
+            c += 1;
+        }
+    }
+    Span {
+        line: l,
+        column: c,
+        offset: offset + from,
+        length: len,
+    }
+}
+
 impl super::Parser {
     /// Record each f-string literal inside the hole `expr_src`, which starts
     /// at byte `offset` of the source, in [`Self::nested_fstrings`]. When the
@@ -126,23 +154,7 @@ impl super::Parser {
         }
         // An empty base would leave `{x:}`: the `:` goes too.
         let cut = if base.is_empty() { 2 } else { 1 };
-        let at = raw.len() - cut;
-        let mut l = line;
-        let mut c = column;
-        for ch in raw[..at].chars() {
-            if ch == '\n' {
-                l += 1;
-                c = 1;
-            } else {
-                c += 1;
-            }
-        }
-        let span = Span {
-            line: l,
-            column: c,
-            offset: offset + at,
-            length: cut,
-        };
+        let span = hole_span(raw, raw.len() - cut, cut, offset, line, column);
         let message = if base.is_empty() {
             format!(
                 "format spec `{spec}`: Kāra has no `s` type, a value is formatted by its \
@@ -173,6 +185,39 @@ impl super::Parser {
             }],
         );
         true
+    }
+
+    /// Report the format spec `spec` that failed to parse with `msg`, at
+    /// the spec's own text inside the hole `raw` (which starts at byte
+    /// `offset`, `line`, `column`), not at the end of the f-string, where
+    /// every bad spec of one literal used to land (B-2026-11-09-91). A
+    /// Debug spec (`{x:?}`) gets no edit: `{x}` needs a `Display` the parser
+    /// cannot see (tests/mend_rustisms.rs keeps it descriptive).
+    fn report_bad_spec(
+        &mut self,
+        spec: &str,
+        msg: &str,
+        raw: &str,
+        offset: usize,
+        line: usize,
+        column: usize,
+    ) {
+        if self.foreign_spec_letter(spec, raw, offset, line, column) {
+            return;
+        }
+        let span = hole_span(
+            raw,
+            raw.len() - spec.len(),
+            spec.len(),
+            offset,
+            line,
+            column,
+        );
+        self.errors.push(ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
+            message: msg.to_string(),
+            span,
+        });
     }
 
     // ── Expressions (Pratt Parser) ───────────────────────────────
@@ -1682,9 +1727,7 @@ impl super::Parser {
                             // COMPILE error, not a silently-dropped surprise.
                             if let Some(s) = &spec {
                                 if let Err(msg) = crate::format_spec::FormatSpec::parse(s) {
-                                    if !self.foreign_spec_letter(s, &raw, offset, line, column) {
-                                        self.error(&msg);
-                                    }
+                                    self.report_bad_spec(s, &msg, &raw, offset, line, column);
                                 }
                             }
                             // Re-parse the interpolation hole as a standalone
@@ -4324,6 +4367,16 @@ impl super::Parser {
         ) {
             return true;
         }
+        // A structural marker as the first field's name (`D { private: x }`)
+        // is reported by the field parser, not read as a block
+        // (B-2026-11-09-92).
+        if matches!(after, Token::Colon)
+            && next
+                .keyword_spelling()
+                .is_some_and(|kw| !crate::token::is_raw_escapable(kw))
+        {
+            return true;
+        }
         // `{ }` is an empty struct literal or an empty block, as ambiguous as
         // `{ ident }`: in a condition it is the body (`if c == EOL { } else
         // { .. }`, B-2026-10-15-46).
@@ -4426,6 +4479,7 @@ impl super::Parser {
                 break;
             }
             let fs = self.current_span();
+            self.recover_marker_as_field_name();
             let name = self.expect_identifier()?;
             if self.eat(&Token::Colon) {
                 // Explicit field: name: value

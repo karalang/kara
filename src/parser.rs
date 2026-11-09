@@ -2534,6 +2534,45 @@ impl Parser {
         true
     }
 
+    /// A structural marker written as a field's name, directly before the
+    /// `:` of a field declaration or a struct literal's field
+    /// (`struct Directives { private: bool }`, `Directives { private: false }`):
+    /// `r#` cannot escape it, so no spelling of that name exists. Before,
+    /// the declaration read `private` as the field's visibility and said
+    /// "Expected identifier, found `:`" at the colon, and the literal failed
+    /// and cascaded past its closing brace (B-2026-11-09-92). Reports it
+    /// once, by name, and retypes the token as the name, so the rest of the
+    /// struct and its uses parse as written. Returns whether it did.
+    pub(crate) fn recover_marker_as_field_name(&mut self) -> bool {
+        let Some(kw) = self.peek_token_ref().keyword_spelling() else {
+            return false;
+        };
+        // `priv` is reserved for future use too, and keeps that message.
+        if is_raw_escapable(kw)
+            || matches!(self.peek_token_ref(), Token::ReservedFuture(_))
+            || !matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.token),
+                Some(Token::Colon)
+            )
+        {
+            return false;
+        }
+        let span = self.current_span();
+        self.errors.push(ParseError {
+            kind: ParseErrorKind::ReservedKeyword,
+            message: format!(
+                "`{kw}` cannot name a field: it is a structural marker, which `r#` does not \
+                 escape, so give the field another name"
+            ),
+            span,
+        });
+        self.tokens[self.pos].token = Token::Identifier {
+            name: kw.to_string(),
+            raw: false,
+        };
+        true
+    }
+
     fn unexpected_ident_msg(&self, expected: &str) -> String {
         let tok = self.peek_token();
         // A refused `r#` escape answers for itself, and must be handled BEFORE

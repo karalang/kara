@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 211 |
-| false-positive | 171 |
+| diagnostics | 217 |
+| false-positive | 173 |
 | perf | 145 |
 | missing-feature | 126 |
 | soundness | 56 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 344 |
+| typecheck | 349 |
 | mir-llvm | 185 |
-| mir | 161 |
+| mir | 162 |
 | cli | 94 |
 | ownership | 67 |
-| parser | 56 |
+| parser | 58 |
 | interp | 44 |
 | runtime | 32 |
 | effect | 29 |
@@ -128,6 +128,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-79 | 2026-11-09 | typecheck | low | A write through a read-only `Slice` binding is refused without a code since 34d42091dd: `error[typecheck]` where the corpus expects E0200 | — |
 | B-2026-11-09-80 | 2026-11-09 | ownership | low | An escaping closure capturing a borrow is refused without a code: `error[ownership]: an escaping closure captures `r` by move` where the corpus expects E0516 | — |
 | B-2026-11-09-82 | 2026-11-09 | mir-llvm | high | Under `KARAC_AUTO_PAR=0` a write through a `mut Slice` view of a `Vec` is lost: `poke(mut w[2..4])` with `xs[0] = 99` leaves `w` as `1 2 3 4` in a program that has any `for` loop; `as_slice_mut()` in a tuple field and `iter_mut()` over a range view lose theirs too | — |
+| B-2026-11-09-91 | 2026-11-09 | parser | low | Every bad format spec of an f-string is reported at the f-string's closing quote: `println(f"x {a:?} y {b:?}")` gives two "format spec `?`: `?` is Debug formatting" errors at one column, the `"`, so the two holes read as one place reported twice | — |
+| B-2026-11-09-92 | 2026-11-09 | parser | medium | A field named by a structural marker (`struct Directives { private: bool }`, a Cache-Control parser's natural field) says "Expected identifier, found `:`" at the colon, and a struct literal naming it fails and cascades past its closing brace ("Expected expression, found `;`"); neither says that `private` cannot name a field, which `r#` cannot rescue | — |
+| B-2026-11-09-93 | 2026-11-09 | typecheck | high | A program's own `struct Entry` loses its own methods: `impl Entry { fn age(self, ..) }` then `e.age(now)` is "no method 'age' on type 'Entry'", because method dispatch hands every `Entry` receiver to the map entry's (`or_insert`, `and_modify`, ...); the prelude_shadow warning says the opposite, that built-in paths no longer apply | — |
+| B-2026-11-09-94 | 2026-11-09 | typecheck | low | `opt ?? "" == value` (`??` binds loosest, so it is `opt ?? ("" == value)`) gives three type mismatches (`expected 'String', found 'bool'`, the closure's return type, the closure's type) and no word on precedence or fix | — |
+| B-2026-11-09-95 | 2026-11-09 | typecheck | low | A `ref Str` (an element of `pairs.iter()` over a `Slice[(Str, Str)]`) handed to a `String` parameter gets "expected 'String', found 'ref Str'" with no fix where a `Str` gets `.to_string()`; to a user function the ownership pass offers `.clone()`, which leaves a `Str` | — |
+| B-2026-11-09-96 | 2026-11-09 | typecheck | low | A tuple of borrowed elements moved where owned ones are wanted (`for (k, v) in headers { out.push((k, v)); }` with a bare, so borrowing, `headers: Vec[(String, String)]` parameter) gets "expected '(String, String)', found '(ref String, ref String)'" with no fix, where the one-element form gets `.clone()` | — |
+| B-2026-11-09-97 | 2026-11-09 | typecheck | low | `req.header("X-Purge-Token") != Some(PURGE_TOKEN)` (an `Option[String]` against an `Option[Str]` of a constant) is refused with "cannot compare 'Option[String]' and 'Option[Str]'" and no remedy; `String == Str` compares, and the library has no `as_deref` | — |
+| B-2026-11-09-98 | 2026-11-09 | mir | medium | A `Str` view of a parameter passed through a closure combinator is refused as returning a borrow of a temporary: `fn unquote(s: Str) -> Str { s.strip_prefix("\"").and_then(|t| t.strip_suffix("\"")).unwrap_or(s) }` is E0509 "the result borrows a temporary value, which this function owns", as are `.map(|t| t.trim())` and `split_once(..).map(|p| p.0)`; the same chain without a closure, or a `match`, passes | — |
 
 ### Relocated
 

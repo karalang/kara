@@ -198,6 +198,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A program's own `struct Entry` (a cache's entry) kept none of its own
+  methods: every call on it went to the map entry's dispatch and was
+  "no method ... on type 'Entry'". Only the map entry's `or_insert`,
+  `or_insert_with`, `and_modify` and `or_default` go there now
+  (B-2026-11-09-93).
 - Under a `FileSystem` override, a compiled `File.open`, `File.create` or
   `OpenOptions.open` of a `String` path built at run time handed the
   fake's `open` a garbage path (the `String`'s address read as a `Str`),
@@ -484,6 +489,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Each bad format spec of an f-string is reported at its own hole, not at
+  the literal's closing quote (B-2026-11-09-91).
+- A field named `private` (or another structural marker) is reported once,
+  "`private` cannot name a field: it is a structural marker, which `r#`
+  does not escape", in place of "Expected identifier, found `:`" and a
+  cascade through the struct literal (B-2026-11-09-92).
+- `opt ?? "" == value` names the precedence (`??` binds loosest) with the
+  fix `(opt ?? "") == value`, where it gave three mismatches
+  (B-2026-11-09-94).
+- A `ref Str` where a `String` is wanted gets `.to_string()`, as a `Str`
+  does (B-2026-11-09-95).
 - A format spec in Python's spelling, `{x:.1f}` or `{name:>8s}`, is named
   ("Kāra has no `f` type, a float's precision alone sets its digits after
   the point; write `.1`") and `karac fix` deletes the letter; it was
