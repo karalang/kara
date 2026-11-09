@@ -43,7 +43,7 @@ use crate::ast::*;
 /// contain, so a user impl cannot shadow `get`/`insert`/`len`.
 /// Every method name `infer_set_method` answers — the builtin `Set` surface.
 /// B-2026-08-12-34, the `Set` peer of `MAP_BUILTIN_METHODS`.
-pub(super) const SET_BUILTIN_METHODS: &[&str] = &[
+pub(crate) const SET_BUILTIN_METHODS: &[&str] = &[
     "clear",
     "contains",
     "difference",
@@ -61,7 +61,7 @@ pub(super) const SET_BUILTIN_METHODS: &[&str] = &[
 /// Every method name `infer_sorted_set_method` answers. Used like
 /// `SET_BUILTIN_METHODS`: a user trait impl on `SortedSet` (the library's
 /// `Serialize`) is consulted only for a name outside this list.
-pub(super) const SORTED_SET_BUILTIN_METHODS: &[&str] = &[
+pub(crate) const SORTED_SET_BUILTIN_METHODS: &[&str] = &[
     "contains",
     "difference",
     "insert",
@@ -78,7 +78,7 @@ pub(super) const SORTED_SET_BUILTIN_METHODS: &[&str] = &[
 
 /// Every method name `infer_sorted_map_method` answers; the `SortedMap` peer
 /// of `MAP_BUILTIN_METHODS`.
-pub(super) const SORTED_MAP_BUILTIN_METHODS: &[&str] = &[
+pub(crate) const SORTED_MAP_BUILTIN_METHODS: &[&str] = &[
     "ceiling",
     "clear",
     "contains_key",
@@ -100,7 +100,7 @@ pub(super) const SORTED_MAP_BUILTIN_METHODS: &[&str] = &[
     "values",
 ];
 
-pub(super) const MAP_BUILTIN_METHODS: &[&str] = &[
+pub(crate) const MAP_BUILTIN_METHODS: &[&str] = &[
     "clear",
     "contains_key",
     "entries",
@@ -122,7 +122,7 @@ pub(super) const MAP_BUILTIN_METHODS: &[&str] = &[
 /// did-you-mean only (B-2026-10-19-12): the `Vec` surface is answered by
 /// guarded arms in several files, so no dispatch reads this list.
 /// src/typechecker/tests.rs `every_listed_vec_method_checks` calls each.
-pub(super) const VEC_METHOD_NAMES: &[&str] = &[
+pub(crate) const VEC_METHOD_NAMES: &[&str] = &[
     "as_slice",
     "as_slice_mut",
     "binary_search",

@@ -1,7 +1,7 @@
 {
   "name": "kara",
   "displayName": "Kāra",
-  "description": "Kāra language support: syntax highlighting, diagnostics, hover, go-to-definition and formatting through kara-lsp.",
+  "description": "Kāra language support: syntax highlighting, diagnostics, completion, hover, go-to-definition, rename and formatting through kara-lsp.",
   "version": "0.8.1",
   "publisher": "karalang",
   "license": "MIT OR Apache-2.0",

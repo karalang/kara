@@ -3103,6 +3103,11 @@ impl<'a> super::TypeChecker<'a> {
                 ImplItem::Method(m) => m,
                 ImplItem::AssocType(_) => continue,
             };
+            // A deprecated method is still checked, never offered.
+            if method.self_param.is_some() && method.deprecation.is_none() {
+                self.receiver_methods
+                    .insert(format!("{}.{}", type_name, method.name));
+            }
             let method_gp = Self::generic_param_names(&method.generic_params);
             let mut lowering_scope = impl_gp_names.clone();
             lowering_scope.extend(method_gp.iter().cloned());

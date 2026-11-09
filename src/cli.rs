@@ -30,6 +30,7 @@ mod build_cmds;
 mod build_v2;
 mod diag_json;
 pub(crate) mod editor;
+pub(crate) mod editor_complete;
 pub(crate) mod editor_nav;
 pub mod explain;
 mod explain_item;
@@ -1183,6 +1184,10 @@ struct Pipeline {
     /// The library methods [`crate::mir::library_prune`] removed from the
     /// appended library, for the typechecker.
     library_pruned: Option<crate::mir::library_prune::Pruned>,
+    /// Whether [`Self::with_library`] drops the library items the program
+    /// cannot reach. Editor completion keeps them all: it lists what the
+    /// program could call next, not what it calls.
+    prune_library: bool,
     /// The library's bodies, when [`Self::with_library`] kept them: resolved
     /// and type-checked with the program, then set aside for the passes after
     /// (B-2026-10-31-16), whose findings in the library are dropped.
@@ -1230,6 +1235,7 @@ impl Pipeline {
             user_source: None,
             mir_program: None,
             library_pruned: None,
+            prune_library: true,
             library_bodies: LibraryBodiesState::Unchecked,
         }
     }
@@ -1241,6 +1247,12 @@ impl Pipeline {
     /// except a program using `std.process` or `std.net`, whose v2 surface
     /// is in the library rather than the baked legacy module (B-2026-10-15-6,
     /// B-2026-10-15-18), or serde, which only the library defines.
+    /// [`Self::with_library`] keeps the whole library.
+    fn whole_library(mut self) -> Self {
+        self.prune_library = false;
+        self
+    }
+
     fn with_library(mut self) -> Self {
         let Some(src) = self.source.clone() else {
             return self;
@@ -1262,7 +1274,8 @@ impl Pipeline {
         // The library items the program cannot reach are dropped, as the
         // build drops them (`library_prune`), so they are not checked
         // (B-2026-10-19-21). `KARAC_CHECK_PRUNE=0` keeps them.
-        if std::env::var("KARAC_CHECK_PRUNE").as_deref() != Ok("0")
+        if self.prune_library
+            && std::env::var("KARAC_CHECK_PRUNE").as_deref() != Ok("0")
             && crate::mir::library_prune::enabled()
         {
             self.library_pruned = Some(crate::mir::library_prune::prune(

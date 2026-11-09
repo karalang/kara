@@ -1649,6 +1649,68 @@ pub fn find_references(
     out
 }
 
+/// Rename query: the spans of the name under `byte_offset`, at its
+/// declaration and every use, each covering the name alone, so an editor
+/// replaces exactly those bytes. Built on [`find_references`]; `None` when
+/// the cursor is not on a name the resolver binds, or when a reference's
+/// span does not hold the name (a rename that could not be made whole).
+pub fn rename_spans(source: &str, byte_offset: usize) -> Option<(String, Vec<DefLocation>)> {
+    let refs = find_references(source, byte_offset, true);
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+    // The name: the identifier under the cursor.
+    let bytes = source.as_bytes();
+    let mut start = byte_offset.min(source.len());
+    while start > 0 && ident(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = byte_offset.min(source.len());
+    while end < bytes.len() && ident(bytes[end]) {
+        end += 1;
+    }
+    let name = source.get(start..end)?.to_string();
+    if name.is_empty() || refs.is_empty() {
+        return None;
+    }
+    let mut out = Vec::new();
+    for r in refs {
+        let text = source.get(r.span_offset..r.span_offset + r.span_length)?;
+        // A declaration's span can be its whole item (`fn name(...) {...}`):
+        // the name is its first whole-word occurrence.
+        let at = text.match_indices(name.as_str()).find(|(i, _)| {
+            let b = text.as_bytes();
+            (*i == 0 || !ident(b[i - 1]))
+                && (i + name.len() == b.len() || !ident(b[i + name.len()]))
+        })?;
+        out.push(DefLocation {
+            span_offset: r.span_offset + at.0,
+            span_length: name.len(),
+        });
+    }
+    if !out
+        .iter()
+        .any(|l| l.span_offset <= byte_offset && byte_offset <= l.span_offset + l.span_length)
+    {
+        return None;
+    }
+    out.sort_by_key(|l| l.span_offset);
+    out.dedup();
+    Some((name, out))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use cli::editor_complete::{CompletionEntry, CompletionKind};
+
+/// Completion query: what can be written at `byte_offset`. After a `.` on
+/// a value, its type's fields and the methods that take `self` (library
+/// types included, deprecated methods left out); after `std.`, the library
+/// modules and their items; elsewhere, the locals and parameters in scope
+/// and the buffer's items. Each label starts with what is already typed of
+/// the name at the cursor. Never executes the program.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn completions_at(source: &str, byte_offset: usize) -> Vec<CompletionEntry> {
+    cli::editor_complete::complete(source, byte_offset)
+}
+
 /// One entry in a document outline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolOutline {

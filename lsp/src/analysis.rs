@@ -5,9 +5,9 @@
 //! (`main.rs`) is deliberately thin over this module.
 
 use lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, Diagnostic, DiagnosticSeverity,
-    DocumentSymbol, Hover, HoverContents, MarkupContent, MarkupKind, NumberOrString, Position,
-    Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CompletionItem, CompletionItemKind,
+    Diagnostic, DiagnosticSeverity, DocumentSymbol, Hover, HoverContents, MarkupContent,
+    MarkupKind, NumberOrString, Position, Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
 };
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -243,6 +243,69 @@ pub fn references(text: &str, position: Position, include_declaration: bool) -> 
     refs.into_iter()
         .map(|r| index.range(r.span_offset, r.span_length))
         .collect()
+}
+
+/// Completion at `position`: after a `.`, the receiver type's fields and
+/// methods; after `std.`, library modules and their items; elsewhere, the
+/// locals, parameters and items in scope. `catch_unwind`-guarded like
+/// [`diagnostics`].
+pub fn completion(text: &str, position: Position) -> Vec<CompletionItem> {
+    let offset = LineIndex::new(text).offset(position);
+    let entries =
+        match std::panic::catch_unwind(AssertUnwindSafe(|| karac::completions_at(text, offset))) {
+            Ok(entries) => entries,
+            Err(_) => {
+                eprintln!("kara-lsp: completion analysis panicked; returning none");
+                return Vec::new();
+            }
+        };
+    entries
+        .into_iter()
+        .map(|e| CompletionItem {
+            label: e.label,
+            kind: Some(match e.kind {
+                karac::CompletionKind::Method => CompletionItemKind::METHOD,
+                karac::CompletionKind::Field => CompletionItemKind::FIELD,
+                karac::CompletionKind::Variable => CompletionItemKind::VARIABLE,
+                karac::CompletionKind::Function => CompletionItemKind::FUNCTION,
+                karac::CompletionKind::Struct => CompletionItemKind::STRUCT,
+                karac::CompletionKind::Enum => CompletionItemKind::ENUM,
+                karac::CompletionKind::Trait => CompletionItemKind::INTERFACE,
+                karac::CompletionKind::Constant => CompletionItemKind::CONSTANT,
+                karac::CompletionKind::TypeAlias => CompletionItemKind::TYPE_PARAMETER,
+                karac::CompletionKind::Module => CompletionItemKind::MODULE,
+            }),
+            detail: e.detail,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Rename the name under `position` to `new_name`: one edit per occurrence,
+/// declaration included. `None` when the cursor is not on a name the
+/// resolver binds, or `new_name` is not an identifier. `catch_unwind`-guarded
+/// like [`diagnostics`].
+pub fn rename(text: &str, position: Position, new_name: &str) -> Option<Vec<TextEdit>> {
+    let mut chars = new_name.chars();
+    let first = chars.next()?;
+    if !(first.is_alphabetic() || first == '_') || !chars.all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let index = LineIndex::new(text);
+    let offset = index.offset(position);
+    let (_, spans) =
+        std::panic::catch_unwind(AssertUnwindSafe(|| karac::rename_spans(text, offset)))
+            .ok()
+            .flatten()?;
+    Some(
+        spans
+            .into_iter()
+            .map(|s| TextEdit {
+                range: index.range(s.span_offset, s.span_length),
+                new_text: new_name.to_string(),
+            })
+            .collect(),
+    )
 }
 
 /// Document outline: one flat [`DocumentSymbol`] per top-level item, in source

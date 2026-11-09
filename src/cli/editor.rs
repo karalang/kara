@@ -23,6 +23,17 @@ pub(super) fn checked(source: &str) -> Pipeline {
     pipeline
 }
 
+/// [`checked`], against the whole library rather than the part the buffer
+/// reaches: completion offers what the buffer has not named yet.
+pub(super) fn checked_whole_library(source: &str) -> Pipeline {
+    let mut pipeline = Pipeline::new(BUFFER, source)
+        .strict_core()
+        .whole_library()
+        .with_library();
+    pipeline.run_all_checks();
+    pipeline
+}
+
 /// `karac check`'s diagnostics for `source`, errors, warnings and notes alike,
 /// each with its byte span and its machine-applicable fix.
 pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {

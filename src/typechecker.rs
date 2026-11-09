@@ -59,6 +59,10 @@ pub mod env;
 mod env_build;
 mod expr_call;
 mod expr_method_call;
+pub(crate) use expr_method_call::{
+    MAP_BUILTIN_METHODS, SET_BUILTIN_METHODS, SLICE_BUILTIN_METHODS, SORTED_MAP_BUILTIN_METHODS,
+    SORTED_SET_BUILTIN_METHODS, VEC_METHOD_NAMES,
+};
 mod fn_env_cross_task;
 mod pointer_ints;
 mod provider_share;
@@ -82,6 +86,9 @@ mod method_iterator_agg;
 mod method_mapset;
 mod method_nominal_tail;
 mod method_numeric;
+pub(crate) use method_numeric::{
+    FLOAT_METHODS, INT_METHODS, SIGNED_INT_METHODS, UNSIGNED_INT_METHODS,
+};
 mod method_optres_combinator;
 mod method_pointer;
 mod method_sequence_mutation;
@@ -1857,6 +1864,12 @@ pub type ProjTraits = FxHashMap<(String, String), String>;
 
 #[derive(Default, Clone)]
 pub struct TypeCheckResult {
+    /// Every impl the checker registered (user, library and baked), for
+    /// editor completion: the methods a value's type offers.
+    pub impls: Vec<env::ImplInfo>,
+    /// `Type.method` for each of those methods that takes `self` and is not
+    /// deprecated.
+    pub receiver_methods: FxHashSet<String>,
     pub errors: Vec<TypeError>,
     /// Non-fatal diagnostics: typecheck-time signals that don't block
     /// later phases. Currently carries `UnreachableArm` from the Maranget
@@ -4154,6 +4167,10 @@ pub struct TypeChecker<'a> {
     /// receiver type cannot be recovered from `expr_types` at that span (the
     /// method's return type is recorded there instead).
     pub(super) method_receiver_collections: FxHashMap<SpanKey, String>,
+    /// `Type.method` for every impl method that takes `self` in some form
+    /// and is not deprecated: the ones a `.` after a value can name. Exported with the impl table
+    /// for editor completion ([`TypeCheckResult::receiver_methods`]).
+    pub(super) receiver_methods: FxHashSet<String>,
 }
 
 /// Why a closure is `OnceFunction`-typed: which captured outer binding the
@@ -4461,6 +4478,7 @@ impl<'a> TypeChecker<'a> {
             profile_config: crate::manifest::ProfileConfig::default(),
             alloc_rejected_spans: FxHashSet::default(),
             method_receiver_collections: FxHashMap::default(),
+            receiver_methods: FxHashSet::default(),
         }
     }
 
@@ -4854,6 +4872,8 @@ impl<'a> TypeChecker<'a> {
             }
         }
         TypeCheckResult {
+            impls: std::mem::take(&mut self.env.impls),
+            receiver_methods: std::mem::take(&mut self.receiver_methods),
             errors: self.errors,
             warnings: self.warnings,
             expr_types: self.expr_types,

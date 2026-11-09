@@ -69,6 +69,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   design.md §10 says every standard-library error type does, so `?`
   converts them into `AnyError`; `Json.parse(t)?` in a function returning
   `Result[_, AnyError]` was refused (B-2026-11-09-30).
+
+- **Completion and rename in the editor.** `kara-lsp` answers
+  `textDocument/completion`: after `.`, the fields and the methods taking
+  `self` of the receiver's type, the library's and the builtin types'
+  included (an iterator's `map` and `filter` before the file names them);
+  after `std.`, the library's modules and their items; elsewhere, the
+  locals and parameters in scope and the file's items. `textDocument/rename`
+  renames a name at its declaration and every use in the file.
+
 - **`Slice.split(pred)`** (and so on `Vec` and arrays): the runs between
   the elements `pred` accepts, which are dropped, with Rust's empty runs
   (`[1, 0, 2, 3, 0].split(|x| x == 0)` is `[[1], [2, 3], []]`), so Rust's

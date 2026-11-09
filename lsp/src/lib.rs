@@ -9,7 +9,8 @@
 //! go-to-definition + document outline (`textDocument/definition` +
 //! `textDocument/documentSymbol`, slice 3), whole-document formatting
 //! (`textDocument/formatting`, slice 4), and find-references
-//! (`textDocument/references`, slice 5) — each a thin [`analysis`] call over a
+//! (`textDocument/references`, slice 5), completion (`textDocument/completion`)
+//! and rename (`textDocument/rename`) — each a thin [`analysis`] call over a
 //! `karac` library query. No user code is ever executed — feedback is purely
 //! static.
 
@@ -24,11 +25,11 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeActionRequest, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest, References,
-    Request as _,
+    CodeActionRequest, Completion, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest,
+    References, Rename, Request as _,
 };
 use lsp_types::{
-    CodeActionOptions, CodeActionProviderCapability, DocumentSymbolResponse,
+    CodeActionOptions, CodeActionProviderCapability, CompletionOptions, DocumentSymbolResponse,
     GotoDefinitionResponse, HoverProviderCapability, InitializeParams, Location, OneOf,
     PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
     Uri,
@@ -42,8 +43,7 @@ type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
 pub fn serve(connection: Connection) -> LspResult {
     // Full-document sync (so every edit hands us the whole buffer to
     // re-analyze) drives the diagnostics loop; hover is served from the same
-    // per-document text. Further capabilities (completion, inlay hints,
-    // rename) are turned on as their slices land.
+    // per-document text. Inlay hints are the capability still to come.
     let capabilities = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -51,6 +51,14 @@ pub fn serve(connection: Connection) -> LspResult {
         references_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        // `.` asks for the receiver's members as it is typed; anywhere else
+        // the client asks on its own (identifier characters, or Ctrl-Space).
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec![".".to_string()]),
+            ..Default::default()
+        }),
+        // Over the same resolver references `textDocument/references` uses.
+        rename_provider: Some(OneOf::Left(true)),
         // Quick fixes. The machine-applicable edits `karac fix` applies from
         // the CLI had no editor path at all — the compiler computed them and
         // nothing but the terminal could act on them. Declaring the kind (not
@@ -215,6 +223,34 @@ fn handle_request(
                     })
                     .unwrap_or_default();
                 lsp_server::Response::new_ok(id, locs)
+            }
+            Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+        },
+        Completion::METHOD => match serde_json::from_value::<lsp_types::CompletionParams>(params) {
+            Ok(p) => {
+                let pos = p.text_document_position.position;
+                let uri = p.text_document_position.text_document.uri.to_string();
+                let items = docs
+                    .get(&uri)
+                    .map(|text| analysis::completion(text, pos))
+                    .unwrap_or_default();
+                lsp_server::Response::new_ok(id, lsp_types::CompletionResponse::Array(items))
+            }
+            Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+        },
+        Rename::METHOD => match serde_json::from_value::<lsp_types::RenameParams>(params) {
+            Ok(p) => {
+                let pos = p.text_document_position.position;
+                let uri = p.text_document_position.text_document.uri;
+                // `None` (not on a renameable name) → a null result, which
+                // the client reports as "cannot rename here".
+                let edit = docs.get(&uri.to_string()).and_then(|text| {
+                    analysis::rename(text, pos, &p.new_name).map(|edits| lsp_types::WorkspaceEdit {
+                        changes: Some(std::iter::once((uri.clone(), edits)).collect()),
+                        ..Default::default()
+                    })
+                });
+                lsp_server::Response::new_ok(id, edit)
             }
             Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
         },

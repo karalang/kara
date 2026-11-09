@@ -52,7 +52,15 @@ pub(crate) struct Member {
 
 /// Check `source` for a position query; `None` when it does not parse.
 pub(crate) fn analyze(source: &str) -> Option<Nav> {
-    let pipeline = super::editor::checked(source);
+    nav_of(super::editor::checked(source), source)
+}
+
+/// [`analyze`] against the whole library, for completion.
+pub(crate) fn analyze_whole_library(source: &str) -> Option<Nav> {
+    nav_of(super::editor::checked_whole_library(source), source)
+}
+
+fn nav_of(pipeline: super::Pipeline, source: &str) -> Option<Nav> {
     pipeline.typed.as_ref()?;
     pipeline.resolved.as_ref()?;
     pipeline.effects.as_ref()?;
@@ -81,7 +89,18 @@ impl Nav {
         self.pipeline.effects.as_ref().expect("checked in analyze")
     }
 
-    fn user_items(&self) -> impl Iterator<Item = &Item> {
+    /// The checked program: the buffer's items, then the library's.
+    pub(crate) fn program(&self) -> &crate::ast::Program {
+        &self.pipeline.parsed.program
+    }
+
+    /// The checked text (the buffer, then the library) and where the
+    /// library starts in it.
+    pub(crate) fn text(&self) -> (&str, usize) {
+        (&self.text, self.user_len)
+    }
+
+    pub(crate) fn user_items(&self) -> impl Iterator<Item = &Item> {
         let user_len = self.user_len;
         self.pipeline
             .parsed
@@ -274,13 +293,13 @@ impl Nav {
     }
 }
 
-fn span_contains(span: &Span, at: usize) -> bool {
+pub(crate) fn span_contains(span: &Span, at: usize) -> bool {
     at >= span.offset && at < span.offset.saturating_add(span.length)
 }
 
 /// The name a type is declared under: `User` for `User`, `ref User`,
 /// `Rc[User]` or a `shared` `User`.
-fn type_head(ty: &Type) -> Option<&str> {
+pub(crate) fn type_head(ty: &Type) -> Option<&str> {
     match ty {
         Type::Named { name, .. } | Type::Shared(name) => Some(name),
         Type::Ref(t) | Type::MutRef(t) | Type::Rc(t) | Type::Arc(t) | Type::Weak(t) => type_head(t),
@@ -290,7 +309,7 @@ fn type_head(ty: &Type) -> Option<&str> {
 
 /// Where `e` ends in the source. A method call's span covers only its
 /// receiver, so its end is its closing `)`; a field access ends at its name.
-fn expr_end(text: &str, e: &Expr) -> usize {
+pub(crate) fn expr_end(text: &str, e: &Expr) -> usize {
     match &e.kind {
         ExprKind::MethodCall {
             args_close_span, ..
@@ -304,7 +323,7 @@ fn expr_end(text: &str, e: &Expr) -> usize {
 }
 
 /// The offset of `name` in `.name` / `?.name` right after `from`.
-fn member_name_offset(text: &str, from: usize, name: &str) -> Option<usize> {
+pub(crate) fn member_name_offset(text: &str, from: usize, name: &str) -> Option<usize> {
     let bytes = text.as_bytes();
     let skip_ws = |mut i: usize| {
         while i < bytes.len() && bytes[i].is_ascii_whitespace() {
@@ -326,7 +345,7 @@ fn member_name_offset(text: &str, from: usize, name: &str) -> Option<usize> {
 }
 
 /// The `fn` keyword's offset and the name's in the declaration at `span`.
-fn fn_name_offset(text: &str, span: &Span, name: &str) -> Option<(usize, usize)> {
+pub(crate) fn fn_name_offset(text: &str, span: &Span, name: &str) -> Option<(usize, usize)> {
     let end = (span.offset + span.length).min(text.len());
     let decl = text.get(span.offset..end)?;
     let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';

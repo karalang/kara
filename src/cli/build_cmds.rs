@@ -345,6 +345,7 @@ pub(super) fn run_multi_file_late_phases(
         user_source: None,
         mir_program: None,
         library_pruned: None,
+        prune_library: true,
         library_bodies: Default::default(),
     };
     pipeline.resolve();

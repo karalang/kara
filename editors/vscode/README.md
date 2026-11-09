@@ -5,7 +5,11 @@ Language support for [Kāra](https://github.com/karalang/kara).
 - **Syntax highlighting** for `.kara` files, with or without the server.
 - **Diagnostics** as you type, from the same checks `karac check` runs
   (parse, resolve, types, effects, ownership). No code is executed.
-- **Go to definition** and **find references** within a file.
+- **Completion**: after `.`, the fields and methods of the value's type,
+  the standard library's included; after `std.`, its modules and their
+  items; anywhere else, the locals and parameters in scope and the file's
+  own items.
+- **Go to definition**, **find references** and **rename** within a file.
 - **Hover** shows the type of the expression under the cursor and, on a
   function, its effect signature.
 - **Outline**, **Format Document** (`karac fmt`) and **quick fixes** for the
@@ -44,9 +48,9 @@ install the server.
 
 ## Limits in this release
 
-Go to definition and references work within the open file; jumping into
-another module or the standard library comes later, as do completion,
-signature help and rename (see `docs/roadmap.md` § Track 3).
+Go to definition, references and rename work within the open file;
+reaching across modules comes later, as does signature help (see
+`docs/roadmap.md` § Track 3).
 
 ## Developing
 

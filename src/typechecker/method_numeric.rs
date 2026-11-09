@@ -27,7 +27,7 @@ use super::TypeErrorKind;
 /// The value-receiver methods every float has, for the did-you-mean on an
 /// unknown one (B-2026-10-19-3). src/typechecker/tests.rs
 /// `every_listed_number_method_checks` calls each, so a name here exists.
-pub(super) const FLOAT_METHODS: &[&str] = &[
+pub(crate) const FLOAT_METHODS: &[&str] = &[
     "abs",
     "acos",
     "acosh",
@@ -80,7 +80,7 @@ pub(super) const FLOAT_METHODS: &[&str] = &[
 ];
 
 /// The value-receiver methods every integer has, as [`FLOAT_METHODS`].
-pub(super) const INT_METHODS: &[&str] = &[
+pub(crate) const INT_METHODS: &[&str] = &[
     "abs_diff",
     "bits_as_f32",
     "bits_as_f64",
@@ -136,7 +136,7 @@ pub(super) const INT_METHODS: &[&str] = &[
 ];
 
 /// The methods only a signed integer has.
-pub(super) const SIGNED_INT_METHODS: &[&str] = &[
+pub(crate) const SIGNED_INT_METHODS: &[&str] = &[
     "abs",
     "div_euclid",
     "rem_euclid",
@@ -145,7 +145,7 @@ pub(super) const SIGNED_INT_METHODS: &[&str] = &[
 ];
 
 /// The methods only an unsigned integer has.
-pub(super) const UNSIGNED_INT_METHODS: &[&str] = &["is_power_of_two", "next_power_of_two"];
+pub(crate) const UNSIGNED_INT_METHODS: &[&str] = &["is_power_of_two", "next_power_of_two"];
 
 /// The method a number of type `ty` has that an unknown `method` most likely
 /// meant.
