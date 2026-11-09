@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 204 |
 | false-positive | 165 |
-| perf | 141 |
+| perf | 142 |
 | missing-feature | 114 |
 | soundness | 56 |
 | miscompile | 47 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 323 |
 | mir-llvm | 174 |
 | mir | 150 |
-| cli | 89 |
+| cli | 90 |
 | ownership | 65 |
 | parser | 52 |
 | interp | 39 |
@@ -112,6 +112,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-28 | 2026-11-09 | typecheck | low | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | — |
 | B-2026-11-09-31 | 2026-11-09 | typecheck | medium | A program's `impl Clone for String` is accepted and replaces the library's `clone`: an impl overlapping a baked library trait impl is not refused | — |
 | B-2026-11-09-32 | 2026-11-09 | mir | medium | `Clone.clone(s)` on a `String` passes `karac check`, then `__mir-run` refuses it: "a type that failed to check is not lowered yet" | — |
+| B-2026-11-09-33 | 2026-11-09 | cli | medium | kara-lsp: incremental user-code checking -- a completion re-checks the whole buffer and the unpruned library on every request: 186 ms on a 5-line file, 428 ms mid-file in mini_parsy (4.9k lines), 1.54 s in mini_markdown (14.8k lines) | — |
 
 ### Relocated
 
