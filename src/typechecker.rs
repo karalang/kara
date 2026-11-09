@@ -92,6 +92,8 @@ mod method_user_impl;
 mod method_vec_mutation;
 mod patterns;
 mod refinement_elision;
+mod rust_last_mut;
+mod rust_scan;
 mod stdlib_io;
 mod stdlib_iter;
 mod stdlib_map;
@@ -3523,6 +3525,11 @@ pub struct TypeChecker<'a> {
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// A `match`/`if let` over `v.last_mut()` or `v.first_mut()`, keyed by
+    /// the receiver's span: the whole expression's span and its rewrite
+    /// through an index, which the refusal of the method carries
+    /// (`rust_last_mut`, B-2026-11-08-46).
+    pub(super) end_mut_rewrites: FxHashMap<SpanKey, (Span, String)>,
     /// The `?`s in a `fn main()` that returns `()`, which `check_function`
     /// fixes by declaring `-> Result[(), AnyError]` (B-2026-11-07-43).
     pub(super) unit_main_questions: Vec<Span>,
@@ -4316,6 +4323,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
+            end_mut_rewrites: FxHashMap::default(),
             unit_main_questions: Vec::new(),
             loose_expr_spans: FxHashSet::default(),
             as_str_calls: FxHashMap::default(),

@@ -59,6 +59,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- **`Slice.split(pred)`** (and so on `Vec` and arrays): the runs between
+  the elements `pred` accepts, which are dropped, with Rust's empty runs
+  (`[1, 0, 2, 3, 0].split(|x| x == 0)` is `[[1], [2, 3], []]`), so Rust's
+  `line.split(|&ch| ch == '#')` carries over through `karac fix`
+  (docs/library/collections.md § Slice; B-2026-11-08-47).
+
 - **A block may declare a constant.** `const MOD: i64 = 1_000_000_007;` as
   the first line of a function body, the way a Rust solution writes it, was
   a parse error advising `r#const`. Its scope is the rest of the block; it
@@ -343,6 +349,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`T.build(n)` under `T: Make`) is refused naming the bounds, where it got
   an internal "a type that failed to check is not lowered yet"
   (B-2026-11-09-4).
+- Rust's `scan` closure over a lent state (`|m, x| { *m = (*m).max(x);
+  Some(*m) }`) gets one error saying Kāra's closure takes the state by
+  value and returns `Some((next_state, item))`, and `karac fix` writes
+  `|m, x| { let m = m.max(x); Some((m, m)) }`; it drew six "drop the `*`"
+  fixes that left a closure of the wrong type (B-2026-11-08-45).
+
+- `match v.last_mut() { Some(x) if g => body, _ => other }` and
+  `if let Some(x) = v.last_mut() { .. }` are rewritten by `karac fix` to
+  `if v.len() > 0 and g { .. } else { .. }` through `v[v.len() - 1]`
+  (or `v[0]` for `first_mut`) when only `x` reaches the element
+  (B-2026-11-08-46).
+
 - A `select` that is a function's tail value no longer draws `must_use`
   warnings on the statements it is rewritten into, and a warning from a
   library body (`recv_timeout`'s) no longer reaches a program's output at a

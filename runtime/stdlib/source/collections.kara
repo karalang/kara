@@ -232,6 +232,27 @@ impl[T] Slice[T] {
         }
         lo
     }
+
+    /// The runs between the elements `pred` accepts, which are dropped:
+    /// separators at either end or side by side give empty runs, so there
+    /// is always one more run than there are separators, as Rust's
+    /// `slice::split` (docs/library/collections.md, B-2026-11-08-47).
+    fn split(self, pred: own MutFn(T) -> bool) -> Vec[Slice[T]] {
+        let mut pred = pred;
+        let n = self.len();
+        let mut runs: Vec[Slice[T]] = Vec.new();
+        let mut start = 0;
+        let mut i = 0;
+        while i < n {
+            if pred(self[i]) {
+                runs.push(self[start..i]);
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+        runs.push(self[start..n]);
+        runs
+    }
 }
 
 impl[T: Display] Slice[T] {

@@ -1977,6 +1977,25 @@ impl<'a> super::TypeChecker<'a> {
                                 ": write through an index instead (`{at} = ..`, or \
                                  `{at}.field = ..`), after checking the vector is not empty"
                             ));
+                            // The `match`/`if let` around it rewrites
+                            // mechanically (B-2026-11-08-46).
+                            if let Some((whole, text)) = self.end_mut_rewrite(&object.span) {
+                                if text.contains('\n') {
+                                    msg.push_str(
+                                        "; this one rewrites mechanically, as `karac fix` writes it",
+                                    );
+                                } else {
+                                    msg.push_str(&format!(": write `{text}`"));
+                                }
+                                self.error_fix_diffs.insert(
+                                    SpanKey::from_span(span),
+                                    vec![crate::resolver::TextEdit {
+                                        offset: whole.offset,
+                                        length: whole.length,
+                                        replacement: text,
+                                    }],
+                                );
+                            }
                         } else if let Some(suggestion) =
                             crate::edit_distance::suggest_method(method, &candidate_refs)
                         {

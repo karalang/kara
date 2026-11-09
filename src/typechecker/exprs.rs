@@ -12674,6 +12674,7 @@ impl<'a> super::TypeChecker<'a> {
                 then_block,
                 else_branch,
             } => {
+                self.note_end_mut_rewrite(expr);
                 let scrut_ty = self.infer_expr(value);
                 // `if let Some(b) = None`: the `None`'s `T` is solved by the
                 // body, as a `match` arm solves it, rather than left an
@@ -12751,7 +12752,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
 
-            ExprKind::Match { scrutinee, arms } => self.infer_match(scrutinee, arms, &expr.span),
+            ExprKind::Match { scrutinee, arms } => {
+                self.note_end_mut_rewrite(expr);
+                self.infer_match(scrutinee, arms, &expr.span)
+            }
 
             ExprKind::While {
                 condition,

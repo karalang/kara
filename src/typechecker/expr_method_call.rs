@@ -1744,8 +1744,12 @@ impl<'a> super::TypeChecker<'a> {
                 .collect(),
         );
         self.method_call_ends.push(ends);
+        let errors_before = self.errors.len();
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
         self.method_call_ends.pop();
+        if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
+            self.explain_rust_scan(args, errors_before);
+        }
         ty
     }
 
