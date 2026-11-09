@@ -2317,14 +2317,44 @@ impl super::Parser {
                     }
                     self.expect(&Token::RightParen)?;
                     let span = self.span_from(&start);
-                    self.error_at(
-                        &format!(
-                            "a parameter's pattern must be irrefutable, and `{name}(..)` matches \
-                             only some values (design.md § Destructuring parameters): take the value \
-                             and use `if let` or `match` in the body"
+                    // Rust's `|Reverse(s)| s` over a `BinaryHeap<Reverse<T>>`'s
+                    // items, in a program that uses `std::cmp::Reverse`:
+                    // Kāra's heap holds the value itself, so the parameter is
+                    // the inner pattern (kata 1086, B-2026-11-09-42).
+                    let unwrapped = match patterns.as_slice() {
+                        [inner] if name == "Reverse" && self.uses_rust_reverse() => self
+                            .source_at(inner.span.offset, inner.span.length)
+                            .map(str::to_string),
+                        _ => None,
+                    };
+                    match unwrapped {
+                        Some(inner) => {
+                            self.error_at(
+                                &format!(
+                                    "`Reverse({inner})` is Rust's `std::cmp::Reverse`, which Kāra \
+                                     has no use for: its `PriorityQueue` holds the value itself, so \
+                                     the parameter is `{inner}`"
+                                ),
+                                span,
+                            );
+                            self.fix_edits.insert(
+                                crate::resolver::SpanKey::from_span(&span),
+                                crate::resolver::TextEdit {
+                                    offset: span.offset,
+                                    length: span.length,
+                                    replacement: inner,
+                                },
+                            );
+                        }
+                        None => self.error_at(
+                            &format!(
+                                "a parameter's pattern must be irrefutable, and `{name}(..)` matches \
+                                 only some values (design.md § Destructuring parameters): take the \
+                                 value and use `if let` or `match` in the body"
+                            ),
+                            span,
                         ),
-                        span,
-                    );
+                    }
                     Some(Pattern {
                         id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::TupleVariant {

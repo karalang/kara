@@ -2780,6 +2780,26 @@ impl Parser {
         ])
     }
 
+    /// Whether the program uses Rust's `std::cmp::Reverse`: it imports it
+    /// (a `cmp` path segment followed, before the statement's `;`, by
+    /// `Reverse`: `use std::cmp::Reverse;`, `use std::cmp::{Ordering,
+    /// Reverse};`), or, once `karac fix` has deleted the import, it still
+    /// writes a `BinaryHeap<Reverse<..>>` or `BinaryHeap[Reverse[..]]`.
+    fn uses_rust_reverse(&self) -> bool {
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let ident = |i: usize, want: &str| matches!(tok(i), Some(Token::Identifier { name, .. }) if name == want);
+        let opens = |i: usize| matches!(tok(i), Some(Token::LeftBracket | Token::LessThan));
+        (0..self.tokens.len()).any(|i| {
+            (ident(i, "BinaryHeap") && opens(i + 1) && ident(i + 2, "Reverse"))
+                || (ident(i, "cmp")
+                    && self.tokens[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t.token, Token::Semicolon))
+                        .enumerate()
+                        .any(|(k, _)| ident(i + 1 + k, "Reverse")))
+        })
+    }
+
     fn source_at(&self, offset: usize, length: usize) -> Option<&str> {
         let (source, base) = self.source.as_ref()?;
         let at = offset.checked_sub(*base)?;

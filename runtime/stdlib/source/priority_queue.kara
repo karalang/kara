@@ -201,6 +201,57 @@ impl[T: Ord] PriorityQueue[T] {
         }
         out
     }
+
+    // The elements in the queue's own order, the order of its backing
+    // vector: every element once, but not pop order (that is
+    // `into_sorted_vec`), as Rust's `BinaryHeap::iter`. The order is fixed
+    // by the pushes and pops that built the queue, so it is the same on
+    // every run and every backend. The iterator is the backing vector's,
+    // named as every collection's own `iter` names its type.
+    fn iter(ref self) -> VecIter[T] {
+        self.xs.iter()
+    }
+
+    // The backing vector, in `iter`'s order, without sorting it (Rust's
+    // `BinaryHeap::into_vec`).
+    fn into_vec(own self) -> Vec[T] {
+        let h = self;
+        h.xs
+    }
+}
+
+// A queue is borrowed and consumed as every collection is (collections.md
+// § Iteration): `for x in pq` visits `iter()`'s order, and `pq.into_iter()`
+// moves the elements out in that order (kata 1086).
+impl[T: Ord] Iterable for PriorityQueue[T] {
+    type Item = ref T;
+
+    fn iter(self) -> VecIter[T] {
+        self.xs.iter()
+    }
+}
+
+impl[T: Ord] IntoIterator for PriorityQueue[T] {
+    type Item = T;
+
+    fn into_iter(own self) -> VecIntoIter[T] {
+        self.into_vec().into_iter()
+    }
+}
+
+impl[T: Ord + Clone] Clone for PriorityQueue[T] {
+    fn clone(self) -> PriorityQueue[T] {
+        PriorityQueue { xs: self.xs.clone(), max: self.max }
+    }
+}
+
+// Rendered as its backing vector is, `[a, b]` in `iter`'s order
+// (collections.md § Common traits: every collection is `Display` when its
+// elements are).
+impl[T: Ord + Display] Display for PriorityQueue[T] {
+    fn to_string(self) -> String {
+        self.xs.to_string()
+    }
 }
 
 // The sift loops work on a slice view of the backing vector rather than

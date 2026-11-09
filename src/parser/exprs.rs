@@ -3320,6 +3320,12 @@ impl super::Parser {
                 });
             }
 
+            // `BinaryHeap.new` named as a value, Rust's
+            // `entry(k).or_insert_with(BinaryHeap::new)`: a constructor as
+            // much as the call is (kata 1086).
+            if path.len() == 2 && path[0] == "BinaryHeap" {
+                self.note_rust_heap_ctor(start.offset, &path[1]);
+            }
             return Some(Expr {
                 id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),

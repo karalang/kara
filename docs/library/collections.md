@@ -308,6 +308,10 @@ A binary heap, `T: Ord`: a `Vec[T]` arranged so that the next element out is at 
 | `is_empty` | `fn is_empty(self) -> bool` | |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
 | `into_sorted_vec` | `fn into_sorted_vec(own self) -> Vec[T]` | Consumes the queue in pop order: ascending for smallest-first, descending for largest-first |
+| `iter` | `fn iter(self) -> VecIter[T]` | Every element once, in the queue's own order, not pop order |
+| `into_vec` | `fn into_vec(own self) -> Vec[T]` | The backing vector, in `iter`'s order, unsorted |
+
+The queue's own order, which `iter`, `into_iter`, `for` and `Display` follow, is the order of its backing vector, as with Rust's `BinaryHeap::iter`. It is fixed by the pushes and pops that built the queue, so it is the same on every run and every backend, but it is not pop order; `into_sorted_vec` gives that (kata 1086, B-2026-11-09-41).
 
 ```kara
 let mut pq: PriorityQueue[i64] = PriorityQueue.new();
@@ -332,12 +336,13 @@ Every collection works with `for`. A collection is `Iterable`, so `for x in c` b
 | `VecDeque[T]` | `ref T` | `mut ref T` | `T` | Front to back |
 | `SortedMap[K, V]` | `(ref K, ref V)` | `(ref K, mut ref V)` | `(K, V)` | Ascending key |
 | `SortedSet[T]` | `ref T` | none | `T` | Ascending |
+| `PriorityQueue[T]` | `ref T` | none | `T` | The queue's own order, not pop order |
 
-`Set` and `SortedSet` have no `iter_mut`, because changing an element in place would break the hash or the ordering. `iter()` borrows the collection, `iter_mut()` borrows it mutably for the whole iteration, and `into_iter()` consumes it. Each returns `impl Iterator` with the item shown. `into_iter` is each collection's `IntoIterator` impl ([design.md § `Iterator` and `Iterable`](../design.md#iterator-and-iterable)), so a generic `C: IntoIterator[Item = T]` takes any of them, and an iterator or range as well: every `Iterator` is `IntoIterator` of itself. Each collection's `extend` is likewise its `Extend` impl (`std.iter.Extend`, [design.md §9](../design.md#9-traits)), so `fn fill[C: Extend[i64]](c: mut ref C)` takes a `Vec`, `VecDeque`, `Set` or `SortedSet` of `i64`.
+`Set`, `SortedSet` and `PriorityQueue` have no `iter_mut`, because changing an element in place would break the hash, the ordering or the heap. `iter()` borrows the collection, `iter_mut()` borrows it mutably for the whole iteration, and `into_iter()` consumes it. Each returns `impl Iterator` with the item shown. `into_iter` is each collection's `IntoIterator` impl ([design.md § `Iterator` and `Iterable`](../design.md#iterator-and-iterable)), so a generic `C: IntoIterator[Item = T]` takes any of them, and an iterator or range as well: every `Iterator` is `IntoIterator` of itself. Each collection's `extend` is likewise its `Extend` impl (`std.iter.Extend`, [design.md §9](../design.md#9-traits)), so `fn fill[C: Extend[i64]](c: mut ref C)` takes a `Vec`, `VecDeque`, `Set` or `SortedSet` of `i64`.
 
 ## Common traits
 
-`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap` and `SortedSet` implement `Clone`. Every collection implements `Display` when its elements implement `Display`, and `FromIterator` for its natural element type, so `collect` can build it. `Display` adds only punctuation, never a type name ([design.md §9](../design.md#9-traits)): `Vec`, `Array`, `Slice` and `VecDeque` render as `[a, b]`, `Map` and `SortedMap` as `{k: v, k2: v2}`, and `Set` and `SortedSet` as `{a, b}`; empty ones render as `[]` or `{}`.
+`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap`, `SortedSet` and `PriorityQueue` implement `Clone`. Every collection implements `Display` when its elements implement `Display`, and `FromIterator` for its natural element type, so `collect` can build it. `Display` adds only punctuation, never a type name ([design.md §9](../design.md#9-traits)): `Vec`, `Array`, `Slice`, `VecDeque` and `PriorityQueue` (in its own order) render as `[a, b]`, `Map` and `SortedMap` as `{k: v, k2: v2}`, and `Set` and `SortedSet` as `{a, b}`; empty ones render as `[]` or `{}`.
 
 `Vec[T]`, `Array[T, N]`, `Slice[T]` and `VecDeque[T]` implement `PartialEq` (with `Rhs = Self`) when `T: PartialEq`, and `Eq` when `T: Eq`: two sequences are equal when they have the same length and equal elements in order. They implement `PartialOrd` and `Ord` when `T` does, comparing lexicographically. The comparison traits borrow both operands ([design.md §9](../design.md#operator-traits)).
 
