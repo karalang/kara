@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 203 |
 | false-positive | 165 |
-| perf | 140 |
+| perf | 141 |
 | missing-feature | 113 |
 | soundness | 55 |
 | miscompile | 47 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 319 |
+| typecheck | 320 |
 | mir-llvm | 174 |
 | mir | 149 |
 | cli | 89 |
@@ -109,6 +109,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-21 | 2026-11-09 | typecheck | low | `Option` accepts `Result`'s `is_ok()` and `is_err()` (as `is_some`/`is_none`), though docs/library/core-types.md lists them on `Result` only, so Rust's `xs.binary_search(v).is_ok()` passes unremarked and gets no `.is_some()` fix | — |
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-09-26 | 2026-11-09 | mir-llvm | low | A presized push fill whose trip count is not a constant keeps two exits a trip, its bound and its reservation's reach, so LLVM does not vectorize it: kata 484's `(1..=n).collect()` (n = letters.len() + 1) runs 7 instructions an element where Rust's TrustedLen fill is vectorized, and its `s.chars().collect()` runs 14 a char against Rust's 11 | — |
+| B-2026-11-09-28 | 2026-11-09 | typecheck | medium | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | — |
 
 ### Relocated
 
