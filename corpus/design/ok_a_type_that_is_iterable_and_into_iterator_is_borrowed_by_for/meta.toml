@@ -1,0 +1,9 @@
+source = "B-2026-11-08-76"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iterators", "traits"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Iterator and Iterable: a `for` over a non-Iterator borrows through Iterable, and never calls into_iter. A Ring[T] implementing both Iterable and IntoIterator, as Vec does, is borrowed by two bare loops (lengths 1 + 2 = 3, then each word) and consumed only by the explicit into_iter (2 items)."

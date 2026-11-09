@@ -1820,9 +1820,13 @@ impl<'a> super::TypeChecker<'a> {
             {
                 false
             }
+            // A type that is `Iterable` too is borrowed through it, as a
+            // collection is (design.md § `Iterator` and `Iterable`,
+            // B-2026-11-08-76).
             Type::Named { name, args } => {
                 self.env.has_impl("IntoIterator", name, args)
                     && !self.env.has_impl("Iterator", name, args)
+                    && !self.env.has_impl("Iterable", name, args)
             }
             _ => false,
         }

@@ -292,6 +292,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   parameters.** `step(v, |seen| Some((Vec.new(), seen.len())))` over
   `g: Fn(S) -> Option[(S, O)]`, and the same `scan` state reset, were refused
   as "cannot infer type parameter 'O'" (B-2026-11-08-58).
+- **A type that implements both `Iterable` and `IntoIterator` is borrowed
+  by a bare `for`**, as `Vec` is (design.md § `Iterator` and `Iterable`): it
+  was refused as "implements `IntoIterator` but not `Iterator`"
+  (B-2026-11-08-76).
 
 ### Performance
 

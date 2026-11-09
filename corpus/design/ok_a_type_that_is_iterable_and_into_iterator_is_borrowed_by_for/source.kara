@@ -1,0 +1,31 @@
+struct Ring[T] {
+    items: Vec[T],
+}
+
+impl[T] Iterable for Ring[T] {
+    type Item = ref T;
+    fn iter(self) -> impl Iterator[Item = ref T] {
+        self.items.iter()
+    }
+}
+
+impl[T] IntoIterator for Ring[T] {
+    type Item = T;
+    fn into_iter(own self) -> impl Iterator[Item = T] {
+        self.items.into_iter()
+    }
+}
+
+fn main() {
+    let r = Ring { items: ["a".to_string(), "bb".to_string()] };
+    let mut n = 0;
+    for w in r {
+        n += w.len();
+    }
+    println(n);
+    for w in r {
+        println(w);
+    }
+    let all: Vec[String] = r.into_iter().collect();
+    println(all.len());
+}
