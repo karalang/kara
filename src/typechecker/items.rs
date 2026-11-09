@@ -947,6 +947,17 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// Whether `ty` is a path to a type `type_vis` records as not `pub`.
+    fn names_private_type(ty: &TypeExpr, type_vis: &HashMap<String, bool>) -> bool {
+        match &ty.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .last()
+                .is_some_and(|last| type_vis.get(last).copied() == Some(false)),
+            _ => false,
+        }
+    }
+
     fn check_type_expr_visibility(
         &mut self,
         ty: &TypeExpr,
@@ -1349,6 +1360,14 @@ impl<'a> super::TypeChecker<'a> {
                 Item::ConstDecl(c) if c.is_pub => {
                     self.check_type_expr_visibility(&c.ty, &[], &type_vis, "constant", &c.name);
                 }
+                // An inherent impl of a type that is not `pub` is on no
+                // public surface: its `pub fn`s are reached only through the
+                // type, which users of the package cannot name. Rust's
+                // `struct Solution; impl Solution { pub fn .. }` is that
+                // shape (B-2026-11-09-24).
+                Item::ImplBlock(imp)
+                    if imp.trait_name.is_none()
+                        && Self::names_private_type(&imp.target_type, &type_vis) => {}
                 Item::ImplBlock(imp) => {
                     let impl_scope = Self::generic_param_names(&imp.generic_params);
                     for ii in &imp.items {
