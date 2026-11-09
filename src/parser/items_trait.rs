@@ -618,7 +618,7 @@ impl super::Parser {
                 let binding = self.parse_assoc_type_binding()?;
                 items.push(ImplItem::AssocType(Box::new(binding)));
             } else {
-                let is_pub = self.eat(&Token::Pub);
+                let is_pub = self.eat_pub();
                 let is_private = if !is_pub {
                     self.eat(&Token::Private)
                 } else {

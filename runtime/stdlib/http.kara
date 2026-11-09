@@ -42,6 +42,17 @@ struct HttpError {
     message: String,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for HttpError {
+    fn to_string(ref self) -> String {
+        self.message.clone()
+    }
+}
+
+impl Error for HttpError { }
+
 // Chained-builder request descriptor (phase-8 line 24). Declared
 // before `impl Client` so `Client.request(...) -> RequestBuilder`
 // finds the type at impl-block registration time. The `handle` is an

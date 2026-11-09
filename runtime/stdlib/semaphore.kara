@@ -31,6 +31,19 @@ enum SemaphoreError {
     Timeout,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for SemaphoreError {
+    fn to_string(ref self) -> String {
+        match self {
+            SemaphoreError.Timeout => "timed out waiting for a permit",
+        }
+    }
+}
+
+impl Error for SemaphoreError { }
+
 // Opaque semaphore handle. `handle_id` keys into the interpreter's
 // `semaphore_table` side-table; `0` is reserved for a hand-rolled
 // `Semaphore { handle_id: 0 }` literal that bypassed `Semaphore.new`

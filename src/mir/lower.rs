@@ -27317,7 +27317,8 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
     ),
     (
         include_str!("../../runtime/stdlib/cli.kara"),
-        &["Parser", "Arg"],
+        // `CliError` for its `Display` (design.md §10).
+        &["Parser", "Arg", "CliError"],
         &[],
     ),
     (

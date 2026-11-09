@@ -6567,6 +6567,38 @@ impl<'a> super::TypeChecker<'a> {
             let of = ty
                 .map(|t| format!(" of `{}`", type_display(&t)))
                 .unwrap_or_default();
+            // `let v = it.collect();`, what Rust's `collect::<Vec<_>>()`
+            // leaves once its turbofish is gone: the collection is the
+            // binding's to name, and a `Vec` of the items is the one Rust's
+            // `_` meant.
+            let key = SpanKey::from_span(&span);
+            if let (Some(item), Some(at)) = (
+                self.collect_items.get(&key).cloned(),
+                self.untyped_let_names.get(&key).copied(),
+            ) {
+                let item = self.resolved_now(&item);
+                if !contains_type_var(&item) {
+                    let vec = format!("Vec[{}]", Self::vec_elem_source(&item));
+                    self.type_error_with_fix_it(
+                        format!(
+                            "cannot infer what this `collect` builds: nothing in the body \
+                             fixes it (design.md § Type inference); name it on the binding, \
+                             `: {vec}` for a `Vec` of the items"
+                        ),
+                        span,
+                        TypeErrorKind::CannotInferTypeParam,
+                        FixIt {
+                            span: Span {
+                                offset: at.offset + at.length,
+                                length: 0,
+                                ..at
+                            },
+                            replacement: format!(": {vec}"),
+                        },
+                    );
+                    continue;
+                }
+            }
             self.type_error(
                 format!(
                     "cannot infer type parameter '{name}'{of}: nothing in the body fixes \
@@ -11950,6 +11982,10 @@ impl<'a> super::TypeChecker<'a> {
                             expr.span,
                             crate::typechecker::TypeErrorKind::NotCallable,
                         );
+                        let key = SpanKey::from_span(&expr.span);
+                        if let Some(edits) = self.struct_call_literals.remove(&key) {
+                            self.error_fix_diffs.insert(key, edits);
+                        }
                     }
                 }
                 // A `weak` local or parameter is storage, as a `weak` field
@@ -12255,6 +12291,61 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     Type::Error => Type::Error,
                     t if self.after_into_iter_hint(t) => Type::Error,
+                    // Rust's newtype `.0`: a distinct type unwraps with
+                    // `.raw()` (design.md § Distinct types), which is what a
+                    // tuple struct's fix makes of the declaration.
+                    Type::Named { name, .. }
+                        if *index == 0 && self.env.distinct_bases.contains_key(name) =>
+                    {
+                        let base = self.env.distinct_bases[name].clone();
+                        let from = object.span.offset + object.span.length;
+                        let to = expr.span.offset + expr.span.length;
+                        self.type_error_with_fix_it(
+                            format!(
+                                "`{name}` is a distinct type, not a tuple: its value is \
+                                 `.raw()`, not `.0` (design.md § Distinct types)"
+                            ),
+                            expr.span,
+                            TypeErrorKind::InvalidTupleIndex,
+                            FixIt {
+                                span: Span {
+                                    offset: from,
+                                    length: to.saturating_sub(from),
+                                    ..expr.span
+                                },
+                                replacement: ".raw()".to_string(),
+                            },
+                        );
+                        base
+                    }
+                    // Rust's tuple-struct `.0` on a struct, whose fix names
+                    // its fields: the field in that place.
+                    Type::Named { name, .. }
+                        if self.env.structs.get(name).is_some_and(|i| {
+                            !i.defining_stdlib_origin && (*index as usize) < i.fields.len()
+                        }) =>
+                    {
+                        let field = self.env.structs[name].fields[*index as usize].0.clone();
+                        let from = object.span.offset + object.span.length;
+                        let to = expr.span.offset + expr.span.length;
+                        self.type_error_with_fix_it(
+                            format!(
+                                "`{name}` is a struct, not a tuple: its fields have names, and \
+                                 field {index} is `.{field}`"
+                            ),
+                            expr.span,
+                            TypeErrorKind::InvalidTupleIndex,
+                            FixIt {
+                                span: Span {
+                                    offset: from,
+                                    length: to.saturating_sub(from),
+                                    ..expr.span
+                                },
+                                replacement: format!(".{field}"),
+                            },
+                        );
+                        Type::Error
+                    }
                     _ => {
                         self.type_error(
                             format!("tuple index on non-tuple type '{}'", type_display(&obj_ty)),

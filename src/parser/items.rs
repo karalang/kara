@@ -88,6 +88,77 @@ impl super::Parser {
         true
     }
 
+    /// Eat a `pub`, and refuse Rust's scoped forms after it with the Kāra
+    /// visibility that covers them: `pub(crate)`, `pub(super)` and
+    /// `pub(in path)` are deleted (the default is the whole package), and
+    /// `pub(self)` becomes `private`. Whether the item is `pub`; after a
+    /// `pub(self)`, the next token is the `private` the fix writes.
+    pub(crate) fn eat_pub(&mut self) -> bool {
+        if !self.check(&Token::Pub) {
+            return false;
+        }
+        if self.peek_token_at(1) != Token::LeftParen {
+            self.advance();
+            return true;
+        }
+        let scope = match self.peek_token_ref_at(2) {
+            Token::Identifier { name, .. } if name == "crate" || name == "super" => name.clone(),
+            Token::SelfValue => "self".to_string(),
+            Token::In => "in".to_string(),
+            _ => {
+                self.advance();
+                return true;
+            }
+        };
+        let close = (self.pos + 3..(self.pos + 12).min(self.tokens.len()))
+            .find(|&i| self.tokens[i].token == Token::RightParen);
+        let Some(close) = close else {
+            self.advance();
+            return true;
+        };
+        let start = self.current_span();
+        let end = self.tokens[close].span;
+        let span = Span {
+            length: end.offset + end.length - start.offset,
+            ..start
+        };
+        let written = if scope == "in" {
+            "pub(in ..)".to_string()
+        } else {
+            format!("pub({scope})")
+        };
+        if scope == "self" {
+            self.error_at(
+                &format!(
+                    "`{written}` is Rust: Kāra limits an item to its directory with `private`"
+                ),
+                span,
+            );
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&span),
+                crate::resolver::TextEdit {
+                    offset: span.offset,
+                    length: span.length,
+                    replacement: "private".to_string(),
+                },
+            );
+            self.tokens[close].token = Token::Private;
+            self.pos = close;
+        } else {
+            self.error_at(
+                &format!(
+                    "`{written}` is Rust: a Kāra item is visible to its whole package \
+                     by default, so it needs no marker (`pub` exports it from the package, \
+                     `private` keeps it to its directory)"
+                ),
+                span,
+            );
+            self.record_token_range_deletion(self.pos, close + 1, &span);
+            self.pos = close + 1;
+        }
+        false
+    }
+
     pub(crate) fn parse_item(&mut self) -> Option<Item> {
         // Collect any leading `///` doc-comment tokens. The text gets
         // attached to the next item via `take_pending_doc` at the
@@ -95,7 +166,7 @@ impl super::Parser {
         self.collect_leading_doc_comments();
         let attributes = self.parse_attributes();
         // Visibility keyword: `pub` OR `private`, never both.
-        let is_pub = self.eat(&Token::Pub);
+        let is_pub = self.eat_pub();
         let is_private = if !is_pub {
             self.eat(&Token::Private)
         } else if self.check(&Token::Private) {
@@ -2403,8 +2474,106 @@ impl super::Parser {
 
     // ── Structs ──────────────────────────────────────────────────
 
-    /// A struct's `[with E]` is in scope in its field types (design.md
-    /// § Effect variables); the scope closes however the parse ends.
+    /// `struct Name(T);` is a Rust tuple struct, which Kāra does not have.
+    /// The fix names its fields (`value` for one, `f0`, `f1`, .. for more)
+    /// and keeps their types; a call `Name(x)` and a `.0` are then refused
+    /// with the literal and the field as their fixes. Called at the `(`;
+    /// consumes through the `;`.
+    fn reject_tuple_struct(&mut self, name: &str) {
+        let open = self.pos;
+        let mut depth = 0usize;
+        let mut close = None;
+        // Each field's first and last token, split at top-level commas.
+        let mut fields: Vec<(usize, usize)> = Vec::new();
+        let mut start = open + 1;
+        for i in open..self.tokens.len() {
+            match self.tokens[i].token {
+                Token::LeftParen | Token::LeftBracket => depth += 1,
+                Token::RightParen | Token::RightBracket => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        if start < i {
+                            fields.push((start, i - 1));
+                        }
+                        close = Some(i);
+                        break;
+                    }
+                }
+                Token::Comma if depth == 1 => {
+                    if start < i {
+                        fields.push((start, i - 1));
+                    }
+                    start = i + 1;
+                }
+                Token::LeftBrace | Token::RightBrace | Token::Semicolon | Token::EOF => break,
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            self.error("Expected `{` after struct name; a struct with no fields is `{}`");
+            return;
+        };
+        let at = self.current_span();
+        let mut end = close + 1;
+        if self.tokens.get(end).map(|t| &t.token) == Some(&Token::Semicolon) {
+            end += 1;
+        }
+        let names: Vec<String> = if fields.len() == 1 {
+            vec!["value".to_string()]
+        } else {
+            (0..fields.len()).map(|i| format!("f{i}")).collect()
+        };
+        let text = |p: &Self, (a, b): (usize, usize)| -> Option<(bool, String)> {
+            let is_pub = p.tokens[a].token == Token::Pub;
+            let a = if is_pub { a + 1 } else { a };
+            if a > b {
+                return None;
+            }
+            let (x, y) = (p.tokens[a].span, p.tokens[b].span);
+            let (src, base) = p.source.as_ref()?;
+            let t =
+                src.get(x.offset.checked_sub(*base)?..(y.offset + y.length).checked_sub(*base)?)?;
+            (!t.contains(['\n', '/'])).then(|| (is_pub, t.to_string()))
+        };
+        let typed: Option<Vec<String>> = fields
+            .iter()
+            .zip(&names)
+            .map(|(&f, n)| {
+                text(self, f)
+                    .map(|(is_pub, t)| format!("{}{n}: {t}", if is_pub { "pub " } else { "" }))
+            })
+            .collect();
+        let body = match &typed {
+            Some(fs) if fs.is_empty() => " {}".to_string(),
+            Some(fs) => format!(" {{ {} }}", fs.join(", ")),
+            None => " { .. }".to_string(),
+        };
+        let first = names.first().map_or("value", String::as_str);
+        self.error_at(
+            &format!(
+                "`struct {name}(..)` is a Rust tuple struct, which Kāra does not have: a \
+                 struct names its fields, `struct {name}{body}`, built as `{name} {{ {first}: x \
+                 }}` and read as `.{first}` (design.md §5 Structs; a wrapper that only tags a \
+                 value can be a `distinct type`, § Distinct types)"
+            ),
+            at,
+        );
+        if typed.is_some() {
+            let last = self.tokens[end - 1].span;
+            let from = self.tokens[open - 1].span;
+            let from = from.offset + from.length;
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&at),
+                crate::resolver::TextEdit {
+                    offset: from,
+                    length: last.offset + last.length - from,
+                    replacement: body,
+                },
+            );
+        }
+        self.pos = end;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn parse_struct_def(
         &mut self,
@@ -2478,6 +2647,10 @@ impl super::Parser {
             );
             (Vec::new(), Vec::new(), Vec::new())
         } else {
+            if self.check(&Token::LeftParen) {
+                self.reject_tuple_struct(&name);
+                return None;
+            }
             if !self.check(&Token::LeftBrace) {
                 self.error("Expected `{` after struct name; a struct with no fields is `{}`");
                 return None;
@@ -2626,7 +2799,7 @@ impl super::Parser {
             self.collect_leading_doc_comments();
             let start = self.current_span();
             let attributes = self.parse_attributes();
-            let is_pub = self.eat(&Token::Pub);
+            let is_pub = self.eat_pub();
             // `mut` on a union field is rejected: every field shares
             // storage with every other field, so per-field mutability
             // is not a meaningful annotation. Assignment to a union
@@ -2666,7 +2839,7 @@ impl super::Parser {
             self.collect_leading_doc_comments();
             let start = self.current_span();
             let attributes = self.parse_attributes();
-            let is_pub = self.eat(&Token::Pub);
+            let is_pub = self.eat_pub();
             let is_private = !is_pub && self.eat(&Token::Private);
             let mut_keyword_span = if self.check(&Token::Mut) {
                 let s = self.current_span();

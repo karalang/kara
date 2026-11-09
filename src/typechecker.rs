@@ -3553,8 +3553,10 @@ pub struct TypeChecker<'a> {
     /// (`rust_last_mut`, B-2026-11-08-46).
     pub(super) end_mut_rewrites: FxHashMap<SpanKey, (Span, String)>,
     /// The `?`s in a `fn main()` that returns `()`, which `check_function`
-    /// fixes by declaring `-> Result[(), AnyError]` (B-2026-11-07-43).
-    pub(super) unit_main_questions: Vec<Span>,
+    /// fixes by declaring a `Result` return (B-2026-11-07-43), each with its
+    /// operand's error type and whether that converts to `AnyError`; `None`
+    /// for an `Option` operand.
+    pub(super) unit_main_questions: Vec<(Span, Option<(Type, bool)>)>,
     /// Spans of the expressions that bind looser than a postfix `.`
     /// (`*r`, `-x`, `a + b`, `x as T`, a range, a closure): a fix that
     /// appends `.to_string()` / `.clone()` to one of these must wrap it in
@@ -4012,6 +4014,16 @@ pub struct TypeChecker<'a> {
     /// `karac fix` writes `: Vec[T]` and `.collect()` when `x` is used as a
     /// `Vec` (B-2026-10-12-7).
     pub(super) iter_lets: FxHashMap<String, IterLet>,
+    /// `let name = value` with no annotation, by the value's span: the
+    /// name's span, where a fix writes the annotation nothing else gives.
+    pub(super) untyped_let_names: FxHashMap<SpanKey, Span>,
+    /// A `.collect()` on a library iterator, by the call's span: the
+    /// iterator's item, so a `collect` whose target nothing fixes can be
+    /// annotated as the `Vec` Rust's `collect::<Vec<_>>()` meant.
+    pub(super) collect_items: FxHashMap<SpanKey, Type>,
+    /// `Name(a, b)` calling a program struct, by the callee's span: the
+    /// edits that make it the struct literal (see `note_struct_called`).
+    pub(super) struct_call_literals: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// The spans of identifiers that read an [`IterLet`] binding.
     pub(super) iter_let_uses: FxHashMap<SpanKey, String>,
     /// `let x = "text"` with no annotation, by name: a use of `x` as a
@@ -4470,6 +4482,9 @@ impl<'a> TypeChecker<'a> {
             pruned_library_methods: std::collections::HashMap::new(),
             option_recv_spans: FxHashSet::default(),
             iter_lets: FxHashMap::default(),
+            untyped_let_names: FxHashMap::default(),
+            collect_items: FxHashMap::default(),
+            struct_call_literals: FxHashMap::default(),
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
             literal_lets: FxHashMap::default(),

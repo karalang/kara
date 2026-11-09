@@ -103,6 +103,24 @@ enum TlsError {
     PermissionDenied,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for TlsError {
+    fn to_string(ref self) -> String {
+        match self {
+            TlsError.Interrupted => "interrupted",
+            TlsError.Other(code) => f"os error {code}",
+            TlsError.Protocol(code) => f"TLS protocol error {code}",
+            TlsError.AddrInUse => "address in use",
+            TlsError.ConnectionRefused => "connection refused",
+            TlsError.PermissionDenied => "permission denied",
+        }
+    }
+}
+
+impl Error for TlsError { }
+
 // Opaque marker type — see file-header `TlsConfig opacity` block.
 // Field-list intentionally empty: the runtime owns the underlying
 // `rustls::ServerConfig` allocation and the `*mut TlsConfig` pointer

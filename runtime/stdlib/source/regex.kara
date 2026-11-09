@@ -18,6 +18,17 @@ struct RegexError {
     message: String,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for RegexError {
+    fn to_string(ref self) -> String {
+        self.message.clone()
+    }
+}
+
+impl Error for RegexError { }
+
 // A match: its text and its byte offsets in the searched string, so that
 // `s[m.start..m.end]` is `m.text`.
 struct Match {

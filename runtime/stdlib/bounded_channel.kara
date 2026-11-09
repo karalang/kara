@@ -34,6 +34,19 @@ enum ChannelError {
     Full,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for ChannelError {
+    fn to_string(ref self) -> String {
+        match self {
+            ChannelError.Full => "channel full",
+        }
+    }
+}
+
+impl Error for ChannelError { }
+
 // Opaque bounded-channel handle. `handle_id` keys into the interpreter's
 // `bounded_channel_table` side-table; `0` is reserved for a hand-rolled
 // `BoundedChannel { handle_id: 0 }` literal that bypassed `new` — `send`

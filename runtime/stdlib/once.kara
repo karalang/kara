@@ -58,6 +58,17 @@ struct AlreadySetError[=T] {
     rejected: T,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl[T] Display for AlreadySetError[T] {
+    fn to_string(ref self) -> String {
+        "the cell is already set"
+    }
+}
+
+impl[T] Error for AlreadySetError[T] { }
+
 // Cross-task-safe write-once cell. `handle_id` keys into the
 // interpreter's `once_table`; `0` is reserved for a hand-rolled
 // `OnceLock { handle_id: 0 }` literal that bypassed `OnceLock.new` —

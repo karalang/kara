@@ -1126,7 +1126,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Sorted, so a variant name declared by two user enums always names the
     /// same one rather than whichever the map iterated first — the same
     /// determinism `resolve_identifier_type`'s variant fallback establishes.
-    fn user_enum_owning_variant(&self, name: &str) -> Option<String> {
+    pub(super) fn user_enum_owning_variant(&self, name: &str) -> Option<String> {
         let mut owners: Vec<&String> = self
             .env
             .enums
@@ -6546,10 +6546,41 @@ impl<'a> super::TypeChecker<'a> {
                 let remedy = if return_ty != Type::Unit {
                     String::new()
                 } else if self.current_fn_core_key.as_deref() == Some("main") {
-                    self.unit_main_questions.push(*span);
-                    ": `main` returns `()`; to use `?` here, declare \
-                     `fn main() -> Result[(), AnyError]` and end it with `Ok(())`"
-                        .to_string()
+                    // What the fix makes of it: an error that converts to
+                    // `AnyError` (any `Error`) declares that; another error
+                    // declares its own type, which `main` may return as
+                    // well; an `Option` has no `Result` to pass up, so it is
+                    // unwrapped as the Rust it came from would have been.
+                    let err = match inner_name.as_str() {
+                        "Result" if inner_args.len() == 2 => {
+                            let e = resolve_type_vars(
+                                &inner_args[1],
+                                &self.env.substitutions,
+                                &HashMap::new(),
+                                &self.env.const_substitutions,
+                                &HashMap::new(),
+                            );
+                            let to_any = matches!(&e, Type::Named { name, .. } if name == "AnyError")
+                                || self.env.find_from_impl(&e, "AnyError", &[]).is_some();
+                            Some((e, to_any))
+                        }
+                        _ => None,
+                    };
+                    let remedy = match &err {
+                        Some((_, true)) => ": `main` returns `()`; to use `?` here, declare \
+                             `fn main() -> Result[(), AnyError]` and end it with `Ok(())`"
+                            .to_string(),
+                        Some((e, false)) => format!(
+                            ": `main` returns `()`; to use `?` here, declare \
+                             `fn main() -> Result[(), {}]` and end it with `Ok(())`",
+                            type_display(e)
+                        ),
+                        None => ": `main` returns `()` and cannot return an `Option`; \
+                             `.unwrap()` stops the program on `None` instead"
+                            .to_string(),
+                    };
+                    self.unit_main_questions.push((*span, err));
+                    remedy
                 } else {
                     ": to pass the error up, declare the function's return type as \
                      `Result[T, E]` (or `Option[T]`) and return its value in `Ok(..)`; \

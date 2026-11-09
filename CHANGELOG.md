@@ -183,6 +183,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - String literals in `[..].to_vec()` take the `Str` a `Vec[Str]` (or
   `Vec[(Str, T)]`) parameter wants; `total(["a", "b"].to_vec())` was
   refused as a `Vec[String]` (B-2026-11-09-49).
+- Eleven library error types did not implement `Display` and `Error`
+  (design.md §10 says every one does): `Utf8Error`, `NulError`,
+  `NetError` (and its alias `TcpError`), `TlsError`, `HttpError`, `RegexError`,
+  `CliError`, `ChannelError`, `SemaphoreError`, `DiscriminantError` and
+  `AlreadySetError`. `String.from_utf8(b)?` in a function returning
+  `Result[T, AnyError]` was refused, and `f"{e}"` printed the variant's
+  name. Each now reads as a short phrase (`invalid UTF-8 byte`, `os error
+  5`) (B-2026-11-09-54).
 - A program that declares its own `Response` to send headers (io.md §
   HTTP server) gets it back from the HTTP client too, and the compiled
   client wrote only the library's two fields there: the program's
@@ -452,6 +460,23 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   a `JsonError` says "the library's `JsonError` does not implement
   `Clone`" instead of advising a derive on the library's declaration
   (B-2026-11-09-48).
+- Six mistakes Rust habits make in Kāra were diagnosed with no fix that
+  `karac fix` applies; each now has one, found by the Rust-ism audit
+  (`scripts/mend/rustism_audit.py`) (B-2026-11-09-53):
+  - `pub(crate)`, `pub(super)` and `pub(in ..)` are deleted (the default
+    is package-wide) and `pub(self)` becomes `private`.
+  - An unreachable `match` arm (`_ =>` after every variant) is deleted,
+    with its line when it has one to itself.
+  - `?` in a `main` returning `()` declares the error the operand carries
+    (`Result[(), String]`), `AnyError` when every error is an `Error`, and
+    unwraps an `Option` operand or an error that is neither.
+  - A tuple struct `struct S(T);` gets named fields (`value`, or `f0`,
+    `f1`, ..), and its uses follow: `S(x)` becomes the literal `S { value:
+    x }` and `.0` the field. On a `distinct type`, `.0` becomes `.raw()`.
+  - `let v = it.collect();`, what `.collect::<Vec<_>>()` leaves once its
+    turbofish goes, is annotated `: Vec[T]` with the iterator's item.
+  - `impl<T: Add<Output = T>>` is fixed to brackets; an associated-type
+    binding inside the list stopped the fix before.
 - `text?` on a bare `text: Option[String]` parameter (a borrow, since
   parameters borrow by default) was refused as "'?' operator requires
   `Result` or `Option`, found 'ref Option[String]'", with no fix. It now

@@ -38,6 +38,17 @@ struct CliError {
     message: String,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for CliError {
+    fn to_string(ref self) -> String {
+        self.message.clone()
+    }
+}
+
+impl Error for CliError { }
+
 // Builder-side handle returned by `Arg.string()` and chained through
 // `.required()` / `.help(...)`. Holds the configuration that gets
 // flattened into a `Parser.args` entry when `parser.arg(name, a)`

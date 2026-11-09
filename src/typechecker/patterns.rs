@@ -2892,11 +2892,28 @@ impl<'a> super::TypeChecker<'a> {
     fn check_exhaustiveness(&mut self, scrutinee_type: &Type, arms: &[MatchArm], span: Span) {
         use crate::exhaustive::{check_match_exhaustive, unreachable_arms, ExhaustiveResult};
         for idx in unreachable_arms(scrutinee_type, arms, &self.env) {
-            self.type_lint_warning(
+            // The fix deletes the arm: from the end of the arm before it, so
+            // the separator between them goes too (`karac fix` widens it to
+            // the arm's whole lines when they hold nothing else). An arm is
+            // unreachable only behind an earlier one, so there is one.
+            let fix = idx.checked_sub(1).map(|prev| {
+                let from = arms[prev].span.offset + arms[prev].span.length;
+                let to = arms[idx].span.offset + arms[idx].span.length;
+                super::FixIt {
+                    span: Span {
+                        offset: from,
+                        length: to.saturating_sub(from),
+                        ..arms[idx].span
+                    },
+                    replacement: String::new(),
+                }
+            });
+            self.type_lint_warning_with_fix(
                 "unreachable match arm: pattern is fully covered by an earlier arm".to_string(),
                 arms[idx].pattern.span,
                 TypeErrorKind::UnreachableArm,
                 "unreachable_arm",
+                fix,
             );
         }
 

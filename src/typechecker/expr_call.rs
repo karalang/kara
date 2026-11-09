@@ -1008,6 +1008,50 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// `Name(a, b)` naming a program struct of two fields is Rust's tuple
+    /// struct construction: keep the struct literal that builds it, in its
+    /// fields' order, for the "a type, not a function" refusal the callee
+    /// draws to carry as its fix.
+    fn note_struct_called(&mut self, callee: &Expr, args: &[CallArg], span: &Span) {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return;
+        };
+        if self.local_scope.lookup(name).is_some()
+            || self.env.functions.contains_key(name)
+            || self.env.distinct_bases.contains_key(name)
+            || self.user_enum_owning_variant(name).is_some()
+            || args.iter().any(|a| a.label.is_some() || a.mut_marker)
+        {
+            return;
+        }
+        let Some(info) = self.env.structs.get(name) else {
+            return;
+        };
+        if info.defining_stdlib_origin || info.fields.len() != args.len() {
+            return;
+        }
+        let names: Vec<String> = info.fields.iter().map(|f| f.0.clone()).collect();
+        let call_end = span.offset + span.length;
+        let mut from = callee.span.offset + callee.span.length;
+        let mut edits = Vec::new();
+        for (i, (arg, field)) in args.iter().zip(&names).enumerate() {
+            let lead = if i == 0 { " { " } else { ", " };
+            edits.push(crate::resolver::TextEdit {
+                offset: from,
+                length: arg.value.span.offset.saturating_sub(from),
+                replacement: format!("{lead}{field}: "),
+            });
+            from = arg.value.span.offset + arg.value.span.length;
+        }
+        edits.push(crate::resolver::TextEdit {
+            offset: from,
+            length: call_end.saturating_sub(from),
+            replacement: if args.is_empty() { " {}" } else { " }" }.to_string(),
+        });
+        self.struct_call_literals
+            .insert(SpanKey::from_span(&callee.span), edits);
+    }
+
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
         // `old(e)` in an `ensures` clause is `e` as it was at entry, of
         // `e`'s type: `old(b) - amount` is an `i64` (B-2026-10-31-30).
@@ -1019,6 +1063,7 @@ impl<'a> super::TypeChecker<'a> {
         if self.cli_lint_overrides.strict_core {
             self.reject_call_site_type_args(callee);
         }
+        self.note_struct_called(callee, args, span);
         // `TaskGroup.new(limit: n)` (docs/library/concurrency.md §
         // TaskGroup; B-2026-10-15-11): the baked `new()` takes nothing, so
         // the label is typed here, and the natives take the limit as their

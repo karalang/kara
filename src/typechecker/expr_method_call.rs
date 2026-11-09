@@ -1748,6 +1748,21 @@ impl<'a> super::TypeChecker<'a> {
         let errors_before = self.errors.len();
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
         self.method_call_ends.pop();
+        if method == "collect" && args.is_empty() {
+            let item = self
+                .expr_types
+                .get(&SpanKey::from_span(&object.span))
+                .map(|t| self.resolved_now(t))
+                .and_then(|t| self.library_iter_item_type(&t));
+            if let Some(item) = item {
+                let end = args_close_span.offset + args_close_span.length;
+                let whole = Span {
+                    length: end.saturating_sub(object.span.offset),
+                    ..object.span
+                };
+                self.collect_items.insert(SpanKey::from_span(&whole), item);
+            }
+        }
         if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
             self.explain_rust_scan(args, errors_before);
         }

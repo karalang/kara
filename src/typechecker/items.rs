@@ -2984,18 +2984,58 @@ impl<'a> super::TypeChecker<'a> {
     /// (B-2026-11-07-43).
     fn offer_unit_main_result_fix(&mut self, f: &Function, top_level: bool) {
         let questions = std::mem::take(&mut self.unit_main_questions);
-        let Some(first) = questions.first() else {
+        let Some((first, _)) = questions.first() else {
             return;
         };
+        let first = *first;
         if f.name != "main" || !top_level || f.return_type.is_some() {
             return;
         }
+        // The error `main` declares: `AnyError` when every error converts
+        // to it, else the one error type every `?` shares. A `?` whose
+        // operand cannot pass up as that (an `Option`, or an error of
+        // another type that is no `Error`) becomes `.unwrap()`.
+        let errs: Vec<&(Type, bool)> = questions.iter().filter_map(|(_, e)| e.as_ref()).collect();
+        let declared = if errs.iter().all(|(_, to_any)| *to_any) {
+            "AnyError".to_string()
+        } else {
+            let shown = type_display(&errs[0].0);
+            if errs.iter().all(|(e, _)| type_display(e) == shown) {
+                shown
+            } else {
+                "AnyError".to_string()
+            }
+        };
+        let mut edits = Vec::new();
+        for (span, err) in &questions {
+            let passes = match err {
+                Some((_, true)) => declared == "AnyError",
+                Some((e, false)) => type_display(e) == declared,
+                None => false,
+            };
+            if !passes {
+                edits.push(crate::resolver::TextEdit {
+                    offset: span.offset + span.length.saturating_sub(1),
+                    length: 1,
+                    replacement: ".unwrap()".to_string(),
+                });
+            }
+        }
         let body = &f.body.span;
-        let mut edits = vec![crate::resolver::TextEdit {
-            offset: body.offset,
-            length: 0,
-            replacement: "-> Result[(), AnyError] ".to_string(),
-        }];
+        if errs.is_empty() || edits.len() == questions.len() {
+            // Nothing passes up: the `.unwrap()`s are the whole fix.
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&first), edits);
+            return;
+        }
+        edits.insert(
+            0,
+            crate::resolver::TextEdit {
+                offset: body.offset,
+                length: 0,
+                replacement: format!("-> Result[(), {declared}] "),
+            },
+        );
         match &f.body.final_expr {
             Some(tail) => {
                 let sep = if tail.span.line == body.line {
@@ -3025,7 +3065,7 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.error_fix_diffs
-            .insert(SpanKey::from_span(first), edits);
+            .insert(SpanKey::from_span(&first), edits);
     }
 
     /// For a tail-less body: the `;` of its last statement, with the
@@ -11115,6 +11155,8 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if let PatternKind::Binding(name) = &pattern.kind {
                     if ty.is_none() {
+                        self.untyped_let_names
+                            .insert(SpanKey::from_span(&value.span), pattern.span);
                         self.note_iter_let(name, pattern.span, &value.span, &expected_ty);
                         self.note_str_lit_let(name, pattern.span, value, &expected_ty);
                         self.note_literal_let(name, pattern.span, value, &expected_ty);

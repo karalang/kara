@@ -1713,6 +1713,7 @@ impl Pipeline {
         // the program's own text, ahead of the appended library.
         self.report_missing_library_imports();
         self.widen_redundant_suffix_fixes();
+        self.widen_unreachable_arm_fixes();
         self.report_style_lints();
     }
 
@@ -1914,6 +1915,50 @@ impl Pipeline {
             }
             fix.span.length += fix.span.offset - start;
             fix.span.offset = start;
+        }
+    }
+
+    /// An unreachable arm's fix deletes from the end of the arm before it,
+    /// which is always well-formed but leaves a comment on that arm's line
+    /// at the mercy of the cut. When the arm has its lines to itself (only
+    /// indentation before it, only a `,` after it), delete those lines
+    /// instead, so what surrounds the arm is untouched.
+    fn widen_unreachable_arm_fixes(&mut self) {
+        let (Some(source), Some(typed)) = (self.source.as_ref(), self.typed.as_mut()) else {
+            return;
+        };
+        let bytes = source.as_bytes();
+        for warn in &mut typed.warnings {
+            if warn.kind != crate::typechecker::TypeErrorKind::UnreachableArm {
+                continue;
+            }
+            let Some(fix) = warn.fix_it.as_mut() else {
+                continue;
+            };
+            let arm_start = warn.span.offset;
+            let arm_end = fix.span.offset + fix.span.length;
+            if arm_start > arm_end || arm_end > bytes.len() {
+                continue;
+            }
+            let line_start = source[..arm_start].rfind('\n').map_or(0, |i| i + 1);
+            if !source[line_start..arm_start].trim().is_empty() {
+                continue;
+            }
+            let skip_blank = |mut i: usize| {
+                while matches!(bytes.get(i), Some(b' ' | b'\t' | b'\r')) {
+                    i += 1;
+                }
+                i
+            };
+            let mut after = skip_blank(arm_end);
+            if bytes.get(after) == Some(&b',') {
+                after = skip_blank(after + 1);
+            }
+            if bytes.get(after) != Some(&b'\n') {
+                continue;
+            }
+            fix.span.offset = line_start;
+            fix.span.length = after + 1 - line_start;
         }
     }
 

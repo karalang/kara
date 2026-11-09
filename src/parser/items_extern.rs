@@ -106,7 +106,7 @@ impl super::Parser {
             // would otherwise overwrite it.
             let doc_comment = self.take_pending_doc();
 
-            let is_pub = self.eat(&Token::Pub);
+            let is_pub = self.eat_pub();
             let is_private = if !is_pub {
                 self.eat(&Token::Private)
             } else {

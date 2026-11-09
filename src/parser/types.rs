@@ -1117,11 +1117,11 @@ impl super::Parser {
                 Token::GreaterGreater => &[Token::LessThan, Token::LessThan],
                 Token::RightBracket => &[Token::LeftBracket],
                 Token::RightParen => &[Token::LeftParen],
-                Token::EOF
-                | Token::Semicolon
-                | Token::LeftBrace
-                | Token::RightBrace
-                | Token::Equal => break,
+                Token::EOF | Token::Semicolon | Token::LeftBrace | Token::RightBrace => break,
+                // An associated-type binding inside a nested list
+                // (`impl<T: Add<Output = T>>`) is part of it; at the list's
+                // own level an `=` ends the type (`Vec<i64 = ..`).
+                Token::Equal if open_brackets.len() <= 1 => break,
                 _ => &[],
             };
             if matches!(t.token, Token::GreaterThan | Token::GreaterGreater) {

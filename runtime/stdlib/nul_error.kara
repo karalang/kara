@@ -17,3 +17,17 @@ enum NulError {
     InteriorNul,
     Other(String),
 }
+
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for NulError {
+    fn to_string(ref self) -> String {
+        match self {
+            NulError.InteriorNul => "the text contains a NUL byte",
+            NulError.Other(msg) => msg.clone(),
+        }
+    }
+}
+
+impl Error for NulError { }

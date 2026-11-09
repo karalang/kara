@@ -20,3 +20,16 @@
 enum DiscriminantError[=D] {
     OutOfRange { value: D },
 }
+
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl[D: Display] Display for DiscriminantError[D] {
+    fn to_string(ref self) -> String {
+        match self {
+            DiscriminantError.OutOfRange { value } => f"no variant has the discriminant {value}",
+        }
+    }
+}
+
+impl[D: Display] Error for DiscriminantError[D] { }

@@ -899,6 +899,11 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/io_error.kara",
         include_str!("../runtime/stdlib/source/io_error.kara"),
     ),
+    // The other baked error types' `Display` (design.md §10).
+    (
+        "source/library_errors.kara",
+        include_str!("../runtime/stdlib/source/library_errors.kara"),
+    ),
     (
         "source/ordering.kara",
         include_str!("../runtime/stdlib/source/ordering.kara"),

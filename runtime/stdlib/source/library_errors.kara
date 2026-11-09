@@ -1,0 +1,76 @@
+// The `Display` of the library's error types that are declared in baked
+// files, as Kāra, for the MIR pipeline (design.md §10: the standard
+// library's error types implement `Error`, so `?` converts them into
+// `AnyError`, whose message is this text).
+//
+// The baked files that declare each type state the same impls for the
+// checker; the MIR builder lowers no baked impl, so a call resolved to one
+// of those runs this one, as `io_error.kara` does for `IoError`.
+
+impl Display for Utf8Error {
+    fn to_string(ref self) -> String {
+        match self {
+            Utf8Error.InvalidByte => "invalid UTF-8 byte",
+            Utf8Error.IncompleteSequence => "incomplete UTF-8 sequence",
+            Utf8Error.Other(msg) => msg.clone(),
+        }
+    }
+}
+
+impl Display for NulError {
+    fn to_string(ref self) -> String {
+        match self {
+            NulError.InteriorNul => "the text contains a NUL byte",
+            NulError.Other(msg) => msg.clone(),
+        }
+    }
+}
+
+impl Display for ChannelError {
+    fn to_string(ref self) -> String {
+        match self {
+            ChannelError.Full => "channel full",
+        }
+    }
+}
+
+impl Display for SemaphoreError {
+    fn to_string(ref self) -> String {
+        match self {
+            SemaphoreError.Timeout => "timed out waiting for a permit",
+        }
+    }
+}
+
+impl[D: Display] Display for DiscriminantError[D] {
+    fn to_string(ref self) -> String {
+        match self {
+            DiscriminantError.OutOfRange { value } => f"no variant has the discriminant {value}",
+        }
+    }
+}
+
+impl[T] Display for AlreadySetError[T] {
+    fn to_string(ref self) -> String {
+        "the cell is already set"
+    }
+}
+
+impl Display for TlsError {
+    fn to_string(ref self) -> String {
+        match self {
+            TlsError.Interrupted => "interrupted",
+            TlsError.Other(code) => f"os error {code}",
+            TlsError.Protocol(code) => f"TLS protocol error {code}",
+            TlsError.AddrInUse => "address in use",
+            TlsError.ConnectionRefused => "connection refused",
+            TlsError.PermissionDenied => "permission denied",
+        }
+    }
+}
+
+impl Display for HttpError {
+    fn to_string(ref self) -> String {
+        self.message.clone()
+    }
+}

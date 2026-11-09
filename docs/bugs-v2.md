@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 206 |
+| diagnostics | 207 |
 | false-positive | 169 |
 | perf | 145 |
-| missing-feature | 120 |
+| missing-feature | 122 |
 | soundness | 56 |
 | miscompile | 49 |
 | run-vs-build | 29 |
 | other | 26 |
-| codegen-gap | 25 |
+| codegen-gap | 26 |
 | crash | 20 |
 | leak | 4 |
 | use-after-free | 2 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 335 |
+| typecheck | 337 |
 | mir-llvm | 180 |
-| mir | 156 |
+| mir | 158 |
 | cli | 93 |
-| ownership | 65 |
-| parser | 54 |
+| ownership | 66 |
+| parser | 55 |
 | interp | 41 |
 | runtime | 31 |
 | effect | 29 |
@@ -120,6 +120,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-47 | 2026-11-09 | mir-llvm | low | `s.chars().collect()` into a Vec[char] runs 14 instructions a char against Rust's 11: the UTF-8 decode loop tests the reserved length on each push, and the loop copy B-2026-11-09-26 gives counted fills does not apply because the char count is not known at the way in | — |
 | B-2026-11-09-50 | 2026-11-09 | typecheck+mir | low | `let v: Vec[Str] = ["a", "b"].to_vec();` is refused as a reference to a temporary that outlives its statement (typecheck §5.5, and E0516 in MIR borrowck once that passes), though the `Vec` holds static literals and borrows nothing from the array | — |
 | B-2026-11-09-51 | 2026-11-09 | mir-llvm | low | Kata 1087's bench (20 million short words cloned into vectors and freed) runs 26% behind `rustc -O -C overflow-checks=on -C target-cpu=x86-64-v3` with the same allocations: 13.65G instructions against 10.45G, the extra in glibc's malloc slow path (14.8M `_int_malloc` calls against 2.7M) and in `malloc_consolidate` (0.72G, none in Rust) | — |
+| B-2026-11-09-53 | 2026-11-09 | parser+typecheck | medium | Six Rust-isms were diagnosed with no fix `karac fix` applies: `pub(crate)` (and `pub(super)`, `pub(self)`), an unreachable `_ =>` arm, `?` in a unit `main` over an error that is no `Error` or an `Option` (the fix declared `AnyError`, which did not check), a tuple struct and its `Name(x)` / `.0`, `.collect::<Vec<_>>()` (the binding was left unannotated), and `impl<T: Add<Output = T>>` (the `=` stopped the bracket fix) | — |
+| B-2026-11-09-54 | 2026-11-09 | typecheck+mir | medium | Eleven library error types did not implement `Display` and `Error` though design.md §10 says the library's error types do (Utf8Error, NulError, NetError and its alias TcpError, TlsError, HttpError, RegexError, CliError, ChannelError, SemaphoreError, DiscriminantError, AlreadySetError): `String.from_utf8(b)?` in a function returning `Result[T, AnyError]` was refused, and `f"{e}"` printed the variant's name. A remainder of 8adc0b0e29, which covered JsonError, SendError, the timeout errors and PoolError | — |
+| B-2026-11-09-55 | 2026-11-09 | ownership | low | No lint reports a `let mut` binding that is never written: Rust's habit of `let mut` on a binding that is only read draws nothing (the Rust-ism audit's injection was silent in 20 of 20 programs), so Kāra written from Rust habits keeps every one; Rust warns `unused_mut` | — |
+| B-2026-11-09-56 | 2026-11-09 | mir | medium | `let v = it.collect();` whose `Vec` target a later use decides passes the type checker and is refused by MIR: `fn count(v: Vec[char]) -> i64` and `let cs = text.chars().collect(); count(cs)` draws "the method call `.collect` with no resolved callee is not lowered yet". 6 of 16 audit programs reached it once `karac fix` removed a `.collect::<Vec<_>>()` turbofish | — |
 
 ### Relocated
 

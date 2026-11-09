@@ -57,6 +57,41 @@ enum TlsFailure {
     UnexpectedClose,
 }
 
+
+// design.md §10: the standard library's error types implement `Error`, so
+// `?` converts them into `AnyError`.
+impl Display for NetError {
+    fn to_string(ref self) -> String {
+        match self {
+            NetError.Interrupted => "interrupted",
+            NetError.Other(code) => f"os error {code}",
+            NetError.AddrInUse => "address in use",
+            NetError.ConnectionRefused => "connection refused",
+            NetError.PermissionDenied => "permission denied",
+            NetError.TimedOut => "timed out",
+            NetError.WouldBlock => "operation would block",
+            NetError.InvalidInput => "invalid input",
+            NetError.Tls(failure) => f"TLS: {failure}",
+            NetError.Protocol => "WebSocket protocol error",
+            NetError.ProviderUnavailable => "provider unavailable",
+            NetError.Unsupported => "unsupported",
+        }
+    }
+}
+
+impl Error for NetError { }
+
+impl Display for TlsFailure {
+    fn to_string(ref self) -> String {
+        match self {
+            TlsFailure.Handshake => "handshake failed",
+            TlsFailure.BadCertificate => "bad certificate",
+            TlsFailure.Protocol => "protocol error",
+            TlsFailure.UnexpectedClose => "connection closed unexpectedly",
+        }
+    }
+}
+
 // The name before UDP; `TcpError` is `NetError` until M3.
 type TcpError = NetError;
 
