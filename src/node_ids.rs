@@ -59,6 +59,36 @@ pub fn assign_item_node_ids(items: &mut [Item]) {
     }
 }
 
+/// Number every node of `items`, which were parsed on their own, from
+/// `*next` up, so they can join a program whose ids are all below `*next`.
+/// A parse numbers its nodes from 0, so items spliced in as parsed hold ids
+/// the program's own nodes hold, and [`assign_node_ids`] then renumbers
+/// whichever of the two it walks second: the program's nodes after a
+/// `#[derive]`d type, whose ids the type checker's tables were keyed by.
+pub fn number_items_from(items: &mut [Item], next: &mut u32) {
+    struct Fresh<'a>(&'a mut u32);
+    impl MutVisitor for Fresh<'_> {
+        fn span(&mut self, _span: &mut Span) {}
+        fn node_id(&mut self, id: &mut NodeId) {
+            *id = NodeId(*self.0);
+            *self.0 += 1;
+            assert!(!id.is_dummy(), "NodeId space exhausted");
+        }
+    }
+    for item in items.iter_mut() {
+        walk_item_mut_with(item, &mut Fresh(next));
+    }
+}
+
+/// One above the largest id `items` hold; 0 when they hold none.
+pub fn next_free_id(items: &mut [Item]) -> u32 {
+    let mut max = MaxId(None);
+    for item in items.iter_mut() {
+        walk_item_mut_with(item, &mut max);
+    }
+    max.0.map_or(0, |m| m + 1)
+}
+
 /// Give every expression, pattern and statement in `program` a distinct id.
 pub fn assign_node_ids(program: &mut Program) {
     assign_item_node_ids(&mut program.items);

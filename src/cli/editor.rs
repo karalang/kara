@@ -40,15 +40,18 @@ pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
     diagnostics_of(&checked(source))
 }
 
-/// [`check_source`], with each function's inferred effects, rendered, keyed
-/// as the effect checker keys them (`f`, `Type.method`), for the
-/// incremental check ([`super::editor_incremental`]).
-pub(crate) fn check_with_effects(
-    source: &str,
-) -> (
-    Vec<PlaygroundDiagnostic>,
-    std::collections::HashMap<String, String>,
-) {
+/// One full check of a buffer, as the incremental checker keeps it.
+pub(crate) struct Checked {
+    pub(crate) diags: Vec<PlaygroundDiagnostic>,
+    /// Each function's inferred effects, rendered, keyed as the effect
+    /// checker keys them (`f`, `Type.method`).
+    pub(crate) effects: std::collections::HashMap<String, String>,
+    pub(crate) hints: Vec<super::editor_hints::InlayHint>,
+}
+
+/// [`check_source`], with the effects and inlay hints of the same check, for
+/// the incremental check ([`super::editor_incremental`]).
+pub(crate) fn check_detailed(source: &str) -> Checked {
     let pipeline = checked(source);
     let effects = pipeline
         .effects
@@ -60,7 +63,11 @@ pub(crate) fn check_with_effects(
                 .collect()
         })
         .unwrap_or_default();
-    (diagnostics_of(&pipeline), effects)
+    Checked {
+        diags: diagnostics_of(&pipeline),
+        effects,
+        hints: super::editor_hints::hints_of(&pipeline, source),
+    }
 }
 
 fn diagnostics_of(pipeline: &Pipeline) -> Vec<PlaygroundDiagnostic> {

@@ -26,13 +26,13 @@ use lsp_types::notification::{
 };
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest,
-    References, Rename, Request as _,
+    InlayHintRequest, References, Rename, Request as _, SignatureHelpRequest,
 };
 use lsp_types::{
     CodeActionOptions, CodeActionProviderCapability, CompletionOptions, DocumentSymbolResponse,
     GotoDefinitionResponse, HoverProviderCapability, InitializeParams, Location, OneOf,
-    PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-    Uri,
+    PublishDiagnosticsParams, ServerCapabilities, SignatureHelpOptions, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri,
 };
 
 type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
@@ -43,7 +43,7 @@ type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
 pub fn serve(connection: Connection) -> LspResult {
     // Full-document sync (so every edit hands us the whole buffer to
     // re-analyze) drives the diagnostics loop; hover is served from the same
-    // per-document text. Inlay hints are the capability still to come.
+    // per-document text.
     let capabilities = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -59,6 +59,16 @@ pub fn serve(connection: Connection) -> LspResult {
         }),
         // Over the same resolver references `textDocument/references` uses.
         rename_provider: Some(OneOf::Left(true)),
+        // A call's signature as its arguments are typed: `(` opens it, `,`
+        // moves to the next parameter.
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: None,
+            work_done_progress_options: Default::default(),
+        }),
+        // Inferred `let` types and private functions' inferred effects, read
+        // off each document's last check.
+        inlay_hint_provider: Some(OneOf::Left(true)),
         // Quick fixes. The machine-applicable edits `karac fix` applies from
         // the CLI had no editor path at all — the compiler computed them and
         // nothing but the terminal could act on them. Declaring the kind (not
@@ -101,7 +111,7 @@ fn main_loop(connection: Connection) -> LspResult {
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                let resp = handle_request(&docs, req);
+                let resp = handle_request(&docs, &checkers, req);
                 connection.sender.send(Message::Response(resp))?;
             }
             Message::Notification(not) => {
@@ -176,6 +186,7 @@ const INVALID_PARAMS: i32 = -32602;
 /// silently dropping (which would hang the client).
 fn handle_request(
     docs: &HashMap<String, String>,
+    checkers: &HashMap<String, karac::DocumentChecker>,
     req: lsp_server::Request,
 ) -> lsp_server::Response {
     let lsp_server::Request { id, method, params } = req;
@@ -247,6 +258,40 @@ fn handle_request(
             }
             Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
         },
+        SignatureHelpRequest::METHOD => {
+            match serde_json::from_value::<lsp_types::SignatureHelpParams>(params) {
+                Ok(p) => {
+                    let pos = p.text_document_position_params.position;
+                    let uri = p
+                        .text_document_position_params
+                        .text_document
+                        .uri
+                        .to_string();
+                    // `None` (not inside a call) → null: no signature to show.
+                    let help = docs
+                        .get(&uri)
+                        .and_then(|text| analysis::signature_help(text, pos));
+                    lsp_server::Response::new_ok(id, help)
+                }
+                Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+            }
+        }
+        InlayHintRequest::METHOD => {
+            match serde_json::from_value::<lsp_types::InlayHintParams>(params) {
+                Ok(p) => {
+                    let uri = p.text_document.uri.to_string();
+                    // The hints of the check the last edit already ran.
+                    let hints = match (docs.get(&uri), checkers.get(&uri)) {
+                        (Some(text), Some(c)) => {
+                            analysis::inlay_hints(text, c.inlay_hints(), p.range)
+                        }
+                        _ => Vec::new(),
+                    };
+                    lsp_server::Response::new_ok(id, hints)
+                }
+                Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+            }
+        }
         Rename::METHOD => match serde_json::from_value::<lsp_types::RenameParams>(params) {
             Ok(p) => {
                 let pos = p.text_document_position.position;

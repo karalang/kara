@@ -34,10 +34,34 @@ fn compare(base: &str, edited: &str) -> Result<CheckKind, String> {
     c.full(base);
     let (inc, kind) = c.check_reporting(edited);
     same(&inc, &karac::check_source(edited))?;
+    same_hints(&c, edited)?;
     // And back again, from the incremental result.
     let (back, _) = c.check_reporting(base);
     same(&back, &karac::check_source(base)).map_err(|e| format!("reverting: {e}"))?;
+    same_hints(&c, base).map_err(|e| format!("reverting: {e}"))?;
     Ok(kind)
+}
+
+/// `c`'s inlay hints are a full check's of `text`.
+fn same_hints(c: &DocumentChecker, text: &str) -> Result<(), String> {
+    let mut fresh = DocumentChecker::new();
+    fresh.full(text);
+    if c.inlay_hints() == fresh.inlay_hints() {
+        return Ok(());
+    }
+    let only_a: Vec<_> = c
+        .inlay_hints()
+        .iter()
+        .filter(|h| !fresh.inlay_hints().contains(h))
+        .collect();
+    let only_b: Vec<_> = fresh
+        .inlay_hints()
+        .iter()
+        .filter(|h| !c.inlay_hints().contains(h))
+        .collect();
+    Err(format!(
+        "hints incremental only: {only_a:?}\nfull only: {only_b:?}"
+    ))
 }
 
 const PROGRAM: &str = "\
@@ -166,13 +190,19 @@ fn incremental_matches_full_over_a_directory() {
             let (got, kind) = c.check_reporting(&edited);
             t_inc += t.elapsed().as_secs_f64();
             let t = Instant::now();
-            let want = karac::check_source(&edited);
+            let mut fresh = DocumentChecker::new();
+            let want = fresh.full(&edited);
             t_full += t.elapsed().as_secs_f64();
             edits += 1;
             if kind == CheckKind::Incremental {
                 inc += 1;
             }
-            if let Err(e) = same(&got, &want) {
+            let hints = if c.inlay_hints() == fresh.inlay_hints() {
+                Ok(())
+            } else {
+                Err("inlay hints differ".to_string())
+            };
+            if let Err(e) = same(&got, &want).and(hints) {
                 failures.push(format!(
                     "{} @{at} {insert:?} ({kind:?}): {e}",
                     path.display()
@@ -180,7 +210,7 @@ fn incremental_matches_full_over_a_directory() {
             }
             // Back to the original, from the edited result.
             let (back, _) = c.check_reporting(&src);
-            if let Err(e) = same(&back, &karac::check_source(&src)) {
+            if let Err(e) = same(&back, &karac::check_source(&src)).and(same_hints(&c, &src)) {
                 failures.push(format!("{} @{at} revert: {e}", path.display()));
             }
         }

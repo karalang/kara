@@ -6,8 +6,10 @@
 
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CompletionItem, CompletionItemKind,
-    Diagnostic, DiagnosticSeverity, DocumentSymbol, Hover, HoverContents, MarkupContent,
-    MarkupKind, NumberOrString, Position, Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
+    Diagnostic, DiagnosticSeverity, DocumentSymbol, Documentation, Hover, HoverContents, InlayHint,
+    InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, NumberOrString, ParameterInformation,
+    ParameterLabel, Position, Range, SignatureHelp, SignatureInformation, SymbolKind, TextEdit,
+    Uri, WorkspaceEdit,
 };
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -277,6 +279,103 @@ pub fn completion(text: &str, position: Position) -> Vec<CompletionItem> {
             }),
             detail: e.detail,
             ..Default::default()
+        })
+        .collect()
+}
+
+/// The signature of the call whose parentheses hold `position`: the
+/// callee's declaration, each parameter's place in it and what its mode
+/// means for the argument, and the parameter the cursor is on. `None`
+/// outside a call, or for a builtin method with no Kāra declaration.
+/// `catch_unwind`-guarded like [`diagnostics`].
+pub fn signature_help(text: &str, position: Position) -> Option<SignatureHelp> {
+    let offset = LineIndex::new(text).offset(position);
+    let help =
+        match std::panic::catch_unwind(AssertUnwindSafe(|| karac::signature_help_at(text, offset)))
+        {
+            Ok(help) => help?,
+            Err(_) => {
+                eprintln!("kara-lsp: signature help panicked; returning none");
+                return None;
+            }
+        };
+    let utf16 = |b: usize| help.label[..b].encode_utf16().count() as u32;
+    let markdown = |value: String| {
+        Documentation::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value,
+        })
+    };
+    let parameters = help
+        .params
+        .iter()
+        .map(|p| {
+            let mut doc = mode_text(p.mode).to_string();
+            if let Some(d) = &p.doc {
+                doc.push_str("\n\n");
+                doc.push_str(d.trim());
+            }
+            ParameterInformation {
+                label: ParameterLabel::LabelOffsets([utf16(p.start), utf16(p.end)]),
+                documentation: Some(markdown(doc)),
+            }
+        })
+        .collect::<Vec<_>>();
+    // Past the last parameter, an index out of range highlights none.
+    let active = help.active.unwrap_or(parameters.len()) as u32;
+    Some(SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label: help.label.clone(),
+            documentation: help.doc.clone().map(markdown),
+            parameters: Some(parameters),
+            active_parameter: Some(active),
+        }],
+        active_signature: Some(0),
+        active_parameter: Some(active),
+    })
+}
+
+/// What a parameter's mode means for the argument passed to it
+/// (core-semantics §4.1).
+fn mode_text(mode: karac::ParamMode) -> &'static str {
+    match mode {
+        karac::ParamMode::Borrowed => {
+            "**borrowed**: the call reads the argument, which stays the caller's \
+             (a copy, for a `Copy` type)."
+        }
+        karac::ParamMode::Owned => {
+            "**`own`**: the argument moves into the call and the caller cannot use it \
+             afterwards; pass `x.clone()` to keep `x`."
+        }
+        karac::ParamMode::MutRef => {
+            "**`mut ref`**: the call may change the argument, which the call marks \
+             `mut` (`f(mut x)`)."
+        }
+    }
+}
+
+/// The inlay hints of `checker`'s last check of `text` that fall in `range`:
+/// a `let` binding's inferred type after its name, and a private function's
+/// inferred effects after its signature.
+pub fn inlay_hints(text: &str, hints: &[karac::InlayHint], range: Range) -> Vec<InlayHint> {
+    let index = LineIndex::new(text);
+    hints
+        .iter()
+        .filter(|h| h.offset <= text.len())
+        .map(|h| (index.position(h.offset), h))
+        .filter(|(p, _)| !pos_lt(*p, range.start) && !pos_lt(range.end, *p))
+        .map(|(position, h)| {
+            let types = h.kind == karac::InlayHintKind::Type;
+            InlayHint {
+                position,
+                label: InlayHintLabel::String(h.label.clone()),
+                kind: types.then_some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: Some(!types),
+                padding_right: None,
+                data: None,
+            }
         })
         .collect()
 }

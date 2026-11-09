@@ -9,6 +9,12 @@ Language support for [Kāra](https://github.com/karalang/kara).
   the standard library's included; after `std.`, its modules and their
   items; anywhere else, the locals and parameters in scope and the file's
   own items.
+- **Signature help** inside a call's parentheses: the function's
+  declaration, the parameter you are on, and what each parameter's mode
+  means for the argument (borrowed, `own`, `mut ref`).
+- **Inlay hints**: the inferred type of a `let` written without one, and,
+  when `kara.inlayHints.effects` is on, the inferred effects of a private
+  function written without a `with` clause.
 - **Go to definition**, **find references** and **rename** within a file.
 - **Hover** shows the type of the expression under the cursor and, on a
   function, its effect signature.
@@ -39,18 +45,22 @@ install the server.
 |---|---|---|
 | `kara.server.path` | `""` | Path to the `kara-lsp` binary. |
 | `kara.server.extraEnv` | `{}` | Extra environment variables for the server. |
+| `kara.inlayHints.types` | `true` | Inferred types of `let` bindings. |
+| `kara.inlayHints.effects` | `false` | Inferred effects of private functions. |
 | `kara.trace.server` | `"off"` | `messages` or `verbose` logs the protocol to the **Kāra Language Server** output. |
 
 ## Commands
 
-- **Kāra: Restart Language Server** (also happens when a `kara.server.*` setting changes).
+- **Kāra: Restart Language Server** (also happens when a `kara.server.*` or
+  `kara.inlayHints.*` setting changes).
 - **Kāra: Show Language Server Output**.
 
 ## Limits in this release
 
 Go to definition, references and rename work within the open file;
-reaching across modules comes later, as does signature help (see
-`docs/roadmap.md` § Track 3).
+reaching across modules comes later (see `docs/roadmap.md` § Track 3).
+Signature help has nothing to show for a builtin type's method that has no
+Kāra declaration, such as `Vec.push`.
 
 ## Developing
 

@@ -1,7 +1,8 @@
 // The Kāra extension: a thin client over `kara-lsp` (lsp/ in this repo).
 //
 // Everything language-aware (diagnostics, hover, go-to-definition,
-// references, outline, formatting, quick fixes) comes from the server; this
+// references, outline, formatting, quick fixes, completion, signature help,
+// inlay hints) comes from the server; this
 // file only finds the binary, starts it over stdio and restarts it on demand.
 // Syntax highlighting is the TextMate grammar in syntaxes/, which works with
 // or without a server.
@@ -30,7 +31,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("kara.showOutput", () => output?.show(true)),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
-      if (e.affectsConfiguration("kara.server")) {
+      // A hint setting restarts too, so the open editors ask for hints again.
+      if (e.affectsConfiguration("kara.server") || e.affectsConfiguration("kara.inlayHints")) {
         await stopClient();
         await startClient(context);
       }
@@ -75,6 +77,19 @@ async function startClient(context: vscode.ExtensionContext): Promise<void> {
     ],
     outputChannel: output,
     traceOutputChannel: output,
+    middleware: {
+      // The server sends both kinds of inlay hint; each has its setting.
+      provideInlayHints: async (document, range, token, next) => {
+        const hints = await next(document, range, token);
+        if (hints === undefined || hints === null) {
+          return hints;
+        }
+        const shown = vscode.workspace.getConfiguration("kara.inlayHints");
+        const types = shown.get<boolean>("types", true);
+        const effects = shown.get<boolean>("effects", false);
+        return hints.filter((h) => (h.kind === vscode.InlayHintKind.Type ? types : effects));
+      },
+    },
   };
 
   client = new LanguageClient("kara", "Kāra Language Server", serverOptions, clientOptions);

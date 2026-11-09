@@ -1700,6 +1700,8 @@ pub fn rename_spans(source: &str, byte_offset: usize) -> Option<(String, Vec<Def
 #[cfg(not(target_arch = "wasm32"))]
 pub use cli::editor_complete::{CompletionEntry, CompletionKind};
 #[cfg(not(target_arch = "wasm32"))]
+pub use cli::editor_hints::{InlayHint, InlayHintKind};
+#[cfg(not(target_arch = "wasm32"))]
 pub use cli::editor_incremental::{CheckKind, DocumentChecker};
 
 /// Completion query: what can be written at `byte_offset`. After a `.` on
@@ -1711,6 +1713,20 @@ pub use cli::editor_incremental::{CheckKind, DocumentChecker};
 #[cfg(not(target_arch = "wasm32"))]
 pub fn completions_at(source: &str, byte_offset: usize) -> Vec<CompletionEntry> {
     cli::editor_complete::complete(source, byte_offset)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use cli::editor_signature::{ParamMode, SignatureHelp, SignatureParam};
+
+/// Signature-help query: inside a call's parentheses at `byte_offset`, the
+/// callee's declaration on one line, each parameter's range in it and mode
+/// (borrowed, `own`, `mut ref`), and the parameter the cursor is on. `None`
+/// outside a call's parentheses, or for a callee with no Kāra declaration
+/// (a builtin type's method the checker answers itself). Never executes
+/// the program.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn signature_help_at(source: &str, byte_offset: usize) -> Option<SignatureHelp> {
+    cli::editor_signature::signature_help(source, byte_offset)
 }
 
 /// One entry in a document outline.

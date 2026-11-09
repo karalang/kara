@@ -66,6 +66,16 @@
           },
           "markdownDescription": "Extra environment variables for the `kara-lsp` process."
         },
+        "kara.inlayHints.types": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show the inferred type of a `let` binding written without one."
+        },
+        "kara.inlayHints.effects": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show the inferred effects of a private function written without a `with` clause. Off by default: overflow-checked arithmetic makes most functions `panics`."
+        },
         "kara.trace.server": {
           "type": "string",
           "enum": [

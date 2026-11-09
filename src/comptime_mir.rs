@@ -482,6 +482,11 @@ fn splice(program: &mut Program, spliced: Spliced) {
         )
         .collect();
     edits.sort_by_key(|(i, replace, _)| (*i, *replace));
+    // Fresh ids, so the program's own nodes keep theirs.
+    let mut next = crate::node_ids::next_free_id(&mut program.items);
+    for (_, _, items) in &mut edits {
+        crate::node_ids::number_items_from(items, &mut next);
+    }
     for (idx, replace, items) in edits.into_iter().rev() {
         let at = if replace {
             program.items.remove(idx);

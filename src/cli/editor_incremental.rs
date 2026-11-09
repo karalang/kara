@@ -28,6 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::editor_hints::InlayHint;
 use crate::ast::{ImplItem, Item, TraitItem};
 use crate::PlaygroundDiagnostic;
 
@@ -291,6 +292,7 @@ struct Snapshot {
     diags: Vec<PlaygroundDiagnostic>,
     outline: Outline,
     effects: HashMap<String, String>,
+    hints: Vec<InlayHint>,
 }
 
 /// How a [`DocumentChecker::check`] was answered.
@@ -371,14 +373,23 @@ impl DocumentChecker {
         }
     }
 
+    /// The inlay hints of the last checked text: what the checker inferred
+    /// and the source does not say ([`super::editor_hints`]). Empty for a
+    /// package member, which is checked with its package.
+    pub fn inlay_hints(&self) -> &[InlayHint] {
+        self.last.as_ref().map_or(&[], |l| &l.hints)
+    }
+
     /// A full check of `text`, which becomes the last result.
     pub fn full(&mut self, text: &str) -> Vec<PlaygroundDiagnostic> {
-        let (diags, effects) = super::editor::check_with_effects(text);
+        let checked = super::editor::check_detailed(text);
+        let diags = checked.diags;
         self.last = outline(text).map(|outline| Snapshot {
             text: text.to_string(),
             diags: diags.clone(),
             outline,
-            effects,
+            effects: checked.effects,
+            hints: checked.hints,
         });
         diags
     }
@@ -471,8 +482,8 @@ impl DocumentChecker {
             );
         }
         let t0 = std::time::Instant::now();
-        let (fdiags, feffects) =
-            super::editor::check_with_effects(focused.as_deref().unwrap_or(nt));
+        let focused_check = super::editor::check_detailed(focused.as_deref().unwrap_or(nt));
+        let (fdiags, feffects) = (focused_check.diags, focused_check.effects);
         if std::env::var("KARAC_LSP_INCREMENTAL_DEBUG").is_ok() {
             eprintln!(
                 "[incremental] focused check {:.0} ms",
@@ -527,12 +538,31 @@ impl DocumentChecker {
         for d in &mut diags {
             (d.line, d.column) = index.line_col(nt, d.offset);
         }
+        // The hints the same way: the edited items' from this check, the
+        // rest moved by the edit.
+        let mut hints: Vec<InlayHint> = last
+            .hints
+            .iter()
+            .filter(|h| !in_edited(&old.bodies, h.offset))
+            .map(|h| InlayHint {
+                offset: shift(h.offset),
+                ..h.clone()
+            })
+            .collect();
+        hints.extend(
+            focused_check
+                .hints
+                .into_iter()
+                .filter(|h| in_edited(&new.bodies, h.offset)),
+        );
+        hints.sort_by_key(|h| h.offset);
         let effects = last.effects.clone();
         self.last = Some(Snapshot {
             text: nt.to_string(),
             diags: diags.clone(),
             outline: new,
             effects,
+            hints,
         });
         Some((diags, CheckKind::Incremental))
     }

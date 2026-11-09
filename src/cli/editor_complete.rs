@@ -89,7 +89,7 @@ fn check_with_hole(before: &str, rest: &str) -> Option<(Nav, usize)> {
 /// [`editor_nav::analyze`] of the text with every body but the one at `at`
 /// emptied ([`super::editor_incremental::focus`]), or of the text itself
 /// when nothing was emptied.
-fn analyze_focused(text: &str, at: usize) -> Option<Nav> {
+pub(super) fn analyze_focused(text: &str, at: usize) -> Option<Nav> {
     match super::editor_incremental::focus(text, at) {
         Some(focused) => editor_nav::analyze(&focused),
         None => editor_nav::analyze(text),

@@ -88,6 +88,21 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   locals and parameters in scope and the file's items. `textDocument/rename`
   renames a name at its declaration and every use in the file.
 
+- **Signature help and inlay hints in the editor.** Inside a call's
+  parentheses `kara-lsp` shows the callee's declaration with the parameter
+  under the cursor, and says for each parameter what its mode means for the
+  argument: borrowed (the default, core-semantics §4.1), `own` (it moves in)
+  or `mut ref` (marked `mut` at the call). A builtin type's method with no
+  Kāra declaration (`Vec.push`, `String.push_str`) is shown as the library
+  reference states it, and enum variants and `println` are covered too:
+  1,710 of 1,896 calls sampled across the corpus apps get a signature.
+  Inlay hints show the inferred type of a `let` written without one and the
+  inferred effects of a private function without a `with` clause; both
+  come from the check the last edit already ran. In VS Code,
+  `kara.inlayHints.types` is on and `kara.inlayHints.effects` off by
+  default: the corpus apps carry 37 effect hints per thousand lines, most
+  of them `panics` or `allocates(Heap)`.
+
 - **The editor re-checks only what an edit touched.** On a keystroke inside
   a function body, `kara-lsp` checks that body with the rest of the file's
   bodies emptied (the ones it calls kept, or stood in for by a body with
@@ -643,6 +658,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (B-2026-11-08-41).
 
 ### Tooling
+
+- A `let` binding after a `#[derive]`d type had no type on hover: the
+  derive's items were spliced in numbered from zero, so the program's own
+  nodes after the type were renumbered away from the ids the type checker's
+  tables are keyed by. Spliced items now take fresh ids.
 
 - `karac fmt` keeps a comment beside the parameter or call argument it
   follows: such a list is laid out one element per line, where the comment
