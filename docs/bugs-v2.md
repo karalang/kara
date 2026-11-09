@@ -118,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-38 | 2026-11-09 | parser+typecheck+cli | medium | A tuple value cannot be assigned to existing places: `(lo, hi) = if c { (lo, mid) } else { (mid + 1, hi) };` (Rust's destructuring assignment) is refused E_ASSIGN_TARGET_NOT_PLACE with advice to drop the parentheses, and `lo, hi = if ..` is then a parse error ("2 target(s) but 1 value(s)"), so the halving step of a binary search carried as a pair has no spelling but a `let` and two assignments | — |
 | B-2026-11-09-39 | 2026-11-09 | typecheck+mir+mir-llvm | medium | A closure whose body fixes nothing about its parameter, handed to a bounded generic `F: Fn(i64) -> i64`, passes `karac check` but types its parameter and result as `()`: `ap(1, |x| { println("a"); x })` stops every backend with "invalid MIR: ap[Fn(()) -> ()]: argument 0 of a Fn call has the wrong type" | — |
 | B-2026-11-09-40 | 2026-11-09 | typecheck+mir | medium | A closure whose body ends in `collect()` takes its target from nowhere: `let to32 = |v: ref Vec[i64]| v.iter().map(|x| x as i32).collect();` used as `take(to32(a))` with `take(v: Vec[i32])`, or `let r: Vec[i64] = f(a)`, checks clean and then stops at lowering with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet"; a Kāra closure cannot declare its return type, so nothing can fix `C` | — |
-| B-2026-11-09-43 | 2026-11-09 | typecheck | medium | `let t = text?;` on a bare (borrowed) `text: Option[String]` parameter is refused as "'?' operator requires `Result` or `Option`, found 'ref Option[String]'" with no fix, about a value that is one; `??` on the same operand already names the borrow and offers `.clone()`, and a `Copy` payload (`n?` on a bare `Option[i64]`) is refused too | — |
 | B-2026-11-09-44 | 2026-11-09 | interp+mir-llvm+runtime | medium | The HTTP client turns a status of 400 or more into `Err(HttpError)` carrying only a message ("<url>: status code 409"): a program cannot read the status, the headers or the body of an error response, so a tus client cannot take `Upload-Offset` from a 409 and a REST client cannot read a JSON error body | — |
 
 ### Relocated
@@ -958,6 +957,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-35 | typecheck+mir+mir-llvm | high | A scalar `ref` handed to a type parameter a closure returns solved it as the `ref`: `m.map_or(x, \|k: i64\| k + 1)` with `x: ref i64` made `U` a `ref i… | 5a9b370550 |
 | B-2026-11-09-41 | typecheck+mir | medium | `PriorityQueue` has no `iter`, `into_iter`, `for`, `Clone` or `Display`, though collections.md says every collection works with `for` and is `Display… | 2f62c55005 |
 | B-2026-11-09-42 | parser+resolver | low | Rust's `heap.into_iter().map(\|Reverse(s)\| s)` gets no fix for the `Reverse` parameter, and `or_insert_with(BinaryHeap::new)` is not seen as a heap's… | 2f62c55005 |
+| B-2026-11-09-43 | typecheck | medium | `let t = text?;` on a bare (borrowed) `text: Option[String]` parameter is refused as "'?' operator requires `Result` or `Option`, found 'ref Option[S… | b490bc1d36 |
 
 </details>
 
