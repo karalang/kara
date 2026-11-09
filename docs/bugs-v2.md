@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 206 |
 | false-positive | 167 |
-| perf | 143 |
+| perf | 144 |
 | missing-feature | 119 |
 | soundness | 56 |
 | miscompile | 49 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 332 |
-| mir-llvm | 178 |
+| mir-llvm | 179 |
 | mir | 155 |
 | cli | 92 |
 | ownership | 65 |
@@ -108,7 +108,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
 | B-2026-11-09-21 | 2026-11-09 | typecheck | low | Tracker for the next minor release: `is_ok()`/`is_err()` on an `Option` become a compile error; in 0.8.x they are a `deprecated` warning with a `karac fix` to `is_some()`/`is_none()` (85675b25f1, core-types.md 49ba9850cd) | — |
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
-| B-2026-11-09-26 | 2026-11-09 | mir-llvm | low | A presized push fill whose trip count is not a constant keeps two exits a trip, its bound and its reservation's reach, so LLVM does not vectorize it: kata 484's `(1..=n).collect()` (n = letters.len() + 1) runs 7 instructions an element where Rust's TrustedLen fill is vectorized, and its `s.chars().collect()` runs 14 a char against Rust's 11 | — |
 | B-2026-11-09-28 | 2026-11-09 | typecheck | low | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | — |
 | B-2026-11-09-33 | 2026-11-09 | cli | medium | kara-lsp: incremental user-code checking -- a completion re-checks the whole buffer and the unpruned library on every request: 186 ms on a 5-line file, 428 ms mid-file in mini_parsy (4.9k lines), 1.54 s in mini_markdown (14.8k lines) | — |
 | B-2026-11-09-36 | 2026-11-09 | typecheck | low | `v.iter().fold(None, |acc: Option[i64], x| Some(x))` is refused: the tail `Some(x)` with `x: ref i64` is an `Option[ref i64]`, though `Some(x)` against an `Option[i64]` slot elsewhere reads the scalar as its value (the remainder of the row that stopped it building an address) | — |
@@ -119,6 +118,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-44 | 2026-11-09 | interp+mir-llvm+runtime | medium | The HTTP client turns a status of 400 or more into `Err(HttpError)` carrying only a message ("<url>: status code 409"): a program cannot read the status, the headers or the body of an error response, so a tus client cannot take `Upload-Offset` from a 409 and a REST client cannot read a JSON error body | — |
 | B-2026-11-09-45 | 2026-11-09 | typecheck+mir | medium | A `mut ref` cursor cannot walk to a list's tail: Rust's `let mut tail = &mut list; while tail.is_some() { tail = &mut tail.as_mut().unwrap().next; } *tail = rest;` has no Kāra spelling, since `Option` has no `as_mut`, and the natural `while let Some(n) = tail { tail = mut ref n.next; }` (or the same as a `match` in a `loop`) is refused E0516 by both borrow checks: the rebinding reads as a use of `tail` while `tail` still borrows from itself | — |
 | B-2026-11-09-46 | 2026-11-09 | interp | medium | `karac __mir-run` builds an owned (non-`shared`) recursive list in quadratic time: `head = Some(N { v: i, next: head })` n times takes 3.2 s at n = 5000, 13.8 s at 10000 and 56 s at 20000, where the same program with `shared struct N` takes 0.29 s at 20000 and the compiled backend is linear | — |
+| B-2026-11-09-47 | 2026-11-09 | mir-llvm | low | `s.chars().collect()` into a Vec[char] runs 14 instructions a char against Rust's 11: the UTF-8 decode loop tests the reserved length on each push, and the loop copy B-2026-11-09-26 gives counted fills does not apply because the char count is not known at the way in | — |
 
 ### Relocated
 
@@ -950,6 +950,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-20 | mir | low | A raw pointer cannot reach a non-`Copy` element: `ptr.mut(xs[i])` is refused as a move out of the collection, `p.read()` as a move out of a borrowed… | f6dfaaa342 |
 | B-2026-11-09-24 | typecheck | low | A `pub fn` in an inherent impl of a type that is not `pub` (LeetCode's `struct Solution; impl Solution { pub fn sufficient_subset(root: Option<Rc<Ref… | 52b677beea |
 | B-2026-11-09-25 | typecheck | low | A `char` handed to `replace` or `replacen` (Rust's `rest.replace(c, "")`) is refused with "expects String arguments" and no machine fix, though `find… | 5eee63ee71 |
+| B-2026-11-09-26 | mir-llvm | low | A presized push fill whose trip count is not a constant keeps two exits a trip, its bound and its reservation's reach, so LLVM does not vectorize it:… | 1cbfcd7e92 |
 | B-2026-11-09-27 | ownership | low | `let Json.Array(queries) = row[3] else { … };` with `queries` only read is refused with E0515 "cannot move a non-`Copy` value out of a collection ele… | 4e69fdaed4 |
 | B-2026-11-09-29 | typecheck | low | A program's inherent impl on a library type that redefines a library method is also refused at the library's own impl, past the program's end, under… | 8adc0b0e29 |
 | B-2026-11-09-30 | typecheck | medium | JsonError, PoolError, SendError, RecvTimeoutError and SendTimeoutError do not implement `Error`, so `?` cannot convert them into `AnyError` | 8adc0b0e29 |
