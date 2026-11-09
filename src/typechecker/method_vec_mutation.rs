@@ -913,6 +913,93 @@ impl<'a> super::TypeChecker<'a> {
         Some(Type::Error)
     }
 
+    /// `.slice(a, b)` on a `Vec`, an array or a slice, JavaScript's
+    /// spelling of a run of elements. The library has no
+    /// such method: a run is the range index `v[a..b]`, a `Slice[T]`
+    /// (collections.md), copied out with `.to_vec()`. Refused by name with
+    /// that pointer, and with the edit to `[a..b]` when both bounds are an
+    /// integer literal or a name, which are the only arguments the checker
+    /// can write back without the source text (B-2026-11-09-17).
+    pub(super) fn reject_slice_method_on_sequence(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+        args_close_span: &Span,
+        obj_ty: &Type,
+    ) -> Option<Type> {
+        if !self.library_methods_from_source || method != "slice" {
+            return None;
+        }
+        let inner = match obj_ty {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        let element = match inner {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => args[0].clone(),
+            Type::Array { element, .. } | Type::Slice { element, .. } => (**element).clone(),
+            _ => return None,
+        };
+        let defined = ["Vec", "Slice", "Array"]
+            .iter()
+            .any(|ty| !self.env.find_methods_with_args(ty, &[], method).is_empty());
+        if defined {
+            return None;
+        }
+        for arg in args {
+            self.infer_expr(&arg.value);
+        }
+        let msg = format!(
+            "no method 'slice' on type '{}': a run of elements is the range index \
+             `v[a..b]`, a `Slice[{}]`; `.to_vec()` copies it out \
+             (docs/library/collections.md)",
+            type_display(inner),
+            type_display(&element)
+        );
+        let bound = |e: &Expr| match &e.kind {
+            ExprKind::Integer(n, None) => Some(n.to_string()),
+            ExprKind::Identifier(name) => Some(name.clone()),
+            _ => None,
+        };
+        // The edit rewrites `.slice(a, b)` whole, offered only when it sits
+        // right after the receiver and both bounds can be written back.
+        let object_end = object.span.offset + object.span.length;
+        let fix = match args {
+            [a, b]
+                if a.label.is_none()
+                    && b.label.is_none()
+                    && !a.mut_marker
+                    && !b.mut_marker
+                    && a.value.span.offset == object_end + ".slice(".len()
+                    && args_close_span.offset > b.value.span.offset =>
+            {
+                bound(&a.value)
+                    .zip(bound(&b.value))
+                    .map(|(a, b)| format!("[{a}..{b}]"))
+            }
+            _ => None,
+        };
+        match fix {
+            Some(replacement) => self.type_error_with_fix_it(
+                msg,
+                *span,
+                TypeErrorKind::NoMethodFound,
+                FixIt {
+                    span: Span {
+                        line: object.span.line,
+                        column: object.span.column + object.span.length,
+                        offset: object_end,
+                        length: args_close_span.offset + 1 - object_end,
+                    },
+                    replacement,
+                },
+            ),
+            None => self.type_error(msg, *span, TypeErrorKind::NoMethodFound),
+        }
+        Some(Type::Error)
+    }
+
     /// Rust's `sort_unstable`, `sort_unstable_by` and `sort_unstable_by_key`
     /// on a `Vec`, an array or a slice. collections.md gives only the stable
     /// sorts, and a stable sort is also a valid unstable one, so on v2 the

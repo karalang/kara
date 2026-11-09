@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 199 |
+| diagnostics | 200 |
 | false-positive | 163 |
 | perf | 138 |
 | missing-feature | 113 |
@@ -89,6 +89,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
+| typechecker | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-09). Do not edit this block by hand; edit the ledger and regenerate._
@@ -119,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-88 | 2026-11-08 | typecheck+cli | low | A plain list literal's element literal is not fixed by where the binding goes (the remainder of B-2026-11-08-57): `let mut v = [0, 0]; g(mut v)` with `g(a: mut ref Vec[i32])`, and `let v = [0, 7]; g(v)` into a `ref Vec[i32]`, are refused as `Vec[i64]`, with no machine fix | — |
 | B-2026-11-09-14 | 2026-11-09 | typecheck+cli | medium | Rust's `binary_search` taken apart as a `Result` has no fix: `xs.binary_search(&v).unwrap_or_else(|x| x)` is refused with "expected 'OnceFn() -> i64', found 'Fn(?T) -> ?T'" and `match xs.binary_search(&v) { Ok(i) => .., Err(i) => .. }` with a generic pattern error, though Kāra's `binary_search` returns `Option[i64]` and `partition_point(|y| y < v)` is the insertion point | — |
 | B-2026-11-09-15 | 2026-11-09 | typecheck+cli | low | A defaulted `i64` literal that reaches a narrower slot through a collection (`let mut a = 0; a += nums[i]; left[k].push(a)`, then `best.min(x + ..)` for `x` in `left[k]`, `best: i32`) is refused at the `min` with no edit; the fix is `a: i32` at the binding, two hops away | — |
+| B-2026-11-09-17 | 2026-11-09 | typechecker | low | `.slice(a, b)` on a `Vec`, an array or a slice (JavaScript's spelling of a run of elements) gets a bare "no method 'slice' on type 'Vec'", with no pointer to the range index `v[a..b]` and nothing for `karac fix` to apply | — |
 
 ### Relocated
 

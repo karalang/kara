@@ -2191,6 +2191,17 @@ impl<'a> super::TypeChecker<'a> {
         let method: &str = self
             .rename_rust_unstable_sort(object, method, args, args_close_span, &obj_ty)
             .unwrap_or(method);
+        // `.slice(a, b)` on a sequence is `v[a..b]` (kata 1078).
+        if let Some(t) = self.reject_slice_method_on_sequence(
+            object,
+            method,
+            args,
+            span,
+            args_close_span,
+            &obj_ty,
+        ) {
+            return t;
+        }
 
         // B-2026-11-05-3: the receivers of the builtin `Option.unwrap`, where
         // an editor offers the rewrite to `.expect("…")`. Before the library
