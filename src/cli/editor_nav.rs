@@ -60,6 +60,17 @@ pub(crate) fn analyze_whole_library(source: &str) -> Option<Nav> {
     nav_of(super::editor::checked_whole_library(source), source)
 }
 
+/// The whole library, checked once a process against an empty program:
+/// its types, impls and traits, for completion to offer what a buffer has
+/// not named yet without checking the whole library with every buffer
+/// (B-2026-11-09-28).
+pub(crate) fn whole_library() -> Option<&'static Nav> {
+    static WHOLE: std::sync::OnceLock<Option<Nav>> = std::sync::OnceLock::new();
+    WHOLE
+        .get_or_init(|| analyze_whole_library("fn main() {}\n"))
+        .as_ref()
+}
+
 fn nav_of(pipeline: super::Pipeline, source: &str) -> Option<Nav> {
     pipeline.typed.as_ref()?;
     pipeline.resolved.as_ref()?;

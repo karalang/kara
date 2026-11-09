@@ -582,6 +582,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   used to move into the body or to the end of the statement
   (B-2026-11-07-44).
 
+- `kara-lsp` completion checks the buffer against the library it reaches,
+  as `karac check` does, and takes what the rest of the library offers
+  from the whole library checked once a process: completion on a 5-line
+  buffer went from 120-165 ms to about 32 ms after the first request
+  (about 190 ms), with the same entries (B-2026-11-09-28).
+
 ---
 
 ## 0.8.1 (beta) — 2026-11-07

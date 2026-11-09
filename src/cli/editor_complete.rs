@@ -81,8 +81,8 @@ pub(crate) fn complete(source: &str, at: usize) -> Vec<CompletionEntry> {
 /// after the hole, as a statement left unfinished needs.
 fn check_with_hole(before: &str, rest: &str) -> Option<(Nav, usize)> {
     let hole_at = before.len();
-    editor_nav::analyze_whole_library(&format!("{before}{HOLE}{rest}"))
-        .or_else(|| editor_nav::analyze_whole_library(&format!("{before}{HOLE};{rest}")))
+    editor_nav::analyze(&format!("{before}{HOLE}{rest}"))
+        .or_else(|| editor_nav::analyze(&format!("{before}{HOLE};{rest}")))
         .map(|nav| (nav, hole_at))
 }
 
@@ -177,13 +177,25 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
         return Vec::new();
     };
     let head = head.as_str();
-    let typed = nav.typed();
+    // The buffer is checked against the library it reaches, as `karac check`
+    // checks it; what the library offers that the buffer has not named yet
+    // comes from the whole library, checked once a process
+    // (B-2026-11-09-28). A type the buffer declares is the buffer's alone.
+    let declared = nav.user_items().any(|it| match it {
+        Item::StructDef(s) => s.name == head,
+        Item::EnumDef(e) => e.name == head,
+        _ => false,
+    });
+    let views: Vec<&Nav> = std::iter::once(&nav)
+        .chain(editor_nav::whole_library().filter(|_| !declared))
+        .collect();
     let mut out = Vec::new();
-    if let Some(info) = typed.struct_info.get(head) {
+    if let Some(info) = views.iter().find_map(|v| v.typed().struct_info.get(head)) {
         // A library struct's private fields are not the program's to name.
-        let own = nav
-            .user_items()
-            .any(|it| matches!(it, Item::StructDef(s) if s.name == head));
+        let own = declared
+            && nav
+                .user_items()
+                .any(|it| matches!(it, Item::StructDef(s) if s.name == head));
         for (name, fty, is_pub) in &info.fields {
             if own || *is_pub {
                 out.push(CompletionEntry {
@@ -204,55 +216,91 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
     let applies = |imp: &&ImplInfo| {
         imp.target_type == head && (imp.target_args.is_empty() || imp.target_args == args)
     };
-    for imp in typed.impls.iter().filter(applies) {
-        for (name, sig) in &imp.methods {
-            if !typed.receiver_methods.contains(&format!("{head}.{name}")) {
-                continue;
+    let entry = |name: &String, sig: &crate::typechecker::env::FunctionSig| {
+        let params: Vec<String> = sig
+            .param_names
+            .iter()
+            .zip(&sig.params)
+            .map(|(n, t)| match n {
+                Some(n) => format!("{n}: {}", type_display(t)),
+                None => type_display(t),
+            })
+            .collect();
+        let ret = match &sig.return_type {
+            Type::Unit => String::new(),
+            t => format!(" -> {}", type_display(t)),
+        };
+        CompletionEntry {
+            label: name.clone(),
+            kind: CompletionKind::Method,
+            detail: Some(format!("fn {name}({}){ret}", params.join(", "))),
+        }
+    };
+    let mut traits: Vec<&str> = Vec::new();
+    for view in &views {
+        let typed = view.typed();
+        for imp in typed.impls.iter().filter(applies) {
+            for (name, sig) in &imp.methods {
+                if typed.receiver_methods.contains(&format!("{head}.{name}")) {
+                    out.push(entry(name, sig));
+                }
             }
-            let params: Vec<String> = sig
-                .param_names
+        }
+        // A trait's provided methods (an iterator's `map`, `filter`, ...)
+        // belong to every type that implements it.
+        traits.extend(
+            typed
+                .impls
                 .iter()
-                .zip(&sig.params)
-                .map(|(n, t)| match n {
-                    Some(n) => format!("{n}: {}", type_display(t)),
-                    None => type_display(t),
-                })
-                .collect();
-            let ret = match &sig.return_type {
-                Type::Unit => String::new(),
-                t => format!(" -> {}", type_display(t)),
-            };
-            out.push(CompletionEntry {
-                label: name.clone(),
-                kind: CompletionKind::Method,
-                detail: Some(format!("fn {name}({}){ret}", params.join(", "))),
-            });
+                .filter(applies)
+                .filter_map(|imp| imp.trait_name.as_deref()),
+        );
+    }
+    // A type the buffer declares has, from a library trait it implements,
+    // only the provided methods the buffer names; the rest are the ones
+    // another implementation of the trait has in the whole library.
+    if declared {
+        if let Some(whole) = editor_nav::whole_library() {
+            let typed = whole.typed();
+            for t in &traits {
+                let Some(imp) = typed
+                    .impls
+                    .iter()
+                    .find(|imp| imp.trait_name.as_deref() == Some(*t))
+                else {
+                    continue;
+                };
+                for (name, sig) in &imp.methods {
+                    if typed
+                        .receiver_methods
+                        .contains(&format!("{}.{name}", imp.target_type))
+                    {
+                        out.push(entry(name, sig));
+                    }
+                }
+            }
         }
     }
-    // A trait's provided methods (an iterator's `map`, `filter`, ...)
-    // belong to every type that implements it.
-    let traits: Vec<&str> = typed
-        .impls
-        .iter()
-        .filter(applies)
-        .filter_map(|imp| imp.trait_name.as_deref())
-        .collect();
-    let (text, _) = nav.text();
-    for item in &nav.program().items {
-        let Item::TraitDef(td) = item else { continue };
-        if !traits.contains(&td.name.as_str()) {
-            continue;
-        }
-        for ti in &td.items {
-            let TraitItem::Method(m) = ti else { continue };
-            if m.self_param.is_none() || m.deprecation.is_some() {
+    // A library trait's provided methods reach a type the buffer declares
+    // too (`impl Iterator for C` offers `filter`).
+    for view in std::iter::once(&nav).chain(editor_nav::whole_library()) {
+        let (text, _) = view.text();
+        for item in &view.program().items {
+            let Item::TraitDef(td) = item else { continue };
+            if !traits.contains(&td.name.as_str()) {
                 continue;
             }
-            out.push(CompletionEntry {
-                label: m.name.clone(),
-                kind: CompletionKind::Method,
-                detail: signature_text(text, m),
-            });
+            for ti in &td.items {
+                let TraitItem::Method(m) = ti else { continue };
+                if m.self_param.is_none() || m.deprecation.is_some() {
+                    continue;
+                }
+                out.push(CompletionEntry {
+                    label: m.name.clone(),
+                    kind: CompletionKind::Method,
+                    detail: signature_text(text, m),
+                });
+            }
         }
     }
     // The builtin types' methods are the checker's own arms, not impl
