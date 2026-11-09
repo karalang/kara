@@ -1,0 +1,92 @@
+// LeetCode #1086: High Five -- the ★ arm: the scores grouped by student
+// in a `SortedMap[i64, Vec[i64]]`, which walks the ids in order; each
+// student's scores sorted high to low, and the first five summed and
+// divided by 5. O(n log n).
+
+fn high_five(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut scores: SortedMap[i64, Vec[i64]] = SortedMap.new();
+    for item in items.iter() {
+        match scores.get_mut(item[0]) {
+            Some(list) => list.push(item[1]),
+            None => {
+                scores.insert(item[0], [item[1]]);
+            }
+        }
+    }
+    let mut out: Vec[Vec[i64]] = [];
+    for (id, list) in scores.iter() {
+        let mut sorted = list.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        let top: i64 = sorted.iter().take(5).sum();
+        out.push([id, top / 5]);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn written(pairs: Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = pairs.iter().map(|p| f"[{p[0]},{p[1]}]").collect();
+    f"[{parts.join(",")}]"
+}
+
+// k students with ids drawn from 1 to `ids`, each with 5 to 9 scores,
+// the items shuffled.
+fn random_items(seed: mut ref i64, k: i64, ids: i64) -> Vec[Vec[i64]] {
+    let mut chosen: Vec[i64] = [];
+    while chosen.len() < k {
+        let id = next_random(mut seed) % ids + 1;
+        if not chosen.contains(id) {
+            chosen.push(id);
+        }
+    }
+    let mut items: Vec[Vec[i64]] = [];
+    for id in chosen.iter() {
+        let n = next_random(mut seed) % 5 + 5;
+        for _ in 0..n {
+            items.push([id, next_random(mut seed) % 101]);
+        }
+    }
+    for i in (1..items.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        items.swap(i, j);
+    }
+    items
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases: Vec[Vec[Vec[i64]]] = [
+        [[1, 91], [1, 92], [2, 93], [2, 97], [1, 60], [2, 77], [1, 65], [1, 87], [1, 100], [2, 100], [2, 76]],
+        [[1, 100], [7, 100], [1, 100], [7, 100], [1, 100], [7, 100], [1, 100], [7, 100], [1, 100], [7, 100]],
+        [[3, 0], [3, 0], [3, 0], [3, 0], [3, 1]],
+        [[1000, 4], [1000, 4], [1000, 4], [1000, 4], [1000, 3], [1000, 100], [2, 9], [2, 9], [2, 9], [2, 9], [2, 9]],
+    ];
+    for items in cases.iter() {
+        println(f"{written(items)} -> {written(high_five(items))}");
+    }
+    // 300 random item lists of 1 to 40 students
+    let mut seed = 1086;
+    let mut students = 0;
+    let mut h = 0;
+    for _ in 0..300 {
+        let k = next_random(mut seed) % 40 + 1;
+        let items = random_items(mut seed, k, 1000);
+        let out = high_five(items);
+        students += out.len();
+        h = fold(h, written(out));
+    }
+    println(f"300 random lists: {students} students, checksum {h}");
+}

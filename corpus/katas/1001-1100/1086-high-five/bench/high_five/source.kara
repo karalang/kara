@@ -1,0 +1,73 @@
+// Benchmark: LeetCode #1086 High Five -- the ★ arm, the scores grouped by
+// student in a `SortedMap`, each student's sorted high to low and the
+// first five averaged. 200 random lists of 1000 items, LeetCode's
+// largest, are built once: list t has 50 + t % 150 students with ids from
+// 1 to 1000, five scores each and the rest given to students at random,
+// every score 0 to 100, the items shuffled. Every round answers each list,
+// in an order that changes with the round.
+// Mirrors high_five.rs, .c, .py and go-seq/.
+
+fn high_five(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut scores: SortedMap[i64, Vec[i64]] = SortedMap.new();
+    for item in items.iter() {
+        match scores.get_mut(item[0]) {
+            Some(list) => list.push(item[1]),
+            None => {
+                scores.insert(item[0], [item[1]]);
+            }
+        }
+    }
+    let mut out: Vec[Vec[i64]] = [];
+    for (id, list) in scores.iter() {
+        let mut sorted = list.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        let top: i64 = sorted.iter().take(5).sum();
+        out.push([id, top / 5]);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 50;
+    let mut seed = 1086;
+    let mut lists: Vec[Vec[Vec[i64]]] = [];
+    for t in 0..200 {
+        let k = 50 + t % 150;
+        let mut ids: Vec[i64] = [];
+        let mut taken: Vec[bool] = Vec.filled(1001, false);
+        while ids.len() < k {
+            let id = next_random(mut seed) % 1000 + 1;
+            if not taken[id] {
+                taken[id] = true;
+                ids.push(id);
+            }
+        }
+        let mut items: Vec[Vec[i64]] = [];
+        for i in 0..1000 {
+            let id = if i < 5 * k { ids[i % k] } else { ids[next_random(mut seed) % k] };
+            items.push([id, next_random(mut seed) % 101]);
+        }
+        for i in (1..items.len()).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            items.swap(i, j);
+        }
+        lists.push(items);
+    }
+    let mut students = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..200 {
+            let out = high_five(lists[(r * 7 + i) % 200]);
+            students += out.len();
+            for row in out.iter() {
+                check = (check * 31 + row[0] * 101 + row[1]) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over 200 lists of 1000 items: {students} students, checksum {check}");
+}

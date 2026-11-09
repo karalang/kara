@@ -1,0 +1,380 @@
+// LeetCode #1086: High Five -- the differential: the six arms against the
+// statement read literally, under six properties, over 2000 random problems
+// drawn before any arm answers.
+
+// ---- high_five.kara ----
+
+fn star_arm(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut scores: SortedMap[i64, Vec[i64]] = SortedMap.new();
+    for item in items.iter() {
+        match scores.get_mut(item[0]) {
+            Some(list) => list.push(item[1]),
+            None => {
+                scores.insert(item[0], [item[1]]);
+            }
+        }
+    }
+    let mut out: Vec[Vec[i64]] = [];
+    for (id, list) in scores.iter() {
+        let mut sorted = list.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        let top: i64 = sorted.iter().take(5).sum();
+        out.push([id, top / 5]);
+    }
+    out
+}
+
+// ---- high_five_heap.kara ----
+
+fn heap_arm(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut best: Map[i64, PriorityQueue[i64]] = Map.new();
+    for item in items.iter() {
+        let heap = best.entry(item[0]).or_insert_with(|| PriorityQueue.new());
+        heap.push(item[1]);
+        if heap.len() > 5 {
+            heap.pop();
+        }
+    }
+    let mut ids: Vec[i64] = best.keys().collect();
+    ids.sort();
+    let mut out: Vec[Vec[i64]] = [];
+    for id in ids.iter() {
+        let sum: i64 = best[id].iter().sum();
+        out.push([id, sum / 5]);
+    }
+    out
+}
+
+// ---- high_five_sorted.kara ----
+
+fn sorted_arm(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut all = items.clone();
+    all.sort_by(|a, b| a[0].cmp(b[0]).then(b[1].cmp(a[1])));
+    let mut out: Vec[Vec[i64]] = [];
+    let mut i = 0;
+    while i < all.len() {
+        let id = all[i][0];
+        let mut sum = 0;
+        let mut taken = 0;
+        while i < all.len() and all[i][0] == id {
+            if taken < 5 {
+                sum += all[i][1];
+                taken += 1;
+            }
+            i += 1;
+        }
+        out.push([id, sum / 5]);
+    }
+    out
+}
+
+// ---- high_five_buckets.kara ----
+
+fn buckets_arm(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let most = items.iter().map(|item| item[0]).max().unwrap();
+    let mut counts: Vec[Array[i64, 101]] = Vec.filled(most + 1, [0; 101]);
+    let mut seen: Vec[bool] = Vec.filled(most + 1, false);
+    for item in items.iter() {
+        counts[item[0]][item[1]] += 1;
+        seen[item[0]] = true;
+    }
+    let mut out: Vec[Vec[i64]] = [];
+    for id in 1..=most {
+        if not seen[id] {
+            continue;
+        }
+        let mut need = 5;
+        let mut sum = 0;
+        let mut score = 100;
+        while need > 0 {
+            let take = counts[id][score].min(need);
+            sum += take * score;
+            need -= take;
+            score -= 1;
+        }
+        out.push([id, sum / 5]);
+    }
+    out
+}
+
+// ---- high_five_five.kara ----
+
+struct Best {
+    top: Array[i64, 5],
+}
+
+fn five_arm(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut best: SortedMap[i64, Best] = SortedMap.new();
+    for item in items.iter() {
+        if best.get(item[0]).is_none() {
+            best.insert(item[0], Best { top: [-1; 5] });
+        }
+        let b = best.get_mut(item[0]).unwrap();
+        let mut s = item[1];
+        for k in 0..5 {
+            if s > b.top[k] {
+                let lower = b.top[k];
+                b.top[k] = s;
+                s = lower;
+            }
+        }
+    }
+    best.iter().map(|(id, b)| [id, b.top.iter().sum() / 5]).collect()
+}
+
+// ---- high_five_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn high_five(items: Vec[Vec[i32]]) -> Vec[Vec[i32]] {
+        let mut map: SortedMap[i32, PriorityQueue[i32]] = SortedMap.new();
+        for item in items.iter() {
+            let heap = map.entry(item[0]).or_insert_with(PriorityQueue.new);
+            heap.push(item[1]);
+            if heap.len() > 5 {
+                heap.pop();
+            }
+        }
+        map.into_iter()
+            .map(|(id, heap)| {
+                let sum: i32 = heap.into_iter().map(|s| s).sum();
+                [id, sum / 5]
+            })
+            .collect()
+    }
+}
+
+fn solution_arm(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let rows: Vec[Vec[i32]] = items.iter().map(|r| r.iter().map(|x| x as i32).collect()).collect();
+    Solution.high_five(rows).iter().map(|r| r.iter().map(|x| x as i64).collect()).collect()
+}
+
+// ---- the harness ----------------------------------------------------------
+
+fn arm(which: i64, items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    match which {
+        0 => star_arm(items),
+        1 => heap_arm(items),
+        2 => sorted_arm(items),
+        3 => buckets_arm(items),
+        4 => five_arm(items),
+        _ => solution_arm(items),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: each student once, smallest id first, the
+// next being the smallest id above the last one answered; and its average,
+// the sum of its five greatest scores, each the greatest of those left,
+// taken out in turn, divided by 5 with integer division.
+fn literally(items: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = [];
+    let mut last = 0;
+    loop {
+        let mut next = -1;
+        for it in items.iter() {
+            if it[0] > last and (next == -1 or it[0] < next) {
+                next = it[0];
+            }
+        }
+        if next == -1 {
+            break;
+        }
+        out.push([next, top_five(items, next) / 5]);
+        last = next;
+    }
+    out
+}
+
+// The sum of the five greatest scores of `id`, each the greatest of those
+// left, taken out in turn.
+fn top_five(items: Vec[Vec[i64]], id: i64) -> i64 {
+    let mut left: Vec[i64] = items.iter().filter(|it| it[0] == id).map(|it| it[1]).collect();
+    let mut sum = 0;
+    for _ in 0..5 {
+        let mut at = 0;
+        for j in 1..left.len() {
+            if left[j] > left[at] {
+                at = j;
+            }
+        }
+        sum += left[at];
+        left.remove(at);
+    }
+    sum
+}
+
+// The fifth greatest score of `id`.
+fn fifth(items: Vec[Vec[i64]], id: i64) -> i64 {
+    let mut left: Vec[i64] = items.iter().filter(|it| it[0] == id).map(|it| it[1]).collect();
+    let mut best = 0;
+    for _ in 0..5 {
+        let mut at = 0;
+        for j in 1..left.len() {
+            if left[j] > left[at] {
+                at = j;
+            }
+        }
+        best = left[at];
+        left.remove(at);
+    }
+    best
+}
+
+fn written(pairs: Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = pairs.iter().map(|p| f"[{p[0]},{p[1]}]").collect();
+    f"[{parts.join(",")}]"
+}
+
+struct Problem {
+    items: Vec[Vec[i64]],
+    // the order the items are written in for P2
+    order: Vec[i64],
+    // the student given a low score for P3, by place among the ids, and
+    // the draw that picks the score
+    low_at: i64,
+    low_draw: i64,
+    // the draw that picks how far every score is raised for P5
+    raise_draw: i64,
+    // the student asked alone for P6, by place among the ids
+    alone_at: i64,
+}
+
+// k students with ids drawn from 1 to `ids`, each with 5 to 5 + `extra`
+// scores from `low` to `top`, the items shuffled; then the draws for the
+// properties.
+fn random_problem(seed: mut ref i64, k: i64, ids: i64, extra: i64, low: i64, top: i64) -> Problem {
+    let mut chosen: Vec[i64] = [];
+    while chosen.len() < k {
+        let id = next_random(mut seed) % ids + 1;
+        if not chosen.contains(id) {
+            chosen.push(id);
+        }
+    }
+    let mut items: Vec[Vec[i64]] = [];
+    for id in chosen.iter() {
+        let n = next_random(mut seed) % (extra + 1) + 5;
+        for _ in 0..n {
+            items.push([id, low + next_random(mut seed) % (top - low + 1)]);
+        }
+    }
+    for i in (1..items.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        items.swap(i, j);
+    }
+    let mut order: Vec[i64] = (0..items.len()).collect();
+    for i in (1..order.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    let low_at = next_random(mut seed) % k;
+    let low_draw = next_random(mut seed);
+    let raise_draw = next_random(mut seed);
+    let alone_at = next_random(mut seed) % k;
+    Problem { items, order, low_at, low_draw, raise_draw, alone_at }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let items = p.items.clone();
+    let want = literally(items);
+    let ids: Vec[i64] = want.iter().map(|row| row[0]).collect();
+    // P2: the items in another order, and written backwards
+    let shuffled: Vec[Vec[i64]] = p.order.iter().map(|i| items[i].clone()).collect();
+    let mut backwards = items.clone();
+    backwards.reverse();
+    // P3: a score no greater than the student's fifth best, added
+    let low_id = ids[p.low_at];
+    let mut with_low = items.clone();
+    with_low.push([low_id, p.low_draw % (fifth(items, low_id) + 1)]);
+    // P4: every id moved to 2 id + 1
+    let moved: Vec[Vec[i64]] = items.iter().map(|it| [it[0] * 2 + 1, it[1]]).collect();
+    // P5: every score raised by d: half the time as far as the greatest
+    // can go, to 100, otherwise anywhere up to that
+    let greatest = items.iter().map(|it| it[1]).max().unwrap();
+    let d = if p.raise_draw % 2 == 0 { 100 - greatest } else { p.raise_draw / 2 % (101 - greatest) };
+    let raised: Vec[Vec[i64]] = items.iter().map(|it| [it[0], it[1] + d]).collect();
+    // P6: one student's items alone
+    let alone_id = ids[p.alone_at];
+    let alone: Vec[Vec[i64]] = items.iter().filter(|it| it[0] == alone_id).map(|it| it.clone()).collect();
+    for w in 0..6 {
+        let answer = arm(w, items.clone());
+        let what = f"arm {w}, {written(items)} -> {written(answer)}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {written(want)}");
+        let a = arm(w, shuffled.clone());
+        let b = arm(w, backwards.clone());
+        expect(mut t, 2, a == answer and b == answer, f"P2 {what}: shuffled -> {written(a)}, backwards -> {written(b)}");
+        let c = arm(w, with_low.clone());
+        expect(mut t, 3, c == answer, f"P3 {what}: a low score for {low_id} -> {written(c)}");
+        let m = arm(w, moved.clone());
+        let m_want: Vec[Vec[i64]] = answer.iter().map(|row| [row[0] * 2 + 1, row[1]]).collect();
+        expect(mut t, 4, m == m_want, f"P4 {what}: ids moved -> {written(m)}");
+        let r = arm(w, raised.clone());
+        let r_want: Vec[Vec[i64]] = answer.iter().map(|row| [row[0], row[1] + d]).collect();
+        expect(mut t, 5, r == r_want, f"P5 {what}: raised by {d} -> {written(r)}");
+        let one = arm(w, alone.clone());
+        let row: Vec[Vec[i64]] = answer.iter().filter(|row| row[0] == alone_id).map(|row| row.clone()).collect();
+        expect(mut t, 6, one == row, f"P6 {what}: {alone_id} alone -> {written(one)}");
+    }
+    t.cases += 1;
+    t.check = fold(t.check, written(want));
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1000 of 1 to 4 students with ids 1 to 6 and 5 to 7
+    // scores each, from 0 to 10 in half of them and 9 or 10 in the other
+    // half, and 1000 of 1 to 30 students with ids 1 to 499, 5 to 12 scores
+    // each from 0 to 100. Every choice is drawn before any arm answers.
+    let mut seed = 10861;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let p = if i < 1000 {
+            let k = next_random(mut seed) % 4 + 1;
+            random_problem(mut seed, k, 6, 2, if i < 500 { 0 } else { 9 }, 10)
+        } else {
+            let k = next_random(mut seed) % 30 + 1;
+            random_problem(mut seed, k, 499, 7, 0, 100)
+        };
+        problems.push(p);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

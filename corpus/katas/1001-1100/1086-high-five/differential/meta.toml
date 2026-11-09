@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1086-high-five/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map", "lib:sortedmap"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it"
+bucket = "timeout"
+classified_with = "2108100b7+local"
+extracted_src = "b8274f9b"
