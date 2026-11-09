@@ -1,0 +1,51 @@
+// `<`, `<=`, `>` and `>=` on tuples are lexicographic: the first element
+// that differs decides, and equal tuples are `<=` and `>=` only. Tuples of
+// integers, `bool`s and `char`s compare element by element without an
+// `Ordering` per element (B-2026-11-09-1); the answers are the same.
+fn rel[T: Ord](a: T, b: T) -> String {
+    let mut s = "";
+    if a < b {
+        s = s + "<";
+    }
+    if a <= b {
+        s = s + "l";
+    }
+    if a > b {
+        s = s + ">";
+    }
+    if a >= b {
+        s = s + "g";
+    }
+    s
+}
+
+fn main() {
+    let xs = [(1, 2, 3), (1, 2, 4), (1, 3, 0), (0, 9, 9), (1, 2, 3), (-5, i64.MAX, i64.MIN)];
+    for a in xs.iter() {
+        let mut line = "";
+        for b in xs.iter() {
+            let x = *a;
+            let y = *b;
+            let mut s = "";
+            if x < y {
+                s = s + "<";
+            }
+            if x <= y {
+                s = s + "l";
+            }
+            if x > y {
+                s = s + ">";
+            }
+            if x >= y {
+                s = s + "g";
+            }
+            line = line + s + " ";
+        }
+        println(line);
+    }
+    println(rel((true, 'a'), (true, 'b')));
+    println(rel((false, 'z'), (true, 'a')));
+    println(rel((5u8, -1), (5u8, -1)));
+    println(rel((7, (1, 2)), (7, (1, 3))));
+    println(rel(("b".to_string(), 1), ("a".to_string(), 2)));
+}

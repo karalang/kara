@@ -1,0 +1,9 @@
+source = "B-2026-11-09-4"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "traits", "generics", "conversion"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Conversion traits: `trait From[T] { fn from(value: own T) -> Self; }`, `trait TryFrom[T] { type Error; fn try_from(value: own T) -> Result[Self, Self.Error]; }`. conv[W](5) is W.from(5) = 5; W.from(true) picks the bool impl, 1; 7.into() is 7; checked[Small](3) is Ok 3 and (30) Err `30 is too big`. `T.from(n)` was refused with an internal message: the library's `trait From { }` declared no `from`."

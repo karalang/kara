@@ -5,4 +5,6 @@
 // dual; users implement `From` and get `Into` for free via the
 // typechecker's `into_conversions` rewrite at lowering time.
 
-trait From { }
+trait From[T] {
+    fn from(value: own T) -> Self;
+}

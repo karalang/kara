@@ -1,0 +1,24 @@
+// A call on a type parameter that none of its bounds declares is refused
+// at check, naming the bounds (B-2026-11-09-4).
+trait Make {
+    fn make(n: i64) -> Self;
+}
+
+struct W {
+    n: i64,
+}
+
+impl Make for W {
+    fn make(n: i64) -> W {
+        W { n: n }
+    }
+}
+
+fn conv[T: Make](n: i64) -> T {
+    T.build(n)
+}
+
+fn main() {
+    let w: W = conv(5);
+    println(w.n);
+}

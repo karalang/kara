@@ -1373,15 +1373,48 @@ impl<'a> super::TypeChecker<'a> {
                 .get(self.current_generic_frame as usize)
                 .is_some_and(|f| f.iter().any(|p| p == type_name))
             {
-                return if member == "default" {
-                    Type::Function {
+                if member == "default" {
+                    return Type::Function {
                         cross_task: Default::default(),
                         params: Vec::new(),
                         return_type: Box::new(Type::TypeParam(type_name.clone())),
-                    }
-                } else {
-                    Type::Error
-                };
+                    };
+                }
+                // No bound declares the member: say so, rather than leave
+                // an untyped callee for lowering to fail on (B-2026-11-09-4).
+                let bounds = self
+                    .enclosing_bounds
+                    .get(type_name)
+                    .cloned()
+                    .unwrap_or_default();
+                let traits: Vec<String> = bounds
+                    .iter()
+                    .filter_map(|b| b.path.last().cloned())
+                    .collect();
+                if !traits
+                    .iter()
+                    .any(|t| self.find_trait_method(t, member).is_some())
+                {
+                    let msg = if traits.is_empty() {
+                        format!(
+                            "no associated function `{member}` on type parameter `{type_name}`, \
+                             which has no bounds: a bound whose trait declares `{member}` \
+                             (`{type_name}: Trait`) makes `{type_name}.{member}` callable"
+                        )
+                    } else {
+                        let named = traits
+                            .iter()
+                            .map(|t| format!("`{t}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "no associated function `{member}` on type parameter \
+                             `{type_name}`: its bounds ({named}) declare none"
+                        )
+                    };
+                    self.type_error(msg, *span, crate::typechecker::TypeErrorKind::NoMethodFound);
+                }
+                return Type::Error;
             }
 
             // `ExitCode.SUCCESS` / `ExitCode.FAILURE` — paren-free

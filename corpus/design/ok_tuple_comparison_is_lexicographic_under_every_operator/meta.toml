@@ -1,0 +1,9 @@
+source = "B-2026-11-09-1"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "tuples", "ordering", "operators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md tuples: ordering is lexicographic. The 6x6 table is checked against Python's tuple comparison (l = <=, g = >=); (true,'a') < (true,'b'); (false,'z') < (true,'a'); equal (5u8,-1) is l and g only; a nested tuple and a String element take the Ordering route and agree."

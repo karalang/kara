@@ -1,0 +1,55 @@
+// `T.from(x)` under `T: From[X]` and `T.try_from(x)` under `T: TryFrom[X]`
+// are the instance's conversions (design.md § Conversion traits,
+// B-2026-11-09-4).
+struct W {
+    n: i64,
+}
+
+impl From[i64] for W {
+    fn from(n: i64) -> W {
+        W { n: n }
+    }
+}
+
+impl From[bool] for W {
+    fn from(b: bool) -> W {
+        W { n: if b { 1 } else { 0 } }
+    }
+}
+
+struct Small {
+    n: i64,
+}
+
+impl TryFrom[i64] for Small {
+    type Error = String;
+    fn try_from(n: i64) -> Result[Small, String] {
+        if n < 10 { Ok(Small { n: n }) } else { Err(f"{n} is too big") }
+    }
+}
+
+fn conv[T: From[i64]](n: i64) -> T {
+    T.from(n)
+}
+
+fn checked[T: TryFrom[i64]](n: i64) -> Result[T, T.Error] {
+    T.try_from(n)
+}
+
+fn main() {
+    let w: W = conv(5);
+    println(w.n);
+    println(W.from(true).n);
+    let x: W = 7.into();
+    println(x.n);
+    let a: Result[Small, String] = checked(3);
+    match a {
+        Ok(s) => println(s.n),
+        Err(e) => println(e),
+    }
+    let b: Result[Small, String] = checked(30);
+    match b {
+        Ok(s) => println(s.n),
+        Err(e) => println(e),
+    }
+}

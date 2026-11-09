@@ -128,6 +128,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `T.from(x)` under `T: From[X]` and `T.try_from(x)` under `T: TryFrom[X]`
+  call the instance's conversion: the library's `From` and `TryFrom` now
+  declare `from` and `try_from` as design.md § Conversion traits writes
+  them, and were refused with "a type that failed to check is not lowered
+  yet". `impl From for Out { fn from(a: A) }` still reads as `From[A]`
+  (B-2026-11-09-4).
 - Inside `fn fresh[T: Default]() -> T { T.default() }`, `T` is the
   instance's type also where the program declares a `struct T`: the call
   went to the struct's `default` at every instance, so `let u: U = fresh()`
@@ -279,6 +285,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- `<`, `<=`, `>` and `>=` on a tuple of integers, `bool`s and `char`s
+  compare element by element instead of building an `Ordering` for each:
+  a `PriorityQueue` of tuples sifts with one compare and branch an element
+  (kata 632 2.91G to 2.62G instructions, kata 743 2.40G to 2.09G on x86;
+  B-2026-11-09-1).
 - **`s.chars().last()` reads the last char from the back** instead of
   walking the whole text, on a `String` and on a `Str` view, as Rust's
   `Chars::last` does. Kata 2030's string arm, which reads the top of its
@@ -324,6 +335,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A call on a type parameter that none of its bounds declares
+  (`T.build(n)` under `T: Make`) is refused naming the bounds, where it got
+  an internal "a type that failed to check is not lowered yet"
+  (B-2026-11-09-4).
 - A `select` that is a function's tail value no longer draws `must_use`
   warnings on the statements it is rewritten into, and a warning from a
   library body (`recv_timeout`'s) no longer reaches a program's output at a

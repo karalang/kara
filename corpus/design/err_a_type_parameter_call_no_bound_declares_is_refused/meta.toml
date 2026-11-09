@@ -1,0 +1,9 @@
+source = "B-2026-11-09-4"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "traits", "generics", "diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "the expected.out wording of an error pin is guidance, not a byte oracle. design.md generics: a type parameter's associated functions are its bounds'. `T.build(n)` under `T: Make` used to get the internal `a type that failed to check is not lowered yet`."

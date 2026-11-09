@@ -10273,6 +10273,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.cur = join;
             return Ok(());
         }
+        if self.scalar_tuple_rel(&lp, &rp, lt, bin, &dest) {
+            return Ok(());
+        }
         let o = self.temp(ot);
         self.cmp_places(left.span, lp, rp, lt, Place::local(o))?;
         let disc = self.temp(isize_t);
@@ -10286,6 +10289,66 @@ impl<'l, 'a> Bx<'l, 'a> {
             Rvalue::BinaryOp(op, Operand::Copy(Place::local(disc)), want),
         );
         Ok(())
+    }
+
+    /// `a < b` on a tuple of integers, `bool`s and `char`s, as the chain
+    /// of its elements' operators: at the first element that differs, the
+    /// strict comparison of it decides, and the last element takes the
+    /// operator itself. The same answer as testing `a.cmp(b)`'s `Ordering`,
+    /// without building one per element (B-2026-11-09-1). Floats keep the
+    /// `Ordering` route, whose NaN answers this chain would change.
+    fn scalar_tuple_rel(&mut self, l: &Place, r: &Place, t: Ty, bin: BinOp, dest: &Place) -> bool {
+        let HK::Tuple(list) = self.tys().tcx().kind(t) else {
+            return false;
+        };
+        let tys = self.tys().tcx().list(list);
+        let total = |k| matches!(k, HK::Int(_) | HK::UInt(_) | HK::Bool | HK::Char);
+        if tys.is_empty() || !tys.iter().all(|&ft| total(self.tys().tcx().kind(ft))) {
+            return false;
+        }
+        let strict = match bin {
+            BinOp::Lt | BinOp::Le => BinOp::Lt,
+            _ => BinOp::Gt,
+        };
+        let bool_t = self.tys().bool();
+        let join = self.b.new_block();
+        let last = tys.len() - 1;
+        for (i, &ft) in tys.iter().enumerate() {
+            let (a, b) = (l.clone().field(i as u32, ft), r.clone().field(i as u32, ft));
+            if i == last {
+                self.assign(
+                    dest.clone(),
+                    Rvalue::BinaryOp(bin, Operand::Copy(a), Operand::Copy(b)),
+                );
+                self.goto(join);
+                break;
+            }
+            let ne = self.temp(bool_t);
+            self.assign(
+                ne,
+                Rvalue::BinaryOp(
+                    BinOp::Ne,
+                    Operand::Copy(a.clone()),
+                    Operand::Copy(b.clone()),
+                ),
+            );
+            let (decide, next) = (self.b.new_block(), self.b.new_block());
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(ne)),
+                    targets: SwitchTargets::if_else(decide, next),
+                },
+                decide,
+            );
+            self.assign(
+                dest.clone(),
+                Rvalue::BinaryOp(strict, Operand::Copy(a), Operand::Copy(b)),
+            );
+            self.goto(join);
+            self.cur = next;
+        }
+        self.cur = join;
+        true
     }
 
     /// The `Ordering` type, with the indices of `Less`, `Equal` and

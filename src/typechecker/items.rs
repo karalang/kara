@@ -4740,6 +4740,26 @@ impl<'a> super::TypeChecker<'a> {
                     .collect()
             })
             .unwrap_or_default();
+        // `impl From for Out { fn from(a: A) }` names its source in the
+        // method rather than as the trait's argument: it is `From[A]`.
+        let mut trait_args = trait_args;
+        if trait_args.is_empty() && trait_gp.len() == 1 {
+            let method = match trait_name {
+                "From" => Some("from"),
+                "TryFrom" => Some("try_from"),
+                _ => None,
+            };
+            let source = method.and_then(|m| {
+                imp.items.iter().find_map(|it| match it {
+                    ImplItem::Method(f) if f.name == m => f.params.first().map(|p| p.ty.clone()),
+                    _ => None,
+                })
+            });
+            if let Some(te) = source {
+                let t = self.lower_type_expr(&te, gp);
+                trait_args.push(peel_mode(&t).clone());
+            }
+        }
         // Each comparison, with what to add when it fails.
         let mut checks: Vec<(String, Span, Type, Type, String)> = Vec::new();
         for item in &imp.items {
