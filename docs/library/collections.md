@@ -56,6 +56,7 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `windows` | `fn windows(self, size: i64) -> Vec[Slice[T]]` | Every run of `size` consecutive elements |
 | `chunks` | `fn chunks(self, size: i64) -> Vec[Slice[T]]` | Consecutive runs of `size` elements; the last may be shorter |
 | `split` | `fn split(self, pred: own MutFn(T) -> bool) -> Vec[Slice[T]]` | The runs between elements `pred` accepts, which are dropped: `[1, 0, 2, 3, 0].split(\|x\| x == 0)` is `[[1], [2, 3], []]`. Separators at either end or side by side give empty runs, so the result always has one more run than there are separators (review-thread ruling 2026-11-09, B-2026-11-08-47) |
+| `chunk_by` | `fn chunk_by(self, same: own MutFn(T, T) -> bool) -> Vec[Slice[T]]` | Consecutive runs in which `same` accepts each adjacent pair: `[1, 1, 2, 3, 3].chunk_by(\|a, b\| a == b)` is `[[1, 1], [2], [3, 3]]`. An empty slice gives no runs (review-thread ruling 2026-11-09, B-2026-11-09-37) |
 | `to_vec` | `fn to_vec(self) -> Vec[T] where T: Clone` | Owned copy |
 | `join` | `fn join(self, sep: Str) -> String where T: Display` | Displays each element, separated by `sep` |
 | `[]` | `v[i]` and `v[a..b]` | Index operator through `Index` ([design.md §9](../design.md#9-traits)). `v[i]` is `ref T` and panics if out of bounds; `v[a..b]` is a `Slice[T]` |

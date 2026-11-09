@@ -489,12 +489,15 @@ impl Response {
 
 impl HttpError {
     fn message(self) -> String
+    fn status(self) -> Option[i64]
+    fn header(self, name: String) -> Option[String]
+    fn body(self) -> Option[String]
 }
 ```
 
 **Inside a task**, `get`, `post` and `send` suspend their task until the answer is in, and the program's other tasks run meanwhile ([core semantics §11.8](../core-semantics.md)). For now each request runs on a helper thread, at most 64 at once; the rest queue, and their tasks stay suspended until a helper is free. A request whose task is cancelled still runs to its end, and its answer is dropped. This is interim: the client will run on the executor's own non-blocking sockets, with no helper.
 
-A URL is `http://` or `https://`. The client follows up to five redirects, and a status outside 2xx is an `Err`. A request still unanswered when the builder's `timeout` has passed, redirects included, is an `Err` with the message `<url>: request timed out after <ms> ms`, naming the URL the program asked for. A redirect keeps the request's `Authorization` and `Cookie` headers only while it stays on the original request's origin (scheme, host and port); the first hop anywhere else drops both for the rest of the chain, an `https://` to `http://` downgrade included. `header` compares names without case.
+A URL is `http://` or `https://`. The client follows up to five redirects, and a status outside 2xx is an `Err`. That `HttpError` keeps the response: `status` gives its code, and `header` and `body` read it as `Response`'s do, so a client can branch on a 409 or read a `Retry-After`. For a failure with no response (a refused connection, a timeout, a TLS error) all three are `None` (B-2026-11-09-44). A request still unanswered when the builder's `timeout` has passed, redirects included, is an `Err` with the message `<url>: request timed out after <ms> ms`, naming the URL the program asked for. A redirect keeps the request's `Authorization` and `Cookie` headers only while it stays on the original request's origin (scheme, host and port); the first hop anywhere else drops both for the rest of the chain, an `https://` to `http://` downgrade included. `header` compares names without case.
 
 **Under an override** ([core semantics §14.12](../core-semantics.md)), `Client.get`, `Client.post` and `RequestBuilder.send` call the `Network` provider's `send(mut ref self, req: Request) -> Result[Response, HttpError]` with the `Request` they describe: the method, the absolute URL, the builder's headers in order and the body (a `get` has none). The builder's timeout is not part of the request. The fake's `Response` (`Response { status: 200, body: .. }`) or `HttpError` comes back as the call's result as it is, without the redirects or the status check of the real client, and its `header` and `headers` find none. A fake states `send` only when it serves HTTP: `NetworkProvider`'s default panics, as its socket methods' do (above).
 
