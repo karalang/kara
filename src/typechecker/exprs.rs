@@ -1840,10 +1840,24 @@ impl<'a> super::TypeChecker<'a> {
     /// of the bare parameter it names, so giving one away names that
     /// parameter's `own` fix (B-2026-10-20-16).
     pub(super) fn mark_d5_parts(&mut self, pattern: &Pattern, scrutinee: &Expr) {
+        let root = self.d5_param_root_for_let(scrutinee);
+        self.mark_d5_parts_of(pattern, root);
+    }
+
+    /// [`Self::d5_param_root`] under the strict check, for
+    /// [`Self::mark_d5_parts_of`]: a `let` reads it before its own bindings
+    /// can shadow the scrutinee (`let mut node = node;`, kata 2046).
+    pub(super) fn d5_param_root_for_let(&self, scrutinee: &Expr) -> Option<String> {
         if !self.cli_lint_overrides.strict_core {
-            return;
+            return None;
         }
-        let Some(root) = self.d5_param_root(scrutinee) else {
+        self.d5_param_root(scrutinee)
+    }
+
+    /// Record the bindings of `pattern` as parts of the bare parameter
+    /// `root`, when there is one.
+    pub(super) fn mark_d5_parts_of(&mut self, pattern: &Pattern, root: Option<String>) {
+        let Some(root) = root else {
             return;
         };
         for n in pattern.binding_names() {
@@ -10610,12 +10624,45 @@ impl<'a> super::TypeChecker<'a> {
         };
         let entry = Self::collection_root_name(iterable)
             .and_then(|root| self.literal_pushes.get(root))
-            .cloned();
+            .cloned()
+            .or_else(|| self.literal_array_for_entry(name, iterable));
         let prev = match entry {
             Some(e) => self.literal_lets.insert(name.clone(), e),
             None => self.literal_lets.remove(name.as_str()),
         };
         Some((name.clone(), prev))
+    }
+
+    /// `for v in [10, -10, 5]`, an array literal of unsuffixed integer
+    /// literals: `v` is each of them, so a refusal at a use of `v` (Rust's
+    /// `ListNode::new(v)` taking an `i32`, kata 2046) offers the first
+    /// literal's suffix, which types the whole array.
+    fn literal_array_for_entry(&self, name: &str, iterable: &Expr) -> Option<super::LiteralLet> {
+        let ExprKind::ArrayLiteral(elems) = &iterable.kind else {
+            return None;
+        };
+        let first = elems.first()?;
+        let values = elems
+            .iter()
+            .map(|e| {
+                Self::is_int_literal_operator_tree(e)
+                    .then(|| Self::int_literal_operator_tree_value(e))
+                    .flatten()
+            })
+            .collect::<Option<Vec<i128>>>()?;
+        let ty = self
+            .expr_types
+            .get(&SpanKey::from_span(&first.span))?
+            .clone();
+        let at = Span {
+            offset: first.span.offset + first.span.length,
+            length: 0,
+            ..first.span
+        };
+        let mut entry = self.literal_entry(first, &ty, at, true, false, name)?;
+        entry.value = values.iter().copied().max();
+        entry.low = values.iter().copied().min();
+        Some(entry)
     }
 
     /// Note `let (a, b, ..) = (<literal>, <literal>, ..)` with no
@@ -10709,6 +10756,7 @@ impl<'a> super::TypeChecker<'a> {
             element,
             var,
             value: Self::int_literal_operator_tree_value(value),
+            low: None,
             root: root.to_string(),
         })
     }
@@ -10825,7 +10873,9 @@ impl<'a> super::TypeChecker<'a> {
                 return None;
             }
             let fits = match (entry.value, Self::int_literal_range(target)) {
-                (Some(v), Some((lo, hi))) => v >= lo && v <= hi,
+                (Some(v), Some((lo, hi))) => {
+                    v >= lo && v <= hi && entry.low.is_none_or(|l| l >= lo && l <= hi)
+                }
                 _ => true,
             };
             let t = type_display(target);

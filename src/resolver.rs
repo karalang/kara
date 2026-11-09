@@ -2446,6 +2446,28 @@ impl<'a> Resolver<'a> {
         if self.wildcard_hides_unresolved_names() {
             return;
         }
+        // Rust's `Box<T>` written as `Box[T]` (kata 2046): Kāra has no heap
+        // box, the owned form of a value is the value, so the type is `T`.
+        if name == "Box" {
+            let replacement = self
+                .program
+                .rust_box_new
+                .get(&span.offset)
+                .cloned()
+                .map(Box::new);
+            self.errors.push(ResolveError {
+                message: "`Box` is Rust's heap box: Kāra has none (design.md § dyn Trait). A \
+                          value is owned where it is, and a `dyn Trait` or function value is \
+                          already a handle, so `Box[T]` is `T`"
+                    .to_string(),
+                span,
+                kind: ResolveErrorKind::UndefinedType,
+                suggestion: None,
+                replacement,
+                stub_hint: None,
+            });
+            return;
+        }
         if matches!(name, "Rc" | "RefCell") {
             self.errors.push(ResolveError {
                 message: RC_REFCELL_HELP.to_string(),

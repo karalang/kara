@@ -1003,7 +1003,7 @@ impl Parser {
             vec_macro_literals: std::mem::take(&mut self.vec_macro_literals),
             discarded_doc_comments: std::mem::take(&mut self.discarded_doc_comments),
             nested_fstrings: std::mem::take(&mut self.nested_fstrings),
-            rust_box_new: std::mem::take(&mut self.rust_box_new),
+            rust_box_new: self.rust_box_new_and_types(),
             foreign_calls: std::mem::take(&mut self.foreign_calls),
             expr_stmt_semis: std::mem::take(&mut self.expr_stmt_semis),
             rust_heap_ctor_sides: self.rust_heap_ctor_sides(),
@@ -1143,6 +1143,66 @@ impl Parser {
             }
         }
         sides
+    }
+
+    /// [`crate::ast::Program::rust_box_new`]: the `Box.new(e)` calls the
+    /// expression parser recorded, and each `Box[T]` written as a type
+    /// (Rust's `Box<T>`, kata 2046) with the edit that writes `T` in its
+    /// place. A `Box[T]` followed by `.` or `(` is an expression, not a
+    /// type, and gets no edit.
+    fn rust_box_new_and_types(
+        &mut self,
+    ) -> rustc_hash::FxHashMap<usize, crate::resolver::TextEdit> {
+        let mut out = std::mem::take(&mut self.rust_box_new);
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        for i in 0..self.tokens.len() {
+            if !matches!(tok(i), Some(Token::Identifier { name, .. }) if name == "Box")
+                || !matches!(tok(i + 1), Some(Token::LeftBracket))
+                || (i > 0 && matches!(tok(i - 1), Some(Token::Dot)))
+            {
+                continue;
+            }
+            let mut depth = 0usize;
+            let mut close = None;
+            for (j, t) in self.tokens.iter().enumerate().skip(i + 1) {
+                match t.token {
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(j);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(close) = close else { continue };
+            if matches!(tok(close + 1), Some(Token::Dot | Token::LeftParen)) {
+                continue;
+            }
+            let Some((source, base)) = self.source.as_ref() else {
+                continue;
+            };
+            let open = self.tokens[i + 1].span;
+            let (from, to) = (open.offset + open.length, self.tokens[close].span.offset);
+            let Some(inner) = from
+                .checked_sub(*base)
+                .zip(to.checked_sub(*base))
+                .and_then(|(a, b)| source.get(a..b))
+                .map(str::trim)
+                .filter(|t| !t.is_empty() && !t.contains(','))
+            else {
+                continue;
+            };
+            let start = self.tokens[i].span.offset;
+            out.entry(start).or_insert(crate::resolver::TextEdit {
+                offset: start,
+                length: to + 1 - start,
+                replacement: inner.to_string(),
+            });
+        }
+        out
     }
 
     /// Each `Reverse(` written as a heap's item: the argument of a `.push(`,

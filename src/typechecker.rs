@@ -973,6 +973,10 @@ pub(crate) struct LiteralLet {
     /// and its value.
     pub(crate) var: Option<TypeVarId>,
     pub(crate) value: Option<i128>,
+    /// The least of the literals the fix types together, when there are
+    /// several (`for v in [10, -10, 5]`, whose first literal's suffix types
+    /// the whole array): the fix is offered only when it fits too.
+    pub(crate) low: Option<i128>,
     /// The binding to fix: the literal's own, or for a copy (`let y = x`)
     /// the one it copies.
     pub(crate) root: String,
@@ -7759,6 +7763,25 @@ impl<'a> TypeChecker<'a> {
                 .all(|n| n != "Self" && !self.enclosing_bounds.contains_key(n))
     }
 
+    /// The bare parameter (and where its `own ` goes) that the local named
+    /// at `span` was bound out of, when `span` is such a local's use.
+    fn d5_param_of_local_at(&self, span: Span) -> Option<(String, Span)> {
+        let id = self
+            .resolve_result
+            .resolutions
+            .get(&SpanKey::from_span(&span))?;
+        let sym = self.resolve_result.symbol_table.get_symbol(*id);
+        if sym.span.offset == span.offset {
+            return None;
+        }
+        let param = self.local_scope.part_of(&sym.name)?;
+        if self.closure_d5_params.contains(param) {
+            return None;
+        }
+        let at = *self.current_fn_d5_params.get(param)?;
+        Some((param.to_string(), at))
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // An unannotated collection's element or key takes a `Copy`
         // reference's value (design.md §8, B-2026-11-08-19).
@@ -8451,6 +8474,31 @@ impl<'a> TypeChecker<'a> {
                     && self.type_supports_clone(expected)
                 {
                     let shown = type_display(expected);
+                    // Kata 2046: a local bound out of a bare parameter
+                    // (`let mut cur = head; while let Some(node) = cur ..
+                    // Some(node)`) borrows because the parameter does, so
+                    // the fix is the parameter's `own`, not a deep copy.
+                    if let Some((param, at)) = self.d5_param_of_local_at(span) {
+                        self.errors.push(TypeError {
+                            message: format!(
+                                "expected '{shown}', found 'ref {shown}': this is bound out \
+                                 of parameter `{param}`, and a bare parameter borrows \
+                                 (core-semantics §4.1). Take `{param}` by value with `own`, \
+                                 or take an owned copy with `.clone()`"
+                            ),
+                            span,
+                            kind: TypeErrorKind::TypeMismatch,
+                            lint_name: None,
+                            fix_it: Some(FixIt {
+                                span: at,
+                                replacement: "own ".to_string(),
+                            }),
+                            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                            expected: Some(shown.clone()),
+                            got: Some(format!("ref {shown}")),
+                        });
+                        return false;
+                    }
                     self.errors.push(TypeError {
                         message: format!(
                             "expected '{shown}', found 'ref {shown}': a borrowed value \

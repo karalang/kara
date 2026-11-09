@@ -11313,6 +11313,9 @@ impl<'a> super::TypeChecker<'a> {
                     &mut self.current_scrutinee_core_borrowed,
                     borrowed_destructure,
                 );
+                // The parameter `value` is bound out of, read before the
+                // pattern's bindings can shadow it (`let mut node = node;`).
+                let d5_root = self.d5_param_root_for_let(value);
                 self.bind_pattern_types(pattern, &expected_ty);
                 self.current_scrutinee_core_borrowed = prev_core;
                 if matches!(pattern.kind, PatternKind::Binding(_))
@@ -11425,7 +11428,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.current_scrutinee_mut_self = prev_ms;
                     self.current_scrutinee_clone_view = prev_cv;
                 }
-                self.mark_d5_parts(pattern, value);
+                self.mark_d5_parts_of(pattern, d5_root);
             }
             StmtKind::LetUninit {
                 is_mut: _,
@@ -11885,22 +11888,42 @@ impl<'a> super::TypeChecker<'a> {
             );
             return;
         }
-        self.type_error(
-            format!(
-                "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot hold this \
-                 owned `{}`, which would be dropped at the end of the statement; bind an \
-                 owned copy where `{name}` is declared (`.clone()`){}",
-                type_display(&inner),
-                type_display(rhs_ty),
-                if of_item {
-                    ""
-                } else {
-                    ", or take the parameter it borrows as `own`"
-                }
-            ),
-            value.span,
-            TypeErrorKind::TypeMismatch,
+        let message = format!(
+            "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot hold this \
+             owned `{}`, which would be dropped at the end of the statement; bind an \
+             owned copy where `{name}` is declared (`.clone()`){}",
+            type_display(&inner),
+            type_display(rhs_ty),
+            if of_item {
+                ""
+            } else {
+                ", or take the parameter it borrows as `own`"
+            }
         );
+        // Kata 2046: `let mut cur = head; .. cur = node.next.take();` with
+        // `head` a bare parameter. The borrow is the parameter's, so the fix
+        // is its `own` (Rust's by-value parameter), named in the message.
+        let own_at = (!of_item)
+            .then(|| self.local_scope.part_of(name))
+            .flatten()
+            .and_then(|param| {
+                self.current_fn_d5_params
+                    .get(param)
+                    .map(|at| (param.to_string(), *at))
+            })
+            .filter(|(param, _)| !self.closure_d5_params.contains(param));
+        match own_at {
+            Some((param, at)) => self.type_error_with_fix_it(
+                format!("{message}: take `{param}` as `own`"),
+                value.span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span: at,
+                    replacement: "own ".to_string(),
+                },
+            ),
+            None => self.type_error(message, value.span, TypeErrorKind::TypeMismatch),
+        }
     }
 
     /// B-2026-10-19-16 — plain `=` does not write through a `mut ref` binding
