@@ -1,0 +1,86 @@
+// LeetCode #1079: Letter Tile Possibilities -- the ★ arm: the tiles
+// counted by letter, and a depth-first walk that, at each step, places
+// one more tile of every letter left: each placement is one more
+// sequence, and the walk below it counts the sequences that extend it.
+// O(number of sequences).
+
+fn sequences(counts: mut ref Array[i64, 26]) -> i64 {
+    let mut total = 0;
+    for letter in 0..26 {
+        if counts[letter] > 0 {
+            counts[letter] -= 1;
+            total += 1 + sequences(mut counts);
+            counts[letter] += 1;
+        }
+    }
+    total
+}
+
+fn num_tile_possibilities(tiles: String) -> i64 {
+    let mut counts = [0; 26];
+    for b in tiles.bytes() {
+        counts[b - b'A'] += 1;
+    }
+    sequences(mut counts)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` tiles over the first `k` letters.
+fn random_tiles(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'A' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's examples, then a few more
+    let examples = ["AAB", "AAABBC", "V", "AB", "ABC", "AAAAAAA", "ABCDEFG", "AABBCCD", "ZZYYX", "QQQQQQZ"];
+    for tiles in examples.iter() {
+        println(f"{tiles} -> {num_tile_possibilities(tiles)}");
+    }
+    let mut seed = 1079;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 7 + 1;
+        let k = next_random(mut seed) % 7 + 1;
+        let tiles = random_tiles(n, k, mut seed);
+        let count = num_tile_possibilities(tiles);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"300 random tile sets: {total} sequences in all, checksum {check}");
+    // every set of 1 to 4 tiles over A to C, as a multiset
+    let mut sets = 0;
+    let mut all = 0;
+    for n in 1..5 {
+        for code in 0..3.pow(n as u32) {
+            let mut tiles = String.new();
+            let mut rest = code;
+            let mut last = 0;
+            let mut sorted = true;
+            for _ in 0..n {
+                let letter = rest % 3;
+                if letter < last {
+                    sorted = false;
+                }
+                last = letter;
+                tiles.push((b'A' + letter as u8) as char);
+                rest /= 3;
+            }
+            if sorted {
+                sets += 1;
+                all += num_tile_possibilities(tiles);
+            }
+        }
+    }
+    println(f"every multiset of 1 to 4 tiles over A to C: {sets} sets, {all} sequences");
+}

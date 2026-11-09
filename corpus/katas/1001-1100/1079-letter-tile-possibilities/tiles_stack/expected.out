@@ -1,0 +1,12 @@
+AAB -> 8
+AAABBC -> 188
+V -> 1
+AB -> 4
+ABC -> 15
+AAAAAAA -> 7
+ABCDEFG -> 13699
+AABBCCD -> 1840
+ZZYYX -> 89
+QQQQQQZ -> 34
+300 random tile sets: 65833 sequences in all, checksum 332528038
+every multiset of 1 to 4 tiles over A to C: 34 sets, 339 sequences

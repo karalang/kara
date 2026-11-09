@@ -1,0 +1,369 @@
+// LeetCode #1079: Letter Tile Possibilities -- the differential: the six
+// arms against the statement read literally, under six properties, over
+// 2000 random problems drawn before any arm answers.
+
+// ---- tiles.kara ----
+
+fn star_sequences(counts: mut ref Array[i64, 26]) -> i64 {
+    let mut total = 0;
+    for letter in 0..26 {
+        if counts[letter] > 0 {
+            counts[letter] -= 1;
+            total += 1 + star_sequences(mut counts);
+            counts[letter] += 1;
+        }
+    }
+    total
+}
+
+fn star_arm(tiles: String) -> i64 {
+    let mut counts = [0; 26];
+    for b in tiles.bytes() {
+        counts[b - b'A'] += 1;
+    }
+    star_sequences(mut counts)
+}
+
+// ---- tiles_set.kara ----
+
+fn set_place(tiles: Vec[u8], used: mut ref Vec[bool], built: String, seen: mut ref Set[String]) {
+    for i in 0..tiles.len() {
+        if not used[i] {
+            used[i] = true;
+            let next = f"{built}{tiles[i] as char}";
+            seen.insert(next.clone());
+            set_place(tiles, mut used, next, mut seen);
+            used[i] = false;
+        }
+    }
+}
+
+fn set_arm(tiles: String) -> i64 {
+    let letters: Vec[u8] = tiles.bytes().iter().collect();
+    let mut used = Vec.filled(letters.len(), false);
+    let mut seen: Set[String] = Set.new();
+    set_place(letters, mut used, String.new(), mut seen);
+    seen.len()
+}
+
+// ---- tiles_multinomial.kara ----
+
+fn multinomial_factorial(n: i64) -> i64 {
+    if n <= 1 { 1 } else { n * multinomial_factorial(n - 1) }
+}
+
+// The sum over every choice from the letters at `at` and after, with
+// `taken` tiles chosen so far and `divisor` the product of their counts'
+// factorials.
+fn multinomial_choose(counts: Vec[i64], at: i64, taken: i64, divisor: i64) -> i64 {
+    if at == counts.len() {
+        return multinomial_factorial(taken) / divisor;
+    }
+    let mut total = 0;
+    for k in 0..=counts[at] {
+        total += multinomial_choose(counts, at + 1, taken + k, divisor * multinomial_factorial(k));
+    }
+    total
+}
+
+fn multinomial_arm(tiles: String) -> i64 {
+    let mut by_letter: Map[u8, i64] = Map.new();
+    for b in tiles.bytes() {
+        by_letter.insert(b, by_letter.get(b).unwrap_or(0) + 1);
+    }
+    let counts: Vec[i64] = by_letter.values().collect();
+    multinomial_choose(counts, 0, 0, 1) - 1
+}
+
+// ---- tiles_egf.kara ----
+
+fn egf_binomial(n: i64, k: i64) -> i64 {
+    let mut result = 1;
+    for i in 0..k {
+        result = result * (n - i) / (i + 1);
+    }
+    result
+}
+
+fn egf_arm(tiles: String) -> i64 {
+    let mut counts = [0; 26];
+    for b in tiles.bytes() {
+        counts[b - b'A'] += 1;
+    }
+    let n = tiles.len();
+    let mut ways = Vec.filled(n + 1, 0);
+    ways[0] = 1;
+    let mut longest = 0;
+    for letter in 0..26 {
+        let c = counts[letter];
+        if c == 0 {
+            continue;
+        }
+        let mut next = Vec.filled(n + 1, 0);
+        for len in 0..=longest {
+            for k in 0..=c {
+                next[len + k] += ways[len] * egf_binomial(len + k, k);
+            }
+        }
+        ways = next;
+        longest += c;
+    }
+    ways.iter().skip(1).sum()
+}
+
+// ---- tiles_stack.kara ----
+
+fn stack_arm(tiles: String) -> i64 {
+    let mut start = [0; 26];
+    for b in tiles.bytes() {
+        start[b - b'A'] += 1;
+    }
+    let mut stack: Vec[Array[i64, 26]] = [start];
+    let mut total = 0;
+    while let Some(left) = stack.pop() {
+        for letter in 0..26 {
+            if left[letter] > 0 {
+                let mut fewer = left;
+                fewer[letter] -= 1;
+                total += 1;
+                stack.push(fewer);
+            }
+        }
+    }
+    total
+}
+
+// ---- tiles_solution.kara ----
+
+struct Solution {}
+
+fn solution_dfs(count: mut ref Array[i32, 26]) -> i32 {
+    let mut sum: i32 = 0;
+    for i in 0..26 {
+        if count[i] > 0 {
+            sum += 1;
+            count[i] -= 1;
+            sum += solution_dfs(mut count);
+            count[i] += 1;
+        }
+    }
+    sum
+}
+
+impl Solution {
+    pub fn num_tile_possibilities(tiles: String) -> i32 {
+        let mut count = [0; 26];
+        for c in tiles.chars() {
+            count[(c as u32 as u8 - b'A') as usize] += 1;
+        }
+        solution_dfs(mut count)
+    }
+}
+
+fn solution_arm(tiles: String) -> i64 {
+    Solution.num_tile_possibilities(tiles.clone())
+}
+
+// ---- the harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, tiles: String) -> i64 {
+    match which {
+        0 => star_arm(tiles),
+        1 => set_arm(tiles),
+        2 => multinomial_arm(tiles),
+        3 => egf_arm(tiles),
+        4 => stack_arm(tiles),
+        _ => solution_arm(tiles),
+    }
+}
+
+// The statement read literally: every string of 1 to `n` letters, each a
+// letter printed on some tile, counted when no letter is in it more times
+// than tiles carry it. Also the strings' total length, for P5.
+struct Literal {
+    count: i64,
+    length: i64,
+}
+
+fn literally(tiles: String) -> Literal {
+    let mut letters: Vec[char] = [];
+    let mut printed: Vec[i64] = [];
+    for c in tiles.chars() {
+        match letters.iter().position(|x| x == c) {
+            Some(i) => printed[i] += 1,
+            None => {
+                letters.push(c);
+                printed.push(1);
+            }
+        }
+    }
+    let d = letters.len();
+    let mut count = 0;
+    let mut length = 0;
+    for len in 1..=tiles.len() {
+        // every string of `len` of the letters, as a number in base `d`
+        let mut strings = 1;
+        for _ in 0..len {
+            strings *= d;
+        }
+        for code in 0..strings {
+            let mut used = Vec.filled(d, 0);
+            let mut rest = code;
+            for _ in 0..len {
+                used[rest % d] += 1;
+                rest /= d;
+            }
+            if (0..d).all(|i| used[i] <= printed[i]) {
+                count += 1;
+                length += len;
+            }
+        }
+    }
+    Literal { count: count, length: length }
+}
+
+// Every letter moved on by `by` in the alphabet, and the tiles reversed.
+fn renamed(tiles: String, by: i64) -> String {
+    let mut out = String.new();
+    for c in tiles.bytes().iter().rev() {
+        out.push((b'A' + ((c - b'A' + by) % 26) as u8) as char);
+    }
+    out
+}
+
+struct Problem {
+    tiles: String,
+    // P2's shift; P5's letter no tile has; P6's letter some tile has
+    by: i64,
+    fresh: char,
+    again: char,
+}
+
+// `n` tiles over `d` letters drawn from the alphabet.
+fn random_problem(n: i64, d: i64, seed: mut ref i64) -> Problem {
+    let mut alphabet: Vec[char] = [];
+    while alphabet.len() < d {
+        let c = (b'A' + (next_random(mut seed) % 26) as u8) as char;
+        if not alphabet.contains(c) {
+            alphabet.push(c);
+        }
+    }
+    let mut tiles = String.new();
+    for _ in 0..n {
+        tiles.push(alphabet[next_random(mut seed) % d]);
+    }
+    let by = next_random(mut seed) % 25 + 1;
+    let mut fresh = (b'A' + (next_random(mut seed) % 26) as u8) as char;
+    while tiles.contains(fresh.to_string()) {
+        fresh = (b'A' + ((fresh as u32 as u8 - b'A' + 1) % 26)) as char;
+    }
+    let again = tiles.chars().nth(next_random(mut seed) % n).unwrap();
+    Problem { tiles: tiles, by: by, fresh: fresh, again: again }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let tiles = p.tiles.clone();
+    let want = literally(tiles);
+    let n = tiles.len();
+    let mut letters: Vec[char] = [];
+    for c in tiles.chars() {
+        if not letters.contains(c) {
+            letters.push(c);
+        }
+    }
+    let d = letters.len();
+    // every ordering of every choice of k of n distinct tiles
+    let mut most = 0;
+    let mut arrangements = 1;
+    for k in 1..=n {
+        arrangements *= n - k + 1;
+        most += arrangements;
+    }
+    for w in 0..6 {
+        let answer = arm(w, tiles);
+        let what = f"arm {w}, \"{tiles}\" -> {answer}";
+        expect(mut t, 1, answer == want.count, f"P1 {what}, read literally {want.count}");
+        // P2: the letters renamed and the tiles reversed answer the same
+        let moved = arm(w, renamed(tiles, p.by));
+        expect(mut t, 2, moved == answer, f"P2 {what}: renamed by {p.by} -> {moved}");
+        // P3: at least n and d, at most every ordering of distinct tiles,
+        // n exactly when one letter, and the most exactly when all differ
+        let in_bounds = answer >= n and answer >= d and answer <= most;
+        let ends = (answer == n) == (d == 1) and (answer == most) == (d == n);
+        expect(mut t, 3, in_bounds and ends, f"P3 {what}: {n} tiles, {d} letters, at most {most}");
+        // P4: the sequences start with each letter: that letter alone, or
+        // it before a sequence of the other tiles
+        let mut by_first = 0;
+        for c in letters.iter() {
+            by_first += 1;
+            if n > 1 {
+                let at = tiles.find(f"{c}").unwrap();
+                let rest = f"{tiles.substring(0, at)}{tiles.substring(at + 1, n)}";
+                by_first += arm(w, rest);
+            }
+        }
+        expect(mut t, 4, answer == by_first, f"P4 {what}: by first letter {by_first}");
+        // P5: a tile of a new letter keeps every sequence, and puts the
+        // letter at each of the len + 1 places of every sequence and the
+        // empty one
+        let with_fresh = arm(w, f"{tiles}{p.fresh}");
+        let fresh_want = answer + (answer + 1) + want.length;
+        expect(mut t, 5, with_fresh == fresh_want, f"P5 {what}: with {p.fresh} -> {with_fresh}, not {fresh_want}");
+        // P6: one more tile of a letter there is adds sequences, but fewer
+        // than a new letter would
+        let with_again = arm(w, f"{tiles}{p.again}");
+        expect(mut t, 6, answer < with_again and with_again < with_fresh, f"P6 {what}: with {p.again} -> {with_again}, with {p.fresh} -> {with_fresh}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want.count * 7 + want.length) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 600 of 1 to 6 tiles over 1 to 3 letters, and 1400 of
+    // 1 to 5 tiles over 1 to 5 letters, the letters drawn from the
+    // alphabet. Every choice is drawn before any arm answers.
+    let mut seed = 10791;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let p = if i < 600 {
+            random_problem(next_random(mut seed) % 6 + 1, next_random(mut seed) % 3 + 1, mut seed)
+        } else {
+            random_problem(next_random(mut seed) % 5 + 1, next_random(mut seed) % 5 + 1, mut seed)
+        };
+        problems.push(p);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
