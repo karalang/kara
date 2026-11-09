@@ -88,3 +88,33 @@ fn main() {
     let plan = String::from_utf8_lossy(&dry.stdout).into_owned();
     assert!(!plan.contains("0i32"), "{plan}");
 }
+
+/// `vec![0, r as i32]`, which `karac fix` spells `[0, r as i32]`: the
+/// leading literal takes the later element's type, as a trailing one
+/// already did, so the list is a `Vec[i32]`, not a `Vec[i64]` the `i32`
+/// widened into (kata 2055's adapter, written as Rust writes it).
+#[test]
+fn kata_2055_leading_literal_in_a_list_takes_a_later_elements_type() {
+    let src = "fn take(v: Vec[i32]) -> i32 { v[0] + v[1] }
+
+fn main() {
+    let x: i32 = 4;
+    let a = [0, x];
+    let b = [x, 0];
+    let c = [-1, x, 2];
+    println(f\"{take(a)} {take(b)} {take(c)}\");
+}
+";
+    let file = write("k2055-list", src);
+    let check = karac(&["check", &file]);
+    let _ = std::fs::remove_file(&file);
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let out = karac::mir::lower::run_source(src)
+        .expect("MIR interpreter")
+        .output;
+    assert_eq!(out, "4 4 3\n");
+}

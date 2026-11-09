@@ -4599,6 +4599,29 @@ impl<'a> super::TypeChecker<'a> {
             let t = self.infer_later_elem(e, &tys[0]);
             tys.push(t);
         }
+        // A first element that is only unsuffixed literals takes the type
+        // of a later element that is not, as a branch of literals takes its
+        // sibling's: `[0, r as i32]` is a `Vec[i32]`, as `[r as i32, 0]`
+        // already was (kata 2055's Rust arm, `vec![0, r as i32]`).
+        if Self::is_literal_tree(&elements[0], &tys[0]) {
+            let peer = elements
+                .iter()
+                .zip(&tys)
+                .skip(1)
+                .find(|(e, t)| {
+                    matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+                        && !Self::is_literal_tree(e, t)
+                })
+                .map(|(_, t)| t.clone());
+            if let Some(peer) = peer.filter(|p| *p != tys[0]) {
+                for (e, t) in elements.iter().zip(tys.iter_mut()) {
+                    if *t != peer && Self::is_literal_tree(e, &peer) {
+                        self.promote_literal_tree(e, &peer);
+                        *t = peer.clone();
+                    }
+                }
+            }
+        }
         let bodies: Vec<Option<&Expr>> = elements.iter().map(Some).collect();
         self.view_string_literal_branches(&bodies, &mut tys);
         let mut first_ty = tys[0].clone();
