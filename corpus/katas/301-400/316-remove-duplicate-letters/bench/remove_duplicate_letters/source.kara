@@ -25,13 +25,11 @@ fn lcg(state: i64) -> i64 {
     return (state * 1103515245 + 12345) & 0x7fffffff;
 }
 
-fn remove_duplicate_letters(bs: ref Vec[u8]) -> Vec[u8] {
+fn remove_duplicate_letters(bs: Vec[u8]) -> Vec[u8] {
     let n = bs.len();
-    let mut last: Vec[i64] = Vec.new();
-    for k in 0..26 { last.push(-1); }
+    let mut last = [-1; 26];
     for i in 0..n { last[(bs[i] - b'a') as i64] = i; }
-    let mut on_stack: Vec[bool] = Vec.new();
-    for k in 0..26 { on_stack.push(false); }
+    let mut on_stack = [false; 26];
     let mut stack: Vec[u8] = Vec.new();
     for i in 0..n {
         let c = bs[i];
@@ -49,7 +47,7 @@ fn remove_duplicate_letters(bs: ref Vec[u8]) -> Vec[u8] {
         stack.push(c);
         on_stack[ci] = true;
     }
-    return stack;
+    stack
 }
 
 fn main() {
@@ -60,7 +58,7 @@ fn main() {
         seed = lcg(seed);
         let r = seed / 65536;
         if r % 4 != 0 {
-            cur = cur - 1;
+            cur -= 1;
             if cur < 0 { cur = 25; }
         } else {
             cur = r % 26;
@@ -76,7 +74,7 @@ fn main() {
         text[i] = letter + b'a';
         let out = remove_duplicate_letters(text);
         let mut fold = 0;
-        for k in 0..out.len() { fold = (fold * 131 + (out[k] as i64)) & MASK; }
+        for k in 0..out.len() { fold = (fold * 131 + (out[k])) & MASK; }
         checksum = (checksum * 31 + fold + out.len()) & MASK;
         text[i] = saved;
     }

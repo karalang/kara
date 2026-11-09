@@ -16,8 +16,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 | bucket | programs |
 |---|---|
-| a | 5920 |
-| e-spec | 4084 |
+| a | 5915 |
+| e-spec | 4089 |
 | a:refused | 389 |
 | b->a | 238 |
 | check-refuses | 64 |
@@ -65,7 +65,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:url | 4 |
 | post-m1:dyn | 2 |
 
-## Auto-resolved e-spec (4993): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4998): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -2890,6 +2890,11 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/301-400/313-super-ugly-number/differential`
 - `katas/301-400/313-super-ugly-number/super_ugly_frontier`
 - `katas/301-400/314-binary-tree-vertical-order-traversal/differential`
+- `katas/301-400/316-remove-duplicate-letters/differential`
+- `katas/301-400/316-remove-duplicate-letters/remove_duplicate_letters`
+- `katas/301-400/316-remove-duplicate-letters/remove_duplicate_letters_brute`
+- `katas/301-400/316-remove-duplicate-letters/remove_duplicate_letters_greedy`
+- `katas/301-400/316-remove-duplicate-letters/remove_duplicate_letters_mask`
 - `katas/301-400/341-flatten-nested-list-iterator/differential`
 - `katas/301-400/341-flatten-nested-list-iterator/flatten_iterator_trait`
 - `katas/301-400/358-rearrange-string-k-distance-apart/rearrange_ready_at`

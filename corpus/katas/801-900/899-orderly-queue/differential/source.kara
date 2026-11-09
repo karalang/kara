@@ -53,7 +53,7 @@ fn counts_orderly_queue(s: String, k: i64) -> String {
         }
         return out;
     }
-    let mut count: Vec[i64] = Vec.filled(26, 0);
+    let mut count = [0; 26];
     for c in b.iter() {
         count[(*c - 97) as i64] += 1;
     }
@@ -102,7 +102,7 @@ fn booth_orderly_queue(s: String, k: i64) -> String {
         }
         return out;
     }
-    let mut count: Vec[i64] = Vec.filled(26, 0);
+    let mut count = [0; 26];
     for c in b.iter() {
         count[(*c - 97) as i64] += 1;
     }
@@ -286,8 +286,8 @@ fn rotated(s: String, r: i64) -> String {
     out
 }
 
-fn letter_counts(s: String) -> Vec[i64] {
-    let mut count: Vec[i64] = Vec.filled(26, 0);
+fn letter_counts(s: String) -> Array[i64, 26] {
+    let mut count = [0; 26];
     for c in s.bytes() {
         count[(c - 97) as i64] += 1;
     }
@@ -384,7 +384,7 @@ fn main() {
     for p in 0..6 {
         failures += t.failures[p];
         if t.failures[p] > 0 {
-            by = by + f" P{p + 1} {t.failures[p]}";
+            by += f" P{p + 1} {t.failures[p]}";
         }
     }
     println(f"{cases} cases, {letters_in_all} letters, {t.checks} checks over 5 arms: {failures} failures");

@@ -11,16 +11,14 @@
 //
 // Every letter is pushed at most once and popped at most once: O(n).
 
-fn remove_duplicate_letters(s: ref String) -> String {
+fn remove_duplicate_letters(s: String) -> String {
     let bs = s.bytes();
     let n = bs.len();
 
-    let mut last: Vec[i64] = Vec.new();
-    for k in 0..26 { last.push(-1); }
+    let mut last = [-1; 26];
     for i in 0..n { last[(bs[i] - b'a') as i64] = i; }
 
-    let mut on_stack: Vec[bool] = Vec.new();
-    for k in 0..26 { on_stack.push(false); }
+    let mut on_stack = [false; 26];
 
     let mut stack: Vec[u8] = Vec.new();
     for i in 0..n {
@@ -42,7 +40,7 @@ fn remove_duplicate_letters(s: ref String) -> String {
 
     let mut out = String.new();
     for i in 0..stack.len() { out.push(stack[i] as char); }
-    return out;
+    out
 }
 
 // ------------------------------------------------------------- demo ---
@@ -66,7 +64,7 @@ fn main() {
         let r = remove_duplicate_letters(cases[c]);
         let rb = r.bytes();
         for j in 0..rb.len() {
-            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+            acc = (acc * 131 + (rb[j])) % 1000000007;
         }
         println(f"case {c}: {cases[c]} -> {r}");
     }

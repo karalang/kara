@@ -12,11 +12,10 @@
 // This is the classic "prove the first character, then recurse" shape — the
 // stack arm does the same thing in one pass by deferring the proof.
 
-fn solve(bs: ref Vec[u8]) -> String {
+fn solve(bs: Vec[u8]) -> String {
     if bs.len() == 0 { return String.new(); }
 
-    let mut count: Vec[i64] = Vec.new();
-    for k in 0..26 { count.push(0); }
+    let mut count = [0; 26];
     for i in 0..bs.len() { count[(bs[i] - b'a') as i64] += 1; }
 
     let mut pos = 0;
@@ -36,14 +35,14 @@ fn solve(bs: ref Vec[u8]) -> String {
     let mut out = String.new();
     out.push(first as char);
     out.push_str(solve(rest));
-    return out;
+    out
 }
 
-fn remove_duplicate_letters(s: ref String) -> String {
+fn remove_duplicate_letters(s: String) -> String {
     let bs = s.bytes();
     let mut v: Vec[u8] = Vec.new();
     for i in 0..bs.len() { v.push(bs[i]); }
-    return solve(v);
+    solve(v)
 }
 
 // ------------------------------------------------------------- demo ---
@@ -67,7 +66,7 @@ fn main() {
         let r = remove_duplicate_letters(cases[c]);
         let rb = r.bytes();
         for j in 0..rb.len() {
-            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+            acc = (acc * 131 + (rb[j])) % 1000000007;
         }
         println(f"case {c}: {cases[c]} -> {r}");
     }

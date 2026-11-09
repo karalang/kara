@@ -12,7 +12,7 @@
 // output letter. O(26 * n) per placed letter, at most 26 letters — O(26^2 n)
 // worst case, linear in practice.
 
-fn remove_duplicate_letters(s: ref String) -> String {
+fn remove_duplicate_letters(s: String) -> String {
     let bs = s.bytes();
     let n = bs.len();
 
@@ -22,7 +22,7 @@ fn remove_duplicate_letters(s: ref String) -> String {
     let mut i = n - 1;
     while i >= 0 {
         suf[i] = suf[i + 1] | (1 << ((bs[i] - b'a') as i64));
-        i = i - 1;
+        i -= 1;
     }
 
     let mut out = String.new();
@@ -43,11 +43,11 @@ fn remove_duplicate_letters(s: ref String) -> String {
                     placed = true;
                     break;
                 }
-                p = p + 1;
+                p += 1;
             }
         }
     }
-    return out;
+    out
 }
 
 // ------------------------------------------------------------- demo ---
@@ -71,7 +71,7 @@ fn main() {
         let r = remove_duplicate_letters(cases[c]);
         let rb = r.bytes();
         for j in 0..rb.len() {
-            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+            acc = (acc * 131 + (rb[j])) % 1000000007;
         }
         println(f"case {c}: {cases[c]} -> {r}");
     }

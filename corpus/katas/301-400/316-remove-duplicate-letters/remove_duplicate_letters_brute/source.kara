@@ -6,23 +6,21 @@
 // no greedy insight, no stack, no "the answer is a permutation" shortcut
 // beyond checking the letter tallies.
 
-fn remove_duplicate_letters(s: ref String) -> String {
+fn remove_duplicate_letters(s: String) -> String {
     let bs = s.bytes();
     let n = bs.len();
 
-    let mut present: Vec[bool] = Vec.new();
-    for k in 0..26 { present.push(false); }
+    let mut present = [false; 26];
     for i in 0..n { present[(bs[i] - b'a') as i64] = true; }
     let mut k = 0;
-    for c in 0..26 { if present[c] { k = k + 1; } }
+    for c in 0..26 { if present[c] { k += 1; } }
 
     let mut best = String.new();
     let mut have_best = false;
     let limit = 1 << n;
     let mut mask = 0;
     while mask < limit {
-        let mut seen: Vec[bool] = Vec.new();
-        for c in 0..26 { seen.push(false); }
+        let mut seen = [false; 26];
         let mut cand = String.new();
         let mut ok = true;
         let mut taken = 0;
@@ -32,7 +30,7 @@ fn remove_duplicate_letters(s: ref String) -> String {
                 if seen[ci] { ok = false; break; }
                 seen[ci] = true;
                 cand.push(bs[i] as char);
-                taken = taken + 1;
+                taken += 1;
             }
         }
         if ok and taken == k {
@@ -41,9 +39,9 @@ fn remove_duplicate_letters(s: ref String) -> String {
                 have_best = true;
             }
         }
-        mask = mask + 1;
+        mask += 1;
     }
-    return best;
+    best
 }
 
 // ------------------------------------------------------------- demo ---
@@ -67,7 +65,7 @@ fn main() {
         let r = remove_duplicate_letters(cases[c]);
         let rb = r.bytes();
         for j in 0..rb.len() {
-            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+            acc = (acc * 131 + (rb[j])) % 1000000007;
         }
         println(f"case {c}: {cases[c]} -> {r}");
     }

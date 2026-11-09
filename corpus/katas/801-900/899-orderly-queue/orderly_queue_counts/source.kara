@@ -27,7 +27,7 @@ fn orderly_queue(s: String, k: i64) -> String {
         }
         return out;
     }
-    let mut count: Vec[i64] = Vec.filled(26, 0);
+    let mut count = [0; 26];
     for c in b.iter() {
         count[(*c - 97) as i64] += 1;
     }
@@ -72,7 +72,7 @@ fn random_string(seed: mut ref i64, len: i64, letters: i64, repeat: bool) -> Str
 fn checksum(s: String, check: i64) -> i64 {
     let mut c = check;
     for b in s.bytes() {
-        c = (c * 131 + b as i64) % 1000000007;
+        c = (c * 131 + b) % 1000000007;
     }
     c
 }

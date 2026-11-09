@@ -11,7 +11,7 @@
 
 // ---- the ★ arm: a rank per letter -----------------------------------------
 fn star_is_alien_sorted(words: Vec[String], order: String) -> bool {
-    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut rank = [0; 26];
     let letters = order.bytes();
     for i in 0..26 {
         rank[(letters[i] - b'a') as i64] = i;
@@ -57,7 +57,7 @@ fn translate_is_alien_sorted(words: Vec[String], order: String) -> bool {
 
 // ---- the keys arm: words as rank vectors ----------------------------------
 fn keys_is_alien_sorted(words: Vec[String], order: String) -> bool {
-    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut rank = [0; 26];
     let mut i = 0;
     for c in order.bytes() {
         rank[(c - b'a') as i64] = i;
@@ -81,7 +81,7 @@ fn keys_is_alien_sorted(words: Vec[String], order: String) -> bool {
 
 // ---- the sorted arm: sorted and compared ----------------------------------
 fn sorted_is_alien_sorted(words: Vec[String], order: String) -> bool {
-    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut rank = [0; 26];
     let letters = order.bytes();
     for i in 0..26 {
         rank[(letters[i] - b'a') as i64] = i;
@@ -98,7 +98,7 @@ fn sorted_is_alien_sorted(words: Vec[String], order: String) -> bool {
 }
 
 // ---- the columns arm: column by column ------------------------------------
-fn columns_sorted_from(words: ref Vec[Vec[i64]], lo: i64, hi: i64, depth: i64) -> bool {
+fn columns_sorted_from(words: Vec[Vec[i64]], lo: i64, hi: i64, depth: i64) -> bool {
     let mut start = lo;
     while start < hi and words[start].len() == depth {
         start += 1;
@@ -124,7 +124,7 @@ fn columns_sorted_from(words: ref Vec[Vec[i64]], lo: i64, hi: i64, depth: i64) -
 }
 
 fn columns_is_alien_sorted(words: Vec[String], order: String) -> bool {
-    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut rank = [0; 26];
     let letters = order.bytes();
     for i in 0..26 {
         rank[(letters[i] - b'a') as i64] = i;
@@ -159,7 +159,7 @@ fn arm(x: i64, words: Vec[String], order: String) -> bool {
 // Lexicographic order read literally, as LeetCode explains it: both words
 // padded to one length with a blank that comes before every letter, then
 // compared letter by letter, the first difference deciding.
-fn at_most(a: ref String, b: ref String, order: ref String) -> bool {
+fn at_most(a: String, b: String, order: String) -> bool {
     let x = a.bytes();
     let y = b.bytes();
     let alphabet = order.bytes();
@@ -182,7 +182,7 @@ fn at_most(a: ref String, b: ref String, order: ref String) -> bool {
 }
 
 // Sorted read literally: every word at most every word after it.
-fn statement(words: ref Vec[String], order: ref String) -> bool {
+fn statement(words: Vec[String], order: String) -> bool {
     for i in 0..words.len() {
         for j in (i + 1)..words.len() {
             if not at_most(words[i], words[j], order) {
@@ -216,7 +216,7 @@ fn random_order(seed: mut ref i64) -> String {
 }
 
 // n words of 1 to len letters, each from the first `letters` of `order`.
-fn random_words(seed: mut ref i64, n: i64, len: i64, letters: i64, order: ref String) -> Vec[String] {
+fn random_words(seed: mut ref i64, n: i64, len: i64, letters: i64, order: String) -> Vec[String] {
     let pool = order.bytes();
     let mut words: Vec[String] = Vec.new();
     for _ in 0..n {
@@ -231,8 +231,8 @@ fn random_words(seed: mut ref i64, n: i64, len: i64, letters: i64, order: ref St
 }
 
 // The words sorted by the alien order.
-fn alien_sorted(words: ref Vec[String], order: ref String) -> Vec[String] {
-    let mut rank: Vec[i64] = Vec.filled(26, 0);
+fn alien_sorted(words: Vec[String], order: String) -> Vec[String] {
+    let mut rank = [0; 26];
     let mut i = 0;
     for c in order.bytes() {
         rank[(c - b'a') as i64] = i;
@@ -251,7 +251,7 @@ fn alien_sorted(words: ref Vec[String], order: ref String) -> Vec[String] {
 
 // Every letter of `s` replaced by its image under `to`, a permutation of
 // the letters given as the image of a, b, ... z.
-fn renamed(s: ref String, to: ref Vec[u8]) -> String {
+fn renamed(s: String, to: Vec[u8]) -> String {
     let mut out = String.new();
     for c in s.bytes() {
         out.push(to[(c - b'a') as i64] as char);
@@ -357,7 +357,7 @@ fn properties(t: mut ref Tally, seed: mut ref i64, words: Vec[String], order: St
 }
 
 fn main() {
-    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
     let mut seed = 953;
     let mut count = 0;
     let mut sorted = 0;
@@ -388,7 +388,7 @@ fn main() {
     for p in 0..6 {
         failures += t.failures[p];
         if t.failures[p] > 0 {
-            by = by + f" P{p + 1} {t.failures[p]}";
+            by += f" P{p + 1} {t.failures[p]}";
         }
     }
     println(f"3200 cases of {count} words, {sorted} sorted, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");

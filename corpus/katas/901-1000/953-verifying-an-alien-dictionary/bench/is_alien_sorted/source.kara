@@ -7,7 +7,7 @@
 // order on words is transitive. O(total letters).
 
 fn is_alien_sorted(words: Vec[String], order: String) -> bool {
-    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut rank = [0; 26];
     let letters = order.bytes();
     for i in 0..26 {
         rank[(letters[i] - b'a') as i64] = i;
@@ -36,7 +36,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 // Whether word a comes strictly before word b under the ranks.
-fn before(a: ref String, b: ref String, rank: ref Vec[i64]) -> bool {
+fn before(a: String, b: String, rank: Array[i64, 26]) -> bool {
     let x = a.bytes();
     let y = b.bytes();
     let mut k = 0;
@@ -71,7 +71,7 @@ fn main() {
             let j = i + next_random(mut seed) % (26 - i);
             letters.swap(i, j);
         }
-        let mut rank: Vec[i64] = Vec.filled(26, 0);
+        let mut rank = [0; 26];
         let mut order = String.new();
         for i in 0..26 {
             rank[(letters[i] - b'a') as i64] = i;
