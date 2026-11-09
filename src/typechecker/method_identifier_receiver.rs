@@ -235,8 +235,13 @@ impl<'a> super::TypeChecker<'a> {
         //
         // From dispatch is special-cased — the source type of the argument
         // disambiguates between multiple `impl From[X] for T` impls.
+        // A local or a type parameter of the name is that, not the type: a
+        // library `comptime T: Type` parameter, or `fn mk[T: Default]()`'s
+        // `T.default()`, beside a program's `struct T` (B-2026-11-08-78).
         if let ExprKind::Identifier(type_name) = &object.kind {
-            let is_known_type = self.env.structs.contains_key(type_name)
+            let is_known_type = self.local_scope.lookup(type_name).is_none()
+                && !self.type_param_in_scope(type_name)
+                && (self.env.structs.contains_key(type_name)
                 || self.env.enums.contains_key(type_name)
                 // B-2026-08-30-40 — the canonical primitive list, not a
                 // longhand copy of it. This spelling stopped at `f32`/`f64` and
@@ -256,7 +261,7 @@ impl<'a> super::TypeChecker<'a> {
                 // taking it directly both fixes the omission and stops this copy
                 // drifting again — the same recurrence B-2026-08-30-25 records
                 // for the width list in `method_callee_type_name`.
-                || crate::prelude::PRELUDE_PRIMITIVES.contains(&type_name.as_str());
+                || crate::prelude::PRELUDE_PRIMITIVES.contains(&type_name.as_str()));
             if is_known_type {
                 // Comptime `Type` reflection (substrate 2): `MyType.name()`,
                 // `.fields()`, `.variants()`, `.is_struct()`, … The reflection

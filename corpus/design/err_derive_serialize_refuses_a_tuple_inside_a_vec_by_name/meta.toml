@@ -1,0 +1,9 @@
+source = "B-2026-11-08-78"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "serde", "derive"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "the expected.out wording of an error pin is guidance, not a byte oracle. design.md Serialize and Deserialize: a tuple inside another type has no impl yet, so the derive names the field at check; it used to pass check and fail every run lane in MIR."

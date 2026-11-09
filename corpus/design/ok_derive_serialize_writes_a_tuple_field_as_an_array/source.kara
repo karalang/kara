@@ -1,0 +1,29 @@
+// A tuple field or payload is a JSON array and reads back from one of its
+// length. The struct is named `T`, as the derives' own `comptime T: Type`
+// parameter is (B-2026-11-08-78).
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize)]
+struct T { pair: (i64, bool), deep: (String, (f64, i64)), n: i64 }
+
+#[derive(Serialize, Deserialize)]
+enum Shape { Dot, At((i64, i64)), Seg((i64, i64), (i64, i64)), Named { at: (i64, i64) } }
+
+fn main() {
+    let t = T { pair: (1, true), deep: ("a".to_string(), (2.5, 3)), n: 4 };
+    let text = Json.serialize(t);
+    println(text);
+    let back: Result[T, DeserializeError] = Json.deserialize(text);
+    match back { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+    let shapes = [Shape.Dot, Shape.At((1, 2)), Shape.Seg((0, 0), (3, 4)), Shape.Named { at: (5, 6) }];
+    for sh in shapes {
+        let s = Json.serialize(sh);
+        println(s);
+        let b: Result[Shape, DeserializeError] = Json.deserialize(s);
+        match b { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+    }
+    let bad: Result[T, DeserializeError] = Json.deserialize("{\"pair\":[1],\"deep\":[\"a\",[1.0,2]],\"n\":1}");
+    match bad { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+    let bad2: Result[T, DeserializeError] = Json.deserialize("{\"pair\":[1,true,3],\"deep\":[\"a\",[1.0,2]],\"n\":1}");
+    match bad2 { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+}

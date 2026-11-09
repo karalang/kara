@@ -1,0 +1,9 @@
+source = "B-2026-11-08-79"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "serde", "json"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md Serialize and Deserialize: Json.deserialize takes a Str, so lines of text.lines() and a String both read; the line without userName reports missing field `userName` (B-2026-11-08-80), the key the input names, not the Kara field name."

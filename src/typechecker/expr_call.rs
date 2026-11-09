@@ -3885,6 +3885,10 @@ impl super::TypeChecker<'_> {
             "try_from" => "TryFrom",
             _ => return None,
         };
+        // A type parameter's `T.from(x)` is its bound's (B-2026-11-08-78).
+        if self.type_param_in_scope(type_name) {
+            return None;
+        }
         // Collect first (owned), so the immutable borrow of `env` ends before
         // `infer_expr` needs `&mut self`.
         let sources: Vec<Type> = self
@@ -3960,7 +3964,10 @@ impl super::TypeChecker<'_> {
         args: &[CallArg],
         span: &Span,
     ) -> Option<Type> {
-        if matches!(member, "from" | "try_from") || self.local_scope.lookup(type_name).is_some() {
+        if matches!(member, "from" | "try_from")
+            || self.local_scope.lookup(type_name).is_some()
+            || self.type_param_in_scope(type_name)
+        {
             return None;
         }
         let type_name = self.unaliased_type_name(type_name);

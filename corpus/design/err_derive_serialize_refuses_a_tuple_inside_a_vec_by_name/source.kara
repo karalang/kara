@@ -1,0 +1,12 @@
+// A tuple inside another type has no `Serialize` yet: the derive names the
+// field at check instead of failing in MIR (B-2026-11-08-78).
+import std.json.{Json};
+
+#[derive(Serialize)]
+struct Path {
+    pairs: Vec[(i64, i64)],
+}
+
+fn main() {
+    println(Json.serialize(Path { pairs: [(1, 2)] }));
+}

@@ -1,0 +1,12 @@
+{"pair":[1,true],"deep":["a",[2.5,3]],"n":4}
+{"pair":[1,true],"deep":["a",[2.5,3]],"n":4}
+"Dot"
+"Dot"
+{"At":[1,2]}
+{"At":[1,2]}
+{"Seg":[[0,0],[3,4]]}
+{"Seg":[[0,0],[3,4]]}
+{"Named":{"at":[5,6]}}
+{"Named":{"at":[5,6]}}
+err too few values in a tuple
+err too many values in a tuple

@@ -670,7 +670,7 @@ pub struct JsonDeserializer {
 }
 
 impl JsonDeserializer {
-    fn new(text: String) -> JsonDeserializer {
+    fn new(text: Str) -> JsonDeserializer {
         JsonDeserializer {
             chars: text.chars().collect(),
             pos: 0,
@@ -1126,7 +1126,9 @@ impl Json {
 
     /// The value of type `T` that `text` holds; the annotation at the call
     /// selects `T` (`let u: User = Json.deserialize(text)?`).
-    fn deserialize[T: Deserialize](text: String) -> Result[T, DeserializeError] {
+    /// `text` is a view, as `Json.parse` takes it: a `String`, a line of
+    /// `text.lines()` or a slice of one (B-2026-11-08-79).
+    fn deserialize[T: Deserialize](text: Str) -> Result[T, DeserializeError] {
         let mut d = JsonDeserializer.new(text);
         let v = T.deserialize(d)?;
         d.end()?;
@@ -1232,12 +1234,102 @@ comptime fn serde_key(name: ref String, args: ref Vec[String]) -> String {
     }
 }
 
+// The element types of a tuple type `(A, B, ...)`, split at its top level;
+// empty for any other type (B-2026-11-08-78).
+comptime fn serde_tuple_parts(ty: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if not ty.starts_with("(") or not ty.ends_with(")") or ty.len() < 3 {
+        return out;
+    }
+    let inner: Vec[char] = ty.substring(1, ty.len() - 1).chars().collect();
+    let mut cur = "";
+    let mut depth = 0;
+    let mut j = 0;
+    while j < inner.len() {
+        let c = inner[j];
+        if c == '(' or c == '[' {
+            depth = depth + 1;
+        }
+        if c == ')' or c == ']' {
+            depth = depth - 1;
+        }
+        if c == ',' and depth == 0 {
+            out.push(cur.trim().to_string());
+            cur = "";
+        } else {
+            cur = cur + c.to_string();
+        }
+        j = j + 1;
+    }
+    if cur.trim() != "" {
+        out.push(cur.trim().to_string());
+    }
+    out
+}
+
+// A tuple nested in another type (`Vec[(A, B)]`, `Option[(A, B)]`) has no
+// `Serialize` of its own, so the derive names the field rather than emit a
+// call that fails later.
+comptime fn serde_refuse_nested_tuple(what: ref String, owner: ref String, field: ref String, ty: ref String) {
+    if ty.contains("(") {
+        compiler.error(
+            "derive(" + what + "): field `" + field + "` of `" + owner + "` has type `" + ty
+                + "`, a tuple inside another type, which has no " + what + " yet; "
+                + "make the element a struct, or the field a tuple of its own",
+        );
+    }
+}
+
+// Writes the value `expr` of type `ty`: a tuple as a sequence of its
+// elements, as serde writes one (B-2026-11-08-78), anything else through its
+// own `serialize`.
+comptime fn serde_write_value(expr: ref String, ty: ref String, owner: ref String, field: ref String) -> String {
+    let parts = serde_tuple_parts(ty);
+    if parts.len() == 0 {
+        serde_refuse_nested_tuple("Serialize", owner, field, ty);
+        return expr + ".serialize(s); ";
+    }
+    let mut out = "s.serialize_seq_begin(" + f"{parts.len()}" + "); ";
+    let mut k = 0;
+    while k < parts.len() {
+        out = out + "s.serialize_element(); "
+            + serde_write_value("(" + expr + ")." + f"{k}", parts[k], owner, field);
+        k = k + 1;
+    }
+    out + "s.serialize_seq_end(); "
+}
+
+// An expression of type `ty` read from `d`; its `?` returns the error. A
+// tuple reads from a sequence of exactly its length (B-2026-11-08-78).
+comptime fn serde_read_value(ty: ref String, owner: ref String, field: ref String, depth: i64) -> String {
+    let parts = serde_tuple_parts(ty);
+    if parts.len() == 0 {
+        serde_refuse_nested_tuple("Deserialize", owner, field, ty);
+        return "{ let serde_x: Result[" + ty + ", DeserializeError] = serde_next(d); serde_x? }";
+    }
+    let mut reads = "";
+    let mut vals = "";
+    let mut k = 0;
+    while k < parts.len() {
+        let x = "serde_t" + f"{depth}" + "_" + f"{k}";
+        reads = reads + "if not d.deserialize_element()? { return Err(DeserializeError.new("
+            + "\"too few values in a tuple\".to_string())); } let " + x + ": " + parts[k] + " = "
+            + serde_read_value(parts[k], owner, field, depth + 1) + "; ";
+        vals = vals + x + ", ";
+        k = k + 1;
+    }
+    "{ d.deserialize_seq_begin()?; " + reads + "if d.deserialize_element()? { "
+        + "return Err(DeserializeError.new(\"too many values in a tuple\".to_string())); } ("
+        + vals + ") }"
+}
+
 // Writes the fields of a struct, or of a struct variant whose fields are
 // bound by name (`prefix` is "self." for a struct, "" for a variant). A
 // non-empty `tag` writes `tag: tagval` first (an internally tagged variant).
 comptime fn serde_write_fields(
     tn: ref String,
     names: ref Vec[String],
+    tys: ref Vec[String],
     attrs: ref Vec[Vec[String]],
     prefix: ref String,
     tag: ref String,
@@ -1254,8 +1346,8 @@ comptime fn serde_write_fields(
         let args = serde_args(attrs[k]);
         if not serde_flag(args, "skip") and not serde_flag(args, "skip_serializing") {
             count = count + 1;
-            body = body + "s.serialize_field(\"" + serde_key(names[k], args) + "\"); " + prefix
-                + names[k] + ".serialize(s); ";
+            body = body + "s.serialize_field(\"" + serde_key(names[k], args) + "\"); "
+                + serde_write_value(prefix + names[k], tys[k], tn, names[k]);
         }
         k = k + 1;
     }
@@ -1290,14 +1382,15 @@ comptime fn serde_read_fields(
             build = build + fname + ": " + value + ", ";
         } else {
             decls = decls + "let mut " + slot + ": Option[" + ty + "] = None; ";
-            arms = arms + "if serde_k == \"" + serde_key(fname, args) + "\" { let serde_x: Result[" + ty
-                + ", DeserializeError] = serde_next(d); " + slot + " = Some(serde_x?); } else ";
+            arms = arms + "if serde_k == \"" + serde_key(fname, args) + "\" { " + slot + " = Some("
+                + serde_read_value(ty, tn, fname, 0) + "); } else ";
             let missing = if dflt != "" {
                 "match " + slot + " { Some(v) => v, None => " + dflt + " }"
             } else if ty.starts_with("Option[") {
                 "match " + slot + " { Some(v) => v, None => None }"
             } else {
-                "serde_missing(\"" + fname + "\", " + slot + ")?"
+                // The key the input names, `rename` applied (B-2026-11-08-80).
+                "serde_missing(\"" + serde_key(fname, args) + "\", " + slot + ")?"
             };
             build = build + fname + ": " + missing + ", ";
         }
@@ -1371,16 +1464,18 @@ comptime fn serde_no_attrs(names: ref Vec[String]) -> Vec[Vec[String]] {
 // Reads a tuple variant's payload into `ctor(...)` (`?` returns its error).
 comptime fn serde_read_tuple(tys: ref Vec[String], ctor: ref String, what: ref String) -> String {
     if tys.len() == 1 {
-        return "{ let serde_x0: Result[" + tys[0] + ", DeserializeError] = serde_next(d); " + ctor
-            + "(serde_x0?) }";
+        return "{ let serde_x0: " + tys[0] + " = " + serde_read_value(tys[0], ctor, "0", 0) + "; "
+            + ctor + "(serde_x0) }";
     }
     let mut reads = "";
     let mut args = "";
     let mut k = 0;
     while k < tys.len() {
         let x = "serde_x" + f"{k}";
-        reads = reads + "let " + x + ": Result[" + tys[k] + ", DeserializeError] = serde_element(d); ";
-        args = args + x + "?, ";
+        reads = reads + "if not d.deserialize_element()? { return Err(DeserializeError.new("
+            + "\"too few values in a variant's payload\".to_string())); } let " + x + ": " + tys[k]
+            + " = " + serde_read_value(tys[k], ctor, f"{k}", 0) + "; ";
+        args = args + x + ", ";
         k = k + 1;
     }
     "{ d.deserialize_seq_begin()?; " + reads + "let serde_r = " + ctor + "(" + args + "); "
@@ -1418,13 +1513,16 @@ comptime fn derive_serialize(comptime T: own Type) -> Vec[Item] {
             // The payload alone: a struct, the one field, or a sequence.
             let mut payload = "";
             if named {
-                payload = serde_write_fields(vn, names, serde_no_attrs(names), "", "", "");
+                payload = serde_write_fields(vn, names, v.field_types, serde_no_attrs(names), "", "", "");
             } else if v.field_count == 1 {
-                payload = "serde_a0.serialize(s); ";
+                payload = serde_write_value("serde_a0", v.field_types[0], n + "." + vn, "0");
             } else if v.field_count > 1 {
                 payload = "s.serialize_seq_begin(" + f"{v.field_count}" + "); ";
+                let mut k = 0;
                 for f in names {
-                    payload = payload + "s.serialize_element(); serde_a" + f + ".serialize(s); ";
+                    payload = payload + "s.serialize_element(); "
+                        + serde_write_value("serde_a" + f, v.field_types[k], n + "." + vn, f);
+                    k = k + 1;
                 }
                 payload = payload + "s.serialize_seq_end(); ";
             }
@@ -1436,7 +1534,7 @@ comptime fn derive_serialize(comptime T: own Type) -> Vec[Item] {
                     write = "s.serialize_struct_begin(\"" + vn + "\", 1); s.serialize_field(\"" + tag
                         + "\"); s.serialize_string(\"" + key + "\"); s.serialize_struct_end(); ";
                 } else if named {
-                    write = serde_write_fields(vn, names, serde_no_attrs(names), "", tag, key);
+                    write = serde_write_fields(vn, names, v.field_types, serde_no_attrs(names), "", tag, key);
                 } else {
                     compiler.error(
                         "derive(Serialize): `" + n + "." + vn + "` is a tuple variant, which an "
@@ -1455,12 +1553,14 @@ comptime fn derive_serialize(comptime T: own Type) -> Vec[Item] {
         body = body + "}";
     } else {
         let mut names: Vec[String] = Vec.new();
+        let mut tys: Vec[String] = Vec.new();
         let mut attrs: Vec[Vec[String]] = Vec.new();
         for f in T.fields() {
             names.push(f.name.clone());
+            tys.push(f.ty.name());
             attrs.push(f.attrs.clone());
         }
-        body = serde_write_fields(n, names, attrs, "self.", "", "");
+        body = serde_write_fields(n, names, tys, attrs, "self.", "", "");
     }
     [ast.item(
         "impl" + serde_impl_params(T, "Serialize") + " Serialize for " + serde_self_type(T)

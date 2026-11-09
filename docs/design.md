@@ -4498,6 +4498,9 @@ struct Config {
 - The attributes are `rename`, `skip`, `skip_serializing`, `skip_deserializing` and `default` (deserializing only). `default` alone uses the field type's `Default`; a skipped field without one does too.
 - Enums are externally tagged by default. `#[serde(tag: "type")]` makes them internally tagged and `#[serde(untagged)]` untagged. An internally tagged enum holds unit and struct variants only. `rename` also applies to a variant. Reading an internally tagged or untagged enum reads ahead and back, so a `Deserializer` provides `deserialize_mark` and `deserialize_reset`.
 - **`#[serde(default: expr)]`** takes a constant expression, the same class a `const` initializer accepts ([§4 Constants](#constants)): literals, named constants (`i64.MAX`), constant arithmetic (`MAX_PORT - 1`), and struct, array and tuple literals built from constants. A run-time expression (`Vec.new()`, `load_config()`) is a "not a constant expression" error.
+- **A tuple field or payload** (`pair: (i64, bool)`) is a sequence of its elements, `[1,true]` in JSON, and reads back from a sequence of exactly its length. A tuple inside another type (`Vec[(A, B)]`, `Option[(A, B)]`) has no impl of either trait yet: the derive refuses that field by name, and a struct element is the way to write it today.
+- A missing field is reported by the key the input should have held: for `#[serde(rename: "userName")] name: String` the error reads ``missing field `userName` ``.
+- `Json.deserialize(text: Str)` reads a view, so a line of `text.lines()` or a slice is read without a copy.
 
 ---
 

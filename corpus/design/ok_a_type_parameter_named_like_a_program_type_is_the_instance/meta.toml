@@ -1,0 +1,9 @@
+source = "B-2026-11-09-3"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "generics", "traits"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md generics: a type parameter names the instance type in its body. fresh::<U> gives U.default() = 2 and fresh::<T> gives 1; built gives 300 and 30; converted, through a generic trait struct T implements twice, gives 2005 and 1005. With a program struct T, `T.default()` inside `fn fresh[T: Default]` called the struct's impl at every instance (printed 1 1), and the multi-impl path refused at LLVM."

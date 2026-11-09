@@ -1,0 +1,84 @@
+// A type parameter `T` is the instance's type inside its body, also where the
+// program declares a `struct T`: `T.default()` and `T.mk(n)` under one bound
+// call the instance's (B-2026-11-09-3).
+struct T {
+    n: i64,
+}
+
+impl Default for T {
+    fn default() -> T {
+        T { n: 1 }
+    }
+}
+
+struct U {
+    m: i64,
+}
+
+impl Default for U {
+    fn default() -> U {
+        U { m: 2 }
+    }
+}
+
+trait Make {
+    fn make(n: i64) -> Self;
+}
+
+impl Make for T {
+    fn make(n: i64) -> T {
+        T { n: n * 10 }
+    }
+}
+
+impl Make for U {
+    fn make(n: i64) -> U {
+        U { m: n * 100 }
+    }
+}
+
+trait Mk[A] {
+    fn mk(a: A) -> Self;
+}
+
+impl Mk[i64] for T {
+    fn mk(a: i64) -> T {
+        T { n: a + 1000 }
+    }
+}
+
+impl Mk[String] for T {
+    fn mk(a: String) -> T {
+        T { n: a.len() }
+    }
+}
+
+impl Mk[i64] for U {
+    fn mk(a: i64) -> U {
+        U { m: a + 2000 }
+    }
+}
+
+fn fresh[T: Default]() -> T {
+    T.default()
+}
+
+fn built[T: Make](n: i64) -> T {
+    T.make(n)
+}
+
+fn converted[T: Mk[i64]](n: i64) -> T {
+    T.mk(n)
+}
+
+fn main() {
+    let u: U = fresh();
+    let t: T = fresh();
+    println(f"{u.m} {t.n}");
+    let u2: U = built(3);
+    let t2: T = built(3);
+    println(f"{u2.m} {t2.n}");
+    let u3: U = converted(5);
+    let t3: T = converted(5);
+    println(f"{u3.m} {t3.n}");
+}

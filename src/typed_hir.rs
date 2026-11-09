@@ -81,6 +81,11 @@ pub trait HirDefs {
     /// What a call's callee expression resolves to, by that expression's
     /// node.
     fn path_callee(&self, callee_expr: NodeId) -> Option<Callee>;
+    /// Whether a call's callee path starts at a type parameter (`T.default`
+    /// in `fn mk[T: Default]`), whose call goes to the instance's type.
+    fn path_starts_at_type_param(&self, _callee_expr: NodeId) -> bool {
+        false
+    }
     /// A callable definition's generic parameter names in positional order,
     /// or `None` when unknown.
     fn generics(&self, def: DefId) -> Option<Vec<String>>;
@@ -235,6 +240,10 @@ impl HirDefs for ProgramHirDefs<'_> {
         }
     }
 
+    fn path_starts_at_type_param(&self, callee_expr: NodeId) -> bool {
+        matches!(self.res.get(&callee_expr), Some(Res::Generic(_)))
+    }
+
     fn generics(&self, def: DefId) -> Option<Vec<String>> {
         let def = self.variant_enum.get(&def).copied().unwrap_or(def);
         Some(self.defs.generic_params(def))
@@ -358,7 +367,21 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
             .node_call_callees
             .get(&id)
             .and_then(|&e| defs.path_callee(e));
+        // `T.default()` with `T` a type parameter is the instance type's,
+        // never that of a program type the parameter's name spells
+        // (`struct T`, B-2026-11-08-78): the name-keyed fallback would find
+        // that one.
+        let at_param = tc
+            .node_call_callees
+            .get(&id)
+            .is_some_and(|&e| defs.path_starts_at_type_param(e));
         let callee = by_path.or_else(|| {
+            if at_param {
+                return tc
+                    .node_method_callees
+                    .get(&id)
+                    .map(|key| Callee::Builtin(key.clone()));
+            }
             tc.node_method_callees.get(&id).and_then(|key| {
                 // `Ho[R].Full(x)`, `Vec[i64].new()`: the owner is named with
                 // its type arguments, which the call's type carries.

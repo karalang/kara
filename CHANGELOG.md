@@ -68,6 +68,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `Json.deserialize(text: Str)` takes a view, so a line of `text.lines()`
+  or a slice reads without `.to_string()`; a `String` still passes
+  (B-2026-11-08-79).
 - **`Map`, `SortedMap`, `Set` and `SortedSet` compare with `==`.** Two
   maps are equal when they hold the same keys with equal values, two sets
   when they hold the same elements, whatever the insertion or iteration
@@ -116,6 +119,22 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- Inside `fn fresh[T: Default]() -> T { T.default() }`, `T` is the
+  instance's type also where the program declares a `struct T`: the call
+  went to the struct's `default` at every instance, so `let u: U = fresh()`
+  built a `T` (B-2026-11-09-3). A local of the name wins the same way: the
+  library derives' own `comptime T: Type` parameter made `#[derive(Serialize,
+  Deserialize)]` on a program's `struct T` fail with an internal error, and
+  `Json.deserialize` read any type as the program's `T` (B-2026-11-08-78).
+- `#[derive(Serialize, Deserialize)]` writes a tuple field or payload as a
+  sequence, `[1,true]` in JSON, and reads it back from one of exactly its
+  length (design.md § Serialize and Deserialize). It passed `karac check`
+  and failed every run lane in MIR; a tuple inside another type
+  (`Vec[(A, B)]`) is now refused at check, naming the field
+  (B-2026-11-08-78).
+- A missing field in `Json.deserialize` is named by its key in the input,
+  `missing field `userName`` for a field renamed `userName`, not by its Kāra
+  name (B-2026-11-08-80).
 - The element literal of `let cnt = [0; 26];` and `let ans = Vec.filled(n,
   0);` is fixed by where the collection goes, as a scalar's is (design.md
   §8 Literals): returned as an `Array[i32, 26]`, or handed to a

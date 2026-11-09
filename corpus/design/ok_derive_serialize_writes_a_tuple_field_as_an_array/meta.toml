@@ -1,0 +1,9 @@
+source = "B-2026-11-08-78"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "serde", "json", "derive"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md Serialize and Deserialize (serde semantics): a tuple is a JSON array, nested tuples nest, and reading wants exactly its length. Checked against Python json.dumps(separators=(\",\", \":\")). The struct named T used to break the derives (their comptime T param resolved to it)."

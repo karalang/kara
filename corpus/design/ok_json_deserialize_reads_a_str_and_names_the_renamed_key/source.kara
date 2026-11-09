@@ -1,0 +1,34 @@
+// `Json.deserialize` reads a `Str` (a line of `text.lines()`) and a `String`
+// alike (B-2026-11-08-79); a missing renamed field is named by its key in the
+// input (B-2026-11-08-80).
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize)]
+struct User {
+    id: i64,
+    #[serde(rename: "userName")]
+    name: String,
+}
+
+fn main() {
+    let text = "{\"id\":1,\"userName\":\"ann\"}\n{\"id\":2}\n{\"id\":3,\"userName\":\"cy\"}";
+    for line in text.lines() {
+        let r: Result[User, DeserializeError] = Json.deserialize(line);
+        match r {
+            Ok(u) => println(f"{u.id} {u.name}"),
+            Err(e) => println(f"err {e}"),
+        }
+    }
+    let owned = "{\"id\":4,\"userName\":\"di\"}".to_string();
+    let r: Result[User, DeserializeError] = Json.deserialize(owned);
+    match r {
+        Ok(u) => println(f"{u.id} {u.name} {owned.len()}"),
+        Err(e) => println(f"err {e}"),
+    }
+    let part = "xx{\"id\":5,\"userName\":\"ed\"}yy";
+    let r: Result[User, DeserializeError] = Json.deserialize(part.substring(2, part.len() - 2));
+    match r {
+        Ok(u) => println(f"{u.id} {u.name}"),
+        Err(e) => println(f"err {e}"),
+    }
+}
