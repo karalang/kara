@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1081-smallest-subsequence-of-distinct-characters/bench/smallest_subsequence.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1081 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "2a1ba8811"
+extracted_src = "5613f4e2"

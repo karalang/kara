@@ -1,0 +1,14 @@
+bcabc -> abc
+cbacdcbc -> acdb
+a -> a
+aaaa -> a
+abcabc -> abc
+cba -> cba
+bcac -> bac
+leetcode -> letcod
+zyxzyxzyx -> xyz
+ecbacba -> eacb
+abacb -> abc
+thesqtitxyetpxloeevdeqifkz -> hesitxyplovdqfkz
+300 random strings: 3892 letters kept, checksum 244995108
+1000 letters, the alphabet backwards -> abcdefghijklmnopqrstuvwxyz

@@ -1,0 +1,457 @@
+// LeetCode #1081: Smallest Subsequence of Distinct Characters -- the
+// differential: the seven arms against the statement read literally, under
+// six properties, over 2000 random problems drawn before any arm answers.
+
+// ---- smallest_subsequence.kara ----
+
+fn star_arm(s: Str) -> String {
+    let bytes = s.bytes();
+    let mut last = [0; 26];
+    for i in 0..bytes.len() {
+        last[bytes[i] - b'a'] = i;
+    }
+    let mut placed = [false; 26];
+    let mut stack: Vec[u8] = [];
+    for i in 0..bytes.len() {
+        let b = bytes[i];
+        if placed[b - b'a'] {
+            continue;
+        }
+        while let Some(top) = stack.last() {
+            if top > b and last[top - b'a'] > i {
+                placed[top - b'a'] = false;
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        stack.push(b);
+        placed[b - b'a'] = true;
+    }
+    String.from_utf8(stack).unwrap()
+}
+
+// ---- smallest_subsequence_maps.kara ----
+
+fn maps_arm(s: Str) -> String {
+    let mut last: Map[char, i64] = Map.new();
+    for (i, c) in s.chars().enumerate() {
+        last[c] = i;
+    }
+    let mut placed: Set[char] = Set.new();
+    let mut stack: Vec[char] = [];
+    for (i, c) in s.chars().enumerate() {
+        if placed.contains(c) {
+            continue;
+        }
+        while let Some(top) = stack.last() {
+            if top > c and last[top] > i {
+                placed.remove(top);
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        stack.push(c);
+        placed.insert(c);
+    }
+    stack.iter().collect()
+}
+
+// ---- smallest_subsequence_counts.kara ----
+
+fn counts_arm(s: Str) -> String {
+    let bytes = s.bytes();
+    let mut left = [0; 26];
+    for b in bytes.iter() {
+        left[b - b'a'] += 1;
+    }
+    let mut placed = [false; 26];
+    let mut stack: Vec[u8] = [];
+    for b in bytes.iter() {
+        left[b - b'a'] -= 1;
+        if placed[b - b'a'] {
+            continue;
+        }
+        while stack.len() > 0 {
+            let top = stack[stack.len() - 1];
+            if top < b or left[top - b'a'] == 0 {
+                break;
+            }
+            placed[top - b'a'] = false;
+            stack.pop();
+        }
+        stack.push(b);
+        placed[b - b'a'] = true;
+    }
+    String.from_utf8(stack).unwrap()
+}
+
+// ---- smallest_subsequence_greedy.kara ----
+
+fn greedy_distinct(s: Str) -> i64 {
+    let mut seen: Set[char] = Set.new();
+    for c in s.chars() {
+        seen.insert(c);
+    }
+    seen.len()
+}
+
+fn greedy_arm(s: Str) -> String {
+    if s.is_empty() {
+        return String.new();
+    }
+    let want = greedy_distinct(s);
+    for b in b'a'..=b'z' {
+        let c = b as char;
+        if let Some(at) = s.find(c.to_string()) {
+            let rest = s.slice(at, s.len());
+            if greedy_distinct(rest) == want {
+                let after = rest.slice(1, rest.len()).replace(c.to_string(), "");
+                return f"{c}{greedy_arm(after)}";
+            }
+        }
+    }
+    panic("no letter starts the answer")
+}
+
+// ---- smallest_subsequence_masks.kara ----
+
+fn masks_arm(s: Str) -> String {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut ahead: Vec[u32] = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        ahead[i] = ahead[i + 1] | 1 << (bytes[i] - b'a') as u32;
+    }
+    let mut taken: u32 = 0;
+    let mut at = 0;
+    let mut out = String.new();
+    while taken != ahead[0] {
+        let wanted = ahead[0] & ~taken;
+        for k in 0..26 {
+            let bit: u32 = 1 << k;
+            if wanted & bit == 0 {
+                continue;
+            }
+            let mut j = at;
+            while bytes[j] - b'a' != k as u8 {
+                j += 1;
+            }
+            if ahead[j] & wanted == wanted {
+                taken |= bit;
+                out.push(bytes[j] as char);
+                at = j + 1;
+                break;
+            }
+        }
+    }
+    out
+}
+
+// ---- smallest_subsequence_string.kara ----
+
+fn string_arm(s: Str) -> String {
+    let mut out = String.new();
+    for (i, c) in s.chars().enumerate() {
+        if out.contains(c.to_string()) {
+            continue;
+        }
+        while let Some(top) = out.chars().last() {
+            if top > c and s.rfind(top.to_string()).unwrap() > i {
+                out.pop();
+            } else {
+                break;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+// ---- smallest_subsequence_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn smallest_subsequence(s: String) -> String {
+        let s = s.bytes();
+        let mut last = [0; 26];
+        for (i, c) in s.iter().enumerate() {
+            last[(c - b'a') as i64] = i;
+        }
+        let mut stack: Vec[u8] = Vec.new();
+        let mut seen = [false; 26];
+        for (i, c) in s.iter().enumerate() {
+            if seen[(c - b'a') as i64] {
+                continue;
+            }
+            while let Some(top) = stack.last().cloned() {
+                if top > c and last[(top - b'a') as i64] > i {
+                    seen[(top - b'a') as i64] = false;
+                    stack.pop();
+                } else {
+                    break;
+                }
+            }
+            stack.push(c);
+            seen[(c - b'a') as i64] = true;
+        }
+        String.from_utf8(stack).unwrap()
+    }
+}
+
+fn solution_arm(s: Str) -> String {
+    Solution.smallest_subsequence(s.to_string())
+}
+
+// ---- the harness ----------------------------------------------------------
+
+fn arm(which: i64, s: Str) -> String {
+    match which {
+        0 => star_arm(s),
+        1 => maps_arm(s),
+        2 => counts_arm(s),
+        3 => greedy_arm(s),
+        4 => masks_arm(s),
+        5 => string_arm(s),
+        _ => solution_arm(s),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: the answer holds each distinct letter
+// once, so it is an ordering of them; the smallest ordering that is a
+// subsequence of `s`. The orderings are tried smallest first, a letter at
+// a time, each prefix matched against `s` from the left; the first whole
+// one matched is the answer.
+fn literally(s: Str) -> String {
+    let bytes = s.bytes();
+    let mut letters: Vec[u8] = [];
+    for b in b'a'..=b'z' {
+        if bytes.contains(b) {
+            letters.push(b);
+        }
+    }
+    let mut used = Vec.filled(letters.len(), false);
+    let mut chosen: Vec[u8] = [];
+    if orderings(bytes, letters, mut used, mut chosen, 0) {
+        String.from_utf8(chosen).unwrap()
+    } else {
+        panic("no ordering is a subsequence")
+    }
+}
+
+// Whether `chosen`, matched up to place `from` of `bytes`, extends to a
+// whole ordering that is a subsequence; it is left holding the first one.
+fn orderings(bytes: Slice[u8], letters: Vec[u8], used: mut ref Vec[bool], chosen: mut ref Vec[u8], from: i64) -> bool {
+    if chosen.len() == letters.len() {
+        return true;
+    }
+    for k in 0..letters.len() {
+        if used[k] {
+            continue;
+        }
+        let mut j = from;
+        while j < bytes.len() and bytes[j] != letters[k] {
+            j += 1;
+        }
+        if j == bytes.len() {
+            continue;
+        }
+        used[k] = true;
+        chosen.push(letters[k]);
+        if orderings(bytes, letters, mut used, mut chosen, j + 1) {
+            return true;
+        }
+        chosen.pop();
+        used[k] = false;
+    }
+    false
+}
+
+fn is_subsequence(small: Str, big: Str) -> bool {
+    let b = big.bytes();
+    let mut j = 0;
+    for c in small.bytes().iter() {
+        while j < b.len() and b[j] != c {
+            j += 1;
+        }
+        if j == b.len() {
+            return false;
+        }
+        j += 1;
+    }
+    true
+}
+
+// The distinct letters of `s` in alphabet order.
+fn letters_of(s: Str) -> String {
+    let mut out = String.new();
+    for b in b'a'..=b'z' {
+        if s.bytes().contains(b) {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
+// The answer's letters sorted, each once.
+fn sorted_once(s: Str) -> String {
+    let mut bytes: Vec[u8] = s.bytes().to_vec();
+    bytes.sort();
+    String.from_utf8(bytes).unwrap()
+}
+
+// Every letter moved to `map`'s place for it.
+fn relabel(s: Str, map: Vec[u8]) -> String {
+    let mut out = String.new();
+    for b in s.bytes().iter() {
+        out.push(map[b - b'a'] as char);
+    }
+    out
+}
+
+// Each run of one letter written once, or each letter written twice.
+fn collapsed(s: Str) -> String {
+    let mut out = String.new();
+    let mut prev = ' ';
+    for c in s.chars() {
+        if c != prev {
+            out.push(c);
+        }
+        prev = c;
+    }
+    out
+}
+
+fn doubled(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(c);
+        out.push(c);
+    }
+    out
+}
+
+struct Problem {
+    text: String,
+    // an order-kept map of the letters a to w into b to y
+    map: Vec[u8],
+}
+
+// n letters drawn from an alphabet of k letters taken at random from a
+// to w, and an order-kept map of a to w into b to y.
+fn random_problem(seed: mut ref i64, n: i64, k: i64) -> Problem {
+    let mut alphabet: Vec[u8] = [];
+    while alphabet.len() < k {
+        let b = b'a' + (next_random(mut seed) % 23) as u8;
+        if not alphabet.contains(b) {
+            alphabet.push(b);
+        }
+    }
+    let mut text = String.new();
+    for _ in 0..n {
+        text.push(alphabet[next_random(mut seed) % k] as char);
+    }
+    // 23 letters into 23 of the 24 places b to y, in order: one place,
+    // at random, is skipped
+    let skip = next_random(mut seed) % 24;
+    let mut map: Vec[u8] = [];
+    let mut to = 0;
+    for _ in 0..26 {
+        if to == skip {
+            to += 1;
+        }
+        map.push(b'b' + to.min(23) as u8);
+        to += 1;
+    }
+    Problem { text: text, map: map }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let s = p.text.clone();
+    let want = literally(s);
+    let moved = relabel(s, p.map);
+    for w in 0..7 {
+        let answer = arm(w, s);
+        let what = f"arm {w}, {s} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        // P2: a subsequence of the text holding each of its letters once
+        expect(mut t, 2, is_subsequence(answer, s) and sorted_once(answer) == letters_of(s), f"P2 {what}: not each letter once in order");
+        // P3: the letters moved, keeping their order, move the answer
+        let relabelled = arm(w, moved);
+        expect(mut t, 3, relabelled == relabel(answer, p.map), f"P3 {what}: moved to {moved} -> {relabelled}");
+        // P4: a run of one letter counts as one, and each letter twice as once
+        let once = arm(w, collapsed(s));
+        let twice = arm(w, doubled(s));
+        expect(mut t, 4, once == answer and twice == answer, f"P4 {what}: runs collapsed -> {once}, letters doubled -> {twice}");
+        // P5: the answer, asked again, is itself
+        let again = arm(w, answer);
+        expect(mut t, 5, again == answer, f"P5 {what}: asked again -> {again}");
+        // P6: a letter smaller than all of them in front and one larger
+        // behind stand first and last
+        let framed = arm(w, f"a{moved}z");
+        expect(mut t, 6, framed == f"a{relabel(answer, p.map)}z", f"P6 {what}: a{moved}z -> {framed}");
+    }
+    t.cases += 1;
+    t.check = fold(t.check, want);
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1000 texts of 1 to 12 letters over 1 to 4 letters, and
+    // 1000 of 1 to 150 letters over 1 to 10. Every choice is drawn before any
+    // arm answers.
+    let mut seed = 10811;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let p = if i < 1000 {
+            let n = next_random(mut seed) % 12 + 1;
+            random_problem(mut seed, n, next_random(mut seed) % 4 + 1)
+        } else {
+            let n = next_random(mut seed) % 150 + 1;
+            random_problem(mut seed, n, next_random(mut seed) % 10 + 1)
+        };
+        problems.push(p);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 7 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

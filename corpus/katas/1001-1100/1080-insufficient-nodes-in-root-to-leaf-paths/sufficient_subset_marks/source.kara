@@ -1,0 +1,221 @@
+// LeetCode #1080: Insufficient Nodes in Root to Leaf Paths -- the paths
+// marked from their leaves: the nodes numbered level by level with their
+// parents and the sums down to them; every leaf whose sum reaches the
+// limit marks itself and the nodes above it as kept, stopping at one
+// already kept; then each kept node drops the children that are not.
+// O(n) time and space, no recursion.
+
+fn sufficient_subset(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    let top = root?;
+    let mut nodes: Vec[TreeNode] = [top];
+    let mut parent: Vec[i64] = [-1];
+    let mut on_left: Vec[bool] = [false];
+    let mut sum: Vec[i64] = [top.val];
+    let mut at = 0;
+    while at < nodes.len() {
+        let n = nodes[at];
+        for (child, left_side) in [(n.left, true), (n.right, false)] {
+            if let Some(c) = child {
+                nodes.push(c);
+                parent.push(at);
+                on_left.push(left_side);
+                sum.push(sum[at] + c.val);
+            }
+        }
+        at += 1;
+    }
+    let mut kept = Vec.filled(nodes.len(), false);
+    for i in 0..nodes.len() {
+        let n = nodes[i];
+        if n.left.is_none() and n.right.is_none() and sum[i] >= limit {
+            let mut j = i;
+            while j >= 0 and not kept[j] {
+                kept[j] = true;
+                j = parent[j];
+            }
+        }
+    }
+    if not kept[0] {
+        return None;
+    }
+    for i in 1..nodes.len() {
+        if not kept[i] {
+            let p = nodes[parent[i]];
+            if on_left[i] {
+                p.left = None;
+            } else {
+                p.right = None;
+            }
+        }
+    }
+    Some(top)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// LeetCode's TreeNode: an `i32` value and two children.
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level-order form, "[1,2,null,3]": each node's two children
+// come next, in the order the nodes were met, "null" for none.
+fn parse(text: Str) -> Option[TreeNode] {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return None;
+    }
+    let items: Vec[Option[i32]] = inner.split(",").map(|s| if s == "null" { None } else { Some(i32.parse(s).unwrap()) }).collect();
+    let root = leaf(items[0].unwrap());
+    let mut queue: Vec[TreeNode] = [root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue[head];
+        head += 1;
+        if let Some(v) = items[i] {
+            let child = leaf(v);
+            node.left = Some(child);
+            queue.push(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = leaf(v);
+                node.right = Some(child);
+                queue.push(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+fn written(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = [];
+    let mut queue: Vec[Option[TreeNode]] = [root];
+    let mut head = 0;
+    while head < queue.len() {
+        match queue[head] {
+            Some(n) => {
+                out.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => out.push("null"),
+        }
+        head += 1;
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// `size` nodes with values from -`spread` to `spread`, each node after the
+// first hung on a free side of a node drawn from those placed so far.
+fn random_tree(seed: mut ref i64, size: i64, spread: i32) -> String {
+    let root = leaf((next_random(mut seed) % (2 * spread + 1)) as i32 - spread);
+    let mut nodes: Vec[TreeNode] = [root];
+    for _ in 1..size {
+        let child = leaf((next_random(mut seed) % (2 * spread + 1)) as i32 - spread);
+        loop {
+            let parent = nodes[next_random(mut seed) % nodes.len()];
+            if next_random(mut seed) % 2 == 0 {
+                if parent.left.is_none() {
+                    parent.left = Some(child);
+                    break;
+                }
+            } else if parent.right.is_none() {
+                parent.right = Some(child);
+                break;
+            }
+        }
+        nodes.push(child);
+    }
+    written(Some(root))
+}
+
+// The sum of a root-to-leaf path drawn at random, so that a limit near
+// it keeps some paths and cuts others.
+fn random_path_sum(seed: mut ref i64, root: TreeNode) -> i64 {
+    let mut node = root;
+    let mut sum: i64 = node.val;
+    loop {
+        let next = match (node.left, node.right) {
+            (None, None) => break,
+            (Some(l), None) => l,
+            (None, Some(r)) => r,
+            (Some(l), Some(r)) => if next_random(mut seed) % 2 == 0 { l } else { r },
+        };
+        node = next;
+        sum += node.val;
+    }
+    sum
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases = [
+        ("[1,2,3,4,-99,-99,7,8,9,-99,-99,12,13,-99,14]", 1),
+        ("[5,4,8,11,null,17,4,7,1,null,null,5,3]", 22),
+        ("[1,2,-3,-5,null,4,null]", -1),
+        ("[5]", 5),
+        ("[5]", 6),
+        ("[1,2,3]", 4),
+        ("[1,2,3]", 5),
+        ("[10,-5,null,-5]", 0),
+        ("[10,-5,null,-5]", 1),
+        ("[0,1,-1,null,null,2,null]", 1),
+    ];
+    for (text, limit) in cases.iter() {
+        println(f"{text} limit {limit} -> {written(sufficient_subset(parse(text), limit))}");
+    }
+    // 300 random trees of 1 to 300 nodes, values -10 to 10, each with a
+    // limit near the sum of one of its paths
+    let mut seed = 1080;
+    let mut h = 0;
+    let mut kept = 0;
+    for t in 0..300 {
+        let size = t + 1;
+        let text = random_tree(mut seed, size, 10);
+        let limit = random_path_sum(mut seed, parse(text).unwrap()) + next_random(mut seed) % 7 - 3;
+        let out = written(sufficient_subset(parse(text), limit));
+        if out != "[]" {
+            kept += 1;
+        }
+        h = fold(h, out);
+    }
+    println(f"300 random trees: {kept} keep their root, checksum {h}");
+    // a chain of 5000 nodes, 1 each, whose one path sums to 5000: kept
+    // whole at a limit of 5000, and gone at 5001
+    let top = leaf(1);
+    let mut last = top;
+    for _ in 1..5000 {
+        let next = leaf(1);
+        last.left = Some(next);
+        last = next;
+    }
+    let text = written(Some(top));
+    let whole = written(sufficient_subset(parse(text), 5000));
+    println(f"a chain of 5000 at 5000 -> {whole.len()} characters, same {whole == text}");
+    println(f"a chain of 5000 at 5001 -> {written(sufficient_subset(parse(text), 5001))}");
+}

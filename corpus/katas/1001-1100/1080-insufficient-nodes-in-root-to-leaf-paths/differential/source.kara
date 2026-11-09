@@ -1,0 +1,534 @@
+// LeetCode #1080: Insufficient Nodes in Root to Leaf Paths -- the
+// differential: the six arms against the statement read literally, under
+// six properties, over 2000 random problems drawn before any arm answers.
+
+// ---- sufficient_subset.kara ----
+
+fn star_prune(node: Option[TreeNode], need: i64) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            if n.left.is_none() and n.right.is_none() {
+                return if n.val >= need { Some(n) } else { None };
+            }
+            n.left = star_prune(n.left, need - n.val);
+            n.right = star_prune(n.right, need - n.val);
+            if n.left.is_none() and n.right.is_none() { None } else { Some(n) }
+        }
+    }
+}
+
+fn star_arm(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    star_prune(root, limit)
+}
+
+// ---- sufficient_subset_best.kara ----
+
+// The largest sum of a path from `node` down to a leaf; `above` is the sum
+// of the path from the root down to `node`'s parent.
+fn best_below(node: TreeNode, above: i64, limit: i64) -> i64 {
+    let here = above + node.val;
+    let mut best: Option[i64] = None;
+    if let Some(l) = node.left {
+        let b = best_below(l, here, limit);
+        if here + b < limit {
+            node.left = None;
+        }
+        best = Some(b);
+    }
+    if let Some(r) = node.right {
+        let b = best_below(r, here, limit);
+        if here + b < limit {
+            node.right = None;
+        }
+        best = Some(match best {
+            Some(x) => x.max(b),
+            None => b,
+        });
+    }
+    node.val + best.unwrap_or(0)
+}
+
+fn best_arm(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(r) => if best_below(r, 0, limit) < limit { None } else { Some(r) },
+    }
+}
+
+// ---- sufficient_subset_stack.kara ----
+
+struct Visit {
+    node: TreeNode,
+    need: i64,
+    parent: Option[TreeNode],
+    left_side: bool,
+    leaf: bool,
+    opened: bool,
+}
+
+fn stack_arm(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    let top = match root {
+        None => return None,
+        Some(r) => r,
+    };
+    let mut root_goes = false;
+    let mut stack: Vec[Visit] = [Visit { node: top, need: limit, parent: None, left_side: false, leaf: top.left.is_none() and top.right.is_none(), opened: false }];
+    while let Some(v) = stack.pop() {
+        if not v.opened {
+            let rest = v.need - v.node.val;
+            stack.push(Visit { opened: true, ..v });
+            for (child, left_side) in [(v.node.right, false), (v.node.left, true)] {
+                if let Some(c) = child {
+                    stack.push(Visit { node: c, need: rest, parent: Some(v.node), left_side: left_side, leaf: c.left.is_none() and c.right.is_none(), opened: false });
+                }
+            }
+            continue;
+        }
+        let goes = if v.leaf { v.node.val < v.need } else { v.node.left.is_none() and v.node.right.is_none() };
+        if goes {
+            match v.parent {
+                None => root_goes = true,
+                Some(p) => if v.left_side { p.left = None; } else { p.right = None; },
+            }
+        }
+    }
+    if root_goes { None } else { Some(top) }
+}
+
+// ---- sufficient_subset_rebuild.kara ----
+
+fn rebuilt(node: Option[TreeNode], need: i64) -> Option[TreeNode] {
+    let n = node?;
+    if n.left.is_none() and n.right.is_none() {
+        return if n.val >= need { Some(TreeNode { val: n.val, left: None, right: None }) } else { None };
+    }
+    let left = rebuilt(n.left, need - n.val);
+    let right = rebuilt(n.right, need - n.val);
+    if left.is_none() and right.is_none() {
+        return None;
+    }
+    Some(TreeNode { val: n.val, left: left, right: right })
+}
+
+fn rebuild_arm(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    rebuilt(root, limit)
+}
+
+// ---- sufficient_subset_marks.kara ----
+
+fn marks_arm(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    let top = root?;
+    let mut nodes: Vec[TreeNode] = [top];
+    let mut parent: Vec[i64] = [-1];
+    let mut on_left: Vec[bool] = [false];
+    let mut sum: Vec[i64] = [top.val];
+    let mut at = 0;
+    while at < nodes.len() {
+        let n = nodes[at];
+        for (child, left_side) in [(n.left, true), (n.right, false)] {
+            if let Some(c) = child {
+                nodes.push(c);
+                parent.push(at);
+                on_left.push(left_side);
+                sum.push(sum[at] + c.val);
+            }
+        }
+        at += 1;
+    }
+    let mut kept = Vec.filled(nodes.len(), false);
+    for i in 0..nodes.len() {
+        let n = nodes[i];
+        if n.left.is_none() and n.right.is_none() and sum[i] >= limit {
+            let mut j = i;
+            while j >= 0 and not kept[j] {
+                kept[j] = true;
+                j = parent[j];
+            }
+        }
+    }
+    if not kept[0] {
+        return None;
+    }
+    for i in 1..nodes.len() {
+        if not kept[i] {
+            let p = nodes[parent[i]];
+            if on_left[i] {
+                p.left = None;
+            } else {
+                p.right = None;
+            }
+        }
+    }
+    Some(top)
+}
+
+// ---- sufficient_subset_solution.kara ----
+
+struct Solution {}
+
+fn solution_dfs(node: Option[TreeNode], limit: i32) -> Option[TreeNode] {
+    let n = node?;
+    {
+        let mut b = n;
+        if b.left.is_none() and b.right.is_none() {
+            return if b.val >= limit { Some(n.clone()) } else { None };
+        }
+        let rest = limit - b.val;
+        b.left = solution_dfs(b.left.take(), rest);
+        b.right = solution_dfs(b.right.take(), rest);
+        if b.left.is_none() and b.right.is_none() {
+            return None;
+        }
+    }
+    Some(n)
+}
+
+impl Solution {
+    pub fn sufficient_subset(root: Option[TreeNode], limit: i32) -> Option[TreeNode] {
+        solution_dfs(root, limit)
+    }
+}
+
+fn solution_arm(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    Solution.sufficient_subset(root, limit as i32)
+}
+
+// ---- the harness ----------------------------------------------------------
+
+// LeetCode's TreeNode: an `i32` value and two children.
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, text: Str, limit: i64) -> String {
+    let root = parse(text);
+    let out = match which {
+        0 => star_arm(root, limit),
+        1 => best_arm(root, limit),
+        2 => stack_arm(root, limit),
+        3 => rebuild_arm(root, limit),
+        4 => marks_arm(root, limit),
+        _ => solution_arm(root, limit),
+    };
+    written(out)
+}
+
+// LeetCode's level-order form, "[1,2,null,3]".
+fn parse(text: Str) -> Option[TreeNode] {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return None;
+    }
+    let items: Vec[Option[i32]] = inner.split(",").map(|s| if s == "null" { None } else { Some(i32.parse(s).unwrap()) }).collect();
+    let root = leaf(items[0].unwrap());
+    let mut queue: Vec[TreeNode] = [root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue[head];
+        head += 1;
+        if let Some(v) = items[i] {
+            let child = leaf(v);
+            node.left = Some(child);
+            queue.push(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = leaf(v);
+                node.right = Some(child);
+                queue.push(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+fn written(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = [];
+    let mut queue: Vec[Option[TreeNode]] = [root];
+    let mut head = 0;
+    while head < queue.len() {
+        match queue[head] {
+            Some(n) => {
+                out.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => out.push("null"),
+        }
+        head += 1;
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// A tree as arrays, read from the text: each node's value and the
+// indices of its children, -1 for none. Node 0 is the root.
+struct Flat {
+    val: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn flat(text: Str) -> Flat {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    let mut f = Flat { val: [], left: [], right: [] };
+    if inner.is_empty() {
+        return f;
+    }
+    let items: Vec[Str] = inner.split(",").collect();
+    f.val.push(i64.parse(items[0]).unwrap());
+    f.left.push(-1);
+    f.right.push(-1);
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        for side in 0..2 {
+            if i < items.len() {
+                if items[i] != "null" {
+                    let k = f.val.len();
+                    f.val.push(i64.parse(items[i]).unwrap());
+                    f.left.push(-1);
+                    f.right.push(-1);
+                    if side == 0 {
+                        f.left[head] = k;
+                    } else {
+                        f.right[head] = k;
+                    }
+                }
+                i += 1;
+            }
+        }
+        head += 1;
+    }
+    f
+}
+
+// Every root-to-leaf path, as the list of its nodes.
+fn paths(f: Flat, at: i64, above: Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let mut here = above.clone();
+    here.push(at);
+    if f.left[at] < 0 and f.right[at] < 0 {
+        out.push(here);
+        return;
+    }
+    for c in [f.left[at], f.right[at]] {
+        if c >= 0 {
+            paths(f, c, here, mut out);
+        }
+    }
+}
+
+// The statement read literally: a node is insufficient when every
+// root-to-leaf path through it sums to less than the limit, and all of
+// them are deleted at once. What is left is written level by level.
+fn literally(text: Str, limit: i64) -> String {
+    let f = flat(text);
+    if f.val.len() == 0 {
+        return "[]";
+    }
+    let mut all: Vec[Vec[i64]] = [];
+    paths(f, 0, [], mut all);
+    let mut sufficient = Vec.filled(f.val.len(), false);
+    for i in 0..f.val.len() {
+        for p in all.iter() {
+            if p.contains(i) {
+                let sum: i64 = p.iter().map(|k| f.val[k]).sum();
+                if sum >= limit {
+                    sufficient[i] = true;
+                }
+            }
+        }
+    }
+    // level order over the nodes that stay
+    let mut out: Vec[String] = [];
+    let mut queue: Vec[i64] = [if sufficient[0] { 0 } else { -1 }];
+    let mut head = 0;
+    while head < queue.len() {
+        let k = queue[head];
+        if k < 0 {
+            out.push("null");
+        } else {
+            out.push(f"{f.val[k]}");
+            for c in [f.left[k], f.right[k]] {
+                queue.push(if c >= 0 and sufficient[c] { c } else { -1 });
+            }
+        }
+        head += 1;
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// The sums of a tree's root-to-leaf paths, read off its text.
+fn path_sums(text: Str) -> Vec[i64] {
+    let f = flat(text);
+    if f.val.len() == 0 {
+        return [];
+    }
+    let mut all: Vec[Vec[i64]] = [];
+    paths(f, 0, [], mut all);
+    all.iter().map(|p| p.iter().map(|k| f.val[k]).sum()).collect()
+}
+
+// The root's value moved by `by`.
+fn root_moved(text: Str, by: i64) -> String {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return "[]";
+    }
+    let mut items: Vec[String] = inner.split(",").map(|s| s.to_string()).collect();
+    items[0] = f"{i64.parse(items[0]).unwrap() + by}";
+    f"[{items.join(",")}]"
+}
+
+fn random_tree(seed: mut ref i64, size: i64, spread: i64) -> String {
+    let root = leaf((next_random(mut seed) % (2 * spread + 1) - spread) as i32);
+    let mut nodes: Vec[TreeNode] = [root];
+    for _ in 1..size {
+        let child = leaf((next_random(mut seed) % (2 * spread + 1) - spread) as i32);
+        loop {
+            let parent = nodes[next_random(mut seed) % nodes.len()];
+            if next_random(mut seed) % 2 == 0 {
+                if parent.left.is_none() {
+                    parent.left = Some(child);
+                    break;
+                }
+            } else if parent.right.is_none() {
+                parent.right = Some(child);
+                break;
+            }
+        }
+        nodes.push(child);
+    }
+    written(Some(root))
+}
+
+struct Problem {
+    text: String,
+    limit: i64,
+    // P4's raise of the limit and P6's move of the root
+    raise: i64,
+    by: i64,
+}
+
+fn random_problem(seed: mut ref i64, size: i64, spread: i64) -> Problem {
+    let text = random_tree(mut seed, size, spread);
+    let sums = path_sums(text);
+    // a limit at a path's sum, one either side of it, or anywhere in the range
+    let pick = sums[next_random(mut seed) % sums.len()];
+    let limit = match next_random(mut seed) % 4 {
+        0 => pick,
+        1 => pick + 1,
+        2 => pick - 1,
+        _ => next_random(mut seed) % (4 * spread * size + 1) - 2 * spread * size,
+    };
+    let raise = next_random(mut seed) % 5 + 1;
+    let by = next_random(mut seed) % 21 - 10;
+    Problem { text: text, limit: limit, raise: raise, by: by }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let text = p.text.clone();
+    let limit = p.limit;
+    let want = literally(text, limit);
+    let sums = path_sums(text);
+    let least = sums.iter().min().unwrap();
+    let most = sums.iter().max().unwrap();
+    for w in 0..6 {
+        let answer = arm(w, text, limit);
+        let what = f"arm {w}, {text} limit {limit} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        // P2: every root-to-leaf path left sums to the limit at least
+        expect(mut t, 2, path_sums(answer).iter().all(|s| s >= limit), f"P2 {what}: a path left is short");
+        // P3: what is left, pruned again at the same limit, stays
+        let again = arm(w, answer, limit);
+        expect(mut t, 3, again == answer, f"P3 {what}: pruned again -> {again}");
+        // P4: a higher limit prunes what a lower one left to its own answer
+        let higher = arm(w, text, limit + p.raise);
+        let from_left = arm(w, answer, limit + p.raise);
+        expect(mut t, 4, from_left == higher, f"P4 {what}: at {limit + p.raise} from the tree {higher}, from what was left {from_left}");
+        // P5: a limit at the least path sum keeps the whole tree, and one
+        // past the greatest keeps nothing
+        let whole = arm(w, text, least);
+        let none = arm(w, text, most + 1);
+        expect(mut t, 5, whole == text and none == "[]", f"P5 {what}: at {least} -> {whole}, at {most + 1} -> {none}");
+        // P6: the root's value and the limit moved together leave the same
+        // nodes, the root moved
+        let moved = arm(w, root_moved(text, p.by), limit + p.by);
+        expect(mut t, 6, moved == root_moved(answer, p.by), f"P6 {what}: moved by {p.by} -> {moved}");
+    }
+    t.cases += 1;
+    t.check = fold(t.check, want);
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1000 trees of 1 to 12 nodes valued -3 to 3, and 1000
+    // of 1 to 28 nodes valued -10 to 10. Every choice is drawn before any
+    // arm answers.
+    let mut seed = 10801;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let p = if i < 1000 {
+            random_problem(mut seed, next_random(mut seed) % 12 + 1, 3)
+        } else {
+            random_problem(mut seed, next_random(mut seed) % 28 + 1, 10)
+        };
+        problems.push(p);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

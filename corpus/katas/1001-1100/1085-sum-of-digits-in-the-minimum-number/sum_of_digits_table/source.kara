@@ -1,0 +1,64 @@
+// LeetCode #1085: Sum of Digits in the Minimum Number -- the values
+// marked in a table of 1 to 100, the least found as the first place
+// marked, and its answer looked up in a second table made once of the
+// parity of every digit sum 1 to 100. O(n + 100).
+
+fn sum_of_digits(nums: Vec[i64]) -> i64 {
+    let mut seen = [false; 101];
+    for v in nums.iter() {
+        seen[v] = true;
+    }
+    let mut even = [0; 101];
+    for v in 1..=100 {
+        even[v] = 1 - (v / 100 + v / 10 % 10 + v % 10) % 2;
+    }
+    let mut least = 1;
+    while not seen[least] {
+        least += 1;
+    }
+    even[least]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases: Vec[Vec[i64]] = [
+        [34, 23, 1, 24, 75, 33, 54, 8],
+        [99, 77, 33, 66, 55],
+        [1],
+        [100],
+        [10, 100],
+        [19, 28, 37],
+        [100, 99, 98, 11],
+        [56, 65, 47],
+    ];
+    for nums in cases.iter() {
+        println(f"{nums} -> {sum_of_digits(nums)}");
+    }
+    // every single value 1 to 100: how many have an even digit sum
+    let mut even = 0;
+    for v in 1..=100 {
+        even += sum_of_digits([v]);
+    }
+    println(f"1 to 100 alone: {even} answer 1");
+    // 1000 random arrays of 1 to 100 values, each 1 to 100
+    let mut seed = 1085;
+    let mut ones = 0;
+    let mut h = 0;
+    for i in 0..1000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let mut nums: Vec[i64] = [];
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 100 + 1);
+        }
+        let a = sum_of_digits(nums);
+        ones += a;
+        h = (h * 31 + a + i) % 1000000007;
+    }
+    println(f"1000 random arrays: {ones} answer 1, checksum {h}");
+}

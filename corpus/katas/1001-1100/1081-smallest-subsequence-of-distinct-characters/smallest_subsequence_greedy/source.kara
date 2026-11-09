@@ -1,0 +1,94 @@
+// LeetCode #1081: Smallest Subsequence of Distinct Characters -- the
+// first letter decided, then the rest: it is the smallest letter whose
+// first place still has every distinct letter at or after it. What
+// follows is the smallest subsequence of the text after that place,
+// with that letter taken out. O(26^2 n).
+
+fn distinct(s: Str) -> i64 {
+    let mut seen: Set[char] = Set.new();
+    for c in s.chars() {
+        seen.insert(c);
+    }
+    seen.len()
+}
+
+fn smallest_subsequence(s: Str) -> String {
+    if s.is_empty() {
+        return String.new();
+    }
+    let want = distinct(s);
+    for b in b'a'..=b'z' {
+        let c = b as char;
+        if let Some(at) = s.find(c.to_string()) {
+            let rest = s.slice(at, s.len());
+            if distinct(rest) == want {
+                let after = rest.slice(1, rest.len()).replace(c.to_string(), "");
+                return f"{c}{smallest_subsequence(after)}";
+            }
+        }
+    }
+    panic("no letter starts the answer")
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n letters drawn from the first k of the alphabet.
+fn random_text(seed: mut ref i64, n: i64, k: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases = [
+        "bcabc",
+        "cbacdcbc",
+        "a",
+        "aaaa",
+        "abcabc",
+        "cba",
+        "bcac",
+        "leetcode",
+        "zyxzyxzyx",
+        "ecbacba",
+        "abacb",
+        "thesqtitxyetpxloeevdeqifkz",
+    ];
+    for s in cases.iter() {
+        println(f"{s} -> {smallest_subsequence(s)}");
+    }
+    // 300 random strings of 1 to 1000 letters over the first 1 to 26 letters
+    let mut seed = 1081;
+    let mut h = 0;
+    let mut total = 0;
+    for t in 0..300 {
+        let n = next_random(mut seed) % 1000 + 1;
+        let k = t % 26 + 1;
+        let out = smallest_subsequence(random_text(mut seed, n, k));
+        total += out.len();
+        h = fold(h, out);
+    }
+    println(f"300 random strings: {total} letters kept, checksum {h}");
+    // 1000 letters, the alphabet backwards over and over: each letter
+    // of the answer comes from a later run than the one before it
+    let mut long = String.new();
+    for i in 0..1000 {
+        long.push((b'z' - (i % 26) as u8) as char);
+    }
+    println(f"1000 letters, the alphabet backwards -> {smallest_subsequence(long)}");
+}

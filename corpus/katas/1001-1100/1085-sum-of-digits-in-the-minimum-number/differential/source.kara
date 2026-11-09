@@ -1,0 +1,236 @@
+// LeetCode #1085: Sum of Digits in the Minimum Number -- the
+// differential: the six arms against the statement read literally, under
+// six properties, over 9000 random problems drawn before any arm answers.
+
+// ---- sum_of_digits.kara ----
+
+fn star_arm(nums: Vec[i64]) -> i64 {
+    let mut least = nums[0];
+    for v in nums.iter() {
+        if v < least {
+            least = v;
+        }
+    }
+    let mut sum = 0;
+    while least > 0 {
+        sum += least % 10;
+        least /= 10;
+    }
+    if sum % 2 == 0 { 1 } else { 0 }
+}
+
+// ---- sum_of_digits_text.kara ----
+
+fn text_arm(nums: Vec[i64]) -> i64 {
+    let least = nums.iter().min().unwrap();
+    let sum: u32 = least.to_string().chars().map(|c| c.to_digit(10).unwrap()).sum();
+    1 - (sum % 2) as i64
+}
+
+// ---- sum_of_digits_sorted.kara ----
+
+fn sorted_digit_sum(v: i64) -> i64 {
+    if v < 10 { v } else { v % 10 + sorted_digit_sum(v / 10) }
+}
+
+fn sorted_arm(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    if sorted_digit_sum(sorted[0]) % 2 == 0 { 1 } else { 0 }
+}
+
+// ---- sum_of_digits_table.kara ----
+
+fn table_arm(nums: Vec[i64]) -> i64 {
+    let mut seen = [false; 101];
+    for v in nums.iter() {
+        seen[v] = true;
+    }
+    let mut even = [0; 101];
+    for v in 1..=100 {
+        even[v] = 1 - (v / 100 + v / 10 % 10 + v % 10) % 2;
+    }
+    let mut least = 1;
+    while not seen[least] {
+        least += 1;
+    }
+    even[least]
+}
+
+// ---- sum_of_digits_fold.kara ----
+
+fn fold_arm(nums: Vec[i64]) -> i64 {
+    let least = nums.iter().fold(i64.MAX, |m, v| m.min(v));
+    let digits: Vec[i64] = [least / 100, least / 10 % 10, least % 10];
+    let odd = digits.iter().filter(|d| d % 2 == 1).count();
+    if odd % 2 == 0 { 1 } else { 0 }
+}
+
+// ---- sum_of_digits_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn sum_of_digits(nums: Vec[i32]) -> i32 {
+        let mut m = *nums.iter().min().unwrap();
+        let mut s = 0;
+        while m > 0 {
+            s += m % 10;
+            m /= 10;
+        }
+        if s % 2 == 0 { 1 } else { 0 }
+    }
+}
+
+fn solution_arm(nums: Vec[i64]) -> i64 {
+    let v: Vec[i32] = nums.iter().map(|x| x as i32).collect();
+    Solution.sum_of_digits(v)
+}
+
+// ---- the harness ----------------------------------------------------------
+
+fn arm(which: i64, nums: Vec[i64]) -> i64 {
+    match which {
+        0 => star_arm(nums),
+        1 => text_arm(nums),
+        2 => sorted_arm(nums),
+        3 => table_arm(nums),
+        4 => fold_arm(nums),
+        _ => solution_arm(nums),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: the minimum is the value no other value
+// is below; its digits are the characters of its decimal text; the
+// answer is 0 when their sum is odd and 1 otherwise.
+fn least(nums: Vec[i64]) -> i64 {
+    for v in nums.iter() {
+        if nums.iter().all(|w| w >= v) {
+            return v;
+        }
+    }
+    panic("no least value")
+}
+
+fn literally(nums: Vec[i64]) -> i64 {
+    let mut sum = 0;
+    for b in f"{least(nums)}".bytes() {
+        sum += b - b'0';
+    }
+    if sum % 2 == 1 { 0 } else { 1 }
+}
+
+// The digits of v written the other way round: 1 to 100 into 1 to 99,
+// with the same digit sum (100 and 10 become 1).
+fn reversed(v: i64) -> i64 {
+    let mut v = v;
+    let mut r = 0;
+    while v > 0 {
+        r = r * 10 + v % 10;
+        v /= 10;
+    }
+    r
+}
+
+struct Problem {
+    nums: Vec[i64],
+    // a place to rotate at, and a value no smaller than the least
+    turn: i64,
+    above: i64,
+}
+
+fn random_problem(seed: mut ref i64, n: i64, low: i64) -> Problem {
+    let mut nums: Vec[i64] = [];
+    for _ in 0..n {
+        nums.push(low + next_random(mut seed) % (101 - low));
+    }
+    let turn = next_random(mut seed) % n;
+    let m = least(nums);
+    let above = m + next_random(mut seed) % (101 - m);
+    Problem { nums: nums, turn: turn, above: above }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let nums = p.nums.clone();
+    let want = literally(nums);
+    let m = least(nums);
+    let mut turned: Vec[i64] = nums.iter().skip(p.turn).collect();
+    turned.extend(nums.iter().take(p.turn));
+    let mut twice = nums.clone();
+    twice.extend(nums.iter());
+    let mut with_above = nums.clone();
+    with_above.push(p.above);
+    let mut with_reversed = nums.clone();
+    with_reversed.push(reversed(m));
+    for w in 0..6 {
+        let answer = arm(w, nums);
+        let what = f"arm {w}, {nums} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        // P2: the values turned round, or backwards, answer the same
+        let backwards: Vec[i64] = nums.iter().rev().collect();
+        let a2 = arm(w, turned);
+        let b2 = arm(w, backwards);
+        expect(mut t, 2, a2 == answer and b2 == answer, f"P2 {what}: turned at {p.turn} -> {a2}, backwards -> {b2}");
+        // P3: a value no smaller than the least, added, changes nothing
+        let a3 = arm(w, with_above);
+        expect(mut t, 3, a3 == answer, f"P3 {what}: with {p.above} -> {a3}");
+        // P4: every value twice answers the same
+        let a4 = arm(w, twice);
+        expect(mut t, 4, a4 == answer, f"P4 {what}: twice -> {a4}");
+        // P5: the least alone answers the same
+        let a5 = arm(w, [m]);
+        expect(mut t, 5, a5 == answer, f"P5 {what}: {m} alone -> {a5}");
+        // P6: the least's digits reversed, added, keep the digit sum of
+        // whichever is now least
+        let a6 = arm(w, with_reversed);
+        expect(mut t, 6, a6 == answer, f"P6 {what}: with {reversed(m)} -> {a6}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want + 2 * m) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 9000 problems: 3000 arrays of 1 to 5 values, 3000 of 1 to 100, and
+    // 3000 of 1 to 100 values no smaller than 1 to 100. Every choice is
+    // drawn before any arm answers.
+    let mut seed = 10851;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..9000 {
+        let n = if i < 3000 { next_random(mut seed) % 5 + 1 } else { next_random(mut seed) % 100 + 1 };
+        let low = if i < 6000 { 1 } else { next_random(mut seed) % 100 + 1 };
+        problems.push(random_problem(mut seed, n, low));
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

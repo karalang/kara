@@ -1,0 +1,62 @@
+// Benchmark: LeetCode #1081 Smallest Subsequence of Distinct Characters --
+// the ★ arm, a stack with a table of last places. 2000 random texts of
+// 1000 letters, LeetCode's longest, each over the first 1 to 26 letters,
+// are built once; every round answers each of them, in an order that
+// changes with the round. Mirrors smallest_subsequence.rs, .c, .py and
+// go-seq/.
+
+fn smallest_subsequence(s: Str) -> String {
+    let bytes = s.bytes();
+    let mut last = [0; 26];
+    for i in 0..bytes.len() {
+        last[bytes[i] - b'a'] = i;
+    }
+    let mut placed = [false; 26];
+    let mut stack: Vec[u8] = [];
+    for i in 0..bytes.len() {
+        let b = bytes[i];
+        if placed[b - b'a'] {
+            continue;
+        }
+        while let Some(top) = stack.last() {
+            if top > b and last[top - b'a'] > i {
+                placed[top - b'a'] = false;
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        stack.push(b);
+        placed[b - b'a'] = true;
+    }
+    String.from_utf8(stack).unwrap()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 100;
+    let mut seed = 1081;
+    let mut texts: Vec[String] = [];
+    for t in 0..2000 {
+        let k = t % 26 + 1;
+        let mut s = String.new();
+        for _ in 0..1000 {
+            s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+        }
+        texts.push(s);
+    }
+    let mut kept = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..2000 {
+            let out = smallest_subsequence(texts[(r * 7 + i) % 2000]);
+            kept += out.len();
+            check = (check * 31 + out.bytes()[out.len() / 2] + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 2000 texts of 1000 letters: {kept} letters kept, checksum {check}");
+}

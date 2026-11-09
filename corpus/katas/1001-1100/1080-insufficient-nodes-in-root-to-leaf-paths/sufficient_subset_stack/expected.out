@@ -1,0 +1,13 @@
+[1,2,3,4,-99,-99,7,8,9,-99,-99,12,13,-99,14] limit 1 -> [1,2,3,4,null,null,7,8,9,null,14]
+[5,4,8,11,null,17,4,7,1,null,null,5,3] limit 22 -> [5,4,8,11,null,17,4,7,null,null,null,5]
+[1,2,-3,-5,null,4,null] limit -1 -> [1,null,-3,4]
+[5] limit 5 -> [5]
+[5] limit 6 -> []
+[1,2,3] limit 4 -> [1,null,3]
+[1,2,3] limit 5 -> []
+[10,-5,null,-5] limit 0 -> [10,-5,null,-5]
+[10,-5,null,-5] limit 1 -> []
+[0,1,-1,null,null,2,null] limit 1 -> [0,1,-1,null,null,2]
+300 random trees: 291 keep their root, checksum 536429515
+a chain of 5000 at 5000 -> 34991 characters, same true
+a chain of 5000 at 5001 -> []

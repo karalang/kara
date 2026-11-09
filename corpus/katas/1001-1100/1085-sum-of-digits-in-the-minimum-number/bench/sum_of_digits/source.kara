@@ -1,0 +1,50 @@
+// Benchmark: LeetCode #1085 Sum of Digits in the Minimum Number -- the ★
+// arm, the least value in one pass and its digits summed. 2000 random
+// arrays of 100 values, LeetCode's largest, each value 1 to 100 and no
+// smaller than a floor drawn for the array, are built once; every round
+// answers each of them, in an order that changes with the round.
+// Mirrors sum_of_digits.rs, .c, .py and go-seq/.
+
+fn sum_of_digits(nums: Vec[i64]) -> i64 {
+    let mut least = nums[0];
+    for v in nums.iter() {
+        if v < least {
+            least = v;
+        }
+    }
+    let mut sum = 0;
+    while least > 0 {
+        sum += least % 10;
+        least /= 10;
+    }
+    if sum % 2 == 0 { 1 } else { 0 }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 5000;
+    let mut seed = 1085;
+    let mut arrays: Vec[Vec[i64]] = [];
+    for _ in 0..2000 {
+        let low = next_random(mut seed) % 100 + 1;
+        let mut nums: Vec[i64] = [];
+        for _ in 0..100 {
+            nums.push(low + next_random(mut seed) % (101 - low));
+        }
+        arrays.push(nums);
+    }
+    let mut ones = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..2000 {
+            let a = sum_of_digits(arrays[(r * 7 + i) % 2000]);
+            ones += a;
+            check = (check * 31 + a + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 2000 arrays of 100 values: {ones} answer 1, checksum {check}");
+}

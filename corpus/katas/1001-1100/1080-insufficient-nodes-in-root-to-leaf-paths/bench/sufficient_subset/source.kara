@@ -1,0 +1,108 @@
+// Benchmark: LeetCode #1080 Insufficient Nodes in Root to Leaf Paths --
+// the ★ arm, one walk down passing on what a path still has to make up.
+// 200 random tree shapes of 1000 nodes, values -100 to 100, are drawn
+// once as arrays; every round builds each tree afresh from its shape
+// (pruning cuts it apart), prunes it at a limit that changes with the
+// round and the tree, and counts what is left. Mirrors
+// sufficient_subset.rs, .c, .py and go-seq/.
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn prune(node: Option[TreeNode], need: i64) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            if n.left.is_none() and n.right.is_none() {
+                return if n.val >= need { Some(n) } else { None };
+            }
+            n.left = prune(n.left, need - n.val);
+            n.right = prune(n.right, need - n.val);
+            if n.left.is_none() and n.right.is_none() { None } else { Some(n) }
+        }
+    }
+}
+
+fn sufficient_subset(root: Option[TreeNode], limit: i64) -> Option[TreeNode] {
+    prune(root, limit)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree's shape: each node's value and its children's indices, -1 for
+// none. Node 0 is the root.
+struct Shape {
+    val: Vec[i32],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+// n nodes, each hung below the root by going left or right at random
+// down to the first empty place.
+fn random_shape(n: i64, seed: mut ref i64) -> Shape {
+    let mut s = Shape { val: [], left: [], right: [] };
+    for k in 0..n {
+        s.val.push((next_random(mut seed) % 201 - 100) as i32);
+        s.left.push(-1);
+        s.right.push(-1);
+        if k > 0 {
+            let mut at = 0;
+            loop {
+                if next_random(mut seed) % 2 == 0 {
+                    if s.left[at] < 0 {
+                        s.left[at] = k;
+                        break;
+                    }
+                    at = s.left[at];
+                } else {
+                    if s.right[at] < 0 {
+                        s.right[at] = k;
+                        break;
+                    }
+                    at = s.right[at];
+                }
+            }
+        }
+    }
+    s
+}
+
+fn build(s: Shape, k: i64) -> Option[TreeNode] {
+    if k < 0 {
+        return None;
+    }
+    Some(TreeNode { val: s.val[k], left: build(s, s.left[k]), right: build(s, s.right[k]) })
+}
+
+fn count(t: Option[TreeNode]) -> i64 {
+    match t {
+        None => 0,
+        Some(n) => 1 + count(n.left) + count(n.right),
+    }
+}
+
+fn main() {
+    let rounds = 100;
+    let mut seed = 1080;
+    let mut shapes: Vec[Shape] = [];
+    for _ in 0..200 {
+        shapes.push(random_shape(1000, mut seed));
+    }
+    let mut kept = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..200 {
+            let limit = (r * 37 + i * 11) % 401 - 200;
+            let k = count(sufficient_subset(build(shapes[i], 0), limit));
+            kept += k;
+            check = (check * 31 + k + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 200 trees of 1000 nodes: {kept} nodes kept, checksum {check}");
+}
