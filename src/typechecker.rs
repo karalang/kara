@@ -6059,7 +6059,17 @@ impl<'a> TypeChecker<'a> {
     ///
     /// All other unsupported pairs fall through to the generic
     /// `cannot cast` diagnostic.
-    fn check_cast_pair(&mut self, from_ty: &Type, to_ty: &Type, span: &Span) {
+    /// `fix_end`, when given, is where the operand's text ends: a cast the
+    /// checker can mend by inserting text there (`c as u8` to `c as u32 as
+    /// u8`, B-2026-11-09-18) carries that edit. `None` for an operand whose
+    /// span is not its text's, such as a cast (whose span is its operand's).
+    fn check_cast_pair(
+        &mut self,
+        from_ty: &Type,
+        to_ty: &Type,
+        span: &Span,
+        fix_end: Option<usize>,
+    ) {
         // Type::Error is a wildcard — silently accept; the original error
         // already surfaced elsewhere.
         if matches!(from_ty, Type::Error) || matches!(to_ty, Type::Error) {
@@ -6134,19 +6144,34 @@ impl<'a> TypeChecker<'a> {
                     return;
                 }
                 // Char → narrow integer: rejected with focused diagnostic.
-                self.type_error(
-                    format!(
-                        "error[E_CHAR_AS_NARROW_INT]: cannot cast `char` to \
-                         `{}` directly because the Unicode scalar range \
-                         (`0..=0x10FFFF`) does not fit in {width} bits; \
-                         help: `c as u32 as {}` for explicit truncation, or \
-                         `c.encode_utf8(buf)` for proper UTF-8 encoding",
-                        type_display(to_ty),
-                        type_display(to_ty)
-                    ),
-                    *span,
-                    TypeErrorKind::InvalidCast,
+                // The help's `c as u32 as uN` is Rust's meaning of `c as uN`
+                // (the low bits of the scalar value), so `karac fix` writes
+                // it when it knows where the operand ends (B-2026-11-09-18).
+                let message = format!(
+                    "error[E_CHAR_AS_NARROW_INT]: cannot cast `char` to \
+                     `{}` directly because the Unicode scalar range \
+                     (`0..=0x10FFFF`) does not fit in {width} bits; \
+                     help: `c as u32 as {}` for explicit truncation, or \
+                     `c.encode_utf8(buf)` for proper UTF-8 encoding",
+                    type_display(to_ty),
+                    type_display(to_ty)
                 );
+                match fix_end {
+                    Some(end) => self.type_error_with_fix_it(
+                        message,
+                        *span,
+                        TypeErrorKind::InvalidCast,
+                        FixIt {
+                            span: Span {
+                                offset: end,
+                                length: 0,
+                                ..*span
+                            },
+                            replacement: " as u32".to_string(),
+                        },
+                    ),
+                    None => self.type_error(message, *span, TypeErrorKind::InvalidCast),
+                }
                 return;
             }
         }
@@ -6291,7 +6316,7 @@ impl<'a> TypeChecker<'a> {
         // prohibition so that rule keeps firing. One peel level.
         if let Type::Ref(inner) | Type::MutRef(inner) = from_ty {
             if Self::scalar_reads_as_value(inner) {
-                return self.check_cast_pair(&inner.clone(), to_ty, span);
+                return self.check_cast_pair(&inner.clone(), to_ty, span, fix_end);
             }
         }
 

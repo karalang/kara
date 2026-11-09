@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 200 |
+| diagnostics | 201 |
 | false-positive | 163 |
 | perf | 138 |
 | missing-feature | 113 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 315 |
+| typecheck | 316 |
 | mir-llvm | 172 |
 | mir | 147 |
 | cli | 89 |
@@ -120,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-14 | 2026-11-09 | typecheck+cli | medium | Rust's `binary_search` taken apart as a `Result` has no fix: `xs.binary_search(&v).unwrap_or_else(|x| x)` is refused with "expected 'OnceFn() -> i64', found 'Fn(?T) -> ?T'" and `match xs.binary_search(&v) { Ok(i) => .., Err(i) => .. }` with a generic pattern error, though Kāra's `binary_search` returns `Option[i64]` and `partition_point(|y| y < v)` is the insertion point | — |
 | B-2026-11-09-15 | 2026-11-09 | typecheck+cli | low | A defaulted `i64` literal that reaches a narrower slot through a collection (`let mut a = 0; a += nums[i]; left[k].push(a)`, then `best.min(x + ..)` for `x` in `left[k]`, `best: i32`) is refused at the `min` with no edit; the fix is `a: i32` at the binding, two hops away | — |
 | B-2026-11-09-17 | 2026-11-09 | typecheck | low | `.slice(a, b)` on a `Vec`, an array or a slice (JavaScript's spelling of a run of elements) gets a bare "no method 'slice' on type 'Vec'", with no pointer to the range index `v[a..b]` and nothing for `karac fix` to apply | — |
+| B-2026-11-09-18 | 2026-11-09 | typecheck | low | `c as u8` on a `char` (LeetCode's Rust template for 1079, `count[(c as u8 - b'A') as usize]`) is refused with a help naming `c as u32 as u8` but no machine fix, so `karac fix` stops the template there | — |
 
 ### Relocated
 

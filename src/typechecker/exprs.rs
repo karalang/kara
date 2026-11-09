@@ -13606,7 +13606,13 @@ impl<'a> super::TypeChecker<'a> {
                             },
                         );
                     }
-                    _ => self.check_cast_pair(&from_ty, &to_ty, &inner.span),
+                    _ => {
+                        // A cast's span is its operand's (see below), so
+                        // its text's end is not known here.
+                        let fix_end = (!matches!(inner.kind, ExprKind::Cast { .. }))
+                            .then(|| inner.span.offset + inner.span.length);
+                        self.check_cast_pair(&from_ty, &to_ty, &inner.span, fix_end)
+                    }
                 }
                 let expected = self
                     .pending_cast_expected
