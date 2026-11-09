@@ -852,7 +852,16 @@ impl<'a> super::TypeChecker<'a> {
                 // narrower argument: the fix is the literal's type, at its
                 // binding (B-2026-11-08-53).
                 let resolved_arg = self.resolved_now(&arg_ty);
-                match self.literal_let_annotation(object, receiver_for_lookup, &resolved_arg) {
+                // An argument whose literal kept the default beside a
+                // narrower receiver (`best.min(a + nums[i])`, `best: i32`,
+                // `let mut a = 0`): the same fix, at the argument's binding
+                // (kata 2035).
+                let annotation = self
+                    .literal_let_annotation(object, receiver_for_lookup, &resolved_arg)
+                    .or_else(|| {
+                        self.literal_let_annotation(arg, &resolved_arg, receiver_for_lookup)
+                    });
+                match annotation {
                     Some((_, fix, why)) => self.type_error_with_fix_it(
                         format!("{message}: {why}"),
                         arg.span,

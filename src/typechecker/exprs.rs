@@ -10504,6 +10504,9 @@ impl<'a> super::TypeChecker<'a> {
                     names(left, out);
                     names(right, out);
                 }
+                // `(total - a).abs()`: a numeric method keeps its
+                // receiver's type.
+                ExprKind::MethodCall { object, .. } => names(object, out),
                 _ => {}
             }
         }
