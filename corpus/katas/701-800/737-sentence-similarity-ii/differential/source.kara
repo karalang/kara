@@ -40,8 +40,8 @@ fn are_sentences_similar_two_star(sentence1: Vec[String], sentence2: Vec[String]
     let mut parent: Vec[i64] = Vec.new();
     let mut size: Vec[i64] = Vec.new();
     for p in pairs.iter() {
-        let a = number_star(mut ids, mut parent, mut size, p.0.clone());
-        let b = number_star(mut ids, mut parent, mut size, p.1.clone());
+        let a = number_star(mut ids, mut parent, mut size, p.0);
+        let b = number_star(mut ids, mut parent, mut size, p.1);
         let ra = find_star(mut parent, a);
         let rb = find_star(mut parent, b);
         if ra != rb {
@@ -58,13 +58,13 @@ fn are_sentences_similar_two_star(sentence1: Vec[String], sentence2: Vec[String]
         if sentence1[i] == sentence2[i] {
             continue;
         }
-        let a = match ids.get(sentence1[i].clone()) {
+        let a = match ids.get(sentence1[i]) {
             Some(k) => *k,
             None => {
                 return false;
             }
         };
-        let b = match ids.get(sentence2[i].clone()) {
+        let b = match ids.get(sentence2[i]) {
             Some(k) => *k,
             None => {
                 return false;
