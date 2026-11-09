@@ -788,7 +788,21 @@ impl<'ctx> Cx<'ctx, '_> {
                 let untested = dest.projection.is_empty()
                     && self.untested.get(dest.local.index()) == Some(&true)
                     && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul);
-                let (v, o) = if by_length {
+                let unsigned = matches!(op, BinOp::Div | BinOp::Rem)
+                    && dest.projection.is_empty()
+                    && self.unsigned_div.get(dest.local.index()) == Some(&true);
+                let (v, o) = if unsigned {
+                    // The ranges show the dividend `>= 0` and the divisor
+                    // `>= 1`: the unsigned operation gives the same value,
+                    // and a power of two makes it a shift or a mask.
+                    let b = &self.builder;
+                    let v = match op {
+                        BinOp::Div => b.build_int_unsigned_div(x, y, ""),
+                        _ => b.build_int_unsigned_rem(x, y, ""),
+                    }
+                    .map_err(e)?;
+                    (v, self.llcx.bool_type().const_zero())
+                } else if by_length {
                     // A length is `>= 0`, and the zero check is the MIR's
                     // own, before this: nothing can overflow.
                     let v = self.binop(*op, at, x.into(), y.into())?.into_int_value();

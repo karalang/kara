@@ -336,6 +336,9 @@ pub struct Cx<'ctx, 'p> {
     /// The locals of the body being lowered that hold a checked result no
     /// one tests ([`crate::mir::range_bounds::untested_checks`]).
     untested: Vec<bool>,
+    /// The locals holding a division the ranges show can be unsigned
+    /// ([`crate::mir::range_bounds::unsigned_divisions`]).
+    unsigned_div: Vec<bool>,
     /// The binary carries the runtime debug metadata (design.md §
     /// Debugger contract, B-2026-11-05-34): every build but `--release`,
     /// which sets `KARAC_STRIP_DEBUG_METADATA`.
@@ -391,6 +394,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             upper_proven: false,
             lengths: Vec::new(),
             untested: Vec::new(),
+            unsigned_div: Vec::new(),
             hot_swap_calls: Vec::new(),
             debug_meta: !matches!(
                 std::env::var("KARAC_STRIP_DEBUG_METADATA").as_deref(),
@@ -1685,6 +1689,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             crate::mir::guard_bounds::length_locals(body, |n| !program.bodies.contains_key(n))
         };
         self.untested = crate::mir::range_bounds::untested_checks(body);
+        // `KARAC_MIR_UNSIGNED_DIV=0` divides as the types say.
+        self.unsigned_div = if std::env::var("KARAC_MIR_UNSIGNED_DIV").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            crate::mir::range_bounds::unsigned_divisions(body, self.tys)
+        };
         // `KARAC_MIR_GUARD_BOUNDS=0` checks every index in full.
         let proven = if std::env::var("KARAC_MIR_GUARD_BOUNDS").as_deref() == Ok("0") {
             Vec::new()

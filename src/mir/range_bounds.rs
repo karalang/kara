@@ -327,6 +327,50 @@ pub fn untested_checks(body: &Body) -> Vec<bool> {
     checked
 }
 
+/// The locals of `body` that each hold a division or remainder (checked
+/// or not) whose dividend the ranges show is never negative and whose
+/// divisor is at least 1, at every assignment. Codegen divides them
+/// unsigned, which a power of two makes a shift or a mask: kata 540's
+/// `(low + high) / 2` and `mid % 2` over indices its loop keeps
+/// non-negative took a signed division's sign fix-up each, 3 more
+/// instructions a step than Rust's `usize` (B-2026-11-08-72).
+pub fn unsigned_divisions(body: &Body, tys: &TyInterner) -> Vec<bool> {
+    let n = body.locals.len();
+    let (mut yes, mut no) = (vec![false; n], vec![false; n]);
+    let solved = Analysis::new(body, tys, false).and_then(|a| a.solve().map(|outs| (a, outs)));
+    for (bi, b) in body.blocks.iter().enumerate() {
+        let mut st = solved
+            .as_ref()
+            .and_then(|(a, outs)| a.incoming(bi, outs, None));
+        for s in &b.statements {
+            let StatementKind::Assign(p, rv) = &s.kind else {
+                continue;
+            };
+            if let Rvalue::CheckedBinaryOp(BinOp::Div | BinOp::Rem, x, y)
+            | Rvalue::BinaryOp(BinOp::Div | BinOp::Rem, x, y) = rv
+            {
+                let ok = p.projection.is_empty()
+                    && match (&solved, &st) {
+                        (Some((a, _)), Some(st)) => matches!(
+                            (a.operand(st, x), a.operand(st, y)),
+                            (Some((ix, _)), Some((iy, _))) if ix.lo >= 0 && iy.lo >= 1
+                        ),
+                        _ => false,
+                    };
+                if ok {
+                    yes[p.local.index()] = true;
+                } else {
+                    no[p.local.index()] = true;
+                }
+            }
+            if let (Some((a, _)), Some(st)) = (&solved, &mut st) {
+                a.assign(st, p, rv);
+            }
+        }
+    }
+    yes.iter().zip(&no).map(|(y, n)| *y && !n).collect()
+}
+
 fn fn_name(func: &Operand) -> Option<&str> {
     match func {
         Operand::Const(Const {
