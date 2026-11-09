@@ -8831,6 +8831,14 @@ impl<'a> TypeChecker<'a> {
         // B-2026-10-23-12 — the two types differ only in a number nested in
         // them, which nothing converts: say where the type has to be given.
         if let Some(msg) = nested_numeric_mismatch_message(expected, found) {
+            // `Vec[Vec[usize]]` for a `Vec[Vec[i64]]` is a `usize` meeting
+            // the `i64` an index is: the written `usize` gets its fix to
+            // `i64` (kata 2049's Rust arm, `children: &Vec<Vec<usize>>`).
+            let peel = |t: &Type| match t {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref().clone(),
+                t => t.clone(),
+            };
+            self.note_pointer_int_mix_within(&peel(expected), &peel(found));
             self.type_error_with_types(msg, span, TypeErrorKind::TypeMismatch, expected, found);
             return false;
         }
