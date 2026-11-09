@@ -4175,12 +4175,18 @@ thread_local! {
 
 /// Queues the `size` bytes at `v`: 0 when queued, 1 when the channel is
 /// full, 2 when no receiver is left and 3 when an armed send found it full
-/// (`v` is then left to the caller).
+/// (`v` is then left to the caller). A null `h` is a `BoundedChannel {
+/// handle_id: 0 }` written by hand, not made by `new`: it fails closed,
+/// refusing as full (bounded_channel.kara; B-2026-11-09-78).
 ///
 /// # Safety
-/// `h` is a live channel; `v` is readable for its `size` bytes.
+/// `h` is null or a live channel; `v` is readable for its `size` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_chan_send(h: *mut MirChan, v: *const u8) -> i32 {
+    if h.is_null() {
+        CHAN_ARMED.with(|a| a.set(false));
+        return 1;
+    }
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
     let armed = CHAN_ARMED.with(|a| a.replace(false));
@@ -4204,12 +4210,16 @@ pub unsafe extern "C" fn karac_mir_chan_send(h: *mut MirChan, v: *const u8) -> i
 /// Whether a `recv` (`send` 0) or a `send` on `h` can complete now: a
 /// value is queued or no sender is left, or there is room or no receiver
 /// is left (a `BoundedChannel` refuses at once when full, so its send is
-/// always ready).
+/// always ready). A null `h` (a hand-rolled `BoundedChannel`) is ready,
+/// its call answering at once.
 ///
 /// # Safety
-/// `h` is a live channel.
+/// `h` is null or a live channel.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_chan_ready(h: *mut MirChan, send: u8) -> u8 {
+    if h.is_null() {
+        return 1;
+    }
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
     let s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
@@ -4227,12 +4237,17 @@ pub unsafe extern "C" fn karac_mir_chan_ready(h: *mut MirChan, send: u8) -> u8 {
 
 /// Moves the oldest value to `out`: 1 when there was one, else 0, or 2
 /// when an armed recv found the channel empty with a sender left (`out`
-/// is then untouched).
+/// is then untouched). A null `h` (a hand-rolled `BoundedChannel`) holds
+/// nothing.
 ///
 /// # Safety
-/// `h` is a live channel; `out` is writable for its `size` bytes.
+/// `h` is null or a live channel; `out` is writable for its `size` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_chan_recv(h: *mut MirChan, out: *mut u8) -> u8 {
+    if h.is_null() {
+        CHAN_ARMED.with(|a| a.set(false));
+        return 0;
+    }
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
     let armed = CHAN_ARMED.with(|a| a.replace(false));
@@ -4252,24 +4267,31 @@ pub unsafe extern "C" fn karac_mir_chan_recv(h: *mut MirChan, out: *mut u8) -> u
     }
 }
 
-/// Whether every sender of `h` is gone, for a `select`'s receive arm.
+/// Whether every sender of `h` is gone, for a `select`'s receive arm; a
+/// null `h` has none.
 ///
 /// # Safety
-/// `h` is a live channel.
+/// `h` is null or a live channel.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_chan_closed(h: *mut MirChan) -> u8 {
+    if h.is_null() {
+        return 1;
+    }
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
     let s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
     u8::from(s.senders == 0)
 }
 
-/// Another end of the kind `sender` names.
+/// Another end of the kind `sender` names; a null `h` stays null.
 ///
 /// # Safety
-/// `h` is a live channel.
+/// `h` is null or a live channel.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_chan_clone(h: *mut MirChan, sender: u8) -> *mut MirChan {
+    if h.is_null() {
+        return h;
+    }
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
     let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
@@ -4748,6 +4770,30 @@ pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
 
 #[cfg(test)]
 mod tests {
+    /// A null channel, a `BoundedChannel { handle_id: 0 }` written by
+    /// hand, fails closed: a send is refused as full, a recv finds nothing,
+    /// and its end, clone and readiness touch nothing (B-2026-11-09-78).
+    #[test]
+    fn null_channel_fails_closed() {
+        let h: *mut super::MirChan = std::ptr::null_mut();
+        let v = 7i64;
+        let mut out = 0i64;
+        // SAFETY: each call accepts a null channel.
+        unsafe {
+            assert_eq!(super::karac_mir_chan_send(h, (&v as *const i64).cast()), 1);
+            assert_eq!(
+                super::karac_mir_chan_recv(h, (&mut out as *mut i64).cast()),
+                0
+            );
+            assert_eq!(super::karac_mir_chan_ready(h, 0), 1);
+            assert_eq!(super::karac_mir_chan_closed(h), 1);
+            assert!(super::karac_mir_chan_clone(h, 1).is_null());
+            super::karac_mir_chan_end(h, 1);
+            super::karac_mir_chan_end(h, 0);
+        }
+        assert_eq!(out, 0);
+    }
+
     /// Random pushes and pops at both ends agree with `std`'s `VecDeque`,
     /// with 1-, 8- and 24-byte elements, so the ring wraps and grows from
     /// every head position (the growth copies the two runs of a wrapped
