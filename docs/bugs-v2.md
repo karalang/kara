@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 56 |
 | miscompile | 51 |
 | run-vs-build | 30 |
-| other | 26 |
+| other | 27 |
 | codegen-gap | 26 |
 | crash | 22 |
 | leak | 4 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 344 |
 | mir-llvm | 184 |
 | mir | 161 |
-| cli | 93 |
+| cli | 94 |
 | ownership | 67 |
 | parser | 56 |
 | interp | 44 |
@@ -985,6 +985,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-75 | typecheck+mir-llvm | high | `chain` accepts items of another numeric width or kind: `Vec[f64]` chained with `Vec[i64]` builds and prints `[1.5, 5e-324]`; `Vec[i32]` with `Vec[i6… | 7c40eb7a02 |
 | B-2026-11-09-76 | mir | medium | A program declaring its own `struct F64` or `struct F32` fails to build: `typecheck: 3694:5: no associated function 'from' on type 'F64'` from the li… | 7c40eb7a02 |
 | B-2026-11-09-77 | interp | low | A hand-rolled `BoundedChannel { handle_id: 0 }` stops the interpreter (`BoundedChannel[i64].send of a channel never made`) instead of failing closed… | 7c40eb7a02 |
+| B-2026-11-09-81 | cli | medium | A `let` after a `#[derive]`d type had no hover type and no inlay hint: derived items were spliced in numbered from 0, so lowering's renumbering moved… | b6179e77bc |
 
 </details>
 
