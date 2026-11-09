@@ -1,0 +1,22 @@
+//! `File.write_all` (B-2026-11-09-70). Appended to a program that calls a
+//! `write_all` (`BAKED_SOURCES` in src/mir/lower.rs), as `std.net` is; the
+//! rest of `File` is native (runtime/stdlib/io.kara).
+
+impl File {
+    // Every byte of `buf`, by `write` until none is left: a partial write
+    // goes round again, and so does `Interrupted`. A write that takes no
+    // bytes is `Other("failed to write whole buffer")`, Rust's `write_all`
+    // error.
+    fn write_all(ref self, buf: Slice[u8]) -> Result[(), IoError] with writes(FileSystem) blocks {
+        let mut done = 0;
+        while done < buf.len() {
+            match self.write(buf[done..buf.len()]) {
+                Ok(0) => return Err(IoError.Other("failed to write whole buffer".to_string())),
+                Ok(n) => done = done + n,
+                Err(IoError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+}

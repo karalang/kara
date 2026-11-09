@@ -1,0 +1,163 @@
+config: 8 endpoints, 0 errors
+  api-health http 3 conditions, alert after 2 failures, resolve after 2
+  orders http 3 conditions, alert after 3 failures, resolve after 2
+  flaky http 1 conditions, alert after 3 failures, resolve after 2
+  slow http 2 conditions, alert after 3 failures, resolve after 2
+  hang http 1 conditions, alert after 2 failures, resolve after 2
+  login http 2 conditions, alert after 3 failures, resolve after 2
+  cache tcp 2 conditions, alert after 2 failures, resolve after 2
+  docs http 1 conditions, alert after 3 failures, resolve after 2 (disabled)
+== self-test: conditions
+  true: [STATUS] (200) == 200
+  false: [STATUS] (200) != 200
+  true: [STATUS] (200) < 300
+  true: [RESPONSE_TIME] (120) <= 120
+  false: [RESPONSE_TIME] (120) > 500
+  true: [BODY].status (UP) == UP
+  true: [BODY].items[0].id (17) == 17
+  false: [BODY].items[1].state (missing) == shipped
+  false: [BODY].items[5].id (missing) == 1
+  true: len([BODY].items) (2) == 2
+  true: len([BODY].status) (2) == 2
+  true: [BODY].n (2.5) == 2.5
+  true: [BODY].ok (true) == true
+  true: [BODY] ({"status":"UP","items...) == pat(*"UP"*)
+  false: [BODY] ({"status":"UP","items...) == pat(*DOWN*)
+  true: [CONNECTED] (true) == true
+  false: [STATUS] ~ 200 (unparsable)
+== self-test: config errors
+  2 endpoints, 8 errors
+  line 2: a: unsupported url ftp://x
+  line 3: a: condition has no operator: [STATUS] 200
+  line 4: a: unknown key retries
+  line 7: b: bad timeout soon
+  line 8: b: failure-threshold must be a positive number
+  line 10: bad section [endpoint c
+  line 11: expected key = value
+  a: no conditions
+== self-test: http checks against a fake network and clock
+  health: pass
+  health under 100ms: fail: [RESPONSE_TIME] (120) < 100
+  flaky: fail: [STATUS] (503) == 200
+  login (no page): fail: [STATUS] (0) == 200; [BODY] () == pat(*Sign in*)
+    error: http://127.0.0.1:47751/login: connection refused
+  cache: fail: [BODY] () == +PONG
+    error: set timeout: unsupported
+== self-test: state files against a fake file system
+  missing config: not found
+  config from fake fs: 8 endpoints, 0 errors
+  saved state
+  loaded round 5: flaky failures 3 triggered true, 2/5 passed
+  temp file left: false
+  full disk: no space left on device
+  full disk: state still at round 4
+servers up: true
+== round 1
+  api-health ok
+  orders     ok
+  flaky      ok
+  slow       ok
+  hang       ok
+  login      ok
+  cache      ok
+== round 2
+  api-health ok
+  orders     ok
+  flaky      ok
+  slow       ok
+  hang       ok
+  login      ok
+  cache      ok
+== round 3
+  api-health ok
+  orders     ok
+  flaky      FAIL [STATUS] (0) == 200
+             error: http://127.0.0.1:47751/flaky: status code 503
+  slow       FAIL [RESPONSE_TIME] (~1s) < 800
+  hang       ok
+  login      ok
+  cache      ok
+== round 4
+  api-health ok
+  orders     ok
+  flaky      FAIL [STATUS] (0) == 200
+             error: http://127.0.0.1:47751/flaky: status code 503
+  slow       FAIL [RESPONSE_TIME] (~1s) < 800
+  hang       ok
+  login      ok
+  cache      FAIL [CONNECTED] (false) == true; [BODY] () == +PONG
+             error: read: timed out
+== round 5
+  api-health ok
+  orders     ok
+  flaky      FAIL [STATUS] (0) == 200
+             error: http://127.0.0.1:47751/flaky: status code 503
+  ** TRIGGERED flaky after 3 failures: [STATUS] (0) == 200
+  slow       ok
+  hang       FAIL [CONNECTED] (false) == true
+             error: http://127.0.0.1:47751/hang: request timed out after 300 ms
+  login      ok
+  cache      FAIL [CONNECTED] (false) == true; [BODY] () == +PONG
+             error: read: timed out
+  ** TRIGGERED cache after 2 failures: [CONNECTED] (false) == true
+== round 6
+  api-health ok
+  orders     FAIL [BODY].items[0].state (failed) != failed
+  flaky      ok
+  slow       ok
+  hang       FAIL [CONNECTED] (false) == true
+             error: http://127.0.0.1:47751/hang: request timed out after 300 ms
+  ** TRIGGERED hang after 2 failures: [CONNECTED] (false) == true
+  login      ok
+  cache      ok
+== round 7
+  api-health ok
+  orders     ok
+  flaky      ok
+  ** RESOLVED flaky after 2 successes
+  slow       ok
+  hang       ok
+  login      FAIL [STATUS] (0) == 200; [BODY] () == pat(*Sign in*)
+             error: http://127.0.0.1:47751/login: status code 500
+  cache      ok
+  ** RESOLVED cache after 2 successes
+== round 8
+  api-health ok
+  orders     ok
+  flaky      ok
+  slow       ok
+  hang       ok
+  ** RESOLVED hang after 2 successes
+  login      ok
+  cache      FAIL [BODY] (-ERR loading) == +PONG
+== restart
+  resumed after round 8
+  cache: 1 failures in a row, triggered false
+== round 9
+  api-health ok
+  orders     ok
+  flaky      ok
+  slow       ok
+  hang       ok
+  login      ok
+  cache      FAIL [BODY] (-ERR loading) == +PONG
+  ** TRIGGERED cache after 2 failures: [BODY] (-ERR loading) == +PONG
+== incidents
+  round 5 TRIGGERED flaky after 3 failures: [STATUS] (0) == 200
+  round 5 TRIGGERED cache after 2 failures: [CONNECTED] (false) == true
+  round 6 TRIGGERED hang after 2 failures: [CONNECTED] (false) == true
+  round 7 RESOLVED flaky after 2 successes
+  round 7 RESOLVED cache after 2 successes
+  round 8 RESOLVED hang after 2 successes
+  round 9 TRIGGERED cache after 2 failures: [BODY] (-ERR loading) == +PONG
+== uptime
+  api-health 9/9 100.0%
+  orders     8/9 88.9%
+  flaky      6/9 66.7%
+  slow       7/9 77.8%
+  hang       7/9 77.8%
+  login      8/9 88.9%
+  cache      5/9 55.6%
+  docs       no checks
+state file: 10 lines, temp left false
+done

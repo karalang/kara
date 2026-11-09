@@ -1,0 +1,989 @@
+// uptime_monitor: an endpoint monitor in the shape of Gatus. It reads a
+// config of HTTP and TCP endpoints, each with conditions on the status,
+// the body, the response time and the connection, checks them in rounds,
+// triggers and resolves alerts on failure and success thresholds, appends
+// incidents to a log and keeps its state in a file it replaces atomically,
+// so a restart resumes the streaks. Its logic is tested first against fake
+// Network, Clock and FileSystem providers, then run against real servers
+// on loopback.
+
+import std.sync.{TaskGroup, Atomic, Mutex};
+import std.time.{Duration, Instant, sleep};
+import std.json.{Json};
+
+const HTTP_ADDR: Str = "127.0.0.1:47751";
+const TCP_ADDR: Str = "127.0.0.1:47752";
+const ROOT: Str = "uptime_data";
+
+const CONFIG: Str = "# endpoints watched by the uptime monitor
+[endpoint api-health]
+url = http://127.0.0.1:47751/health
+condition = [STATUS] == 200
+condition = [BODY].status == UP
+condition = [RESPONSE_TIME] < 1000
+failure-threshold = 2
+
+[endpoint orders]
+url = http://127.0.0.1:47751/orders
+condition = [STATUS] == 200
+condition = len([BODY].items) >= 2
+condition = [BODY].items[0].state != failed
+
+[endpoint flaky]
+url = http://127.0.0.1:47751/flaky
+condition = [STATUS] == 200
+failure-threshold = 3
+success-threshold = 2
+
+[endpoint slow]
+url = http://127.0.0.1:47751/slow
+condition = [STATUS] == 200
+condition = [RESPONSE_TIME] < 800
+
+[endpoint hang]
+url = http://127.0.0.1:47751/hang
+timeout = 300ms
+condition = [CONNECTED] == true
+failure-threshold = 2
+
+[endpoint login]
+url = http://127.0.0.1:47751/login
+condition = [STATUS] == 200
+condition = [BODY] == pat(*Sign in*)
+
+[endpoint cache]
+url = tcp://127.0.0.1:47752
+send = PING
+timeout = 300ms
+condition = [CONNECTED] == true
+condition = [BODY] == +PONG
+failure-threshold = 2
+
+[endpoint docs]
+url = http://127.0.0.1:47751/docs
+enabled = false
+condition = [STATUS] == 200
+";
+
+// ---------------------------------------------------------------- config
+
+enum Kind { Http, Tcp }
+
+#[derive(Clone)]
+struct Endpoint {
+    name: String,
+    kind: Kind,
+    url: String,
+    send: String,
+    timeout_ms: i64,
+    conditions: Vec[String],
+    failure_threshold: i64,
+    success_threshold: i64,
+    enabled: bool,
+}
+
+fn new_endpoint(name: Str) -> Endpoint {
+    Endpoint {
+        name: name.to_string(),
+        kind: Kind.Http,
+        url: String.new(),
+        send: String.new(),
+        timeout_ms: 5000,
+        conditions: Vec.new(),
+        failure_threshold: 3,
+        success_threshold: 2,
+        enabled: true,
+    }
+}
+
+// "300ms", "2s" or a bare number of milliseconds.
+fn parse_duration(text: Str) -> Option[i64] {
+    if let Some(n) = text.strip_suffix("ms") {
+        return i64.parse(n).ok();
+    }
+    if let Some(n) = text.strip_suffix("s") {
+        return i64.parse(n).ok().map(|s| s * 1000);
+    }
+    i64.parse(text).ok()
+}
+
+const OPERATORS: Array[Str, 6] = ["==", "!=", "<=", ">=", "<", ">"];
+
+// A condition is `left op right` with spaces around the operator.
+fn split_condition(text: Str) -> Option[(Str, Str, Str)] {
+    for op in OPERATORS.iter() {
+        if let Some((l, r)) = text.split_once(f" {op} ") {
+            return Some((l.trim(), *op, r.trim()));
+        }
+    }
+    None
+}
+
+fn parse_config(text: Str) -> (Vec[Endpoint], Vec[String]) {
+    let mut eps: Vec[Endpoint] = Vec.new();
+    let mut errors: Vec[String] = Vec.new();
+    let mut line_no = 0;
+    for raw in text.lines() {
+        line_no += 1;
+        let line = raw.trim();
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        if line.starts_with("[") {
+            match line.strip_prefix("[endpoint ").and_then(|r| r.strip_suffix("]")) {
+                Some(name) => eps.push(new_endpoint(name.trim())),
+                None => errors.push(f"line {line_no}: bad section {line}"),
+            }
+            continue;
+        }
+        let (key, value) = match line.split_once("=") {
+            Some((k, v)) => (k.trim(), v.trim()),
+            None => {
+                errors.push(f"line {line_no}: expected key = value");
+                continue;
+            }
+        };
+        if eps.is_empty() {
+            errors.push(f"line {line_no}: {key} outside an endpoint");
+            continue;
+        }
+        let last = eps.len() - 1;
+        let ep = mut ref eps[last];
+        match key {
+            "url" => {
+                if value.starts_with("tcp://") {
+                    ep.kind = Kind.Tcp;
+                } else if not value.starts_with("http://") and not value.starts_with("https://") {
+                    errors.push(f"line {line_no}: {ep.name}: unsupported url {value}");
+                }
+                ep.url = value.to_string();
+            }
+            "send" => ep.send = value.to_string(),
+            "timeout" => match parse_duration(value) {
+                Some(ms) => ep.timeout_ms = ms,
+                None => errors.push(f"line {line_no}: {ep.name}: bad timeout {value}"),
+            },
+            "condition" => {
+                if split_condition(value).is_none() {
+                    errors.push(f"line {line_no}: {ep.name}: condition has no operator: {value}");
+                } else {
+                    ep.conditions.push(value.to_string());
+                }
+            }
+            "failure-threshold" | "success-threshold" => match i64.parse(value) {
+                Ok(n) if n >= 1 => {
+                    if key == "failure-threshold" {
+                        ep.failure_threshold = n;
+                    } else {
+                        ep.success_threshold = n;
+                    }
+                }
+                _ => errors.push(f"line {line_no}: {ep.name}: {key} must be a positive number"),
+            },
+            "enabled" => ep.enabled = value == "true",
+            _ => errors.push(f"line {line_no}: {ep.name}: unknown key {key}"),
+        }
+    }
+    for ep in eps.iter() {
+        if ep.url.is_empty() {
+            errors.push(f"{ep.name}: no url");
+        }
+        if ep.conditions.is_empty() {
+            errors.push(f"{ep.name}: no conditions");
+        }
+    }
+    (eps, errors)
+}
+
+// ------------------------------------------------------------ conditions
+
+// What one check observed.
+struct Outcome {
+    connected: bool,
+    status: i64,
+    body: String,
+    ms: i64,
+    error: String,
+}
+
+fn json_text(v: ref Json) -> String {
+    match v {
+        Json.String(s) => s.clone(),
+        Json.Int(n) => f"{n}",
+        Json.Number(x) => f"{x}",
+        Json.Bool(b) => f"{b}",
+        Json.Null => "null".to_string(),
+        other => other.clone().stringify(),
+    }
+}
+
+// `items[0].state`: object keys separated by dots, each with optional
+// array indexes.
+fn json_at(root: ref Json, path: Str) -> Option[Json] {
+    let mut cur = root.clone();
+    for seg in path.split(".") {
+        let (key, rest) = match seg.find("[") {
+            Some(i) => (seg[0..i], seg[i..]),
+            None => (seg, ""),
+        };
+        if not key.is_empty() {
+            cur = match cur {
+                Json.Object(fields) => {
+                    let mut found: Option[Json] = None;
+                    for (k, v) in fields.iter() {
+                        if k == key {
+                            found = Some(v.clone());
+                        }
+                    }
+                    found?
+                }
+                _ => return None,
+            };
+        }
+        let mut idx = rest;
+        while let Some(after) = idx.strip_prefix("[") {
+            let (n, tail) = after.split_once("]")?;
+            let i = i64.parse(n).ok()?;
+            cur = match cur {
+                Json.Array(items) => {
+                    if i < 0 or i >= items.len() {
+                        return None;
+                    }
+                    items[i].clone()
+                }
+                _ => return None,
+            };
+            idx = tail;
+        }
+    }
+    Some(cur)
+}
+
+// The value a placeholder stands for, or None when it resolves to nothing
+// (a JSON path into a body that does not have it).
+fn resolve(term: Str, o: ref Outcome) -> Option[String] {
+    if let Some(inner) = term.strip_prefix("len(").and_then(|t| t.strip_suffix(")")) {
+        if let Some(path) = inner.strip_prefix("[BODY].") {
+            let root = Json.parse(o.body.as_str()).ok()?;
+            return match json_at(root, path)? {
+                Json.Array(items) => Some(f"{items.len()}"),
+                Json.Object(fields) => Some(f"{fields.len()}"),
+                v => Some(f"{json_text(v).len()}"),
+            };
+        }
+        return Some(f"{resolve(inner, o)?.len()}");
+    }
+    match term {
+        "[STATUS]" => Some(f"{o.status}"),
+        "[RESPONSE_TIME]" => Some(f"{o.ms}"),
+        "[CONNECTED]" => Some(f"{o.connected}"),
+        "[BODY]" => Some(o.body.clone()),
+        _ => {
+            if let Some(path) = term.strip_prefix("[BODY].") {
+                let root = Json.parse(o.body.as_str()).ok()?;
+                return Some(json_text(json_at(root, path)?));
+            }
+            Some(term.to_string())
+        }
+    }
+}
+
+// `*` matches any run of characters.
+fn glob(pat: Str, text: Str) -> bool {
+    let parts: Vec[Str] = pat.split("*").collect();
+    if parts.len() == 1 {
+        return pat == text;
+    }
+    let first = parts[0];
+    let last = parts[parts.len() - 1];
+    if not text.starts_with(first) or text.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut at = first.len();
+    for k in 1..parts.len() - 1 {
+        match text[at..].find(parts[k]) {
+            Some(i) => at = at + i + parts[k].len(),
+            None => return false,
+        }
+    }
+    text.len() - last.len() >= at and text.ends_with(last)
+}
+
+fn compare(left: Str, op: Str, right: Str) -> bool {
+    if let Some(p) = right.strip_prefix("pat(").and_then(|r| r.strip_suffix(")")) {
+        let m = glob(p, left);
+        return if op == "==" { m } else if op == "!=" { not m } else { false };
+    }
+    match (i64.parse(left), i64.parse(right)) {
+        (Ok(a), Ok(b)) => match op {
+            "==" => a == b,
+            "!=" => a != b,
+            "<" => a < b,
+            "<=" => a <= b,
+            ">" => a > b,
+            ">=" => a >= b,
+            _ => false,
+        },
+        _ => match op {
+            "==" => left == right,
+            "!=" => left != right,
+            _ => false,
+        },
+    }
+}
+
+fn shorten(s: Str) -> String {
+    let one_line = s.replace("\n", " ");
+    if one_line.len() > 24 { f"{one_line[0..21]}..." } else { one_line }
+}
+
+// The condition with the value it saw, as Gatus prints a failure:
+// `[STATUS] (503) == 200`. A response time read off the real clock is
+// shown to the second, so a run's output does not change with the load.
+fn evaluate(cond: Str, o: ref Outcome, exact_times: bool) -> (bool, String) {
+    let (left, op, right) = match split_condition(cond) {
+        Some(parts) => parts,
+        None => return (false, f"{cond} (unparsable)"),
+    };
+    match resolve(left, o) {
+        Some(actual) => {
+            let ok = compare(actual.as_str(), op, right);
+            let shown = if left == "[RESPONSE_TIME]" and not exact_times { f"~{o.ms / 1000}s" } else { shorten(actual) };
+            (ok, f"{left} ({shown}) {op} {right}")
+        }
+        None => (false, f"{left} (missing) {op} {right}"),
+    }
+}
+
+struct Verdict {
+    passed: bool,
+    failed: Vec[String],
+}
+
+fn judge(ep: ref Endpoint, o: ref Outcome, exact_times: bool) -> Verdict {
+    let mut failed: Vec[String] = Vec.new();
+    for c in ep.conditions.iter() {
+        let (ok, shown) = evaluate(c, o, exact_times);
+        if not ok {
+            failed.push(shown);
+        }
+    }
+    Verdict { passed: failed.is_empty(), failed }
+}
+
+// ---------------------------------------------------------------- checks
+
+fn net_reason(e: NetError) -> String {
+    match e {
+        NetError.ConnectionRefused => "connection refused".to_string(),
+        NetError.TimedOut => "timed out".to_string(),
+        NetError.Unsupported => "unsupported".to_string(),
+        NetError.InvalidInput => "invalid input".to_string(),
+        NetError.Other(code) => f"os error {code}",
+        _ => "network error".to_string(),
+    }
+}
+
+fn check_http(c: ref Client, ep: ref Endpoint) -> Outcome {
+    let start = Instant.now();
+    let res = c.request("GET".to_string(), ep.url.clone()).timeout(ep.timeout_ms).send();
+    let ms = start.elapsed().as_ms();
+    match res {
+        Ok(r) => Outcome { connected: true, status: r.status(), body: r.body(), ms, error: String.new() },
+        Err(e) => Outcome { connected: false, status: 0, body: String.new(), ms, error: e.message() },
+    }
+}
+
+fn failed_tcp(connected: bool, error: own String, start: Instant) -> Outcome {
+    Outcome { connected, status: 0, body: String.new(), ms: start.elapsed().as_ms(), error }
+}
+
+// Connects, sends one line and reads one reply line.
+fn check_tcp(ep: ref Endpoint) -> Outcome {
+    let start = Instant.now();
+    let addr = ep.url.strip_prefix("tcp://") ?? ep.url.as_str();
+    let s = match TcpStream.connect(addr) {
+        Ok(s) => s,
+        Err(e) => return failed_tcp(false, f"connect: {net_reason(e)}", start),
+    };
+    if let Err(e) = s.set_read_timeout(Some(ep.timeout_ms)) {
+        return failed_tcp(true, f"set timeout: {net_reason(e)}", start);
+    }
+    if not ep.send.is_empty() {
+        if let Err(e) = s.write_all(f"{ep.send}\r\n".bytes()) {
+            return failed_tcp(true, f"write: {net_reason(e)}", start);
+        }
+    }
+    let mut buf: Array[u8, 256] = [0u8; 256];
+    let mut got: Vec[u8] = Vec.new();
+    loop {
+        match s.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    got.push(buf[i]);
+                }
+                if got.contains(10u8) {
+                    break;
+                }
+            }
+            Err(e) => return failed_tcp(false, f"read: {net_reason(e)}", start),
+        }
+    }
+    let text = String.from_utf8(got).unwrap_or(String.new());
+    let line = text.lines().next().unwrap_or("").to_string();
+    Outcome { connected: true, status: 0, body: line, ms: start.elapsed().as_ms(), error: String.new() }
+}
+
+fn check(c: ref Client, ep: ref Endpoint) -> Outcome {
+    match ep.kind {
+        Kind.Http => check_http(c, ep),
+        Kind.Tcp => check_tcp(ep),
+    }
+}
+
+// ---------------------------------------------------------------- alerts
+
+#[derive(Clone)]
+struct Health {
+    failures: i64,
+    successes: i64,
+    triggered: bool,
+    checks: i64,
+    passed: i64,
+}
+
+fn fresh() -> Health {
+    Health { failures: 0, successes: 0, triggered: false, checks: 0, passed: 0 }
+}
+
+// Updates the streaks and returns the alert event this check caused.
+fn record(ep: ref Endpoint, h: mut ref Health, v: ref Verdict) -> Option[String] {
+    h.checks += 1;
+    if v.passed {
+        h.passed += 1;
+        h.successes += 1;
+        let streak = h.failures;
+        h.failures = 0;
+        if h.triggered and h.successes >= ep.success_threshold {
+            h.triggered = false;
+            return Some(f"RESOLVED {ep.name} after {h.successes} successes");
+        }
+        if streak > 0 and not h.triggered {
+            return None;
+        }
+    } else {
+        h.failures += 1;
+        h.successes = 0;
+        if not h.triggered and h.failures >= ep.failure_threshold {
+            h.triggered = true;
+            return Some(f"TRIGGERED {ep.name} after {h.failures} failures: {v.failed[0]}");
+        }
+    }
+    None
+}
+
+// ----------------------------------------------------------------- state
+
+fn state_text(eps: ref Vec[Endpoint], hs: ref Vec[Health], round: i64) -> String {
+    let mut out = f"# uptime state v1\nround {round}\n";
+    for i in 0..eps.len() {
+        let h = ref hs[i];
+        out.push_str(f"{eps[i].name} {h.failures} {h.successes} {h.triggered} {h.checks} {h.passed}\n");
+    }
+    out
+}
+
+// Writes a temporary file, makes it durable, then renames it over the
+// state file, so a crash leaves either the old state or the new one.
+fn save_state(path: Str, text: Str) -> Result[(), IoError] {
+    let tmp = f"{path}.tmp";
+    let f = File.options().write(true).create(true).truncate(true).open(tmp)?;
+    f.write_all(text.bytes())?;
+    f.sync_all()?;
+    fs.rename(tmp, path)?;
+    Ok(())
+}
+
+// The round and each named endpoint's health.
+fn load_state(path: Str) -> Result[(i64, Vec[(String, Health)]), IoError] {
+    let text = fs.read_to_string(path)?;
+    let mut round = 0;
+    let mut out: Vec[(String, Health)] = Vec.new();
+    for line in text.lines() {
+        if line.starts_with("#") {
+            continue;
+        }
+        let f: Vec[Str] = line.split(" ").collect();
+        if f.len() == 2 and f[0] == "round" {
+            round = i64.parse(f[1]).unwrap_or(0);
+        } else if f.len() == 6 {
+            let n = |s: Str| i64.parse(s).unwrap_or(0);
+            out.push((f[0].to_string(), Health { failures: n(f[1]), successes: n(f[2]), triggered: f[3] == "true", checks: n(f[4]), passed: n(f[5]) }));
+        }
+    }
+    Ok((round, out))
+}
+
+fn restore(eps: ref Vec[Endpoint], saved: Vec[(String, Health)]) -> Vec[Health] {
+    let mut hs: Vec[Health] = Vec.new();
+    for ep in eps.iter() {
+        let mut h = fresh();
+        for (name, s) in saved.iter() {
+            if name == ep.name {
+                h = s.clone();
+            }
+        }
+        hs.push(h);
+    }
+    hs
+}
+
+// ----------------------------------------------------------------- fakes
+
+struct FakeNet {
+    pages: Vec[(String, i64, String)],
+    reply: String,
+    next: i64,
+}
+
+impl NetworkProvider for FakeNet {
+    fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
+        for (url, status, body) in self.pages.iter() {
+            if url == req.url() {
+                return Ok(Response { status: status, body: body.clone() });
+            }
+        }
+        Err(HttpError { message: f"{req.url()}: connection refused" })
+    }
+
+    fn connect(mut ref self, addr: Str) -> Result[i64, NetError] {
+        self.next += 1;
+        Ok(self.next)
+    }
+
+    fn write_stream(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, NetError] {
+        Ok(buf.len())
+    }
+
+    fn read_stream(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, NetError] {
+        let bytes = self.reply.bytes();
+        for i in 0..bytes.len() {
+            buf[i] = bytes[i];
+        }
+        Ok(bytes.len())
+    }
+
+    fn close(mut ref self, h: i64) {}
+}
+
+// Each reading of the monotonic clock is `step_ms` later than the last.
+struct StepClock {
+    ns: Atomic[i64],
+    step_ms: i64,
+}
+
+impl ClockProvider for StepClock {
+    fn monotonic_ns(ref self) -> i64 {
+        self.ns.fetch_add(self.step_ms * 1000000)
+    }
+}
+
+// Files in memory; with `full` set every write fails as a full disk does.
+struct MemFs {
+    files: Map[String, String],
+    open: Map[i64, String],
+    next: i64,
+    full: bool,
+}
+
+impl FileSystemProvider for MemFs {
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        match self.files.get(path) {
+            Some(s) => Ok(s.clone()),
+            None => Err(IoError.NotFound),
+        }
+    }
+
+    fn exists(ref self, path: Str) -> bool {
+        self.files.contains_key(path)
+    }
+
+    fn write(mut ref self, path: Str, contents: Str) -> Result[(), IoError] {
+        self.files.insert(path.to_string(), contents.to_string());
+        Ok(())
+    }
+
+    fn rename(mut ref self, from: Str, to: Str) -> Result[(), IoError] {
+        match self.files.remove(from) {
+            Some(s) => {
+                self.files.insert(to.to_string(), s);
+                Ok(())
+            }
+            None => Err(IoError.NotFound),
+        }
+    }
+
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] {
+        self.next += 1;
+        self.open.insert(self.next, path.to_string());
+        self.files.insert(path.to_string(), String.new());
+        Ok(self.next)
+    }
+
+    fn write_handle(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, IoError] {
+        if self.full {
+            return Err(IoError.Other("no space left on device".to_string()));
+        }
+        let path = self.open.get(h).ok_or(IoError.InvalidInput)?.clone();
+        let text = String.from_utf8(buf).map_err(|_| IoError.InvalidUtf8)?;
+        let old = self.files.get(path.as_str()).unwrap_or("");
+        self.files.insert(path, f"{old}{text}");
+        Ok(buf.len())
+    }
+
+    fn close(mut ref self, h: i64) {
+        self.open.remove(h);
+    }
+}
+
+// ------------------------------------------------------------- self-test
+
+fn outcome(status: i64, body: Str, ms: i64) -> Outcome {
+    Outcome { connected: true, status, body: body.to_string(), ms, error: String.new() }
+}
+
+fn show_check(label: Str, ep: ref Endpoint, o: ref Outcome) {
+    let v = judge(ep, o, true);
+    if v.passed {
+        println(f"  {label}: pass");
+    } else {
+        println(f"  {label}: fail: {v.failed.join("; ")}");
+    }
+    if not o.error.is_empty() {
+        println(f"    error: {o.error}");
+    }
+}
+
+fn self_test(eps: ref Vec[Endpoint]) {
+    println("== self-test: conditions");
+    let body = "{\"status\":\"UP\",\"items\":[{\"id\":17,\"state\":\"shipped\"},{\"id\":18}],\"n\":2.5,\"ok\":true}";
+    let o = outcome(200, body, 120);
+    let cases = [
+        "[STATUS] == 200",
+        "[STATUS] != 200",
+        "[STATUS] < 300",
+        "[RESPONSE_TIME] <= 120",
+        "[RESPONSE_TIME] > 500",
+        "[BODY].status == UP",
+        "[BODY].items[0].id == 17",
+        "[BODY].items[1].state == shipped",
+        "[BODY].items[5].id == 1",
+        "len([BODY].items) == 2",
+        "len([BODY].status) == 2",
+        "[BODY].n == 2.5",
+        "[BODY].ok == true",
+        "[BODY] == pat(*\"UP\"*)",
+        "[BODY] == pat(*DOWN*)",
+        "[CONNECTED] == true",
+        "[STATUS] ~ 200",
+    ];
+    for c in cases.iter() {
+        let (ok, shown) = evaluate(c, o, true);
+        println(f"  {ok}: {shown}");
+    }
+
+    println("== self-test: config errors");
+    let bad = "[endpoint a]\nurl = ftp://x\ncondition = [STATUS] 200\nretries = 3\n[endpoint b]\nurl = http://x\ntimeout = soon\nfailure-threshold = 0\ncondition = [STATUS] == 200\n[endpoint c\nnonsense\n";
+    let (parsed, errors) = parse_config(bad);
+    println(f"  {parsed.len()} endpoints, {errors.len()} errors");
+    for e in errors.iter() {
+        println(f"  {e}");
+    }
+
+    println("== self-test: http checks against a fake network and clock");
+    let health = eps[0].clone();
+    let fake = FakeNet {
+        pages: [
+            ("http://127.0.0.1:47751/health", 200, "{\"status\":\"UP\"}"),
+            ("http://127.0.0.1:47751/flaky", 503, "upstream unavailable"),
+        ].to_vec(),
+        reply: "+PONG\r\n".to_string(),
+        next: 0,
+    };
+    let clock = StepClock { ns: Atomic.new(0), step_ms: 120 };
+    with_provider[Clock](clock, || {
+        with_provider[Network](fake, || {
+            let c = Client.new();
+            show_check("health", health, check(c, health));
+            let mut strict = health.clone();
+            strict.conditions.push("[RESPONSE_TIME] < 100".to_string());
+            show_check("health under 100ms", strict, check(c, strict));
+            show_check("flaky", eps[2], check(c, eps[2]));
+            show_check("login (no page)", eps[5], check(c, eps[5]));
+            show_check("cache", eps[6], check(c, eps[6]));
+        });
+    });
+
+    println("== self-test: state files against a fake file system");
+    let mut files: Map[String, String] = Map.new();
+    files.insert("/etc/uptime/config.ini".to_string(), CONFIG.to_string());
+    let mem = MemFs { files, open: Map.new(), next: 0, full: false };
+    with_provider[FileSystem](mem, || {
+        match fs.read_to_string("/etc/uptime/missing.ini") {
+            Ok(_) => println("  missing config: read?"),
+            Err(e) => println(f"  missing config: {e}"),
+        }
+        let text = fs.read_to_string("/etc/uptime/config.ini") ?? String.new();
+        let (eps2, errs2) = parse_config(text);
+        println(f"  config from fake fs: {eps2.len()} endpoints, {errs2.len()} errors");
+        let mut hs: Vec[Health] = Vec.new();
+        for _ in eps2.iter() {
+            hs.push(fresh());
+        }
+        hs[2] = Health { failures: 3, successes: 0, triggered: true, checks: 5, passed: 2 };
+        match save_state("/var/uptime/state", state_text(eps2, hs, 5)) {
+            Ok(()) => println("  saved state"),
+            Err(e) => println(f"  save failed: {e}"),
+        }
+        match load_state("/var/uptime/state") {
+            Ok((round, saved)) => {
+                let back = restore(eps2, saved);
+                println(f"  loaded round {round}: flaky failures {back[2].failures} triggered {back[2].triggered}, {back[2].passed}/{back[2].checks} passed");
+            }
+            Err(e) => println(f"  load failed: {e}"),
+        }
+        println(f"  temp file left: {fs.exists("/var/uptime/state.tmp")}");
+    });
+
+    let mut files: Map[String, String] = Map.new();
+    files.insert("/var/uptime/state".to_string(), "# uptime state v1\nround 4\n".to_string());
+    let full = MemFs { files, open: Map.new(), next: 0, full: true };
+    with_provider[FileSystem](full, || {
+        match save_state("/var/uptime/state", "# uptime state v1\nround 5\n") {
+            Ok(()) => println("  full disk: saved?"),
+            Err(e) => println(f"  full disk: {e}"),
+        }
+        match load_state("/var/uptime/state") {
+            Ok((round, _)) => println(f"  full disk: state still at round {round}"),
+            Err(e) => println(f"  full disk: load failed: {e}"),
+        }
+    });
+}
+
+// --------------------------------------------------------------- servers
+
+sync struct Hits {
+    counts: Mutex[Map[String, i64]],
+}
+
+impl Hits {
+    fn next(self, key: Str) -> i64 {
+        let g = self.counts.lock();
+        let n = g.value.get(key).unwrap_or(0) + 1;
+        g.value.insert(key.to_string(), n);
+        n
+    }
+}
+
+fn page(status: i64, body: Str) -> Response {
+    Response { status, body: body.to_string() }
+}
+
+// Each path misbehaves on chosen hits, so every round is scripted.
+fn handle(hits: Hits, req: ref Request) -> Response {
+    let path = req.path();
+    let n = hits.next(path.as_str());
+    match path.as_str() {
+        "/health" => page(200, "{\"status\":\"UP\",\"version\":\"2.4.1\"}"),
+        "/orders" => {
+            let state = if n == 6 { "failed" } else { "shipped" };
+            page(200, f"{{\"items\":[{{\"id\":17,\"state\":\"{state}\"}},{{\"id\":18,\"state\":\"pending\"}}]}}")
+        }
+        "/flaky" => if n >= 3 and n <= 5 { page(503, "upstream unavailable") } else { page(200, "ok") },
+        "/slow" => {
+            if n == 3 or n == 4 {
+                sleep(Duration.ms(1200));
+            }
+            page(200, "ok")
+        }
+        "/hang" => {
+            if n == 5 or n == 6 {
+                sleep(Duration.ms(1500));
+            }
+            page(200, "ok")
+        }
+        "/login" => if n == 7 { page(500, "internal error") } else { page(200, "<html><h1>Sign in</h1></html>") },
+        _ => page(404, "not found"),
+    }
+}
+
+// A line protocol cache: answers PING with +PONG, except that it stays
+// silent on its 4th and 5th connections and is still loading on its 8th
+// and 9th.
+fn serve_cache(listener: TcpListener, hits: Hits) {
+    let group = TaskGroup.new();
+    loop {
+        let conn = match listener.accept() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let n = hits.next("tcp");
+        group.spawn(|| {
+            let mut buf: Array[u8, 64] = [0u8; 64];
+            let _ = conn.read(mut buf);
+            if n == 4 or n == 5 {
+                sleep(Duration.ms(1500));
+                return;
+            }
+            let reply = if n >= 8 { "-ERR loading\r\n" } else { "+PONG\r\n" };
+            let _ = conn.write_all(reply.bytes());
+        });
+    }
+}
+
+// ------------------------------------------------------------------- run
+
+fn run_round(c: ref Client, eps: ref Vec[Endpoint], hs: mut ref Vec[Health], round: i64, log: mut ref BufWriter[File]) {
+    println(f"== round {round}");
+    for i in 0..eps.len() {
+        let ep = ref eps[i];
+        if not ep.enabled {
+            continue;
+        }
+        let o = check(c, ep);
+        let v = judge(ep, o, false);
+        if v.passed {
+            println(f"  {ep.name:<10} ok");
+        } else {
+            println(f"  {ep.name:<10} FAIL {v.failed.join("; ")}");
+            if not o.error.is_empty() {
+                println(f"  {"":<10} error: {o.error}");
+            }
+        }
+        if let Some(event) = record(ep, mut hs[i], v) {
+            println(f"  ** {event}");
+            let _ = log.write_all(f"round {round} {event}\n".bytes());
+        }
+    }
+    let _ = log.flush();
+}
+
+fn main() -> Result[(), AnyError] {
+    let (eps, errors) = parse_config(CONFIG);
+    println(f"config: {eps.len()} endpoints, {errors.len()} errors");
+    for ep in eps.iter() {
+        let kind = match ep.kind {
+            Kind.Http => "http",
+            Kind.Tcp => "tcp",
+        };
+        let state = if ep.enabled { "" } else { " (disabled)" };
+        println(f"  {ep.name} {kind} {ep.conditions.len()} conditions, alert after {ep.failure_threshold} failures, resolve after {ep.success_threshold}{state}");
+    }
+
+    self_test(eps);
+
+    let _ = fs.remove_dir_all(ROOT);
+    let _ = fs.create_dir_all(ROOT);
+    let state_path = f"{ROOT}/state";
+    let log_path = f"{ROOT}/incidents.log";
+
+    let hits = Hits { counts: Mutex.new(Map.new()) };
+    let group = TaskGroup.new();
+    group.spawn(|| Server.serve(HTTP_ADDR.to_string(), |req| handle(hits, req)));
+    let listener = match TcpListener.bind(TCP_ADDR) {
+        Ok(l) => l,
+        Err(e) => {
+            println(f"cache bind failed: {net_reason(e)}");
+            return Ok(());
+        }
+    };
+    group.spawn(|| serve_cache(listener, hits));
+
+    let c = Client.new();
+    let mut up = false;
+    for _ in 0..100 {
+        match TcpStream.connect(HTTP_ADDR) {
+            Ok(_) => {
+                up = true;
+                break;
+            }
+            Err(_) => sleep(Duration.ms(20)),
+        }
+    }
+    println(f"servers up: {up}");
+
+    let mut hs: Vec[Health] = Vec.new();
+    for _ in eps.iter() {
+        hs.push(fresh());
+    }
+    let log_file = match File.append(log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            println(f"cannot open incident log: {e}");
+            return Ok(());
+        }
+    };
+    {
+        let mut log = BufWriter.new(log_file);
+        for round in 1..=8 {
+            run_round(c, eps, mut hs, round, mut log);
+            if let Err(e) = save_state(state_path, state_text(eps, hs, round)) {
+                println(f"  state not saved: {e}");
+            }
+        }
+    }
+
+    println("== restart");
+    let (eps, _) = parse_config(CONFIG);
+    let (round, saved) = match load_state(state_path) {
+        Ok(s) => s,
+        Err(e) => {
+            println(f"state lost: {e}");
+            return Ok(());
+        }
+    };
+    let mut hs = restore(eps, saved);
+    println(f"  resumed after round {round}");
+    for i in 0..eps.len() {
+        let h = ref hs[i];
+        if h.failures > 0 or h.triggered {
+            println(f"  {eps[i].name}: {h.failures} failures in a row, triggered {h.triggered}");
+        }
+    }
+    {
+        let mut log = BufWriter.new(File.append(log_path).unwrap());
+        run_round(c, eps, mut hs, round + 1, mut log);
+        let _ = save_state(state_path, state_text(eps, hs, round + 1));
+    }
+
+    println("== incidents");
+    match File.open(log_path) {
+        Ok(f) => {
+            let r = BufReader.new(f);
+            for line in r.lines() {
+                println(f"  {line?}");
+            }
+        }
+        Err(e) => println(f"no incident log: {e}"),
+    }
+
+    println("== uptime");
+    for i in 0..eps.len() {
+        let h = ref hs[i];
+        if h.checks == 0 {
+            println(f"  {eps[i].name:<10} no checks");
+            continue;
+        }
+        let pct = 100.0 * h.passed as f64 / h.checks as f64;
+        println(f"  {eps[i].name:<10} {h.passed}/{h.checks} {pct:.1}%");
+    }
+    let text = fs.read_to_string(state_path) ?? String.new();
+    let tmp_path = f"{state_path}.tmp";
+    println(f"state file: {text.lines().count()} lines, temp left {fs.exists(tmp_path)}");
+
+    group.cancel();
+    let _ = fs.remove_dir_all(ROOT);
+    println("done");
+    Ok(())
+}

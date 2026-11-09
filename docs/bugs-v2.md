@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 207 |
+| diagnostics | 209 |
 | false-positive | 169 |
 | perf | 145 |
-| missing-feature | 123 |
+| missing-feature | 126 |
 | soundness | 56 |
-| miscompile | 49 |
-| run-vs-build | 29 |
+| miscompile | 50 |
+| run-vs-build | 30 |
 | other | 26 |
 | codegen-gap | 26 |
 | crash | 20 |
@@ -75,14 +75,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 338 |
-| mir-llvm | 180 |
-| mir | 158 |
+| typecheck | 341 |
+| mir-llvm | 182 |
+| mir | 160 |
 | cli | 93 |
 | ownership | 66 |
-| parser | 55 |
-| interp | 41 |
-| runtime | 31 |
+| parser | 56 |
+| interp | 43 |
+| runtime | 32 |
 | effect | 29 |
 | codegen | 22 |
 | resolver | 20 |
@@ -123,6 +123,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-55 | 2026-11-09 | ownership | low | No lint reports a `let mut` binding that is never written: Rust's habit of `let mut` on a binding that is only read draws nothing (the Rust-ism audit's injection was silent in 20 of 20 programs), so Kāra written from Rust habits keeps every one; Rust warns `unused_mut` | — |
 | B-2026-11-09-56 | 2026-11-09 | mir | medium | `let v = it.collect();` whose `Vec` target a later use decides passes the type checker and is refused by MIR: `fn count(v: Vec[char]) -> i64` and `let cs = text.chars().collect(); count(cs)` draws "the method call `.collect` with no resolved callee is not lowered yet". 6 of 16 audit programs reached it once `karac fix` removed a `.collect::<Vec<_>>()` turbofish | — |
 | B-2026-11-09-57 | 2026-11-09 | typecheck | low | Strings have no `match_indices` (nor `char_indices`): kata 2052's text arm wrote Rust's `sentence.match_indices(" ").map(|(at, _)| at + 1)` to find each word's start and was refused "no method 'match_indices' on type 'String'" with no hint at what to write instead | — |
+| B-2026-11-09-67 | 2026-11-09 | typecheck | medium | `karac fix`'s `fn main() -> Result[(), AnyError]` for a `?` in `main` left each bare `return;` of `main` as it was, so the fixed program failed to check with "expected return value of type 'Result[(), AnyError]'" at every one | — |
+| B-2026-11-09-68 | 2026-11-09 | parser | medium | A format spec in Python's spelling, `{x:.1f}` or `{name:>8s}`, is refused as "unsupported type `f` (expected one of x, X, o, b, d)" with no fix, though Kāra's spelling is the same spec without the letter | — |
+| B-2026-11-09-69 | 2026-11-09 | interp | medium | An HTTP request past its `timeout` fails in `karac run` with ureq's "Network Error: Network Error: Error encountered in the status line: timed out reading response", without the URL, where the compiled client says "<url>: request timed out after <ms> ms" | — |
+| B-2026-11-09-70 | 2026-11-09 | typecheck+mir | medium | `File` has no `write_all`: `f.write_all(text.bytes())?` is "no method 'write_all' on type 'File'", though `TcpStream`, `TlsStream`, `BufWriter` and `ChildStdin` have one and `File.write` may write fewer bytes than given | — |
+| B-2026-11-09-71 | 2026-11-09 | mir+mir-llvm | high | Under a `FileSystem` override, a compiled `File.open`, `File.create` or `OpenOptions.open` of a `String` path built at run time hands the fake's `open` a garbage path (the `&String` read as a `Str`; ASan: stack-buffer-overflow in the caller); a literal path works, and the interpreter is right | — |
+| B-2026-11-09-72 | 2026-11-09 | typecheck | low | There is no `drop(x)`: ending an owned value early (closing a `BufWriter[File]` before reopening its file) is "undefined name 'drop'" with no hint, and the only spellings are a block around the value's scope or a helper taking `own T` | — |
+| B-2026-11-09-73 | 2026-11-09 | interp+mir-llvm+runtime | low | `set_read_timeout` on a socket a `Network` fake opened returns `Err(Unsupported)`, so a TCP client that sets a timeout, as io.md tells a client to, cannot be tested against a fake without ignoring the error | — |
 
 ### Relocated
 

@@ -97,6 +97,84 @@ impl super::Parser {
         }
     }
 
+    /// A format spec ending in Python's or C's `f` after a precision
+    /// (`{x:.1f}`) or in `s` (`{name:>8s}`), which Kāra spells without the
+    /// letter: a float's precision alone fixes its digits, and a value's
+    /// text is its `Display` form (design.md §3 Format specifiers). Reports
+    /// it with the edit that deletes the letter, and returns whether it
+    /// did; any other bad spec keeps the general message (B-2026-11-09-68).
+    /// `raw` is the whole hole, starting at byte `offset`, `line`, `column`.
+    fn foreign_spec_letter(
+        &mut self,
+        spec: &str,
+        raw: &str,
+        offset: usize,
+        line: usize,
+        column: usize,
+    ) -> bool {
+        let Some(letter) = spec.chars().last() else {
+            return false;
+        };
+        let base = &spec[..spec.len() - letter.len_utf8()];
+        let fits = match letter {
+            'f' | 'F' => base.contains('.'),
+            's' => true,
+            _ => false,
+        };
+        if !fits || crate::format_spec::FormatSpec::parse(base).is_err() {
+            return false;
+        }
+        // An empty base would leave `{x:}`: the `:` goes too.
+        let cut = if base.is_empty() { 2 } else { 1 };
+        let at = raw.len() - cut;
+        let mut l = line;
+        let mut c = column;
+        for ch in raw[..at].chars() {
+            if ch == '\n' {
+                l += 1;
+                c = 1;
+            } else {
+                c += 1;
+            }
+        }
+        let span = Span {
+            line: l,
+            column: c,
+            offset: offset + at,
+            length: cut,
+        };
+        let message = if base.is_empty() {
+            format!(
+                "format spec `{spec}`: Kāra has no `s` type, a value is formatted by its \
+                 `Display` text; drop the `:{spec}`"
+            )
+        } else if letter == 's' {
+            format!(
+                "format spec `{spec}`: Kāra has no `s` type, a value is formatted by its \
+                 `Display` text; write `{base}`"
+            )
+        } else {
+            format!(
+                "format spec `{spec}`: Kāra has no `{letter}` type, a float's precision \
+                 alone sets its digits after the point; write `{base}`"
+            )
+        };
+        self.errors.push(ParseError {
+            kind: crate::parser::ParseErrorKind::Syntax,
+            message,
+            span,
+        });
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&span),
+            vec![crate::resolver::TextEdit {
+                offset: span.offset,
+                length: cut,
+                replacement: String::new(),
+            }],
+        );
+        true
+    }
+
     // ── Expressions (Pratt Parser) ───────────────────────────────
 
     pub(crate) fn parse_expression(&mut self) -> Option<Expr> {
@@ -1604,7 +1682,9 @@ impl super::Parser {
                             // COMPILE error, not a silently-dropped surprise.
                             if let Some(s) = &spec {
                                 if let Err(msg) = crate::format_spec::FormatSpec::parse(s) {
-                                    self.error(&msg);
+                                    if !self.foreign_spec_letter(s, &raw, offset, line, column) {
+                                        self.error(&msg);
+                                    }
                                 }
                             }
                             // Re-parse the interpolation hole as a standalone

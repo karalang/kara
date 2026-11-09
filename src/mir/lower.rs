@@ -27364,6 +27364,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &[],
     ),
     (
+        // `File.write_all` (B-2026-11-09-70); a program's own `File` is not
+        // the library's.
+        include_str!("../../runtime/stdlib/source/file_write_all.kara"),
+        &["write_all"],
+        &["File"],
+    ),
+    (
         // `TaskGroup.with_deadline` (§11.10), for the same reason.
         include_str!("../../runtime/stdlib/source/group_deadline.kara"),
         &["with_deadline"],

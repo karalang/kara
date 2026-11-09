@@ -18164,7 +18164,14 @@ fn http_fetch(req: &HttpBuilder, with_body: bool) -> HttpFetched {
     let mut body = with_body.then(|| req.body.clone());
     let mut headers = req.headers.clone();
     for _hop in 0..=5 {
-        let resp = http_exchange(&method, &url, &headers, body.as_deref(), req.timeout_ms)?;
+        let resp = http_exchange(
+            &method,
+            &url,
+            &req.url,
+            &headers,
+            body.as_deref(),
+            req.timeout_ms,
+        )?;
         let status = resp.status();
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
             if let Some(loc) = resp.header("location") {
@@ -18208,10 +18215,12 @@ fn http_fetch(_req: &HttpBuilder, _with_body: bool) -> HttpFetched {
 
 /// One request of `http_send`'s, redirects not followed: the
 /// response, or the error message the compiled client gives for it.
+/// `origin` is the URL the program asked for, which a timeout names.
 #[cfg(not(target_arch = "wasm32"))]
 fn http_exchange(
     method: &str,
     url: &str,
+    origin: &str,
     headers: &[(String, String)],
     body: Option<&str>,
     timeout_ms: i128,
@@ -18317,8 +18326,35 @@ fn http_exchange(
                 None => format!("{url}: connect failed: {cause}"),
             })
         }
+        // A request past its timeout, in the compiled client's words
+        // (runtime/src/lib.rs `http_fetch_blocking`), not `ureq`'s
+        // "Network Error: ... timed out reading response" (B-2026-11-09-69).
+        Err(ureq::Error::Transport(t)) if timeout_ms > 0 && http_timed_out(&t) => {
+            Err(format!("{origin}: request timed out after {timeout_ms} ms"))
+        }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Whether `ureq`'s transport error is a read or connect that ran out
+/// of time: an `io::Error` of kind `TimedOut` (or `WouldBlock`, which a
+/// socket timeout is on some platforms) somewhere in its sources.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_timed_out(t: &ureq::Transport) -> bool {
+    use std::error::Error;
+    let mut cause: Option<&(dyn Error + 'static)> = t.source();
+    while let Some(c) = cause {
+        if let Some(io) = c.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) {
+                return true;
+            }
+        }
+        cause = c.source();
+    }
+    false
 }
 
 /// `loc`, a redirect's `Location`, against the URL `current` it answered, as

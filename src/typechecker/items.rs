@@ -3064,6 +3064,31 @@ impl<'a> super::TypeChecker<'a> {
                 });
             }
         }
+        // A bare `return` in `main` must now return the `Ok(())` too, or
+        // the fixed program fails with "expected return value". One inside
+        // a closure returns from the closure and stays (B-2026-11-09-67).
+        let mut closures: Vec<(usize, usize)> = Vec::new();
+        let mut returns: Vec<Span> = Vec::new();
+        crate::span_visitor::for_each_expr_in_block(&f.body, &mut |e| match &e.kind {
+            crate::ast::ExprKind::Closure { .. } => {
+                closures.push((e.span.offset, e.span.offset + e.span.length))
+            }
+            crate::ast::ExprKind::Return(None) => returns.push(e.span),
+            _ => {}
+        });
+        for r in returns {
+            if closures
+                .iter()
+                .any(|&(lo, hi)| lo <= r.offset && r.offset < hi)
+            {
+                continue;
+            }
+            edits.push(crate::resolver::TextEdit {
+                offset: r.offset + r.length,
+                length: 0,
+                replacement: " Ok(())".to_string(),
+            });
+        }
         self.error_fix_diffs
             .insert(SpanKey::from_span(&first), edits);
     }

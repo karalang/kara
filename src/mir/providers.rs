@@ -1079,6 +1079,7 @@ impl Spec<'_> {
         let info = fx.body.blocks[bb.index()].terminator.source_info;
         let after = target
             .ok_or_else(|| format!("providers: in `{here}`, an open that does not return"))?;
+        let (bb, path) = self.path_view(fx, bb, path.clone())?;
         let opts = fx.temp(opts_ty);
         fx.push(
             bb,
@@ -1118,6 +1119,48 @@ impl Spec<'_> {
         };
         // The open is a call on the resource like any other.
         self.resource_call(fx, bb, r, "open")
+    }
+
+    /// The path of an open as the provider's `open(self, path: Str, ..)`
+    /// takes it. The natives read a path behind a reference or as a view,
+    /// so `File.open(p)` with `p: String` passes `&p`; the provider's
+    /// body would read that pointer as a `Str`, a pointer and a length,
+    /// and open a garbage path (B-2026-11-09-71). A borrowed or owned
+    /// `String` is viewed with `String.as_str` before the call. Returns
+    /// the block that makes the call, and the path to pass.
+    fn path_view(
+        &mut self,
+        fx: &mut Fx,
+        bb: BasicBlock,
+        path: Operand,
+    ) -> Result<(BasicBlock, Operand), String> {
+        let tcx = self.tys.tcx();
+        let ty = fx.operand_ty(&path, self.tys)?;
+        let recv = match tcx.kind(ty) {
+            SK::Ref(t) | SK::MutRef(t) if matches!(tcx.kind(t), SK::Str) => path,
+            SK::Str => match &path {
+                Operand::Copy(p) | Operand::Move(p) => fx.borrow(bb, p.clone(), false, self.tys),
+                Operand::Const(_) => return Ok((bb, path)),
+            },
+            _ => return Ok((bb, path)),
+        };
+        let view = fx.temp(tcx.intern(SK::StaticStr));
+        let info = fx.body.blocks[bb.index()].terminator.source_info;
+        let call = fx.body.blocks[bb.index()].terminator.kind.clone();
+        let next = fx.block(call, info);
+        fx.body.blocks[bb.index()].terminator.kind = TerminatorKind::Call {
+            func: fn_def(
+                self.tys,
+                DefId(u32::MAX),
+                Vec::new(),
+                "String.as_str".to_string(),
+            ),
+            args: vec![recv],
+            destination: Place::local(view),
+            target: Some(next),
+            unwind: UnwindAction::Abort,
+        };
+        Ok((next, Operand::Move(Place::local(view))))
     }
 
     /// `with_provider[R](p, f)`: `p` kept in a local while `f`'s copy for

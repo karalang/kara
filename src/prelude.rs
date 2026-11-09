@@ -862,6 +862,8 @@ pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
     "Receiver",
     // `send_timeout` (runtime/stdlib/source/channel_timeout.kara).
     "Sender",
+    // `write_all` (runtime/stdlib/source/file_write_all.kara).
+    "File",
 ];
 
 /// Library methods written in Kāra (redesign A2), from

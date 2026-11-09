@@ -69,6 +69,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `File.write_all`, as `TcpStream`, `BufWriter` and `ChildStdin` have it:
+  every byte of the buffer, by `write` until none is left
+  (B-2026-11-09-70).
 - `Json` implements `Clone`, so a field of a parsed body can be copied out
   of a borrowed tree (B-2026-11-09-48).
 - `JsonError`, `SendError`, `RecvTimeoutError`, `SendTimeoutError`, and
@@ -180,6 +183,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- Under a `FileSystem` override, a compiled `File.open`, `File.create` or
+  `OpenOptions.open` of a `String` path built at run time handed the
+  fake's `open` a garbage path (the `String`'s address read as a `Str`),
+  so a state file saved through a fake was not found again; a literal
+  path worked (B-2026-11-09-71).
+- An HTTP request past its `timeout` failed in `karac run` with ureq's
+  "Network Error: Network Error: Error encountered in the status line:
+  timed out reading response", without the URL; it now says
+  `<url>: request timed out after <ms> ms`, as a compiled program does
+  (B-2026-11-09-69).
 - String literals in `[..].to_vec()` take the `Str` a `Vec[Str]` (or
   `Vec[(Str, T)]`) parameter wants; `total(["a", "b"].to_vec())` was
   refused as a `Vec[String]` (B-2026-11-09-49).
@@ -456,6 +469,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A format spec in Python's spelling, `{x:.1f}` or `{name:>8s}`, is named
+  ("Kāra has no `f` type, a float's precision alone sets its digits after
+  the point; write `.1`") and `karac fix` deletes the letter; it was
+  "unsupported type `f`" with no fix (B-2026-11-09-68).
+- `karac fix`'s `fn main() -> Result[(), AnyError]` for a `?` in `main`
+  also turns each bare `return;` of `main` into `return Ok(());`, so the
+  fixed program checks; a closure's `return` stays (B-2026-11-09-67).
 - A library type without a trait is named as the library's: `e.clone()` on
   a `JsonError` says "the library's `JsonError` does not implement
   `Clone`" instead of advising a derive on the library's declaration
