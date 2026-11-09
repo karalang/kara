@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/2001-2100/2035-partition-array-into-two-arrays-to-minimize-sum-difference/partition_solution.kara"
+dedup_of = []
+tags = []
+class = "e"
+bucket = "check-refuses:E0200"
+classified_with = "6a852dc7b+local"
+extracted_src = "d5a3b1d3"

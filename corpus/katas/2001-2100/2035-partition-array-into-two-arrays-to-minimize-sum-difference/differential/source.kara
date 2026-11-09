@@ -1,0 +1,358 @@
+// LeetCode #2035: Partition Array Into Two Arrays to Minimize Sum
+// Difference -- the differential. The five arms that check, against the
+// statement read literally: every way to choose `n` of the `2 n` values,
+// the smallest difference between the chosen sum and the rest. 1500 arrays
+// of 2 to 10 values up to 60 either side, every one drawn (with its
+// shuffle, shift and scale) before any arm answers. LeetCode's Rust
+// template does not check yet (B-2026-11-09-14, B-2026-11-09-15) and joins
+// when it does.
+//
+// P1  the answer is the statement read literally
+// P2  the values shuffled leave the answer
+// P3  every value negated leaves the answer
+// P4  the same amount added to every value leaves the answer (each side
+//     takes it `n` times)
+// P5  every value tripled triples the answer
+// P6  each arm agrees with at least two of the other four
+
+// ---- partition.kara: the ★ arm, meet in the middle with partition_point
+fn star_subset_sums(half: Vec[i64]) -> Vec[Vec[i64]] {
+    let n = half.len();
+    let mut by_size: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        by_size.push(Vec.new());
+    }
+    for mask in 0..1 << n {
+        let mut sum = 0;
+        let mut size = 0;
+        for i in 0..n {
+            if mask >> i & 1 == 1 {
+                sum += half[i];
+                size += 1;
+            }
+        }
+        by_size[size].push(sum);
+    }
+    by_size
+}
+
+fn star_minimum_difference(nums: Vec[i64]) -> i64 {
+    let n = nums.len() / 2;
+    let total: i64 = nums.iter().sum();
+    let left = star_subset_sums(nums[0..n].to_vec());
+    let mut right = star_subset_sums(nums[n..2 * n].to_vec());
+    for list in right.iter_mut() {
+        list.sort();
+    }
+    let mut best = i64.MAX;
+    for k in 0..n + 1 {
+        let others = ref right[n - k];
+        for a in left[k].iter() {
+            // the side's sum is a + b; the difference is |total - 2 (a + b)|,
+            // smallest where b is nearest (total - 2 a) / 2
+            let at = others.partition_point(|b| 2 * (a + b) < total);
+            if at < others.len() {
+                best = best.min((total - 2 * (a + others[at])).abs());
+            }
+            if at > 0 {
+                best = best.min((total - 2 * (a + others[at - 1])).abs());
+            }
+        }
+    }
+    best
+}
+
+// ---- partition_pointers.kara: sorted sums on both sides, two pointers
+fn pointers_sums_by_size(half: Vec[i64]) -> Vec[Vec[i64]] {
+    let n = half.len();
+    let mut by_size: Vec[Vec[i64]] = (0..n + 1).map(|_| Vec.new()).collect();
+    for mask in 0..1 << n {
+        let mut sum = 0;
+        for i in 0..n {
+            if mask >> i & 1 == 1 {
+                sum += half[i];
+            }
+        }
+        by_size[mask.count_ones()].push(sum);
+    }
+    for list in by_size.iter_mut() {
+        list.sort();
+    }
+    by_size
+}
+
+fn pointers_minimum_difference(nums: Vec[i64]) -> i64 {
+    let n = nums.len() / 2;
+    let total: i64 = nums.iter().sum();
+    let left = pointers_sums_by_size(nums[0..n].to_vec());
+    let right = pointers_sums_by_size(nums[n..2 * n].to_vec());
+    let mut best = i64.MAX;
+    for k in 0..n + 1 {
+        let xs = ref left[k];
+        let ys = ref right[n - k];
+        let mut j = ys.len() - 1;
+        for i in 0..xs.len() {
+            // move down while the next smaller right sum is still at or
+            // above half
+            while j > 0 and 2 * (xs[i] + ys[j - 1]) >= total {
+                j -= 1;
+            }
+            best = best.min((total - 2 * (xs[i] + ys[j])).abs());
+            if j > 0 {
+                best = best.min((total - 2 * (xs[i] + ys[j - 1])).abs());
+            }
+        }
+    }
+    best
+}
+
+// ---- partition_dfs.kara: sums by a recursive walk, a hand-written lower bound
+fn dfs_walk(half: ref Vec[i64], i: i64, sum: i64, size: i64, out: mut ref Vec[Vec[i64]]) {
+    if i == half.len() {
+        out[size].push(sum);
+        return;
+    }
+    dfs_walk(half, i + 1, sum, size, mut out);
+    dfs_walk(half, i + 1, sum + half[i], size + 1, mut out);
+}
+
+// the first index whose value is at least `want`, in sorted `xs`
+fn dfs_lower_bound(xs: ref Vec[i64], want: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = xs.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if xs[mid] < want {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn dfs_minimum_difference(nums: Vec[i64]) -> i64 {
+    let n = nums.len() / 2;
+    let total: i64 = nums.iter().sum();
+    let left_half: Vec[i64] = nums.iter().take(n).cloned().collect();
+    let right_half: Vec[i64] = nums.iter().skip(n).cloned().collect();
+    let mut left: Vec[Vec[i64]] = Vec.new();
+    let mut right: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        left.push(Vec.new());
+        right.push(Vec.new());
+    }
+    dfs_walk(left_half, 0, 0, 0, mut left);
+    dfs_walk(right_half, 0, 0, 0, mut right);
+    for list in right.iter_mut() {
+        list.sort();
+    }
+    let mut best = i64.MAX;
+    for k in 0..n + 1 {
+        let ys = ref right[n - k];
+        for a in left[k].iter() {
+            // 2 (a + b) >= total exactly when b >= ceil((total - 2 a) / 2)
+            let d = total - 2 * a;
+            let at = dfs_lower_bound(ys, d.div_euclid(2) + d.rem_euclid(2));
+            for j in [at - 1, at] {
+                if j >= 0 and j < ys.len() {
+                    best = best.min((total - 2 * (a + ys[j])).abs());
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- partition_tuples.kara: (size, sum) pairs sorted together
+fn tuples_minimum_difference(nums: Vec[i64]) -> i64 {
+    let n = nums.len() / 2;
+    let total: i64 = nums.iter().sum();
+    let mut left: Vec[(i64, i64)] = Vec.new();
+    let mut right: Vec[(i64, i64)] = Vec.new();
+    for mask in 0..1 << n {
+        let mut a = 0;
+        let mut b = 0;
+        for i in 0..n {
+            if mask & (1 << i) != 0 {
+                a += nums[i];
+                b += nums[n + i];
+            }
+        }
+        let size = mask.count_ones();
+        left.push((size, a));
+        right.push((size, b));
+    }
+    right.sort();
+    let mut best = i64.MAX;
+    for (k, a) in left {
+        let want = n - k;
+        let at = right.partition_point(|(s, b)| s < want or (s == want and 2 * (a + b) < total));
+        if at < right.len() and right[at].0 == want {
+            best = best.min((total - 2 * (a + right[at].1)).abs());
+        }
+        if at > 0 and right[at - 1].0 == want {
+            best = best.min((total - 2 * (a + right[at - 1].1)).abs());
+        }
+    }
+    best
+}
+
+// ---- partition_sets.kara: a SortedSet of sums per size, range queries
+fn sets_minimum_difference(nums: Vec[i64]) -> i64 {
+    let n = nums.len() / 2;
+    let total: i64 = nums.iter().sum();
+    let mut left: Vec[Vec[i64]] = (0..n + 1).map(|_| Vec.new()).collect();
+    let mut right: Vec[SortedSet[i64]] = (0..n + 1).map(|_| SortedSet.new()).collect();
+    for mask in 0..1 << n {
+        let mut (a, b, size) = (0, 0, 0);
+        for i in 0..n {
+            if mask >> i & 1 == 1 {
+                a += nums[i];
+                b += nums[n + i];
+                size += 1;
+            }
+        }
+        left[size].push(a);
+        right[size].insert(b);
+    }
+    let mut best = i64.MAX;
+    for k in 0..n + 1 {
+        for a in left[k].iter() {
+            // the right sum wanted is (total - 2 a) / 2, rounded either way
+            let want = (total - 2 * a).div_euclid(2);
+            if let Some(b) = right[n - k].range(want, i64.MAX).next() {
+                best = best.min((total - 2 * (a + b)).abs());
+            }
+            if let Some(b) = right[n - k].range(i64.MIN, want).next_back() {
+                best = best.min((total - 2 * (a + b)).abs());
+            }
+        }
+    }
+    best
+}
+
+// ---- the statement read literally
+
+fn literal(nums: Vec[i64]) -> i64 {
+    let m = nums.len();
+    let total: i64 = nums.iter().sum();
+    let mut best = -1;
+    for mask in 0..1 << m {
+        let mut chosen = 0;
+        let mut side = 0;
+        for i in 0..m {
+            if mask >> i & 1 == 1 {
+                chosen += 1;
+                side += nums[i];
+            }
+        }
+        if chosen * 2 == m {
+            let gap = (total - 2 * side).abs();
+            if best == -1 or gap < best {
+                best = gap;
+            }
+        }
+    }
+    best
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_minimum_difference(nums),
+        1 => pointers_minimum_difference(nums),
+        2 => dfs_minimum_difference(nums),
+        3 => tuples_minimum_difference(nums),
+        _ => sets_minimum_difference(nums),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    nums: Vec[i64],
+    shuffled: Vec[i64],
+    shift: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 5 + 1;
+    let top = next_random(mut seed) % 60 + 1;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..2 * n {
+        nums.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    let mut shuffled = nums.clone();
+    for i in (1..shuffled.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        shuffled.swap(i, j);
+    }
+    let shift = next_random(mut seed) % 2001 - 1000;
+    Problem { nums, shuffled, shift }
+}
+
+fn main() {
+    let names = ["star", "pointers", "dfs", "tuples", "sets"];
+    let mut seed = 2035;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let truth = literal(prob.nums.clone());
+        check = (check * 31 + truth) % 1000000007;
+        let negated: Vec[i64] = prob.nums.iter().map(|x| -x).collect();
+        let shifted: Vec[i64] = prob.nums.iter().map(|x| x + prob.shift).collect();
+        let tripled: Vec[i64] = prob.nums.iter().map(|x| 3 * x).collect();
+        let got: Vec[i64] = (0..5).map(|arm| answer(arm, prob.nums.clone())).collect();
+        for arm in 0..5 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..5 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            // the tripled answer divided back, so an arm's `i64.MAX` (no
+            // pair found) cannot overflow the check
+            let thrice = answer(arm, tripled.clone());
+            let verdicts = [
+                a == truth,
+                answer(arm, prob.shuffled.clone()) == a,
+                answer(arm, negated.clone()) == a,
+                answer(arm, shifted.clone()) == a,
+                thrice % 3 == 0 and thrice / 3 == a,
+                same >= 2,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"array {p} arm {names[arm]}: P{k + 1} fails, answer {a}, literal {truth}, values {prob.nums}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 arrays: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}
