@@ -1989,6 +1989,31 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             PatternKind::Tuple(patterns) => {
+                // A tuple pattern over a value whose type a later use fixes
+                // (`Some((end, val))` over `heap.peek()` before the first
+                // `heap.push((e, v))`) makes the variable a tuple of fresh
+                // variables, one per part, as Rust's inference does; the
+                // parts are then solved by that later use. Left unsolved,
+                // the leaves had no type at all and the MIR builder refused
+                // the program with "a type that failed to check is not
+                // lowered yet" (kata 2054).
+                let solved;
+                let expected = match self.resolved_now(expected) {
+                    Type::TypeVar(_) => {
+                        let parts: Vec<Type> =
+                            patterns.iter().map(|_| self.env.fresh_type_var()).collect();
+                        let tuple = Type::Tuple(parts);
+                        super::inference::unify_types(
+                            expected,
+                            &tuple,
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        );
+                        solved = tuple;
+                        &solved
+                    }
+                    _ => expected,
+                };
                 if let Type::Tuple(types) = expected {
                     // The scrutinee's own tuple literal, at the top level only:
                     // a nested tuple pattern sees `None`.

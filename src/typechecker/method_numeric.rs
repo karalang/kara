@@ -838,7 +838,24 @@ impl<'a> super::TypeChecker<'a> {
                 return Some(Type::Error);
             }
             let arg = &args[0].value;
-            let arg_ty = self.infer_expr(arg);
+            let mut arg_ty = self.infer_expr(arg);
+            // An argument whose type a later use fixes (`val` bound by
+            // `Some((end, val))` over a heap filled further down) is the
+            // receiver's type, as in Rust (kata 2054).
+            let open = match self.resolved_now(&arg_ty) {
+                Type::Ref(inner) | Type::MutRef(inner) => *inner,
+                t => t,
+            };
+            if matches!(open, Type::TypeVar(_))
+                && super::inference::unify_types(
+                    &open,
+                    receiver_for_lookup,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                )
+            {
+                arg_ty = self.resolved_now(&arg_ty);
+            }
             let is_bare_num_lit = Self::unsuffixed_num_literal(arg, receiver_for_lookup).is_some();
             if is_bare_num_lit {
                 self.record_promoted_literal(arg, receiver_for_lookup);
