@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 202 |
 | false-positive | 165 |
-| perf | 139 |
+| perf | 140 |
 | missing-feature | 113 |
 | soundness | 55 |
 | miscompile | 47 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 319 |
-| mir-llvm | 173 |
+| mir-llvm | 174 |
 | mir | 149 |
 | cli | 89 |
 | ownership | 64 |
@@ -106,11 +106,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 1.9x Rust's `sort_by` in kata 1058's benchmark (2.5x before a53992a785), where a plain `sort()` keeps pace | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
-| B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
 | B-2026-11-09-19 | 2026-11-09 | mir | medium | `v.contains(d)` with a float needle on a `Vec[u8]` (`let d = 1.5`) passes `karac check`; the interpreter then stops with "Eq on Int(1) and Float(1.5)" and the binary prints `false`, while `Set[u8].contains(d)` and a `u8` parameter refuse the same float | — |
 | B-2026-11-09-21 | 2026-11-09 | typecheck | low | `Option` accepts `Result`'s `is_ok()` and `is_err()` (as `is_some`/`is_none`), though docs/library/core-types.md lists them on `Result` only, so Rust's `xs.binary_search(v).is_ok()` passes unremarked and gets no `.is_some()` fix | — |
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
+| B-2026-11-09-26 | 2026-11-09 | mir-llvm | low | A presized push fill whose trip count is not a constant keeps two exits a trip, its bound and its reservation's reach, so LLVM does not vectorize it: kata 484's `(1..=n).collect()` (n = letters.len() + 1) runs 7 instructions an element where Rust's TrustedLen fill is vectorized, and its `s.chars().collect()` runs 14 a char against Rust's 11 | — |
 
 ### Relocated
 
@@ -892,6 +892,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-08-58 | typecheck | medium | A closure returning `Some((Vec.new(), x))` to a generic `Fn(S) -> Option[(S, O)]` leaves `O` uninferred, and with the state unannotated reports two u… | fbc3d33e01 |
 | B-2026-11-08-59 | resolver | low | An undefined `Deque`, `ArrayDeque`, `deque` or `Queue` gets no suggestion, though `HashMap`, `HashSet`, `BTreeMap` and `BinaryHeap` are each pointed… | e99826bcc0 |
 | B-2026-11-08-60 | parser | medium | A `const` declared inside a function body (`const MOD: i64 = 1_000_000_007;`, the usual first line of a LeetCode Rust solution) is a parse error that… | a90821c8d |
+| B-2026-11-08-61 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] . | 774d3877a5 |
 | B-2026-11-08-62 | typecheck+cli | medium | A copy of a defaulted literal binding gets no annotation fix: `let mut carry = 0; let mut x = carry; x += d; out.push(x & 1)` with `out: Vec[i32]` is… | a0bb430292 |
 | B-2026-11-08-63 | typecheck+mir | low | A constant whose value is computed from another constant is refused as a pattern: `const AA: i64 = 5; const BB: i64 = AA + 1;` then `match 6 { BB => . | 429cb5a08c |
 | B-2026-11-08-64 | typecheck | low | A mutating method on a read-only Slice binding (`let mut b = s.bytes(); b.swap(i, j)`, also sort, reverse, fill, sort_by, sort_by_key, split_at_mut)… | 34d42091dd |
