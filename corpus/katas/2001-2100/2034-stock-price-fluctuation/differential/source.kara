@@ -1,0 +1,558 @@
+// LeetCode #2034: Stock Price Fluctuation -- differential. The six arms
+// against the statement read literally: a list of (timestamp, price)
+// records, a correction overwriting its record in place, every query a scan
+// of the list. 1500 sessions of 1 to 25 operations, timestamps up to 12 and
+// prices up to 30, every one drawn before any arm answers. A session's
+// answers are the answers of its queries, in order.
+//
+// P1  the answers are the statement read literally
+// P2  every price raised by the same amount raises every answer by it
+// P3  every query asked twice in a row gives its answer twice
+// P4  every price `p` turned into `31 - p`, with the maximum and minimum
+//     queries swapped, turns every answer `a` into `31 - a`
+// P5  every update preceded by a wrong record at its timestamp, priced
+//     `31 - p`, leaves the answers
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: two heaps, stale records popped at query time
+struct StarStock {
+    prices: Map[i64, i64],
+    latest: i64,
+    highs: PriorityQueue[(i64, i64)],
+    lows: PriorityQueue[(i64, i64)],
+}
+
+impl StarStock {
+    fn new() -> StarStock {
+        StarStock { prices: Map.new(), latest: 0, highs: PriorityQueue.max_first(), lows: PriorityQueue.new() }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        self.prices.insert(timestamp, price);
+        self.latest = self.latest.max(timestamp);
+        self.highs.push((price, timestamp));
+        self.lows.push((price, timestamp));
+    }
+
+    fn current(self) -> i64 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(mut ref self) -> i64 {
+        loop {
+            let (price, timestamp) = *self.highs.peek().unwrap();
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.highs.pop();
+        }
+    }
+
+    fn minimum(mut ref self) -> i64 {
+        loop {
+            let (price, timestamp) = *self.lows.peek().unwrap();
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.lows.pop();
+        }
+    }
+}
+
+fn star_replay(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut stock = StarStock.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        match kind {
+            0 => stock.update(timestamp, price),
+            1 => answers.push(stock.current()),
+            2 => answers.push(stock.maximum()),
+            _ => answers.push(stock.minimum()),
+        }
+    }
+    answers
+}
+
+// ---- stock_sorted.kara: a SortedMap of counts per price
+struct SortedStock {
+    prices: Map[i64, i64],
+    latest: i64,
+    counts: SortedMap[i64, i64],
+}
+
+impl SortedStock {
+    fn new() -> SortedStock {
+        SortedStock { prices: Map.new(), latest: 0, counts: SortedMap.new() }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        if let Some(old) = self.prices.insert(timestamp, price) {
+            let left = self.counts[old] - 1;
+            if left == 0 {
+                self.counts.remove(old);
+            } else {
+                self.counts[old] = left;
+            }
+        }
+        *self.counts.entry(price).or_insert(0) += 1;
+        self.latest = self.latest.max(timestamp);
+    }
+
+    fn current(self) -> i64 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(self) -> i64 {
+        *self.counts.last().unwrap().0
+    }
+
+    fn minimum(self) -> i64 {
+        *self.counts.first().unwrap().0
+    }
+}
+
+fn sorted_replay(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut stock = SortedStock.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        match kind {
+            0 => stock.update(timestamp, price),
+            1 => answers.push(stock.current()),
+            2 => answers.push(stock.maximum()),
+            _ => answers.push(stock.minimum()),
+        }
+    }
+    answers
+}
+
+// ---- stock_pairs.kara: a SortedSet of (price, timestamp) records
+struct PairsStock {
+    prices: Map[i64, i64],
+    latest: i64,
+    records: SortedSet[(i64, i64)],
+}
+
+impl PairsStock {
+    fn new() -> PairsStock {
+        PairsStock { prices: Map.new(), latest: 0, records: SortedSet.new() }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        match self.prices.get(timestamp) {
+            Some(old) => {
+                self.records.remove((*old, timestamp));
+            }
+            None => {}
+        }
+        self.prices.insert(timestamp, price);
+        self.records.insert((price, timestamp));
+        if timestamp > self.latest {
+            self.latest = timestamp;
+        }
+    }
+
+    fn current(self) -> i64 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(self) -> i64 {
+        self.records.max().unwrap().0
+    }
+
+    fn minimum(self) -> i64 {
+        self.records.min().unwrap().0
+    }
+}
+
+fn pairs_replay(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut stock = PairsStock.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        match kind {
+            0 => stock.update(timestamp, price),
+            1 => answers.push(stock.current()),
+            2 => answers.push(stock.maximum()),
+            _ => answers.push(stock.minimum()),
+        }
+    }
+    answers
+}
+
+// ---- stock_scan.kara: the map scanned at every query
+struct ScanStock {
+    prices: Map[i64, i64],
+    latest: i64,
+    high: Option[i64],
+    low: Option[i64],
+}
+
+impl ScanStock {
+    fn new() -> ScanStock {
+        ScanStock { prices: Map.new(), latest: 0, high: None, low: None }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        let old = self.prices.insert(timestamp, price);
+        self.latest = self.latest.max(timestamp);
+        self.high = match (self.high, old) {
+            (Some(h), Some(o)) if o == h and price < h => None,
+            (Some(h), _) => Some(h.max(price)),
+            (None, _) => None,
+        };
+        self.low = match (self.low, old) {
+            (Some(l), Some(o)) if o == l and price > l => None,
+            (Some(l), _) => Some(l.min(price)),
+            (None, _) => None,
+        };
+        if self.prices.len() == 1 {
+            self.high = Some(price);
+            self.low = Some(price);
+        }
+    }
+
+    fn current(self) -> i64 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(mut ref self) -> i64 {
+        if self.high.is_none() {
+            self.high = Some(*self.prices.values().max().unwrap());
+        }
+        self.high.unwrap()
+    }
+
+    fn minimum(mut ref self) -> i64 {
+        if self.low.is_none() {
+            self.low = Some(*self.prices.values().min().unwrap());
+        }
+        self.low.unwrap()
+    }
+}
+
+fn scan_replay(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut stock = ScanStock.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        match kind {
+            0 => stock.update(timestamp, price),
+            1 => answers.push(stock.current()),
+            2 => answers.push(stock.maximum()),
+            _ => answers.push(stock.minimum()),
+        }
+    }
+    answers
+}
+
+// ---- stock_vec.kara: a sorted Vec of prices
+struct VecStock {
+    prices: Map[i64, i64],
+    latest: i64,
+    sorted: Vec[i64],
+}
+
+impl VecStock {
+    fn new() -> VecStock {
+        VecStock { prices: Map.new(), latest: 0, sorted: Vec.new() }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        if self.prices.contains_key(timestamp) {
+            let old = self.prices[timestamp];
+            match self.sorted.binary_search(old) {
+                Some(at) => {
+                    self.sorted.remove(at);
+                }
+                None => {}
+            }
+        }
+        self.prices.insert(timestamp, price);
+        let at = self.sorted.partition_point(|p| p < price);
+        self.sorted.insert(at, price);
+        self.latest = self.latest.max(timestamp);
+    }
+
+    fn current(self) -> i64 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(self) -> i64 {
+        self.sorted[self.sorted.len() - 1]
+    }
+
+    fn minimum(self) -> i64 {
+        self.sorted[0]
+    }
+}
+
+fn vec_replay(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut stock = VecStock.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        match kind {
+            0 => stock.update(timestamp, price),
+            1 => answers.push(stock.current()),
+            2 => answers.push(stock.maximum()),
+            _ => answers.push(stock.minimum()),
+        }
+    }
+    answers
+}
+
+// ---- stock_solution.kara: LeetCode's Rust template after karac fix
+struct RustStockPrice {
+    prices: Map[i32, i32],
+    latest: i32,
+    max_heap: PriorityQueue[(i32, i32)],
+    min_heap: PriorityQueue[(i32, i32)],
+}
+
+impl RustStockPrice {
+    fn new() -> Self {
+        RustStockPrice {
+            prices: Map.new(),
+            latest: 0,
+            max_heap: PriorityQueue.max_first(),
+            min_heap: PriorityQueue.new(),
+        }
+    }
+
+    fn update(mut ref self, timestamp: i32, price: i32) {
+        self.prices.insert(timestamp, price);
+        self.latest = self.latest.max(timestamp);
+        self.max_heap.push((price, timestamp));
+        self.min_heap.push((price, timestamp));
+    }
+
+    fn current(self) -> i32 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(mut ref self) -> i32 {
+        while let Some((price, timestamp)) = self.max_heap.peek().cloned() {
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.max_heap.pop();
+        }
+        unreachable()
+    }
+
+    fn minimum(mut ref self) -> i32 {
+        while let Some((price, timestamp)) = self.min_heap.peek().cloned() {
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.min_heap.pop();
+        }
+        unreachable()
+    }
+}
+
+struct RustTracker {
+    stock: RustStockPrice,
+}
+
+impl RustTracker {
+    fn new() -> Self {
+        RustTracker { stock: RustStockPrice.new() }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        self.stock.update(timestamp as i32, price as i32);
+    }
+
+    fn current(self) -> i64 {
+        self.stock.current()
+    }
+
+    fn maximum(mut ref self) -> i64 {
+        self.stock.maximum()
+    }
+
+    fn minimum(mut ref self) -> i64 {
+        self.stock.minimum()
+    }
+}
+
+fn rust_replay(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut stock = RustTracker.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        match kind {
+            0 => stock.update(timestamp, price),
+            1 => answers.push(stock.current()),
+            2 => answers.push(stock.maximum()),
+            _ => answers.push(stock.minimum()),
+        }
+    }
+    answers
+}
+
+// ---- the statement read literally
+
+fn literal(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut records: Vec[(i64, i64)] = Vec.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        if kind == 0 {
+            let mut found = false;
+            for i in 0..records.len() {
+                if records[i].0 == timestamp {
+                    records[i] = (timestamp, price);
+                    found = true;
+                }
+            }
+            if not found {
+                records.push((timestamp, price));
+            }
+        } else {
+            let mut latest = records[0];
+            let mut high = records[0].1;
+            let mut low = records[0].1;
+            for (t, p) in records.iter() {
+                if t > latest.0 {
+                    latest = (t, p);
+                }
+                if p > high {
+                    high = p;
+                }
+                if p < low {
+                    low = p;
+                }
+            }
+            answers.push(if kind == 1 {
+                latest.1
+            } else if kind == 2 {
+                high
+            } else {
+                low
+            });
+        }
+    }
+    answers
+}
+
+fn answer(arm: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    match arm {
+        0 => star_replay(ops),
+        1 => sorted_replay(ops),
+        2 => pairs_replay(ops),
+        3 => scan_replay(ops),
+        4 => vec_replay(ops),
+        _ => rust_replay(ops),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64) -> (Vec[(i64, i64, i64)], i64) {
+    let count = next_random(mut seed) % 25 + 1;
+    let span = next_random(mut seed) % 12 + 1;
+    let top = next_random(mut seed) % 30 + 1;
+    let upd = next_random(mut seed) % 9 + 1;
+    let mut ops: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..count {
+        if i == 0 or next_random(mut seed) % 10 < upd {
+            let timestamp = next_random(mut seed) % span + 1;
+            let price = next_random(mut seed) % top + 1;
+            ops.push((0, timestamp, price));
+        } else {
+            ops.push((next_random(mut seed) % 3 + 1, 0, 0));
+        }
+    }
+    let lift = next_random(mut seed) % 1000 + 1;
+    (ops, lift)
+}
+
+fn main() {
+    let names = ["star", "sorted", "pairs", "scan", "vec", "rust"];
+    let mut seed = 2034;
+    let mut problems: Vec[(Vec[(i64, i64, i64)], i64)] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let (ops, lift) = problems[p].clone();
+        let truth = literal(ops.clone());
+        for a in truth.iter() {
+            check = (check * 31 + a) % 1000000007;
+        }
+        check = (check * 31 + 31) % 1000000007;
+        let mut lifted: Vec[(i64, i64, i64)] = Vec.new();
+        let mut asked_twice: Vec[(i64, i64, i64)] = Vec.new();
+        let mut mirrored: Vec[(i64, i64, i64)] = Vec.new();
+        let mut corrected: Vec[(i64, i64, i64)] = Vec.new();
+        for (kind, t, pr) in ops.iter() {
+            if kind == 0 {
+                lifted.push((0, t, pr + lift));
+                asked_twice.push((0, t, pr));
+                mirrored.push((0, t, 31 - pr));
+                corrected.push((0, t, 31 - pr));
+                corrected.push((0, t, pr));
+            } else {
+                lifted.push((kind, 0, 0));
+                asked_twice.push((kind, 0, 0));
+                asked_twice.push((kind, 0, 0));
+                mirrored.push((if kind == 2 {
+                    3
+                } else if kind == 3 {
+                    2
+                } else {
+                    1
+                }, 0, 0));
+                corrected.push((kind, 0, 0));
+            }
+        }
+        let got: Vec[Vec[i64]] = (0..6).map(|arm| answer(arm, ops.clone())).collect();
+        for arm in 0..6 {
+            let ans = got[arm].clone();
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == ans {
+                    same += 1;
+                }
+            }
+            let raised: Vec[i64] = ans.iter().map(|a| a + lift).collect();
+            let mut doubled: Vec[i64] = Vec.new();
+            for a in ans.iter() {
+                doubled.push(a);
+                doubled.push(a);
+            }
+            let flipped: Vec[i64] = ans.iter().map(|a| 31 - a).collect();
+            let verdicts = [
+                ans == truth,
+                answer(arm, lifted.clone()) == raised,
+                answer(arm, asked_twice.clone()) == doubled,
+                answer(arm, mirrored.clone()) == flipped,
+                answer(arm, corrected.clone()) == ans,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, ops {ops}, answers {ans}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 sessions: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

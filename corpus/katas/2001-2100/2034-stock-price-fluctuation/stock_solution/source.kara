@@ -1,0 +1,174 @@
+// LeetCode #2034: Stock Price Fluctuation -- LeetCode's Rust template,
+// carried to Kāra by `karac fix`. A `HashMap`, a `BinaryHeap` of
+// `(price, timestamp)` and a second one of `Reverse(..)` records, stale
+// records popped in a `while let` over `peek()`; `Tracker` adapts its
+// `i32`s to the harness.
+
+
+struct StockPrice {
+    prices: Map[i32, i32],
+    latest: i32,
+    max_heap: PriorityQueue[(i32, i32)],
+    min_heap: PriorityQueue[(i32, i32)],
+}
+
+impl StockPrice {
+    fn new() -> Self {
+        StockPrice {
+            prices: Map.new(),
+            latest: 0,
+            max_heap: PriorityQueue.max_first(),
+            min_heap: PriorityQueue.new(),
+        }
+    }
+
+    fn update(mut ref self, timestamp: i32, price: i32) {
+        self.prices.insert(timestamp, price);
+        self.latest = self.latest.max(timestamp);
+        self.max_heap.push((price, timestamp));
+        self.min_heap.push((price, timestamp));
+    }
+
+    fn current(self) -> i32 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(mut ref self) -> i32 {
+        while let Some((price, timestamp)) = self.max_heap.peek().cloned() {
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.max_heap.pop();
+        }
+        unreachable()
+    }
+
+    fn minimum(mut ref self) -> i32 {
+        while let Some((price, timestamp)) = self.min_heap.peek().cloned() {
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.min_heap.pop();
+        }
+        unreachable()
+    }
+}
+
+struct Tracker {
+    stock: StockPrice,
+}
+
+impl Tracker {
+    fn new() -> Self {
+        Tracker { stock: StockPrice.new() }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        self.stock.update(timestamp as i32, price as i32);
+    }
+
+    fn current(self) -> i64 {
+        self.stock.current()
+    }
+
+    fn maximum(mut ref self) -> i64 {
+        self.stock.maximum()
+    }
+
+    fn minimum(mut ref self) -> i64 {
+        self.stock.minimum()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The answers of the queries in `ops`, each `(kind, timestamp, price)`:
+// kind 0 updates, 1 asks for the current price, 2 the maximum, 3 the
+// minimum.
+fn replay(ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut stock = Tracker.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, timestamp, price) in ops {
+        match kind {
+            0 => stock.update(timestamp, price),
+            1 => answers.push(stock.current()),
+            2 => answers.push(stock.maximum()),
+            _ => answers.push(stock.minimum()),
+        }
+    }
+    answers
+}
+
+// `count` operations on a fresh tracker: the first an update, then each an
+// update with odds `upd` in 10, timestamps from 1 to `span` and prices from
+// 1 to `top`, else one of the three queries. Returns the number of queries
+// and a checksum of their answers.
+fn play(count: i64, span: i64, top: i64, upd: i64, seed: mut ref i64) -> (i64, i64) {
+    let mut stock = Tracker.new();
+    let mut queries = 0;
+    let mut check = 0;
+    for i in 0..count {
+        if i == 0 or next_random(mut seed) % 10 < upd {
+            let timestamp = (next_random(mut seed) * 32768 + next_random(mut seed)) % span + 1;
+            let price = (next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1;
+            stock.update(timestamp, price);
+        } else {
+            let kind = next_random(mut seed) % 3 + 1;
+            let answer = match kind {
+                1 => stock.current(),
+                2 => stock.maximum(),
+                _ => stock.minimum(),
+            };
+            queries += 1;
+            check = (check * 31 + answer % 1000000007 + kind) % 1000000007;
+        }
+    }
+    (queries, check)
+}
+
+fn main() {
+    // LeetCode's example, then a few more
+    let examples: Vec[Vec[(i64, i64, i64)]] = [
+        [(0, 1, 10), (0, 2, 5), (1, 0, 0), (2, 0, 0), (0, 1, 3), (2, 0, 0), (0, 4, 2), (3, 0, 0)],
+        [(0, 7, 4), (1, 0, 0), (2, 0, 0), (3, 0, 0)],
+        [(0, 5, 9), (0, 5, 1), (2, 0, 0), (3, 0, 0), (1, 0, 0)],
+        [(0, 3, 8), (0, 1, 2), (1, 0, 0), (0, 2, 8), (0, 3, 1), (2, 0, 0), (1, 0, 0)],
+        [(0, 1, 1000000000), (0, 1000000000, 1), (2, 0, 0), (3, 0, 0), (1, 0, 0), (0, 1000000000, 1000000000), (3, 0, 0)],
+        [(0, 2, 6), (0, 1, 6), (0, 2, 3), (2, 0, 0), (3, 0, 0), (0, 1, 3), (2, 0, 0), (3, 0, 0)],
+    ];
+    for ops in examples {
+        println(f"{ops} -> {replay(ops)}");
+    }
+    // 3000 sessions of 1 to 30 operations, timestamps up to 20 and prices up
+    // to 50, each with its own odds of an update
+    let mut seed = 2034;
+    let mut queries = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let count = next_random(mut seed) % 30 + 1;
+        let span = next_random(mut seed) % 20 + 1;
+        let top = next_random(mut seed) % 50 + 1;
+        let upd = next_random(mut seed) % 9 + 1;
+        let (q, c) = play(count, span, top, upd, mut seed);
+        queries += q;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"3000 small sessions: {queries} queries, checksum {check}");
+    // 5 sessions of 100000 operations, the most the constraints allow
+    queries = 0;
+    check = 0;
+    for a in 0..5 {
+        let span = [1000000000, 100, 1000000000, 10, 50000][a];
+        let top = [1000000000, 1000000000, 5, 1000000000, 1000][a];
+        let upd = [5, 5, 8, 2, 9][a];
+        let (q, c) = play(100000, span, top, upd, mut seed);
+        queries += q;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"5 sessions of 100000 operations: {queries} queries, checksum {check}");
+}

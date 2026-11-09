@@ -1,0 +1,97 @@
+// LeetCode #2034: Stock Price Fluctuation -- the ★ arm as a benchmark. 10
+// sessions of 100000 operations (updates, corrections and queries) built
+// once, each replayed 15 times on a fresh tracker: 150 sessions, 15000000
+// operations.
+
+struct StockPrice {
+    prices: Map[i64, i64],
+    latest: i64,
+    highs: PriorityQueue[(i64, i64)],
+    lows: PriorityQueue[(i64, i64)],
+}
+
+impl StockPrice {
+    fn new() -> StockPrice {
+        StockPrice { prices: Map.new(), latest: 0, highs: PriorityQueue.max_first(), lows: PriorityQueue.new() }
+    }
+
+    fn update(mut ref self, timestamp: i64, price: i64) {
+        self.prices.insert(timestamp, price);
+        self.latest = self.latest.max(timestamp);
+        self.highs.push((price, timestamp));
+        self.lows.push((price, timestamp));
+    }
+
+    fn current(self) -> i64 {
+        self.prices[self.latest]
+    }
+
+    fn maximum(mut ref self) -> i64 {
+        loop {
+            let (price, timestamp) = *self.highs.peek().unwrap();
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.highs.pop();
+        }
+    }
+
+    fn minimum(mut ref self) -> i64 {
+        loop {
+            let (price, timestamp) = *self.lows.peek().unwrap();
+            if self.prices[timestamp] == price {
+                return price;
+            }
+            self.lows.pop();
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 2034;
+    let mut sessions: Vec[Vec[(i64, i64, i64)]] = Vec.new();
+    for a in 0..10 {
+        let span = [1000000000, 100000, 1000, 1000000000, 50000][a % 5];
+        let top = [1000000000, 1000, 1000000000, 100, 1000000][a % 5];
+        let upd = a % 7 + 2;
+        let mut ops: Vec[(i64, i64, i64)] = Vec.new();
+        for i in 0..100000 {
+            if i == 0 or next_random(mut seed) % 10 < upd {
+                let timestamp = (next_random(mut seed) * 32768 + next_random(mut seed)) % span + 1;
+                let price = (next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1;
+                ops.push((0, timestamp, price));
+            } else {
+                ops.push((next_random(mut seed) % 3 + 1, 0, 0));
+            }
+        }
+        sessions.push(ops);
+    }
+    let mut runs = 0;
+    let mut queries = 0;
+    let mut check = 0;
+    for _ in 0..15 {
+        for ops in sessions.iter() {
+            let mut stock = StockPrice.new();
+            for (kind, timestamp, price) in ops.iter() {
+                if kind == 0 {
+                    stock.update(timestamp, price);
+                } else {
+                    let answer = match kind {
+                        1 => stock.current(),
+                        2 => stock.maximum(),
+                        _ => stock.minimum(),
+                    };
+                    queries += 1;
+                    check = (check * 31 + answer % 1000000007 + kind) % 1000000007;
+                }
+            }
+            runs += 1;
+        }
+    }
+    println(f"{runs} sessions: {queries} queries, checksum {check}");
+}
