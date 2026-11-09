@@ -1,0 +1,105 @@
+// LeetCode #2053: Kth Distinct String in an Array -- by sorting: the
+// indices ordered by their strings, so equal strings sit together; a run
+// of length one is a distinct string, and those indices, sorted back into
+// the array's order, give the k-th. O(n log n).
+
+fn kth_distinct(arr: Vec[String], k: i64) -> String {
+    let n = arr.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by(|a, b| arr[a].cmp(arr[b]));
+    let mut once: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n and arr[order[j]] == arr[order[i]] {
+            j += 1;
+        }
+        if j - i == 1 {
+            once.push(order[i]);
+        }
+        i = j;
+    }
+    once.sort();
+    if k <= once.len() { arr[once[k - 1]].clone() } else { String.new() }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` strings of 1 to `longest` letters from the first `letters` of the
+// alphabet: few letters make many repeats
+fn draw(n: i64, longest: i64, letters: i64, seed: mut ref i64) -> Vec[String] {
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut arr: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let len = next_random(mut seed) % longest + 1;
+        let mut s = String.new();
+        for _ in 0..len {
+            s.push(alphabet[next_random(mut seed) % letters]);
+        }
+        arr.push(s);
+    }
+    arr
+}
+
+// an answer folded into a checksum: its letters, then its length, so ""
+// counts too
+fn fold(check: i64, answer: String) -> i64 {
+    let mut c = check;
+    for ch in answer.chars() {
+        c = (c * 31 + ch as i64) % 1000000007;
+    }
+    (c * 31 + answer.len() + 1) % 1000000007
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        (["d", "b", "c", "b", "c", "a"], 2),
+        (["aaa", "aa", "a"], 1),
+        (["a", "b", "a"], 3),
+        (["a", "b", "a"], 1),
+        (["x"], 1),
+        (["p", "p", "q", "q"], 1),
+        (["ab", "ba", "ab", "c", "ba", "d", "c", "e"], 2),
+    ];
+    for (words, k) in examples.iter() {
+        let arr: Vec[String] = words.iter().map(|w| w.to_string()).collect();
+        println(f"{arr}, k {k} -> \"{kth_distinct(arr, k)}\"");
+    }
+    // 2000 arrays of 1 to 30 strings
+    let mut seed = 2053;
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 30 + 1;
+        let longest = next_random(mut seed) % 3 + 1;
+        let letters = next_random(mut seed) % 4 + 2;
+        let arr = draw(n, longest, letters, mut seed);
+        let k = next_random(mut seed) % n + 1;
+        let answer = kth_distinct(arr, k);
+        if answer.len() > 0 {
+            found += 1;
+        }
+        check = fold(check, answer);
+    }
+    println(f"2000 arrays: {found} answers found, checksum {check}");
+    // 200 arrays of 1000 strings of up to 5 letters, the constraints'
+    // limit, k from 1 to 1000
+    found = 0;
+    check = 0;
+    for t in 0..200 {
+        let letters = 2 + t % 25;
+        let arr = draw(1000, 5, letters, mut seed);
+        let answer = kth_distinct(arr, t * 5 + 1);
+        if answer.len() > 0 {
+            found += 1;
+        }
+        check = fold(check, answer);
+    }
+    println(f"200 arrays of 1000: {found} answers found, checksum {check}");
+}

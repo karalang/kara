@@ -1,0 +1,9 @@
+[d, b, c, b, c, a], k 2 -> "a"
+[aaa, aa, a], k 1 -> "aaa"
+[a, b, a], k 3 -> ""
+[a, b, a], k 1 -> "b"
+[x], k 1 -> "x"
+[p, p, q, q], k 1 -> ""
+[ab, ba, ab, c, ba, d, c, e], k 2 -> "e"
+2000 arrays: 756 answers found, checksum 898995166
+200 arrays of 1000: 115 answers found, checksum 823980031

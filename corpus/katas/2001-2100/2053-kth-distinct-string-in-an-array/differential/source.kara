@@ -1,0 +1,248 @@
+// LeetCode #2053: Kth Distinct String in an Array -- the differential.
+// The six arms, against the statement read literally: the distinct
+// strings listed in the order they appear, each checked against every
+// other place in the array, and the k-th of the list taken. 500 arrays of
+// 1 to 30 strings, every one drawn before any arm answers, each asked for
+// every k from 1 to its length.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is "" or a string that occurs in the array exactly once
+// P3  the answers for k and k + 1 are both "", or differ, and when both
+//     are strings the one for k comes first in the array
+// P4  a new string put at the end leaves a string answer the same
+// P5  the array twice over has no distinct string: the answer is ""
+// P6  each arm agrees with at least three of the other five
+
+// ---- distinct.kara: the ★ arm, counted into a `Map`, walked in order
+fn star_kth_distinct(arr: Vec[String], k: i64) -> String {
+    let mut counts: Map[String, i64] = Map.new();
+    for s in arr.iter() {
+        counts[s.clone()] = counts.get(s).unwrap_or(0) + 1;
+    }
+    let mut left = k;
+    for s in arr.iter() {
+        if counts[s] == 1 {
+            left -= 1;
+            if left == 0 {
+                return s.clone();
+            }
+        }
+    }
+    String.new()
+}
+
+// ---- distinct_brute.kara: each string's occurrences counted by a scan
+fn brute_kth_distinct(arr: Vec[String], k: i64) -> String {
+    let mut seen = 0;
+    for s in arr.iter() {
+        if arr.iter().filter(|t| t == s).count() == 1 {
+            seen += 1;
+            if seen == k {
+                return s.clone();
+            }
+        }
+    }
+    String.new()
+}
+
+// ---- distinct_sets.kara: two `Set`s in one pass, then `filter` and `nth`
+fn sets_kth_distinct(arr: Vec[String], k: i64) -> String {
+    let mut seen: Set[String] = Set.new();
+    let mut repeated: Set[String] = Set.new();
+    for s in arr.iter() {
+        if not seen.insert(s.clone()) {
+            repeated.insert(s.clone());
+        }
+    }
+    match arr.iter().filter(|s| not repeated.contains(s)).nth(k - 1) {
+        Some(s) => s.clone(),
+        None => String.new(),
+    }
+}
+
+// ---- distinct_sorted.kara: runs of equal strings after sorting
+fn sorted_kth_distinct(arr: Vec[String], k: i64) -> String {
+    let n = arr.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by(|a, b| arr[a].cmp(arr[b]));
+    let mut once: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n and arr[order[j]] == arr[order[i]] {
+            j += 1;
+        }
+        if j - i == 1 {
+            once.push(order[i]);
+        }
+        i = j;
+    }
+    once.sort();
+    if k <= once.len() { arr[once[k - 1]].clone() } else { String.new() }
+}
+
+// ---- distinct_places.kara: first and last places in a `SortedMap`
+fn places_kth_distinct(arr: Vec[String], k: i64) -> String {
+    let mut places: SortedMap[String, (i64, i64)] = SortedMap.new();
+    for i in 0..arr.len() {
+        let first = match places.get(arr[i]) {
+            Some((f, _)) => f,
+            None => i,
+        };
+        places.insert(arr[i].clone(), (first, i));
+    }
+    let mut once: Vec[i64] = places.values().filter(|(f, l)| f == l).map(|(f, _)| f).collect();
+    once.sort();
+    match once.get(k - 1) {
+        Some(i) => arr[i].clone(),
+        None => String.new(),
+    }
+}
+
+// ---- distinct_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn kth_distinct(arr: Vec[String], k: i32) -> String {
+        let mut cnt: Map[Str, i32] = Map.new();
+        for s in ref arr {
+            *cnt.entry(s.as_str()).or_insert(0) += 1;
+        }
+        let mut k = k;
+        for s in ref arr {
+            if cnt[s.as_str()] == 1 {
+                k -= 1;
+                if k == 0 {
+                    return s.clone();
+                }
+            }
+        }
+        String.new()
+    }
+}
+
+fn solution_kth_distinct(arr: Vec[String], k: i64) -> String {
+    Solution.kth_distinct(arr, k as i32)
+}
+
+// ---- the statement read literally
+
+fn literal(arr: Vec[String], k: i64) -> String {
+    let n = arr.len();
+    let mut distinct: Vec[String] = Vec.new();
+    for i in 0..n {
+        let mut alone = true;
+        for j in 0..n {
+            if j != i and arr[j] == arr[i] {
+                alone = false;
+            }
+        }
+        if alone {
+            distinct.push(arr[i].clone());
+        }
+    }
+    if k <= distinct.len() { distinct[k - 1].clone() } else { String.new() }
+}
+
+fn answer(arm: i64, arr: Vec[String], k: i64) -> String {
+    match arm {
+        0 => star_kth_distinct(arr, k),
+        1 => brute_kth_distinct(arr, k),
+        2 => sets_kth_distinct(arr, k),
+        3 => sorted_kth_distinct(arr, k),
+        4 => places_kth_distinct(arr, k),
+        _ => solution_kth_distinct(arr, k),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` strings of 1 to `longest` letters from the first `letters` of the
+// alphabet, as the harness draws them
+fn draw(n: i64, longest: i64, letters: i64, seed: mut ref i64) -> Vec[String] {
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut arr: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let len = next_random(mut seed) % longest + 1;
+        let mut s = String.new();
+        for _ in 0..len {
+            s.push(alphabet[next_random(mut seed) % letters]);
+        }
+        arr.push(s);
+    }
+    arr
+}
+
+fn place(arr: Vec[String], s: String) -> i64 {
+    arr.iter().position(|t| t == s).unwrap_or(-1)
+}
+
+fn main() {
+    let names = ["star", "brute", "sets", "sorted", "places", "solution"];
+    let mut seed = 2053;
+    let mut problems: Vec[Vec[String]] = Vec.new();
+    for _ in 0..500 {
+        let n = next_random(mut seed) % 30 + 1;
+        let longest = next_random(mut seed) % 3 + 1;
+        let letters = next_random(mut seed) % 4 + 2;
+        problems.push(draw(n, longest, letters, mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for arr in problems.iter() {
+        let n = arr.len();
+        let mut longer = arr.clone();
+        longer.push("zzzzz");
+        let mut twice = arr.clone();
+        twice.extend(arr.iter().cloned());
+        for k in 1..n + 1 {
+            let truth = literal(arr, k);
+            check = (check * 31 + place(arr, truth) + 2) % 1000000007;
+            let got: Vec[String] = (0..6).map(|arm| answer(arm, arr, k)).collect();
+            for arm in 0..6 {
+                let x = got[arm].clone();
+                let mut same = 0;
+                for o in 0..6 {
+                    if o != arm and got[o] == x {
+                        same += 1;
+                    }
+                }
+                let next = answer(arm, arr, k + 1);
+                let verdicts = [
+                    x == truth,
+                    x.is_empty() or arr.iter().filter(|t| t == x).count() == 1,
+                    if x.is_empty() { next.is_empty() } else { next.is_empty() or place(arr, x) < place(arr, next) },
+                    x.is_empty() or answer(arm, longer, k) == x,
+                    answer(arm, twice, k).is_empty(),
+                    same >= 3,
+                ];
+                for p in 0..6 {
+                    checks += 1;
+                    if not verdicts[p] {
+                        by_property[p] += 1;
+                        if failures.len() < 10 {
+                            failures.push(f"{arr} k {k} arm {names[arm]}: P{p + 1} fails, answer \"{x}\", literal \"{truth}\"");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"500 arrays: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for p in 0..6 {
+            if by_property[p] > 0 {
+                println(f"P{p + 1} {by_property[p]}");
+            }
+        }
+    }
+}

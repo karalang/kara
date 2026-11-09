@@ -1,0 +1,55 @@
+// LeetCode #2053: Kth Distinct String in an Array -- the ★ arm as a
+// benchmark. 5000 arrays of 1000 strings of 1 to 5 letters, the
+// constraints' limit, from 2 to 26 letters of the alphabet, so from nearly
+// every string repeated to nearly none; each answered by counting into a
+// `Map` and walking the array: five million strings counted.
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn kth_distinct(arr: Vec[String], k: i64) -> String {
+    let mut counts: Map[String, i64] = Map.new();
+    for s in arr.iter() {
+        counts[s.clone()] = counts.get(s).unwrap_or(0) + 1;
+    }
+    let mut left = k;
+    for s in arr.iter() {
+        if counts[s] == 1 {
+            left -= 1;
+            if left == 0 {
+                return s.clone();
+            }
+        }
+    }
+    String.new()
+}
+
+fn main() {
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut seed = 2053;
+    let mut found = 0;
+    let mut check = 0;
+    for t in 0..5000 {
+        let letters = 2 + t % 25;
+        let mut arr: Vec[String] = Vec.with_capacity(1000);
+        for _ in 0..1000 {
+            let len = next_random(mut seed) % 5 + 1;
+            let mut s = String.new();
+            for _ in 0..len {
+                s.push(alphabet[next_random(mut seed) % letters]);
+            }
+            arr.push(s);
+        }
+        let answer = kth_distinct(arr, t % 1000 + 1);
+        if answer.len() > 0 {
+            found += 1;
+        }
+        for ch in answer.chars() {
+            check = (check * 31 + ch as i64) % 1000000007;
+        }
+        check = (check * 31 + answer.len() + 1) % 1000000007;
+    }
+    println(f"5000 arrays: {found} answers found, checksum {check}");
+}
