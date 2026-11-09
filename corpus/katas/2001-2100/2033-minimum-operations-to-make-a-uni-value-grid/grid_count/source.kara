@@ -1,0 +1,121 @@
+// LeetCode #2033: Minimum Operations to Make a Uni-Value Grid -- a counting
+// pass instead of a sort: values are at most 10^4, so a count per value
+// finds the median by walking the counts until half the cells are passed,
+// and the cost is read off the counts too. O(mn + 10^4).
+
+fn min_operations(grid: Vec[Vec[i64]], x: i64) -> i64 {
+    let mut count = [0; 10001];
+    let r = grid[0][0] % x;
+    let mut cells = 0;
+    for row in grid {
+        for v in row {
+            if v % x != r {
+                return -1;
+            }
+            count[v] += 1;
+            cells += 1;
+        }
+    }
+    // the median is the value whose count first carries the running total
+    // past index cells / 2
+    let mut seen = 0;
+    let mut median = 0;
+    for v in 0..10001 {
+        seen += count[v];
+        if seen > cells / 2 {
+            median = v;
+            break;
+        }
+    }
+    let mut total = 0;
+    for v in 0..10001 {
+        if count[v] > 0 {
+            total += count[v] * ((v - median).abs() / x);
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, answer: i64) -> i64 {
+    (check * 31 + answer + 2) % 1000000007
+}
+
+// An `m` by `n` grid of values from 1 to `cap`. When `aligned`, every
+// value is `base` plus a multiple of `x`, with `base` from 1 to `x`, so
+// some answer exists; otherwise the values are drawn at random.
+fn random_grid(m: i64, n: i64, x: i64, cap: i64, aligned: bool, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let base = next_random(mut seed) % x.min(cap) + 1;
+    let steps = (cap - base) / x + 1;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            if aligned {
+                row.push(base + next_random(mut seed) % steps * x);
+            } else {
+                row.push(next_random(mut seed) % cap + 1);
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[Vec[i64]], i64)] = [
+        ([[2, 4], [6, 8]], 2),
+        ([[1, 5], [2, 3]], 1),
+        ([[1, 2], [3, 4]], 2),
+        ([[7]], 3),
+        ([[1, 1], [1, 1]], 5),
+        ([[1, 10000]], 9999),
+        ([[1, 10000]], 3),
+        ([[3, 6, 9, 12, 15]], 3),
+        ([[5], [5], [5], [8]], 3),
+        ([[2, 2, 2], [4, 4, 4]], 2),
+    ];
+    for (grid, x) in examples {
+        println(f"{grid}, {x} -> {min_operations(grid, x)}");
+    }
+    // 3000 grids of 1 to 6 by 1 to 6 values up to 30, `x` from 1 to 5,
+    // three in four of them aligned
+    let mut seed = 2033;
+    let mut answered = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let m = next_random(mut seed) % 6 + 1;
+        let n = next_random(mut seed) % 6 + 1;
+        let x = next_random(mut seed) % 5 + 1;
+        let cap = next_random(mut seed) % 30 + 1;
+        let aligned = next_random(mut seed) % 4 != 0;
+        let answer = min_operations(random_grid(m, n, x, cap, aligned, mut seed), x);
+        if answer >= 0 {
+            answered += 1;
+            sum += answer;
+        }
+        check = mix(check, answer);
+    }
+    println(f"3000 small grids: {answered} answered, sum {sum}, checksum {check}");
+    // 6 grids of about 100000 values up to 10000, the most the
+    // constraints allow; the last one not aligned
+    sum = 0;
+    check = 0;
+    for a in 0..6 {
+        let m = [316, 1, 100000, 250, 400, 300][a];
+        let n = [316, 100000, 1, 400, 250, 333][a];
+        let x = [1, 7, 2, 100, 1, 3][a];
+        let answer = min_operations(random_grid(m, n, x, 10000, a < 5, mut seed), x);
+        sum += answer;
+        check = mix(check, answer);
+    }
+    println(f"6 grids of 100000 values: sum {sum}, checksum {check}");
+}

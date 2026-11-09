@@ -1,0 +1,321 @@
+// LeetCode #2033: Minimum Operations to Make a Uni-Value Grid --
+// differential. The six arms against the statement read literally: every
+// target from the smallest value to the largest tried, the ones some value
+// cannot reach in steps of `x` passed over, the cheapest kept. 2000 grids of
+// 1 to 5 by 1 to 5 values up to 30, `x` from 1 to 5, three in four aligned,
+// every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  every value raised by the same amount leaves the answer
+// P3  the grid transposed leaves the answer
+// P4  every value `v` turned into `31 - v` leaves the answer
+// P5  every row written twice doubles the answer, -1 staying -1
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: sorted, the median
+fn star_min_operations(grid: Vec[Vec[i64]], x: i64) -> i64 {
+    let mut values: Vec[i64] = grid.iter().flat_map(|v| v.iter()).cloned().collect();
+    let r = values[0] % x;
+    if values.iter().any(|v| v % x != r) {
+        return -1;
+    }
+    values.sort();
+    let median = values[values.len() / 2];
+    values.iter().map(|v| (v - median).abs() / x).sum()
+}
+
+// ---- grid_select.kara: the median by quickselect
+fn select_kth(values: mut ref Vec[i64], k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = values.len() - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        values.swap(mid, hi);
+        let pivot = values[hi];
+        let mut store = lo;
+        for i in lo..hi {
+            if values[i] < pivot {
+                values.swap(i, store);
+                store += 1;
+            }
+        }
+        values.swap(store, hi);
+        if store == k {
+            return values[k];
+        } else if store < k {
+            lo = store + 1;
+        } else {
+            hi = store - 1;
+        }
+    }
+    values[k]
+}
+
+fn select_min_operations(grid: Vec[Vec[i64]], x: i64) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    for row in grid {
+        for v in row {
+            values.push(v);
+        }
+    }
+    let r = values[0] % x;
+    for v in values {
+        if v % x != r {
+            return -1;
+        }
+    }
+    let k = values.len() / 2;
+    let median = select_kth(mut values, k);
+    let mut total = 0;
+    for v in values {
+        total += (v - median).abs() / x;
+    }
+    total
+}
+
+// ---- grid_count.kara: a count per value
+fn count_min_operations(grid: Vec[Vec[i64]], x: i64) -> i64 {
+    let mut count = [0; 10001];
+    let r = grid[0][0] % x;
+    let mut cells = 0;
+    for row in grid {
+        for v in row {
+            if v % x != r {
+                return -1;
+            }
+            count[v] += 1;
+            cells += 1;
+        }
+    }
+    // the median is the value whose count first carries the running total
+    // past index cells / 2
+    let mut seen = 0;
+    let mut median = 0;
+    for v in 0..10001 {
+        seen += count[v];
+        if seen > cells / 2 {
+            median = v;
+            break;
+        }
+    }
+    let mut total = 0;
+    for v in 0..10001 {
+        if count[v] > 0 {
+            total += count[v] * ((v - median).abs() / x);
+        }
+    }
+    total
+}
+
+// ---- grid_prefix.kara: every value tried, by prefix sums
+fn prefix_min_operations(grid: Vec[Vec[i64]], x: i64) -> i64 {
+    let mut s: Vec[i64] = Vec.new();
+    for row in grid {
+        s.extend(row.iter().cloned());
+    }
+    let remainders: SortedSet[i64] = s.iter().map(|v| v % x).collect();
+    if remainders.len() > 1 {
+        return -1;
+    }
+    s.sort();
+    let len = s.len();
+    let mut prefix = Vec.filled(len + 1, 0);
+    for i in 0..len {
+        prefix[i + 1] = prefix[i] + s[i];
+    }
+    let mut best = i64.MAX;
+    for i in 0..len {
+        let t = s[i];
+        let below = i * t - prefix[i];
+        let above = prefix[len] - prefix[i + 1] - (len - 1 - i) * t;
+        best = best.min((below + above) / x);
+    }
+    best
+}
+
+// ---- grid_sweep.kara: the cost swept across the sorted values
+fn sweep_min_operations(grid: Vec[Vec[i64]], x: i64) -> i64 {
+    let mut s: Vec[i64] = grid.iter().flat_map(|row| row.iter()).cloned().collect();
+    s.sort();
+    let len = s.len();
+    let mut cost = 0;
+    for v in s.iter() {
+        let gap = v - s[0];
+        if gap % x != 0 {
+            return -1;
+        }
+        cost += gap / x;
+    }
+    let mut best = cost;
+    for i in 1..len {
+        let d = (s[i] - s[i - 1]) / x;
+        cost += (2 * i - len) * d;
+        best = best.min(cost);
+    }
+    best
+}
+
+// ---- grid_solution.kara: LeetCode's Rust template after karac fix
+impl Solution {
+    pub fn min_operations(grid: Vec[Vec[i32]], x: i32) -> i32 {
+        let mut v: Vec[i32] = grid.clone().into_iter().flat_map(|v| v.into_iter()).collect();
+        let r = v[0] % x;
+        if v.iter().any(|a| a % x != r) {
+            return -1;
+        }
+        v.sort();
+        let med = v[v.len() / 2];
+        v.iter().map(|a| (a - med).abs() / x).sum()
+    }
+}
+
+struct Solution {}
+
+fn rust_min_operations(grid: ref Vec[Vec[i64]], x: i64) -> i64 {
+    let g: Vec[Vec[i32]] = grid.iter().map(|row| row.iter().map(|v| v as i32).collect()).collect();
+    Solution.min_operations(g, x as i32) as i64
+}
+
+// ---- the statement read literally
+
+fn literal(grid: Vec[Vec[i64]], x: i64) -> i64 {
+    let mut lo = 10000;
+    let mut hi = 0;
+    for row in grid.iter() {
+        for v in row.iter() {
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }
+    }
+    let mut best = -1;
+    for t in lo..hi + 1 {
+        let mut reach = true;
+        let mut ops = 0;
+        for row in grid.iter() {
+            for v in row.iter() {
+                if (v - t) % x != 0 {
+                    reach = false;
+                }
+                ops += (v - t).abs() / x;
+            }
+        }
+        if reach and (best == -1 or ops < best) {
+            best = ops;
+        }
+    }
+    best
+}
+
+fn answer(arm: i64, grid: Vec[Vec[i64]], x: i64) -> i64 {
+    match arm {
+        0 => star_min_operations(grid, x),
+        1 => select_min_operations(grid, x),
+        2 => count_min_operations(grid, x),
+        3 => prefix_min_operations(grid, x),
+        4 => sweep_min_operations(grid, x),
+        _ => rust_min_operations(grid, x),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    grid: Vec[Vec[i64]],
+    x: i64,
+    lift: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let m = next_random(mut seed) % 5 + 1;
+    let n = next_random(mut seed) % 5 + 1;
+    let x = next_random(mut seed) % 5 + 1;
+    let cap = next_random(mut seed) % 30 + 1;
+    let aligned = next_random(mut seed) % 4 != 0;
+    let base = next_random(mut seed) % x.min(cap) + 1;
+    let steps = (cap - base) / x + 1;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            if aligned {
+                row.push(base + next_random(mut seed) % steps * x);
+            } else {
+                row.push(next_random(mut seed) % cap + 1);
+            }
+        }
+        grid.push(row);
+    }
+    let lift = next_random(mut seed) % 100 + 1;
+    Problem { grid, x, lift }
+}
+
+fn main() {
+    let names = ["star", "select", "count", "prefix", "sweep", "rust"];
+    let mut seed = 2033;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..2000 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let grid = prob.grid.clone();
+        let x = prob.x;
+        let truth = literal(grid.clone(), x);
+        check = (check * 31 + truth + 2) % 1000000007;
+        let lifted: Vec[Vec[i64]] = grid.iter().map(|row| row.iter().map(|v| v + prob.lift).collect()).collect();
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for j in 0..grid[0].len() {
+            transposed.push(grid.iter().map(|row| row[j]).collect());
+        }
+        let mirrored: Vec[Vec[i64]] = grid.iter().map(|row| row.iter().map(|v| 31 - v).collect()).collect();
+        let mut twice = grid.clone();
+        for row in grid.iter() {
+            twice.push(row.clone());
+        }
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, grid.clone(), x)).collect();
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let double = if a == -1 { -1 } else { 2 * a };
+            let verdicts = [
+                a == truth,
+                answer(arm, lifted.clone(), x) == a,
+                answer(arm, transposed.clone(), x) == a,
+                answer(arm, mirrored.clone(), x) == a,
+                answer(arm, twice.clone(), x) == double,
+                same >= 3,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, grid {grid}, x {x}, answer {a}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"2000 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}
