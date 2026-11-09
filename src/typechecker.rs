@@ -3403,6 +3403,10 @@ pub struct TypeChecker<'a> {
     pub(super) binding_class_reported: rustc_hash::FxHashSet<usize>,
     /// `vec![..]` literals already warned on, by `(offset, length)`.
     pub(super) vec_macro_reported: rustc_hash::FxHashSet<(usize, usize)>,
+    /// The `opt.is_ok()` / `opt.is_err()` calls already warned about, by the
+    /// call's closing `)`, which a re-inference visits again
+    /// (B-2026-11-09-21).
+    pub(super) option_result_predicates_reported: rustc_hash::FxHashSet<usize>,
     /// Casts `redundant_cast` / `lossless_cast` already reported, for the
     /// same reason.
     pub(super) cast_lints_reported: FxHashSet<SpanKey>,
@@ -4289,6 +4293,7 @@ impl<'a> TypeChecker<'a> {
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             binding_class_reported: rustc_hash::FxHashSet::default(),
             vec_macro_reported: rustc_hash::FxHashSet::default(),
+            option_result_predicates_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
             pending_cast_expected: None,
             operand_casts: FxHashMap::default(),

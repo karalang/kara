@@ -2454,6 +2454,9 @@ impl<'a> super::TypeChecker<'a> {
         // `make_map().get(k)`, a `TupleIndex` place). Extracted to
         // `method_temp_receiver.rs`; the records must be written before any
         // later arm consumes them, so this keeps its chain position.
+        if matches!(method, "is_ok" | "is_err") && args.is_empty() {
+            self.warn_option_result_predicate(object, method, &obj_ty, args_close_span);
+        }
         if let Some(t) = self.record_temp_receiver_types(object, method, args, span, &obj_ty) {
             return t;
         }

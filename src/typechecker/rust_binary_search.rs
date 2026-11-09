@@ -371,3 +371,58 @@ impl TypeChecker<'_> {
         }
     }
 }
+
+impl TypeChecker<'_> {
+    /// `deprecated` on `is_ok()` / `is_err()` called on an `Option`
+    /// (docs/library/core-types.md, review-thread ruling 2026-11-09,
+    /// B-2026-11-09-21): `Result` methods that an `Option` accepts as
+    /// `is_some()` / `is_none()`, which Rust's `binary_search(..).is_ok()`
+    /// reaches. 0.8.x warns, with the rewrite; the next minor refuses them.
+    pub(super) fn warn_option_result_predicate(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        obj_ty: &super::Type,
+        close: &Span,
+    ) {
+        let mut ty = obj_ty;
+        while let super::Type::Ref(t) | super::Type::MutRef(t) = ty {
+            ty = t;
+        }
+        if self.compiling_stdlib
+            || !matches!(ty, super::Type::Named { name, .. } if name == "Option")
+            || !self.option_result_predicates_reported.insert(close.offset)
+        {
+            return;
+        }
+        let to = if method == "is_ok" {
+            "is_some"
+        } else {
+            "is_none"
+        };
+        let from = object.span.offset + object.span.length;
+        let end = close.offset + close.length;
+        let fix_it = (end > from && close.length > 0).then(|| super::FixIt {
+            span: Span {
+                offset: from,
+                length: end - from,
+                ..object.span
+            },
+            replacement: format!(".{to}()"),
+        });
+        self.type_lint_warning_with_fix(
+            format!(
+                "use of deprecated `{method}()` on an `Option`: it is a `Result` method, and \
+                 on an `Option` it means `{to}()`; it becomes an error at the next minor \
+                 release — suppress with `#[allow(deprecated)]` on the enclosing item"
+            ),
+            Span {
+                length: end.saturating_sub(object.span.offset),
+                ..object.span
+            },
+            TypeErrorKind::Deprecated,
+            "deprecated",
+            fix_it,
+        );
+    }
+}

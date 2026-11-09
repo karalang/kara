@@ -79,6 +79,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- **`is_ok()` and `is_err()` on an `Option` are deprecated.** They are
+  `Result` methods that an `Option` accepted as `is_some()` and
+  `is_none()`; `karac check` now warns (`deprecated`), `karac fix`
+  rewrites them, and they become an error at the next minor release, as
+  `vec!` and `mut` on a plain field do (docs/library/core-types.md;
+  B-2026-11-09-21).
+
 - `Json.deserialize(text: Str)` takes a view, so a line of `text.lines()`
   or a slice reads without `.to_string()`; a `String` still passes
   (B-2026-11-08-79).
