@@ -112,7 +112,14 @@ fn kata_1061_nested_fn_moves_to_the_top_level() {
 fn kata_1061_usize_cast_where_i64_is_wanted_becomes_i64() {
     let src = "fn find(parent: Vec<usize>, x: usize) -> usize {\n    parent[x]\n}\n\nfn main() {\n    let parent: Vec<usize> = (0..26).collect();\n    let s = \"dog\";\n    let b = s.as_bytes();\n    println(find(parent, (b[0] - b'a') as usize));\n}";
     let (first, text, clean, last, out) = mend(&scratch("usize"), src);
-    assert!(first.contains("so cast to `i64`"), "{first}");
+    // `(0..26)` collects as the `Vec[usize]` it is annotated (design.md §
+    // Type inference, B-2026-11-08-86), so the cast is only a lossless one
+    // that the fix drops.
+    assert!(!first.contains("FromIterator"), "{first}");
+    assert!(
+        first.contains("unnecessary cast: 'u8' widens to 'usize'"),
+        "{first}"
+    );
     assert!(text.contains("find(parent, (b[0] - b'a'))"), "{text}");
     assert!(clean && !last.contains("warning"), "{text}\n{last}");
     assert_eq!(out, "3\n");

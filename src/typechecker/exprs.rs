@@ -5087,7 +5087,17 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Ref(inner) if is_bare_collect(&arg.value) => *inner,
                         t => t,
                     };
-                    expectation_is_concrete(&resolved).then_some(resolved)
+                    // A slot its items solved to their open literal
+                    // (`solve_collect_slot_from_items`) is checked against too.
+                    let mut ids = Vec::new();
+                    type_var_ids(&resolved, &mut ids);
+                    let open_literals = is_bare_collect(&arg.value)
+                        && !ids.is_empty()
+                        && ids
+                            .iter()
+                            .all(|id| inference::literal_var_kind(*id).is_some())
+                        && !contains_type_param(&resolved);
+                    (open_literals || expectation_is_concrete(&resolved)).then_some(resolved)
                 } else if matches!(
                     &arg.value.kind,
                     ExprKind::ArrayLiteral(_)
@@ -6307,6 +6317,8 @@ impl<'a> super::TypeChecker<'a> {
         }
         for (span, vars) in std::mem::take(&mut self.unsolved_call_vars) {
             let names: HashMap<TypeVarId, String> = vars.iter().cloned().collect();
+            // A parameter a literal solved (`Vec.from_iter(0..3)`) takes the
+            // literal's type, its default when nothing else fixes it.
             let unsolved = vars.iter().find(|(id, _)| {
                 matches!(
                     resolve_type_vars(
@@ -6316,7 +6328,7 @@ impl<'a> super::TypeChecker<'a> {
                         &self.env.const_substitutions,
                         &no_consts,
                     ),
-                    Type::TypeVar(_)
+                    Type::TypeVar(v) if inference::literal_var_kind(v).is_none()
                 )
             });
             let Some((_, name)) = unsolved else { continue };
@@ -7487,7 +7499,9 @@ impl<'a> super::TypeChecker<'a> {
                     .or_else(|| self.declaring_bound_trait(where_clause, type_name, assoc_name)),
             };
             let found = self.resolve_assoc_projections(&substitute_type_params(&projection, &subs));
-            if !assoc_eq_bound_is_comparable(&found) {
+            // An item that is a literal no use has fixed yet (`0..3`'s) solves
+            // the parameter to its variable (B-2026-11-08-86).
+            if !assoc_eq_bound_is_comparable(&found) && self.unbound_literal_var(&found).is_none() {
                 continue;
             }
             let required = substitute_type_params(&self.lower_type_expr(ty, &scope), &metas);
@@ -7708,7 +7722,7 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 continue;
             }
-            if !assoc_eq_bound_is_comparable(&found) {
+            if !assoc_eq_bound_is_comparable(&found) && self.unbound_literal_var(&found).is_none() {
                 continue;
             }
             // Lower the REQUIRED type against the function's full type-param
@@ -7736,6 +7750,34 @@ impl<'a> super::TypeChecker<'a> {
             };
             let required =
                 self.resolve_assoc_projections(&substitute_type_params(&required, &subs));
+            // An item that is a literal no use has fixed yet (`(0..3)`'s) is
+            // fixed by the other side when that side is a number, solves it
+            // when it is an open variable (`Vec.from_iter(0..3)`), and is read
+            // at its default otherwise, so `(0..3).chain(b.iter())` is still
+            // `i64` against `ref i64` (B-2026-11-08-86).
+            let (required, found) = {
+                let mut pair = [required, found];
+                for i in 0..2 {
+                    let other = self.resolved_now(&pair[1 - i]);
+                    if let Some((id, kind)) = self.unbound_literal_var(&pair[i]) {
+                        if inference::literal_takes(kind, &other)
+                            || matches!(other, Type::TypeVar(_))
+                        {
+                            unify_types(
+                                &Type::TypeVar(id),
+                                &other,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            );
+                            pair[i] = self.resolved_now(&pair[i]);
+                        } else if assoc_eq_bound_is_comparable(&other) {
+                            pair[i] = self.settle_literals(&pair[i]);
+                        }
+                    }
+                }
+                let [r, f] = pair;
+                (r, f)
+            };
             if !assoc_eq_bound_is_comparable(&required) {
                 continue;
             }
@@ -8565,7 +8607,13 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         let item = self.read_as_value(&item);
-        if contains_type_var(&item) || matches!(item, Type::Error | Type::TypeParam(_)) {
+        // Items that are literals no use has fixed yet (`w.iter().cloned()` of
+        // `let w = [1, 5, 3]`) solve the slot to their variable, which then
+        // keeps its default or takes what the call's result is given.
+        let open_literal = self.unbound_literal_var(&item).is_some();
+        if !open_literal
+            && (contains_type_var(&item) || matches!(item, Type::Error | Type::TypeParam(_)))
+        {
             return;
         }
         unify_types(
@@ -8612,7 +8660,13 @@ impl<'a> super::TypeChecker<'a> {
         let Some(kind) = inference::literal_var_kind(id) else {
             return;
         };
-        if inference::literal_takes(kind, &elem) {
+        let elem_now = resolve_type_var_top(&elem, &self.env.substitutions);
+        // A slot a generic callee has not solved yet (`largest(it.collect())`
+        // over `largest[T](v: Vec[T])`) is the literal's too: it stays open
+        // until the call's result is used, or keeps its default.
+        let open_slot = matches!(elem_now, Type::TypeVar(e)
+            if e != id && inference::literal_var_kind(e).is_none());
+        if open_slot || inference::literal_takes(kind, &elem) {
             unify_types(
                 &Type::TypeVar(id),
                 &elem,

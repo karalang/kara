@@ -6,4 +6,4 @@ tags = ["design", "iterators", "inference"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "design.md § Type inference: a range of bare literals takes its element type from the collection or sum it feeds: odds 1..=9 into Vec[i32], doubled into Vec[i32], a Set[i32] probe in the filter, six u8 bytes 250..=255, an i32 sum, and three u64 values past i64::MAX."
+note = "design.md § Type inference: a range of bare literals takes its element type from the collection or sum it feeds: odds 1..=9 into Vec[i32], doubled into Vec[i32], a Set[i32] probe in the filter, six u8 bytes 250..=255, an i32 sum, three u64 values past i64::MAX, a range chained with a bare list into Vec[i32], and Vec.from_iter of a range left at the default."

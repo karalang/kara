@@ -22,4 +22,10 @@ fn main() {
     println(total);
     let wide: Vec[u64] = (18446744073709551613..=18446744073709551615).collect();
     println(wide);
+    // Chained with a list of bare literals, both take the collect's `i32`.
+    let tail = [10, 20];
+    let joined: Vec[i32] = (0..2).chain(tail.iter().cloned()).collect();
+    println(joined);
+    let counted = Vec.from_iter(0..3);
+    println(counted.len());
 }

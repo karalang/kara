@@ -4345,12 +4345,16 @@ impl<'a> super::TypeChecker<'a> {
         // operand's: `v == []` (B-2026-11-04-75).
         let empty = |e: &Expr| matches!(&e.kind, ExprKind::ArrayLiteral(v) if v.is_empty());
         let (mut left_ty, mut right_ty) = if compares && empty(right) && !empty(left) {
+            // The comparison reads the other side's literals at their type
+            // now, as it does below (`let v = [1, 2]; v == []`).
             let l = strip_refinement(&self.infer_expr(left)).clone();
+            let l = self.settle_nested_literals(&l);
             let want = strip_refs_for_compare(&l).clone();
             let r = strip_refinement(&self.check_expr(right, &want)).clone();
             (l, r)
         } else if compares && empty(left) && !empty(right) {
             let r = strip_refinement(&self.infer_expr(right)).clone();
+            let r = self.settle_nested_literals(&r);
             let want = strip_refs_for_compare(&r).clone();
             let l = strip_refinement(&self.check_expr(left, &want)).clone();
             (l, r)
