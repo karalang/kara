@@ -1,0 +1,12 @@
+{a,b}c{d,e}f -> [acdf,acef,bcdf,bcef]
+abcd -> [abcd]
+{a,b}{z,x,y} -> [ax,ay,az,bx,by,bz]
+k{a,b,c,d,e,f,g} -> [ka,kb,kc,kd,ke,kf,kg]
+{a}b -> [ab]
+{x,a} -> [a,x]
+a{b,c}d{e,f}g{h,i} -> [abdegh,abdegi,abdfgh,abdfgi,acdegh,acdegi,acdfgh,acdfgi]
+{z,y,x,w}{v,u}t -> [wut,wvt,xut,xvt,yut,yvt,zut,zvt]
+{c,b,a}{c,b,a} -> [aa,ab,ac,ba,bb,bc,ca,cb,cc]
+z -> [z]
+300 random patterns: 5445 words, checksum 943556290
+{c,a,b}{f,e,d}{i,g,h}{l,j,k}{o,n,m}{r,q,p}{u,s,t} -> 2187 words, first adgjmps, last cfiloru, checksum 178540527

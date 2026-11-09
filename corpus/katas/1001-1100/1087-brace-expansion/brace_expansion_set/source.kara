@@ -1,0 +1,125 @@
+// LeetCode #1087: Brace Expansion -- the words gathered in a
+// `SortedSet[String]`, which keeps them in order: each group, its letters
+// in the order written, extends every word so far, and the set is walked
+// once at the end. Duplicates cannot arise, as a group's letters differ.
+// O(w log w) for w words.
+
+fn expand(s: Str) -> Vec[String] {
+    let mut words: SortedSet[String] = SortedSet.new();
+    words.insert(String.new());
+    let mut group: Vec[char] = [];
+    let mut inside = false;
+    for c in s.chars() {
+        if c == '{' {
+            inside = true;
+            group.clear();
+            continue;
+        }
+        if c == ',' {
+            continue;
+        }
+        if inside and c != '}' {
+            group.push(c);
+            continue;
+        }
+        if c != '}' {
+            group = [c];
+        }
+        inside = false;
+        let mut next: SortedSet[String] = SortedSet.new();
+        for w in words.iter() {
+            for g in group.iter() {
+                let mut longer = w.clone();
+                longer.push(g);
+                next.insert(longer);
+            }
+        }
+        words = next;
+    }
+    words.into_iter().collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A pattern of up to `most` characters: letters alone, and groups of 1 to
+// `k` different letters in braces, the letters drawn from the first `k`.
+fn random_pattern(seed: mut ref i64, most: i64, k: i64) -> String {
+    let mut s = String.new();
+    let parts = next_random(mut seed) % 8 + 1;
+    for _ in 0..parts {
+        if next_random(mut seed) % 2 == 0 {
+            let c = (b'a' + (next_random(mut seed) % k) as u8) as char;
+            if s.len() + 1 <= most {
+                s.push(c);
+            }
+        } else {
+            let want = next_random(mut seed) % k + 1;
+            let mut letters: Vec[char] = [];
+            while letters.len() < want {
+                let c = (b'a' + (next_random(mut seed) % k) as u8) as char;
+                if not letters.contains(c) {
+                    letters.push(c);
+                }
+            }
+            let parts: Vec[String] = letters.iter().map(|c| c.to_string()).collect();
+            let group = f"{{{parts.join(",")}}}";
+            if s.len() + group.len() <= most {
+                s.push_str(group);
+            }
+        }
+    }
+    if s.is_empty() {
+        s.push('a');
+    }
+    s
+}
+
+fn written(words: Vec[String]) -> String {
+    f"[{words.join(",")}]"
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases = [
+        "{a,b}c{d,e}f",
+        "abcd",
+        "{a,b}{z,x,y}",
+        "k{a,b,c,d,e,f,g}",
+        "{a}b",
+        "{x,a}",
+        "a{b,c}d{e,f}g{h,i}",
+        "{z,y,x,w}{v,u}t",
+        "{c,b,a}{c,b,a}",
+        "z",
+    ];
+    for s in cases.iter() {
+        println(f"{s} -> {written(expand(s))}");
+    }
+    // 300 random patterns of up to 50 characters over the first 1 to 6 letters
+    let mut seed = 1087;
+    let mut words = 0;
+    let mut h = 0;
+    for t in 0..300 {
+        let s = random_pattern(mut seed, 50, t % 6 + 1);
+        let out = expand(s);
+        words += out.len();
+        h = fold(h, written(out));
+    }
+    println(f"300 random patterns: {words} words, checksum {h}");
+    // seven groups of three, 2187 words
+    let big = "{c,a,b}{f,e,d}{i,g,h}{l,j,k}{o,n,m}{r,q,p}{u,s,t}";
+    let out = expand(big);
+    println(f"{big} -> {out.len()} words, first {out[0]}, last {out[out.len() - 1]}, checksum {fold(0, written(out))}");
+}

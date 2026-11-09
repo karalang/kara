@@ -1,0 +1,553 @@
+// LeetCode #1087: Brace Expansion -- the differential: the six arms against
+// the statement read literally, under six properties, over 2000 random
+// problems drawn before any arm answers.
+
+// ---- brace_expansion.kara ----
+
+fn groups_of(s: Str) -> Vec[Vec[char]] {
+    let mut groups: Vec[Vec[char]] = [];
+    let mut open: Option[Vec[char]] = None;
+    for c in s.chars() {
+        match c {
+            '{' => open = Some([]),
+            '}' => {
+                let mut g = open.take().unwrap();
+                g.sort();
+                groups.push(g);
+            }
+            ',' => {}
+            _ => match open {
+                Some(mut ref g) => g.push(c),
+                None => groups.push([c]),
+            },
+        }
+    }
+    groups
+}
+
+fn walk(groups: Vec[Vec[char]], at: i64, word: mut ref String, out: mut ref Vec[String]) {
+    if at == groups.len() {
+        out.push(word.clone());
+        return;
+    }
+    for c in groups[at].iter() {
+        word.push(c);
+        walk(groups, at + 1, mut word, mut out);
+        word.pop();
+    }
+}
+
+fn star_arm(s: Str) -> Vec[String] {
+    let groups = groups_of(s);
+    let mut word = String.new();
+    let mut out: Vec[String] = [];
+    walk(groups, 0, mut word, mut out);
+    out
+}
+
+// ---- brace_expansion_bfs.kara ----
+
+fn bfs_arm(s: Str) -> Vec[String] {
+    let mut words: Vec[String] = [String.new()];
+    let mut i = 0;
+    while i < s.len() {
+        let mut letters: Vec[String] = [];
+        if s.slice(i, i + 1) == "{" {
+            let close = i + s.slice(i, s.len()).find("}").unwrap();
+            for part in s.slice(i + 1, close).split(",") {
+                letters.push(part.to_string());
+            }
+            letters.sort();
+            i = close + 1;
+        } else {
+            letters.push(s.slice(i, i + 1).to_string());
+            i += 1;
+        }
+        let mut next: Vec[String] = [];
+        for w in words.iter() {
+            for l in letters.iter() {
+                next.push(f"{w}{l}");
+            }
+        }
+        words = next;
+    }
+    words
+}
+
+// ---- brace_expansion_text.kara ----
+
+fn expand_text(s: Str) -> Vec[String] {
+    match s.find("{") {
+        None => [s.to_string()],
+        Some(open) => {
+            let close = s.find("}").unwrap();
+            let before = s.slice(0, open);
+            let rest = expand_text(s.slice(close + 1, s.len()));
+            let mut out: Vec[String] = [];
+            for letter in s.slice(open + 1, close).split(",") {
+                for tail in rest.iter() {
+                    out.push(f"{before}{letter}{tail}");
+                }
+            }
+            out
+        }
+    }
+}
+
+fn text_arm(s: Str) -> Vec[String] {
+    let mut out = expand_text(s);
+    out.sort();
+    out
+}
+
+// ---- brace_expansion_odometer.kara ----
+
+fn odometer_arm(s: Str) -> Vec[String] {
+    let bytes = s.bytes();
+    let mut wheels: Vec[Vec[u8]] = [];
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let mut wheel: Vec[u8] = [];
+            i += 1;
+            while bytes[i] != b'}' {
+                if bytes[i] != b',' {
+                    wheel.push(bytes[i]);
+                }
+                i += 1;
+            }
+            wheel.sort();
+            wheels.push(wheel);
+        } else {
+            wheels.push([bytes[i]]);
+        }
+        i += 1;
+    }
+    let mut total = 1;
+    for w in wheels.iter() {
+        total *= w.len();
+    }
+    let mut out: Vec[String] = [];
+    for k in 0..total {
+        let mut word: Vec[u8] = Vec.filled(wheels.len(), 0);
+        let mut rest = k;
+        for g in (0..wheels.len()).rev() {
+            let size = wheels[g].len();
+            word[g] = wheels[g][rest % size];
+            rest /= size;
+        }
+        out.push(String.from_utf8(word).unwrap());
+    }
+    out
+}
+
+// ---- brace_expansion_set.kara ----
+
+fn set_arm(s: Str) -> Vec[String] {
+    let mut words: SortedSet[String] = SortedSet.new();
+    words.insert(String.new());
+    let mut group: Vec[char] = [];
+    let mut inside = false;
+    for c in s.chars() {
+        if c == '{' {
+            inside = true;
+            group.clear();
+            continue;
+        }
+        if c == ',' {
+            continue;
+        }
+        if inside and c != '}' {
+            group.push(c);
+            continue;
+        }
+        if c != '}' {
+            group = [c];
+        }
+        inside = false;
+        let mut next: SortedSet[String] = SortedSet.new();
+        for w in words.iter() {
+            for g in group.iter() {
+                let mut longer = w.clone();
+                longer.push(g);
+                next.insert(longer);
+            }
+        }
+        words = next;
+    }
+    words.into_iter().collect()
+}
+
+// ---- brace_expansion_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn expand(s: String) -> Vec[String] {
+        let chars: Vec[char] = s.chars().collect();
+        let mut groups: Vec[Vec[char]] = Vec.new();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '{' {
+                let mut j = i + 1;
+                let mut opts = Vec.new();
+                while chars[j] != '}' {
+                    if chars[j] != ',' {
+                        opts.push(chars[j]);
+                    }
+                    j += 1;
+                }
+                opts.sort();
+                groups.push(opts);
+                i = j + 1;
+            } else {
+                groups.push([chars[i]]);
+                i += 1;
+            }
+        }
+        let mut res = Vec.new();
+        let mut cur = String.new();
+        Solution.dfs(groups, 0, mut cur, mut res);
+        res
+    }
+
+    fn dfs(groups: Vec[Vec[char]], i: i64, cur: mut ref String, res: mut ref Vec[String]) {
+        if i == groups.len() {
+            res.push(cur.clone());
+            return;
+        }
+        for c in ref groups[i] {
+            cur.push(c);
+            Solution.dfs(groups, i + 1, mut cur, mut res);
+            cur.pop();
+        }
+    }
+}
+
+fn solution_arm(s: Str) -> Vec[String] {
+    Solution.expand(s.to_string())
+}
+
+// ---- the harness ----------------------------------------------------------
+
+fn arm(which: i64, s: Str) -> Vec[String] {
+    match which {
+        0 => star_arm(s),
+        1 => bfs_arm(s),
+        2 => text_arm(s),
+        3 => odometer_arm(s),
+        4 => set_arm(s),
+        _ => solution_arm(s),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: a word picks one letter from each group,
+// in the order the pattern writes them, and the answer is every such word
+// in lexicographic order. The words are made in the order the pattern
+// writes its letters, unsorted, and the answer taken from them smallest
+// first, each the least of those left.
+fn literally(s: Str) -> Vec[String] {
+    let mut words: Vec[String] = [String.new()];
+    let mut choices: Vec[char] = [];
+    let mut inside = false;
+    for c in s.chars() {
+        if c == '{' {
+            inside = true;
+        } else if c == ',' {
+        } else if c == '}' {
+            inside = false;
+            words = with_each(words, choices);
+            choices = [];
+        } else if inside {
+            choices.push(c);
+        } else {
+            words = with_each(words, [c]);
+        }
+    }
+    let mut out: Vec[String] = [];
+    while words.len() > 0 {
+        let mut least = 0;
+        for i in 1..words.len() {
+            if words[i] < words[least] {
+                least = i;
+            }
+        }
+        out.push(words.remove(least));
+    }
+    out
+}
+
+fn with_each(words: Vec[String], letters: Vec[char]) -> Vec[String] {
+    let mut out: Vec[String] = [];
+    for w in words.iter() {
+        for c in letters.iter() {
+            out.push(f"{w}{c}");
+        }
+    }
+    out
+}
+
+// The pattern with every group's letters written in the other order.
+fn groups_reversed(s: Str) -> String {
+    let mut out = String.new();
+    let mut group: Vec[char] = [];
+    let mut inside = false;
+    for c in s.chars() {
+        if c == '{' {
+            inside = true;
+        } else if c == '}' {
+            inside = false;
+            group.reverse();
+            let parts: Vec[String] = group.iter().map(|c| c.to_string()).collect();
+            out.push_str(f"{{{parts.join(",")}}}");
+            group = [];
+        } else if inside {
+            if c != ',' {
+                group.push(c);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// The pattern with every letter alone written as a group of one, and every
+// group of one written as its letter alone.
+fn singles_flipped(s: Str) -> String {
+    let mut out = String.new();
+    let mut group: Vec[char] = [];
+    let mut inside = false;
+    for c in s.chars() {
+        if c == '{' {
+            inside = true;
+        } else if c == '}' {
+            inside = false;
+            if group.len() == 1 {
+                out.push(group[0]);
+            } else {
+                let parts: Vec[String] = group.iter().map(|c| c.to_string()).collect();
+                out.push_str(f"{{{parts.join(",")}}}");
+            }
+            group = [];
+        } else if inside {
+            if c != ',' {
+                group.push(c);
+            }
+        } else {
+            out.push_str(f"{{{c}}}");
+        }
+    }
+    out
+}
+
+// Every letter moved by an order-kept map of a to z into a to z.
+fn relabel(s: Str, map: Vec[u8]) -> String {
+    let mut out = String.new();
+    for b in s.bytes() {
+        if b >= b'a' and b <= b'z' {
+            out.push(map[b - b'a'] as char);
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
+fn random_pattern(seed: mut ref i64, most: i64, k: i64) -> String {
+    let mut s = String.new();
+    let parts = next_random(mut seed) % 6 + 1;
+    for _ in 0..parts {
+        if next_random(mut seed) % 2 == 0 {
+            let c = (b'a' + (next_random(mut seed) % k) as u8) as char;
+            if s.len() + 1 <= most {
+                s.push(c);
+            }
+        } else {
+            let want = next_random(mut seed) % k + 1;
+            let mut letters: Vec[char] = [];
+            while letters.len() < want {
+                let c = (b'a' + (next_random(mut seed) % k) as u8) as char;
+                if not letters.contains(c) {
+                    letters.push(c);
+                }
+            }
+            let parts: Vec[String] = letters.iter().map(|c| c.to_string()).collect();
+            let group = f"{{{parts.join(",")}}}";
+            if s.len() + group.len() <= most {
+                s.push_str(group);
+            }
+        }
+    }
+    if s.is_empty() {
+        s.push('a');
+    }
+    s
+}
+
+fn written(words: Vec[String]) -> String {
+    f"[{words.join(",")}]"
+}
+
+struct Problem {
+    p: String,
+    q: String,
+    // a map of the letters into a to z that keeps the order of the first
+    // six, the most a pattern uses: each moves past 0 to 3 skipped places
+    map: Vec[u8],
+}
+
+fn random_problem(seed: mut ref i64, most: i64, k: i64) -> Problem {
+    let p = random_pattern(mut seed, most, k);
+    let q = random_pattern(mut seed, 10, k);
+    let mut map: Vec[u8] = [];
+    let mut to = 0;
+    for _ in 0..26 {
+        if next_random(mut seed) % 3 == 0 {
+            to += 1 + next_random(mut seed) % 3;
+        }
+        map.push(b'a' + to.min(25) as u8);
+        to += 1;
+    }
+    Problem { p, q, map }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn product(s: Str) -> i64 {
+    let mut total = 1;
+    let mut size = 0;
+    let mut inside = false;
+    for c in s.chars() {
+        if c == '{' {
+            inside = true;
+            size = 0;
+        } else if c == '}' {
+            inside = false;
+            total *= size;
+        } else if c != ',' {
+            if inside {
+                size += 1;
+            }
+        }
+    }
+    total
+}
+
+fn groups_count(s: Str) -> i64 {
+    let mut n = 0;
+    let mut inside = false;
+    for c in s.chars() {
+        if c == '{' {
+            inside = true;
+            n += 1;
+        } else if c == '}' {
+            inside = false;
+        } else if c != ',' and not inside {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn check_case(t: mut ref Tally, pr: Problem) {
+    let p = pr.p.clone();
+    let want = literally(p);
+    let reversed = groups_reversed(p);
+    let flipped = singles_flipped(p);
+    let moved = relabel(p, pr.map);
+    let joined = f"{p}{pr.q}";
+    for w in 0..6 {
+        let answer = arm(w, p);
+        let what = f"arm {w}, {p} -> {written(answer)}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {written(want)}");
+        let r = arm(w, reversed);
+        expect(mut t, 2, r == answer, f"P2 {what}: {reversed} -> {written(r)}");
+        let f = arm(w, flipped);
+        expect(mut t, 3, f == answer, f"P3 {what}: {flipped} -> {written(f)}");
+        let m = arm(w, moved);
+        let m_want: Vec[String] = answer.iter().map(|word| relabel(word, pr.map)).collect();
+        expect(mut t, 4, m == m_want, f"P4 {what}: {moved} -> {written(m)}");
+        // P5: as many words as the groups' sizes multiply to, each as long
+        // as there are groups, each after the one before
+        let n = groups_count(p);
+        let mut shaped = answer.len() == product(p) and answer.iter().all(|word| word.len() == n);
+        for i in 1..answer.len() {
+            if not (answer[i - 1] < answer[i]) {
+                shaped = false;
+            }
+        }
+        expect(mut t, 5, shaped, f"P5 {what}: not {product(p)} sorted words of {n} letters");
+        // P6: the pattern followed by another answers each word followed by
+        // each of the other's
+        let tail = arm(w, pr.q);
+        let both = arm(w, joined);
+        let mut both_want: Vec[String] = [];
+        for a in answer.iter() {
+            for b in tail.iter() {
+                both_want.push(f"{a}{b}");
+            }
+        }
+        expect(mut t, 6, both == both_want, f"P6 {what}: {joined} -> {written(both)}");
+    }
+    t.cases += 1;
+    t.check = fold(t.check, written(want));
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1000 patterns of up to 14 characters over the first 1
+    // to 3 letters, and 1000 of up to 24 over the first 1 to 6; each with a
+    // second pattern of up to 10 characters to follow it. Every choice is
+    // drawn before any arm answers.
+    let mut seed = 10871;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let p = if i < 1000 {
+            let k = next_random(mut seed) % 3 + 1;
+            random_problem(mut seed, 14, k)
+        } else {
+            let k = next_random(mut seed) % 6 + 1;
+            random_problem(mut seed, 24, k)
+        };
+        problems.push(p);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

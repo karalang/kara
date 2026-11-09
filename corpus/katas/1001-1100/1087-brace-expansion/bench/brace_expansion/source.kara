@@ -1,0 +1,103 @@
+// Benchmark: LeetCode #1087 Brace Expansion -- the ★ arm, the pattern read
+// into sorted groups and the words built by a depth-first walk. 2000
+// random patterns of up to 50 characters, LeetCode's longest, are built
+// once, pattern t over the first t % 6 + 1 letters; every round expands
+// each of them, in an order that changes with the round.
+// Mirrors brace_expansion.rs, .c, .py and go-seq/.
+
+fn groups_of(s: Str) -> Vec[Vec[char]] {
+    let mut groups: Vec[Vec[char]] = [];
+    let mut open: Option[Vec[char]] = None;
+    for c in s.chars() {
+        match c {
+            '{' => open = Some([]),
+            '}' => {
+                let mut g = open.take().unwrap();
+                g.sort();
+                groups.push(g);
+            }
+            ',' => {}
+            _ => match open {
+                Some(mut ref g) => g.push(c),
+                None => groups.push([c]),
+            },
+        }
+    }
+    groups
+}
+
+fn walk(groups: Vec[Vec[char]], at: i64, word: mut ref String, out: mut ref Vec[String]) {
+    if at == groups.len() {
+        out.push(word.clone());
+        return;
+    }
+    for c in groups[at].iter() {
+        word.push(c);
+        walk(groups, at + 1, mut word, mut out);
+        word.pop();
+    }
+}
+
+fn expand(s: Str) -> Vec[String] {
+    let groups = groups_of(s);
+    let mut word = String.new();
+    let mut out: Vec[String] = [];
+    walk(groups, 0, mut word, mut out);
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_pattern(seed: mut ref i64, most: i64, k: i64) -> String {
+    let mut s = String.new();
+    let parts = next_random(mut seed) % 8 + 1;
+    for _ in 0..parts {
+        if next_random(mut seed) % 2 == 0 {
+            let c = (b'a' + (next_random(mut seed) % k) as u8) as char;
+            if s.len() + 1 <= most {
+                s.push(c);
+            }
+        } else {
+            let want = next_random(mut seed) % k + 1;
+            let mut letters: Vec[char] = [];
+            while letters.len() < want {
+                let c = (b'a' + (next_random(mut seed) % k) as u8) as char;
+                if not letters.contains(c) {
+                    letters.push(c);
+                }
+            }
+            let parts: Vec[String] = letters.iter().map(|c| c.to_string()).collect();
+            let group = f"{{{parts.join(",")}}}";
+            if s.len() + group.len() <= most {
+                s.push_str(group);
+            }
+        }
+    }
+    if s.is_empty() {
+        s.push('a');
+    }
+    s
+}
+
+fn main() {
+    let rounds = 400;
+    let mut seed = 1087;
+    let mut patterns: Vec[String] = [];
+    for t in 0..2000 {
+        patterns.push(random_pattern(mut seed, 50, t % 6 + 1));
+    }
+    let mut words = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..2000 {
+            let out = expand(patterns[(r * 7 + i) % 2000]);
+            words += out.len();
+            let mid = out[out.len() / 2].bytes();
+            check = (check * 31 + out.len() + mid[mid.len() - 1]) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 2000 patterns: {words} words, checksum {check}");
+}
