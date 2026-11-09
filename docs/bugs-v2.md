@@ -125,10 +125,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-57 | 2026-11-09 | typecheck | low | Strings have no `match_indices` (nor `char_indices`): kata 2052's text arm wrote Rust's `sentence.match_indices(" ").map(|(at, _)| at + 1)` to find each word's start and was refused "no method 'match_indices' on type 'String'" with no hint at what to write instead | — |
 | B-2026-11-09-72 | 2026-11-09 | typecheck | low | There is no `drop(x)`: ending an owned value early (closing a `BufWriter[File]` before reopening its file) is "undefined name 'drop'" with no hint, and the only spellings are a block around the value's scope or a helper taking `own T` | — |
 | B-2026-11-09-73 | 2026-11-09 | interp+mir-llvm+runtime | low | `set_read_timeout` on a socket a `Network` fake opened returns `Err(Unsupported)`, so a TCP client that sets a timeout, as io.md tells a client to, cannot be tested against a fake without ignoring the error | — |
-| B-2026-11-09-74 | 2026-11-09 | typecheck | high | A chain of two literal lists is refused: `v.iter().chain(w.iter())` over `[1, 2]` and `[10, 20, 30]` reports `J.Item = ref i64` is not satisfied by `Item = ref i64` | — |
-| B-2026-11-09-75 | 2026-11-09 | typecheck+mir-llvm | high | `chain` accepts items of another numeric width or kind: `Vec[f64]` chained with `Vec[i64]` builds and prints `[1.5, 5e-324]`; `Vec[i32]` with `Vec[i64]` prints `[7, 705032704]` | — |
-| B-2026-11-09-76 | 2026-11-09 | mir | medium | A program declaring its own `struct F64` or `struct F32` fails to build: `typecheck: 3694:5: no associated function 'from' on type 'F64'` from the library's `f64_wrapper_from` | — |
-| B-2026-11-09-77 | 2026-11-09 | interp | low | A hand-rolled `BoundedChannel { handle_id: 0 }` stops the interpreter (`BoundedChannel[i64].send of a channel never made`) instead of failing closed as bounded_channel.kara documents | — |
 | B-2026-11-09-78 | 2026-11-09 | mir-llvm | low | A hand-rolled `BoundedChannel { handle_id: 0 }` segfaults the built binary (exit 139; `__mir-llvm-run` exits 101 with no output) where bounded_channel.kara says send fails closed with `Full` and recv returns `None` | — |
 | B-2026-11-09-79 | 2026-11-09 | typecheck | low | A write through a read-only `Slice` binding is refused without a code since 34d42091dd: `error[typecheck]` where the corpus expects E0200 | — |
 | B-2026-11-09-80 | 2026-11-09 | ownership | low | An escaping closure capturing a borrow is refused without a code: `error[ownership]: an escaping closure captures `r` by move` where the corpus expects E0516 | — |
@@ -985,6 +981,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-69 | interp | medium | An HTTP request past its `timeout` fails in `karac run` with ureq's "Network Error: Network Error: Error encountered in the status line: timed out re… | f42a83543c |
 | B-2026-11-09-70 | typecheck+mir | medium | `File` has no `write_all`: `f.write_all(text.bytes())?` is "no method 'write_all' on type 'File'", though `TcpStream`, `TlsStream`, `BufWriter` and `… | f42a83543c |
 | B-2026-11-09-71 | mir+mir-llvm | high | Under a `FileSystem` override, a compiled `File.open`, `File.create` or `OpenOptions.open` of a `String` path built at run time hands the fake's `ope… | f42a83543c |
+| B-2026-11-09-74 | typecheck | high | A chain of two literal lists is refused: `v.iter().chain(w.iter())` over `[1, 2]` and `[10, 20, 30]` reports `J.Item = ref i64` is not satisfied by `… | 7c40eb7a02 |
+| B-2026-11-09-75 | typecheck+mir-llvm | high | `chain` accepts items of another numeric width or kind: `Vec[f64]` chained with `Vec[i64]` builds and prints `[1.5, 5e-324]`; `Vec[i32]` with `Vec[i6… | 7c40eb7a02 |
+| B-2026-11-09-76 | mir | medium | A program declaring its own `struct F64` or `struct F32` fails to build: `typecheck: 3694:5: no associated function 'from' on type 'F64'` from the li… | 7c40eb7a02 |
+| B-2026-11-09-77 | interp | low | A hand-rolled `BoundedChannel { handle_id: 0 }` stops the interpreter (`BoundedChannel[i64].send of a channel never made`) instead of failing closed… | 7c40eb7a02 |
 
 </details>
 
