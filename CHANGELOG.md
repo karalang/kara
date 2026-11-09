@@ -160,6 +160,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A program that declares its own `Response` to send headers (io.md §
+  HTTP server) gets it back from the HTTP client too, and the compiled
+  client wrote only the library's two fields there: the program's
+  `headers` was left unwritten and its drop freed a garbage pointer
+  (`free(): invalid pointer` or a segfault, where the interpreter printed
+  the right answer), and a declaration in another field order read the
+  status from the body. Both backends now fill the fields by name, and
+  `headers` holds the response's headers (B-2026-11-09-34).
 - Raw pointers reach a non-`Copy` element: `ptr.mut(xs[i])` takes its
   address without moving it, `p.read()` copies the bits out and `p.write(v)`
   stores without dropping, as design.md § Raw pointers now says. The first

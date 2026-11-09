@@ -2192,7 +2192,8 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
-                self.http_method(name, base, method, args, ret)
+                let recv_ty = arg_tys.first().copied();
+                self.http_method(name, base, method, args, recv_ty, ret)
             }
             ("Vector", _) => self.vector_method(method, &args, arg_tys, ret),
             ("Secret", "expose" | "expose_mut" | "ct_eq") => {
@@ -15510,6 +15511,7 @@ impl<'a> Interp<'a> {
         base: &str,
         method: &str,
         args: Vec<Value>,
+        recv_ty: Option<Ty>,
         ret: Ty,
     ) -> R<Value> {
         let recv = match args.first() {
@@ -15520,6 +15522,15 @@ impl<'a> Interp<'a> {
         let field = |i: usize| match &recv {
             Value::Agg(fs) => fs.get(i).cloned(),
             _ => None,
+        };
+        // A `Response`'s `status` and `body`, by name (B-2026-11-09-34).
+        let (status_k, body_k) = match recv_ty {
+            Some(t) if base == "Response" => {
+                let names = self.response_fields(t);
+                let at = |n: &str| names.iter().position(|f| f == n);
+                (at("status").unwrap_or(0), at("body").unwrap_or(1))
+            }
+            _ => (0, 1),
         };
         match (base, method) {
             ("Client", "new") => Ok(Value::Agg(Vec::new())),
@@ -15577,17 +15588,17 @@ impl<'a> Interp<'a> {
                 Ok(recv)
             }
             ("Response", "status") => {
-                field(0).ok_or_else(|| Stop::Error(format!("{name} of {recv:?}")))
+                field(status_k).ok_or_else(|| Stop::Error(format!("{name} of {recv:?}")))
             }
             ("Response" | "HttpError", "body" | "message") => {
-                let text = match field(if base == "Response" { 1 } else { 0 }) {
+                let text = match field(if base == "Response" { body_k } else { 0 }) {
                     Some(v) => self.string_at(&v)?,
                     None => return err(format!("{name} of {recv:?}")),
                 };
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("Response", "bytes") => {
-                let raw = match field(1) {
+                let raw = match field(body_k) {
                     Some(Value::Box(id)) if self.http_bodies.contains_key(&id) => {
                         self.http_bodies[&id].clone()
                     }
@@ -15598,7 +15609,7 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box("Vec", Value::Agg(bytes)))
             }
             ("Response", "header" | "headers") => {
-                let headers = match field(1) {
+                let headers = match field(body_k) {
                     Some(Value::Box(id)) => self.http_headers.get(&id).cloned().unwrap_or_default(),
                     _ => Vec::new(),
                 };
@@ -15610,15 +15621,7 @@ impl<'a> Interp<'a> {
                         .map(|(_, v)| self.alloc_box("String", Value::Str(v)));
                     return self.option(ret, found);
                 }
-                let pairs = headers
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let k = self.alloc_box("String", Value::Str(k));
-                        let v = self.alloc_box("String", Value::Str(v));
-                        Value::Agg(vec![k, v])
-                    })
-                    .collect();
-                Ok(self.alloc_box("Vec", Value::Agg(pairs)))
+                Ok(self.header_pairs(headers))
             }
             _ => err(format!("call of unknown function {name}")),
         }
@@ -15710,12 +15713,76 @@ impl<'a> Interp<'a> {
         // not UTF-8 keeps its bytes there, as the compiled backend's does.
         let text = String::from_utf8_lossy(&a.raw).into_owned();
         let body = self.alloc_box("String", Value::Str(text));
+        let headers = a.headers.clone();
         if let Value::Box(id) = body {
             self.http_headers.insert(id, a.headers);
             self.http_bodies.insert(id, a.raw);
         }
-        let response = Value::Agg(vec![Value::Int(i128::from(a.status)), body]);
-        self.variant_named(ret, None, "Ok", vec![response])
+        // The fields by name: a program's own `Response` (io.md § HTTP
+        // server) may order them its way and add `headers`, which get the
+        // response's headers (B-2026-11-09-34).
+        let ok_ty = match self.tys.kind(ret) {
+            TyKind::Adt(a) => self
+                .tys
+                .adt(a)
+                .variants
+                .iter()
+                .position(|v| v.name == "Ok")
+                .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0)),
+            _ => None,
+        };
+        let names = match ok_ty {
+            Some(t) => self.response_fields(t),
+            None => vec!["status".to_string(), "body".to_string()],
+        };
+        let mut fields = Vec::with_capacity(names.len());
+        let mut body = Some(body);
+        for n in &names {
+            fields.push(match n.as_str() {
+                "status" => Value::Int(i128::from(a.status)),
+                "body" => match body.take() {
+                    Some(b) => b,
+                    None => return err("a Response with two `body` fields".to_string()),
+                },
+                "headers" => self.header_pairs(headers.clone()),
+                other => {
+                    return err(format!(
+                        "a client response into a Response with a field `{other}`"
+                    ))
+                }
+            });
+        }
+        self.variant_named(ret, None, "Ok", vec![Value::Agg(fields)])
+    }
+
+    /// `Response`'s field names: the library's `status, body`, or those of a
+    /// program's own `Response` (io.md § HTTP server).
+    fn response_fields(&self, t: Ty) -> Vec<String> {
+        let mut t = t;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            t = i;
+        }
+        match self.tys.kind(t) {
+            TyKind::Adt(a) => self.tys.adt(a).variants[0]
+                .fields
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect(),
+            _ => vec!["status".to_string(), "body".to_string()],
+        }
+    }
+
+    /// Headers as a `Vec[(String, String)]`.
+    fn header_pairs(&mut self, headers: Vec<(String, String)>) -> Value {
+        let pairs = headers
+            .into_iter()
+            .map(|(k, v)| {
+                let k = self.alloc_box("String", Value::Str(k));
+                let v = self.alloc_box("String", Value::Str(v));
+                Value::Agg(vec![k, v])
+            })
+            .collect();
+        self.alloc_box("Vec", Value::Agg(pairs))
     }
 
     /// A call of the `extern "C"` function `name` (`super::foreign`).

@@ -1538,11 +1538,35 @@ impl<'ctx> Cx<'ctx, '_> {
                     out,
                     string,
                 )?;
+                // By name, so a program's own `Response` (io.md § HTTP
+                // server) gets its fields where it declared them, and its
+                // `headers` the response's headers (B-2026-11-09-34).
+                let status_k = self.response_field(rt, "status")?;
+                let body_k = self.response_field(rt, "body")?;
+                let headers_k = self.response_field(rt, "headers").ok();
                 self.if_then(is_ok, |cx| {
                     cx.store_tag(d, dty, okv)?;
                     let st = cx.load_i64(status)?;
-                    cx.store(cx.offset(r, cx.field_offset(rt, None, 0)?)?, st.into())?;
-                    cx.copy(cx.offset(r, cx.field_offset(rt, None, 1)?)?, out, string)
+                    cx.store(
+                        cx.offset(r, cx.field_offset(rt, None, status_k)?)?,
+                        st.into(),
+                    )?;
+                    let body = cx.offset(r, cx.field_offset(rt, None, body_k)?)?;
+                    cx.copy(body, out, string)?;
+                    if let Some(k) = headers_k {
+                        let hs = cx.offset(r, cx.field_offset(rt, None, k)?)?;
+                        let f = cx.extern_fn(
+                            "karac_runtime_http_client_mir_headers",
+                            cx.llcx
+                                .void_type()
+                                .fn_type(&[ptr.into(), ptr.into()], false),
+                        );
+                        let key = cx.load_ptr(body)?;
+                        cx.builder
+                            .build_call(f, &[key.into(), hs.into()], "")
+                            .map_err(e)?;
+                    }
+                    Ok(())
                 })?;
             }
             ("Client", "request") => {
@@ -1624,7 +1648,8 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("Response", "status") => {
                 let (at, ty) = self.behind_refs(&args[0])?;
-                let v = self.load_i64(self.offset(at, self.field_offset(ty, None, 0)?)?)?;
+                let k = self.response_field(ty, "status")?;
+                let v = self.load_i64(self.offset(at, self.field_offset(ty, None, k)?)?)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, v.into())?;
             }
@@ -1632,14 +1657,19 @@ impl<'ctx> Cx<'ctx, '_> {
             // is laid out as.
             ("Response", "body" | "bytes") | ("HttpError", "message") => {
                 let (at, ty) = self.behind_refs(&args[0])?;
-                let k = u32::from(base == "Response");
+                let k = if base == "Response" {
+                    self.response_field(ty, "body")?
+                } else {
+                    0
+                };
                 let src = self.offset(at, self.field_offset(ty, None, k)?)?;
                 let d = self.place_ptr(dest)?;
                 self.clone_into(d, src, string)?;
             }
             ("Response", "header" | "headers") => {
                 let (at, ty) = self.behind_refs(&args[0])?;
-                let body = self.load_ptr(self.offset(at, self.field_offset(ty, None, 1)?)?)?;
+                let k = self.response_field(ty, "body")?;
+                let body = self.load_ptr(self.offset(at, self.field_offset(ty, None, k)?)?)?;
                 let d = self.place_ptr(dest)?;
                 if method == "headers" {
                     let f = self.extern_fn(
@@ -1701,6 +1731,25 @@ impl<'ctx> Cx<'ctx, '_> {
         )?;
         let d = self.place_ptr(dest)?;
         self.store(d, used.into())
+    }
+
+    /// The index of `Response`'s field `name`: the library's
+    /// `{ status, body }`, or a program's own `Response` in the shape io.md
+    /// § HTTP server documents, whose fields may come in any order and may
+    /// add `headers`.
+    fn response_field(&self, rt: Ty, name: &str) -> R<u32> {
+        let TyKind::Adt(adt) = self.tys.kind(rt) else {
+            return Err(format!(
+                "a client response of type {}",
+                self.tys.display(rt)
+            ));
+        };
+        self.tys.adt(adt).variants[0]
+            .fields
+            .iter()
+            .position(|(n, _)| n == name)
+            .map(|k| k as u32)
+            .ok_or_else(|| format!("a Response without a `{name}`"))
     }
 
     /// `Server.__wire(resp)`: the response's bytes, as a `Vec[u8]`, reading
