@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 55 |
 | miscompile | 47 |
 | run-vs-build | 29 |
-| other | 24 |
+| other | 25 |
 | codegen-gap | 24 |
 | crash | 19 |
 | leak | 4 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 316 |
+| typecheck | 317 |
 | mir-llvm | 172 |
 | mir | 149 |
 | cli | 89 |
@@ -109,8 +109,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-33 | 2026-11-07 | mir-llvm | low | Kata 404's recursive `visit(nodes: Vec[Node], ...)` takes the Vec as a pointer to its header, so every call reloads the length and data pointer and re-checks the bound after the first recursive call: 1.23x equal-safety Rust's instructions on x86, 1.73x Rust's time on the M5 | — |
 | B-2026-11-08-61 | 2026-11-08 | mir-llvm | low | An index into a local Vec, inside a loop bounded by that Vec's length, keeps its bounds check: 459's `for i in d..n { cs[i] .. }` (n = cs.len()) and 484's `while i < letters.len() and letters[i] == 'D'`; 484's `for i in 0..n { perm.push(i + 1) }` fill also stays scalar with a capacity test (remainder of B-2026-11-08-6) | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
-| B-2026-11-09-14 | 2026-11-09 | typecheck+cli | medium | Rust's `binary_search` taken apart as a `Result` has no fix: `xs.binary_search(&v).unwrap_or_else(|x| x)` is refused with "expected 'OnceFn() -> i64', found 'Fn(?T) -> ?T'" and `match xs.binary_search(&v) { Ok(i) => .., Err(i) => .. }` with a generic pattern error, though Kāra's `binary_search` returns `Option[i64]` and `partition_point(|y| y < v)` is the insertion point | — |
 | B-2026-11-09-19 | 2026-11-09 | mir | medium | `v.contains(d)` with a float needle on a `Vec[u8]` (`let d = 1.5`) passes `karac check`; the interpreter then stops with "Eq on Int(1) and Float(1.5)" and the binary prints `false`, while `Set[u8].contains(d)` and a `u8` parameter refuse the same float | — |
+| B-2026-11-09-21 | 2026-11-09 | typecheck | low | `Option` accepts `Result`'s `is_ok()` and `is_err()` (as `is_some`/`is_none`), though docs/library/core-types.md lists them on `Result` only, so Rust's `xs.binary_search(v).is_ok()` passes unremarked and gets no `.is_some()` fix | — |
 
 ### Relocated
 
@@ -930,6 +930,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-10 | mir | low | A vector made before its loop's bound is worked out (`let mut seat_of = Vec.new(); for _ in 0..row.len() { seat_of.push(0) }`) is not presized, since… | d308599fbb |
 | B-2026-11-09-11 | mir-llvm | low | A library body's located function (`<fn>.at`, every library body a program calls) gets none of the parameter attributes the plain function gets: no `… | d308599fbb |
 | B-2026-11-09-13 | parser+resolver | high | `karac fix` turns a plain Rust `BinaryHeap` into a smallest-first `PriorityQueue.new()` whenever any other heap in the program wraps its items in `Re… | 4899210bd7 |
+| B-2026-11-09-14 | typecheck+cli | medium | Rust's `binary_search` taken apart as a `Result` has no fix: `xs.binary_search(&v).unwrap_or_else(\|x\| x)` is refused with "expected 'OnceFn() -> i64'… | 182b518950 |
 | B-2026-11-09-15 | typecheck+cli | low | A defaulted `i64` literal that reaches a narrower slot through a collection (`let mut a = 0; a += nums[i]; left[k].push(a)`, then `best.min(x + ..)`… | 6464505444 |
 | B-2026-11-09-16 | ownership | medium | A move inside a `let … else` else block is reported E0500 "value 'x' moved here, used again here (moved at line L)" against a move of the same bindin… | 6db1634956 |
 | B-2026-11-09-17 | typecheck | low | `.slice(a, b)` on a `Vec`, an array or a slice (JavaScript's spelling of a run of elements) gets a bare "no method 'slice' on type 'Vec'", with no po… | e9cca2f951 |
