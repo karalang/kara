@@ -324,6 +324,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   isolating group runs at teardown. On x86 (callgrind) kata 632 went from
   2.59G to 2.16G instructions, 743 from 2.11G to 1.86G, 480 from 4.33G to
   3.93G and 786 from 7.93G to 6.70G (B-2026-11-08-87).
+
+- `v.sort_by(|a, b| b.cmp(a))` (or `a.cmp(b)`, or a function written so)
+  over integers, `char`s or `bool`s sorts with the runtime's integer sort,
+  reversed for the descending order, instead of a merge sort that calls
+  the comparator per pair. The result is the same: such a comparator calls
+  nothing, and equal elements are the same bits. Kata 1058's bench went
+  from 1.44x to 1.08x Rust's `sort_by` (B-2026-11-06-34).
+
 - `<`, `<=`, `>` and `>=` on a tuple of integers, `bool`s and `char`s
   compare element by element instead of building an `Ordering` for each:
   a `PriorityQueue` of tuples sifts with one compare and branch an element

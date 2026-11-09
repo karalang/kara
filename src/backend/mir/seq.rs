@@ -1678,6 +1678,59 @@ impl<'ctx> Cx<'ctx, '_> {
         self.key_fn(op, el).as_global_value().as_pointer_value()
     }
 
+    /// Reverses the `n` elements of `el` (`size` bytes each) at `p` in place.
+    fn reverse_elems(
+        &mut self,
+        p: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        el: Ty,
+        size: u64,
+    ) -> R<()> {
+        let tmp = self.temp(el, "swap")?;
+        let half = self
+            .builder
+            .build_int_unsigned_div(n, self.i64(2), "")
+            .map_err(e)?;
+        let last = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
+        self.count_loop(half, |cx, i| {
+            let j = cx.builder.build_int_sub(last, i, "").map_err(e)?;
+            let x = cx.elem_ptr(p, i, size)?;
+            let y = cx.elem_ptr(p, j, size)?;
+            cx.copy(tmp, x, el)?;
+            cx.copy(x, y, el)?;
+            cx.copy(y, tmp, el)
+        })
+    }
+
+    /// `Some(descending)` when `method` (`sort_by` or `sort_unstable_by`)
+    /// sorts integers, `char`s or `bool`s with a comparator `f` that is
+    /// their own order (`false`) or its reverse (`true`), which the
+    /// runtime's integer sort can do with no comparator call
+    /// (B-2026-11-06-34). `KARAC_MIR_SORT_BY_OWN=0` keeps the merge sort.
+    fn own_order_of(&self, method: &str, f: &Operand, el: Ty, size: u64) -> R<Option<bool>> {
+        if !matches!(method, "sort_by" | "sort_unstable_by")
+            || std::env::var("KARAC_MIR_SORT_BY_OWN").as_deref() == Ok("0")
+        {
+            return Ok(None);
+        }
+        let scalar = match self.tys.kind(el) {
+            TyKind::Int(IntTy::I128 | IntTy::U128) => false,
+            TyKind::Int(_) | TyKind::Char | TyKind::Bool => true,
+            _ => false,
+        };
+        if !scalar || self.user_cmp_body(el).is_some() || !matches!(size, 1 | 2 | 4 | 8) {
+            return Ok(None);
+        }
+        let mut ty = self.operand_type(f)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ty) {
+            ty = i;
+        }
+        if !matches!(self.tys.kind(ty), TyKind::Closure(..) | TyKind::FnDef(_)) {
+            return Ok(None);
+        }
+        Ok(self.plain_order_comparator(ty))
+    }
+
     /// Sorts the `n` elements of `el` (`size` bytes each) at `buf` in
     /// their own order: integers, `char`s and `bool`s straight through
     /// the runtime's slice sort, anything else by the emitted merge sort
@@ -1912,22 +1965,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.copy(x, y, el)?;
                 self.copy(y, tmp, el)?;
             }
-            ("reverse", []) => {
-                let tmp = self.temp(el, "swap")?;
-                let half = self
-                    .builder
-                    .build_int_unsigned_div(n, self.i64(2), "")
-                    .map_err(e)?;
-                let last = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
-                self.count_loop(half, |cx, i| {
-                    let j = cx.builder.build_int_sub(last, i, "").map_err(e)?;
-                    let x = cx.elem_ptr(p, i, size)?;
-                    let y = cx.elem_ptr(p, j, size)?;
-                    cx.copy(tmp, x, el)?;
-                    cx.copy(x, y, el)?;
-                    cx.copy(y, tmp, el)
-                })?;
-            }
+            ("reverse", []) => self.reverse_elems(p, n, el, size)?,
             ("contains", [needle]) => {
                 let np = self.key_arg_of(needle, el)?;
                 let res = self.entry_slot(1, "found")?;
@@ -1964,7 +2002,17 @@ impl<'ctx> Cx<'ctx, '_> {
                 [f],
             ) => {
                 let by_key = method.contains("key");
-                self.sort_with(p, n, size, f, by_key, el)?;
+                match self.own_order_of(method, f, el, size)? {
+                    // A comparator that is the elements' own order or its
+                    // reverse (B-2026-11-06-34, `sort_order.rs`).
+                    Some(descending) => {
+                        self.sort_own_order(p, n, el, size)?;
+                        if descending {
+                            self.reverse_elems(p, n, el, size)?;
+                        }
+                    }
+                    None => self.sort_with(p, n, size, f, by_key, el)?,
+                }
                 self.drop_moved(&args[1..])?;
             }
             ("to_vec", []) => self.vec_of_clones(dest, p, n, el)?,

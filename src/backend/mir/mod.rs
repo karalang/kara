@@ -45,6 +45,7 @@ mod log;
 mod num;
 mod pool;
 mod seq;
+mod sort_order;
 mod table;
 mod task;
 mod tracing;
