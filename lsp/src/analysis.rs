@@ -406,6 +406,33 @@ pub fn diagnostics_for(source: &str, uri: &Uri) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// [`diagnostics_for`], re-checking only what the edit since `checker`'s
+/// last result touched (B-2026-11-09-33); `full` checks the whole buffer,
+/// as a save does, so nothing an edit-by-edit result missed can stay.
+pub fn diagnostics_with(
+    checker: &mut karac::DocumentChecker,
+    source: &str,
+    uri: &Uri,
+    full: bool,
+) -> Vec<Diagnostic> {
+    let path = file_path(uri);
+    let check = || {
+        if full {
+            checker.full_at(source, path.as_deref())
+        } else {
+            checker.check_at(source, path.as_deref())
+        }
+    };
+    match std::panic::catch_unwind(AssertUnwindSafe(check)) {
+        Ok(raw) => to_lsp(source, raw).into_iter().map(|(d, _)| d).collect(),
+        Err(_) => {
+            *checker = karac::DocumentChecker::new();
+            eprintln!("kara-lsp: analysis panicked; skipping diagnostics for this revision");
+            Vec::new()
+        }
+    }
+}
+
 /// The local path a `file:` URI names, percent-decoded; `None` for any other
 /// scheme or a path that does not decode as UTF-8.
 pub fn file_path(uri: &Uri) -> Option<std::path::PathBuf> {
@@ -455,7 +482,13 @@ fn analyze(
             return Vec::new();
         }
     };
+    to_lsp(source, raw)
+}
 
+fn to_lsp(
+    source: &str,
+    raw: Vec<karac::PlaygroundDiagnostic>,
+) -> Vec<(Diagnostic, Vec<karac::SourceFix>)> {
     let index = LineIndex::new(source);
     raw.into_iter()
         .map(|d| {

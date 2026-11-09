@@ -1438,7 +1438,7 @@ fn effect_signature_display_grouped(fn_name: &str, effects: &EffectCheckResult) 
 /// identically everywhere). Empty → `"pure"` (hover's convention; the shared
 /// renderer's own empty form is `(none)`, which the caller never reaches).
 /// Uncolored — the LSP wraps this in Markdown, not ANSI.
-fn render_effect_set(set: &crate::effectchecker::EffectSet) -> String {
+pub(crate) fn render_effect_set(set: &crate::effectchecker::EffectSet) -> String {
     if set.effects.is_empty() {
         return "pure".to_string();
     }
@@ -1699,6 +1699,8 @@ pub fn rename_spans(source: &str, byte_offset: usize) -> Option<(String, Vec<Def
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use cli::editor_complete::{CompletionEntry, CompletionKind};
+#[cfg(not(target_arch = "wasm32"))]
+pub use cli::editor_incremental::{CheckKind, DocumentChecker};
 
 /// Completion query: what can be written at `byte_offset`. After a `.` on
 /// a value, its type's fields and the methods that take `self` (library

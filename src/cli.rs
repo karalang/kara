@@ -31,6 +31,7 @@ mod build_v2;
 mod diag_json;
 pub(crate) mod editor;
 pub(crate) mod editor_complete;
+pub(crate) mod editor_incremental;
 pub(crate) mod editor_nav;
 pub mod explain;
 mod explain_item;

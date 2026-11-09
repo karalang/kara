@@ -89,6 +89,9 @@ fn main_loop(connection: Connection) -> LspResult {
     // whole buffer; we keep it so `save` (which need not carry text) and future
     // position-based requests can re-analyze the current revision.
     let mut docs: HashMap<String, String> = HashMap::new();
+    // Each open document's last check, so an edit inside one function body
+    // re-checks that body (B-2026-11-09-33).
+    let mut checkers: HashMap<String, karac::DocumentChecker> = HashMap::new();
 
     for msg in &connection.receiver {
         match msg {
@@ -102,7 +105,7 @@ fn main_loop(connection: Connection) -> LspResult {
                 connection.sender.send(Message::Response(resp))?;
             }
             Message::Notification(not) => {
-                handle_notification(&connection, &mut docs, not)?;
+                handle_notification(&connection, &mut docs, &mut checkers, not)?;
             }
             Message::Response(_) => {
                 // We issue no server→client requests in slice 1, so there are
@@ -116,6 +119,7 @@ fn main_loop(connection: Connection) -> LspResult {
 fn handle_notification(
     connection: &Connection,
     docs: &mut HashMap<String, String>,
+    checkers: &mut HashMap<String, karac::DocumentChecker>,
     not: lsp_server::Notification,
 ) -> LspResult {
     match not.method.as_str() {
@@ -123,7 +127,8 @@ fn handle_notification(
             let params: lsp_types::DidOpenTextDocumentParams = serde_json::from_value(not.params)?;
             let uri = params.text_document.uri;
             let text = params.text_document.text;
-            publish(connection, &uri, &text);
+            let checker = checkers.entry(uri.to_string()).or_default();
+            publish(connection, checker, &uri, &text, true);
             docs.insert(uri.to_string(), text);
         }
         DidChangeTextDocument::METHOD => {
@@ -133,7 +138,8 @@ fn handle_notification(
             // FULL sync: the last content change holds the entire new buffer.
             if let Some(change) = params.content_changes.into_iter().next_back() {
                 let text = change.text;
-                publish(connection, &uri, &text);
+                let checker = checkers.entry(uri.to_string()).or_default();
+                publish(connection, checker, &uri, &text, false);
                 docs.insert(uri.to_string(), text);
             }
         }
@@ -142,14 +148,17 @@ fn handle_notification(
             let uri = params.text_document.uri;
             // Prefer the text carried on save if present; otherwise re-analyze
             // the last-known revision.
+            // A save checks the whole buffer.
             if let Some(text) = params.text.or_else(|| docs.get(&uri.to_string()).cloned()) {
-                publish(connection, &uri, &text);
+                let checker = checkers.entry(uri.to_string()).or_default();
+                publish(connection, checker, &uri, &text, true);
             }
         }
         DidCloseTextDocument::METHOD => {
             let params: lsp_types::DidCloseTextDocumentParams = serde_json::from_value(not.params)?;
             let uri = params.text_document.uri;
             docs.remove(&uri.to_string());
+            checkers.remove(&uri.to_string());
             // Clear the editor's squiggles for a closed document.
             publish_diagnostics(connection, uri, Vec::new());
         }
@@ -324,9 +333,17 @@ fn handle_request(
     }
 }
 
-/// Analyze `text` and publish the resulting diagnostics for `uri`.
-fn publish(connection: &Connection, uri: &Uri, text: &str) {
-    let diags = analysis::diagnostics_for(text, uri);
+/// Analyze `text` and publish the resulting diagnostics for `uri`: from
+/// what changed since `checker`'s last result, or, when `full`, the whole
+/// buffer.
+fn publish(
+    connection: &Connection,
+    checker: &mut karac::DocumentChecker,
+    uri: &Uri,
+    text: &str,
+    full: bool,
+) {
+    let diags = analysis::diagnostics_with(checker, text, uri, full);
     publish_diagnostics(connection, uri.clone(), diags);
 }
 

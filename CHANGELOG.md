@@ -85,6 +85,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   locals and parameters in scope and the file's items. `textDocument/rename`
   renames a name at its declaration and every use in the file.
 
+- **The editor re-checks only what an edit touched.** On a keystroke inside
+  a function body, `kara-lsp` checks that body with the rest of the file's
+  bodies emptied (the ones it calls kept, or stood in for by a body with
+  the same inferred effects), and keeps the previous diagnostics
+  everywhere else. A change to a signature, a declaration, what a body
+  names, or a private function's inferred effects checks the whole file,
+  as does every open and save. Completion checks only the body under the
+  cursor. On `mini_markdown` (14,776 lines) an edit's diagnostics take
+  0.1 to 0.2 s rather than 1.7 s, and a completion 0.13 s rather than
+  1.5 s; a sweep that edits each of the 472 corpus apps at three points
+  finds the incremental answer identical to a full check every time.
+  `KARAC_LSP_INCREMENTAL=0` turns both off (B-2026-11-09-33).
+
 - **`Slice.split(pred)`** (and so on `Vec` and arrays): the runs between
   the elements `pred` accepts, which are dropped, with Rust's empty runs
   (`[1, 0, 2, 3, 0].split(|x| x == 0)` is `[[1], [2, 3], []]`), so Rust's

@@ -734,6 +734,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 3`](../
 
 **v1 stretch (ship if engineering time allows, else v1.1):**
 - [x] Rename symbol (`textDocument/rename`). **✓ (2026-11-09)** — over `find_references`, each span narrowed to the name (`karac::rename_spans`); single-document.
+- [x] Incremental diagnostics. **✓ (2026-11-09)** — `karac::DocumentChecker` (`src/cli/editor_incremental.rs`): an edit inside one body re-checks that body with the file's other bodies emptied (callees kept or replaced by an effect-matching stand-in, recursion partners kept) and merges the result into the cached diagnostics; any change to a signature, a declaration, the names a body uses, or a private function's inferred effects falls back to a full check. Completion checks only the cursor's body. mini_markdown (14,776 lines): 0.1 to 0.2 s per edit against 1.7 s full, completion 0.13 s against 1.5 s. `lsp/tests/incremental.rs` holds the ignored corpus sweep (472 apps, 1416 edits, identical to a full check). B-2026-11-09-33.
 - [ ] Code actions — apply structured fix-diffs from `karac` diagnostics.
 - [ ] Semantic tokens (full semantic highlighting beyond TextMate).
 - [ ] Workspace symbols / global search.

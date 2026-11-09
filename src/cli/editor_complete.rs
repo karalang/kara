@@ -81,9 +81,19 @@ pub(crate) fn complete(source: &str, at: usize) -> Vec<CompletionEntry> {
 /// after the hole, as a statement left unfinished needs.
 fn check_with_hole(before: &str, rest: &str) -> Option<(Nav, usize)> {
     let hole_at = before.len();
-    editor_nav::analyze(&format!("{before}{HOLE}{rest}"))
-        .or_else(|| editor_nav::analyze(&format!("{before}{HOLE};{rest}")))
+    analyze_focused(&format!("{before}{HOLE}{rest}"), hole_at)
+        .or_else(|| analyze_focused(&format!("{before}{HOLE};{rest}"), hole_at))
         .map(|nav| (nav, hole_at))
+}
+
+/// [`editor_nav::analyze`] of the text with every body but the one at `at`
+/// emptied ([`super::editor_incremental::focus`]), or of the text itself
+/// when nothing was emptied.
+fn analyze_focused(text: &str, at: usize) -> Option<Nav> {
+    match super::editor_incremental::focus(text, at) {
+        Some(focused) => editor_nav::analyze(&focused),
+        None => editor_nav::analyze(text),
+    }
 }
 
 /// `std.a.b` as `["std", "a", "b"]` when the text before a `.` ends in a
@@ -500,9 +510,10 @@ fn item_name(item: &Item) -> Option<(&str, CompletionKind, bool)> {
 fn names(before: &str, rest: &str, at: usize) -> Vec<CompletionEntry> {
     // The name being typed is left out, so it cannot fail to resolve; a
     // `0` stands in where the buffer needs an operand there (`a + |`).
-    let nav = editor_nav::analyze(&format!("{before}{rest}"))
-        .or_else(|| editor_nav::analyze(&format!("{before}0{rest}")))
-        .or_else(|| editor_nav::analyze(&format!("{before}0;{rest}")));
+    let at_hole = before.len();
+    let nav = analyze_focused(&format!("{before}{rest}"), at_hole)
+        .or_else(|| analyze_focused(&format!("{before}0{rest}"), at_hole))
+        .or_else(|| analyze_focused(&format!("{before}0;{rest}"), at_hole));
     let Some(nav) = nav else {
         return Vec::new();
     };

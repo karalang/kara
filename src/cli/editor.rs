@@ -37,8 +37,34 @@ pub(super) fn checked_whole_library(source: &str) -> Pipeline {
 /// `karac check`'s diagnostics for `source`, errors, warnings and notes alike,
 /// each with its byte span and its machine-applicable fix.
 pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
+    diagnostics_of(&checked(source))
+}
+
+/// [`check_source`], with each function's inferred effects, rendered, keyed
+/// as the effect checker keys them (`f`, `Type.method`), for the
+/// incremental check ([`super::editor_incremental`]).
+pub(crate) fn check_with_effects(
+    source: &str,
+) -> (
+    Vec<PlaygroundDiagnostic>,
+    std::collections::HashMap<String, String>,
+) {
     let pipeline = checked(source);
-    let diags = collect_diagnostics(&pipeline);
+    let effects = pipeline
+        .effects
+        .as_ref()
+        .map(|e| {
+            e.inferred_effects
+                .iter()
+                .map(|(k, v)| (k.clone(), crate::render_effect_set(v)))
+                .collect()
+        })
+        .unwrap_or_default();
+    (diagnostics_of(&pipeline), effects)
+}
+
+fn diagnostics_of(pipeline: &Pipeline) -> Vec<PlaygroundDiagnostic> {
+    let diags = collect_diagnostics(pipeline);
     diags
         .entries
         .iter()
