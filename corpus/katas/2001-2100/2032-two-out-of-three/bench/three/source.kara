@@ -1,0 +1,64 @@
+// LeetCode #2032: Two Out of Three -- the ★ arm under the bench workload.
+// Each value up to 100 gets a mask of the arrays it appears in; the values
+// whose mask has at least two bits are the answer, in ascending order.
+
+fn two_out_of_three(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let mut mask = [0; 101];
+    for x in nums1 {
+        mask[x] |= 1;
+    }
+    for x in nums2 {
+        mask[x] |= 2;
+    }
+    for x in nums3 {
+        mask[x] |= 4;
+    }
+    let mut out = Vec.new();
+    for v in 1..101 {
+        if mask[v].count_ones() >= 2 {
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 problems of three arrays of 100 values built once, problem `p`'s
+    // values from 1 to `p % 90 + 11`; then 4000 rounds, each changing one
+    // value of each problem before the ★ arm answers it
+    let mut seed = 2032;
+    let mut problems: Vec[Vec[Vec[i64]]] = Vec.new();
+    for p in 0..100 {
+        let mut arrays: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..3 {
+            let mut nums: Vec[i64] = Vec.new();
+            for _ in 0..100 {
+                nums.push(next_random(mut seed) % (p % 90 + 11) + 1);
+            }
+            arrays.push(nums);
+        }
+        problems.push(arrays);
+    }
+    let mut calls = 0;
+    let mut kept = 0;
+    let mut check = 0;
+    for round in 0..4000 {
+        for p in 0..100 {
+            let k = (round + p) % 3;
+            let at = (round * 7 + p * 13) % 100;
+            problems[p][k][at] = (problems[p][k][at] + round) % 100 + 1;
+            let answer = two_out_of_three(problems[p][0], problems[p][1], problems[p][2]);
+            calls += 1;
+            kept += answer.len();
+            for v in answer {
+                check = (check * 31 + v) % 1000000007;
+            }
+        }
+    }
+    println(f"{calls} calls: {kept} values kept, checksum {check}");
+}

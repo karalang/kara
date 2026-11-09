@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2039-the-time-when-the-network-becomes-idle/bench/network.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:set", "lib:vecdeque", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 2039 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "991c45adc+local"
+extracted_src = "4ef6ff46"

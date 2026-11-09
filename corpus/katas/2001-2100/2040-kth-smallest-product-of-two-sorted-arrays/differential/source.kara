@@ -1,0 +1,338 @@
+// LeetCode #2040: Kth Smallest Product of Two Sorted Arrays -- the
+// differential. The five arms that check, against the statement read
+// literally: every product formed, sorted, and the `k`-th taken. The
+// iterator arm is blocked (see the README) and not here. 1500 problems of 1
+// to 6 values a side, up to 1 to 30 either side, each with a value to add,
+// every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the two arrays swapped leave the answer
+// P3  both arrays negated (and reversed, to stay sorted) leave the answer
+// P4  one array negated turns the k-th smallest into minus the k-th largest
+// P5  a value added to the first array never raises the answer
+// P6  each arm agrees with at least two of the other four
+
+// ---- product.kara: the ★ arm, binary search on the answer by partition_point
+fn star_count_at_most(nums1: Vec[i64], nums2: Vec[i64], x: i64) -> i64 {
+    let mut count = 0;
+    for a in nums1.iter() {
+        if a > 0 {
+            count += nums2.partition_point(|b| a * b <= x);
+        } else if a < 0 {
+            count += nums2.len() - nums2.partition_point(|b| a * b > x);
+        } else if x >= 0 {
+            count += nums2.len();
+        }
+    }
+    count
+}
+
+fn star_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let mut lo = -10000000000;
+    let mut hi = 10000000000;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_euclid(2);
+        if star_count_at_most(nums1, nums2, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- product_pointers.kara: the count by two pointers, one per sign
+fn pointers_count_at_most(nums1: Vec[i64], nums2: Vec[i64], x: i64) -> i64 {
+    let m = nums2.len();
+    let positive: Vec[i64] = nums1.iter().filter(|a| a > 0).cloned().collect();
+    let negative: Vec[i64] = nums1.iter().filter(|a| a < 0).cloned().collect();
+    let zeros = nums1.len() - positive.len() - negative.len();
+    let mut count = if x >= 0 { zeros * m } else { 0 };
+    // positive `a`, walked so that `x / a` grows: the prefix `b <= x / a`
+    let mut j = 0;
+    let order: Vec[i64] = if x >= 0 { positive.iter().rev().cloned().collect() } else { positive.clone() };
+    for a in order.iter() {
+        while j < m and a * nums2[j] <= x {
+            j += 1;
+        }
+        count += j;
+    }
+    // negative `a`, walked so that the first `b` with `a b <= x` moves right
+    let mut i = 0;
+    let order: Vec[i64] = if x < 0 { negative.clone() } else { negative.iter().rev().cloned().collect() };
+    for a in order.iter() {
+        while i < m and a * nums2[i] > x {
+            i += 1;
+        }
+        count += m - i;
+    }
+    count
+}
+
+fn pointers_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let mut lo = -10000000000;
+    let mut hi = 10000000000;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_euclid(2);
+        if pointers_count_at_most(nums1, nums2, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- product_division.kara: the bounds by division, a hand-written search
+// the first index whose value is greater than `bound`, in sorted `xs`
+fn division_first_above(xs: Vec[i64], bound: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = xs.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if xs[mid] <= bound {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn division_count_at_most(nums1: Vec[i64], nums2: Vec[i64], x: i64) -> i64 {
+    let mut count = 0;
+    for a in nums1.iter() {
+        if a > 0 {
+            count += division_first_above(nums2, x.div_euclid(a));
+        } else if a < 0 {
+            // `b >= -floor(x / -a)` is `b > -floor(x / -a) - 1`
+            count += nums2.len() - division_first_above(nums2, -x.div_euclid(-a) - 1);
+        } else if x >= 0 {
+            count += nums2.len();
+        }
+    }
+    count
+}
+
+fn division_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let mut lo = -10000000000;
+    let mut hi = 10000000000;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_euclid(2);
+        if division_count_at_most(nums1, nums2, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- product_signs.kara: the sign groups counted first, then one group searched
+struct Signs {
+    negative: Vec[i64],
+    zeros: i64,
+    positive: Vec[i64],
+}
+
+fn signs_signs(xs: Vec[i64]) -> Signs {
+    Signs {
+        negative: xs.iter().filter(|x| x < 0).cloned().collect(),
+        zeros: xs.iter().filter(|x| x == 0).count(),
+        positive: xs.iter().filter(|x| x > 0).cloned().collect(),
+    }
+}
+
+// products `a b <= x` over `a` in `xs` and `b` in sorted `ys`
+fn signs_pairs_at_most(xs: Vec[i64], ys: Vec[i64], x: i64) -> i64 {
+    let mut count = 0;
+    for a in xs.iter() {
+        count += if a > 0 {
+            ys.partition_point(|b| a * b <= x)
+        } else {
+            ys.len() - ys.partition_point(|b| a * b > x)
+        };
+    }
+    count
+}
+
+fn signs_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let s1 = signs_signs(nums1);
+    let s2 = signs_signs(nums2);
+    let below = s1.negative.len() * s2.positive.len() + s1.positive.len() * s2.negative.len();
+    let zero = s1.zeros * nums2.len() + s2.zeros * nums1.len() - s1.zeros * s2.zeros;
+    if k > below and k <= below + zero {
+        return 0;
+    }
+    // the sign groups whose products are on the `k`-th's side of zero
+    let mut (groups, rank, lo, hi) = if k <= below {
+        ([(s1.negative.clone(), s2.positive.clone()), (s1.positive.clone(), s2.negative.clone())], k, -10000000000, -1)
+    } else {
+        ([(s1.positive.clone(), s2.positive.clone()), (s1.negative.clone(), s2.negative.clone())], k - below - zero, 1, 10000000000)
+    };
+    while lo < hi {
+        let mid = lo + (hi - lo).div_euclid(2);
+        let count: i64 = groups.iter().map(|(xs, ys)| signs_pairs_at_most(xs, ys, mid)).sum();
+        if count >= rank {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- product_solution.kara: LeetCode's Rust template, carried by `karac fix`
+impl Solution {
+    pub fn solution_kth_smallest_product(nums1: Vec[i32], nums2: Vec[i32], k: i64) -> i64 {
+        let count = |x: i64| {
+            let mut c = 0;
+            for a in ref nums1 {
+                let a = a as i64;
+                if a > 0 {
+                    c += nums2.partition_point(|b| a * b as i64 <= x);
+                } else if a < 0 {
+                    c += (nums2.len() - nums2.partition_point(|b| a * b as i64 > x));
+                } else if x >= 0 {
+                    c += nums2.len();
+                }
+            }
+            c
+        };
+        let mut (lo, hi) = (-10_000_000_000, 10_000_000_000);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if count(mid) >= k {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    }
+}
+
+struct Solution {}
+
+fn solution_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let a: Vec[i32] = nums1.iter().map(|x| x as i32).collect();
+    let b: Vec[i32] = nums2.iter().map(|x| x as i32).collect();
+    Solution.solution_kth_smallest_product(a, b, k)
+}
+
+// ---- the statement read literally
+
+fn literal(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let mut products: Vec[i64] = Vec.new();
+    for a in nums1.iter() {
+        for b in nums2.iter() {
+            products.push(a * b);
+        }
+    }
+    products.sort();
+    products[k - 1]
+}
+
+fn answer(arm: i64, nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let (a, b) = (nums1.clone(), nums2.clone());
+    match arm {
+        0 => star_kth_smallest_product(a, b, k),
+        1 => pointers_kth_smallest_product(a, b, k),
+        2 => division_kth_smallest_product(a, b, k),
+        3 => signs_kth_smallest_product(a, b, k),
+        _ => solution_kth_smallest_product(a, b, k),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn negated(xs: Vec[i64]) -> Vec[i64] {
+    xs.iter().rev().map(|x| -x).collect()
+}
+
+struct Problem {
+    nums1: Vec[i64],
+    nums2: Vec[i64],
+    k: i64,
+    added: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let top = next_random(mut seed) % 30 + 1;
+    let n = next_random(mut seed) % 6 + 1;
+    let m = next_random(mut seed) % 6 + 1;
+    let mut nums1: Vec[i64] = (0..n).map(|_| next_random(mut seed) % (2 * top + 1) - top).collect();
+    let mut nums2: Vec[i64] = (0..m).map(|_| next_random(mut seed) % (2 * top + 1) - top).collect();
+    nums1.sort();
+    nums2.sort();
+    let k = next_random(mut seed) % (n * m) + 1;
+    let added = next_random(mut seed) % (2 * top + 1) - top;
+    Problem { nums1, nums2, k, added }
+}
+
+fn main() {
+    let names = ["star", "pointers", "division", "signs", "solution"];
+    let mut seed = 2040;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let k = prob.k;
+        let size = prob.nums1.len() * prob.nums2.len();
+        let truth = literal(prob.nums1, prob.nums2, k);
+        check = (check * 31 + truth.rem_euclid(1000000007)) % 1000000007;
+        let minus1 = negated(prob.nums1);
+        let minus2 = negated(prob.nums2);
+        let mut more = prob.nums1.clone();
+        more.push(prob.added);
+        more.sort();
+        let got: Vec[i64] = (0..5).map(|arm| answer(arm, prob.nums1, prob.nums2, k)).collect();
+        for arm in 0..5 {
+            let x = got[arm];
+            let mut same = 0;
+            for other in 0..5 {
+                if other != arm and got[other] == x {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                x == truth,
+                answer(arm, prob.nums2, prob.nums1, k) == x,
+                answer(arm, minus1, minus2, k) == x,
+                answer(arm, minus1, prob.nums2, size + 1 - k) == -x,
+                answer(arm, more, prob.nums2, k) <= x,
+                same >= 2,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, answer {x}, literal {truth}, nums1 {prob.nums1}, nums2 {prob.nums2}, k {k}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for q in 0..6 {
+            if by_property[q] > 0 {
+                println(f"P{q + 1} {by_property[q]}");
+            }
+        }
+    }
+}

@@ -1,0 +1,560 @@
+// LeetCode #2043: Simple Bank System -- the differential. The six arms,
+// against the statement read literally: a log of the calls that went
+// through, each account's balance summed from it whenever a call asks. 1500
+// banks of 1 to 6 accounts and 1 to 20 calls, each with a relabelling of
+// the accounts and a place to cut the calls, every one drawn before any arm
+// answers.
+//
+// P1  the answers are the statement read literally
+// P2  the accounts relabelled leave the answers
+// P3  every balance and amount doubled leaves the answers
+// P4  a deposit of 0 into account 1 put first answers true and leaves the rest
+// P5  the calls cut short answer the same up to the cut
+// P6  each arm agrees with at least three of the other five
+
+// ---- bank.kara: the ★ arm, a Vec of balances, each call checked whole
+struct StarBank {
+    balance: Vec[i64],
+}
+
+impl StarBank {
+    fn new(balance: own Vec[i64]) -> StarBank {
+        StarBank { balance }
+    }
+
+    fn exists(self, account: i64) -> bool {
+        account >= 1 and account <= self.balance.len()
+    }
+
+    fn transfer(mut ref self, account1: i64, account2: i64, money: i64) -> bool {
+        if not self.exists(account1) or not self.exists(account2) or self.balance[account1 - 1] < money {
+            return false;
+        }
+        self.balance[account1 - 1] -= money;
+        self.balance[account2 - 1] += money;
+        true
+    }
+
+    fn deposit(mut ref self, account: i64, money: i64) -> bool {
+        if not self.exists(account) {
+            return false;
+        }
+        self.balance[account - 1] += money;
+        true
+    }
+
+    fn withdraw(mut ref self, account: i64, money: i64) -> bool {
+        if not self.exists(account) or self.balance[account - 1] < money {
+            return false;
+        }
+        self.balance[account - 1] -= money;
+        true
+    }
+}
+
+fn star_run(balance: own Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let mut bank = StarBank.new(balance);
+    let mut results: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let ok = match kind {
+            0 => bank.transfer(a, b, money),
+            1 => bank.deposit(a, money),
+            _ => bank.withdraw(a, money),
+        };
+        results.push(ok);
+    }
+    results
+}
+
+// ---- bank_map.kara: a Map from account to balance, guarded matches
+struct MapBank {
+    accounts: Map[i64, i64],
+}
+
+impl MapBank {
+    fn new(balance: own Vec[i64]) -> MapBank {
+        let mut accounts: Map[i64, i64] = Map.new();
+        for (i, money) in balance.iter().enumerate() {
+            accounts.insert(i + 1, money);
+        }
+        MapBank { accounts }
+    }
+
+    fn transfer(mut ref self, account1: i64, account2: i64, money: i64) -> bool {
+        if not self.accounts.contains_key(account2) {
+            return false;
+        }
+        match self.accounts.get(account1) {
+            Some(have) if have >= money => {
+                self.accounts[account1] = have - money;
+                self.accounts[account2] += money;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn deposit(mut ref self, account: i64, money: i64) -> bool {
+        match self.accounts.get(account) {
+            Some(have) => {
+                self.accounts[account] = have + money;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn withdraw(mut ref self, account: i64, money: i64) -> bool {
+        match self.accounts.get(account) {
+            Some(have) if have >= money => {
+                self.accounts[account] = have - money;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+fn map_run(balance: own Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let mut bank = MapBank.new(balance);
+    let mut results: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let ok = match kind {
+            0 => bank.transfer(a, b, money),
+            1 => bank.deposit(a, money),
+            _ => bank.withdraw(a, money),
+        };
+        results.push(ok);
+    }
+    results
+}
+
+// ---- bank_result.kara: refusals as Result values chained with ?
+enum ResultRefusal {
+    NoSuchAccount(i64),
+    TooLittle { have: i64, want: i64 },
+}
+
+struct ResultBank {
+    balance: Vec[i64],
+}
+
+impl ResultBank {
+    fn new(balance: own Vec[i64]) -> ResultBank {
+        ResultBank { balance }
+    }
+
+    fn account(self, account: i64) -> Result[i64, ResultRefusal] {
+        if account >= 1 and account <= self.balance.len() {
+            Ok(account - 1)
+        } else {
+            Err(ResultRefusal.NoSuchAccount(account))
+        }
+    }
+
+    fn take(self, i: i64, money: i64) -> Result[(), ResultRefusal] {
+        if self.balance[i] >= money {
+            Ok(())
+        } else {
+            Err(ResultRefusal.TooLittle { have: self.balance[i], want: money })
+        }
+    }
+
+    fn try_transfer(mut ref self, account1: i64, account2: i64, money: i64) -> Result[(), ResultRefusal] {
+        let from = self.account(account1)?;
+        let to = self.account(account2)?;
+        self.take(from, money)?;
+        self.balance[from] -= money;
+        self.balance[to] += money;
+        Ok(())
+    }
+
+    fn try_withdraw(mut ref self, account: i64, money: i64) -> Result[(), ResultRefusal] {
+        let i = self.account(account)?;
+        self.take(i, money)?;
+        self.balance[i] -= money;
+        Ok(())
+    }
+
+    fn transfer(mut ref self, account1: i64, account2: i64, money: i64) -> bool {
+        self.try_transfer(account1, account2, money).is_ok()
+    }
+
+    fn deposit(mut ref self, account: i64, money: i64) -> bool {
+        match self.account(account) {
+            Ok(i) => {
+                self.balance[i] += money;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn withdraw(mut ref self, account: i64, money: i64) -> bool {
+        self.try_withdraw(account, money).is_ok()
+    }
+}
+
+fn result_run(balance: own Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let mut bank = ResultBank.new(balance);
+    let mut results: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let ok = match kind {
+            0 => bank.transfer(a, b, money),
+            1 => bank.deposit(a, money),
+            _ => bank.withdraw(a, money),
+        };
+        results.push(ok);
+    }
+    results
+}
+
+// ---- bank_ops.kara: every call an Op for one apply
+enum OpsOp {
+    Transfer { from: i64, to: i64, money: i64 },
+    Deposit { to: i64, money: i64 },
+    Withdraw { from: i64, money: i64 },
+}
+
+struct OpsBank {
+    balance: Vec[i64],
+}
+
+impl OpsBank {
+    fn new(balance: own Vec[i64]) -> OpsBank {
+        OpsBank { balance }
+    }
+
+    fn apply(mut ref self, op: OpsOp) -> bool {
+        let n = self.balance.len();
+        let exists = |account: i64| account >= 1 and account <= n;
+        match op {
+            OpsOp.Transfer { from, to, money } if exists(from) and exists(to) and self.balance[from - 1] >= money => {
+                self.balance[from - 1] -= money;
+                self.balance[to - 1] += money;
+                true
+            }
+            OpsOp.Deposit { to, money } if exists(to) => {
+                self.balance[to - 1] += money;
+                true
+            }
+            OpsOp.Withdraw { from, money } if exists(from) and self.balance[from - 1] >= money => {
+                self.balance[from - 1] -= money;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn transfer(mut ref self, account1: i64, account2: i64, money: i64) -> bool {
+        self.apply(OpsOp.Transfer { from: account1, to: account2, money })
+    }
+
+    fn deposit(mut ref self, account: i64, money: i64) -> bool {
+        self.apply(OpsOp.Deposit { to: account, money })
+    }
+
+    fn withdraw(mut ref self, account: i64, money: i64) -> bool {
+        self.apply(OpsOp.Withdraw { from: account, money })
+    }
+}
+
+fn ops_run(balance: own Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let mut bank = OpsBank.new(balance);
+    let mut results: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let ok = match kind {
+            0 => bank.transfer(a, b, money),
+            1 => bank.deposit(a, money),
+            _ => bank.withdraw(a, money),
+        };
+        results.push(ok);
+    }
+    results
+}
+
+// ---- bank_option.kara: Option chaining with zip and filter
+struct OptionBank {
+    balance: Vec[i64],
+}
+
+impl OptionBank {
+    fn new(balance: own Vec[i64]) -> OptionBank {
+        OptionBank { balance }
+    }
+
+    fn index(self, account: i64) -> Option[i64] {
+        if account >= 1 and account <= self.balance.len() { Some(account - 1) } else { None }
+    }
+
+    fn transfer(mut ref self, account1: i64, account2: i64, money: i64) -> bool {
+        let pair = self.index(account1).zip(self.index(account2)).filter(|(i, _)| self.balance[i] >= money);
+        if let Some((i, j)) = pair {
+            self.balance[i] -= money;
+            self.balance[j] += money;
+        }
+        pair.is_some()
+    }
+
+    fn deposit(mut ref self, account: i64, money: i64) -> bool {
+        self.index(account).map(|i| { self.balance[i] += money; }).is_some()
+    }
+
+    fn withdraw(mut ref self, account: i64, money: i64) -> bool {
+        let at = self.index(account).filter(|i| self.balance[i] >= money);
+        if let Some(i) = at {
+            self.balance[i] -= money;
+        }
+        at.is_some()
+    }
+}
+
+fn option_run(balance: own Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let mut bank = OptionBank.new(balance);
+    let mut results: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let ok = match kind {
+            0 => bank.transfer(a, b, money),
+            1 => bank.deposit(a, money),
+            _ => bank.withdraw(a, money),
+        };
+        results.push(ok);
+    }
+    results
+}
+
+// ---- bank_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct SolutionBank {
+    balance: Vec[i64],
+}
+
+impl SolutionBank {
+    fn new(balance: own Vec[i64]) -> Self {
+        SolutionBank { balance }
+    }
+
+    fn valid(self, account: i32) -> bool {
+        account >= 1 and account as i64 <= self.balance.len()
+    }
+
+    fn transfer(mut ref self, account1: i32, account2: i32, money: i64) -> bool {
+        if not self.valid(account1) or not self.valid(account2) {
+            return false;
+        }
+        let (a, b) = (account1 as i64 - 1, account2 as i64 - 1);
+        if self.balance[a] < money {
+            return false;
+        }
+        self.balance[a] -= money;
+        self.balance[b] += money;
+        true
+    }
+
+    fn deposit(mut ref self, account: i32, money: i64) -> bool {
+        if not self.valid(account) {
+            return false;
+        }
+        self.balance[account as i64 - 1] += money;
+        true
+    }
+
+    fn withdraw(mut ref self, account: i32, money: i64) -> bool {
+        if not self.valid(account) or self.balance[account as i64 - 1] < money {
+            return false;
+        }
+        self.balance[account as i64 - 1] -= money;
+        true
+    }
+}
+
+fn solution_run(balance: own Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let mut bank = SolutionBank.new(balance);
+    let mut results: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let ok = match kind {
+            0 => bank.transfer(a as i32, b as i32, money),
+            1 => bank.deposit(a as i32, money),
+            _ => bank.withdraw(a as i32, money),
+        };
+        results.push(ok);
+    }
+    results
+}
+
+// ---- the statement read literally
+
+// the balance of `account` (1-based): its first value, plus what the calls
+// that went through moved into it, less what they moved out
+fn balance_now(first: Vec[i64], log: Vec[(i64, i64, i64)], account: i64) -> i64 {
+    let mut have = first[account - 1];
+    for (from, to, money) in log.iter() {
+        if from == account {
+            have -= money;
+        }
+        if to == account {
+            have += money;
+        }
+    }
+    have
+}
+
+// a call is valid when its accounts are 1 to n and, if it takes money,
+// the account it takes from has at least that much; the log keeps the valid
+// ones as (from, to, money), 0 standing for the world outside the bank
+fn literal(first: Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let n = first.len();
+    let mut log: Vec[(i64, i64, i64)] = Vec.new();
+    let mut answers: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let (from, to) = match kind {
+            0 => (a, b),
+            1 => (0, a),
+            _ => (a, 0),
+        };
+        let mut valid = true;
+        if from != 0 and (from < 1 or from > n) {
+            valid = false;
+        }
+        if to != 0 and (to < 1 or to > n) {
+            valid = false;
+        }
+        if kind == 1 and to == 0 {
+            valid = false;
+        }
+        if kind == 2 and from == 0 {
+            valid = false;
+        }
+        if kind == 0 and (from == 0 or to == 0) {
+            valid = false;
+        }
+        if valid and from != 0 and balance_now(first, log, from) < money {
+            valid = false;
+        }
+        if valid {
+            log.push((from, to, money));
+        }
+        answers.push(valid);
+    }
+    answers
+}
+
+fn answer(arm: i64, balance: Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let b = balance.clone();
+    let o = ops.clone();
+    match arm {
+        0 => star_run(b, o),
+        1 => map_run(b, o),
+        2 => result_run(b, o),
+        3 => ops_run(b, o),
+        4 => option_run(b, o),
+        _ => solution_run(b, o),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    balance: Vec[i64],
+    ops: Vec[(i64, i64, i64, i64)],
+    relabel: Vec[i64],
+    cut: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 6 + 1;
+    let calls = next_random(mut seed) % 20 + 1;
+    let top = next_random(mut seed) % 30 + 1;
+    let balance: Vec[i64] = (0..n).map(|_| next_random(mut seed) % (top + 1)).collect();
+    let mut ops: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for _ in 0..calls {
+        let kind = next_random(mut seed) % 3;
+        let a = next_random(mut seed) % (n + 2);
+        let b = next_random(mut seed) % (n + 2);
+        let money = next_random(mut seed) % (top + 1);
+        ops.push((kind, a, b, money));
+    }
+    // a shuffle of the accounts 1..=n; 0 and n + 1 stay outside
+    let mut relabel: Vec[i64] = (0..n + 2).collect();
+    for i in (2..n + 1).rev() {
+        let j = next_random(mut seed) % i + 1;
+        relabel.swap(i, j);
+    }
+    let cut = next_random(mut seed) % calls;
+    Problem { balance, ops, relabel, cut }
+}
+
+fn main() {
+    let names = ["star", "map", "result", "ops", "option", "solution"];
+    let mut seed = 2043;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let n = prob.balance.len();
+        let truth = literal(prob.balance, prob.ops);
+        for ok in truth.iter() {
+            check = (check * 31 + if ok { 2 } else { 1 }) % 1000000007;
+        }
+        let mut balance_relabelled: Vec[i64] = Vec.filled(n, 0);
+        for i in 0..n {
+            balance_relabelled[prob.relabel[i + 1] - 1] = prob.balance[i];
+        }
+        let ops_relabelled: Vec[(i64, i64, i64, i64)] = prob.ops.iter().map(|(kind, a, b, money)| (kind, prob.relabel[a], prob.relabel[b], money)).collect();
+        let balance_doubled: Vec[i64] = prob.balance.iter().map(|x| 2 * x).collect();
+        let ops_doubled: Vec[(i64, i64, i64, i64)] = prob.ops.iter().map(|(kind, a, b, money)| (kind, a, b, 2 * money)).collect();
+        let mut ops_first: Vec[(i64, i64, i64, i64)] = [(1, 1, 0, 0)].to_vec();
+        ops_first.extend(prob.ops.iter().cloned());
+        let ops_cut: Vec[(i64, i64, i64, i64)] = prob.ops.iter().take(prob.cut).cloned().collect();
+        let got: Vec[Vec[bool]] = (0..6).map(|arm| answer(arm, prob.balance, prob.ops)).collect();
+        for arm in 0..6 {
+            let x = ref got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == x {
+                    same += 1;
+                }
+            }
+            let mut first_then: Vec[bool] = [true].to_vec();
+            first_then.extend(x.iter().cloned());
+            let x_cut: Vec[bool] = x.iter().take(prob.cut).cloned().collect();
+            let verdicts = [
+                x == truth,
+                answer(arm, balance_relabelled, ops_relabelled) == x,
+                answer(arm, balance_doubled, ops_doubled) == x,
+                answer(arm, prob.balance, ops_first) == first_then,
+                answer(arm, prob.balance, ops_cut) == x_cut,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"bank {p} arm {names[arm]}: P{k + 1} fails, answers {x}, literal {truth}, balance {prob.balance}, calls {prob.ops}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 banks: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

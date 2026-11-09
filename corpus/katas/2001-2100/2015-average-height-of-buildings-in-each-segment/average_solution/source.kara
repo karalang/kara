@@ -18,14 +18,13 @@ impl Solution {
         }
         let mut ans: Vec[Vec[i32]] = Vec.new();
         let mut (sum, cnt) = (0, 0i32);
-        let mut prev = 0;
+        let mut prev: i32 = 0;
         for (pos, (dh, dc)) in delta.iter() {
             if cnt > 0 {
                 let avg = (sum / cnt) as i32;
-                match ans.last_mut() {
-                    Some(last) if last[1] == prev and last[2] == avg => last[1] = pos,
-                    _ => ans.push([prev, pos, avg]),
-                }
+                if ans.len() > 0 and ans[ans.len() - 1][1] == prev and ans[ans.len() - 1][2] == avg {
+                    ans[ans.len() - 1][1] = pos;
+                } else { ans.push([prev, pos, avg]); }
             }
             sum += dh;
             cnt += dc;
@@ -35,7 +34,7 @@ impl Solution {
     }
 }
 
-fn average_height_of_buildings(buildings: ref Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+fn average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
     let input: Vec[Vec[i32]] = buildings.iter().map(|(s, e, h)| [s as i32, e as i32, h as i32]).collect();
     Solution.average_height_of_buildings(input).iter().map(|v| (v[0] as i64, v[1] as i64, v[2] as i64)).collect()
 }

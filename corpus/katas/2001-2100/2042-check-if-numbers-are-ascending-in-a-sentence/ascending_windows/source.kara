@@ -1,0 +1,79 @@
+// LeetCode #2042: Check if Numbers Are Ascending in a Sentence -- the
+// numbers collected, then their neighbours compared. `filter_map` keeps
+// the tokens that parse, and `windows(2)` pairs each number with the next;
+// all must rise. O(n).
+
+fn are_numbers_ascending(s: String) -> bool {
+    let numbers: Vec[i64] = s.split(" ").filter_map(|token| i64.parse(token).ok()).collect();
+    numbers.windows(2).iter().all(|pair| pair[0] < pair[1])
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a sentence of words and numbers below 100, at most 200 characters, with
+// at least two numbers; each number is the last one moved by up to `drift`
+// down or `climb` up, kept within 1 to 99
+fn sentence(seed: mut ref i64) -> String {
+    let words = 1 + next_random(mut seed) % 30;
+    let climb = next_random(mut seed) % 20 + 1;
+    let drift = next_random(mut seed) % 4;
+    let mut last = next_random(mut seed) % 10 + 1;
+    let mut tokens: Vec[String] = Vec.new();
+    let mut numbers = 0;
+    let mut length = 0;
+    for t in 0..words + 2 {
+        let token = if t >= words or next_random(mut seed) % 3 == 0 {
+            last = (last + next_random(mut seed) % (climb + drift + 1) - drift).max(1).min(99);
+            numbers += 1;
+            f"{last}"
+        } else {
+            let mut word = String.new();
+            for _ in 0..next_random(mut seed) % 6 + 1 {
+                word.push(['a', 'b', 'c', 'x', 'y', 'z'][next_random(mut seed) % 6]);
+            }
+            word
+        };
+        if length + token.len() + 1 > 200 and numbers >= 2 {
+            break;
+        }
+        length += token.len() + 1;
+        tokens.push(token);
+    }
+    tokens.join(" ")
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        "1 box has 3 blue 4 red 6 green and 12 yellow marbles",
+        "hello world 5 x 5",
+        "sunset is at 7 51 pm overnight lows will be in the low 50 and 60 s",
+        "1 2",
+        "2 1",
+        "a 9 b 10 c 99",
+        "a 10 b 9",
+        "99 x 98 y",
+        "4 4",
+    ];
+    for s in examples.iter() {
+        println(f"\"{s}\" -> {are_numbers_ascending(s.to_string())}");
+    }
+    // 4000 random sentences
+    let mut seed = 2042;
+    let mut ascending = 0;
+    let mut check = 0;
+    for _ in 0..4000 {
+        let s = sentence(mut seed);
+        let answer = are_numbers_ascending(s);
+        if answer {
+            ascending += 1;
+        }
+        check = (check * 31 + if answer { 2 } else { 1 }) % 1000000007;
+    }
+    println(f"4000 sentences: {ascending} ascending, checksum {check}");
+}

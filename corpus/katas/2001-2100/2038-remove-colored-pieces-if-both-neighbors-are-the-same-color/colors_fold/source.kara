@@ -1,0 +1,65 @@
+// LeetCode #2038: Remove Colored Pieces if Both Neighbors are the Same
+// Color -- one fold over the chars, carrying the two pieces before this one
+// (`Option`s until there are two) and the moves so far. O(n).
+
+fn winner_of_game(colors: String) -> bool {
+    let (_, _, alice, bob) = colors.chars().fold((None, None, 0, 0), |(before, last, alice, bob), c| {
+        let triple = before == Some(c) and last == Some(c);
+        let a = if triple and c == 'A' { alice + 1 } else { alice };
+        let b = if triple and c == 'B' { bob + 1 } else { bob };
+        (last, Some(c), a, b)
+    });
+    alice > bob
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` pieces whose color changes with chance `1 / stay` at each piece
+fn random_colors(n: i64, stay: i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    let mut c = if next_random(mut seed) % 2 == 0 { 'A' } else { 'B' };
+    for _ in 0..n {
+        if next_random(mut seed) % stay == 0 {
+            c = if c == 'A' { 'B' } else { 'A' };
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = ["AAABABB", "AA", "ABBBBBBBAAA", "A", "AAA", "BBB", "AAABBB", "AAAABBB", "ABABAB"];
+    for colors in examples {
+        println(f"{colors} -> {winner_of_game(colors.to_string())}");
+    }
+    // 2000 rows of 1 to 40 pieces, runs of every length
+    let mut seed = 2038;
+    let mut wins = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 40 + 1;
+        let stay = next_random(mut seed) % 6 + 1;
+        let alice = winner_of_game(random_colors(n, stay, mut seed));
+        let bit = if alice { 1 } else { 0 };
+        wins += bit;
+        check = (check * 3 + bit + 1) % 1000000007;
+    }
+    println(f"2000 rows of up to 40 pieces: Alice wins {wins}, checksum {check}");
+    // 4 rows of 100000 pieces, the most the constraints allow
+    wins = 0;
+    check = 0;
+    for r in 0..4 {
+        let stay = [2, 3, 50, 1000][r];
+        let alice = winner_of_game(random_colors(100000, stay, mut seed));
+        let bit = if alice { 1 } else { 0 };
+        wins += bit;
+        check = (check * 3 + bit + 1) % 1000000007;
+    }
+    println(f"4 rows of 100000 pieces: Alice wins {wins}, checksum {check}");
+}

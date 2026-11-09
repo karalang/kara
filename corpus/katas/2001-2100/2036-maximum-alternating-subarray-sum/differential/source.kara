@@ -1,0 +1,301 @@
+// LeetCode #2036: Maximum Alternating Subarray Sum -- the differential.
+// The six arms, against the statement read literally: every subarray, its
+// values taken plus, minus, plus, ... from its first. 1500 arrays of 1 to
+// 12 values up to 60 either side, each with a value and a second array to
+// extend it by, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  a value added at either end never lowers the answer (every subarray
+//     is still there, its signs taken from its own first value)
+// P3  two arrays joined answer at least what either does
+// P4  every value tripled triples the answer
+// P5  a 0 appended answers the larger of the answer and 0 (a subarray
+//     that ends on it sums to one that ends before it, or is `[0]`)
+// P6  each arm agrees with at least three of the other five
+
+// ---- alternating.kara: the ★ arm, the best sums ending here on a plus and on a minus
+fn star_maximum_alternating_subarray_sum(nums: Vec[i64]) -> i64 {
+    let mut plus = nums[0];
+    let mut minus: Option[i64] = None;
+    let mut best = plus;
+    for x in nums.iter().skip(1) {
+        let next_plus = match minus {
+            Some(m) => x.max(m + x),
+            None => x,
+        };
+        minus = Some(plus - x);
+        plus = next_plus;
+        best = best.max(plus);
+        if let Some(m) = minus {
+            best = best.max(m);
+        }
+    }
+    best
+}
+
+// ---- alternating_prefix.kara: signed prefix sums, the least prefix of each parity
+fn prefix_maximum_alternating_subarray_sum(nums: Vec[i64]) -> i64 {
+    let mut s = 0;
+    let mut low_even = 0;
+    let mut high_odd: Option[i64] = None;
+    let mut best = nums[0];
+    for (t, x) in nums.iter().enumerate() {
+        // s is s[t]; record it as a start before stepping past t
+        if t % 2 == 0 {
+            low_even = low_even.min(s);
+        } else {
+            high_odd = Some(high_odd.map_or(s, |h| h.max(s)));
+        }
+        s += if t % 2 == 0 { x } else { -x };
+        best = best.max(s - low_even);
+        if let Some(h) = high_odd {
+            best = best.max(h - s);
+        }
+    }
+    best
+}
+
+// ---- alternating_kadane.kara: Kadane over the signed values, once per start parity
+fn kadane_best_from(signed: Vec[i64], parity: i64) -> Option[i64] {
+    let mut best: Option[i64] = None;
+    let mut run: Option[i64] = None;
+    for t in 0..signed.len() {
+        let x = signed[t];
+        run = match run {
+            Some(r) if t % 2 != parity or r > 0 => Some(r + x),
+            Some(r) => Some(x),
+            None if t % 2 == parity => Some(x),
+            None => None,
+        };
+        if let Some(r) = run {
+            best = Some(best.map_or(r, |b| b.max(r)));
+        }
+    }
+    best
+}
+
+fn kadane_maximum_alternating_subarray_sum(nums: Vec[i64]) -> i64 {
+    let even: Vec[i64] = nums.iter().enumerate().map(|(t, x)| if t % 2 == 0 { x } else { -x }).collect();
+    let odd: Vec[i64] = even.iter().map(|x| -x).collect();
+    let from_even = kadane_best_from(even, 0).unwrap();
+    match kadane_best_from(odd, 1) {
+        Some(b) => from_even.max(b),
+        None => from_even,
+    }
+}
+
+// ---- alternating_split.kara: divide and conquer, a Part per half
+struct Part {
+    total: i64,
+    high_prefix: i64,
+    low_prefix: i64,
+    high_even_suffix: Option[i64],
+    low_odd_suffix: Option[i64],
+    best: i64,
+}
+
+fn split_leaf(t: i64, value: i64) -> Part {
+    let a = if t % 2 == 0 { value } else { -value };
+    Part {
+        total: a,
+        high_prefix: a,
+        low_prefix: a,
+        high_even_suffix: if t % 2 == 0 { Some(a) } else { None },
+        low_odd_suffix: if t % 2 == 1 { Some(a) } else { None },
+        best: value,
+    }
+}
+
+fn split_join(left: Part, right: Part) -> Part {
+    let mut best = left.best.max(right.best);
+    if let Some(s) = left.high_even_suffix {
+        best = best.max(s + right.high_prefix);
+    }
+    if let Some(s) = left.low_odd_suffix {
+        best = best.max(-(s + right.low_prefix));
+    }
+    Part {
+        total: left.total + right.total,
+        high_prefix: left.high_prefix.max(left.total + right.high_prefix),
+        low_prefix: left.low_prefix.min(left.total + right.low_prefix),
+        high_even_suffix: match (left.high_even_suffix, right.high_even_suffix) {
+            (Some(l), Some(r)) => Some(r.max(l + right.total)),
+            (Some(l), None) => Some(l + right.total),
+            (None, r) => r,
+        },
+        low_odd_suffix: match (left.low_odd_suffix, right.low_odd_suffix) {
+            (Some(l), Some(r)) => Some(r.min(l + right.total)),
+            (Some(l), None) => Some(l + right.total),
+            (None, r) => r,
+        },
+        best,
+    }
+}
+
+fn split_solve(nums: Vec[i64], lo: i64, hi: i64) -> Part {
+    if hi - lo == 1 {
+        return split_leaf(lo, nums[lo]);
+    }
+    let mid = (lo + hi) / 2;
+    split_join(split_solve(nums, lo, mid), split_solve(nums, mid, hi))
+}
+
+fn split_maximum_alternating_subarray_sum(nums: Vec[i64]) -> i64 {
+    split_solve(nums, 0, nums.len()).best
+}
+
+// ---- alternating_fold.kara: the ★ recurrence as one fold
+fn fold_maximum_alternating_subarray_sum(nums: Vec[i64]) -> i64 {
+    let (_, _, best) = nums.iter().skip(1).fold((nums[0], None, nums[0]), |(plus, minus, best), x| {
+        let next_plus = minus.map_or(x, |m: i64| x.max(m + x));
+        let next_minus = plus - x;
+        (next_plus, Some(next_minus), best.max(next_plus).max(next_minus))
+    });
+    best
+}
+
+// ---- alternating_solution.kara: LeetCode's Rust template, carried by `karac fix`
+impl Solution {
+    pub fn solution_maximum_alternating_subarray_sum(nums: Vec[i32]) -> i64 {
+        let mut plus = nums[0] as i64;
+        let mut minus = i64.MIN / 2;
+        let mut ans = plus;
+        for i in 1..nums.len() {
+            let x = nums[i] as i64;
+            let next_plus = x.max(minus + x);
+            let next_minus = plus - x;
+            plus = next_plus;
+            minus = next_minus;
+            ans = ans.max(plus).max(minus);
+        }
+        ans
+    }
+}
+
+struct Solution {}
+
+fn solution_maximum_alternating_subarray_sum(nums: Vec[i64]) -> i64 {
+    let v: Vec[i32] = nums.iter().map(|x| x as i32).collect();
+    Solution.solution_maximum_alternating_subarray_sum(v)
+}
+
+// ---- the statement read literally
+
+fn literal(nums: Vec[i64]) -> i64 {
+    let mut best = nums[0];
+    for i in 0..nums.len() {
+        let mut sum = 0;
+        for j in i..nums.len() {
+            if (j - i) % 2 == 0 {
+                sum += nums[j];
+            } else {
+                sum -= nums[j];
+            }
+            best = best.max(sum);
+        }
+    }
+    best
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_maximum_alternating_subarray_sum(nums),
+        1 => prefix_maximum_alternating_subarray_sum(nums),
+        2 => kadane_maximum_alternating_subarray_sum(nums),
+        3 => split_maximum_alternating_subarray_sum(nums),
+        4 => fold_maximum_alternating_subarray_sum(nums),
+        _ => solution_maximum_alternating_subarray_sum(nums),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn values(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % (2 * top + 1) - top).collect()
+}
+
+struct Problem {
+    nums: Vec[i64],
+    extra: i64,
+    other: Vec[i64],
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 12 + 1;
+    let top = next_random(mut seed) % 60 + 1;
+    let nums = values(n, top, mut seed);
+    let extra = next_random(mut seed) % (2 * top + 1) - top;
+    let m = next_random(mut seed) % 6 + 1;
+    let other = values(m, top, mut seed);
+    Problem { nums, extra, other }
+}
+
+fn main() {
+    let names = ["star", "prefix", "kadane", "split", "fold", "solution"];
+    let mut seed = 2036;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let truth = literal(prob.nums);
+        check = (check * 31 + truth.rem_euclid(1000000007)) % 1000000007;
+        let mut prepended = [prob.extra].to_vec();
+        prepended.extend(prob.nums.iter().cloned());
+        let mut appended = prob.nums.clone();
+        appended.push(prob.extra);
+        let mut joined = prob.nums.clone();
+        joined.extend(prob.other.iter().cloned());
+        let tripled: Vec[i64] = prob.nums.iter().map(|x| 3 * x).collect();
+        let mut zeroed = prob.nums.clone();
+        zeroed.push(0);
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, prob.nums.clone())).collect();
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let joined_answer = answer(arm, joined.clone());
+            let verdicts = [
+                a == truth,
+                answer(arm, prepended.clone()) >= a and answer(arm, appended.clone()) >= a,
+                joined_answer >= a and joined_answer >= answer(arm, prob.other.clone()),
+                answer(arm, tripled.clone()) == 3 * a,
+                answer(arm, zeroed.clone()) == a.max(0),
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"array {p} arm {names[arm]}: P{k + 1} fails, answer {a}, literal {truth}, values {prob.nums}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 arrays: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

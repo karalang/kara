@@ -1,0 +1,73 @@
+// LeetCode #2044: Count Number of Maximum Bitwise-OR Subsets -- counting by
+// OR value. `ways[v]` is how many subsets of the values seen so far have OR
+// `v`; a new value `x` keeps every old subset and adds each one with `x`
+// (`ways[v | x] += old[v]`). Every OR is below the first power of two above
+// the target, which sizes the table. O(n V) for V that power.
+
+fn count_max_or_subsets(nums: Vec[i64]) -> i64 {
+    let target = nums.iter().fold(0, |acc, x| acc | x);
+    let mut size = 1;
+    while size <= target {
+        size *= 2;
+    }
+    let mut ways: Vec[i64] = Vec.filled(size, 0);
+    ways[0] = 1;
+    for x in nums.iter() {
+        let old = ways.clone();
+        for v in 0..size {
+            if old[v] > 0 {
+                ways[v | x] += old[v];
+            }
+        }
+    }
+    ways[target]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        [3, 1].to_vec(),
+        [2, 2, 2].to_vec(),
+        [3, 2, 1, 5].to_vec(),
+        [7].to_vec(),
+        [1, 2, 4, 8].to_vec(),
+        [100000, 100000, 1].to_vec(),
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1].to_vec(),
+        [5, 3, 6, 4, 1].to_vec(),
+    ].to_vec();
+    for nums in examples.into_iter() {
+        let shown = f"{nums}";
+        println(f"{shown} -> {count_max_or_subsets(nums)}");
+    }
+    // 2000 arrays of 1 to 12 values below 1 to 64
+    let mut seed = 2044;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let top = next_random(mut seed) % 64 + 1;
+        let nums: Vec[i64] = (0..n).map(|_| next_random(mut seed) % top + 1).collect();
+        let answer = count_max_or_subsets(nums);
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"2000 arrays of up to 12 values: sum {sum}, checksum {check}");
+    // 20 arrays of 16 values, the most the constraints allow, below 1 to 10^5
+    sum = 0;
+    check = 0;
+    for r in 0..20 {
+        let top = [100000, 1024, 16, 2][r % 4];
+        let nums: Vec[i64] = (0..16).map(|_| next_random(mut seed) % top + 1).collect();
+        let answer = count_max_or_subsets(nums);
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"20 arrays of 16 values: sum {sum}, checksum {check}");
+}

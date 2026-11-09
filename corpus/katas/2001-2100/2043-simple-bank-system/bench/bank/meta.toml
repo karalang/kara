@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2043-simple-bank-system/bench/bank.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 2043 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "991c45adc+local"
+extracted_src = "2d2497e9"

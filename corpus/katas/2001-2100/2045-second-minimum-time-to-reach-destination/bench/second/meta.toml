@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2045-second-minimum-time-to-reach-destination/bench/second.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:set", "lib:vecdeque", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 2045 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "991c45adc+local"
+extracted_src = "3ec8a36b"

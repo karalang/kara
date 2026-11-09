@@ -1,0 +1,116 @@
+// LeetCode #2045: Second Minimum Time to Reach Destination -- Dijkstra on
+// the clock. The state is a vertex and the minute we reach it; leaving
+// waits out a red light, so the next arrival is computed from the minute,
+// not counted in edges. Each vertex keeps its two smallest distinct
+// arrival times, and the second one at `n` is the answer. A min-first
+// `PriorityQueue` of `(minute, vertex)`. O(edges log n).
+
+fn leave(t: i64, change: i64) -> i64 {
+    if t / change % 2 == 1 { (t / change + 1) * change } else { t }
+}
+
+fn second_minimum(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let mut best: Vec[i64] = Vec.filled(n + 1, i64.MAX);
+    let mut next: Vec[i64] = Vec.filled(n + 1, i64.MAX);
+    best[1] = 0;
+    let mut heap: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    heap.push((0, 1));
+    while let Some((t, u)) = heap.pop() {
+        if t > next[u] {
+            continue;
+        }
+        let arrive = leave(t, change) + time;
+        for v in adjacent[u].iter() {
+            if arrive < best[v] {
+                best[v] = arrive;
+                heap.push((arrive, v));
+            } else if arrive > best[v] and arrive < next[v] {
+                next[v] = arrive;
+                heap.push((arrive, v));
+            }
+        }
+    }
+    next[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a connected graph on 1..=n: a random tree whose vertex `v` hangs from one
+// of the `reach` before it, then `extra` more edges, none repeated
+fn graph(n: i64, reach: i64, extra: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut edges: Vec[Vec[i64]] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    for v in 2..n + 1 {
+        let u = v - 1 - next_random(mut seed) % reach.min(v - 1);
+        edges.push([u, v].to_vec());
+        seen.insert(u * (n + 1) + v);
+    }
+    let mut tries = 0;
+    while edges.len() < n - 1 + extra and tries < 4 * extra {
+        tries += 1;
+        let a = next_random(mut seed) % n + 1;
+        let b = next_random(mut seed) % n + 1;
+        let (u, v) = (a.min(b), a.max(b));
+        if u != v and not seen.contains(u * (n + 1) + v) {
+            seen.insert(u * (n + 1) + v);
+            edges.push([u, v].to_vec());
+        }
+    }
+    edges
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[(i64, Vec[Vec[i64]], i64, i64)] = [
+        (5, [[1, 2].to_vec(), [1, 3].to_vec(), [1, 4].to_vec(), [3, 4].to_vec(), [4, 5].to_vec()].to_vec(), 3, 5),
+        (2, [[1, 2].to_vec()].to_vec(), 3, 2),
+        (3, [[1, 2].to_vec(), [2, 3].to_vec(), [1, 3].to_vec()].to_vec(), 1, 1),
+        (4, [[1, 2].to_vec(), [2, 3].to_vec(), [3, 4].to_vec()].to_vec(), 1000, 1),
+        (4, [[1, 2].to_vec(), [2, 3].to_vec(), [3, 4].to_vec()].to_vec(), 1, 1000),
+        (3, [[1, 2].to_vec(), [1, 3].to_vec()].to_vec(), 2, 3),
+    ].to_vec();
+    for (n, edges, time, change) in examples.into_iter() {
+        let shown = f"{n} {edges} {time} {change}";
+        println(f"{shown} -> {second_minimum(n, edges, time, change)}");
+    }
+    // 2000 graphs of 2 to 10 vertices, a tree and up to n more edges
+    let mut seed = 2045;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 9 + 2;
+        let reach = next_random(mut seed) % n + 1;
+        let extra = next_random(mut seed) % (n + 1);
+        let edges = graph(n, reach, extra, mut seed);
+        let time = next_random(mut seed) % 10 + 1;
+        let change = next_random(mut seed) % 10 + 1;
+        let answer = second_minimum(n, edges, time, change);
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"2000 small graphs: sum {sum}, checksum {check}");
+    // 4 graphs of 10000 vertices and 20000 edges, the most the constraints
+    // allow: a random tree, a bushy one, a chain of short branches and a path
+    sum = 0;
+    check = 0;
+    for r in 0..4 {
+        let reach = [10000, 3, 2, 1][r];
+        let edges = graph(10000, reach, 10001, mut seed);
+        let time = [1000, 7, 1, 1000][r];
+        let change = [1000, 3, 1000, 1][r];
+        let answer = second_minimum(10000, edges, time, change);
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"4 large graphs: sum {sum}, checksum {check}");
+}

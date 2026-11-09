@@ -1,0 +1,44 @@
+// LeetCode #2037: Minimum Number of Moves to Seat Everyone -- the ★ arm as
+// a benchmark. 2000 rooms of 100 seats and 100 students (the most the
+// constraints allow) built once; 25 rounds, each moving one seat of every
+// room before the ★ arm answers it on copies: 50000 calls, each sorting two
+// lists of 100.
+
+fn min_moves_to_seat(seats: own Vec[i64], students: own Vec[i64]) -> i64 {
+    let mut seats = seats;
+    let mut students = students;
+    seats.sort();
+    students.sort();
+    seats.iter().zip(students.iter()).map(|(a, b)| (a - b).abs()).sum()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 2037;
+    let mut seats: Vec[Vec[i64]] = Vec.new();
+    let mut students: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..2000 {
+        let a: Vec[i64] = (0..100).map(|_| next_random(mut seed) % 100 + 1).collect();
+        let b: Vec[i64] = (0..100).map(|_| next_random(mut seed) % 100 + 1).collect();
+        seats.push(a);
+        students.push(b);
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for round in 0..25 {
+        for r in 0..2000 {
+            let at = (round * 37 + r * 11) % 100;
+            seats[r][at] = seats[r][at] % 100 + 1;
+            let answer = min_moves_to_seat(seats[r].clone(), students[r].clone());
+            calls += 1;
+            sum += answer;
+            check = (check * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

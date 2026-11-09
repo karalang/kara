@@ -1,0 +1,256 @@
+// LeetCode #2042: Check if Numbers Are Ascending in a Sentence -- the
+// differential. The six arms, against the statement read literally: the
+// sentence walked a character at a time into tokens, a token of digits only
+// a number, and every earlier number compared with every later one. 1500
+// sentences, each with a place to cut it, every one drawn before any arm
+// answers.
+//
+// P1  the answer is the statement read literally
+// P2  the words dropped, the numbers alone, leave the answer
+// P3  a number above all the others appended leaves the answer
+// P4  the last number repeated at the end makes the answer false
+// P5  a sentence whose numbers rise still does when cut after any token
+// P6  each arm agrees with at least three of the other five
+
+// ---- ascending.kara: the ★ arm, tokens split at spaces and parsed
+fn star_are_numbers_ascending(s: String) -> bool {
+    let mut last = 0;
+    for token in s.split(" ") {
+        if let Ok(n) = i64.parse(token) {
+            if n <= last {
+                return false;
+            }
+            last = n;
+        }
+    }
+    true
+}
+
+// ---- ascending_windows.kara: the numbers by filter_map, neighbours by windows(2)
+fn windows_are_numbers_ascending(s: String) -> bool {
+    let numbers: Vec[i64] = s.split(" ").filter_map(|token| i64.parse(token).ok()).collect();
+    numbers.windows(2).iter().all(|pair| pair[0] < pair[1])
+}
+
+// ---- ascending_bytes.kara: one scan over the bytes
+fn bytes_are_numbers_ascending(s: String) -> bool {
+    let bytes = s.bytes();
+    let mut last = 0;
+    let mut current = 0;
+    for i in 0..bytes.len() + 1 {
+        if i < bytes.len() and bytes[i] >= b'0' and bytes[i] <= b'9' {
+            current = current * 10 + (bytes[i] - b'0');
+        } else if current > 0 {
+            if current <= last {
+                return false;
+            }
+            last = current;
+            current = 0;
+        }
+    }
+    true
+}
+
+// ---- ascending_fold.kara: one fold over the chars with an Option for the number read
+fn fold_are_numbers_ascending(s: String) -> bool {
+    let (_, _, rising) = s.chars().chain(" ".chars()).fold((0, None, true), |(last, reading, rising), c| {
+        match (c.to_digit(10), reading) {
+            (Some(d), Some(n)) => (last, Some(n * 10 + d), rising),
+            (Some(d), None) => (last, Some(d as i64), rising),
+            (None, Some(n)) => (n, None, rising and n > last),
+            (None, None) => (last, None, rising),
+        }
+    });
+    rising
+}
+
+// ---- ascending_digits.kara: split_whitespace, digits folded by hand, zip with skip(1)
+fn digits_value(token: Str) -> i64 {
+    token.chars().fold(0, |n, c| n * 10 + c.to_digit(10).unwrap())
+}
+
+fn digits_are_numbers_ascending(s: String) -> bool {
+    let numbers: Vec[i64] = s
+        .split_whitespace()
+        .filter(|token| token.chars().next().unwrap().is_ascii_digit())
+        .map(|token| digits_value(token))
+        .collect();
+    numbers.iter().zip(numbers.iter().skip(1)).all(|(a, b)| a < b)
+}
+
+// ---- ascending_solution.kara: LeetCode's Rust template, carried by `karac fix`
+impl Solution {
+    pub fn solution_are_numbers_ascending(s: String) -> bool {
+        let mut prev = 0;
+        for w in s.split_whitespace() {
+            if let Ok(n) = i32.parse(w) {
+                if n <= prev {
+                    return false;
+                }
+                prev = n;
+            }
+        }
+        true
+    }
+}
+
+struct Solution {}
+
+fn solution_are_numbers_ascending(s: String) -> bool {
+    Solution.solution_are_numbers_ascending(s)
+}
+
+// ---- the statement read literally
+
+fn tokens_of(s: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut token = String.new();
+    for c in s.chars() {
+        if c == ' ' {
+            tokens.push(token);
+            token = String.new();
+        } else {
+            token.push(c);
+        }
+    }
+    tokens.push(token);
+    tokens
+}
+
+fn numbers_of(s: String) -> Vec[i64] {
+    let mut numbers: Vec[i64] = Vec.new();
+    for token in tokens_of(s).iter() {
+        let mut all_digits = true;
+        let mut n = 0;
+        for c in token.chars() {
+            if c >= '0' and c <= '9' {
+                n = n * 10 + (c as i64 - '0' as i64);
+            } else {
+                all_digits = false;
+            }
+        }
+        if all_digits {
+            numbers.push(n);
+        }
+    }
+    numbers
+}
+
+fn literal(s: String) -> bool {
+    let numbers = numbers_of(s);
+    for i in 0..numbers.len() {
+        for j in i + 1..numbers.len() {
+            if numbers[i] >= numbers[j] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn answer(arm: i64, s: String) -> bool {
+    let t = s.clone();
+    match arm {
+        0 => star_are_numbers_ascending(t),
+        1 => windows_are_numbers_ascending(t),
+        2 => bytes_are_numbers_ascending(t),
+        3 => fold_are_numbers_ascending(t),
+        4 => digits_are_numbers_ascending(t),
+        _ => solution_are_numbers_ascending(t),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn sentence(seed: mut ref i64) -> String {
+    let words = 1 + next_random(mut seed) % 12;
+    let climb = next_random(mut seed) % 20 + 1;
+    let drift = next_random(mut seed) % 4;
+    let mut last = next_random(mut seed) % 10 + 1;
+    let mut tokens: Vec[String] = Vec.new();
+    for t in 0..words + 2 {
+        let token = if t >= words or next_random(mut seed) % 3 == 0 {
+            last = (last + next_random(mut seed) % (climb + drift + 1) - drift).max(1).min(98);
+            f"{last}"
+        } else {
+            let mut word = String.new();
+            for _ in 0..next_random(mut seed) % 4 + 1 {
+                word.push(['a', 'b', 'x', 'z'][next_random(mut seed) % 4]);
+            }
+            word
+        };
+        tokens.push(token);
+    }
+    tokens.join(" ")
+}
+
+fn main() {
+    let names = ["star", "windows", "bytes", "fold", "digits", "solution"];
+    let mut seed = 2042;
+    let mut problems: Vec[(String, i64)] = Vec.new();
+    for _ in 0..1500 {
+        let s = sentence(mut seed);
+        let cut = next_random(mut seed) % tokens_of(s).len() + 1;
+        problems.push((s, cut));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let s = ref problems[p].0;
+        let truth = literal(s);
+        check = (check * 31 + if truth { 2 } else { 1 }) % 1000000007;
+        let numbers = numbers_of(s);
+        let shown: Vec[String] = numbers.iter().map(|n| f"{n}").collect();
+        let alone = shown.join(" ");
+        let top = numbers.iter().max().cloned().unwrap();
+        let above = f"{s} {top + 1}";
+        let last = numbers[numbers.len() - 1];
+        let repeated = f"{s} {last}";
+        let cut_tokens: Vec[String] = tokens_of(s).iter().take(problems[p].1).cloned().collect();
+        let cut = cut_tokens.join(" ");
+        let got: Vec[bool] = (0..6).map(|arm| answer(arm, s)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == x {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                x == truth,
+                answer(arm, alone) == x,
+                answer(arm, above) == x,
+                not answer(arm, repeated),
+                not x or answer(arm, cut),
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"sentence {p} arm {names[arm]}: P{k + 1} fails, answer {x}, literal {truth}, \"{s}\"");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 sentences: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

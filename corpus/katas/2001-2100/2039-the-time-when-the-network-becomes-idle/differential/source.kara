@@ -1,0 +1,404 @@
+// LeetCode #2039: The Time When the Network Becomes Idle -- the
+// differential. The six arms, against the statement read literally: the
+// network run second by second, each server resending on its patience until
+// its first reply arrives, over hop counts from Floyd and Warshall's
+// all-pairs table. 1500 networks of 2 to 9 servers, each with a relabelling,
+// an edge to add and a patience to swap in, every one drawn before any arm
+// answers.
+//
+// P1  the answer is the network run second by second
+// P2  the servers other than the master relabelled leave the answer
+// P3  the edges listed backwards, each end for end, leave the answer
+// P4  an edge added never makes the answer later
+// P5  with every patience 100000 the answer is twice the farthest hop count,
+//     plus one
+// P6  each arm agrees with at least three of the other five
+
+// ---- network.kara: the ★ arm, breadth-first search with a VecDeque
+fn star_network_becomes_idle(edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let n = patience.len();
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let mut hops: Vec[i64] = Vec.filled(n, -1);
+    hops[0] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    while let Some(u) = queue.pop_front() {
+        for v in adjacent[u].iter() {
+            if hops[v] == -1 {
+                hops[v] = hops[u] + 1;
+                queue.push_back(v);
+            }
+        }
+    }
+    let mut idle = 0;
+    for i in 1..n {
+        let round_trip = 2 * hops[i];
+        let last_sent = (round_trip - 1) / patience[i] * patience[i];
+        idle = idle.max(last_sent + round_trip + 1);
+    }
+    idle
+}
+
+// ---- network_dijkstra.kara: Dijkstra's search over unit edges
+fn dijkstra_network_becomes_idle(edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let n = patience.len();
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let mut hops: Vec[i64] = Vec.filled(n, i64.MAX);
+    hops[0] = 0;
+    let mut heap: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    heap.push((0, 0));
+    while let Some((d, u)) = heap.pop() {
+        if d > hops[u] {
+            continue;
+        }
+        for v in adjacent[u].iter() {
+            if d + 1 < hops[v] {
+                hops[v] = d + 1;
+                heap.push((d + 1, v));
+            }
+        }
+    }
+    let mut idle = 0;
+    for i in 1..n {
+        let round_trip = 2 * hops[i];
+        let last_sent = (round_trip - 1) / patience[i] * patience[i];
+        idle = idle.max(last_sent + round_trip + 1);
+    }
+    idle
+}
+
+// ---- network_levels.kara: the search level by level
+fn levels_network_becomes_idle(edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let n = patience.len();
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    seen[0] = true;
+    let mut frontier = [0].to_vec();
+    let mut level = 0;
+    let mut idle = 0;
+    while not frontier.is_empty() {
+        level += 1;
+        let mut next: Vec[i64] = Vec.new();
+        for u in frontier.iter() {
+            for v in adjacent[u].iter() {
+                if not seen[v] {
+                    seen[v] = true;
+                    next.push(v);
+                    let round_trip = 2 * level;
+                    let last_sent = (round_trip - 1) / patience[v] * patience[v];
+                    idle = idle.max(last_sent + round_trip + 1);
+                }
+            }
+        }
+        frontier = next;
+    }
+    idle
+}
+
+// ---- network_flat.kara: compressed adjacency, a Vec queue, sends by ceiling
+fn flat_network_becomes_idle(edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let n = patience.len();
+    let mut start: Vec[i64] = Vec.filled(n + 1, 0);
+    for e in edges.iter() {
+        start[e[0] + 1] += 1;
+        start[e[1] + 1] += 1;
+    }
+    for i in 0..n {
+        start[i + 1] += start[i];
+    }
+    let mut fill = start.clone();
+    let mut targets: Vec[i64] = Vec.filled(2 * edges.len(), 0);
+    for e in edges.iter() {
+        targets[fill[e[0]]] = e[1];
+        fill[e[0]] += 1;
+        targets[fill[e[1]]] = e[0];
+        fill[e[1]] += 1;
+    }
+    let mut hops: Vec[i64] = Vec.filled(n, -1);
+    hops[0] = 0;
+    let mut queue = [0].to_vec();
+    let mut head = 0;
+    while head < queue.len() {
+        let u = queue[head];
+        head += 1;
+        for k in start[u]..start[u + 1] {
+            let v = targets[k];
+            if hops[v] < 0 {
+                hops[v] = hops[u] + 1;
+                queue.push(v);
+            }
+        }
+    }
+    let mut idle = 0;
+    for i in 1..n {
+        let round_trip = 2 * hops[i];
+        let sends = (round_trip + patience[i] - 1) / patience[i];
+        idle = idle.max((sends - 1) * patience[i] + round_trip + 1);
+    }
+    idle
+}
+
+// ---- network_maps.kara: Maps for the neighbours and the hops, a fold
+fn maps_network_becomes_idle(edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let mut adjacent: Map[i64, Vec[i64]] = Map.new();
+    for e in edges.iter() {
+        adjacent.entry(e[0]).or_insert(Vec.new()).push(e[1]);
+        adjacent.entry(e[1]).or_insert(Vec.new()).push(e[0]);
+    }
+    let mut hops: Map[i64, i64] = Map.new();
+    hops.insert(0, 0);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    while let Some(u) = queue.pop_front() {
+        let d = hops[u];
+        for v in adjacent[u].iter() {
+            if not hops.contains_key(v) {
+                hops.insert(v, d + 1);
+                queue.push_back(v);
+            }
+        }
+    }
+    patience.iter().enumerate().skip(1).fold(0, |idle, (i, p)| {
+        let round_trip = 2 * hops[i];
+        idle.max((round_trip - 1) / p * p + round_trip + 1)
+    })
+}
+
+// ---- network_solution.kara: LeetCode's Rust template, carried by `karac fix`
+impl Solution {
+    pub fn solution_network_becomes_idle(edges: Vec[Vec[i32]], patience: Vec[i32]) -> i32 {
+        let n = patience.len();
+        let mut graph = Vec.filled(n, Vec.new());
+        for e in ref edges {
+            let (u, v) = (e[0] as usize, e[1] as usize);
+            graph[u].push(v);
+            graph[v].push(u);
+        }
+        let mut dist = Vec.filled(n, -1i32);
+        dist[0] = 0;
+        let mut q = VecDeque.new();
+        q.push_back(0usize);
+        while let Some(u) = q.pop_front() {
+            for v in ref graph[u] {
+                if dist[v] == -1 {
+                    dist[v] = dist[u] + 1;
+                    q.push_back(v);
+                }
+            }
+        }
+        let mut ans: i32 = 0;
+        for i in 1..n {
+            let t = 2 * dist[i];
+            let last = (t - 1) / patience[i] * patience[i];
+            ans = ans.max(last + t + 1);
+        }
+        ans
+    }
+}
+
+struct Solution {}
+
+fn solution_network_becomes_idle(edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let e: Vec[Vec[i32]] = edges.iter().map(|x| x.iter().map(|y| y as i32).collect()).collect();
+    let p: Vec[i32] = patience.iter().map(|x| x as i32).collect();
+    Solution.solution_network_becomes_idle(e, p)
+}
+
+// ---- the statement read literally
+
+// every server's hop count from the master, by Floyd and Warshall
+fn farthest(n: i64, edges: Vec[Vec[i64]]) -> Vec[i64] {
+    let far = 1000000;
+    let mut d: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, far));
+    for i in 0..n {
+        d[i][i] = 0;
+    }
+    for e in edges.iter() {
+        d[e[0]][e[1]] = 1;
+        d[e[1]][e[0]] = 1;
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                if d[i][k] + d[k][j] < d[i][j] {
+                    d[i][j] = d[i][k] + d[k][j];
+                }
+            }
+        }
+    }
+    d[0].clone()
+}
+
+// the network run: a message leaves at second `s` and its reply arrives
+// during second `s + 2 d`; a server checks at the start of each second
+// whether its first reply has come and, if not, resends every `patience`
+// seconds. The answer is the first second with nothing in flight or
+// arriving.
+fn literal(edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let n = patience.len();
+    let hops = farthest(n, edges);
+    let mut in_flight: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    let mut replied: Vec[bool] = Vec.filled(n, false);
+    replied[0] = true;
+    for i in 1..n {
+        in_flight[i].push(2 * hops[i]);
+    }
+    let mut t = 0;
+    loop {
+        t += 1;
+        let mut busy = false;
+        for i in 1..n {
+            // a reply due back at `t` is still arriving during second `t`
+            in_flight[i].retain(|back| back >= t);
+            if t == 2 * hops[i] {
+                replied[i] = true;
+            }
+            if not replied[i] and t % patience[i] == 0 {
+                in_flight[i].push(t + 2 * hops[i]);
+            }
+            if not in_flight[i].is_empty() {
+                busy = true;
+            }
+        }
+        if not busy {
+            return t;
+        }
+    }
+}
+
+fn answer(arm: i64, edges: Vec[Vec[i64]], patience: Vec[i64]) -> i64 {
+    let (e, p) = (edges.clone(), patience.clone());
+    match arm {
+        0 => star_network_becomes_idle(e, p),
+        1 => dijkstra_network_becomes_idle(e, p),
+        2 => levels_network_becomes_idle(e, p),
+        3 => flat_network_becomes_idle(e, p),
+        4 => maps_network_becomes_idle(e, p),
+        _ => solution_network_becomes_idle(e, p),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    edges: Vec[Vec[i64]],
+    patience: Vec[i64],
+    relabel: Vec[i64],
+    added: Vec[i64],
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 8 + 2;
+    let top = next_random(mut seed) % 12 + 1;
+    let mut edges: Vec[Vec[i64]] = Vec.new();
+    for v in 1..n {
+        edges.push([next_random(mut seed) % v, v].to_vec());
+    }
+    for _ in 0..next_random(mut seed) % 3 {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        let joined = edges.iter().any(|e| (e[0] == a and e[1] == b) or (e[0] == b and e[1] == a));
+        if a != b and not joined {
+            edges.push([a, b].to_vec());
+        }
+    }
+    let mut patience = [0].to_vec();
+    for _ in 1..n {
+        patience.push(next_random(mut seed) % top + 1);
+    }
+    // a shuffle of 1..n, the master staying 0
+    let mut relabel: Vec[i64] = (0..n).collect();
+    for i in (2..n).rev() {
+        let j = next_random(mut seed) % i + 1;
+        relabel.swap(i, j);
+    }
+    let added = [next_random(mut seed) % n, next_random(mut seed) % n].to_vec();
+    Problem { edges, patience, relabel, added }
+}
+
+fn main() {
+    let names = ["star", "dijkstra", "levels", "flat", "maps", "solution"];
+    let mut seed = 2039;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let n = prob.patience.len();
+        let truth = literal(prob.edges, prob.patience);
+        check = (check * 31 + truth) % 1000000007;
+        let relabelled: Vec[Vec[i64]] = prob.edges.iter().map(|e| [prob.relabel[e[0]], prob.relabel[e[1]]].to_vec()).collect();
+        let mut patience_relabelled: Vec[i64] = Vec.filled(n, 0);
+        for i in 0..n {
+            patience_relabelled[prob.relabel[i]] = prob.patience[i];
+        }
+        let backwards: Vec[Vec[i64]] = prob.edges.iter().rev().map(|e| [e[1], e[0]].to_vec()).collect();
+        let (a, b) = (prob.added[0], prob.added[1]);
+        let joined = prob.edges.iter().any(|e| (e[0] == a and e[1] == b) or (e[0] == b and e[1] == a));
+        let mut more = prob.edges.clone();
+        if a != b and not joined {
+            more.push([a, b].to_vec());
+        }
+        let patient: Vec[i64] = (0..n).map(|i| if i == 0 { 0 } else { 100000 }).collect();
+        let far = farthest(n, prob.edges).iter().max().cloned().unwrap();
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, prob.edges, prob.patience)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == x {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                x == truth,
+                answer(arm, relabelled, patience_relabelled) == x,
+                answer(arm, backwards, prob.patience) == x,
+                answer(arm, more, prob.patience) <= x,
+                answer(arm, prob.edges, patient) == 2 * far + 1,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"network {p} arm {names[arm]}: P{k + 1} fails, answer {x}, run {truth}, edges {prob.edges}, patience {prob.patience}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 networks: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

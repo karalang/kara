@@ -1,0 +1,425 @@
+// LeetCode #2045: Second Minimum Time to Reach Destination -- the
+// differential. The six arms, against the statement read literally: the
+// vertices a walk of exactly `k` edges can reach, for `k = 0, 1, ..`, until
+// `n` has been reached at two lengths and one more; each such walk timed
+// minute by minute at the lights, and the second smallest distinct time
+// taken. 1500 graphs of 2 to 8 vertices, each with a relabelling and an
+// edge to add, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the vertices other than 1 and n relabelled leave the answer
+// P3  the edges listed backwards, each end for end, leave the answer
+// P4  an edge added never makes the answer later
+// P5  the edge time and the light's period both doubled double the answer
+// P6  each arm agrees with at least three of the other five
+
+// ---- second.kara: the ★ arm, each vertex's two smallest walk lengths by BFS
+fn star_travel(steps: i64, time: i64, change: i64) -> i64 {
+    let mut t = 0;
+    for _ in 0..steps {
+        // a red light (an odd period) holds us to the next green
+        if t / change % 2 == 1 {
+            t = (t / change + 1) * change;
+        }
+        t += time;
+    }
+    t
+}
+
+fn star_second_minimum(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let mut first: Vec[i64] = Vec.filled(n + 1, -1);
+    let mut second: Vec[i64] = Vec.filled(n + 1, -1);
+    first[1] = 0;
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((1, 0));
+    while let Some((u, d)) = queue.pop_front() {
+        for v in adjacent[u].iter() {
+            if first[v] == -1 {
+                first[v] = d + 1;
+                queue.push_back((v, d + 1));
+            } else if second[v] == -1 and first[v] < d + 1 {
+                second[v] = d + 1;
+                queue.push_back((v, d + 1));
+            }
+        }
+    }
+    star_travel(second[n], time, change)
+}
+
+// ---- second_dijkstra.kara: Dijkstra on the clock, two arrival times a vertex
+fn dijkstra_leave(t: i64, change: i64) -> i64 {
+    if t / change % 2 == 1 { (t / change + 1) * change } else { t }
+}
+
+fn dijkstra_second_minimum(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let mut best: Vec[i64] = Vec.filled(n + 1, i64.MAX);
+    let mut next: Vec[i64] = Vec.filled(n + 1, i64.MAX);
+    best[1] = 0;
+    let mut heap: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    heap.push((0, 1));
+    while let Some((t, u)) = heap.pop() {
+        if t > next[u] {
+            continue;
+        }
+        let arrive = dijkstra_leave(t, change) + time;
+        for v in adjacent[u].iter() {
+            if arrive < best[v] {
+                best[v] = arrive;
+                heap.push((arrive, v));
+            } else if arrive > best[v] and arrive < next[v] {
+                next[v] = arrive;
+                heap.push((arrive, v));
+            }
+        }
+    }
+    next[n]
+}
+
+// ---- second_ends.kara: distances from both ends, an edge for the other parity
+fn ends_travel(steps: i64, time: i64, change: i64) -> i64 {
+    let mut t = 0;
+    for _ in 0..steps {
+        if t / change % 2 == 1 {
+            t = (t / change + 1) * change;
+        }
+        t += time;
+    }
+    t
+}
+
+fn ends_distances(adjacent: Vec[Vec[i64]], from: i64) -> Vec[i64] {
+    let mut dist: Vec[i64] = Vec.filled(adjacent.len(), -1);
+    dist[from] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(from);
+    while let Some(u) = queue.pop_front() {
+        for v in adjacent[u].iter() {
+            if dist[v] == -1 {
+                dist[v] = dist[u] + 1;
+                queue.push_back(v);
+            }
+        }
+    }
+    dist
+}
+
+fn ends_second_minimum(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let from_start = ends_distances(adjacent, 1);
+    let from_end = ends_distances(adjacent, n);
+    let d = from_start[n];
+    let mut steps = d + 2;
+    for e in edges.iter() {
+        for (u, w) in [(e[0], e[1]), (e[1], e[0])] {
+            if from_start[u] + 1 + from_end[w] == d + 1 {
+                steps = d + 1;
+            }
+        }
+    }
+    ends_travel(steps, time, change)
+}
+
+// ---- second_parity.kara: BFS over (vertex, parity)
+fn parity_travel(steps: i64, time: i64, change: i64) -> i64 {
+    let mut t = 0;
+    for _ in 0..steps {
+        if t / change % 2 == 1 {
+            t = (t / change + 1) * change;
+        }
+        t += time;
+    }
+    t
+}
+
+fn parity_second_minimum(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    // `dist[2 * v + p]`: the shortest walk to `v` whose length has parity `p`
+    let mut dist: Vec[i64] = Vec.filled(2 * (n + 1), -1);
+    dist[2] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(2);
+    while let Some(state) = queue.pop_front() {
+        let (u, p) = (state / 2, state % 2);
+        for v in adjacent[u].iter() {
+            let next = 2 * v + 1 - p;
+            if dist[next] == -1 {
+                dist[next] = dist[state] + 1;
+                queue.push_back(next);
+            }
+        }
+    }
+    // the graph is connected, so `n` has a walk of at least one parity
+    let (even, odd) = (dist[2 * n], dist[2 * n + 1]);
+    let shortest = if even == -1 { odd } else if odd == -1 { even } else { even.min(odd) };
+    let other = if shortest == even { odd } else { even };
+    let steps = if other == shortest + 1 { other } else { shortest + 2 };
+    parity_travel(steps, time, change)
+}
+
+// ---- second_levels.kara: level by level, each vertex at most twice
+fn levels_travel(steps: i64, time: i64, change: i64) -> i64 {
+    let mut t = 0;
+    for _ in 0..steps {
+        if t / change % 2 == 1 {
+            t = (t / change + 1) * change;
+        }
+        t += time;
+    }
+    t
+}
+
+fn levels_second_minimum(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let mut adjacent: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for e in edges.iter() {
+        adjacent[e[0]].push(e[1]);
+        adjacent[e[1]].push(e[0]);
+    }
+    let mut visits: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut last_level: Vec[i64] = Vec.filled(n + 1, -1);
+    visits[1] = 1;
+    last_level[1] = 0;
+    let mut frontier: Vec[i64] = [1].to_vec();
+    let mut level = 0;
+    loop {
+        level += 1;
+        let mut next: Vec[i64] = Vec.new();
+        for u in frontier.iter() {
+            for v in adjacent[u].iter() {
+                if visits[v] < 2 and last_level[v] != level {
+                    visits[v] += 1;
+                    last_level[v] = level;
+                    next.push(v);
+                }
+            }
+        }
+        if last_level[n] == level and visits[n] == 2 {
+            return levels_travel(level, time, change);
+        }
+        frontier = next;
+    }
+}
+
+// ---- second_solution.kara: LeetCode's Rust template, carried by `karac fix`
+impl Solution {
+    pub fn solution_second_minimum(n: i32, edges: Vec[Vec[i32]], time: i32, change: i32) -> i32 {
+        let n = n as i64;
+        let mut g = Vec.filled(n + 1, Vec.new());
+        for e in ref edges {
+            let (u, v) = (e[0] as i64, e[1] as i64);
+            g[u].push(v);
+            g[v].push(u);
+        }
+        let mut dist = Vec.filled(n + 1, [i32.MAX; 2]);
+        dist[1][0] = 0;
+        let mut q = VecDeque.new();
+        q.push_back((1, 0i32));
+        while let Some((u, d)) = q.pop_front() {
+            for v in ref g[u] {
+                let nd = d + 1;
+                if nd < dist[v][0] {
+                    dist[v][0] = nd;
+                    q.push_back((v, nd));
+                } else if dist[v][0] < nd and nd < dist[v][1] {
+                    dist[v][1] = nd;
+                    q.push_back((v, nd));
+                }
+            }
+        }
+        let mut ans: i32 = 0;
+        for _ in 0..dist[n][1] {
+            if (ans / change) % 2 == 1 {
+                ans = (ans / change + 1) * change;
+            }
+            ans += time;
+        }
+        ans
+    }
+}
+
+struct Solution {}
+
+fn solution_second_minimum(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let e: Vec[Vec[i32]] = edges.iter().map(|p| [p[0] as i32, p[1] as i32].to_vec()).collect();
+    Solution.solution_second_minimum(n as i32, e, time as i32, change as i32)
+}
+
+// ---- the statement read literally
+
+// a walk of `steps` edges, minute by minute: at a vertex we may leave only
+// on green, and green is every even period of `change` minutes
+fn timed(steps: i64, time: i64, change: i64) -> i64 {
+    let mut t = 0;
+    for _ in 0..steps {
+        while t / change % 2 == 1 {
+            t += 1;
+        }
+        t += time;
+    }
+    t
+}
+
+fn literal(n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let mut reach: Vec[bool] = Vec.filled(n + 1, false);
+    reach[1] = true;
+    let mut lengths: Vec[i64] = Vec.new();
+    let mut k = 0;
+    // the lengths at which a walk ends at `n`, up to one past the second
+    while lengths.len() < 3 {
+        if reach[n] {
+            lengths.push(k);
+        }
+        let mut next: Vec[bool] = Vec.filled(n + 1, false);
+        for e in edges.iter() {
+            if reach[e[0]] {
+                next[e[1]] = true;
+            }
+            if reach[e[1]] {
+                next[e[0]] = true;
+            }
+        }
+        reach = next;
+        k += 1;
+    }
+    let mut times: Vec[i64] = lengths.iter().map(|steps| timed(steps, time, change)).collect();
+    times.sort();
+    times.dedup();
+    times[1]
+}
+
+fn answer(arm: i64, n: i64, edges: Vec[Vec[i64]], time: i64, change: i64) -> i64 {
+    let e = edges.clone();
+    match arm {
+        0 => star_second_minimum(n, e, time, change),
+        1 => dijkstra_second_minimum(n, e, time, change),
+        2 => ends_second_minimum(n, e, time, change),
+        3 => parity_second_minimum(n, e, time, change),
+        4 => levels_second_minimum(n, e, time, change),
+        _ => solution_second_minimum(n, e, time, change),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    n: i64,
+    edges: Vec[Vec[i64]],
+    time: i64,
+    change: i64,
+    relabel: Vec[i64],
+    added: Vec[i64],
+}
+
+fn joined(edges: Vec[Vec[i64]], a: i64, b: i64) -> bool {
+    edges.iter().any(|e| (e[0] == a and e[1] == b) or (e[0] == b and e[1] == a))
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 7 + 2;
+    let mut edges: Vec[Vec[i64]] = Vec.new();
+    for v in 2..n + 1 {
+        edges.push([next_random(mut seed) % (v - 1) + 1, v].to_vec());
+    }
+    for _ in 0..next_random(mut seed) % 4 {
+        let a = next_random(mut seed) % n + 1;
+        let b = next_random(mut seed) % n + 1;
+        if a != b and not joined(edges, a, b) {
+            edges.push([a, b].to_vec());
+        }
+    }
+    let time = next_random(mut seed) % 10 + 1;
+    let change = next_random(mut seed) % 10 + 1;
+    // a shuffle of 2..n, with 1 and n staying where they are
+    let mut relabel: Vec[i64] = (0..n + 1).collect();
+    for i in (3..n).rev() {
+        let j = next_random(mut seed) % (i - 1) + 2;
+        relabel.swap(i, j);
+    }
+    let added = [next_random(mut seed) % n + 1, next_random(mut seed) % n + 1].to_vec();
+    Problem { n, edges, time, change, relabel, added }
+}
+
+fn main() {
+    let names = ["star", "dijkstra", "ends", "parity", "levels", "solution"];
+    let mut seed = 2045;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let (n, time, change) = (prob.n, prob.time, prob.change);
+        let truth = literal(n, prob.edges, time, change);
+        check = (check * 31 + truth) % 1000000007;
+        let relabelled: Vec[Vec[i64]] = prob.edges.iter().map(|e| [prob.relabel[e[0]], prob.relabel[e[1]]].to_vec()).collect();
+        let backwards: Vec[Vec[i64]] = prob.edges.iter().rev().map(|e| [e[1], e[0]].to_vec()).collect();
+        let (a, b) = (prob.added[0], prob.added[1]);
+        let mut more = prob.edges.clone();
+        if a != b and not joined(prob.edges, a, b) {
+            more.push([a, b].to_vec());
+        }
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, n, prob.edges, time, change)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == x {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                x == truth,
+                answer(arm, n, relabelled, time, change) == x,
+                answer(arm, n, backwards, time, change) == x,
+                answer(arm, n, more, time, change) <= x,
+                answer(arm, n, prob.edges, 2 * time, 2 * change) == 2 * x,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"graph {p} arm {names[arm]}: P{k + 1} fails, answer {x}, literal {truth}, n {n}, edges {prob.edges}, time {time}, change {change}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 graphs: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

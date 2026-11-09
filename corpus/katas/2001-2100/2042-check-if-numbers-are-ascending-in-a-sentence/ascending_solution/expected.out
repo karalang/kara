@@ -1,0 +1,10 @@
+"1 box has 3 blue 4 red 6 green and 12 yellow marbles" -> true
+"hello world 5 x 5" -> false
+"sunset is at 7 51 pm overnight lows will be in the low 50 and 60 s" -> false
+"1 2" -> true
+"2 1" -> false
+"a 9 b 10 c 99" -> true
+"a 10 b 9" -> false
+"99 x 98 y" -> false
+"4 4" -> false
+4000 sentences: 1312 ascending, checksum 869831895

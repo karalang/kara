@@ -1,10 +1,9 @@
 // LeetCode #2015: Average Height of Buildings in Each Segment -- the
 // differential.
 //
-// Five arms against the statement read literally, on 1500 problems, with six
+// Six arms against the statement read literally, on 1500 problems, with six
 // properties. A problem is 1 to 10 buildings on a street of up to 40
-// positions. The sixth arm, LeetCode's Rust template, does not check yet
-// and joins when it does.
+// positions.
 //
 // P1  the answer is the statement read literally: each unit stretch
 //     `[x, x + 1)` given the average of the buildings over it, stretches with
@@ -14,7 +13,7 @@
 // P4  the street read the other way, position `p` turned into `100 - p`,
 //     turns the answer round
 // P5  every building listed twice leaves the answer
-// P6  each arm agrees with at least two of the other four
+// P6  each arm agrees with at least three of the other five
 
 // ---- the ★ arm: sorted events, a sweep
 fn star_average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
@@ -229,13 +228,51 @@ fn literal(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
     street
 }
 
+// ---- average_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn average_height_of_buildings(buildings: Vec[Vec[i32]]) -> Vec[Vec[i32]] {
+        let mut delta: SortedMap[i32, (i64, i32)] = SortedMap.new();
+        for b in ref buildings {
+            let e = delta.entry(b[0]).or_insert((0, 0));
+            e.0 += b[2];
+            e.1 += 1;
+            let e = delta.entry(b[1]).or_insert((0, 0));
+            e.0 -= b[2];
+            e.1 -= 1;
+        }
+        let mut ans: Vec[Vec[i32]] = Vec.new();
+        let mut (sum, cnt) = (0, 0i32);
+        let mut prev: i32 = 0;
+        for (pos, (dh, dc)) in delta.iter() {
+            if cnt > 0 {
+                let avg = (sum / cnt) as i32;
+                if ans.len() > 0 and ans[ans.len() - 1][1] == prev and ans[ans.len() - 1][2] == avg {
+                    ans[ans.len() - 1][1] = pos;
+                } else { ans.push([prev, pos, avg]); }
+            }
+            sum += dh;
+            cnt += dc;
+            prev = pos;
+        }
+        ans
+    }
+}
+
+fn solution_average_height_of_buildings(buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
+    let input: Vec[Vec[i32]] = buildings.iter().map(|(s, e, h)| [s as i32, e as i32, h as i32]).collect();
+    Solution.average_height_of_buildings(input).iter().map(|v| (v[0] as i64, v[1] as i64, v[2] as i64)).collect()
+}
+
 fn answer(arm: i64, buildings: Vec[(i64, i64, i64)]) -> Vec[(i64, i64, i64)] {
     match arm {
         0 => star_average_height_of_buildings(buildings),
         1 => map_average_height_of_buildings(buildings),
         2 => diff_average_height_of_buildings(buildings),
         3 => brute_average_height_of_buildings(buildings),
-        _ => heap_average_height_of_buildings(buildings),
+        4 => heap_average_height_of_buildings(buildings),
+        _ => solution_average_height_of_buildings(buildings),
     }
 }
 
@@ -271,7 +308,7 @@ fn draw(seed: mut ref i64) -> Problem {
 }
 
 fn main() {
-    let names = ["star", "map", "diff", "brute", "heap"];
+    let names = ["star", "map", "diff", "brute", "heap", "solution"];
     let mut seed = 2015;
     let mut problems: Vec[Problem] = Vec.new();
     for _ in 0..1500 {
@@ -295,13 +332,13 @@ fn main() {
         let mut twice = buildings.clone();
         twice.extend(buildings.iter().cloned());
         let mut got: Vec[Vec[(i64, i64, i64)]] = Vec.new();
-        for arm in 0..5 {
+        for arm in 0..6 {
             got.push(answer(arm, buildings.clone()));
         }
-        for arm in 0..5 {
+        for arm in 0..6 {
             let a = got[arm].clone();
             let mut same = 0;
-            for other in 0..5 {
+            for other in 0..6 {
                 if other != arm and got[other] == a {
                     same += 1;
                 }
@@ -314,7 +351,7 @@ fn main() {
                 answer(arm, moved.clone()) == a_moved,
                 answer(arm, mirrored.clone()) == a_mirrored,
                 answer(arm, twice.clone()) == a,
-                same >= 2,
+                same >= 3,
             ];
             for q in 0..6 {
                 checks += 1;
@@ -328,7 +365,7 @@ fn main() {
         }
     }
     let total = by_property.iter().sum();
-    println(f"1500 problems: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
     for f in failures {
         println(f);
     }

@@ -1,0 +1,113 @@
+// LeetCode #2040: Kth Smallest Product of Two Sorted Arrays -- binary search
+// on the answer, counted by two pointers. For a positive `a` the `b`s with
+// `a b <= x` are those at most `x / a`, a bound that only grows if the `a`s
+// are walked the right way: downward when `x >= 0`, upward when `x < 0`.
+// For a negative `a` they are the `b`s at least `x / a`, whose first index
+// only grows walking the `a`s upward when `x < 0` and downward when not.
+// One pointer per sign, no search. O((n + m) log V).
+
+fn count_at_most(nums1: Vec[i64], nums2: Vec[i64], x: i64) -> i64 {
+    let m = nums2.len();
+    let positive: Vec[i64] = nums1.iter().filter(|a| a > 0).cloned().collect();
+    let negative: Vec[i64] = nums1.iter().filter(|a| a < 0).cloned().collect();
+    let zeros = nums1.len() - positive.len() - negative.len();
+    let mut count = if x >= 0 { zeros * m } else { 0 };
+    // positive `a`, walked so that `x / a` grows: the prefix `b <= x / a`
+    let mut j = 0;
+    let order: Vec[i64] = if x >= 0 { positive.iter().rev().cloned().collect() } else { positive.clone() };
+    for a in order.iter() {
+        while j < m and a * nums2[j] <= x {
+            j += 1;
+        }
+        count += j;
+    }
+    // negative `a`, walked so that the first `b` with `a b <= x` moves right
+    let mut i = 0;
+    let order: Vec[i64] = if x < 0 { negative.clone() } else { negative.iter().rev().cloned().collect() };
+    for a in order.iter() {
+        while i < m and a * nums2[i] > x {
+            i += 1;
+        }
+        count += m - i;
+    }
+    count
+}
+
+fn kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let mut lo = -10000000000;
+    let mut hi = 10000000000;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_euclid(2);
+        if count_at_most(nums1, nums2, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mix(check: i64, answer: i64) -> i64 {
+    (check * 31 + answer.rem_euclid(1000000007)) % 1000000007
+}
+
+// `n` sorted values from `-top` to `top`
+fn sorted_values(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = (0..n).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % (2 * top + 1) - top).collect();
+    v.sort();
+    v
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], Vec[i64], i64)] = [
+        ([2, 5].to_vec(), [3, 4].to_vec(), 2),
+        ([-4, -2, 0, 3].to_vec(), [2, 4].to_vec(), 6),
+        ([-2, -1, 0, 1, 2].to_vec(), [-3, -1, 2, 4, 5].to_vec(), 3),
+        ([7].to_vec(), [-6].to_vec(), 1),
+        ([-100000, 100000].to_vec(), [-100000, 100000].to_vec(), 4),
+        ([-100000, 100000].to_vec(), [-100000, 100000].to_vec(), 1),
+        ([0, 0, 0].to_vec(), [-1, 1].to_vec(), 4),
+        ([-5, -3, -1].to_vec(), [-4, -2].to_vec(), 5),
+    ].to_vec();
+    for (a, b, k) in examples.into_iter() {
+        let shown = f"{a} {b} {k}";
+        println(f"{shown} -> {kth_smallest_product(a, b, k)}");
+    }
+    // 2000 problems of 1 to 8 values a side, up to 1 to 20 either side
+    let mut seed = 2040;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let top = next_random(mut seed) % 20 + 1;
+        let a = sorted_values(next_random(mut seed) % 8 + 1, top, mut seed);
+        let b = sorted_values(next_random(mut seed) % 8 + 1, top, mut seed);
+        let k = next_random(mut seed) % (a.len() * b.len()) + 1;
+        let answer = kth_smallest_product(a, b, k);
+        sum += answer;
+        check = mix(check, answer);
+    }
+    println(f"2000 problems of up to 8 values a side: sum {sum}, checksum {check}");
+    // 4 large problems, the first of 50000 values a side, the most the
+    // constraints allow
+    sum = 0;
+    check = 0;
+    for r in 0..4 {
+        let top = [100000, 3, 1000, 100000][r];
+        let n = [50000, 10000, 5000, 1000][r];
+        let a = sorted_values(n, top, mut seed);
+        let b = sorted_values(n, top, mut seed);
+        let k = (next_random(mut seed) * 32768 + next_random(mut seed)) * 76293 % (n * n) + 1;
+        let answer = kth_smallest_product(a, b, k);
+        sum += answer;
+        check = mix(check, answer);
+    }
+    println(f"4 large problems: sum {sum}, checksum {check}");
+}

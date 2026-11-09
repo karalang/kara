@@ -1,0 +1,40 @@
+// LeetCode #2044: Count Number of Maximum Bitwise-OR Subsets -- the ★ arm
+// as a benchmark. 2000 arrays of 16 values (the most the constraints
+// allow), below 100000, 1024, 16 and 2 in turn, built once; each answered by
+// the take-or-skip search, 2^17 - 1 calls apiece.
+
+fn count_from(nums: Vec[i64], i: i64, acc: i64, target: i64) -> i64 {
+    if i == nums.len() {
+        return if acc == target { 1 } else { 0 };
+    }
+    count_from(nums, i + 1, acc | nums[i], target) + count_from(nums, i + 1, acc, target)
+}
+
+fn count_max_or_subsets(nums: Vec[i64]) -> i64 {
+    let target = nums.iter().fold(0, |acc, x| acc | x);
+    count_from(nums, 0, 0, target)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 2044;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for r in 0..2000 {
+        let top = [100000, 1024, 16, 2][r % 4];
+        arrays.push((0..16).map(|_| next_random(mut seed) % top + 1).collect());
+    }
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for nums in arrays.into_iter() {
+        let answer = count_max_or_subsets(nums);
+        calls += 1;
+        sum += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"{calls} calls: sum {sum}, checksum {check}");
+}

@@ -1,0 +1,11 @@
+AAABABB -> true
+AA -> false
+ABBBBBBBAAA -> false
+A -> false
+AAA -> true
+BBB -> false
+AAABBB -> false
+AAAABBB -> true
+ABABAB -> false
+2000 rows of up to 40 pieces: Alice wins 698, checksum 320792750
+4 rows of 100000 pieces: Alice wins 2, checksum 50

@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/2001-2100/2015-average-height-of-buildings-in-each-segment/average_solution.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["lib:sortedmap"]
 class = "e"
-bucket = "check-refuses:E0200"
-classified_with = "95006f015"
-extracted_src = "79bdbf26"
+expected_from = "mirror"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the kata's Python mirror, which every arm matches on __mir-run, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "991c45adc+local"
+extracted_src = "525916b5"

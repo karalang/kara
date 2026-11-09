@@ -1,0 +1,261 @@
+// LeetCode #2037: Minimum Number of Moves to Seat Everyone -- the
+// differential. The six arms, against the statement read literally: every
+// way to give each student a seat, the fewest moves. 1500 rooms of 1 to 6
+// seats at places up to 60, each with a shift and a place to add, every one
+// drawn (with its shuffles) before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  either list shuffled leaves the answer
+// P3  the seats and the students swapped leave the answer
+// P4  every place moved by the same amount leaves the answer
+// P5  a seat and a student added at the same place leave the answer
+// P6  each arm agrees with at least three of the other five
+
+// ---- seats.kara: the ★ arm, both sides sorted and paired in order
+fn star_min_moves_to_seat(seats: own Vec[i64], students: own Vec[i64]) -> i64 {
+    let mut seats = seats;
+    let mut students = students;
+    seats.sort();
+    students.sort();
+    seats.iter().zip(students.iter()).map(|(a, b)| (a - b).abs()).sum()
+}
+
+// ---- seats_crossings.kara: the students crossing each gap, from a running balance
+fn crossings_min_moves_to_seat(seats: Vec[i64], students: Vec[i64]) -> i64 {
+    let mut balance = [0; 102];
+    for s in seats.iter() {
+        balance[s] += 1;
+    }
+    for s in students.iter() {
+        balance[s] -= 1;
+    }
+    let mut moves = 0;
+    let mut running = 0;
+    for p in 1..101 {
+        running += balance[p];
+        moves += running.abs();
+    }
+    moves
+}
+
+// ---- seats_heaps.kara: two min-heaps popped in step
+fn heaps_min_moves_to_seat(seats: Vec[i64], students: Vec[i64]) -> i64 {
+    let mut free: PriorityQueue[i64] = PriorityQueue.new();
+    let mut waiting: PriorityQueue[i64] = PriorityQueue.new();
+    for s in seats.iter() {
+        free.push(s);
+    }
+    for s in students.iter() {
+        waiting.push(s);
+    }
+    let mut moves = 0;
+    while let (Some(seat), Some(student)) = (free.pop(), waiting.pop()) {
+        moves += (seat - student).abs();
+    }
+    moves
+}
+
+// ---- seats_runs.kara: SortedMap counts walked as runs
+fn runs_runs(places: Vec[i64]) -> Vec[(i64, i64)] {
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    for p in places.iter() {
+        *counts.entry(p).or_insert(0) += 1;
+    }
+    counts.iter().map(|(p, c)| (p, c)).collect()
+}
+
+fn runs_min_moves_to_seat(seats: Vec[i64], students: Vec[i64]) -> i64 {
+    let mut free = runs_runs(seats);
+    let mut waiting = runs_runs(students);
+    let mut (i, j) = (0, 0);
+    let mut moves = 0;
+    while i < free.len() and j < waiting.len() {
+        let take = free[i].1.min(waiting[j].1);
+        moves += take * (free[i].0 - waiting[j].0).abs();
+        free[i].1 -= take;
+        waiting[j].1 -= take;
+        if free[i].1 == 0 {
+            i += 1;
+        }
+        if waiting[j].1 == 0 {
+            j += 1;
+        }
+    }
+    moves
+}
+
+// ---- seats_insertion.kara: sorted by insertion at partition_point, folded
+fn insertion_sorted_by_insertion(places: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for p in places.iter() {
+        let at = out.partition_point(|q| q <= p);
+        out.insert(at, p);
+    }
+    out
+}
+
+fn insertion_min_moves_to_seat(seats: Vec[i64], students: Vec[i64]) -> i64 {
+    let a = insertion_sorted_by_insertion(seats);
+    let b = insertion_sorted_by_insertion(students);
+    (0..a.len()).fold(0, |moves, k| moves + (a[k] - b[k]).abs())
+}
+
+// ---- seats_solution.kara: LeetCode's Rust template, carried by `karac fix`
+impl Solution {
+    pub fn solution_min_moves_to_seat(seats: own Vec[i32], students: own Vec[i32]) -> i32 {
+        let mut seats = seats;
+        let mut students = students;
+        seats.sort();
+        students.sort();
+        seats
+            .iter()
+            .zip(students.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum()
+    }
+}
+
+struct Solution {}
+
+fn solution_min_moves_to_seat(seats: Vec[i64], students: Vec[i64]) -> i64 {
+    let a: Vec[i32] = seats.iter().map(|x| x as i32).collect();
+    let b: Vec[i32] = students.iter().map(|x| x as i32).collect();
+    Solution.solution_min_moves_to_seat(a, b)
+}
+
+// ---- the statement read literally
+
+// the fewest moves seating students `k..` in the seats `used` leaves free
+fn literal_from(seats: Vec[i64], students: Vec[i64], k: i64, used: i64) -> i64 {
+    if k == students.len() {
+        return 0;
+    }
+    let mut best = -1;
+    for s in 0..seats.len() {
+        if used >> s & 1 == 0 {
+            let moves = (seats[s] - students[k]).abs() + literal_from(seats, students, k + 1, used | 1 << s);
+            if best == -1 or moves < best {
+                best = moves;
+            }
+        }
+    }
+    best
+}
+
+fn literal(seats: Vec[i64], students: Vec[i64]) -> i64 {
+    literal_from(seats, students, 0, 0)
+}
+
+fn answer(arm: i64, seats: Vec[i64], students: Vec[i64]) -> i64 {
+    let (a, b) = (seats.clone(), students.clone());
+    match arm {
+        0 => star_min_moves_to_seat(a, b),
+        1 => crossings_min_moves_to_seat(a, b),
+        2 => heaps_min_moves_to_seat(a, b),
+        3 => runs_min_moves_to_seat(a, b),
+        4 => insertion_min_moves_to_seat(a, b),
+        _ => solution_min_moves_to_seat(a, b),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn places(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % top + 1).collect()
+}
+
+fn shuffled(v: Vec[i64], seed: mut ref i64) -> Vec[i64] {
+    let mut out = v.clone();
+    for i in (1..out.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        out.swap(i, j);
+    }
+    out
+}
+
+struct Problem {
+    seats: Vec[i64],
+    students: Vec[i64],
+    seats_shuffled: Vec[i64],
+    students_shuffled: Vec[i64],
+    shift: i64,
+    extra: i64,
+}
+
+fn draw(seed: mut ref i64) -> Problem {
+    let n = next_random(mut seed) % 6 + 1;
+    let top = next_random(mut seed) % 60 + 1;
+    let seats = places(n, top, mut seed);
+    let students = places(n, top, mut seed);
+    let seats_shuffled = shuffled(seats, mut seed);
+    let students_shuffled = shuffled(students, mut seed);
+    let shift = next_random(mut seed) % 40;
+    let extra = next_random(mut seed) % 100 + 1;
+    Problem { seats, students, seats_shuffled, students_shuffled, shift, extra }
+}
+
+fn main() {
+    let names = ["star", "crossings", "heaps", "runs", "insertion", "solution"];
+    let mut seed = 2037;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..1500 {
+        problems.push(draw(mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let prob = ref problems[p];
+        let truth = literal(prob.seats, prob.students);
+        check = (check * 31 + truth) % 1000000007;
+        let seats_moved: Vec[i64] = prob.seats.iter().map(|x| x + prob.shift).collect();
+        let students_moved: Vec[i64] = prob.students.iter().map(|x| x + prob.shift).collect();
+        let mut seats_added = prob.seats.clone();
+        seats_added.push(prob.extra);
+        let mut students_added = prob.students.clone();
+        students_added.push(prob.extra);
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, prob.seats, prob.students)).collect();
+        for arm in 0..6 {
+            let a = got[arm];
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == a {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                a == truth,
+                answer(arm, prob.seats_shuffled, prob.students) == a and answer(arm, prob.seats, prob.students_shuffled) == a,
+                answer(arm, prob.students, prob.seats) == a,
+                answer(arm, seats_moved, students_moved) == a,
+                answer(arm, seats_added, students_added) == a,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"room {p} arm {names[arm]}: P{k + 1} fails, answer {a}, literal {truth}, seats {prob.seats}, students {prob.students}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 rooms: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

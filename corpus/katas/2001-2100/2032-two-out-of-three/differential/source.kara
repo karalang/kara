@@ -1,0 +1,296 @@
+// LeetCode #2032: Two Out of Three -- differential. The six arms against
+// the statement read literally: each value from 1 to 100 tried, each array
+// scanned for it. 1500 problems of 1 to 12 values each from 1 to a top of
+// their own, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the three arrays taken in another order leave the answer
+// P3  each array reversed and appended to itself leaves the answer
+// P4  the answer rises strictly, and each value in it is in one of the
+//     arrays
+// P5  the smallest value in none of the arrays, appended to the first two,
+//     joins the answer and changes nothing else
+// P6  each arm agrees with at least three of the other five
+
+// ---- the ★ arm: a mask of arrays per value
+fn star_two_out_of_three(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let mut mask = [0; 101];
+    for x in nums1 {
+        mask[x] |= 1;
+    }
+    for x in nums2 {
+        mask[x] |= 2;
+    }
+    for x in nums3 {
+        mask[x] |= 4;
+    }
+    let mut out = Vec.new();
+    for v in 1..101 {
+        if mask[v].count_ones() >= 2 {
+            out.push(v);
+        }
+    }
+    out
+}
+
+// ---- three_sets.kara: a Set per array
+fn sets_two_out_of_three(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let sets: Vec[Set[i64]] = [nums1, nums2, nums3].iter().map(|nums| nums.iter().cloned().collect()).collect();
+    let mut seen: Set[i64] = Set.new();
+    let mut out = Vec.new();
+    for s in sets.iter() {
+        for x in s.iter() {
+            if seen.contains(x) {
+                continue;
+            }
+            seen.insert(*x);
+            if sets.iter().filter(|t| t.contains(x)).count() >= 2 {
+                out.push(*x);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// ---- three_sorted.kara: a SortedMap of counts over SortedSets
+fn sorted_two_out_of_three(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let mut count: SortedMap[i64, i64] = SortedMap.new();
+    for nums in [nums1, nums2, nums3] {
+        let distinct: SortedSet[i64] = nums.clone().into_iter().collect();
+        for x in distinct {
+            *count.entry(x).or_insert(0) += 1;
+        }
+    }
+    count.into_iter().filter(|(_, c)| c >= 2).map(|(v, _)| v).collect()
+}
+
+// ---- three_merge.kara: three sorted lists merged
+fn merge_distinct_sorted(nums: Vec[i64]) -> Vec[i64] {
+    let mut v = nums.clone();
+    v.sort();
+    v.dedup();
+    v
+}
+
+fn merge_two_out_of_three(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let lists = [merge_distinct_sorted(nums1), merge_distinct_sorted(nums2), merge_distinct_sorted(nums3)];
+    let mut at = [0, 0, 0];
+    let mut out = Vec.new();
+    loop {
+        let mut least = 101;
+        for k in 0..3 {
+            if at[k] < lists[k].len() and lists[k][at[k]] < least {
+                least = lists[k][at[k]];
+            }
+        }
+        if least == 101 {
+            break;
+        }
+        let mut holders = 0;
+        for k in 0..3 {
+            if at[k] < lists[k].len() and lists[k][at[k]] == least {
+                holders += 1;
+                at[k] += 1;
+            }
+        }
+        if holders >= 2 {
+            out.push(least);
+        }
+    }
+    out
+}
+
+// ---- three_count.kara: a table of flags per array
+fn count_add_marks(nums: Vec[i64], count: mut ref Vec[i64]) {
+    let mut has = Vec.filled(101, false);
+    for x in nums {
+        has[x] = true;
+    }
+    for v in 1..101 {
+        if has[v] {
+            count[v] += 1;
+        }
+    }
+}
+
+fn count_two_out_of_three(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let mut count = Vec.filled(101, 0);
+    count_add_marks(nums1, mut count);
+    count_add_marks(nums2, mut count);
+    count_add_marks(nums3, mut count);
+    (1..101).filter(|v| count[v] >= 2).collect()
+}
+
+// ---- three_solution.kara: LeetCode's Rust template after karac fix
+struct Solution {}
+
+impl Solution {
+    pub fn two_out_of_three(nums1: Vec[i32], nums2: Vec[i32], nums3: Vec[i32]) -> Vec[i32] {
+        let s1: Set[i32] = nums1.clone().into_iter().collect();
+        let s2: Set[i32] = nums2.clone().into_iter().collect();
+        let s3: Set[i32] = nums3.clone().into_iter().collect();
+        (1..=100)
+            .filter(|x| {
+                let mut c = 0;
+                if s1.contains(x) {
+                    c += 1;
+                }
+                if s2.contains(x) {
+                    c += 1;
+                }
+                if s3.contains(x) {
+                    c += 1;
+                }
+                c >= 2
+            })
+            .collect()
+    }
+}
+
+fn rust_two_out_of_three(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let a: Vec[i32] = nums1.iter().map(|x| x as i32).collect();
+    let b: Vec[i32] = nums2.iter().map(|x| x as i32).collect();
+    let c: Vec[i32] = nums3.iter().map(|x| x as i32).collect();
+    Solution.two_out_of_three(a, b, c)
+        .into_iter()
+        .map(|x| x as i64)
+        .collect()
+}
+
+// ---- the statement read literally
+
+fn literal(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64]) -> Vec[i64] {
+    let mut out = Vec.new();
+    for v in 1..101 {
+        let mut holders = 0;
+        for arr in [nums1.clone(), nums2.clone(), nums3.clone()] {
+            let mut found = false;
+            for x in arr {
+                if x == v {
+                    found = true;
+                }
+            }
+            if found {
+                holders += 1;
+            }
+        }
+        if holders >= 2 {
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn answer(arm: i64, a: Vec[i64], b: Vec[i64], c: Vec[i64]) -> Vec[i64] {
+    match arm {
+        0 => star_two_out_of_three(a, b, c),
+        1 => sets_two_out_of_three(a, b, c),
+        2 => sorted_two_out_of_three(a, b, c),
+        3 => merge_two_out_of_three(a, b, c),
+        4 => count_two_out_of_three(a, b, c),
+        _ => rust_two_out_of_three(a, b, c),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % top + 1);
+    }
+    nums
+}
+
+fn doubled(v: Vec[i64]) -> Vec[i64] {
+    let mut out = v.clone();
+    for x in v.iter().rev() {
+        out.push(*x);
+    }
+    out
+}
+
+fn main() {
+    let names = ["star", "sets", "sorted", "merge", "count", "rust"];
+    let mut seed = 2032;
+    let mut problems: Vec[(Vec[i64], Vec[i64], Vec[i64])] = Vec.new();
+    for _ in 0..1500 {
+        let top = next_random(mut seed) % 12 + 1;
+        let a = draw(next_random(mut seed) % 12 + 1, top, mut seed);
+        let b = draw(next_random(mut seed) % 12 + 1, top, mut seed);
+        let c = draw(next_random(mut seed) % 12 + 1, top, mut seed);
+        problems.push((a, b, c));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in 0..problems.len() {
+        let (a, b, c) = problems[p].clone();
+        let truth = literal(a.clone(), b.clone(), c.clone());
+        for v in truth.iter() {
+            check = (check * 31 + v) % 1000000007;
+        }
+        check = (check * 31 + 101) % 1000000007;
+        // the smallest value in none of the arrays
+        let mut absent = 0;
+        for v in 1..101 {
+            if absent == 0 and not a.contains(v) and not b.contains(v) and not c.contains(v) {
+                absent = v;
+            }
+        }
+        let mut grown = truth.clone();
+        grown.push(absent);
+        grown.sort();
+        let mut a2 = a.clone();
+        a2.push(absent);
+        let mut b2 = b.clone();
+        b2.push(absent);
+        let got: Vec[Vec[i64]] = (0..6).map(|arm| answer(arm, a.clone(), b.clone(), c.clone())).collect();
+        for arm in 0..6 {
+            let ans = got[arm].clone();
+            let mut same = 0;
+            for other in 0..6 {
+                if other != arm and got[other] == ans {
+                    same += 1;
+                }
+            }
+            let p2 = answer(arm, c.clone(), a.clone(), b.clone()) == ans;
+            let p3 = answer(arm, doubled(a.clone()), doubled(b.clone()), doubled(c.clone())) == ans;
+            let mut p4 = true;
+            for i in 0..ans.len() {
+                if i > 0 and ans[i - 1] >= ans[i] {
+                    p4 = false;
+                }
+                if not a.contains(ans[i]) and not b.contains(ans[i]) and not c.contains(ans[i]) {
+                    p4 = false;
+                }
+            }
+            let p5 = answer(arm, a2.clone(), b2.clone(), c.clone()) == grown;
+            let verdicts = [ans == truth, p2, p3, p4, p5, same >= 3];
+            for q in 0..6 {
+                checks += 1;
+                if not verdicts[q] {
+                    by_property[q] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"problem {p} arm {names[arm]}: P{q + 1} fails, {a} {b} {c}, answer {ans}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    for f in failures {
+        println(f);
+    }
+    for q in 0..6 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1} {by_property[q]}");
+        }
+    }
+}

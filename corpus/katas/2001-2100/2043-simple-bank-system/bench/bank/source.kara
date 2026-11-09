@@ -1,0 +1,93 @@
+// LeetCode #2043: Simple Bank System -- the ★ arm as a benchmark. A bank of
+// 100000 accounts and 1000000 calls (transfers, deposits and withdrawals,
+// now and then naming an account that does not exist, amounts up to 10^6)
+// built once; then 40 rounds, each opening the bank afresh from the first
+// balances and making every call: 40000000 calls.
+
+struct Bank {
+    balance: Vec[i64],
+}
+
+impl Bank {
+    fn new(balance: own Vec[i64]) -> Bank {
+        Bank { balance }
+    }
+
+    fn exists(self, account: i64) -> bool {
+        account >= 1 and account <= self.balance.len()
+    }
+
+    fn transfer(mut ref self, account1: i64, account2: i64, money: i64) -> bool {
+        if not self.exists(account1) or not self.exists(account2) or self.balance[account1 - 1] < money {
+            return false;
+        }
+        self.balance[account1 - 1] -= money;
+        self.balance[account2 - 1] += money;
+        true
+    }
+
+    fn deposit(mut ref self, account: i64, money: i64) -> bool {
+        if not self.exists(account) {
+            return false;
+        }
+        self.balance[account - 1] += money;
+        true
+    }
+
+    fn withdraw(mut ref self, account: i64, money: i64) -> bool {
+        if not self.exists(account) or self.balance[account - 1] < money {
+            return false;
+        }
+        self.balance[account - 1] -= money;
+        true
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// up to 2^45, past the 10^12 the constraints allow
+fn big_random(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) * 32768 + next_random(mut seed)
+}
+
+// `n` accounts holding up to `top`, and `calls` operations whose accounts
+// are now and then one outside 1..=n and whose amounts run up to `top`
+fn problem(n: i64, calls: i64, top: i64, seed: mut ref i64) -> (Vec[i64], Vec[(i64, i64, i64, i64)]) {
+    let balance: Vec[i64] = (0..n).map(|_| big_random(mut seed) % (top + 1)).collect();
+    let mut ops: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for _ in 0..calls {
+        let kind = next_random(mut seed) % 3;
+        let a = big_random(mut seed) % (n + 2);
+        let b = big_random(mut seed) % (n + 2);
+        let money = big_random(mut seed) % (top + 1);
+        ops.push((kind, a, b, money));
+    }
+    (balance, ops)
+}
+
+fn main() {
+    let mut seed = 2043;
+    let (balance, ops) = problem(100000, 1000000, 1000000, mut seed);
+    let mut calls = 0;
+    let mut succeeded = 0;
+    let mut check = 0;
+    for round in 0..40 {
+        let mut bank = Bank.new(balance.clone());
+        for (kind, a, b, money) in ops.iter() {
+            let ok = match kind {
+                0 => bank.transfer(a, b, money),
+                1 => bank.deposit(a, money),
+                _ => bank.withdraw(a, money),
+            };
+            calls += 1;
+            if ok {
+                succeeded += 1;
+                check = (check * 31 + calls + round) % 1000000007;
+            }
+        }
+    }
+    println(f"{calls} calls: {succeeded} succeed, checksum {check}");
+}

@@ -1,0 +1,129 @@
+// LeetCode #2043: Simple Bank System -- `Option` chaining. `index` turns an
+// account number into `Some(position)` or `None`; a withdrawal keeps the
+// position only if the money is there (`filter`), and a transfer pairs its
+// two positions with `zip` first. Nothing is written unless the chain ends
+// in `Some`. O(1) a call.
+
+struct Bank {
+    balance: Vec[i64],
+}
+
+impl Bank {
+    fn new(balance: own Vec[i64]) -> Bank {
+        Bank { balance }
+    }
+
+    fn index(self, account: i64) -> Option[i64] {
+        if account >= 1 and account <= self.balance.len() { Some(account - 1) } else { None }
+    }
+
+    fn transfer(mut ref self, account1: i64, account2: i64, money: i64) -> bool {
+        let pair = self.index(account1).zip(self.index(account2)).filter(|(i, _)| self.balance[i] >= money);
+        if let Some((i, j)) = pair {
+            self.balance[i] -= money;
+            self.balance[j] += money;
+        }
+        pair.is_some()
+    }
+
+    fn deposit(mut ref self, account: i64, money: i64) -> bool {
+        self.index(account).map(|i| { self.balance[i] += money; }).is_some()
+    }
+
+    fn withdraw(mut ref self, account: i64, money: i64) -> bool {
+        let at = self.index(account).filter(|i| self.balance[i] >= money);
+        if let Some(i) = at {
+            self.balance[i] -= money;
+        }
+        at.is_some()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// an operation: 0 transfer(a, b, money), 1 deposit(a, money), 2 withdraw(a, money)
+fn run(balance: own Vec[i64], ops: Vec[(i64, i64, i64, i64)]) -> Vec[bool] {
+    let mut bank = Bank.new(balance);
+    let mut results: Vec[bool] = Vec.new();
+    for (kind, a, b, money) in ops.iter() {
+        let ok = match kind {
+            0 => bank.transfer(a, b, money),
+            1 => bank.deposit(a, money),
+            _ => bank.withdraw(a, money),
+        };
+        results.push(ok);
+    }
+    results
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// up to 2^45, past the 10^12 the constraints allow
+fn big_random(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) * 32768 + next_random(mut seed)
+}
+
+// `n` accounts holding up to `top`, and `calls` operations whose accounts
+// are now and then one outside 1..=n and whose amounts run up to `top`
+fn problem(n: i64, calls: i64, top: i64, seed: mut ref i64) -> (Vec[i64], Vec[(i64, i64, i64, i64)]) {
+    let balance: Vec[i64] = (0..n).map(|_| big_random(mut seed) % (top + 1)).collect();
+    let mut ops: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for _ in 0..calls {
+        let kind = next_random(mut seed) % 3;
+        let a = big_random(mut seed) % (n + 2);
+        let b = big_random(mut seed) % (n + 2);
+        let money = big_random(mut seed) % (top + 1);
+        ops.push((kind, a, b, money));
+    }
+    (balance, ops)
+}
+
+fn tally(results: Vec[bool], check: i64) -> i64 {
+    let mut c = check;
+    for ok in results.iter() {
+        c = (c * 31 + if ok { 2 } else { 1 }) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    // LeetCode's example, then a few more
+    let examples: Vec[(Vec[i64], Vec[(i64, i64, i64, i64)])] = [
+        ([10, 100, 20, 50, 30].to_vec(), [(2, 3, 0, 10), (0, 5, 1, 20), (1, 5, 0, 20), (0, 3, 4, 15), (2, 10, 0, 50)].to_vec()),
+        ([0].to_vec(), [(2, 1, 0, 0), (2, 1, 0, 1), (1, 1, 0, 1000000000000), (0, 1, 1, 1000000000000), (0, 1, 2, 1), (2, 1, 0, 1000000000000)].to_vec()),
+        ([5, 5].to_vec(), [(0, 1, 2, 5), (0, 1, 2, 1), (0, 2, 1, 10), (2, 0, 0, 0), (1, 3, 0, 1), (0, 0, 1, 0)].to_vec()),
+    ].to_vec();
+    for (balance, ops) in examples.into_iter() {
+        let shown = f"{balance} {ops}";
+        println(f"{shown} -> {run(balance, ops)}");
+    }
+    // 2000 banks of 1 to 8 accounts, 1 to 30 calls, amounts up to 1 to 100
+    let mut seed = 2043;
+    let mut succeeded = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 8 + 1;
+        let calls = next_random(mut seed) % 30 + 1;
+        let top = next_random(mut seed) % 100 + 1;
+        let (balance, ops) = problem(n, calls, top, mut seed);
+        let results = run(balance, ops);
+        succeeded += results.iter().filter(|ok| ok).count();
+        check = tally(results, check);
+    }
+    println(f"2000 small banks: {succeeded} calls succeed, checksum {check}");
+    // 4 banks of 100000 accounts and 10000 calls, the most the constraints
+    // allow, amounts up to 10^12, 10^6, 100 and 1
+    succeeded = 0;
+    check = 0;
+    for r in 0..4 {
+        let top = [1000000000000, 1000000, 100, 1][r];
+        let (balance, ops) = problem(100000, 10000, top, mut seed);
+        let results = run(balance, ops);
+        succeeded += results.iter().filter(|ok| ok).count();
+        check = tally(results, check);
+    }
+    println(f"4 large banks: {succeeded} calls succeed, checksum {check}");
+}
