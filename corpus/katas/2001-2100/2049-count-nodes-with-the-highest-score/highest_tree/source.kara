@@ -1,0 +1,147 @@
+// LeetCode #2049: Count Nodes With the Highest Score -- the tree is binary,
+// so a `Tree` struct keeps each node's left and right child (-1 for none).
+// Its `sizes` method walks it in postorder with an explicit stack of
+// (node, children pushed) pairs, so a node's size is summed only after
+// both of its children's; `score` multiplies the up to three parts a node's
+// removal leaves.
+
+struct Tree {
+    left: Vec[i64],
+    right: Vec[i64],
+    root: i64,
+}
+
+impl Tree {
+    fn from_parents(parents: Vec[i64]) -> Tree {
+        let n = parents.len();
+        let mut tree = Tree { left: Vec.filled(n, -1), right: Vec.filled(n, -1), root: 0 };
+        for v in 0..n {
+            let p = parents[v];
+            if p == -1 {
+                tree.root = v;
+            } else if tree.left[p] == -1 {
+                tree.left[p] = v;
+            } else {
+                tree.right[p] = v;
+            }
+        }
+        tree
+    }
+
+    fn size_of(self, sizes: Vec[i64], v: i64) -> i64 {
+        if v == -1 { 0 } else { sizes[v] }
+    }
+
+    fn sizes(self) -> Vec[i64] {
+        let n = self.left.len();
+        let mut sizes: Vec[i64] = Vec.filled(n, 0);
+        let mut stack: Vec[(i64, bool)] = [(self.root, false)];
+        while let Some((v, pushed)) = stack.pop() {
+            if pushed {
+                sizes[v] = 1 + self.size_of(sizes, self.left[v]) + self.size_of(sizes, self.right[v]);
+            } else {
+                stack.push((v, true));
+                if self.left[v] != -1 {
+                    stack.push((self.left[v], false));
+                }
+                if self.right[v] != -1 {
+                    stack.push((self.right[v], false));
+                }
+            }
+        }
+        sizes
+    }
+
+    fn score(self, sizes: Vec[i64], v: i64) -> i64 {
+        let n = self.left.len();
+        let mut score = 1;
+        for part in [self.size_of(sizes, self.left[v]), self.size_of(sizes, self.right[v]), n - sizes[v]] {
+            if part > 0 {
+                score *= part;
+            }
+        }
+        score
+    }
+}
+
+fn count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    let tree = Tree.from_parents(parents);
+    let sizes = tree.sizes();
+    let scores: Vec[i64] = (0..parents.len()).map(|v| tree.score(sizes, v)).collect();
+    let best = scores.iter().max().unwrap();
+    scores.iter().filter(|s| s == best).count()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a tree of `n` nodes rooted at 0: the nodes other than the root in a
+// random order, each hung under one before it in that order, chosen from
+// the last `reach` (1 makes a path, `n` any shape) and moved on past any
+// that has its two children already: the trees are binary
+fn draw(n: i64, reach: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut order: Vec[i64] = (0..n).collect();
+    for i in (2..n).rev() {
+        let j = next_random(mut seed) % i + 1;
+        order.swap(i, j);
+    }
+    let mut parents: Vec[i64] = Vec.filled(n, -1);
+    let mut kids: Vec[i64] = Vec.filled(n, 0);
+    for i in 1..n {
+        let mut at = i - (next_random(mut seed) % reach.min(i) + 1);
+        while kids[order[at]] == 2 {
+            at += 1;
+        }
+        parents[order[i]] = order[at];
+        kids[order[at]] += 1;
+    }
+    parents
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples = [
+        [-1, 2, 0, 2, 0].to_vec(),
+        [-1, 2, 0].to_vec(),
+        [-1, 0].to_vec(),
+        [-1, 0, 0, 1, 1, 3, 3].to_vec(),
+        [-1, 0, 1, 2, 3, 4].to_vec(),
+        [-1, 0, 0, 1, 1, 2, 2].to_vec(),
+        [-1, 2, 0, 0, 1, 1, 2].to_vec(),
+    ];
+    for parents in examples.iter() {
+        println(f"{parents} -> {count_highest_score_nodes(parents)}");
+    }
+    // 2000 trees of 2 to 30 nodes, from paths to any shape
+    let mut seed = 2049;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 29 + 2;
+        let reach = next_random(mut seed) % n + 1;
+        let count = count_highest_score_nodes(draw(n, reach, mut seed));
+        sum += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"2000 trees: sum {sum}, checksum {check}");
+    // 4 trees of 100000 nodes, the most the constraints allow: a path, a
+    // comb (a path with a leaf hung under each of its nodes), a complete
+    // binary tree and a random one
+    sum = 0;
+    check = 0;
+    let n = 100000;
+    let path: Vec[i64] = (0..n).map(|i| i - 1).collect();
+    let comb: Vec[i64] = (0..n).map(|i| if i == 0 { -1 } else if i % 2 == 0 { i - 2 } else { i - 1 }).collect();
+    let binary: Vec[i64] = (0..n).map(|i| if i == 0 { -1 } else { (i - 1) / 2 }).collect();
+    let random = draw(n, n, mut seed);
+    for parents in [path, comb, binary, random] {
+        let count = count_highest_score_nodes(parents);
+        sum += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"4 trees of 100000 nodes: sum {sum}, checksum {check}");
+}

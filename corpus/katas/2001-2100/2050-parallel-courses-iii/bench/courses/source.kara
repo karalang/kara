@@ -1,0 +1,64 @@
+// LeetCode #2050: Parallel Courses III -- the ★ arm as a benchmark. 40
+// graphs of 50000 courses, the most the constraints allow, each course but
+// the first in a random order requiring one of the `reach` before it (from
+// 1, a single chain, to 39001), with times up to 10^4; each answered by
+// Kahn's topological order: two million courses scheduled.
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let mut next: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    let mut waiting: Vec[i64] = Vec.filled(n, 0);
+    for (a, b) in relations.iter() {
+        next[a - 1].push(b - 1);
+        waiting[b - 1] += 1;
+    }
+    let mut start: Vec[i64] = Vec.filled(n, 0);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for v in 0..n {
+        if waiting[v] == 0 {
+            queue.push_back(v);
+        }
+    }
+    let mut months = 0;
+    while let Some(v) = queue.pop_front() {
+        let done = start[v] + time[v];
+        months = months.max(done);
+        for w in next[v].iter() {
+            start[w] = start[w].max(done);
+            waiting[w] -= 1;
+            if waiting[w] == 0 {
+                queue.push_back(w);
+            }
+        }
+    }
+    months
+}
+
+fn main() {
+    let n = 50000;
+    let mut seed = 2050;
+    let mut sum = 0;
+    let mut check = 0;
+    for t in 0..40 {
+        let reach = 1 + t * 1000;
+        let mut order: Vec[i64] = (1..n + 1).collect();
+        for i in (1..n).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            order.swap(i, j);
+        }
+        let mut relations: Vec[(i64, i64)] = Vec.with_capacity(n - 1);
+        for i in 1..n {
+            let at = i - (next_random(mut seed) % reach.min(i) + 1);
+            relations.push((order[at], order[i]));
+        }
+        let time: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 10000 + 1).collect();
+        let months = minimum_time(n, relations, time);
+        sum += months;
+        check = (check * 31 + months) % 1000000007;
+    }
+    println(f"40 graphs: sum {sum}, checksum {check}");
+}

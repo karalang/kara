@@ -1,0 +1,105 @@
+// LeetCode #2050: Parallel Courses III -- a memoized recursion over the
+// prerequisites: a course finishes at its own time after the latest finish
+// among its prerequisites, each worked out once and kept in a
+// `Vec[Option[i64]]`. The answer is the latest finish of any course. The
+// recursion is as deep as the longest chain, 50000 calls.
+
+fn finish(v: i64, before: Vec[Vec[i64]], time: Vec[i64], memo: mut ref Vec[Option[i64]]) -> i64 {
+    if let Some(done) = memo[v] {
+        return done;
+    }
+    let mut latest = 0;
+    for u in before[v].iter() {
+        latest = latest.max(finish(u, before, time, mut memo));
+    }
+    let done = latest + time[v];
+    memo[v] = Some(done);
+    done
+}
+
+fn minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let mut before: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (a, b) in relations.iter() {
+        before[b - 1].push(a - 1);
+    }
+    let mut memo: Vec[Option[i64]] = Vec.filled(n, None);
+    (0..n).map(|v| finish(v, before, time, mut memo)).max().unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `m` distinct relations among `n` courses (as many as there can be, if
+// fewer), each from a course to one later in a random order of them, so
+// the graph has no cycle
+fn draw(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut order: Vec[i64] = (1..n + 1).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    let m = m.min(n * (n - 1) / 2);
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut relations: Vec[(i64, i64)] = Vec.new();
+    while relations.len() < m {
+        let a = next_random(mut seed) % (n - 1);
+        let b = a + 1 + next_random(mut seed) % (n - 1 - a);
+        if seen.insert((a, b)) {
+            relations.push((order[a], order[b]));
+        }
+    }
+    relations
+}
+
+fn times(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % most + 1).collect()
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples = [
+        (3, [(1, 3), (2, 3)].to_vec(), [3, 2, 5].to_vec()),
+        (5, [(1, 5), (2, 5), (3, 5), (3, 4), (4, 5)].to_vec(), [1, 2, 3, 4, 5].to_vec()),
+        (1, Vec.new(), [7].to_vec()),
+        (4, Vec.new(), [4, 9, 2, 6].to_vec()),
+        (4, [(4, 3), (3, 2), (2, 1)].to_vec(), [1, 2, 3, 4].to_vec()),
+        (6, [(1, 2), (1, 3), (2, 4), (3, 4), (4, 5), (4, 6)].to_vec(), [5, 1, 8, 2, 3, 3].to_vec()),
+    ];
+    for (n, relations, time) in examples.iter() {
+        println(f"n {n}, {relations}, time {time} -> {minimum_time(n, relations, time)}");
+    }
+    // 2000 graphs of 2 to 30 courses and up to 60 relations
+    let mut seed = 2050;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 29 + 2;
+        let m = next_random(mut seed) % 61;
+        let relations = draw(n, m, mut seed);
+        let time = times(n, 20, mut seed);
+        let months = minimum_time(n, relations, time);
+        sum += months;
+        check = (check * 31 + months) % 1000000007;
+    }
+    println(f"2000 graphs: sum {sum}, checksum {check}");
+    // 3 graphs at the constraints' limits, 50000 courses and 50000
+    // relations: a chain through every course in reverse order, a random
+    // graph, and every course after the first required by course 1
+    sum = 0;
+    check = 0;
+    let n = 50000;
+    let chain: Vec[(i64, i64)] = (1..n).map(|i| (n + 1 - i, n - i)).collect();
+    let random = draw(n, n, mut seed);
+    let fan: Vec[(i64, i64)] = (2..n + 1).map(|i| (1, i)).collect();
+    for relations in [chain, random, fan] {
+        let time = times(n, 10000, mut seed);
+        let months = minimum_time(n, relations, time);
+        sum += months;
+        check = (check * 31 + months) % 1000000007;
+    }
+    println(f"3 graphs of 50000 courses: sum {sum}, checksum {check}");
+}

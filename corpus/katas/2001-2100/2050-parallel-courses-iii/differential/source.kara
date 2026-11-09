@@ -1,0 +1,325 @@
+// LeetCode #2050: Parallel Courses III -- the differential. The six
+// arms, against the statement read literally: the months simulated one at
+// a time, every course started the month all of its prerequisites are
+// done. 500 graphs of 2 to 30 courses and up to 60 relations, every one
+// drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is at least the longest course and at most all of them
+//     one after another
+// P3  the courses relabelled at random, their times and relations with
+//     them, have the same answer
+// P4  the relations listed in reverse order have the same answer
+// P5  a new course of 7 months that requires every other course makes the
+//     answer 7 months later
+// P6  each arm agrees with at least three of the other five
+
+// ---- courses.kara: the ★ arm, Kahn's topological order
+fn star_minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let mut next: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    let mut waiting: Vec[i64] = Vec.filled(n, 0);
+    for (a, b) in relations.iter() {
+        next[a - 1].push(b - 1);
+        waiting[b - 1] += 1;
+    }
+    let mut start: Vec[i64] = Vec.filled(n, 0);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for v in 0..n {
+        if waiting[v] == 0 {
+            queue.push_back(v);
+        }
+    }
+    let mut months = 0;
+    while let Some(v) = queue.pop_front() {
+        let done = start[v] + time[v];
+        months = months.max(done);
+        for w in next[v].iter() {
+            start[w] = start[w].max(done);
+            waiting[w] -= 1;
+            if waiting[w] == 0 {
+                queue.push_back(w);
+            }
+        }
+    }
+    months
+}
+
+// ---- courses_memo.kara: a memoized recursion over the prerequisites
+fn memo_finish(v: i64, before: Vec[Vec[i64]], time: Vec[i64], memo: mut ref Vec[Option[i64]]) -> i64 {
+    if let Some(done) = memo[v] {
+        return done;
+    }
+    let mut latest = 0;
+    for u in before[v].iter() {
+        latest = latest.max(memo_finish(u, before, time, mut memo));
+    }
+    let done = latest + time[v];
+    memo[v] = Some(done);
+    done
+}
+
+fn memo_minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let mut before: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (a, b) in relations.iter() {
+        before[b - 1].push(a - 1);
+    }
+    let mut memo: Vec[Option[i64]] = Vec.filled(n, None);
+    (0..n).map(|v| memo_finish(v, before, time, mut memo)).max().unwrap()
+}
+
+// ---- courses_stack.kara: the same recursion with an explicit stack
+fn stack_minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let mut before: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for (a, b) in relations.iter() {
+        before[b - 1].push(a - 1);
+    }
+    let mut done: Vec[i64] = Vec.filled(n, 0);
+    for root in 0..n {
+        if done[root] > 0 {
+            continue;
+        }
+        let mut stack = [root].to_vec();
+        while let Some(v) = stack.last().cloned() {
+            if done[v] > 0 {
+                stack.pop();
+                continue;
+            }
+            let pending: Vec[i64] = before[v].iter().filter(|u| done[u] == 0).collect();
+            if pending.is_empty() {
+                done[v] = before[v].iter().map(|u| done[u]).max().unwrap_or(0) + time[v];
+                stack.pop();
+            } else {
+                stack.extend(pending);
+            }
+        }
+    }
+    done.iter().max().unwrap()
+}
+
+// ---- courses_heap.kara: the term simulated with a `PriorityQueue`
+fn heap_minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let mut next: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    let mut waiting: Vec[i64] = Vec.filled(n, 0);
+    for (a, b) in relations.iter() {
+        next[a - 1].push(b - 1);
+        waiting[b - 1] += 1;
+    }
+    let mut taking: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    for v in 0..n {
+        if waiting[v] == 0 {
+            taking.push((time[v], v));
+        }
+    }
+    let mut month = 0;
+    while let Some((at, v)) = taking.pop() {
+        month = at;
+        for w in next[v].iter() {
+            waiting[w] -= 1;
+            if waiting[w] == 0 {
+                taking.push((month + time[w], w));
+            }
+        }
+    }
+    month
+}
+
+// ---- courses_rounds.kara: relaxation in rounds until nothing changes
+fn rounds_minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let mut done: Vec[i64] = time.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (a, b) in relations.iter() {
+            let at = done[a - 1] + time[b - 1];
+            if at > done[b - 1] {
+                done[b - 1] = at;
+                changed = true;
+            }
+        }
+    }
+    done.iter().max().unwrap()
+}
+
+// ---- courses_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn minimum_time(n: i32, relations: Vec[Vec[i32]], time: Vec[i32]) -> i32 {
+        let n = n as i64;
+        let mut graph = Vec.filled(n, Vec.new());
+        let mut indegree = Vec.filled(n, 0);
+        for r in relations.iter() {
+            let (u, v) = (r[0] as i64 - 1, r[1] as i64 - 1);
+            graph[u].push(v);
+            indegree[v] += 1;
+        }
+        let mut dist = Vec.filled(n, 0i32);
+        let mut queue = VecDeque.new();
+        for i in 0..n {
+            if indegree[i] == 0 {
+                queue.push_back(i);
+                dist[i] = time[i];
+            }
+        }
+        while let Some(u) = queue.pop_front() {
+            for v in ref graph[u] {
+                dist[v] = dist[v].max(dist[u] + time[v]);
+                indegree[v] -= 1;
+                if indegree[v] == 0 {
+                    queue.push_back(v);
+                }
+            }
+        }
+        *dist.iter().max().unwrap()
+    }
+}
+
+fn solution_minimum_time(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    let relations: Vec[Vec[i32]] = relations.iter().map(|(a, b)| [a as i32, b as i32].to_vec()).collect();
+    Solution.minimum_time(n as i32, relations, time.iter().map(|t| t as i32).collect()) as i64
+}
+
+// ---- the statement read literally
+
+fn literal(n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    // -1 not started, else the month it started
+    let mut started: Vec[i64] = Vec.filled(n, -1);
+    let mut month = 0;
+    loop {
+        let finished = |v: i64| started[v] >= 0 and started[v] + time[v] <= month;
+        if (0..n).all(|v| finished(v)) {
+            return month;
+        }
+        let ready: Vec[i64] = (0..n)
+            .filter(|v| started[v] < 0 and relations.iter().all(|(a, b)| b - 1 != v or finished(a - 1)))
+            .collect();
+        for v in ready.iter() {
+            started[v] = month;
+        }
+        month += 1;
+    }
+}
+
+fn answer(arm: i64, n: i64, relations: Vec[(i64, i64)], time: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_minimum_time(n, relations, time),
+        1 => memo_minimum_time(n, relations, time),
+        2 => stack_minimum_time(n, relations, time),
+        3 => heap_minimum_time(n, relations, time),
+        4 => rounds_minimum_time(n, relations, time),
+        _ => solution_minimum_time(n, relations, time),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `m` distinct relations among `n` courses, as the harness draws them
+fn draw(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut order: Vec[i64] = (1..n + 1).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    let m = m.min(n * (n - 1) / 2);
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut relations: Vec[(i64, i64)] = Vec.new();
+    while relations.len() < m {
+        let a = next_random(mut seed) % (n - 1);
+        let b = a + 1 + next_random(mut seed) % (n - 1 - a);
+        if seen.insert((a, b)) {
+            relations.push((order[a], order[b]));
+        }
+    }
+    relations
+}
+
+struct Problem {
+    n: i64,
+    relations: Vec[(i64, i64)],
+    time: Vec[i64],
+    // course `v + 1` renamed `names[v] + 1`
+    names: Vec[i64],
+}
+
+fn main() {
+    let arm_names = ["star", "memo", "stack", "heap", "rounds", "solution"];
+    let mut seed = 2050;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..500 {
+        let n = next_random(mut seed) % 29 + 2;
+        let m = next_random(mut seed) % 61;
+        let relations = draw(n, m, mut seed);
+        let time: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 20 + 1).collect();
+        let mut names: Vec[i64] = (0..n).collect();
+        for i in (1..n).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            names.swap(i, j);
+        }
+        problems.push(Problem { n, relations, time, names });
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in problems.iter() {
+        let n = p.n;
+        let truth = literal(n, p.relations, p.time);
+        check = (check * 31 + truth) % 1000000007;
+        let renamed: Vec[(i64, i64)] = p.relations.iter().map(|(a, b)| (p.names[a - 1] + 1, p.names[b - 1] + 1)).collect();
+        let mut retimed: Vec[i64] = Vec.filled(n, 0);
+        for v in 0..n {
+            retimed[p.names[v]] = p.time[v];
+        }
+        let reversed: Vec[(i64, i64)] = p.relations.iter().rev().collect();
+        let mut last = p.relations.clone();
+        for v in 1..n + 1 {
+            last.push((v, n + 1));
+        }
+        let mut longer = p.time.clone();
+        longer.push(7);
+        let longest = p.time.iter().max().unwrap();
+        let all: i64 = p.time.iter().sum();
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, n, p.relations, p.time)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let verdicts = [
+                x == truth,
+                x >= longest and x <= all,
+                answer(arm, n, renamed, retimed) == x,
+                answer(arm, n, reversed, p.time) == x,
+                answer(arm, n + 1, last, longer) == x + 7,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"n {n} {p.relations} time {p.time} arm {arm_names[arm]}: P{k + 1} fails, answer {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"500 graphs: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}

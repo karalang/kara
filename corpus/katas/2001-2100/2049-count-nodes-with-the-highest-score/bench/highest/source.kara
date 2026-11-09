@@ -1,0 +1,78 @@
+// LeetCode #2049: Count Nodes With the Highest Score -- the ★ arm as a
+// benchmark. 50 binary trees of 100000 nodes, the most the constraints
+// allow, each node hung under one of the `reach` before it (from 1, a
+// path, to 49001, any shape), each tree answered by the explicit-stack
+// preorder walked backwards: five million nodes scored.
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(n: i64, reach: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut parents: Vec[i64] = Vec.filled(n, -1);
+    let mut kids: Vec[i64] = Vec.filled(n, 0);
+    for i in 1..n {
+        let mut at = i - (next_random(mut seed) % reach.min(i) + 1);
+        while kids[at] == 2 {
+            at += 1;
+        }
+        parents[i] = at;
+        kids[at] += 1;
+    }
+    parents
+}
+
+fn count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    let n = parents.len();
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    let mut root = 0;
+    for v in 0..n {
+        if parents[v] == -1 {
+            root = v;
+        } else {
+            children[parents[v]].push(v);
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    let mut stack = [root].to_vec();
+    while let Some(v) = stack.pop() {
+        order.push(v);
+        for c in children[v].iter() {
+            stack.push(c);
+        }
+    }
+    let mut size: Vec[i64] = Vec.filled(n, 1);
+    for v in order.iter().rev() {
+        if parents[v] != -1 {
+            size[parents[v]] += size[v];
+        }
+    }
+    let mut best = 0;
+    let mut count = 0;
+    for v in 0..n {
+        let mut score = (n - size[v]).max(1);
+        for c in children[v].iter() {
+            score *= size[c];
+        }
+        if score > best {
+            best = score;
+            count = 1;
+        } else if score == best {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn main() {
+    let mut seed = 2049;
+    let mut sum = 0;
+    let mut check = 0;
+    for t in 0..50 {
+        let count = count_highest_score_nodes(draw(100000, 1 + t * 1000, mut seed));
+        sum += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"50 trees: sum {sum}, checksum {check}");
+}

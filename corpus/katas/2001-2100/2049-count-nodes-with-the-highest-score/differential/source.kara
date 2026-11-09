@@ -1,0 +1,461 @@
+// LeetCode #2049: Count Nodes With the Highest Score -- the differential.
+// The six arms, against the statement read literally: each node taken out
+// in turn, the rest of the tree split into its pieces by a search over the
+// edges both ways, and the pieces' sizes multiplied. 500 binary trees of 2
+// to 30 nodes, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is at least 1 and at most the number of nodes
+// P3  the tree with its nodes other than the root relabelled at random
+//     has the same answer
+// P4  two copies of the tree hung under a new root: the copies' best
+//     nodes pair up, so the answer is odd exactly when the new root's score
+//     is the highest
+// P5  the two copies under a new root have the answer the statement read
+//     literally gives
+// P6  each arm agrees with at least three of the other five
+
+// ---- highest.kara: the ★ arm, a stack preorder walked backwards
+fn star_count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    let n = parents.len();
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    let mut root = 0;
+    for v in 0..n {
+        if parents[v] == -1 {
+            root = v;
+        } else {
+            children[parents[v]].push(v);
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    let mut stack = [root].to_vec();
+    while let Some(v) = stack.pop() {
+        order.push(v);
+        for c in children[v].iter() {
+            stack.push(c);
+        }
+    }
+    let mut size: Vec[i64] = Vec.filled(n, 1);
+    for v in order.iter().rev() {
+        if parents[v] != -1 {
+            size[parents[v]] += size[v];
+        }
+    }
+    let mut best = 0;
+    let mut count = 0;
+    for v in 0..n {
+        let mut score = (n - size[v]).max(1);
+        for c in children[v].iter() {
+            score *= size[c];
+        }
+        if score > best {
+            best = score;
+            count = 1;
+        } else if score == best {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- highest_recursive.kara: a recursive depth-first search
+fn rec_visit(v: i64, children: Vec[Vec[i64]], n: i64, best: mut ref i64, count: mut ref i64) -> i64 {
+    let mut size = 1;
+    let mut score = 1;
+    for c in children[v].iter() {
+        let s = rec_visit(c, children, n, mut best, mut count);
+        size += s;
+        score *= s;
+    }
+    if n - size > 0 {
+        score *= n - size;
+    }
+    if score > *best {
+        *best = score;
+        *count = 1;
+    } else if score == *best {
+        *count += 1;
+    }
+    size
+}
+
+fn rec_count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    let n = parents.len();
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    let mut root = 0;
+    for v in 0..n {
+        if parents[v] < 0 {
+            root = v;
+        } else {
+            children[parents[v]].push(v);
+        }
+    }
+    let mut best = 0;
+    let mut count = 0;
+    rec_visit(root, children, n, mut best, mut count);
+    count
+}
+
+// ---- highest_leaves.kara: sizes from the leaves up, Kahn's order
+fn leaves_count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    let n = parents.len();
+    let mut waiting: Vec[i64] = Vec.filled(n, 0);
+    for v in 0..n {
+        if parents[v] >= 0 {
+            waiting[parents[v]] += 1;
+        }
+    }
+    let mut size: Vec[i64] = Vec.filled(n, 1);
+    let mut score: Vec[i64] = Vec.filled(n, 1);
+    let mut queue: VecDeque[i64] = (0..n).filter(|v| waiting[v] == 0).collect();
+    while let Some(v) = queue.pop_front() {
+        let p = parents[v];
+        if p >= 0 {
+            size[p] += size[v];
+            score[p] *= size[v];
+            waiting[p] -= 1;
+            if waiting[p] == 0 {
+                queue.push_back(p);
+            }
+        }
+    }
+    for v in 0..n {
+        if n > size[v] {
+            score[v] *= n - size[v];
+        }
+    }
+    let best = score.iter().max().unwrap();
+    score.iter().filter(|s| s == best).count()
+}
+
+// ---- highest_bfs.kara: breadth-first order, each node's parts multiplied
+fn bfs_count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    let n = parents.len();
+    let mut children: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for v in 0..n {
+        if parents[v] != -1 {
+            children[parents[v]].push(v);
+        }
+    }
+    let root = parents.iter().position(|p| p == -1).unwrap();
+    let mut order: Vec[i64] = Vec.with_capacity(n);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(v) = queue.pop_front() {
+        order.push(v);
+        queue.extend(children[v].iter());
+    }
+    let mut size: Vec[i64] = Vec.filled(n, 1);
+    for v in order.iter().rev() {
+        if v != root {
+            size[parents[v]] += size[v];
+        }
+    }
+    let mut best = 0;
+    let mut count = 0;
+    for v in 0..n {
+        let mut parts: Vec[i64] = children[v].iter().map(|c| size[c]).collect();
+        if v != root {
+            parts.push(n - size[v]);
+        }
+        let score = parts.iter().product();
+        if score > best {
+            best = score;
+            count = 0;
+        }
+        if score == best {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- highest_tree.kara: a binary `Tree` struct, postorder sizes
+struct Tree {
+    left: Vec[i64],
+    right: Vec[i64],
+    root: i64,
+}
+
+impl Tree {
+    fn from_parents(parents: Vec[i64]) -> Tree {
+        let n = parents.len();
+        let mut tree = Tree { left: Vec.filled(n, -1), right: Vec.filled(n, -1), root: 0 };
+        for v in 0..n {
+            let p = parents[v];
+            if p == -1 {
+                tree.root = v;
+            } else if tree.left[p] == -1 {
+                tree.left[p] = v;
+            } else {
+                tree.right[p] = v;
+            }
+        }
+        tree
+    }
+
+    fn size_of(self, sizes: Vec[i64], v: i64) -> i64 {
+        if v == -1 { 0 } else { sizes[v] }
+    }
+
+    fn sizes(self) -> Vec[i64] {
+        let n = self.left.len();
+        let mut sizes: Vec[i64] = Vec.filled(n, 0);
+        let mut stack: Vec[(i64, bool)] = [(self.root, false)];
+        while let Some((v, pushed)) = stack.pop() {
+            if pushed {
+                sizes[v] = 1 + self.size_of(sizes, self.left[v]) + self.size_of(sizes, self.right[v]);
+            } else {
+                stack.push((v, true));
+                if self.left[v] != -1 {
+                    stack.push((self.left[v], false));
+                }
+                if self.right[v] != -1 {
+                    stack.push((self.right[v], false));
+                }
+            }
+        }
+        sizes
+    }
+
+    fn score(self, sizes: Vec[i64], v: i64) -> i64 {
+        let n = self.left.len();
+        let mut score = 1;
+        for part in [self.size_of(sizes, self.left[v]), self.size_of(sizes, self.right[v]), n - sizes[v]] {
+            if part > 0 {
+                score *= part;
+            }
+        }
+        score
+    }
+}
+
+fn tree_count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    let tree = Tree.from_parents(parents);
+    let sizes = tree.sizes();
+    let scores: Vec[i64] = (0..parents.len()).map(|v| tree.score(sizes, v)).collect();
+    let best = scores.iter().max().unwrap();
+    scores.iter().filter(|s| s == best).count()
+}
+
+// ---- highest_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn count_highest_score_nodes(parents: Vec[i32]) -> i32 {
+        let n = parents.len();
+        let mut children = Vec.filled(n, Vec.new());
+        for i in 1..n {
+            children[parents[i] as i64].push(i);
+        }
+        let mut best = 0;
+        let mut count: i32 = 0;
+        Solution.dfs(0, children, n, mut best, mut count);
+        count
+    }
+
+    fn dfs(node: i64, children: Vec[Vec[i64]], n: i64, best: mut ref i64, count: mut ref i32) -> i64 {
+        let mut size = 1;
+        let mut score = 1;
+        for child in ref children[node] {
+            let s = Solution.dfs(child, children, n, mut best, mut count);
+            size += s;
+            score *= s;
+        }
+        if n - size > 0 {
+            score *= n - size;
+        }
+        if score > *best {
+            *best = score;
+            *count = 1;
+        } else if score == *best {
+            *count += 1;
+        }
+        size
+    }
+}
+
+fn solution_count_highest_score_nodes(parents: Vec[i64]) -> i64 {
+    Solution.count_highest_score_nodes(parents.iter().map(|p| p as i32).collect()) as i64
+}
+
+// ---- the statement read literally
+
+fn literal_scores(parents: Vec[i64]) -> Vec[i64] {
+    let n = parents.len();
+    let mut next: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for v in 0..n {
+        if parents[v] != -1 {
+            next[v].push(parents[v]);
+            next[parents[v]].push(v);
+        }
+    }
+    let mut scores: Vec[i64] = Vec.new();
+    for gone in 0..n {
+        let mut seen: Vec[bool] = Vec.filled(n, false);
+        seen[gone] = true;
+        let mut score = 1;
+        for start in 0..n {
+            if not seen[start] {
+                seen[start] = true;
+                let mut piece = [start];
+                let mut at = 0;
+                while at < piece.len() {
+                    let v = piece[at];
+                    at += 1;
+                    for w in next[v].iter() {
+                        if not seen[w] {
+                            seen[w] = true;
+                            piece.push(w);
+                        }
+                    }
+                }
+                score *= piece.len();
+            }
+        }
+        scores.push(score);
+    }
+    scores
+}
+
+fn literal(parents: Vec[i64]) -> i64 {
+    let scores = literal_scores(parents);
+    let best = scores.iter().max().unwrap();
+    scores.iter().filter(|s| s == best).count()
+}
+
+fn answer(arm: i64, parents: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_count_highest_score_nodes(parents),
+        1 => rec_count_highest_score_nodes(parents),
+        2 => leaves_count_highest_score_nodes(parents),
+        3 => bfs_count_highest_score_nodes(parents),
+        4 => tree_count_highest_score_nodes(parents),
+        _ => solution_count_highest_score_nodes(parents),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a binary tree of `n` nodes rooted at 0, as the harness draws one
+fn draw(n: i64, reach: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut order: Vec[i64] = (0..n).collect();
+    for i in (2..n).rev() {
+        let j = next_random(mut seed) % i + 1;
+        order.swap(i, j);
+    }
+    let mut parents: Vec[i64] = Vec.filled(n, -1);
+    let mut kids: Vec[i64] = Vec.filled(n, 0);
+    for i in 1..n {
+        let mut at = i - (next_random(mut seed) % reach.min(i) + 1);
+        while kids[order[at]] == 2 {
+            at += 1;
+        }
+        parents[order[i]] = order[at];
+        kids[order[at]] += 1;
+    }
+    parents
+}
+
+// the same tree with node `v` named `names[v]`
+fn relabel(parents: Vec[i64], names: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.filled(parents.len(), -1);
+    for v in 0..parents.len() {
+        if parents[v] != -1 {
+            out[names[v]] = names[parents[v]];
+        }
+    }
+    out
+}
+
+// two copies of the tree, nodes 1 to m and m + 1 to 2m, under a new root 0
+fn doubled(parents: Vec[i64]) -> Vec[i64] {
+    let m = parents.len();
+    let mut out = [-1];
+    for copy in 0..2 {
+        for v in 0..m {
+            out.push(if parents[v] == -1 { 0 } else { parents[v] + 1 + copy * m });
+        }
+    }
+    out
+}
+
+struct Problem {
+    parents: Vec[i64],
+    relabelled: Vec[i64],
+    doubled: Vec[i64],
+}
+
+fn main() {
+    let names = ["star", "rec", "leaves", "bfs", "tree", "solution"];
+    let mut seed = 2049;
+    let mut problems: Vec[Problem] = Vec.new();
+    for _ in 0..500 {
+        let n = next_random(mut seed) % 29 + 2;
+        let reach = next_random(mut seed) % n + 1;
+        let parents = draw(n, reach, mut seed);
+        let mut labels: Vec[i64] = (0..n).collect();
+        for i in (2..n).rev() {
+            let j = next_random(mut seed) % i + 1;
+            labels.swap(i, j);
+        }
+        let relabelled = relabel(parents, labels);
+        let doubled = doubled(parents);
+        problems.push(Problem { parents, relabelled, doubled });
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for p in problems.iter() {
+        let n = p.parents.len();
+        let truth = literal(p.parents);
+        let twice = literal(p.doubled);
+        let twice_scores = literal_scores(p.doubled);
+        let root_best = twice_scores[0] == twice_scores.iter().max().unwrap();
+        check = (check * 31 + truth * 100 + twice) % 1000000007;
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, p.parents)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let on_doubled = answer(arm, p.doubled);
+            let verdicts = [
+                x == truth,
+                x >= 1 and x <= n,
+                answer(arm, p.relabelled) == x,
+                (on_doubled % 2 == 1) == root_best,
+                on_doubled == twice,
+                same >= 3,
+            ];
+            for k in 0..6 {
+                checks += 1;
+                if not verdicts[k] {
+                    by_property[k] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"{p.parents} arm {names[arm]}: P{k + 1} fails, answer {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"500 trees: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for k in 0..6 {
+            if by_property[k] > 0 {
+                println(f"P{k + 1} {by_property[k]}");
+            }
+        }
+    }
+}
