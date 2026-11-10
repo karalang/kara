@@ -1,0 +1,61 @@
+// Benchmark: LeetCode #1090 Largest Values From Labels -- the ★ arm, greedy:
+// the items sorted by value from the largest, taken in that order while
+// their label has uses left (a `Map` of uses per label). 100 random problems
+// of 2 * 10^4 items, LeetCode's largest, values 0 to 20000 and labels 0 to
+// 999, are built once; each of 20 rounds answers every problem with its own
+// `num_wanted` and `use_limit`, folding the answers into a checksum.
+// Mirrors largest_values_from_labels.rs, .c, .py and go-seq/.
+
+fn largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let mut items: Vec[(i64, i64)] = [];
+    for i in 0..values.len() {
+        items.push((values[i], labels[i]));
+    }
+    items.sort_by(|a, b| b.0.cmp(a.0));
+    let mut used: Map[i64, i64] = Map.new();
+    let mut taken = 0;
+    let mut sum = 0;
+    for (value, label) in items.iter() {
+        if taken == num_wanted {
+            break;
+        }
+        let uses = used.get(label).cloned().unwrap_or(0);
+        if uses < use_limit {
+            used.insert(label, uses + 1);
+            sum += value;
+            taken += 1;
+        }
+    }
+    sum
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1090;
+    let mut problems: Vec[(Vec[i64], Vec[i64])] = [];
+    for _ in 0..100 {
+        let mut values: Vec[i64] = [];
+        let mut labels: Vec[i64] = [];
+        for _ in 0..20000 {
+            values.push(next_random(mut seed) % 20001);
+            labels.push(next_random(mut seed) % 1000);
+        }
+        problems.push((values, labels));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..20 {
+        for (k, p) in problems.iter().enumerate() {
+            let num_wanted = (round * 7919 + k * 31) % 20000 + 1;
+            let use_limit = (round * 13 + k) % 20 + 1;
+            let answer = largest_vals_from_labels(p.0, p.1, num_wanted, use_limit);
+            total += answer;
+            check = (check * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"20 rounds over 100 problems of 2 * 10^4 items: answers sum to {total}, checksum {check}");
+}

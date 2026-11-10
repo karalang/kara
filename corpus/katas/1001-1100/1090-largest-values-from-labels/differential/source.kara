@@ -1,0 +1,368 @@
+// LeetCode #1090: Largest Values From Labels -- a differential over the six
+// arms. Each is checked against the best choice found without the greedy
+// (every subset of a small problem, a knapsack over labels for a larger one)
+// and against five properties that do not compute the answer; see the
+// README.
+
+// ---- largest_values_from_labels.kara ----
+
+fn a0_largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let mut items: Vec[(i64, i64)] = [];
+    for i in 0..values.len() {
+        items.push((values[i], labels[i]));
+    }
+    items.sort_by(|a, b| b.0.cmp(a.0));
+    let mut used: Map[i64, i64] = Map.new();
+    let mut taken = 0;
+    let mut sum = 0;
+    for (value, label) in items.iter() {
+        if taken == num_wanted {
+            break;
+        }
+        let uses = used.get(label).cloned().unwrap_or(0);
+        if uses < use_limit {
+            used.insert(label, uses + 1);
+            sum += value;
+            taken += 1;
+        }
+    }
+    sum
+}
+
+// ---- largest_values_from_labels_heap.kara ----
+
+fn a1_largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let mut heap: PriorityQueue[(i64, i64)] = PriorityQueue.max_first();
+    for i in 0..values.len() {
+        heap.push((values[i], labels[i]));
+    }
+    let mut used: Map[i64, i64] = Map.new();
+    let mut taken = 0;
+    let mut sum = 0;
+    while taken < num_wanted {
+        match heap.pop() {
+            Some((value, label)) => {
+                let uses = used.get(label) ?? 0;
+                if uses < use_limit {
+                    used.insert(label, uses + 1);
+                    sum += value;
+                    taken += 1;
+                }
+            }
+            None => break,
+        }
+    }
+    sum
+}
+
+// ---- largest_values_from_labels_groups.kara ----
+
+fn a2_largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let mut groups: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..values.len() {
+        groups.entry(labels[i]).or_insert(Vec.new()).push(values[i]);
+    }
+    let mut pool: Vec[i64] = [];
+    for (_, group) in groups.iter_mut() {
+        group.sort();
+        group.reverse();
+        group.truncate(use_limit);
+        pool.extend(group.iter());
+    }
+    pool.sort();
+    pool.reverse();
+    pool.iter().take(num_wanted).sum()
+}
+
+// ---- largest_values_from_labels_buckets.kara ----
+
+fn a3_largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let top = values.iter().max().unwrap();
+    let mut buckets: Vec[Vec[i64]] = Vec.filled(top + 1, []);
+    for i in 0..values.len() {
+        buckets[values[i]].push(labels[i]);
+    }
+    let mut used = Vec.filled(labels.iter().max().unwrap() + 1, 0);
+    let mut taken = 0;
+    let mut sum = 0;
+    let mut value = top;
+    while value >= 0 and taken < num_wanted {
+        for label in buckets[value].iter() {
+            if taken == num_wanted {
+                break;
+            }
+            if used[label] < use_limit {
+                used[label] += 1;
+                sum += value;
+                taken += 1;
+            }
+        }
+        value -= 1;
+    }
+    sum
+}
+
+// ---- largest_values_from_labels_chain.kara ----
+
+fn a4_largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let mut order: Vec[i64] = (0..values.len()).collect();
+    order.sort_by_key(|i| -values[i]);
+    let mut used: Map[i64, i64] = Map.new();
+    order
+        .iter()
+        .filter(|i| {
+            let uses = used.entry(labels[i]).or_insert(0);
+            *uses += 1;
+            *uses <= use_limit
+        })
+        .take(num_wanted)
+        .map(|i| values[i])
+        .sum()
+}
+
+// ---- largest_values_from_labels_solution.kara ----
+
+struct Solution {}
+
+impl Solution {
+    pub fn a5_largest_vals_from_labels(values: Vec[i32], labels: Vec[i32], num_wanted: i32, use_limit: i32) -> i32 {
+        let mut items: Vec[(i32, i32)] = values.clone().into_iter().zip(labels.clone().into_iter()).collect();
+        items.sort_by(|a, b| b.0.cmp(a.0));
+        let mut used: Map[i32, i32] = Map.new();
+        let mut taken = 0;
+        let mut sum: i32 = 0;
+        for (v, l) in items {
+            if taken == num_wanted {
+                break;
+            }
+            let c = used.entry(l).or_insert(0);
+            if *c < use_limit {
+                *c += 1;
+                sum += v;
+                taken += 1;
+            }
+        }
+        sum
+    }
+}
+
+fn a5_largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let values: Vec[i32] = values.iter().map(|x| x as i32).collect();
+    let labels: Vec[i32] = labels.iter().map(|x| x as i32).collect();
+    Solution.a5_largest_vals_from_labels(values, labels, num_wanted as i32, use_limit as i32) as i64
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    match which {
+        0 => a0_largest_vals_from_labels(values.clone(), labels.clone(), num_wanted, use_limit),
+        1 => a1_largest_vals_from_labels(values.clone(), labels.clone(), num_wanted, use_limit),
+        2 => a2_largest_vals_from_labels(values.clone(), labels.clone(), num_wanted, use_limit),
+        3 => a3_largest_vals_from_labels(values.clone(), labels.clone(), num_wanted, use_limit),
+        4 => a4_largest_vals_from_labels(values.clone(), labels.clone(), num_wanted, use_limit),
+        _ => a5_largest_vals_from_labels(values.clone(), labels.clone(), num_wanted, use_limit),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The best sum over every subset of at most `num_wanted` items that uses no
+// label more than `use_limit` times, for n up to 12.
+fn best_of_subsets(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let n = values.len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut count = 0;
+        let mut sum = 0;
+        let mut uses = [0; 6];
+        let mut ok = true;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                count += 1;
+                sum += values[i];
+                uses[labels[i]] += 1;
+                if uses[labels[i]] > use_limit {
+                    ok = false;
+                }
+            }
+        }
+        if ok and count <= num_wanted and sum > best {
+            best = sum;
+        }
+    }
+    best
+}
+
+// The best sum by a knapsack over labels: `best[j]` is the most `j` items
+// can sum to from the labels seen so far, and a label adds its `t` largest
+// values for each `t` up to `use_limit`. No item is ever compared with an
+// item of another label.
+fn best_of_knapsack(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let n = values.len();
+    let mut best = Vec.filled(n + 1, -1);
+    best[0] = 0;
+    for label in 0..6 {
+        let mut mine: Vec[i64] = [];
+        for i in 0..n {
+            if labels[i] == label {
+                mine.push(values[i]);
+            }
+        }
+        mine.sort();
+        mine.reverse();
+        let mut next = best.clone();
+        let mut prefix = 0;
+        for t in 1..(mine.len().min(use_limit) + 1) {
+            prefix += mine[t - 1];
+            for j in t..(n + 1) {
+                if best[j - t] >= 0 and best[j - t] + prefix > next[j] {
+                    next[j] = best[j - t] + prefix;
+                }
+            }
+        }
+        best = next;
+    }
+    let mut answer = 0;
+    for j in 0..(num_wanted.min(n) + 1) {
+        if best[j] > answer {
+            answer = best[j];
+        }
+    }
+    answer
+}
+
+// How many items any best choice takes: as many as the labels allow, up to
+// `num_wanted`, as no value is negative.
+fn most_taken(labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let mut count = [0; 6];
+    for l in labels.iter() {
+        count[l] += 1;
+    }
+    let mut room = 0;
+    for c in count.iter() {
+        room += c.min(use_limit);
+    }
+    room.min(num_wanted)
+}
+
+fn show(a: Vec[i64]) -> String {
+    let parts: Vec[String] = a.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+struct Problem {
+    values: Vec[i64],
+    labels: Vec[i64],
+    num_wanted: i64,
+    use_limit: i64,
+    // added to every value for P5
+    shift: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, pr: Problem) {
+    let values = pr.values.clone();
+    let labels = pr.labels.clone();
+    let n = values.len();
+    let w = pr.num_wanted;
+    let u = pr.use_limit;
+    let want = if n <= 12 {
+        best_of_subsets(values, labels, w, u)
+    } else {
+        best_of_knapsack(values, labels, w, u)
+    };
+    let top = values.iter().max().unwrap();
+    let k = most_taken(labels, w, u);
+    let mut back_values = values.clone();
+    back_values.reverse();
+    let mut back_labels = labels.clone();
+    back_labels.reverse();
+    let shifted: Vec[i64] = values.iter().map(|v| v + pr.shift).collect();
+    let doubled: Vec[i64] = values.iter().map(|v| v * 2).collect();
+    let renamed: Vec[i64] = labels.iter().map(|l| (5 - l) * 7 + 3).collect();
+    for a in 0..6 {
+        let answer = arm(a, values, labels, w, u);
+        let what = f"arm {a}, {show(values)} {show(labels)} {w} {u} -> {answer}";
+        // P1: the best choice, found without the greedy
+        expect(mut t, 1, answer == want, f"P1 {what}, best {want}");
+        // P2: one more wanted adds no more than the largest value, and loses nothing
+        let more = arm(a, values, labels, w + 1, u);
+        expect(mut t, 2, more >= answer and more <= answer + top, f"P2 {what}, one more wanted -> {more}");
+        // P3: a looser limit loses nothing, and no limit is the top values
+        let looser = arm(a, values, labels, w, u + 1);
+        let free = arm(a, values, labels, w, n);
+        let mut sorted = values.clone();
+        sorted.sort();
+        sorted.reverse();
+        let top_w: i64 = sorted.iter().take(w).sum();
+        expect(mut t, 3, looser >= answer and free == top_w, f"P3 {what}, looser -> {looser}, free -> {free}");
+        // P4: the items in the other order
+        let back = arm(a, back_values, back_labels, w, u);
+        expect(mut t, 4, back == answer, f"P4 {what}, reversed -> {back}");
+        // P5: every value `shift` more adds `shift` for each item taken
+        let up = arm(a, shifted, labels, w, u);
+        expect(mut t, 5, up == answer + pr.shift * k, f"P5 {what}, +{pr.shift} -> {up}, {k} taken");
+        // P6: values doubled and labels renamed doubles the answer
+        let twice = arm(a, doubled, renamed, w, u);
+        expect(mut t, 6, twice == 2 * answer, f"P6 {what}, doubled -> {twice}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1400 of 1 to 12 items and 600 of 1 to 30, values 0 to
+    // 20 and labels 0 to 5, so ties and spent labels are common; `num_wanted`
+    // and `use_limit` 1 to n. Every choice is drawn before any arm answers.
+    let mut seed = 10901;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let top = if i < 1400 {
+            12
+        } else {
+            30
+        };
+        let n = next_random(mut seed) % top + 1;
+        let mut values: Vec[i64] = [];
+        let mut labels: Vec[i64] = [];
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 21);
+            labels.push(next_random(mut seed) % 6);
+        }
+        let num_wanted = next_random(mut seed) % n + 1;
+        let use_limit = next_random(mut seed) % n + 1;
+        let shift = next_random(mut seed) % 5 + 1;
+        problems.push(Problem { values, labels, num_wanted, use_limit, shift });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

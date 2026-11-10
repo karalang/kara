@@ -1,0 +1,89 @@
+// LeetCode #1090: Largest Values From Labels -- the ★ arm, greedy: the
+// items, as (value, label) pairs, sorted by value from the largest, are taken
+// in that order, skipping one whose label has been used `use_limit` times
+// already (a `Map[i64, i64]` of uses per label), until `num_wanted` are
+// taken. Taking a larger value never stops a better choice: any set the
+// greedy passes over swaps one of its items for the larger one. O(n log n).
+
+fn largest_vals_from_labels(values: Vec[i64], labels: Vec[i64], num_wanted: i64, use_limit: i64) -> i64 {
+    let mut items: Vec[(i64, i64)] = [];
+    for i in 0..values.len() {
+        items.push((values[i], labels[i]));
+    }
+    items.sort_by(|a, b| b.0.cmp(a.0));
+    let mut used: Map[i64, i64] = Map.new();
+    let mut taken = 0;
+    let mut sum = 0;
+    for (value, label) in items.iter() {
+        if taken == num_wanted {
+            break;
+        }
+        let uses = used.get(label).cloned().unwrap_or(0);
+        if uses < use_limit {
+            used.insert(label, uses + 1);
+            sum += value;
+            taken += 1;
+        }
+    }
+    sum
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(xs: Vec[i64]) -> String {
+    let parts: Vec[String] = xs.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn main() {
+    let cases = [
+        ([5, 4, 3, 2, 1], [1, 1, 2, 2, 3], 3, 1),
+        ([5, 4, 3, 2, 1], [1, 3, 3, 3, 2], 3, 2),
+        ([9, 8, 8, 7, 6], [0, 0, 0, 1, 1], 3, 1),
+        ([9, 8, 8, 7, 6], [0, 0, 0, 1, 1], 3, 2),
+        ([7], [4], 1, 1),
+        ([0, 0, 0], [1, 2, 3], 2, 1),
+        ([3, 3, 3, 3], [1, 1, 1, 1], 4, 2),
+        ([3, 3, 3, 3], [1, 1, 1, 1], 1, 4),
+        ([1, 2, 3, 4, 5, 6], [6, 5, 4, 3, 2, 1], 6, 1),
+        ([10, 9, 8, 7, 6, 5], [1, 1, 2, 2, 3, 3], 4, 1),
+        ([2, 6, 1, 2, 6], [2, 2, 2, 1, 1], 1, 1),
+        ([4, 4, 4, 9, 2, 8], [0, 1, 0, 2, 1, 2], 5, 1),
+    ];
+    for (values, labels, num_wanted, use_limit) in cases.iter() {
+        let answer = largest_vals_from_labels(values.clone(), labels.clone(), num_wanted, use_limit);
+        println(f"{show(values)} {show(labels)} {num_wanted} {use_limit} -> {answer}");
+    }
+    // 2000 random problems of 1 to 20 items, values 0 to 20, labels 0 to 5
+    let mut seed = 1090;
+    let mut h = 0;
+    let mut total = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 20 + 1;
+        let mut values: Vec[i64] = [];
+        let mut labels: Vec[i64] = [];
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 21);
+            labels.push(next_random(mut seed) % 6);
+        }
+        let num_wanted = next_random(mut seed) % n + 1;
+        let use_limit = next_random(mut seed) % n + 1;
+        let answer = largest_vals_from_labels(values, labels, num_wanted, use_limit);
+        total += answer;
+        h = (h * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random problems: answers sum to {total}, checksum {h}");
+    // one problem of 20000 items, LeetCode's largest
+    let mut values: Vec[i64] = [];
+    let mut labels: Vec[i64] = [];
+    for _ in 0..20000 {
+        values.push(next_random(mut seed) % 20001);
+        labels.push(next_random(mut seed) % 20001);
+    }
+    println(f"20000 items: {largest_vals_from_labels(values.clone(), labels.clone(), 20000, 1)}, {largest_vals_from_labels(values.clone(), labels.clone(), 5000, 3)}, {largest_vals_from_labels(values, labels, 100, 1)}");
+}
