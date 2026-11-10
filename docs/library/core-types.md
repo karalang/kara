@@ -34,6 +34,7 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `get_or_insert` | `fn get_or_insert(mut ref self, value: own T) -> mut ref T` | Fills a `None` with `value`, then returns a reference to the value; `value` drops if `self` was `Some` |
 | `get_or_insert_with` | `fn get_or_insert_with(mut ref self, f: own OnceFn() -> T) -> mut ref T` | Fills a `None` with `f()`, then returns a reference to the value |
 | `as_ref` | `fn as_ref(self) -> Option[ref T]` | A view of the value, without moving it |
+| `as_deref` | `fn as_deref(self) -> Option[Str]` on `Option[String]`, and `-> Option[Slice[T]]` on `Option[Vec[T]]` | A view of an owned string or vector, without moving or allocating: `req.header("X-Token").as_deref() == Some(TOKEN)` with `TOKEN: Str`. An `Option[String]` never compares with an `Option[Str]` directly, because comparison looks through each operand but not inside type arguments ([design.md](../design.md)). `karac fix` inserts `.as_deref()` on the owned side (review-thread ruling 2026-11-10, B-2026-11-09-97) |
 | `cloned` | `fn cloned(own self) -> Option[T]` on `Option[ref T]`, `where T: Clone` | An owned copy of a viewed value: `m.get(k).cloned() ?? d` gives a default for a non-`Copy` value |
 | `flatten` | `fn flatten(own self) -> Option[T]` on `Option[Option[T]]` | |
 
