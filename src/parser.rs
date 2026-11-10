@@ -178,6 +178,28 @@ pub(crate) fn starts_upper(s: &str) -> bool {
     s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Whether segment `at` of a Rust path is a module Kāra's own expressions
+/// name, followed by one of its functions (`std::fs::read_to_string` is
+/// `fs.read_to_string`, `std.env.args` is `env.args`): the fix that deletes
+/// a Rust path's module segments keeps it, since the function alone does
+/// not resolve (B-2026-11-10-16). A type after it (`std::fs::File`) goes on
+/// alone as before.
+pub(crate) fn kara_module_call<S: AsRef<str>>(names: &[S], at: usize) -> bool {
+    const MODULES: &[&str] = &[
+        "fs",
+        "env",
+        "process",
+        "clock",
+        "rand",
+        "ptr",
+        "cpu",
+        "gpu",
+        "critical_section",
+    ];
+    MODULES.contains(&names[at].as_ref())
+        && names.get(at + 1).is_some_and(|n| !starts_upper(n.as_ref()))
+}
+
 /// Whether a `format!` argument's text can stand in an f-string hole as it
 /// is. An `if`, `match` or block expression can: its braces balance, and a
 /// hole takes them (B-2026-11-10-17). A `:` outside a literal (a Rust path, an
@@ -1433,6 +1455,7 @@ impl Parser {
                 && !starts_upper(names[dropped])
                 && !PRIMITIVES.contains(&names[dropped])
                 && names[dropped] != "mem"
+                && !kara_module_call(&names, dropped)
             {
                 dropped += 1;
             }
@@ -2791,6 +2814,7 @@ impl Parser {
             while dropped < names.len() - 1
                 && !starts_upper(&names[dropped])
                 && !PRIMITIVES.contains(&names[dropped].as_str())
+                && !kara_module_call(&names, dropped)
             {
                 dropped += 1;
             }

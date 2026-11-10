@@ -566,6 +566,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A Rust path through a module Kāra's expressions name keeps that module
+  in its fix: `std.fs.read_to_string(p)` and `std::fs::read_to_string(p)`
+  become `fs.read_to_string(p)`, `std::env::args()` `env.args()` and
+  `std::process::exit(0)` `process.exit(0)`, where the fix wrote a bare
+  function that does not resolve (B-2026-11-10-16).
 - `unused_mut` warns a `let mut` of a `mut ref` binding written only
   through it (a field store, a mutating method, `f(mut r)`), which needs no
   `mut`; a rebind, a `shared` value lent whole as `mut`, and a `let mut`
