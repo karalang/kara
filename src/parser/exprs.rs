@@ -1347,10 +1347,28 @@ impl super::Parser {
                 let view = !is_mut
                     && matches!(&operand.kind, ExprKind::Index { index, .. }
                         if matches!(index.kind, ExprKind::Range { .. }));
+                // `Some(&1)`: a scalar literal is a value, and Kāra has no
+                // borrow of one (`ref 1` is refused), so the edit drops the
+                // `&` (kata 2085).
+                let literal = !is_mut
+                    && matches!(
+                        &operand.kind,
+                        ExprKind::Integer(..)
+                            | ExprKind::Float(..)
+                            | ExprKind::CharLit(_)
+                            | ExprKind::ByteLit(_)
+                            | ExprKind::Bool(_)
+                    );
                 let (message, kara) = if is_mut {
                     (
                         "`&mut` is Rust syntax -- a borrow that writes is `mut ref place`",
                         "mut ref ",
+                    )
+                } else if literal {
+                    (
+                        "`&` is Rust syntax -- a literal is a value and takes no borrow: \
+                         Kāra compares and passes it as it is",
+                        "",
                     )
                 } else if view {
                     (
@@ -1370,7 +1388,7 @@ impl super::Parser {
                         replacement: kara.to_string(),
                     },
                 );
-                if view {
+                if view || literal {
                     return Some(operand);
                 }
                 Some(Expr {
