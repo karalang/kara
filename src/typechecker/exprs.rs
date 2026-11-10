@@ -4122,17 +4122,40 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // An `if` or `match` checked against a slot nothing has fixed yet
+        // (the tail of a closure handed to `map`, checked against the
+        // adaptor's own `OutV`, or a variable no use has bound) has nothing
+        // to push into its branches: checking the first branch against it
+        // settles a literal `0` to `i64` before a later `best[q]: i32` is
+        // seen (kata 2070). Synthesized, the branches join first, as in a
+        // `let` (design.md §8 literal variables), and the join fills the
+        // slot.
+        let open_slot = match resolve_type_var_top(expected, &self.env.substitutions) {
+            Type::TypeVar(_) => true,
+            t @ Type::TypeParam(_) => self.mentions_foreign_param(&t),
+            _ => false,
+        };
+        let joins_branches = match &expr.kind {
+            ExprKind::If { else_branch, .. } => else_branch.is_some(),
+            ExprKind::Match { .. } => true,
+            _ => false,
+        };
+        let synth_branches = open_slot && joins_branches;
+
         // If/IfLet at check position: push `expected` into both branches.
         // Each branch's `check_expr` enforces assignability against the
         // expected type independently, so divergent branches surface a
         // per-branch TypeMismatch rather than the synth-mode aggregate
         // BranchTypeMismatch (more specific, points at the offending
         // branch). Condition typing is unchanged.
-        if let ExprKind::If {
-            condition,
-            then_block,
-            else_branch,
-        } = &expr.kind
+        if let (
+            false,
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            },
+        ) = (synth_branches, &expr.kind)
         {
             let ty = self.check_if_against(
                 condition,
@@ -4164,7 +4187,7 @@ impl<'a> super::TypeChecker<'a> {
         // Match at check position: each arm body is checked against
         // `expected` so closures in arm bodies (and other check-mode-
         // sensitive shapes) see the target type.
-        if let ExprKind::Match { scrutinee, arms } = &expr.kind {
+        if let (false, ExprKind::Match { scrutinee, arms }) = (synth_branches, &expr.kind) {
             let ty = self.check_match_against(scrutinee, arms, expected, &expr.span);
             return ty;
         }
