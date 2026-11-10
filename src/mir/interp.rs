@@ -454,6 +454,32 @@ impl Value {
         }
     }
 
+    /// [`Value::fully_init`] for the check at a read or a return, which
+    /// looks at no more than [`READ_CHECK_PARTS`] parts: a move is O(1),
+    /// and checking all of an owned recursive value at each move made
+    /// building a list quadratic (B-2026-11-09-46). The borrow checker
+    /// rules the read out statically; this catches a lowering slip, which
+    /// shows near the top of a value.
+    fn init_for_read(&self) -> bool {
+        if self.is_plain() {
+            return !matches!(self, Value::Uninit);
+        }
+        let mut budget = READ_CHECK_PARTS;
+        self.init_within(&mut budget)
+    }
+
+    fn init_within(&self, budget: &mut usize) -> bool {
+        if *budget == 0 {
+            return true;
+        }
+        *budget -= 1;
+        match self {
+            Value::Uninit => false,
+            Value::Agg(fs) | Value::Variant(_, fs) => fs.iter().all(|f| f.init_within(budget)),
+            _ => true,
+        }
+    }
+
     fn any_init(&self) -> bool {
         match self {
             Value::Uninit => false,
@@ -466,6 +492,14 @@ impl Value {
         }
     }
 }
+
+/// How many parts of a value [`Value::init_for_read`] looks at.
+const READ_CHECK_PARTS: usize = 64;
+
+/// A place this deep is dropped from a slot of its own
+/// ([`Interp::drop_at`]): finding a place walks its path, so dropping a
+/// recursive value in place costs its depth at each level.
+const DROP_IN_PLACE_DEPTH: usize = 16;
 
 /// One line of the ownership trace (`docs/spikes/mir-types.md` §6).
 #[derive(Debug, Clone, PartialEq)]
@@ -12919,7 +12953,8 @@ impl<'a> Interp<'a> {
             }
         }
         // A frame leaving by its cancel exit returns no value (§11.9).
-        if !frame.locals[0].fully_init() && !self.tasks.get(self.cur_task).is_some_and(|t| t.unwind)
+        if !frame.locals[0].init_for_read()
+            && !self.tasks.get(self.cur_task).is_some_and(|t| t.unwind)
         {
             return err("return with _0 not initialized");
         }
@@ -13569,7 +13604,7 @@ impl<'a> Interp<'a> {
                     // A bare local: read the frame slot directly.
                     let ty = body.local(p.local).ty;
                     let slot = &mut self.frames.last_mut().expect("frame").locals[p.local.index()];
-                    if !slot.fully_init() && !unwinding {
+                    if !slot.init_for_read() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
                     let v = if is_move {
@@ -13581,7 +13616,7 @@ impl<'a> Interp<'a> {
                     };
                     (v, ty)
                 } else if let Some((slot, ty)) = self.local_fields_mut(body, p) {
-                    if !slot.fully_init() && !unwinding {
+                    if !slot.init_for_read() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
                     let v = if is_move {
@@ -13595,7 +13630,7 @@ impl<'a> Interp<'a> {
                 } else {
                     let (addr, ty) = self.resolve_read(body, p)?;
                     let slot = self.slot_mut(&addr)?;
-                    if !slot.fully_init() && !unwinding {
+                    if !slot.init_for_read() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
                     let v = if is_move {
@@ -14290,6 +14325,14 @@ impl<'a> Interp<'a> {
         if !v.any_init() {
             return Ok(());
         }
+        // A deep aggregate moves to a slot of its own and drops there, so
+        // each level of a recursive value finds its parts in O(1)
+        // (B-2026-11-09-46).
+        if addr.path.len() >= DROP_IN_PLACE_DEPTH && matches!(v, Value::Agg(_) | Value::Variant(..))
+        {
+            let v = std::mem::replace(self.slot_mut(addr)?, Value::Uninit);
+            return self.drop_value(v, ty);
+        }
         // The arms below read only a handle or a box out of `v`; an
         // aggregate is dropped through `addr`, so it is not copied.
         let v = match v {
@@ -14493,7 +14536,7 @@ impl<'a> Interp<'a> {
             return Ok(());
         }
         if adt.has_drop_impl {
-            if !self.slot(addr)?.fully_init() {
+            if !self.slot_ref(addr)?.fully_init() {
                 return err(format!(
                     "{} has a Drop body but the value is partly moved",
                     adt.name
@@ -14653,7 +14696,7 @@ impl<'a> Interp<'a> {
                     ret: held,
                     kind: crate::mir::ty::FnKind::Fn,
                 });
-                let n = match self.slot(addr)? {
+                let n = match self.slot_ref(addr)? {
                     Value::Agg(fs) => fs.len(),
                     other => return err(format!("LazyLock holds {other:?}")),
                 };
@@ -14674,7 +14717,7 @@ impl<'a> Interp<'a> {
                 .adt_of(ty)
                 .and_then(|(_, args)| args.first().copied())
                 .ok_or_else(|| Stop::Error(format!("{} has no type argument", adt.name)))?;
-            let n = match self.slot(addr)? {
+            let n = match self.slot_ref(addr)? {
                 Value::Agg(fs) => fs.len(),
                 other => return err(format!("{} holds {other:?}", adt.name)),
             };
@@ -14683,8 +14726,11 @@ impl<'a> Interp<'a> {
             }
             return Ok(());
         }
-        let (variant, n) = match self.slot(addr)? {
-            Value::Variant(k, fs) => (Some(k), fs.len()),
+        // Read in place: a copy of the value would cost its whole depth
+        // at each level of a recursive one, a list's drop quadratic
+        // (B-2026-11-09-46).
+        let (variant, n) = match self.slot_ref(addr)? {
+            Value::Variant(k, fs) => (Some(*k), fs.len()),
             Value::Agg(fs) => (None, fs.len()),
             Value::Uninit => return Ok(()),
             other => return err(format!("ADT place holds {other:?}")),
