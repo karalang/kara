@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 217 |
-| false-positive | 173 |
+| diagnostics | 219 |
+| false-positive | 174 |
 | perf | 145 |
 | missing-feature | 126 |
 | soundness | 56 |
@@ -75,11 +75,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 349 |
+| typecheck | 350 |
 | mir-llvm | 185 |
 | mir | 162 |
 | cli | 94 |
-| ownership | 67 |
+| ownership | 70 |
 | parser | 58 |
 | interp | 44 |
 | runtime | 32 |
@@ -120,17 +120,16 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-47 | 2026-11-09 | mir-llvm | low | `s.chars().collect()` into a Vec[char] runs 14 instructions a char against Rust's 11: the UTF-8 decode loop tests the reserved length on each push, and the loop copy B-2026-11-09-26 gives counted fills does not apply because the char count is not known at the way in | — |
 | B-2026-11-09-50 | 2026-11-09 | typecheck+mir | low | `let v: Vec[Str] = ["a", "b"].to_vec();` is refused as a reference to a temporary that outlives its statement (typecheck §5.5, and E0516 in MIR borrowck once that passes), though the `Vec` holds static literals and borrows nothing from the array | — |
 | B-2026-11-09-51 | 2026-11-09 | mir-llvm | low | Kata 1087's bench (20 million short words cloned into vectors and freed) runs 26% behind `rustc -O -C overflow-checks=on -C target-cpu=x86-64-v3` with the same allocations: 13.65G instructions against 10.45G, the extra in glibc's malloc slow path (14.8M `_int_malloc` calls against 2.7M) and in `malloc_consolidate` (0.72G, none in Rust) | — |
-| B-2026-11-09-55 | 2026-11-09 | ownership | low | No lint reports a `let mut` binding that is never written: Rust's habit of `let mut` on a binding that is only read draws nothing (the Rust-ism audit's injection was silent in 20 of 20 programs), so Kāra written from Rust habits keeps every one; Rust warns `unused_mut` | — |
 | B-2026-11-09-56 | 2026-11-09 | mir | medium | `let v = it.collect();` whose `Vec` target a later use decides passes the type checker and is refused by MIR: `fn count(v: Vec[char]) -> i64` and `let cs = text.chars().collect(); count(cs)` draws "the method call `.collect` with no resolved callee is not lowered yet". 6 of 16 audit programs reached it once `karac fix` removed a `.collect::<Vec<_>>()` turbofish | — |
 | B-2026-11-09-57 | 2026-11-09 | typecheck | low | Strings have no `match_indices` (nor `char_indices`): kata 2052's text arm wrote Rust's `sentence.match_indices(" ").map(|(at, _)| at + 1)` to find each word's start and was refused "no method 'match_indices' on type 'String'" with no hint at what to write instead | — |
 | B-2026-11-09-72 | 2026-11-09 | typecheck | low | There is no `drop(x)`: ending an owned value early (closing a `BufWriter[File]` before reopening its file) is "undefined name 'drop'" with no hint, and the only spellings are a block around the value's scope or a helper taking `own T` | — |
 | B-2026-11-09-73 | 2026-11-09 | interp+mir-llvm+runtime | low | `set_read_timeout` on a socket a `Network` fake opened returns `Err(Unsupported)`, so a TCP client that sets a timeout, as io.md tells a client to, cannot be tested against a fake without ignoring the error | — |
-| B-2026-11-09-79 | 2026-11-09 | typecheck | low | A write through a read-only `Slice` binding is refused without a code since 34d42091dd: `error[typecheck]` where the corpus expects E0200 | — |
-| B-2026-11-09-80 | 2026-11-09 | ownership | low | An escaping closure capturing a borrow is refused without a code: `error[ownership]: an escaping closure captures `r` by move` where the corpus expects E0516 | — |
 | B-2026-11-09-82 | 2026-11-09 | mir-llvm | high | Under `KARAC_AUTO_PAR=0` a write through a `mut Slice` view of a `Vec` is lost: `poke(mut w[2..4])` with `xs[0] = 99` leaves `w` as `1 2 3 4` in a program that has any `for` loop; `as_slice_mut()` in a tuple field and `iter_mut()` over a range view lose theirs too | — |
 | B-2026-11-09-96 | 2026-11-09 | typecheck | low | A tuple of borrowed elements moved where owned ones are wanted (`for (k, v) in headers { out.push((k, v)); }` with a bare, so borrowing, `headers: Vec[(String, String)]` parameter) gets "expected '(String, String)', found '(ref String, ref String)'" with no fix, where the one-element form gets `.clone()` | — |
 | B-2026-11-09-97 | 2026-11-09 | typecheck | low | `req.header("X-Purge-Token") != Some(PURGE_TOKEN)` (an `Option[String]` against an `Option[Str]` of a constant) is refused with "cannot compare 'Option[String]' and 'Option[Str]'" and no remedy; `String == Str` compares, and the library has no `as_deref` | — |
 | B-2026-11-09-98 | 2026-11-09 | mir | medium | A `Str` view of a parameter passed through a closure combinator is refused as returning a borrow of a temporary: `fn unquote(s: Str) -> Str { s.strip_prefix("\"").and_then(|t| t.strip_suffix("\"")).unwrap_or(s) }` is E0509 "the result borrows a temporary value, which this function owns", as are `.map(|t| t.trim())` and `split_once(..).map(|p| p.0)`; the same chain without a closure, or a `match`, passes | — |
+| B-2026-11-09-100 | 2026-11-09 | typecheck+ownership | medium | A method's `mut ref` argument needs no `mut` marker, so an immutable binding is written through it unreported: `let s = String.new(); r.fill(s);` with `fn fill(ref self, buf: mut ref String)` checks clean and fills `s` | — |
+| B-2026-11-09-101 | 2026-11-09 | ownership | medium | The `let mut` rule misses receiver writes its hand-written method table lacks: `let w: VecDeque[i64] = VecDeque.new(); w.push_back(1);` checks clean | — |
 
 ### Relocated
 
@@ -979,6 +978,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-52 | cli | low | `karac fmt` writes the 30 soft words as raw identifiers: `let group = 1` comes out as `let r#group = 1`, and so does every binding, field, parameter… | 7732ad152a |
 | B-2026-11-09-53 | parser+typecheck | medium | Six Rust-isms were diagnosed with no fix `karac fix` applies: `pub(crate)` (and `pub(super)`, `pub(self)`), an unreachable `_ =>` arm, `?` in a unit… | 01d64b96db |
 | B-2026-11-09-54 | typecheck+mir | medium | Eleven library error types did not implement `Display` and `Error` though design.md §10 says the library's error types do (Utf8Error, NulError, NetEr… | 01d64b96db |
+| B-2026-11-09-55 | ownership | low | No lint reports a `let mut` binding that is never written: Rust's habit of `let mut` on a binding that is only read draws nothing (the Rust-ism audit… | df878ae40f |
 | B-2026-11-09-67 | typecheck | medium | `karac fix`'s `fn main() -> Result[(), AnyError]` for a `?` in `main` left each bare `return;` of `main` as it was, so the fixed program failed to ch… | f42a83543c |
 | B-2026-11-09-68 | parser | medium | A format spec in Python's spelling, `{x:.1f}` or `{name:>8s}`, is refused as "unsupported type `f` (expected one of x, X, o, b, d)" with no fix, thou… | f42a83543c |
 | B-2026-11-09-69 | interp | medium | An HTTP request past its `timeout` fails in `karac run` with ureq's "Network Error: Network Error: Error encountered in the status line: timed out re… | f42a83543c |
@@ -995,6 +995,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-93 | typecheck | high | A program's own `struct Entry` loses its own methods: `impl Entry { fn age(self, ..) }` then `e.age(now)` is "no method 'age' on type 'Entry'", becau… | e922bfc642 |
 | B-2026-11-09-94 | typecheck | low | `opt ?? "" == value` (`??` binds loosest, so it is `opt ?? ("" == value)`) gives three type mismatches (`expected 'String', found 'bool'`, the closur… | e922bfc642 |
 | B-2026-11-09-95 | typecheck | low | A `ref Str` (an element of `pairs.iter()` over a `Slice[(Str, Str)]`) handed to a `String` parameter gets "expected 'String', found 'ref Str'" with n… | e922bfc642 |
+| B-2026-11-09-99 | ownership | medium | A `let` inside a block outlived it for the `let mut` rule: `let mut q = 7; if c { let q = 3; } q = 8;` was refused as a write to the inner, immutable… | df878ae40f |
 
 </details>
 
