@@ -1368,7 +1368,7 @@ impl StringSlice {
     /// Every non-overlapping match of `pat`, left to right, each a view
     /// into the text: `match_indices` without the offsets (kata 2086).
     fn matches(self, pat: Str) -> StrMatches {
-        StrMatches { inner: self.match_indices(pat) }
+        StrMatches { s: self, pat: pat, pos: 0 }
     }
 }
 
@@ -1533,18 +1533,37 @@ impl Iterator for StrMatchIndices {
 }
 
 /// The non-overlapping matches of `pat` in a `Str`, left to right:
-/// `matches`, the matches of `match_indices` without their offsets.
+/// `matches`, the matches of `match_indices` without their offsets. It
+/// keeps the text itself rather than a `StrMatchIndices`, so each match it
+/// yields borrows the text its `s` field borrows.
 struct StrMatches {
-    inner: StrMatchIndices,
+    s: Str,
+    pat: Str,
+    pos: i64,
 }
 
 impl Iterator for StrMatches {
     type Item = Str;
 
-    fn next(mut ref self) -> Option[Str] {
-        match self.inner.next() {
-            Some((_, m)) => Some(m),
-            None => None,
+    fn next(mut ref self) -> Option[Self.Item] {
+        let n = self.s.len();
+        if self.pos > n {
+            return None;
+        }
+        let at = self.pos;
+        if self.pat.is_empty() {
+            self.pos = if at == n { n + 1 } else { at + self.s.char_at_byte(at).len_utf8() };
+            return Some(self.s.slice(at, at));
+        }
+        match self.s.find_at_byte(self.pat, at) {
+            Some(i) => {
+                self.pos = i + self.pat.len();
+                Some(self.s.slice(i, self.pos))
+            }
+            None => {
+                self.pos = n + 1;
+                None
+            }
         }
     }
 }
