@@ -1,0 +1,455 @@
+// LeetCode #1093: Statistics from a Large Sample -- a differential over the
+// six arms. Each answer is checked against the statement read literally
+// (the sample written out and sorted) where the sample is small enough, and
+// against five properties that do not compute the answer; see the README.
+
+// ---- sample_stats.kara ----
+
+fn a0_sample_stats(count: Vec[i64]) -> Vec[f64] {
+    let mut low = -1;
+    let mut high = 0;
+    let mut sum = 0;
+    let mut total = 0;
+    let mut mode = 0;
+    for k in 0..count.len() {
+        let c = count[k];
+        if c == 0 {
+            continue;
+        }
+        if low < 0 {
+            low = k;
+        }
+        high = k;
+        sum += k * c;
+        total += c;
+        if c > count[mode] {
+            mode = k;
+        }
+    }
+    // the values at places (total - 1) / 2 and total / 2, counting from 0
+    let (left, right) = ((total - 1) / 2, total / 2);
+    let mut seen = 0;
+    let mut median_low = -1;
+    let mut median_high = -1;
+    for k in 0..count.len() {
+        seen += count[k];
+        if median_low < 0 and seen > left {
+            median_low = k;
+        }
+        if seen > right {
+            median_high = k;
+            break;
+        }
+    }
+    let mean = sum as f64 / total as f64;
+    let median = (median_low + median_high) as f64 / 2.0;
+    [low as f64, high as f64, mean, median, mode as f64]
+}
+
+// ---- sample_stats_ends.kara ----
+
+fn a1_sample_stats(count: Vec[i64]) -> Vec[f64] {
+    let low = count.iter().position(|c| c > 0).unwrap();
+    let high = count.iter().rposition(|c| c > 0).unwrap();
+    let mut sum = 0;
+    let mut total = 0;
+    let mut mode = low;
+    for k in low..=high {
+        sum += k * count[k];
+        total += count[k];
+        if count[k] > count[mode] {
+            mode = k;
+        }
+    }
+    let mut left = count.clone();
+    let mut (lo, hi) = (low, high);
+    let median = loop {
+        if lo == hi {
+            break lo as f64;
+        }
+        let take = left[lo].min(left[hi]);
+        left[lo] -= take;
+        left[hi] -= take;
+        if left[lo] == 0 and left[hi] == 0 {
+            let mut next_lo = lo + 1;
+            while next_lo < hi and left[next_lo] == 0 {
+                next_lo += 1;
+            }
+            let mut next_hi = hi - 1;
+            while next_hi > lo and left[next_hi] == 0 {
+                next_hi -= 1;
+            }
+            if next_lo >= hi or next_lo > next_hi {
+                break (lo + hi) as f64 / 2.0;
+            }
+            lo = next_lo;
+            hi = next_hi;
+        } else if left[lo] == 0 {
+            lo += 1;
+            while left[lo] == 0 {
+                lo += 1;
+            }
+        } else {
+            hi -= 1;
+            while left[hi] == 0 {
+                hi -= 1;
+            }
+        }
+    };
+    [low as f64, high as f64, sum as f64 / total as f64, median, mode as f64]
+}
+
+// ---- sample_stats_chain.kara ----
+
+fn a2_sample_stats(count: Vec[i64]) -> Vec[f64] {
+    let low = count.iter().position(|c| c > 0).unwrap();
+    let high = count.iter().rposition(|c| c > 0).unwrap();
+    let total: i64 = count.iter().sum();
+    let sum: i64 = count.iter().enumerate().map(|(k, c)| k * c).sum();
+    let (mode, _) = count.iter().enumerate().max_by_key(|(_, c)| *c).unwrap();
+    let at = |place: i64| {
+        count
+            .iter()
+            .scan(0, |seen, c| { let seen = seen + c; Some((seen, seen)) })
+            .position(|seen| seen > place)
+            .unwrap()
+    };
+    let median = (at((total - 1) / 2) + at(total / 2)) as f64 / 2.0;
+    [low as f64, high as f64, sum as f64 / total as f64, median, mode as f64]
+}
+
+// ---- sample_stats_prefix.kara ----
+
+fn a3_sample_stats(count: Vec[i64]) -> Vec[f64] {
+    let mut before: Vec[i64] = [0];
+    let mut sum = 0;
+    for k in 0..count.len() {
+        before.push(before[k] + count[k]);
+        sum += k * count[k];
+    }
+    let total = before[count.len()];
+    let value_at = |place: i64| { before.partition_point(|b| *b <= place) - 1 };
+    let low = value_at(0);
+    let high = value_at(total - 1);
+    let mut mode = low;
+    for k in low..=high {
+        if before[k + 1] - before[k] > before[mode + 1] - before[mode] {
+            mode = k;
+        }
+    }
+    let median = (value_at((total - 1) / 2) + value_at(total / 2)) as f64 / 2.0;
+    [low as f64, high as f64, sum as f64 / total as f64, median, mode as f64]
+}
+
+// ---- sample_stats_map.kara ----
+
+fn a4_sample_stats(count: Vec[i64]) -> Vec[f64] {
+    let mut present: SortedMap[i64, i64] = SortedMap.new();
+    for (k, c) in count.iter().enumerate() {
+        if c > 0 {
+            present.insert(k, c);
+        }
+    }
+    let (low, _) = present.first().unwrap();
+    let (high, _) = present.last().unwrap();
+    let mut sum = 0;
+    let mut total = 0;
+    let mut mode = (low, 0);
+    for (k, c) in present.iter() {
+        sum += k * c;
+        total += c;
+        if c > mode.1 {
+            mode = (k, c);
+        }
+    }
+    let middle = [(total - 1) / 2, total / 2];
+    let mut found: Vec[i64] = [];
+    let mut seen = 0;
+    for (k, c) in present.iter() {
+        seen += c;
+        while found.len() < 2 and seen > middle[found.len()] {
+            found.push(k);
+        }
+    }
+    let median = (found[0] + found[1]) as f64 / 2.0;
+    [low as f64, high as f64, sum as f64 / total as f64, median, mode.0 as f64]
+}
+
+// ---- sample_stats_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_sample_stats(count: Vec[i32]) -> Vec[f64] {
+        let mut mn = -1i32;
+        let mut mx = 0i32;
+        let mut sum: i64 = 0;
+        let mut total: i64 = 0;
+        let mut mode = 0;
+        for (i, c) in count.iter().enumerate() {
+            if c > 0 {
+                if mn < 0 {
+                    mn = i as i32;
+                }
+                mx = i as i32;
+                sum += i * c as i64;
+                total += c as i64;
+                if c > count[mode] {
+                    mode = i;
+                }
+            }
+        }
+        let find = |k: i64| {
+            let mut acc = 0;
+            for (i, c) in count.iter().enumerate() {
+                acc += c as i64;
+                if acc > k {
+                    return i as i32;
+                }
+            }
+            0
+        };
+        let median = (find((total - 1) / 2) + find(total / 2)) as f64 / 2.0;
+        [mn as f64, mx as f64, sum as f64 / total as f64, median, mode as f64]
+    }
+}
+
+fn a5_sample_stats(count: Vec[i64]) -> Vec[f64] {
+    let c: Vec[i32] = count.iter().map(|x| x as i32).collect();
+    A5Solution.a5_sample_stats(c)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, count: Vec[i64]) -> Vec[f64] {
+    match which {
+        0 => a0_sample_stats(count),
+        1 => a1_sample_stats(count),
+        2 => a2_sample_stats(count),
+        3 => a3_sample_stats(count),
+        4 => a4_sample_stats(count),
+        _ => a5_sample_stats(count),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(v: Vec[f64]) -> String {
+    let parts: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+// The statement read literally, for a sample small enough to write out:
+// every value as many times as it is counted, sorted; the smallest is the
+// first, the largest the last, the mean the sum over the size, the median
+// the middle one or the halfway point of the middle two, the mode the value
+// with the longest run.
+fn read_literally(count: Vec[i64]) -> Vec[f64] {
+    let mut sample: Vec[i64] = [];
+    for k in (0..count.len()).rev() {
+        for _ in 0..count[k] {
+            sample.push(k);
+        }
+    }
+    sample.sort();
+    let n = sample.len();
+    let sum: i64 = sample.iter().sum();
+    let mut mode = sample[0];
+    let mut best = 0;
+    let mut run = 0;
+    for i in 0..n {
+        run = if i > 0 and sample[i] == sample[i - 1] { run + 1 } else { 1 };
+        if run > best {
+            best = run;
+            mode = sample[i];
+        }
+    }
+    let median = (sample[(n - 1) / 2] + sample[n / 2]) as f64 / 2.0;
+    [sample[0] as f64, sample[n - 1] as f64, sum as f64 / n as f64, median, mode as f64]
+}
+
+fn close(x: f64, y: f64) -> bool {
+    (x - y).abs() < 0.000000001
+}
+
+// The counts moved `by` places up (or down, for a negative `by`).
+fn shifted(count: Vec[i64], by: i64) -> Vec[i64] {
+    let mut c: Vec[i64] = Vec.filled(256, 0);
+    for k in 0..256 {
+        if count[k] > 0 {
+            c[k + by] = count[k];
+        }
+    }
+    c
+}
+
+// Every value k counted as 255 - k.
+fn mirrored(count: Vec[i64]) -> Vec[i64] {
+    (0..256).map(|k| count[255 - k]).collect()
+}
+
+struct Problem {
+    count: Vec[i64],
+    total: i64,
+    low: i64,
+    high: i64,
+    mode: i64,
+    small: bool,
+    pick: i64,
+    times: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    literal: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let c = p.count.clone();
+    let top = c[p.mode];
+    // P6's added count: past the largest value when there is room, else
+    // below the smallest, else more of the mode itself
+    let (place, extra, side) = if p.high < 255 and top > 1 {
+        (p.high + 1 + p.pick % (255 - p.high), 1 + p.pick % (top - 1), 1)
+    } else if p.low > 0 and top > 1 {
+        (p.pick % p.low, 1 + p.pick % (top - 1), -1)
+    } else {
+        (p.mode, 1 + p.pick % 9, 0)
+    };
+    let mut added = c.clone();
+    added[place] += extra;
+    // P3's shift: up when there is room, else down to 0
+    let by = if p.high < 255 { 1 + p.pick % (255 - p.high) } else { -p.low };
+    let times = if p.total * p.times <= 1000000000 { p.times } else { 1 };
+    let scaled: Vec[i64] = c.iter().map(|n| n * times).collect();
+    let literal = if p.small { read_literally(c.clone()) } else { [] };
+    for w in 0..6 {
+        let s = arm(w, c.clone());
+        let what = f"arm {w}, low {p.low} high {p.high} total {p.total} -> {show(s.clone())}";
+        // P1: the statement read literally, where the sample can be written out
+        if p.small {
+            t.literal += 1;
+            expect(mut t, 1, s == literal, f"P1 {what}, read literally {show(literal.clone())}");
+        }
+        // P2: five numbers, each where the sample says it must be: the
+        // smallest and largest counted, nothing counted outside them, the
+        // mean and median between them, the mode counted most
+        let (lo, hi, mean, median, mode) = (s[0], s[1], s[2], s[3], s[4]);
+        let ok = s.len() == 5 and lo as i64 == p.low and hi as i64 == p.high and lo <= mean and mean <= hi
+            and lo <= median and median <= hi and mode as i64 == p.mode;
+        expect(mut t, 2, ok, f"P2 {what}");
+        // P3: every value moved by the same amount moves all five by it
+        let m = arm(w, shifted(c.clone(), by));
+        let b = by as f64;
+        expect(
+            mut t,
+            3,
+            m[0] == lo + b and m[1] == hi + b and close(m[2], mean + b) and m[3] == median + b and m[4] == mode + b,
+            f"P3 {what}, moved {by} -> {show(m.clone())}",
+        );
+        // P4: every count multiplied, the same five numbers
+        let sc = arm(w, scaled.clone());
+        expect(mut t, 4, sc == s, f"P4 {what}, counts times {times} -> {show(sc.clone())}");
+        // P5: every value k read as 255 - k, the five numbers turned round
+        let r = arm(w, mirrored(c.clone()));
+        expect(
+            mut t,
+            5,
+            r[0] == 255.0 - hi and r[1] == 255.0 - lo and close(r[2], 255.0 - mean) and r[3] == 255.0 - median
+                and r[4] == 255.0 - mode,
+            f"P5 {what}, mirrored -> {show(r.clone())}",
+        );
+        // P6: fewer of a new value than of the mode, past either end, keeps
+        // the mode and moves the median that way, or not at all
+        let a = arm(w, added.clone());
+        let ok = a[4] == mode
+            and match side {
+                1 => a[1] == place as f64 and a[0] == lo and a[3] >= median,
+                -1 => a[0] == place as f64 and a[1] == hi and a[3] <= median,
+                _ => a[0] == lo and a[1] == hi,
+            };
+        expect(mut t, 6, ok, f"P6 {what}, {extra} more of {place} -> {show(a.clone())}");
+        if w == 0 {
+            for x in s.iter() {
+                t.check = (t.check * 31 + (x * 1000000.0) as i64) % 1000000007;
+            }
+        }
+    }
+    t.cases += 1;
+}
+
+// LeetCode promises one mode: when the largest count is shared, the first
+// value with it is counted once more.
+fn one_mode(c: mut ref Vec[i64]) {
+    let top = c.iter().max().unwrap();
+    let firsts: Vec[i64] = (0..c.len()).filter(|k| c[k] == top).collect();
+    if firsts.len() > 1 {
+        c[firsts[0]] += 1;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, literal: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 samples in four kinds, 500 each: 1 to 12 values counted 1 to 20
+    // times; 1 to 4 values counted 1 to 2000 times; 1 or 2 values counted
+    // up to 9 * 10^7 times; 30 to 80 values counted 1 to 50 times. Every
+    // choice is drawn before any arm answers.
+    let mut seed = 10931;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let (values, most) = match i % 4 {
+            0 => (next_random(mut seed) % 12 + 1, 20),
+            1 => (next_random(mut seed) % 4 + 1, 2000),
+            2 => (next_random(mut seed) % 2 + 1, 90000000),
+            _ => (next_random(mut seed) % 51 + 30, 50),
+        };
+        let mut c: Vec[i64] = Vec.filled(256, 0);
+        for _ in 0..values {
+            let k = next_random(mut seed) % 256;
+            c[k] = if most > 2000 { next_random(mut seed) * 2749 % most + 1 } else { next_random(mut seed) % most + 1 };
+        }
+        one_mode(mut c);
+        let present: Vec[i64] = (0..256).filter(|k| c[k] > 0).collect();
+        let total: i64 = c.iter().sum();
+        let top = c.iter().max().unwrap();
+        let mode = (0..256).find(|k| c[k] == top).unwrap();
+        let pick = next_random(mut seed);
+        let times = next_random(mut seed) % 4 + 2;
+        problems.push(Problem {
+            count: c,
+            total,
+            low: present[0],
+            high: present[present.len() - 1],
+            mode,
+            small: total <= 20000,
+            pick,
+            times,
+        });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} samples: checksum {t.check}, {t.checks} checks over 6 arms ({t.literal} read literally): {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,103 @@
+// LeetCode #1093: Statistics from a Large Sample -- iterator chains: the
+// ends by `position` and `rposition`, the total and the sum by `sum` over
+// the counts and over `enumerate` weighted by value, the mode by
+// `max_by_key` on the count, and each middle place by `scan`ning the
+// running total and taking the first value whose running total passes it.
+// O(256).
+
+fn sample_stats(count: Vec[i64]) -> Vec[f64] {
+    let low = count.iter().position(|c| c > 0).unwrap();
+    let high = count.iter().rposition(|c| c > 0).unwrap();
+    let total: i64 = count.iter().sum();
+    let sum: i64 = count.iter().enumerate().map(|(k, c)| k * c).sum();
+    let (mode, _) = count.iter().enumerate().max_by_key(|(_, c)| *c).unwrap();
+    let at = |place: i64| {
+        count
+            .iter()
+            .scan(0, |seen, c| { let seen = seen + c; Some((seen, seen)) })
+            .position(|seen| seen > place)
+            .unwrap()
+    };
+    let median = (at((total - 1) / 2) + at(total / 2)) as f64 / 2.0;
+    [low as f64, high as f64, sum as f64 / total as f64, median, mode as f64]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(v: Vec[f64]) -> String {
+    let parts: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+// A count array of 256 places with `given` values set.
+fn counts(given: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut c: Vec[i64] = Vec.filled(256, 0);
+    for (k, n) in given.iter() {
+        c[k] = n;
+    }
+    c
+}
+
+// LeetCode promises one mode: when the largest count is shared, the first
+// value with it is counted once more.
+fn one_mode(c: mut ref Vec[i64]) {
+    let top = c.iter().max().unwrap();
+    let firsts: Vec[i64] = (0..c.len()).filter(|k| c[k] == top).collect();
+    if firsts.len() > 1 {
+        c[firsts[0]] += 1;
+    }
+}
+
+fn main() {
+    let cases: Vec[Vec[(i64, i64)]] = [
+        [(1, 1), (2, 3), (3, 4)],
+        [(1, 4), (2, 3), (3, 2), (4, 2)],
+        [(0, 1)],
+        [(255, 1)],
+        [(0, 1), (255, 2)],
+        [(7, 1000000000)],
+        [(0, 499999999), (255, 500000001)],
+        [(10, 3), (20, 4), (30, 2)],
+        [(5, 2), (6, 1), (9, 1)],
+        [(100, 1), (101, 2), (200, 1), (201, 1)],
+    ];
+    for given in cases.iter() {
+        println(show(sample_stats(counts(given))));
+    }
+    // 2000 random samples: 1 to 12 values present, each counted 1 to 20
+    // times or 1 to 10^8 times
+    let mut seed = 1093;
+    let mut h = 0;
+    let mut modes = 0;
+    for i in 0..2000 {
+        let mut given: Vec[(i64, i64)] = [];
+        for _ in 0..next_random(mut seed) % 12 + 1 {
+            let k = next_random(mut seed) % 256;
+            let n = if i % 2 == 0 { next_random(mut seed) % 20 + 1 } else { next_random(mut seed) * 50000 % 100000000 + 1 };
+            given.push((k, n));
+        }
+        let mut c = counts(given);
+        one_mode(mut c);
+        let s = sample_stats(c);
+        modes += s[4] as i64;
+        for x in s.iter() {
+            h = (h * 31 + (x * 1000000.0) as i64) % 1000000007;
+        }
+    }
+    println(f"2000 random samples: modes sum to {modes}, checksum {h}");
+    // every place counted, as LeetCode's largest sample allows: 10^9 in all
+    let mut c: Vec[i64] = Vec.filled(256, 0);
+    let mut left = 1000000000;
+    for k in 0..256 {
+        let n = if k == 255 { left } else { (next_random(mut seed) * 1000 % 7800000).min(left) };
+        c[k] = n;
+        left -= n;
+    }
+    one_mode(mut c);
+    println(show(sample_stats(c)));
+}
