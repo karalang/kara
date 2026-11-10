@@ -39,6 +39,8 @@ pub struct Monotone {
     pub local: Local,
     pub up: bool,
     pub signed: bool,
+    /// The blocks of the loop, by index.
+    pub blocks: Vec<bool>,
 }
 
 /// Every monotone counter of every loop of `body`.
@@ -50,6 +52,12 @@ pub fn monotones(body: &Body, tys: &TyInterner) -> Vec<Monotone> {
     }
     let preds = predecessors(body);
     let idom = dominators(body, &preds);
+    // `KARAC_MIR_MIDPOINT_MONO=0` leaves a binary search's bounds unstated.
+    let mids = if std::env::var("KARAC_MIR_MIDPOINT_MONO").as_deref() == Ok("0") {
+        Vec::new()
+    } else {
+        super::midpoint::midpoints(body, tys)
+    };
     let loops = natural_loops(body, &preds, &idom);
     if loops.is_empty() {
         return Vec::new();
@@ -86,7 +94,7 @@ pub fn monotones(body: &Body, tys: &TyInterner) -> Vec<Monotone> {
                     }
                     StatementKind::Assign(p, _) => {
                         match (
-                            step(body, tys, &idom, lp, p.local, bi, si),
+                            step(body, tys, &idom, lp, &mids, p.local, bi, si),
                             dirs[p.local.index()],
                         ) {
                             (Some(up), None) => dirs[p.local.index()] = Some(Some(up)),
@@ -126,6 +134,7 @@ pub fn monotones(body: &Body, tys: &TyInterner) -> Vec<Monotone> {
                 local,
                 up,
                 signed: it.signed(),
+                blocks: lp.blocks.clone(),
             });
         }
     }
@@ -143,11 +152,19 @@ fn poison(dirs: &mut [Option<Option<bool>>], l: Local) {
 /// (false: down) written once inside the loop, with `c >= 0` in `x`'s type
 /// and the value taken only past the overflow test. `None` for any other
 /// write.
+///
+/// A binary search's bound moved to its midpoint is a step too
+/// (B-2026-11-10-37): `mid` lies in `[lo, hi)` for the `lo` and `hi` of
+/// this trip's guard (`super::midpoint`), so `hi = mid` moves `hi` down
+/// and `lo = mid` or `lo = mid + c` moves `lo` up, when `mid` is written
+/// only at its midpoint, inside the loop, before the step.
+#[allow(clippy::too_many_arguments)]
 fn step(
     body: &Body,
     tys: &TyInterner,
     idom: &[usize],
     lp: &Loop,
+    mids: &[super::midpoint::Midpoint],
     x: Local,
     bi: usize,
     si: usize,
@@ -160,6 +177,29 @@ fn step(
     else {
         return None;
     };
+    // The midpoint `o` copies, of a guard on `x`, settled before `(b, s)`.
+    let mid_of = |o: &Operand, b: usize, s: usize| {
+        let (Operand::Copy(q) | Operand::Move(q)) = o else {
+            return None;
+        };
+        if !q.projection.is_empty() {
+            return None;
+        }
+        mids.iter().find(|m| {
+            m.mid == q.local
+                && (m.lo == x || m.hi == x)
+                && lp.blocks[m.block]
+                && only_write(body, m.mid) == Some((m.block, m.statement))
+                && if m.block == b {
+                    m.statement < s
+                } else {
+                    super::counters::dominates(idom, m.block, b)
+                }
+        })
+    };
+    if let Some(m) = mid_of(&Operand::Copy(src.clone()), bi, si) {
+        return Some(m.lo == x);
+    }
     let pair = if src.projection.is_empty() {
         let (tb, ts) = only_write(body, src.local)?;
         if !lp.blocks[tb] {
@@ -193,9 +233,10 @@ fn step(
         },
         _ => None,
     };
+    let low = |o: &Operand| mid_of(o, cb, cs).is_some_and(|m| m.lo == x);
     let (up, c) = match op {
-        BinOp::Add if me(a) => (true, k(b)?),
-        BinOp::Add if me(b) => (true, k(a)?),
+        BinOp::Add if me(a) || low(a) => (true, k(b)?),
+        BinOp::Add if me(b) || low(b) => (true, k(a)?),
         BinOp::Sub if me(a) => (false, k(b)?),
         _ => return None,
     };

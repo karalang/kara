@@ -1343,7 +1343,22 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// bounds check against a length `hi` is below. Marks the module so
     /// its passes run a second time (`mir_aot::run_passes`): the fact
     /// meets the check only once the search is inlined into its caller.
-    fn assume_midpoint(&mut self, m: &crate::mir::midpoint::Midpoint) -> R<()> {
+    ///
+    /// When the search's `lo` only rises and its `hi` only falls in its loop
+    /// (`crate::mir::monotone`), `mid` also lies within their values on
+    /// entry, `lo0 <= mid < hi0`: a fact about values from outside the loop,
+    /// which LLVM 22 keeps where it weakens `mid >= lo` and loses `hi <= hi0`
+    /// across its passes (hsearch's `citations[mid]`, B-2026-11-10-37).
+    #[allow(clippy::type_complexity)]
+    fn assume_midpoint(
+        &mut self,
+        m: &crate::mir::midpoint::Midpoint,
+        monotones: &[(
+            crate::mir::monotone::Monotone,
+            PointerValue<'ctx>,
+            IntType<'ctx>,
+        )],
+    ) -> R<()> {
         let e = |x: inkwell::builder::BuilderError| x.to_string();
         let mid = self
             .operand_scalar(&Operand::Copy(Place::local(m.mid)))?
@@ -1374,7 +1389,28 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 .fn_type(&[self.llcx.bool_type().into()], false);
             self.module.add_function("llvm.assume", ty, None)
         });
-        for fact in [above, below] {
+        let mut facts = vec![above, below];
+        for (b, slot, ty) in monotones {
+            if !b.blocks.get(m.block).copied().unwrap_or(false) || b.signed != m.signed {
+                continue;
+            }
+            let (pred, name) = match (b.local == m.lo && b.up, b.local == m.hi && !b.up) {
+                (true, _) => (ge, "mid.from.lo0"),
+                (_, true) => (lt, "mid.under.hi0"),
+                _ => continue,
+            };
+            let init = self
+                .builder
+                .build_load(*ty, *slot, "mono.init")
+                .map_err(e)?
+                .into_int_value();
+            facts.push(
+                self.builder
+                    .build_int_compare(pred, mid, init, name)
+                    .map_err(e)?,
+            );
+        }
+        for fact in facts {
             self.builder
                 .build_call(assume, &[fact.into()], "")
                 .map_err(e)?;
@@ -1796,7 +1832,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 self.locate(s.source_info.span);
                 self.statement(s)?;
                 if let Some(m) = midpoints.iter().find(|m| m.block == i && m.statement == si) {
-                    self.assume_midpoint(m)?;
+                    self.assume_midpoint(m, &monotones)?;
                 }
             }
             for (m, slot, _) in monotones.iter().filter(|(m, ..)| m.entry == i) {
