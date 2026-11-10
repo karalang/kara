@@ -250,6 +250,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   accumulator type before the tail was checked. It now does, and the tail
   `Some(x)` reads `x` as its value, as `let o: Option[i64] = Some(x);`
   does, printing `Some(3)` (B-2026-11-09-36).
+- `let f = |x, n| x + n; println(f(1, 2));` was refused at the operator,
+  "type '?T0' does not implement trait Add", before the call that types
+  `x` and `n` was seen. An operator on closure parameters nothing has
+  typed yet now waits for the later use design.md § Closures lets type
+  them, and prints 3; a parameter no use types gets the closure message,
+  "cannot infer closure parameter type", alone (B-2026-11-10-8).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

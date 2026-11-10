@@ -3790,6 +3790,96 @@ impl<'a> super::TypeChecker<'a> {
         to_string_fix(left)
     }
 
+    /// `a op b` with both operands a variable nothing has typed (not a
+    /// literal's): unify them and defer the operator's check to
+    /// [`Self::discharge_deferred_operand_vars`]. The result is `bool` for
+    /// a comparison and the operand type otherwise.
+    fn defer_operator_on_open_vars(
+        &mut self,
+        op: &BinOp,
+        left_ty: &Type,
+        right_ty: &Type,
+        span: &Span,
+    ) -> Option<Type> {
+        let arithmetic = Self::arithmetic_operator_trait(op).is_some();
+        let compares = matches!(
+            op,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+        );
+        let bitwise = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor);
+        if !(arithmetic || compares || bitwise) {
+            return None;
+        }
+        let open = |t: &Type| match strip_refs_for_compare(t) {
+            Type::TypeVar(id) if super::inference::literal_var_kind(*id).is_none() => Some(*id),
+            _ => None,
+        };
+        let l = open(&self.resolved_now(left_ty))?;
+        let r = open(&self.resolved_now(right_ty))?;
+        if l != r {
+            super::inference::unify_types(
+                &Type::TypeVar(r),
+                &Type::TypeVar(l),
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
+        }
+        self.deferred_operand_vars.push((op.clone(), l, *span));
+        Some(if compares {
+            Type::Bool
+        } else {
+            Type::TypeVar(l)
+        })
+    }
+
+    /// The operators [`Self::defer_operator_on_open_vars`] put off, now that
+    /// the body's later uses have typed their operands: a number (an integer
+    /// for a bitwise operator; a `char` or `bool` may be compared) is what
+    /// the operator reads. An operand still unknown is left to
+    /// `report_unsolved_call_vars`, which says the closure parameter needs
+    /// an annotation.
+    pub(super) fn discharge_deferred_operand_vars(&mut self) {
+        for (op, id, span) in std::mem::take(&mut self.deferred_operand_vars) {
+            let t = self.resolved_now(&Type::TypeVar(id));
+            let t = strip_refs_for_compare(&t).clone();
+            let literal = match &t {
+                Type::TypeVar(v) => match super::inference::literal_var_kind(*v) {
+                    Some(k) => Some(k),
+                    None => continue,
+                },
+                _ => None,
+            };
+            if super::exprs::contains_type_var(&t) && literal.is_none() || t == Type::Error {
+                continue;
+            }
+            let int = matches!(t, Type::Int(_) | Type::UInt(_))
+                || matches!(literal, Some(super::inference::LiteralKind::Int));
+            let number = int
+                || matches!(t, Type::Float(_))
+                || matches!(literal, Some(super::inference::LiteralKind::Float));
+            let ok = match op {
+                BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => int,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                    number || matches!(t, Type::Char | Type::Bool)
+                }
+                _ => number,
+            };
+            if !ok {
+                self.type_error(
+                    format!(
+                        "'{}' on '{}': a closure parameter that a later use types \
+                         takes an operator only as a number; annotate the parameter \
+                         with its type (design.md § Closures)",
+                        super::const_eval::binop_glyph(&op),
+                        type_display(&t)
+                    ),
+                    span,
+                    TypeErrorKind::InvalidBinaryOp,
+                );
+            }
+        }
+    }
+
     pub(super) fn arithmetic_rejection_message(
         &self,
         op: &BinOp,
@@ -4441,6 +4531,15 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_expr_type(&side.span, ty);
                 self.record_node_type(side.id, ty);
             }
+        }
+        // design.md § Closures (synthesis mode): a closure parameter nothing
+        // has typed yet is typed by a later use in the same body (`let f =
+        // |x, n| x + n; f(1, 2)`), so an operator on two such variables
+        // makes them one type and is judged at the end of `check`, where a
+        // parameter still unknown is §8's "cannot infer closure parameter
+        // type" rather than a missing operator trait (B-2026-11-10-8).
+        if let Some(t) = self.defer_operator_on_open_vars(op, &left_ty, &right_ty, span) {
+            return t;
         }
         // B-2026-10-29-35 — a constructor or tuple operand of a comparison is
         // checked against the other operand's type where it differs from it

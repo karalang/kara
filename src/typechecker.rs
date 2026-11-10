@@ -3623,6 +3623,10 @@ pub struct TypeChecker<'a> {
     /// nothing at the call fixed, with those variables, judged at the end of
     /// `check` (`report_unsolved_call_vars`).
     pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
+    /// B-2026-11-10-8: an operator whose operands are both a variable
+    /// nothing has typed yet (`|x, n| x + n`, typed by a later `f(1, 2)`),
+    /// judged at the end of `check` (`discharge_deferred_operand_vars`).
+    pub(super) deferred_operand_vars: Vec<(BinOp, types::TypeVarId, Span)>,
     /// B-2026-11-07-9: the same for a call's `const` parameters only its
     /// result names, judged with them.
     pub(super) unsolved_call_consts: Vec<(Span, Vec<(types::ConstVarId, String)>)>,
@@ -4437,6 +4441,7 @@ impl<'a> TypeChecker<'a> {
             method_call_ends: Vec::new(),
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
+            deferred_operand_vars: Vec::new(),
             unsolved_call_consts: Vec::new(),
             collection_vars: FxHashSet::default(),
             pending_atomic_inners: Vec::new(),
@@ -4889,6 +4894,7 @@ impl<'a> TypeChecker<'a> {
         self.discharge_deferred_call_bounds();
         self.report_pending_atomic_inners();
         self.report_pending_buf_sources();
+        self.discharge_deferred_operand_vars();
         self.report_unsolved_call_vars();
         self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
