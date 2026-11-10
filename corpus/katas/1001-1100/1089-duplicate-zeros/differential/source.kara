@@ -1,0 +1,319 @@
+// LeetCode #1089: Duplicate Zeros -- a differential over the six arms. Each
+// is checked against the statement read literally (every digit written out
+// in order, a 0 twice, the first n kept) and against five properties that
+// do not compute the answer the same way; see the README.
+
+// ---- duplicate_zeros.kara ----
+
+fn a0_duplicate_zeros(arr: mut ref Vec[i64]) {
+    let n = arr.len();
+    let mut zeros = 0;
+    for x in arr.iter() {
+        if x == 0 {
+            zeros += 1;
+        }
+    }
+    for i in (0..n).rev() {
+        if i + zeros < n {
+            arr[i + zeros] = arr[i];
+        }
+        if arr[i] == 0 {
+            zeros -= 1;
+            if i + zeros < n {
+                arr[i + zeros] = 0;
+            }
+        }
+    }
+}
+
+// ---- duplicate_zeros_shift.kara ----
+
+fn a1_duplicate_zeros(arr: mut ref Vec[i64]) {
+    let n = arr.len();
+    let mut i = 0;
+    while i < n {
+        if arr[i] == 0 {
+            arr.insert(i + 1, 0);
+            arr.pop();
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+// ---- duplicate_zeros_chain.kara ----
+
+fn a2_duplicate_zeros(arr: mut ref Vec[i64]) {
+    let n = arr.len();
+    let out: Vec[i64] = arr
+        .iter()
+        .flat_map(|x| if x == 0 { [0, 0] } else { [x] }.into_iter())
+        .take(n)
+        .collect();
+    for (i, x) in out.into_iter().enumerate() {
+        arr[i] = x;
+    }
+}
+
+// ---- duplicate_zeros_queue.kara ----
+
+fn a3_duplicate_zeros(arr: mut ref Vec[i64]) {
+    let mut pending: VecDeque[i64] = VecDeque.new();
+    for i in 0..arr.len() {
+        pending.push_back(arr[i]);
+        if arr[i] == 0 {
+            pending.push_back(0);
+        }
+        arr[i] = pending.pop_front().unwrap();
+    }
+}
+
+// ---- duplicate_zeros_text.kara ----
+
+fn a4_duplicate_zeros(arr: mut ref Vec[i64]) {
+    let mut text = String.new();
+    for x in arr.iter() {
+        text.push_str(f"{x}");
+    }
+    let doubled = text.replace("0", "00");
+    for (i, c) in doubled.chars().take(arr.len()).enumerate() {
+        arr[i] = c.to_digit(10).unwrap();
+    }
+}
+
+// ---- duplicate_zeros_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_duplicate_zeros(arr: mut ref Vec[i32]) {
+        let n = arr.len();
+        let zeros = arr.iter().filter(|x| x == 0).count();
+        let mut j = n + zeros;
+        for i in (0..n).rev() {
+            if arr[i] == 0 {
+                j -= 1;
+                if j < n {
+                    arr[j] = 0;
+                }
+            }
+            j -= 1;
+            if j < n {
+                arr[j] = arr[i];
+            }
+        }
+    }
+}
+
+fn a5_duplicate_zeros(arr: mut ref Vec[i64]) {
+    let mut digits: Vec[i32] = arr.iter().map(|x| x as i32).collect();
+    A5Solution.a5_duplicate_zeros(mut digits);
+    for i in 0..arr.len() {
+        arr[i] = digits[i];
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, a: Vec[i64]) -> Vec[i64] {
+    let mut v = a.clone();
+    match which {
+        0 => a0_duplicate_zeros(mut v),
+        1 => a1_duplicate_zeros(mut v),
+        2 => a2_duplicate_zeros(mut v),
+        3 => a3_duplicate_zeros(mut v),
+        4 => a4_duplicate_zeros(mut v),
+        _ => a5_duplicate_zeros(mut v),
+    }
+    v
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: every digit written out in order, each 0
+// `times` times, and the first n kept, n the length of the input.
+fn expand(a: Vec[i64], times: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = [];
+    for x in a.iter() {
+        if x == 0 {
+            for _ in 0..times {
+                out.push(0);
+            }
+        } else {
+            out.push(x);
+        }
+    }
+    let mut kept: Vec[i64] = [];
+    for i in 0..a.len() {
+        kept.push(out[i]);
+    }
+    kept
+}
+
+// The answer read back: each 0 must have a second 0 after it, unless it is
+// the last place, and the pair stands for one 0 of the input. True when the
+// digits read back are the input's first k and the input's first k, written
+// out, fill exactly the n places, or the n places and one more when the
+// last of them is a 0 whose second copy was dropped.
+fn reads_back(a: Vec[i64], out: Vec[i64]) -> bool {
+    let n = a.len();
+    if out.len() != n {
+        return false;
+    }
+    let mut i = 0;
+    let mut k = 0;
+    while i < n {
+        if out[i] != a[k] {
+            return false;
+        }
+        if out[i] == 0 {
+            if i + 1 < n and out[i + 1] != 0 {
+                return false;
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+        k += 1;
+    }
+    i == n or a[k - 1] == 0
+}
+
+// Every digit but 0 turned into 10 less it: 1 and 9, 2 and 8, and so on.
+fn turned(a: Vec[i64]) -> Vec[i64] {
+    a.iter().map(|x| if x == 0 { 0 } else { 10 - x }).collect()
+}
+
+fn join(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    for x in b.iter() {
+        out.push(x);
+    }
+    out
+}
+
+fn first(a: Vec[i64], m: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = [];
+    for i in 0..m {
+        out.push(a[i]);
+    }
+    out
+}
+
+fn show(a: Vec[i64]) -> String {
+    let parts: Vec[String] = a.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+struct Problem {
+    digits: Vec[i64],
+    // appended for P3
+    tail: Vec[i64],
+    // put in front for P5
+    front: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, pr: Problem) {
+    let a = pr.digits.clone();
+    let n = a.len();
+    let want = expand(a, 2);
+    let twice = expand(a, 4);
+    let longer = join(a, pr.tail);
+    let fronted = join([pr.front], a);
+    for w in 0..6 {
+        let answer = arm(w, a);
+        let what = f"arm {w}, {show(a)} -> {show(answer)}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {show(want)}");
+        // P2: the answer read back gives the input's first digits
+        expect(mut t, 2, reads_back(a, answer), f"P2 {what}");
+        // P3: more digits after the input leave its first n places alone
+        let more = arm(w, longer);
+        expect(mut t, 3, first(more, n) == answer, f"P3 {what}, {show(longer)} -> {show(more)}");
+        // P4: turning the digits but 0 before or after is the same
+        let after = arm(w, turned(a));
+        expect(mut t, 4, after == turned(answer), f"P4 {what}, turned first -> {show(after)}");
+        // P5: one digit in front: a 0 takes two places, any other digit one
+        let got = arm(w, fronted);
+        let expected = if pr.front == 0 {
+            join([0, 0], first(answer, n - 1))
+        } else {
+            join([pr.front], answer)
+        };
+        expect(mut t, 5, got == expected, f"P5 {what}, {show(fronted)} -> {show(got)}");
+        // P6: done twice, each 0 written four times
+        let again = arm(w, answer);
+        expect(mut t, 6, again == twice, f"P6 {what}, again -> {show(again)}");
+    }
+    t.cases += 1;
+    for x in want.iter() {
+        t.check = (t.check * 31 + x + 1) % 1000000007;
+    }
+}
+
+fn random_digit(seed: mut ref i64) -> i64 {
+    let r = next_random(mut seed) % 15;
+    if r < 5 {
+        0
+    } else {
+        r - 5
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1400 of 1 to 8 digits and 600 of 1 to 30, a third of
+    // the digits 0, each with a tail of 1 to 6 digits and a digit for the
+    // front. Every choice is drawn before any arm answers.
+    let mut seed = 10891;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let top = if i < 1400 {
+            8
+        } else {
+            30
+        };
+        let len = next_random(mut seed) % top + 1;
+        let mut digits: Vec[i64] = [];
+        for _ in 0..len {
+            digits.push(random_digit(mut seed));
+        }
+        let mut tail: Vec[i64] = [];
+        for _ in 0..next_random(mut seed) % 6 + 1 {
+            tail.push(random_digit(mut seed));
+        }
+        let front = random_digit(mut seed);
+        problems.push(Problem { digits, tail, front });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

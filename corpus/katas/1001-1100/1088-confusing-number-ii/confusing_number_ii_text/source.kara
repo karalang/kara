@@ -1,0 +1,77 @@
+// LeetCode #1088: Confusing Number II -- every number made of the digits
+// that rotate, in order, read off a counter in base 5 (its digits 0 to 4
+// standing for 0, 1, 6, 8, 9), and each rotated as text: its characters
+// reversed and each turned, and the result read back as a number, which
+// drops its leading zeros, and compared with the number. O(the numbers up
+// to n made of those digits, times their length).
+
+fn turned(c: char) -> char {
+    match c {
+        '6' => '9',
+        '9' => '6',
+        _ => c,
+    }
+}
+
+fn confusing_number_ii(n: i64) -> i64 {
+    let face = ['0', '1', '6', '8', '9'];
+    let mut count = 0;
+    let mut k = 1;
+    loop {
+        // k in base 5, written with the rotating digits
+        let mut text = String.new();
+        let mut rest = k;
+        while rest > 0 {
+            text.push(face[rest % 5]);
+            rest /= 5;
+        }
+        let digits: Vec[char] = text.chars().collect();
+        let written: String = digits.iter().rev().collect();
+        let v = i64.parse(written).unwrap();
+        if v > n {
+            break;
+        }
+        // `text` is the number backwards, so turning each character of it
+        // reads the rotation front to back
+        let rotation: String = text.chars().map(|c| turned(c)).collect();
+        if i64.parse(rotation).unwrap() != v {
+            count += 1;
+        }
+        k += 1;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [1, 6, 9, 10, 20, 100, 1000, 6969, 10000, 68986, 123456, 1000000];
+    for n in cases.iter() {
+        println(f"{n} -> {confusing_number_ii(n)}");
+    }
+    // every n from 1 to 1000
+    let mut small = 0;
+    for n in 1..=1000 {
+        small += confusing_number_ii(n);
+    }
+    println(f"n = 1 to 1000: answers sum to {small}");
+    // 200 random n up to 10^5, of 1 to 6 digits
+    let mut seed = 1088;
+    let mut h = 0;
+    for _ in 0..200 {
+        let digits = next_random(mut seed) % 6;
+        let mut n = 1;
+        for _ in 0..digits {
+            n *= 10;
+        }
+        let hi = next_random(mut seed) * 32768 + next_random(mut seed);
+        n = hi % n + 1;
+        h = (h * 31 + confusing_number_ii(n)) % 1000000007;
+    }
+    println(f"200 random n: checksum {h}");
+}

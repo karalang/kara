@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1089-duplicate-zeros/bench/duplicate_zeros.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1089 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "36b073d40"
+extracted_src = "3dbb9937"

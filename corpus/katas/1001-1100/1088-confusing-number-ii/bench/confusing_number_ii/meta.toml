@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1088-confusing-number-ii/bench/confusing_number_ii.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1088 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "36b073d40"
+extracted_src = "71401469"

@@ -1,0 +1,123 @@
+// LeetCode #1088: Confusing Number II -- counted, not walked: the numbers up
+// to n made of the digits that rotate, counted digit by digit from n's
+// decimal text, less the ones that read the same rotated (strobogrammatic),
+// which are few enough to build: from the middle out, a pair of rotated
+// digits (`1..1`, `6..9`, `8..8`, `9..6`, `0..0`) around a shorter one, with
+// no leading 0. O(log n) for the count and O(the strobogrammatic numbers
+// of n's length, 2500 at ten digits) for the rest.
+
+fn rotating_below(d: i64, first: bool) -> i64 {
+    let mut k = 0;
+    for r in [0, 1, 6, 8, 9] {
+        if r < d and not (first and r == 0) {
+            k += 1;
+        }
+    }
+    k
+}
+
+// How many numbers from 1 to n have only the digits 0, 1, 6, 8, 9.
+fn rotating_up_to(n: i64) -> i64 {
+    let digits: Vec[i64] = n.to_string().bytes().iter().map(|b| (b - b'0') as i64).collect();
+    let len = digits.len();
+    let mut total = 0;
+    let mut five = 1;
+    // every shorter length: a leading 1, 6, 8 or 9 and any of 5 after it
+    for _ in 1..len {
+        total += 4 * five;
+        five *= 5;
+    }
+    // n's own length: below n at the first digit that differs
+    let mut all_rotate = true;
+    for i in 0..len {
+        let rest = 5.pow((len - 1 - i) as u32);
+        total += rotating_below(digits[i], i == 0) * rest;
+        if rotated(digits[i]) < 0 {
+            all_rotate = false;
+            break;
+        }
+    }
+    if all_rotate {
+        total += 1;
+    }
+    total
+}
+
+fn rotated(d: i64) -> i64 {
+    match d {
+        0 => 0,
+        1 => 1,
+        6 => 9,
+        8 => 8,
+        9 => 6,
+        _ => -1,
+    }
+}
+
+// Every digit string of length `len` that reads the same upside down,
+// leading zeros allowed.
+fn strobogrammatic(len: i64) -> Vec[String] {
+    if len == 0 {
+        return [String.new()];
+    }
+    if len == 1 {
+        return ["0", "1", "8"];
+    }
+    let mut out: Vec[String] = [];
+    for inner in strobogrammatic(len - 2).iter() {
+        for (a, b) in [("0", "0"), ("1", "1"), ("6", "9"), ("8", "8"), ("9", "6")] {
+            out.push(f"{a}{inner}{b}");
+        }
+    }
+    out
+}
+
+fn confusing_number_ii(n: i64) -> i64 {
+    let len = n.to_string().len();
+    let mut same = 0;
+    for l in 1..=len {
+        for s in strobogrammatic(l).iter() {
+            if (l == 1 or not s.starts_with("0")) and s != "0" {
+                let v: i64 = i64.parse(s).unwrap();
+                if v <= n {
+                    same += 1;
+                }
+            }
+        }
+    }
+    rotating_up_to(n) - same
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [1, 6, 9, 10, 20, 100, 1000, 6969, 10000, 68986, 123456, 1000000];
+    for n in cases.iter() {
+        println(f"{n} -> {confusing_number_ii(n)}");
+    }
+    // every n from 1 to 1000
+    let mut small = 0;
+    for n in 1..=1000 {
+        small += confusing_number_ii(n);
+    }
+    println(f"n = 1 to 1000: answers sum to {small}");
+    // 200 random n up to 10^5, of 1 to 6 digits
+    let mut seed = 1088;
+    let mut h = 0;
+    for _ in 0..200 {
+        let digits = next_random(mut seed) % 6;
+        let mut n = 1;
+        for _ in 0..digits {
+            n *= 10;
+        }
+        let hi = next_random(mut seed) * 32768 + next_random(mut seed);
+        n = hi % n + 1;
+        h = (h * 31 + confusing_number_ii(n)) % 1000000007;
+    }
+    println(f"200 random n: checksum {h}");
+}

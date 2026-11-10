@@ -1,0 +1,488 @@
+// LeetCode #1088: Confusing Number II -- the differential: the six arms
+// against the statement read literally, under six properties, over 2000
+// random problems drawn before any arm answers.
+
+// ---- confusing_number_ii.kara ----
+
+fn a0_rotated(d: i64) -> i64 {
+    match d {
+        0 => 0,
+        1 => 1,
+        6 => 9,
+        8 => 8,
+        9 => 6,
+        _ => -1,
+    }
+}
+
+fn a0_count_from(num: i64, rot: i64, unit: i64, n: i64) -> i64 {
+    let mut total = 0;
+    for d in [0, 1, 6, 8, 9] {
+        let next = num * 10 + d;
+        if next > n {
+            break;
+        }
+        if next == 0 {
+            continue;
+        }
+        let r = a0_rotated(d) * unit + rot;
+        if next != r {
+            total += 1;
+        }
+        total += a0_count_from(next, r, unit * 10, n);
+    }
+    total
+}
+
+fn a0_confusing_number_ii(n: i64) -> i64 {
+    a0_count_from(0, 0, 1, n)
+}
+
+// ---- confusing_number_ii_stack.kara ----
+
+struct A1Partial {
+    num: i64,
+    rot: i64,
+    unit: i64,
+}
+
+fn a1_confusing_number_ii(n: i64) -> i64 {
+    let mut turn: Map[i64, i64] = Map.new();
+    turn.insert(0, 0);
+    turn.insert(1, 1);
+    turn.insert(6, 9);
+    turn.insert(8, 8);
+    turn.insert(9, 6);
+    let mut count = 0;
+    let mut stack: Vec[A1Partial] = [A1Partial { num: 0, rot: 0, unit: 1 }];
+    while let Some(p) = stack.pop() {
+        for d in 0..10 {
+            if let Some(r) = turn.get(d) {
+                let next = p.num * 10 + d;
+                if next == 0 or next > n {
+                    continue;
+                }
+                let rot = r * p.unit + p.rot;
+                if next != rot {
+                    count += 1;
+                }
+                stack.push(A1Partial { num: next, rot, unit: p.unit * 10 });
+            }
+        }
+    }
+    count
+}
+
+// ---- confusing_number_ii_count.kara ----
+
+fn a2_rotating_below(d: i64, first: bool) -> i64 {
+    let mut k = 0;
+    for r in [0, 1, 6, 8, 9] {
+        if r < d and not (first and r == 0) {
+            k += 1;
+        }
+    }
+    k
+}
+
+// How many numbers from 1 to n have only the digits 0, 1, 6, 8, 9.
+fn a2_rotating_up_to(n: i64) -> i64 {
+    let digits: Vec[i64] = n.to_string().bytes().iter().map(|b| (b - b'0') as i64).collect();
+    let len = digits.len();
+    let mut total = 0;
+    let mut five = 1;
+    // every shorter length: a leading 1, 6, 8 or 9 and any of 5 after it
+    for _ in 1..len {
+        total += 4 * five;
+        five *= 5;
+    }
+    // n's own length: below n at the first digit that differs
+    let mut all_rotate = true;
+    for i in 0..len {
+        let rest = 5.pow((len - 1 - i) as u32);
+        total += a2_rotating_below(digits[i], i == 0) * rest;
+        if a2_rotated(digits[i]) < 0 {
+            all_rotate = false;
+            break;
+        }
+    }
+    if all_rotate {
+        total += 1;
+    }
+    total
+}
+
+fn a2_rotated(d: i64) -> i64 {
+    match d {
+        0 => 0,
+        1 => 1,
+        6 => 9,
+        8 => 8,
+        9 => 6,
+        _ => -1,
+    }
+}
+
+// Every digit string of length `len` that reads the same upside down,
+// leading zeros allowed.
+fn a2_strobogrammatic(len: i64) -> Vec[String] {
+    if len == 0 {
+        return [String.new()];
+    }
+    if len == 1 {
+        return ["0", "1", "8"];
+    }
+    let mut out: Vec[String] = [];
+    for inner in a2_strobogrammatic(len - 2).iter() {
+        for (a, b) in [("0", "0"), ("1", "1"), ("6", "9"), ("8", "8"), ("9", "6")] {
+            out.push(f"{a}{inner}{b}");
+        }
+    }
+    out
+}
+
+fn a2_confusing_number_ii(n: i64) -> i64 {
+    let len = n.to_string().len();
+    let mut same = 0;
+    for l in 1..=len {
+        for s in a2_strobogrammatic(l).iter() {
+            if (l == 1 or not s.starts_with("0")) and s != "0" {
+                let v: i64 = i64.parse(s).unwrap();
+                if v <= n {
+                    same += 1;
+                }
+            }
+        }
+    }
+    a2_rotating_up_to(n) - same
+}
+
+// ---- confusing_number_ii_text.kara ----
+
+fn a3_turned(c: char) -> char {
+    match c {
+        '6' => '9',
+        '9' => '6',
+        _ => c,
+    }
+}
+
+fn a3_confusing_number_ii(n: i64) -> i64 {
+    let face = ['0', '1', '6', '8', '9'];
+    let mut count = 0;
+    let mut k = 1;
+    loop {
+        // k in base 5, written with the rotating digits
+        let mut text = String.new();
+        let mut rest = k;
+        while rest > 0 {
+            text.push(face[rest % 5]);
+            rest /= 5;
+        }
+        let digits: Vec[char] = text.chars().collect();
+        let written: String = digits.iter().rev().collect();
+        let v = i64.parse(written).unwrap();
+        if v > n {
+            break;
+        }
+        // `text` is the number backwards, so turning each character of it
+        // reads the rotation front to back
+        let rotation: String = text.chars().map(|c| a3_turned(c)).collect();
+        if i64.parse(rotation).unwrap() != v {
+            count += 1;
+        }
+        k += 1;
+    }
+    count
+}
+
+// ---- confusing_number_ii_layers.kara ----
+
+// The number read upside down, or -1 when a digit does not rotate.
+fn a4_rotation_of(x: i64) -> i64 {
+    let mut rest = x;
+    let mut r = 0;
+    while rest > 0 {
+        let d = match rest % 10 {
+            0 => 0,
+            1 => 1,
+            6 => 9,
+            8 => 8,
+            9 => 6,
+            _ => return -1,
+        };
+        r = r * 10 + d;
+        rest /= 10;
+    }
+    r
+}
+
+fn a4_confusing_number_ii(n: i64) -> i64 {
+    let digits = [0, 1, 6, 8, 9];
+    let mut layer: Vec[i64] = [1, 6, 8, 9];
+    let mut count = 0;
+    while not layer.is_empty() {
+        let within: Vec[i64] = layer.into_iter().filter(|x| *x <= n).collect();
+        count += within.iter().filter(|x| a4_rotation_of(*x) != *x).count();
+        layer = within.iter().flat_map(|x| digits.iter().map(|d| x * 10 + d)).collect();
+    }
+    count
+}
+
+// ---- confusing_number_ii_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_confusing_number_ii(n: i32) -> i32 {
+        let mut count: i32 = 0;
+        A5Solution.a5_dfs(0, 0, 1, n, mut count);
+        count
+    }
+
+    fn a5_dfs(num: i64, rotated: i64, unit: i64, n: i64, count: mut ref i32) {
+        let pairs = [(0, 0), (1, 1), (6, 9), (8, 8), (9, 6)];
+        for (d, r) in pairs.iter() {
+            let next = num * 10 + d;
+            if next > n or next == 0 {
+                continue;
+            }
+            let next_rot = r * unit + rotated;
+            if next != next_rot {
+                *count += 1;
+            }
+            A5Solution.a5_dfs(next, next_rot, unit * 10, n, mut count);
+        }
+    }
+}
+
+fn a5_confusing_number_ii(n: i64) -> i64 {
+    A5Solution.a5_confusing_number_ii(n as i32) as i64
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, n: i64) -> i64 {
+    match which {
+        0 => a0_confusing_number_ii(n),
+        1 => a1_confusing_number_ii(n),
+        2 => a2_confusing_number_ii(n),
+        3 => a3_confusing_number_ii(n),
+        4 => a4_confusing_number_ii(n),
+        _ => a5_confusing_number_ii(n),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: x rotated is each digit turned 180 degrees
+// (0, 1, 6, 8, 9 to 0, 1, 9, 8, 6), read from its last digit to its first;
+// x is confusing when every digit turns and the result, leading zeros
+// ignored, is another number.
+fn digits_of(x: i64) -> Vec[i64] {
+    let mut ds: Vec[i64] = [];
+    let mut rest = x;
+    while rest > 0 {
+        ds.insert(0, rest % 10);
+        rest /= 10;
+    }
+    ds
+}
+
+fn every_digit_turns(x: i64) -> bool {
+    digits_of(x).iter().all(|d| d == 0 or d == 1 or d == 6 or d == 8 or d == 9)
+}
+
+fn upside_down(x: i64) -> i64 {
+    let ds = digits_of(x);
+    let mut r = 0;
+    let mut i = ds.len() - 1;
+    while i >= 0 {
+        let d = ds[i];
+        let t = if d == 6 {
+            9
+        } else if d == 9 {
+            6
+        } else {
+            d
+        };
+        r = r * 10 + t;
+        i -= 1;
+    }
+    r
+}
+
+fn confusing(x: i64) -> bool {
+    every_digit_turns(x) and upside_down(x) != x
+}
+
+// The greatest number up to n whose digits all turn, and the least above n.
+fn down(n: i64) -> i64 {
+    let mut m = n;
+    while not every_digit_turns(m) {
+        m -= 1;
+    }
+    m
+}
+
+fn up(n: i64) -> i64 {
+    let mut m = n + 1;
+    while not every_digit_turns(m) {
+        m += 1;
+    }
+    m
+}
+
+// For m whose digits all turn: how many such numbers there are from 1 to m,
+// which is m read in base 5 with 0, 1, 6, 8, 9 as its digits 0 to 4.
+fn rank5(m: i64) -> i64 {
+    let mut r = 0;
+    for d in digits_of(m).iter() {
+        let v = if d == 6 {
+            2
+        } else if d == 8 {
+            3
+        } else if d == 9 {
+            4
+        } else {
+            d
+        };
+        r = r * 5 + v;
+    }
+    r
+}
+
+// How many numbers from 1 to n read the same upside down: every candidate
+// up to n, from its base-5 rank, tried.
+fn same_upside_down(n: i64) -> i64 {
+    let face = [0, 1, 6, 8, 9];
+    let mut same = 0;
+    for k in 1..=rank5(down(n)) {
+        let mut x = 0;
+        let mut place = 1;
+        let mut rest = k;
+        while rest > 0 {
+            x += face[rest % 5] * place;
+            place *= 10;
+            rest /= 5;
+        }
+        if upside_down(x) == x {
+            same += 1;
+        }
+    }
+    same
+}
+
+struct Problem {
+    n: i64,
+    // how far below n the window of P4 starts
+    w: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, pr: Problem, flags: Vec[bool], upto: Vec[i64]) {
+    let n = pr.n;
+    let want = upto[n];
+    let is_confusing = flags[n];
+    let low = down(n);
+    let high = up(n);
+    let a = (n - pr.w).max(1);
+    let mut window = 0;
+    for x in (a + 1)..=n {
+        if flags[x] {
+            window += 1;
+        }
+    }
+    let formula = rank5(low) - same_upside_down(n);
+    for w in 0..6 {
+        let answer = arm(w, n);
+        let what = f"arm {w}, n = {n} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        // P2: one step: n adds one exactly when n is confusing
+        if n >= 2 {
+            let before = arm(w, n - 1);
+            let step = if is_confusing {
+                1
+            } else {
+                0
+            };
+            expect(mut t, 2, answer - before == step, f"P2 {what}, n - 1 -> {before}");
+        } else {
+            expect(mut t, 2, answer == 0, f"P2 {what}");
+        }
+        // P3: down to the greatest number up to n whose digits all turn
+        let at_low = arm(w, low);
+        expect(mut t, 3, at_low == answer, f"P3 {what}, {low} -> {at_low}");
+        // P4: a window: the answer at a, and the confusing numbers above a
+        let at_a = arm(w, a);
+        expect(mut t, 4, a == n or answer - at_a == window, f"P4 {what}, {a} -> {at_a}, {window} between");
+        // P5: the numbers whose digits all turn, less those that read the same
+        expect(mut t, 5, answer == formula, f"P5 {what}, counted {formula}");
+        // P6: up to just below the next number whose digits all turn
+        let at_high = arm(w, high - 1);
+        expect(mut t, 6, at_high == answer, f"P6 {what}, {high - 1} -> {at_high}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + formula) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems: 1400 with n from 1 to 300 and 600 with n from 1 to
+    // 1200; each with a window of 1 to 200
+    // below n. Every choice is drawn before any arm answers.
+    let mut seed = 10881;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let top = if i < 1400 {
+            300
+        } else {
+            1200
+        };
+        let n = (next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1;
+        let w = next_random(mut seed) % 200 + 1;
+        problems.push(Problem { n, w });
+    }
+    // the statement read literally, once for every number up to 1200:
+    // whether it is confusing, and how many are, from 1 to it
+    let mut flags: Vec[bool] = [false];
+    let mut upto: Vec[i64] = [0];
+    for x in 1..=1200 {
+        flags.push(confusing(x));
+        upto.push(upto[x - 1] + if flags[x] {
+            1
+        } else {
+            0
+        });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p, flags, upto);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

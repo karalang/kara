@@ -1,0 +1,69 @@
+// LeetCode #1088: Confusing Number II -- LeetCode's Rust template, written
+// as Rust writes it and carried to Kāra by `karac fix`: `n: i32`, a counter
+// passed down as `&mut i32`, and an associated `fn dfs` over an array of
+// `(digit, rotation)` pairs walked with `for &(d, r) in pairs.iter()`.
+// O(the numbers up to n made of the digits that rotate).
+
+struct Solution {}
+
+impl Solution {
+    pub fn confusing_number_ii(n: i32) -> i32 {
+        let mut count: i32 = 0;
+        Solution.dfs(0, 0, 1, n, mut count);
+        count
+    }
+
+    fn dfs(num: i64, rotated: i64, unit: i64, n: i64, count: mut ref i32) {
+        let pairs = [(0, 0), (1, 1), (6, 9), (8, 8), (9, 6)];
+        for (d, r) in pairs.iter() {
+            let next = num * 10 + d;
+            if next > n or next == 0 {
+                continue;
+            }
+            let next_rot = r * unit + rotated;
+            if next != next_rot {
+                *count += 1;
+            }
+            Solution.dfs(next, next_rot, unit * 10, n, mut count);
+        }
+    }
+}
+
+fn confusing_number_ii(n: i64) -> i64 {
+    Solution.confusing_number_ii(n as i32) as i64
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [1, 6, 9, 10, 20, 100, 1000, 6969, 10000, 68986, 123456, 1000000];
+    for n in cases.iter() {
+        println(f"{n} -> {confusing_number_ii(n)}");
+    }
+    // every n from 1 to 1000
+    let mut small = 0;
+    for n in 1..=1000 {
+        small += confusing_number_ii(n);
+    }
+    println(f"n = 1 to 1000: answers sum to {small}");
+    // 200 random n up to 10^5, of 1 to 6 digits
+    let mut seed = 1088;
+    let mut h = 0;
+    for _ in 0..200 {
+        let digits = next_random(mut seed) % 6;
+        let mut n = 1;
+        for _ in 0..digits {
+            n *= 10;
+        }
+        let hi = next_random(mut seed) * 32768 + next_random(mut seed);
+        n = hi % n + 1;
+        h = (h * 31 + confusing_number_ii(n)) % 1000000007;
+    }
+    println(f"200 random n: checksum {h}");
+}

@@ -1,0 +1,83 @@
+// LeetCode #1089: Duplicate Zeros -- as text: the digits written out as a
+// `String`, every "0" replaced by "00", and the first n characters read back
+// as digits into the array. LeetCode's digits are 0 to 9, one character
+// each. O(n) time and space.
+
+fn duplicate_zeros(arr: mut ref Vec[i64]) {
+    let mut text = String.new();
+    for x in arr.iter() {
+        text.push_str(f"{x}");
+    }
+    let doubled = text.replace("0", "00");
+    for (i, c) in doubled.chars().take(arr.len()).enumerate() {
+        arr[i] = c.to_digit(10).unwrap();
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) -> String {
+    let parts: Vec[String] = arr.iter().map(|x| f"{x}").collect();
+    parts.join(", ")
+}
+
+// `len` random digits, about a third of them 0.
+fn random_digits(seed: mut ref i64, len: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = [];
+    for _ in 0..len {
+        let r = next_random(mut seed) % 15;
+        arr.push(if r < 5 { 0 } else { r - 5 });
+    }
+    arr
+}
+
+fn main() {
+    let cases = [
+        [1, 0, 2, 3, 0, 4, 5, 0],
+        [1, 2, 3],
+        [0],
+        [7],
+        [0, 0],
+        [1, 0],
+        [0, 1, 7],
+        [8, 4, 5, 0, 0, 0, 0, 7],
+        [0, 0, 0, 0, 0, 0, 0],
+        [9, 9, 0],
+        [0, 9, 0, 9, 0, 9],
+        [1, 5, 2, 0, 6, 8, 0, 6, 0],
+    ];
+    for case in cases.iter() {
+        let mut arr = case.clone();
+        duplicate_zeros(mut arr);
+        println(f"[{show(case)}] -> [{show(arr)}]");
+    }
+    // 2000 random arrays of 1 to 20 digits
+    let mut seed = 1089;
+    let mut h = 0;
+    let mut zeros = 0;
+    for _ in 0..2000 {
+        let len = next_random(mut seed) % 20 + 1;
+        let mut arr = random_digits(mut seed, len);
+        duplicate_zeros(mut arr);
+        for x in arr.iter() {
+            h = (h * 31 + x + 1) % 1000000007;
+            if x == 0 {
+                zeros += 1;
+            }
+        }
+    }
+    println(f"2000 random arrays: {zeros} zeros after, checksum {h}");
+    // one array of 10^4 digits, LeetCode's longest
+    let mut arr = random_digits(mut seed, 10000);
+    duplicate_zeros(mut arr);
+    let mut h = 0;
+    for (i, x) in arr.iter().enumerate() {
+        h = (h * 31 + x * (i % 7 + 1)) % 1000000007;
+    }
+    println(f"10000 digits: length {arr.len()}, checksum {h}");
+}
