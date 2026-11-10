@@ -129,7 +129,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-7 | 2026-11-10 | mir | medium | A user iterator over a `Str` field whose `next` spells its return `Option[Str]` (or `Option[(i64, Str)]`) instead of `Option[Self.Item]` passes `karac check`, then `collect()` on it is refused E0509 in `ItemValues[..].next`: "the result borrows (*_1).0, which the receiver owns"; the same impl written `-> Option[Self.Item]` runs | — |
 | B-2026-11-10-8 | 2026-11-10 | typecheck | medium | An unannotated closure parameter used with an operator is refused at the operator (`let f = |x, n| x + n; f(1, 2)` -> "type '?T0' does not implement trait Add"), though design.md §8 lets a later use in the same body fix it; when nothing does, the message is not §8's "cannot infer closure parameter type" | — |
 | B-2026-11-10-14 | 2026-11-10 | typecheck+mir-llvm | high | `BufReader.new(stream)` over a `TcpStream` (`BufReader.new(conn.try_clone().unwrap())`, then `.lines()`) passes check, though a `BufReader` wraps only a `File` or a child pipe: the interpreter fails "BufReader[TcpStream].new of a closed file" and a compiled build frees the socket as a file (ASan: attempting free on address which was not malloc()-ed, in karac_mir_buf) | — |
-| B-2026-11-10-15 | 2026-11-10 | interp | medium | The interpreter's readiness peek for a waiting socket read swallowed a pending socket error: a reset TCP connection read as an end of stream (`Ok(0)`) and a refused connected-UDP `recv` waited out its timeout, where a compiled build reports `os error 104` / `connection refused` | — |
 | B-2026-11-10-16 | 2026-11-10 | resolver | low | A call through a path that starts at `std` (`std.mem.take(mut v)`, design.md's own example `std.fs.read_to_string(path)`) fails "undefined name 'std'" with no help, while `mem.take` and `fs.read_to_string` resolve | — |
 | B-2026-11-10-17 | 2026-11-10 | parser | low | `format!` whose argument is an `if`, `match` or block expression (`format!("{}={}", n, if up { "up" } else { "down" })`) gets E0001 with no machine fix, because the f-string rewrite refuses any argument containing `{`, `}` or `:`, though an f-string hole takes those expressions | — |
 
@@ -1008,6 +1007,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-1 | mir-llvm | medium | A plain `karac build` whose auto-par verdicts parallelize nothing shipped the recording lowering, which puts a block between every statement of a blo… | ba29c00d5c |
 | B-2026-11-10-2 | mir-llvm | high | `v.as_slice_mut()` and a range view passed `mut v[a..b]`, on a `Vec` of literals, lowered on a shared borrow, so the literal-table pass made the `Vec… | ba29c00d5c |
 | B-2026-11-10-3 | typecheck | low | A `flat_map` closure whose body is an `if`/`else` or a `match` giving a list from each branch (`\|x\| if x == 0 { [0, 0] } else { [x] }`, as Rust's `fl… | ba29c00d5c |
+| B-2026-11-10-15 | interp | medium | The interpreter's readiness peek for a waiting socket read swallowed a pending socket error: a reset TCP connection read as an end of stream (`Ok(0)`… | 1ca1f71e30 |
 
 </details>
 
