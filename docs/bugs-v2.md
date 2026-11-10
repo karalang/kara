@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 229 |
 | false-positive | 179 |
 | perf | 152 |
-| missing-feature | 133 |
+| missing-feature | 134 |
 | soundness | 60 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 364 |
+| typecheck | 365 |
 | mir-llvm | 196 |
 | mir | 167 |
 | cli | 94 |
@@ -112,7 +112,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-96 | 2026-11-09 | typecheck | low | A tuple of borrowed elements moved where owned ones are wanted (`for (k, v) in headers { out.push((k, v)); }` with a bare, so borrowing, `headers: Vec[(String, String)]` parameter) gets "expected '(String, String)', found '(ref String, ref String)'" with no fix, where the one-element form gets `.clone()` | — |
 | B-2026-11-09-97 | 2026-11-09 | typecheck | low | `req.header("X-Purge-Token") != Some(PURGE_TOKEN)` (an `Option[String]` against an `Option[Str]` of a constant) is refused with "cannot compare 'Option[String]' and 'Option[Str]'" and no remedy; `String == Str` compares, and the library has no `as_deref` | — |
 | B-2026-11-09-98 | 2026-11-09 | mir | medium | A `Str` view of a parameter passed through a closure combinator is refused as returning a borrow of a temporary: `fn unquote(s: Str) -> Str { s.strip_prefix("\"").and_then(|t| t.strip_suffix("\"")).unwrap_or(s) }` is E0509 "the result borrows a temporary value, which this function owns", as are `.map(|t| t.trim())` and `split_once(..).map(|p| p.0)`; the same chain without a closure, or a `match`, passes | — |
-| B-2026-11-10-6 | 2026-11-10 | typecheck | medium | A block, `if` or `match` whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)`, `let z = { 1 }; take_i32(z)`, and kata 2055's `prefix[i + 1] = prefix[i] + if b[i] == b'*' { 1 } else { 0 }` with `prefix: Vec[i32]` are refused as narrowing, with no fix | — |
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-10-37 | 2026-11-10 | mir-llvm | low | LLVM 22 keeps hsearch's (275) bounds check on `citations[mid]` in a binary search: instcombine rewrites karac's `assume(mid >= lo)` into `assume(hi - lo > -2)`, so IPSCCP no longer folds the check; costs nothing measurable on Emerald Rapids at HEAD, Cascade Lake not re-measured | — |
@@ -126,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-46 | 2026-11-10 | typecheck | low | `Result.unwrap_or_default()` does not exist (`String.from_utf8(v).unwrap_or_default()` fails "no method 'unwrap_or_default' on type 'Result'"), though `Option` has it (library/core-types.md) and Rust has both | — |
 | B-2026-11-10-47 | 2026-11-10 | typecheck | low | Rust's `let local = [127u8, 0, 0, 1];` (an array in Rust, a `Vec` by default in Kāra) passed to an `Array[u8, 4]` parameter gets "expected 'Array[u8, 4]', found 'Vec[u8]'" at each use, with no fix to annotate the `let` | — |
 | B-2026-11-10-48 | 2026-11-10 | typecheck | low | An unknown method in a `let` initializer (`text.trim_end_matches('\n').split("\n").collect()`) is followed by a spurious "a reference to a temporary outlives its statement (core-semantics.md §5.5)" at the same span | — |
+| B-2026-11-10-49 | 2026-11-10 | typecheck | medium | A `let` bound to an `if`, `match` or block whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 ("A join of literals is a literal") says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)` and kata 2103's `let bit = match pair[0] { b'R' => 1, b'G' => 2, _ => 4 }; rods[i] |= bit` over a `[u8; 10]` are refused as narrowing (the binding half of B-2026-11-10-6) | — |
 
 ### Relocated
 
@@ -1015,6 +1015,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-3 | typecheck | low | A `flat_map` closure whose body is an `if`/`else` or a `match` giving a list from each branch (`\|x\| if x == 0 { [0, 0] } else { [x] }`, as Rust's `fl… | ba29c00d5c |
 | B-2026-11-10-4 | mir | medium | A range view passed `mut v[a..b]` is lowered on a shared borrow of `v` (`_r = &v; Vec[T].slice(move _r, a, b)`), so MIR borrowck does not see it writ… | 8819ec4dff |
 | B-2026-11-10-5 | mir-llvm | medium | `karac run` of apps/cli/mini_tldextract (21.8k lines) takes 92 s on one core, where `karac build` takes 16 s wall (42 s CPU over four units) and the… | 5f76094346 |
+| B-2026-11-10-6 | typecheck | medium | A block, `if` or `match` whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 says later uses… | 547252a43f |
 | B-2026-11-10-7 | mir | medium | A user iterator over a `Str` field whose `next` spells its return `Option[Str]` (or `Option[(i64, Str)]`) instead of `Option[Self.Item]` passes `kara… | 7087121aa9 |
 | B-2026-11-10-8 | typecheck | medium | An unannotated closure parameter used with an operator is refused at the operator (`let f = \|x, n\| x + n; f(1, 2)` -> "type '?T0' does not implement… | cb5f6da53e |
 | B-2026-11-10-14 | typecheck+mir-llvm | high | `BufReader.new(stream)` over a `TcpStream` (`BufReader.new(conn.try_clone().unwrap())`, then `.lines()`) passes check, though a `BufReader` wraps onl… | e1523f1438 |
