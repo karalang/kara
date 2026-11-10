@@ -1,0 +1,42 @@
+// LeetCode #2057: Smallest Index With Equal Value -- the ★ arm's
+// benchmark. 1000000 arrays of 1 to 100 digits, drawn as the harness draws
+// them into one buffer, each answered by walking its indices from the
+// front.
+
+fn smallest_equal(nums: Vec[i64]) -> i64 {
+    for i in 0..nums.len() {
+        if i % 10 == nums[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 2057;
+    let mut nums: Vec[i64] = Vec.new();
+    let mut found = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let rare = next_random(mut seed) % 20 + 1;
+        nums.clear();
+        for i in 0..n {
+            let d = next_random(mut seed) % 10;
+            nums.push(if d == i % 10 and next_random(mut seed) % rare != 0 { (d + 1) % 10 } else { d });
+        }
+        let at = smallest_equal(nums);
+        if at >= 0 {
+            found += 1;
+        }
+        total += at;
+        check = (check * 31 + at + 2) % 1000000007;
+    }
+    println(f"1000000 arrays: {found} found, sum {total}, checksum {check}");
+}

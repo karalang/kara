@@ -1,0 +1,116 @@
+// LeetCode #2059: Minimum Operations to Convert Number -- the search run
+// backwards from `goal`. Each operation can be undone: `y` came from
+// `y - n`, `y + n` or `y ^ n`, and only a value from 0 to 1000 can have
+// been operated on, so the search walks those predecessors, first of
+// `goal` itself (which may lie outside the range) and then of each value
+// found, until it finds `start`. A `Vec` with a read index is the queue.
+
+fn minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let mut dist: Vec[i64] = Vec.filled(1001, -1);
+    let mut queue: Vec[i64] = Vec.new();
+    for n in nums.iter() {
+        for x in [goal - n, goal + n, goal ^ n] {
+            if x >= 0 and x <= 1000 and dist[x] < 0 {
+                dist[x] = 1;
+                queue.push(x);
+            }
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let y = queue[head];
+        head += 1;
+        if y == start {
+            return dist[y];
+        }
+        for n in nums.iter() {
+            for x in [y - n, y + n, y ^ n] {
+                if x >= 0 and x <= 1000 and dist[x] < 0 {
+                    dist[x] = dist[y] + 1;
+                    queue.push(x);
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` distinct numbers, most within `spread` of 0, one in eight anywhere
+// in the constraints' range
+fn draw(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    while nums.len() < n {
+        let x = if next_random(mut seed) % 8 == 0 {
+            (next_random(mut seed) * 32768 + next_random(mut seed)) % 2000000001 - 1000000000
+        } else {
+            next_random(mut seed) % (2 * spread + 1) - spread
+        };
+        if not nums.contains(x) {
+            nums.push(x);
+        }
+    }
+    nums
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], i64, i64)] = [
+        ([2, 4, 12].to_vec(), 2, 12),
+        ([3, 5, 7].to_vec(), 0, -4),
+        ([2, 8, 16].to_vec(), 0, 1),
+        ([1].to_vec(), 0, 1000),
+        ([1000000000].to_vec(), 5, 1000000005),
+        ([-1].to_vec(), 3, 2),
+        ([7].to_vec(), 1000, 1001),
+        ([0, 6].to_vec(), 9, 15),
+        ([1024].to_vec(), 1000, 24),
+    ].to_vec();
+    for (nums, start, goal) in examples.iter() {
+        println(f"{nums}, {start} -> {goal}: {minimum_operations(nums.clone(), start, goal)}");
+    }
+    // 400 problems of 1 to 8 numbers, mostly within 5 to 1500 of 0
+    let mut seed = 2059;
+    let mut unreachable = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..400 {
+        let n = next_random(mut seed) % 8 + 1;
+        let spread = [5, 50, 300, 1500][next_random(mut seed) % 4];
+        let nums = draw(n, spread, mut seed);
+        let start = next_random(mut seed) % 1001;
+        let mut goal = next_random(mut seed) % 1401 - 200;
+        if goal == start {
+            goal += 1;
+        }
+        let ops = minimum_operations(nums, start, goal);
+        if ops < 0 {
+            unreachable += 1;
+        }
+        total += ops;
+        check = (check * 31 + ops + 2) % 1000000007;
+    }
+    println(f"400 problems: {unreachable} unreachable, sum {total}, checksum {check}");
+    // 4 problems of 100 numbers
+    unreachable = 0;
+    total = 0;
+    check = 0;
+    for r in 0..4 {
+        let nums = draw(100, [20, 200, 1000, 100000][r], mut seed);
+        let start = next_random(mut seed) % 1001;
+        let goal = [1001, -7, 500, 777777][r];
+        let ops = minimum_operations(nums, start, goal);
+        if ops < 0 {
+            unreachable += 1;
+        }
+        total += ops;
+        check = (check * 31 + ops + 2) % 1000000007;
+    }
+    println(f"4 problems of 100 numbers: {unreachable} unreachable, sum {total}, checksum {check}");
+}

@@ -1,0 +1,94 @@
+// LeetCode #2056: Number of Valid Move Combinations On Chessboard -- the ★
+// arm as a benchmark. 200 boards of 4 pieces, the constraints' limit, of
+// random kinds on random squares of the whole board, each counted by
+// backtracking over the pieces' moves, each new move walked against the
+// moves already chosen.
+
+#[derive(Copy, Clone)]
+struct Move {
+    dr: i64,
+    dc: i64,
+    steps: i64,
+}
+
+fn moves_of(kind: Str, r: i64, c: i64) -> Vec[Move] {
+    let rook = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let bishop = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut dirs: Vec[(i64, i64)] = Vec.new();
+    if kind != "bishop" {
+        dirs.extend(rook.iter());
+    }
+    if kind != "rook" {
+        dirs.extend(bishop.iter());
+    }
+    let mut moves = [Move { dr: 0, dc: 0, steps: 0 }].to_vec();
+    for (dr, dc) in dirs.iter() {
+        let mut steps = 1;
+        while (1..=8).contains(r + dr * steps) and (1..=8).contains(c + dc * steps) {
+            moves.push(Move { dr, dc, steps });
+            steps += 1;
+        }
+    }
+    moves
+}
+
+// whether two pieces, from `a` and `b`, ever stand on one square
+fn collide(a: (i64, i64), ma: Move, b: (i64, i64), mb: Move) -> bool {
+    for t in 1..=ma.steps.max(mb.steps) {
+        let (ta, tb) = (t.min(ma.steps), t.min(mb.steps));
+        if a.0 + ma.dr * ta == b.0 + mb.dr * tb and a.1 + ma.dc * ta == b.1 + mb.dc * tb {
+            return true;
+        }
+    }
+    false
+}
+
+fn count_from(i: i64, at: Vec[(i64, i64)], options: Vec[Vec[Move]], chosen: mut ref Vec[Move]) -> i64 {
+    if i == at.len() {
+        return 1;
+    }
+    let mut total = 0;
+    for m in options[i].iter() {
+        if (0..i).all(|j| not collide(at[j], chosen[j], at[i], m)) {
+            chosen.push(m);
+            total += count_from(i + 1, at, options, mut chosen);
+            chosen.pop();
+        }
+    }
+    total
+}
+
+fn count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let options: Vec[Vec[Move]] = (0..pieces.len()).map(|i| moves_of(pieces[i], positions[i].0, positions[i].1)).collect();
+    let mut chosen: Vec[Move] = Vec.new();
+    count_from(0, positions, options, mut chosen)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let kinds = ["rook", "queen", "bishop"];
+    let mut seed = 2056;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..200 {
+        let mut pieces: Vec[String] = Vec.new();
+        let mut positions: Vec[(i64, i64)] = Vec.new();
+        while positions.len() < 4 {
+            let r = next_random(mut seed) % 8 + 1;
+            let c = next_random(mut seed) % 8 + 1;
+            let kind = kinds[next_random(mut seed) % 3].clone();
+            if not positions.contains((r, c)) {
+                pieces.push(kind);
+                positions.push((r, c));
+            }
+        }
+        let count = count_combinations(pieces, positions);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"200 boards: sum {total}, checksum {check}");
+}

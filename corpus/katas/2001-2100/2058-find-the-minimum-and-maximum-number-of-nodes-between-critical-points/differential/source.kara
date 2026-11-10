@@ -1,0 +1,357 @@
+// LeetCode #2058: Find the Minimum and Maximum Number of Nodes Between
+// Critical Points -- the differential. The six arms, against the statement
+// read literally: every node with a node on each side whose value is above
+// both or below both is critical, and the answer is the least and greatest
+// distance between two of them, or [-1, -1] with fewer than two. 1000
+// lists of 2 to 40 values, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is [-1, -1], or a least distance of at least 1 that is at
+//     most the greatest, itself at most the list's length less three
+// P3  the list reversed has the same answer
+// P4  every value v made 11 - v, which swaps peaks and troughs, has the
+//     same answer
+// P5  the list with a copy of its first value put in front has the same
+//     answer
+// P6  each arm agrees with at least three of the other five
+
+shared struct ListNode {
+    val: i64,
+    next: Option[ListNode],
+}
+
+fn build(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: v, next: head });
+    }
+    head
+}
+
+// ---- critical.kara: the ★ arm, one walk with the value before each node
+fn star_nodes_between_critical_points(head: Option[ListNode]) -> Vec[i64] {
+    let Some(first_node) = head else {
+        return [-1, -1].to_vec();
+    };
+    let mut before = first_node.val;
+    let mut cur = first_node.next;
+    let mut at = 1;
+    let mut first = -1;
+    let mut last = -1;
+    let mut nearest = -1;
+    while let Some(node) = cur {
+        if let Some(after) = node.next {
+            let v = node.val;
+            if (v > before and v > after.val) or (v < before and v < after.val) {
+                if first < 0 {
+                    first = at;
+                } else if nearest < 0 or at - last < nearest {
+                    nearest = at - last;
+                }
+                last = at;
+            }
+        }
+        before = node.val;
+        cur = node.next;
+        at += 1;
+    }
+    if nearest < 0 {
+        [-1, -1].to_vec()
+    } else {
+        [nearest, last - first].to_vec()
+    }
+}
+
+// ---- critical_brute.kara: every pair of critical places
+fn brute_nodes_between_critical_points(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    let mut critical: Vec[i64] = Vec.new();
+    for i in 1..values.len() - 1 {
+        let (a, v, b) = (values[i - 1], values[i], values[i + 1]);
+        if (v > a and v > b) or (v < a and v < b) {
+            critical.push(i);
+        }
+    }
+    let mut least = -1;
+    let mut most = -1;
+    for i in 0..critical.len() {
+        for j in i + 1..critical.len() {
+            let d = critical[j] - critical[i];
+            if least < 0 or d < least {
+                least = d;
+            }
+            most = most.max(d);
+        }
+    }
+    [least, most].to_vec()
+}
+
+// ---- critical_windows.kara: `windows(3)` for the places, `windows(2)` for the gaps
+fn windows_nodes_between_critical_points(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    let places: Vec[i64] = values
+        .windows(3)
+        .iter()
+        .enumerate()
+        .filter_map(|(i, w)| {
+            if (w[1] > w[0] and w[1] > w[2]) or (w[1] < w[0] and w[1] < w[2]) {
+                Some(i + 1)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if places.len() < 2 {
+        return [-1, -1].to_vec();
+    }
+    let least = places.windows(2).iter().map(|p| p[1] - p[0]).min().unwrap();
+    [least, places[places.len() - 1] - places[0]].to_vec()
+}
+
+// ---- critical_zip.kara: three iterators `zip`ped, a `fold`
+fn zip_nodes_between_critical_points(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    let (first, last, least) = values
+        .iter()
+        .zip(values.iter().skip(1))
+        .zip(values.iter().skip(2))
+        .enumerate()
+        .fold((-1, -1, -1), |(first, last, least), (i, ((a, v), b))| {
+            if (v > a and v > b) or (v < a and v < b) {
+                let at = i + 1;
+                if first < 0 {
+                    (at, at, least)
+                } else if least < 0 or at - last < least {
+                    (first, at, at - last)
+                } else {
+                    (first, at, least)
+                }
+            } else {
+                (first, last, least)
+            }
+        });
+    if least < 0 {
+        [-1, -1].to_vec()
+    } else {
+        [least, last - first].to_vec()
+    }
+}
+
+// ---- critical_nodes.kara: three node handles walked together
+fn nodes_nodes_between_critical_points(head: Option[ListNode]) -> Vec[i64] {
+    let mut places: Vec[i64] = Vec.new();
+    let mut a = head;
+    let mut at = 1;
+    while let Some(x) = a {
+        let Some(y) = x.next else {
+            break;
+        };
+        let Some(z) = y.next else {
+            break;
+        };
+        if (y.val > x.val and y.val > z.val) or (y.val < x.val and y.val < z.val) {
+            places.push(at);
+        }
+        a = x.next;
+        at += 1;
+    }
+    if places.len() < 2 {
+        return [-1, -1].to_vec();
+    }
+    let mut least = places[1] - places[0];
+    for k in 2..places.len() {
+        least = least.min(places[k] - places[k - 1]);
+    }
+    [least, places[places.len() - 1] - places[0]].to_vec()
+}
+
+// ---- critical_solution.kara: LeetCode's Rust template, carried by `karac fix`
+// Definition for singly-linked list.
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct SolutionListNode {
+    pub val: i32,
+    pub next: Option[SolutionListNode],
+}
+
+impl SolutionListNode {
+    #[inline]
+    fn new(val: i32) -> Self {
+        SolutionListNode { next: None, val }
+    }
+}
+
+struct Solution {}
+
+impl Solution {
+    pub fn nodes_between_critical_points(head: Option[SolutionListNode]) -> Vec[i32] {
+        let mut prev = head.as_ref().unwrap().val;
+        let mut cur = head.clone().unwrap().next;
+        let mut idx: i32 = 1;
+        let mut (first, last, min_d) = (-1i32, -1i32, i32.MAX);
+        while let Some(node) = cur {
+            if let Some(next) = ref node.next {
+                if (node.val > prev and node.val > next.val) or (node.val < prev and node.val < next.val) {
+                    if first == -1 {
+                        first = idx;
+                    } else {
+                        min_d = min_d.min(idx - last);
+                    }
+                    last = idx;
+                }
+            }
+            prev = node.val;
+            cur = node.next;
+            idx += 1;
+        }
+        if min_d == i32.MAX {
+            [-1, -1]
+        } else {
+            [min_d, last - first]
+        }
+    }
+}
+
+fn solution_nodes_between_critical_points(values: Vec[i64]) -> Vec[i64] {
+    let mut head: Option[SolutionListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(SolutionListNode { val: v as i32, next: head });
+    }
+    Solution.nodes_between_critical_points(head).iter().map(|d| d as i64).collect()
+}
+
+// ---- the statement read literally
+
+fn literal(values: Vec[i64]) -> Vec[i64] {
+    let n = values.len();
+    let mut critical: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let has_both = i >= 1 and i + 1 < n;
+        if has_both {
+            let peak = values[i] > values[i - 1] and values[i] > values[i + 1];
+            let trough = values[i] < values[i - 1] and values[i] < values[i + 1];
+            if peak or trough {
+                critical.push(i);
+            }
+        }
+    }
+    if critical.len() < 2 {
+        return [-1, -1].to_vec();
+    }
+    let mut distances: Vec[i64] = Vec.new();
+    for a in critical.iter() {
+        for b in critical.iter() {
+            if a != b {
+                distances.push((a - b).abs());
+            }
+        }
+    }
+    distances.sort();
+    [distances[0], distances[distances.len() - 1]].to_vec()
+}
+
+fn answer(arm: i64, values: Vec[i64]) -> Vec[i64] {
+    match arm {
+        0 => star_nodes_between_critical_points(build(values)),
+        1 => brute_nodes_between_critical_points(build(values)),
+        2 => windows_nodes_between_critical_points(build(values)),
+        3 => zip_nodes_between_critical_points(build(values)),
+        4 => nodes_nodes_between_critical_points(build(values)),
+        _ => solution_nodes_between_critical_points(values),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// as the harness draws them
+fn draw(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        values.push(next_random(mut seed) % top + 1);
+    }
+    values
+}
+
+fn main() {
+    let names = ["star", "brute", "windows", "zip", "nodes", "solution"];
+    let mut seed = 2058;
+    let mut problems: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 39 + 2;
+        let top = next_random(mut seed) % 9 + 2;
+        problems.push(draw(n, top, mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for values in problems.iter() {
+        let n = values.len();
+        let truth = literal(values.clone());
+        for t in truth.iter() {
+            check = (check * 31 + t + 2) % 1000000007;
+        }
+        let reversed: Vec[i64] = values.iter().rev().cloned().collect();
+        let flipped: Vec[i64] = values.iter().map(|v| 11 - v).collect();
+        let mut padded: Vec[i64] = [values[0]].to_vec();
+        padded.extend(values.iter());
+        let got: Vec[Vec[i64]] = (0..6).map(|arm| answer(arm, values.clone())).collect();
+        for arm in 0..6 {
+            let x = got[arm].clone();
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let bounded = x.len() == 2
+                and ((x[0] == -1 and x[1] == -1) or (x[0] >= 1 and x[0] <= x[1] and x[1] <= n - 3));
+            let verdicts = [
+                x == truth,
+                bounded,
+                answer(arm, reversed.clone()) == x,
+                answer(arm, flipped.clone()) == x,
+                answer(arm, padded.clone()) == x,
+                same >= 3,
+            ];
+            for p in 0..6 {
+                checks += 1;
+                if not verdicts[p] {
+                    by_property[p] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"{values} arm {names[arm]}: P{p + 1} fails, answer {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"1000 lists: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for p in 0..6 {
+            if by_property[p] > 0 {
+                println(f"P{p + 1} {by_property[p]}");
+            }
+        }
+    }
+}

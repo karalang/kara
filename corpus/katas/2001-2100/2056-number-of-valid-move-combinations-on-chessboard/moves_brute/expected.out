@@ -1,0 +1,9 @@
+[rook] [(1, 1)] -> 15
+[queen] [(1, 1)] -> 22
+[bishop] [(4, 3)] -> 12
+[rook, rook] [(1, 1), (8, 8)] -> 223
+[queen, bishop] [(5, 7), (3, 4)] -> 281
+[rook, rook] [(1, 1), (1, 2)] -> 196
+[queen, queen, rook] [(4, 4), (4, 5), (5, 4)] -> 8580
+300 boards: sum 392800, checksum 592594677
+4 boards of 4: sum 152376, checksum 908658919

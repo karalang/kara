@@ -1,0 +1,69 @@
+// LeetCode #2057: Smallest Index With Equal Value -- the answer from index
+// `i` on is `i` when it matches, else the answer from `i + 1` on, and -1
+// past the end. At most 100 calls deep.
+
+fn first_from(nums: Vec[i64], i: i64) -> i64 {
+    if i == nums.len() {
+        -1
+    } else if i % 10 == nums[i] {
+        i
+    } else {
+        first_from(nums, i + 1)
+    }
+}
+
+fn smallest_equal(nums: Vec[i64]) -> i64 {
+    first_from(nums, 0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` digits, each matching its index's last digit about one time in
+// `rare` more often than chance would
+fn draw(n: i64, rare: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let d = next_random(mut seed) % 10;
+        // a digit equal to the index's is redrawn once, so matches thin out
+        nums.push(if d == i % 10 and next_random(mut seed) % rare != 0 { (d + 1) % 10 } else { d });
+    }
+    nums
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        [0, 1, 2].to_vec(),
+        [4, 3, 2, 1].to_vec(),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 0].to_vec(),
+        [9].to_vec(),
+        [0].to_vec(),
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1].to_vec(),
+        [2, 0, 3, 4, 5, 6, 7, 8, 9, 1, 2, 2, 2].to_vec(),
+    ];
+    for nums in examples.iter() {
+        println(f"{nums} -> {smallest_equal(nums.clone())}");
+    }
+    // 5000 arrays of 1 to 100 digits, the constraints' limit
+    let mut seed = 2057;
+    let mut found = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..5000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let rare = next_random(mut seed) % 20 + 1;
+        let nums = draw(n, rare, mut seed);
+        let at = smallest_equal(nums);
+        if at >= 0 {
+            found += 1;
+        }
+        total += at;
+        check = (check * 31 + at + 2) % 1000000007;
+    }
+    println(f"5000 arrays: {found} found, sum {total}, checksum {check}");
+}

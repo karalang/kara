@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2056-number-of-valid-move-combinations-on-chessboard/bench/moves.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 2056 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "08f3580ac+local"
+extracted_src = "b07eb903"

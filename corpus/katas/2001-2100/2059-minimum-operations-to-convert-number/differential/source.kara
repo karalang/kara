@@ -1,0 +1,354 @@
+// LeetCode #2059: Minimum Operations to Convert Number -- the
+// differential. The six arms, against the statement read literally: the
+// values reachable in at most k operations, each operation made from a
+// value from 0 to 1000, grown one operation at a time until an operation
+// gives `goal` or the values in range stop growing. 150 problems of 1 to 5
+// numbers, every one drawn before any arm answers, then 20 of one number
+// whose only way to `goal` passes through 0 or through 1000.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is -1 or at least 1, and 1 exactly when one operation on
+//     `start` gives `goal`
+// P3  the numbers listed backwards have the same answer
+// P4  one more number never makes the answer larger, -1 counting as
+//     larger than any
+// P5  from a value in range one operation from `start`, `goal` is out of
+//     reach exactly when it is from `start` itself, and otherwise at most
+//     one operation nearer
+// P6  each arm agrees with at least three of the other five
+
+// ---- ops.kara: the ★ arm, a breadth-first search with a `VecDeque`
+fn star_minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let mut seen: Vec[bool] = Vec.filled(1001, false);
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    seen[start] = true;
+    queue.push_back((start, 0));
+    while let Some((x, steps)) = queue.pop_front() {
+        for n in nums.iter() {
+            for y in [x + n, x - n, x ^ n] {
+                if y == goal {
+                    return steps + 1;
+                }
+                if y >= 0 and y <= 1000 and not seen[y] {
+                    seen[y] = true;
+                    queue.push_back((y, steps + 1));
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- ops_layers.kara: a `Set` of values a level at a time
+fn layers_minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let mut reached: Set[i64] = Set.new();
+    reached.insert(start);
+    let mut level: Vec[i64] = [start].to_vec();
+    let mut steps = 0;
+    while not level.is_empty() {
+        steps += 1;
+        let mut next: Set[i64] = Set.new();
+        for x in level.iter() {
+            for n in nums.iter() {
+                for y in [x + n, x - n, x ^ n] {
+                    if y == goal {
+                        return steps;
+                    }
+                    if (0..=1000).contains(y) and not reached.contains(y) {
+                        reached.insert(y);
+                        next.insert(y);
+                    }
+                }
+            }
+        }
+        level = next.iter().cloned().collect();
+    }
+    -1
+}
+
+// ---- ops_backward.kara: the search run backwards from `goal`
+fn backward_minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let mut dist: Vec[i64] = Vec.filled(1001, -1);
+    let mut queue: Vec[i64] = Vec.new();
+    for n in nums.iter() {
+        for x in [goal - n, goal + n, goal ^ n] {
+            if x >= 0 and x <= 1000 and dist[x] < 0 {
+                dist[x] = 1;
+                queue.push(x);
+            }
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let y = queue[head];
+        head += 1;
+        if y == start {
+            return dist[y];
+        }
+        for n in nums.iter() {
+            for x in [y - n, y + n, y ^ n] {
+                if x >= 0 and x <= 1000 and dist[x] < 0 {
+                    dist[x] = dist[y] + 1;
+                    queue.push(x);
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- ops_map.kara: a `Map` of distances, the operations as closures
+fn map_minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let ops: Vec[Fn(i64, i64) -> i64] = [|x, n| x + n, |x, n| x - n, |x, n| x ^ n];
+    let mut dist: Map[i64, i64] = Map.new();
+    dist[start] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(start);
+    while let Some(x) = queue.pop_front() {
+        let d = dist[x];
+        for n in nums.iter() {
+            for op in ops.iter() {
+                let y = op(x, n);
+                match y {
+                    _ if y == goal => return d + 1,
+                    0..=1000 if not dist.contains_key(y) => {
+                        dist[y] = d + 1;
+                        queue.push_back(y);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- ops_rounds.kara: distances relaxed in rounds
+fn rounds_minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let mut dist: Vec[i64] = Vec.filled(1001, -1);
+    dist[start] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for x in 0..1001 {
+            if dist[x] < 0 {
+                continue;
+            }
+            for n in nums.iter() {
+                for y in [x + n, x - n, x ^ n] {
+                    if y >= 0 and y <= 1000 and (dist[y] < 0 or dist[x] + 1 < dist[y]) {
+                        dist[y] = dist[x] + 1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut best = -1;
+    for x in 0..1001 {
+        if dist[x] < 0 {
+            continue;
+        }
+        for n in nums.iter() {
+            if x + n == goal or x - n == goal or x ^ n == goal {
+                if best < 0 or dist[x] + 1 < best {
+                    best = dist[x] + 1;
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- ops_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn minimum_operations(nums: Vec[i32], start: i32, goal: i32) -> i32 {
+        let mut seen = Vec.filled(1001, false);
+        let mut q = VecDeque.new();
+        seen[start as usize] = true;
+        q.push_back((start, 0));
+        while let Some((x, d)) = q.pop_front() {
+            for n in ref nums {
+                for y in [x + n, x - n, x ^ n] {
+                    if y == goal {
+                        return d + 1;
+                    }
+                    if (0..=1000).contains(y) and not seen[y as usize] {
+                        seen[y as usize] = true;
+                        q.push_back((y, d + 1));
+                    }
+                }
+            }
+        }
+        -1
+    }
+}
+
+fn solution_minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let given: Vec[i32] = nums.iter().map(|n| n as i32).collect();
+    Solution.minimum_operations(given, start as i32, goal as i32) as i64
+}
+
+// ---- the statement read literally
+
+fn literal(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    // `within[v]`: `v` is reachable in at most `k` operations
+    let mut within: Vec[bool] = Vec.filled(1001, false);
+    within[start] = true;
+    let mut k = 0;
+    loop {
+        k += 1;
+        let mut grown = within.clone();
+        let mut more = false;
+        for x in 0..1001 {
+            if not within[x] {
+                continue;
+            }
+            for n in nums.iter() {
+                let results = [x + n, x - n, x ^ n];
+                for y in results.iter() {
+                    if y == goal {
+                        return k;
+                    }
+                    if y >= 0 and y <= 1000 and not grown[y] {
+                        grown[y] = true;
+                        more = true;
+                    }
+                }
+            }
+        }
+        if not more {
+            return -1;
+        }
+        within = grown;
+    }
+}
+
+fn answer(arm: i64, nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    match arm {
+        0 => star_minimum_operations(nums, start, goal),
+        1 => layers_minimum_operations(nums, start, goal),
+        2 => backward_minimum_operations(nums, start, goal),
+        3 => map_minimum_operations(nums, start, goal),
+        4 => rounds_minimum_operations(nums, start, goal),
+        _ => solution_minimum_operations(nums, start, goal),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// as the harness draws them
+fn draw(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    while nums.len() < n {
+        let x = if next_random(mut seed) % 8 == 0 {
+            (next_random(mut seed) * 32768 + next_random(mut seed)) % 2000000001 - 1000000000
+        } else {
+            next_random(mut seed) % (2 * spread + 1) - spread
+        };
+        if not nums.contains(x) {
+            nums.push(x);
+        }
+    }
+    nums
+}
+
+fn main() {
+    let names = ["star", "layers", "backward", "map", "rounds", "solution"];
+    let mut seed = 2059;
+    let mut problems: Vec[(Vec[i64], i64, i64, i64, i64)] = Vec.new();
+    for _ in 0..150 {
+        let n = next_random(mut seed) % 5 + 1;
+        let spread = [5, 50, 300, 1500][next_random(mut seed) % 4];
+        let nums = draw(n, spread, mut seed);
+        let start = next_random(mut seed) % 1001;
+        let mut goal = next_random(mut seed) % 1401 - 200;
+        if goal == start {
+            goal += 1;
+        }
+        // one more number, not among them
+        let mut extra = next_random(mut seed) % (2 * spread + 1) - spread;
+        while nums.contains(extra) {
+            extra += 1;
+        }
+        // which operation, on which number, takes `start` one step
+        let step = next_random(mut seed) % (3 * n);
+        problems.push((nums, start, goal, extra, step));
+    }
+    // the edges of the range: `-a` is reached only from 0, `1000 + a` only
+    // from 1000 (or from a value out of range), with every value a multiple
+    // of `a`
+    for i in 0..20 {
+        let a = [1, 2, 4, 5, 8, 10, 20, 25, 40, 50][i % 10];
+        let start = a * (next_random(mut seed) % (1000 / a) + 1);
+        let goal = if i < 10 { -a } else { 1000 + a };
+        problems.push(([a].to_vec(), start, goal, a + 1, next_random(mut seed) % 3));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for (nums, start, goal, extra, step) in problems.iter() {
+        let truth = literal(nums.clone(), start, goal);
+        check = (check * 31 + truth + 2) % 1000000007;
+        let backwards: Vec[i64] = nums.iter().rev().cloned().collect();
+        let mut more = nums.clone();
+        more.push(extra);
+        let n = nums[step / 3];
+        let y = [start + n, start - n, start ^ n][step % 3];
+        let one_step = nums.iter().any(|m| start + m == goal or start - m == goal or (start ^ m) == goal);
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, nums.clone(), start, goal)).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let shaped = (x == -1 or x >= 1) and ((x == 1) == one_step);
+            let wider = answer(arm, more.clone(), start, goal);
+            let no_larger = if x < 0 { true } else { wider >= 1 and wider <= x };
+            let nearer = if y < 0 or y > 1000 or y == goal {
+                true
+            } else {
+                let from_y = answer(arm, nums.clone(), y, goal);
+                if x < 0 { from_y == -1 } else { from_y >= 1 and from_y >= x - 1 }
+            };
+            let verdicts = [
+                x == truth,
+                shaped,
+                answer(arm, backwards.clone(), start, goal) == x,
+                no_larger,
+                nearer,
+                same >= 3,
+            ];
+            for p in 0..6 {
+                checks += 1;
+                if not verdicts[p] {
+                    by_property[p] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"{nums}, {start} -> {goal} arm {names[arm]}: P{p + 1} fails, answer {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"170 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for p in 0..6 {
+            if by_property[p] > 0 {
+                println(f"P{p + 1} {by_property[p]}");
+            }
+        }
+    }
+}

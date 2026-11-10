@@ -1,0 +1,581 @@
+// LeetCode #2056: Number of Valid Move Combinations On Chessboard -- the
+// differential. The six arms, against the statement read literally: each
+// piece's destinations found from the board's geometry (its own square, or
+// one along a row, column or diagonal its kind may take), every choice of
+// destinations tried, and the pieces stepped a square a second toward
+// theirs, a combination failing if two ever share a square. 60 boards of
+// 1 to 3 pieces, every one drawn before any arm answers.
+//
+// P1  the count is the statement read literally
+// P2  the count is at least 1, all staying, and at most the product of the
+//     pieces' moves; for one piece, it is that piece's moves
+// P3  the board mirrored top to bottom, and the board transposed, have the
+//     same count
+// P4  the pieces listed backwards have the same count
+// P5  the first piece as a queen counts at least as many as it as a rook or
+//     a bishop, and at most the two together
+// P6  each arm agrees with at least three of the other five
+
+// ---- moves.kara: the ★ arm, backtracking, each new move walked against the chosen
+#[derive(Copy, Clone)]
+struct StarMove {
+    dr: i64,
+    dc: i64,
+    steps: i64,
+}
+
+fn star_moves_of(kind: Str, r: i64, c: i64) -> Vec[StarMove] {
+    let rook = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let bishop = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut dirs: Vec[(i64, i64)] = Vec.new();
+    if kind != "bishop" {
+        dirs.extend(rook.iter());
+    }
+    if kind != "rook" {
+        dirs.extend(bishop.iter());
+    }
+    let mut moves = [StarMove { dr: 0, dc: 0, steps: 0 }].to_vec();
+    for (dr, dc) in dirs.iter() {
+        let mut steps = 1;
+        while (1..=8).contains(r + dr * steps) and (1..=8).contains(c + dc * steps) {
+            moves.push(StarMove { dr, dc, steps });
+            steps += 1;
+        }
+    }
+    moves
+}
+
+// whether two pieces, from `a` and `b`, ever stand on one square
+fn star_collide(a: (i64, i64), ma: StarMove, b: (i64, i64), mb: StarMove) -> bool {
+    for t in 1..=ma.steps.max(mb.steps) {
+        let (ta, tb) = (t.min(ma.steps), t.min(mb.steps));
+        if a.0 + ma.dr * ta == b.0 + mb.dr * tb and a.1 + ma.dc * ta == b.1 + mb.dc * tb {
+            return true;
+        }
+    }
+    false
+}
+
+fn star_count_from(i: i64, at: Vec[(i64, i64)], options: Vec[Vec[StarMove]], chosen: mut ref Vec[StarMove]) -> i64 {
+    if i == at.len() {
+        return 1;
+    }
+    let mut total = 0;
+    for m in options[i].iter() {
+        if (0..i).all(|j| not star_collide(at[j], chosen[j], at[i], m)) {
+            chosen.push(m);
+            total += star_count_from(i + 1, at, options, mut chosen);
+            chosen.pop();
+        }
+    }
+    total
+}
+
+fn star_count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let options: Vec[Vec[StarMove]] = (0..pieces.len()).map(|i| star_moves_of(pieces[i], positions[i].0, positions[i].1)).collect();
+    let mut chosen: Vec[StarMove] = Vec.new();
+    star_count_from(0, positions, options, mut chosen)
+}
+
+// ---- moves_brute.kara: every combination, an odometer, every pair walked
+#[derive(Copy, Clone)]
+struct BruteMove {
+    dr: i64,
+    dc: i64,
+    steps: i64,
+}
+
+fn brute_moves_of(kind: Str, r: i64, c: i64) -> Vec[BruteMove] {
+    let rook = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let bishop = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut dirs: Vec[(i64, i64)] = Vec.new();
+    if kind != "bishop" {
+        dirs.extend(rook.iter());
+    }
+    if kind != "rook" {
+        dirs.extend(bishop.iter());
+    }
+    let mut moves = [BruteMove { dr: 0, dc: 0, steps: 0 }].to_vec();
+    for (dr, dc) in dirs.iter() {
+        let mut steps = 1;
+        while (1..=8).contains(r + dr * steps) and (1..=8).contains(c + dc * steps) {
+            moves.push(BruteMove { dr, dc, steps });
+            steps += 1;
+        }
+    }
+    moves
+}
+
+// whether two pieces, from `a` and `b`, ever stand on one square
+fn brute_collide(a: (i64, i64), ma: BruteMove, b: (i64, i64), mb: BruteMove) -> bool {
+    for t in 1..=ma.steps.max(mb.steps) {
+        let (ta, tb) = (t.min(ma.steps), t.min(mb.steps));
+        if a.0 + ma.dr * ta == b.0 + mb.dr * tb and a.1 + ma.dc * ta == b.1 + mb.dc * tb {
+            return true;
+        }
+    }
+    false
+}
+
+fn brute_count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let n = pieces.len();
+    let options: Vec[Vec[BruteMove]] = (0..n).map(|i| brute_moves_of(pieces[i], positions[i].0, positions[i].1)).collect();
+    let mut pick: Vec[i64] = Vec.filled(n, 0);
+    let mut total = 0;
+    loop {
+        let mut valid = true;
+        for i in 0..n {
+            for j in i + 1..n {
+                if brute_collide(positions[i], options[i][pick[i]], positions[j], options[j][pick[j]]) {
+                    valid = false;
+                }
+            }
+        }
+        if valid {
+            total += 1;
+        }
+        // turn the odometer: the first wheel that can, advances
+        let mut i = 0;
+        while i < n and pick[i] + 1 == options[i].len() {
+            pick[i] = 0;
+            i += 1;
+        }
+        if i == n {
+            return total;
+        }
+        pick[i] += 1;
+    }
+}
+
+// ---- moves_table.kara: a table of colliding pairs of moves, then backtracking
+#[derive(Copy, Clone)]
+struct TableMove {
+    dr: i64,
+    dc: i64,
+    steps: i64,
+}
+
+fn table_moves_of(kind: Str, r: i64, c: i64) -> Vec[TableMove] {
+    let rook = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let bishop = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut dirs: Vec[(i64, i64)] = Vec.new();
+    if kind != "bishop" {
+        dirs.extend(rook.iter());
+    }
+    if kind != "rook" {
+        dirs.extend(bishop.iter());
+    }
+    let mut moves = [TableMove { dr: 0, dc: 0, steps: 0 }].to_vec();
+    for (dr, dc) in dirs.iter() {
+        let mut steps = 1;
+        while (1..=8).contains(r + dr * steps) and (1..=8).contains(c + dc * steps) {
+            moves.push(TableMove { dr, dc, steps });
+            steps += 1;
+        }
+    }
+    moves
+}
+
+// whether two pieces, from `a` and `b`, ever stand on one square
+fn table_collide(a: (i64, i64), ma: TableMove, b: (i64, i64), mb: TableMove) -> bool {
+    for t in 1..=ma.steps.max(mb.steps) {
+        let (ta, tb) = (t.min(ma.steps), t.min(mb.steps));
+        if a.0 + ma.dr * ta == b.0 + mb.dr * tb and a.1 + ma.dc * ta == b.1 + mb.dc * tb {
+            return true;
+        }
+    }
+    false
+}
+
+fn table_count_from(i: i64, options: Vec[Vec[TableMove]], clash: Vec[Vec[Vec[Vec[bool]]]], picked: mut ref Vec[i64]) -> i64 {
+    if i == options.len() {
+        return 1;
+    }
+    let mut total = 0;
+    for a in 0..options[i].len() {
+        if (0..i).all(|j| not clash[j][i][picked[j]][a]) {
+            picked.push(a);
+            total += table_count_from(i + 1, options, clash, mut picked);
+            picked.pop();
+        }
+    }
+    total
+}
+
+fn table_count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let n = pieces.len();
+    let options: Vec[Vec[TableMove]] = (0..n).map(|i| table_moves_of(pieces[i], positions[i].0, positions[i].1)).collect();
+    // clash[j][i][a][b]: piece j's move a and piece i's move b table_collide
+    let mut clash: Vec[Vec[Vec[Vec[bool]]]] = Vec.new();
+    for j in 0..n {
+        let mut row: Vec[Vec[Vec[bool]]] = Vec.new();
+        for i in 0..n {
+            let mut table: Vec[Vec[bool]] = Vec.new();
+            if j < i {
+                for ma in options[j].iter() {
+                    table.push(options[i].iter().map(|mb| table_collide(positions[j], ma, positions[i], mb)).collect());
+                }
+            }
+            row.push(table);
+        }
+        clash.push(row);
+    }
+    let mut picked: Vec[i64] = Vec.new();
+    table_count_from(0, options, clash, mut picked)
+}
+
+// ---- moves_board.kara: a `Set` of (row, column, second) taken, backtracking
+#[derive(Copy, Clone)]
+struct BoardMove {
+    dr: i64,
+    dc: i64,
+    steps: i64,
+}
+
+fn board_moves_of(kind: Str, r: i64, c: i64) -> Vec[BoardMove] {
+    let rook = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let bishop = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut dirs: Vec[(i64, i64)] = Vec.new();
+    if kind != "bishop" {
+        dirs.extend(rook.iter());
+    }
+    if kind != "rook" {
+        dirs.extend(bishop.iter());
+    }
+    let mut moves = [BoardMove { dr: 0, dc: 0, steps: 0 }].to_vec();
+    for (dr, dc) in dirs.iter() {
+        let mut steps = 1;
+        while (1..=8).contains(r + dr * steps) and (1..=8).contains(c + dc * steps) {
+            moves.push(BoardMove { dr, dc, steps });
+            steps += 1;
+        }
+    }
+    moves
+}
+
+// where a piece from `at` stands in each second from the first to the
+// seventh
+fn board_path(at: (i64, i64), m: BoardMove) -> Vec[(i64, i64, i64)] {
+    (1..=7).map(|t| (at.0 + m.dr * t.min(m.steps), at.1 + m.dc * t.min(m.steps), t)).collect()
+}
+
+fn board_count_from(i: i64, at: Vec[(i64, i64)], options: Vec[Vec[BoardMove]], taken: mut ref Set[(i64, i64, i64)]) -> i64 {
+    if i == at.len() {
+        return 1;
+    }
+    let mut total = 0;
+    for m in options[i].iter() {
+        let cells = board_path(at[i], m);
+        if cells.iter().all(|cell| not taken.contains(cell)) {
+            for cell in cells.iter() {
+                taken.insert(cell);
+            }
+            total += board_count_from(i + 1, at, options, mut taken);
+            for cell in cells.iter() {
+                taken.remove(cell);
+            }
+        }
+    }
+    total
+}
+
+fn board_count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let options: Vec[Vec[BoardMove]] = (0..pieces.len()).map(|i| board_moves_of(pieces[i], positions[i].0, positions[i].1)).collect();
+    let mut taken: Set[(i64, i64, i64)] = Set.new();
+    board_count_from(0, positions, options, mut taken)
+}
+
+// ---- moves_layers.kara: valid combinations grown a piece at a time with `flat_map`
+#[derive(Copy, Clone)]
+struct LayersMove {
+    dr: i64,
+    dc: i64,
+    steps: i64,
+}
+
+fn layers_moves_of(kind: Str, r: i64, c: i64) -> Vec[LayersMove] {
+    let rook = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let bishop = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut dirs: Vec[(i64, i64)] = Vec.new();
+    if kind != "bishop" {
+        dirs.extend(rook.iter());
+    }
+    if kind != "rook" {
+        dirs.extend(bishop.iter());
+    }
+    let mut moves = [LayersMove { dr: 0, dc: 0, steps: 0 }].to_vec();
+    for (dr, dc) in dirs.iter() {
+        let mut steps = 1;
+        while (1..=8).contains(r + dr * steps) and (1..=8).contains(c + dc * steps) {
+            moves.push(LayersMove { dr, dc, steps });
+            steps += 1;
+        }
+    }
+    moves
+}
+
+// whether two pieces, from `a` and `b`, ever stand on one square
+fn layers_collide(a: (i64, i64), ma: LayersMove, b: (i64, i64), mb: LayersMove) -> bool {
+    for t in 1..=ma.steps.max(mb.steps) {
+        let (ta, tb) = (t.min(ma.steps), t.min(mb.steps));
+        if a.0 + ma.dr * ta == b.0 + mb.dr * tb and a.1 + ma.dc * ta == b.1 + mb.dc * tb {
+            return true;
+        }
+    }
+    false
+}
+
+fn layers_count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let n = pieces.len();
+    let options: Vec[Vec[LayersMove]] = (0..n).map(|i| layers_moves_of(pieces[i], positions[i].0, positions[i].1)).collect();
+    let mut layer: Vec[Vec[LayersMove]] = [Vec.new()].to_vec();
+    for i in 0..n {
+        layer = layer
+            .iter()
+            .flat_map(|combo| {
+                options[i]
+                    .iter()
+                    .filter(|m| (0..i).all(|j| not layers_collide(positions[j], combo[j], positions[i], m)))
+                    .map(|m| {
+                        let mut next = combo.clone();
+                        next.push(m);
+                        next
+                    })
+            })
+            .collect();
+    }
+    layer.len()
+}
+
+// ---- moves_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+fn solution_dfs(i: i64, n: i64, p: Slice[Vec[i32]], moves: Vec[Vec[(i32, i32, i32)]], chosen: mut ref Vec[(i32, i32, i32)]) -> i32 {
+    if i == n {
+        return 1;
+    }
+    let mut res: i32 = 0;
+    for m in ref moves[i] {
+        if (0..i).all(|j| solution_ok(p, j, chosen[j], i, m)) {
+            chosen.push(m);
+            res += solution_dfs(i + 1, n, p, moves, mut chosen);
+            chosen.pop();
+        }
+    }
+    res
+}
+
+fn solution_ok(p: Slice[Vec[i32]], a: i64, ma: (i32, i32, i32), b: i64, mb: (i32, i32, i32)) -> bool {
+    for t in 1..=ma.2.max(mb.2) {
+        let ta = t.min(ma.2);
+        let tb = t.min(mb.2);
+        if p[a][0] + ma.0 * ta == p[b][0] + mb.0 * tb and p[a][1] + ma.1 * ta == p[b][1] + mb.1 * tb {
+            return false;
+        }
+    }
+    true
+}
+
+impl Solution {
+    pub fn count_combinations(pieces: Vec[String], positions: Vec[Vec[i32]]) -> i32 {
+        let n = pieces.len();
+        let dirs: Array[(i32, i32), 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
+        let mut moves: Vec[Vec[(i32, i32, i32)]] = Vec.filled(n, Vec.new());
+        for i in 0..n {
+            let (r, c) = (positions[i][0], positions[i][1]);
+            moves[i].push((0, 0, 0));
+            let range = match pieces[i].as_str() {
+                "rook" => 0..4,
+                "bishop" => 4..8,
+                _ => 0..8,
+            };
+            for d in range {
+                let (dr, dc) = dirs[d];
+                let mut k: i32 = 1;
+                while (1..=8).contains((r + dr * k)) and (1..=8).contains((c + dc * k)) {
+                    moves[i].push((dr, dc, k));
+                    k += 1;
+                }
+            }
+        }
+        let mut chosen = Vec.new();
+        solution_dfs(0, n, positions, moves, mut chosen)
+    }
+}
+
+fn solution_count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let rows: Vec[Vec[i32]] = positions.iter().map(|(r, c)| [r as i32, c as i32]).collect();
+    Solution.count_combinations(pieces, rows)
+}
+
+// ---- the statement read literally
+
+fn destinations(kind: Str, r: i64, c: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for r2 in 1..=8 {
+        for c2 in 1..=8 {
+            let straight = r2 == r or c2 == c;
+            let diagonal = (r2 - r).abs() == (c2 - c).abs();
+            let reach = match kind {
+                "rook" => straight,
+                "bishop" => diagonal,
+                _ => straight or diagonal,
+            };
+            if reach {
+                out.push((r2, c2));
+            }
+        }
+    }
+    out
+}
+
+fn sign(x: i64) -> i64 {
+    if x > 0 { 1 } else if x < 0 { -1 } else { 0 }
+}
+
+fn valid(start: Vec[(i64, i64)], goal: Vec[(i64, i64)]) -> bool {
+    let mut at = start.clone();
+    loop {
+        if (0..at.len()).all(|i| at[i] == goal[i]) {
+            return true;
+        }
+        for i in 0..at.len() {
+            at[i] = (at[i].0 + sign(goal[i].0 - at[i].0), at[i].1 + sign(goal[i].1 - at[i].1));
+        }
+        for i in 0..at.len() {
+            for j in i + 1..at.len() {
+                if at[i] == at[j] {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+fn literal_from(i: i64, start: Vec[(i64, i64)], options: Vec[Vec[(i64, i64)]], goal: mut ref Vec[(i64, i64)]) -> i64 {
+    if i == start.len() {
+        return if valid(start, goal) { 1 } else { 0 };
+    }
+    let mut total = 0;
+    for g in options[i].iter() {
+        goal.push(g);
+        total += literal_from(i + 1, start, options, mut goal);
+        goal.pop();
+    }
+    total
+}
+
+fn literal(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let options: Vec[Vec[(i64, i64)]] = (0..pieces.len()).map(|i| destinations(pieces[i], positions[i].0, positions[i].1)).collect();
+    let mut goal: Vec[(i64, i64)] = Vec.new();
+    literal_from(0, positions, options, mut goal)
+}
+
+fn answer(arm: i64, pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    match arm {
+        0 => star_count_combinations(pieces, positions),
+        1 => brute_count_combinations(pieces, positions),
+        2 => table_count_combinations(pieces, positions),
+        3 => board_count_combinations(pieces, positions),
+        4 => layers_count_combinations(pieces, positions),
+        _ => solution_count_combinations(pieces, positions),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// as the harness draws them
+fn draw(n: i64, rows: i64, cols: i64, seed: mut ref i64) -> (Vec[String], Vec[(i64, i64)]) {
+    let kinds = ["rook", "queen", "bishop"];
+    let mut pieces: Vec[String] = Vec.new();
+    let mut positions: Vec[(i64, i64)] = Vec.new();
+    while positions.len() < n {
+        let r = next_random(mut seed) % rows + 1;
+        let c = next_random(mut seed) % cols + 1;
+        let kind = kinds[next_random(mut seed) % 3].clone();
+        if not positions.contains((r, c)) {
+            pieces.push(kind);
+            positions.push((r, c));
+        }
+    }
+    (pieces, positions)
+}
+
+fn with_first(pieces: Vec[String], kind: Str) -> Vec[String] {
+    let mut out = pieces.clone();
+    out[0] = kind.to_string();
+    out
+}
+
+fn main() {
+    let names = ["star", "brute", "table", "board", "layers", "solution"];
+    let mut seed = 2056;
+    let mut problems: Vec[(Vec[String], Vec[(i64, i64)])] = Vec.new();
+    for _ in 0..60 {
+        let n = next_random(mut seed) % 3 + 1;
+        let side = next_random(mut seed) % 6 + 3;
+        problems.push(draw(n, side, side, mut seed));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for (pieces, positions) in problems.iter() {
+        let truth = literal(pieces, positions);
+        check = (check * 31 + truth) % 1000000007;
+        let n = pieces.len();
+        let mut most = 1;
+        for i in 0..n {
+            most *= destinations(pieces[i], positions[i].0, positions[i].1).len();
+        }
+        let flipped: Vec[(i64, i64)] = positions.iter().map(|(r, c)| (9 - r, c)).collect();
+        let turned: Vec[(i64, i64)] = positions.iter().map(|(r, c)| (c, r)).collect();
+        let back_pieces: Vec[String] = pieces.iter().rev().cloned().collect();
+        let back_positions: Vec[(i64, i64)] = positions.iter().rev().collect();
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, pieces.clone(), positions.clone())).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let queen = answer(arm, with_first(pieces, "queen"), positions.clone());
+            let rook = answer(arm, with_first(pieces, "rook"), positions.clone());
+            let bishop = answer(arm, with_first(pieces, "bishop"), positions.clone());
+            let verdicts = [
+                x == truth,
+                x >= 1 and x <= most and (n > 1 or x == most),
+                answer(arm, pieces.clone(), flipped.clone()) == x and answer(arm, pieces.clone(), turned.clone()) == x,
+                answer(arm, back_pieces.clone(), back_positions.clone()) == x,
+                queen >= rook.max(bishop) and queen <= rook + bishop,
+                same >= 3,
+            ];
+            for p in 0..6 {
+                checks += 1;
+                if not verdicts[p] {
+                    by_property[p] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"{pieces} {positions} arm {names[arm]}: P{p + 1} fails, count {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"60 boards: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for p in 0..6 {
+            if by_property[p] > 0 {
+                println(f"P{p + 1} {by_property[p]}");
+            }
+        }
+    }
+}

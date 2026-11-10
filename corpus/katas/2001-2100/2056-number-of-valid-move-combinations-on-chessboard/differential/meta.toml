@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2056-number-of-valid-move-combinations-on-chessboard/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:set"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it"
+bucket = "timeout"
+classified_with = "08f3580ac+local"
+extracted_src = "327c4946"

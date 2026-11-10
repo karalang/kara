@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/2001-2100/2059-minimum-operations-to-convert-number/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map", "lib:set", "lib:vecdeque"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it"
+bucket = "timeout"
+classified_with = "08f3580ac+local"
+extracted_src = "2159d40b"

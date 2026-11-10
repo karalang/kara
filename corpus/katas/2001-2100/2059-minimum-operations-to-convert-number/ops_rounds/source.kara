@@ -1,0 +1,122 @@
+// LeetCode #2059: Minimum Operations to Convert Number -- the
+// distances to every value from 0 to 1000 relaxed in rounds, as
+// Bellman-Ford does, until a round changes nothing: each round tries every
+// operation from every value already reached. The answer is one more than
+// the least distance of a value with an operation that gives `goal`.
+// O(1001 · n) per round, as many rounds as the longest distance.
+
+fn minimum_operations(nums: Vec[i64], start: i64, goal: i64) -> i64 {
+    let mut dist: Vec[i64] = Vec.filled(1001, -1);
+    dist[start] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for x in 0..1001 {
+            if dist[x] < 0 {
+                continue;
+            }
+            for n in nums.iter() {
+                for y in [x + n, x - n, x ^ n] {
+                    if y >= 0 and y <= 1000 and (dist[y] < 0 or dist[x] + 1 < dist[y]) {
+                        dist[y] = dist[x] + 1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut best = -1;
+    for x in 0..1001 {
+        if dist[x] < 0 {
+            continue;
+        }
+        for n in nums.iter() {
+            if x + n == goal or x - n == goal or x ^ n == goal {
+                if best < 0 or dist[x] + 1 < best {
+                    best = dist[x] + 1;
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` distinct numbers, most within `spread` of 0, one in eight anywhere
+// in the constraints' range
+fn draw(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    while nums.len() < n {
+        let x = if next_random(mut seed) % 8 == 0 {
+            (next_random(mut seed) * 32768 + next_random(mut seed)) % 2000000001 - 1000000000
+        } else {
+            next_random(mut seed) % (2 * spread + 1) - spread
+        };
+        if not nums.contains(x) {
+            nums.push(x);
+        }
+    }
+    nums
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], i64, i64)] = [
+        ([2, 4, 12].to_vec(), 2, 12),
+        ([3, 5, 7].to_vec(), 0, -4),
+        ([2, 8, 16].to_vec(), 0, 1),
+        ([1].to_vec(), 0, 1000),
+        ([1000000000].to_vec(), 5, 1000000005),
+        ([-1].to_vec(), 3, 2),
+        ([7].to_vec(), 1000, 1001),
+        ([0, 6].to_vec(), 9, 15),
+        ([1024].to_vec(), 1000, 24),
+    ].to_vec();
+    for (nums, start, goal) in examples.iter() {
+        println(f"{nums}, {start} -> {goal}: {minimum_operations(nums.clone(), start, goal)}");
+    }
+    // 400 problems of 1 to 8 numbers, mostly within 5 to 1500 of 0
+    let mut seed = 2059;
+    let mut unreachable = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..400 {
+        let n = next_random(mut seed) % 8 + 1;
+        let spread = [5, 50, 300, 1500][next_random(mut seed) % 4];
+        let nums = draw(n, spread, mut seed);
+        let start = next_random(mut seed) % 1001;
+        let mut goal = next_random(mut seed) % 1401 - 200;
+        if goal == start {
+            goal += 1;
+        }
+        let ops = minimum_operations(nums, start, goal);
+        if ops < 0 {
+            unreachable += 1;
+        }
+        total += ops;
+        check = (check * 31 + ops + 2) % 1000000007;
+    }
+    println(f"400 problems: {unreachable} unreachable, sum {total}, checksum {check}");
+    // 4 problems of 100 numbers
+    unreachable = 0;
+    total = 0;
+    check = 0;
+    for r in 0..4 {
+        let nums = draw(100, [20, 200, 1000, 100000][r], mut seed);
+        let start = next_random(mut seed) % 1001;
+        let goal = [1001, -7, 500, 777777][r];
+        let ops = minimum_operations(nums, start, goal);
+        if ops < 0 {
+            unreachable += 1;
+        }
+        total += ops;
+        check = (check * 31 + ops + 2) % 1000000007;
+    }
+    println(f"4 problems of 100 numbers: {unreachable} unreachable, sum {total}, checksum {check}");
+}

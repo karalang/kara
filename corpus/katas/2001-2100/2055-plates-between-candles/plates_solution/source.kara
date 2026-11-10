@@ -1,0 +1,127 @@
+// LeetCode #2055: Plates Between Candles -- LeetCode's Rust template (the
+// string read through `as_bytes()` against `b'*'` and `b'|'`, a
+// `vec![0; n + 1]` of plate counts and two `vec!`s of nearest candles as
+// `i32`, indexed back with `as usize`, the answers a `map` over the
+// queries `collect`ed), carried by `karac fix`. The adapter below hands
+// the harness's queries to it as `Vec<Vec<i32>>`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn plates_between_candles(s: String, queries: Vec[Vec[i32]]) -> Vec[i32] {
+        let n = s.len();
+        let b = s.bytes();
+        let mut prefix = Vec.filled(n + 1, 0i32);
+        let mut left = Vec.filled(n, -1);
+        let mut right = Vec.filled(n, n as i32);
+        let mut last = -1;
+        for i in 0..n {
+            // `{ 1i32 }` by hand: an `if` of literals is typed `i64` at once (kara B-2026-11-10-6)
+            prefix[i + 1] = prefix[i] + if b[i] == b'*' { 1i32 } else { 0 };
+            if b[i] == b'|' {
+                last = i as i32;
+            }
+            left[i] = last;
+        }
+        let mut next = n as i32;
+        for i in (0..n).rev() {
+            if b[i] == b'|' {
+                next = i as i32;
+            }
+            right[i] = next;
+        }
+        queries
+            .iter()
+            .map(|q| {
+                let (l, r) = (right[q[0] as usize], left[q[1] as usize]);
+                if l < r {
+                    prefix[r as usize] - prefix[l as usize]
+                } else {
+                    0
+                }
+            })
+            .collect()
+    }
+}
+
+fn plates_between_candles(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows: Vec[Vec[i32]] = queries.iter().map(|(l, r)| [l as i32, r as i32]).collect();
+    Solution.plates_between_candles(s, rows).iter().map(|a| a as i64).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` places, each a candle one time in `every`, else a plate
+fn draw(n: i64, every: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(if next_random(mut seed) % every == 0 { '|' } else { '*' });
+    }
+    s
+}
+
+// `q` queries [left, right] within `n` places
+fn ask(n: i64, q: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut queries: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..q {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        queries.push((a.min(b), a.max(b)));
+    }
+    queries
+}
+
+fn fold(check: i64, answers: Vec[i64]) -> i64 {
+    let mut c = check;
+    for a in answers.iter() {
+        c = (c * 31 + a + 1) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples = [
+        ("**|**|***|", [(2, 5), (5, 9)].to_vec()),
+        ("***|**|*****|**||**|*", [(1, 17), (4, 5), (14, 17), (5, 11), (15, 16)].to_vec()),
+        ("|*|", [(0, 2), (0, 1), (1, 2)].to_vec()),
+        ("***", [(0, 2)].to_vec()),
+        ("||||", [(0, 3), (1, 2)].to_vec()),
+        ("*|*|*|*", [(0, 6), (1, 5), (2, 4), (3, 3)].to_vec()),
+    ];
+    for (s, queries) in examples.iter() {
+        println(f"\"{s}\" {queries} -> {plates_between_candles(s.to_string(), queries.clone())}");
+    }
+    // 2000 strings of 3 to 40 places, 1 to 20 queries each
+    let mut seed = 2055;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 38 + 3;
+        let every = next_random(mut seed) % 5 + 1;
+        let s = draw(n, every, mut seed);
+        let q = next_random(mut seed) % 20 + 1;
+        let queries = ask(n, q, mut seed);
+        let answers = plates_between_candles(s, queries);
+        total += answers.iter().sum();
+        check = fold(check, answers);
+    }
+    println(f"2000 strings: sum {total}, checksum {check}");
+    // 10 strings of 2000 places, 2000 queries each, candles from every
+    // place to one in 30
+    total = 0;
+    check = 0;
+    for t in 0..10 {
+        let s = draw(2000, [1, 2, 3, 5, 8, 13, 21, 30, 4, 10][t], mut seed);
+        let queries = ask(2000, 2000, mut seed);
+        let answers = plates_between_candles(s, queries);
+        total += answers.iter().sum();
+        check = fold(check, answers);
+    }
+    println(f"10 strings of 2000: sum {total}, checksum {check}");
+}

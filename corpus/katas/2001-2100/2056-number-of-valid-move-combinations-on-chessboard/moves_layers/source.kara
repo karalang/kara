@@ -1,0 +1,131 @@
+// LeetCode #2056: Number of Valid Move Combinations On Chessboard -- the
+// valid combinations built a piece at a time, breadth first: every valid
+// combination of the first pieces extended by each move of the next piece
+// that collides with none of it, through `flat_map`. The answer is how
+// many combinations of all the pieces are left.
+
+#[derive(Copy, Clone)]
+struct Move {
+    dr: i64,
+    dc: i64,
+    steps: i64,
+}
+
+fn moves_of(kind: Str, r: i64, c: i64) -> Vec[Move] {
+    let rook = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let bishop = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut dirs: Vec[(i64, i64)] = Vec.new();
+    if kind != "bishop" {
+        dirs.extend(rook.iter());
+    }
+    if kind != "rook" {
+        dirs.extend(bishop.iter());
+    }
+    let mut moves = [Move { dr: 0, dc: 0, steps: 0 }].to_vec();
+    for (dr, dc) in dirs.iter() {
+        let mut steps = 1;
+        while (1..=8).contains(r + dr * steps) and (1..=8).contains(c + dc * steps) {
+            moves.push(Move { dr, dc, steps });
+            steps += 1;
+        }
+    }
+    moves
+}
+
+// whether two pieces, from `a` and `b`, ever stand on one square
+fn collide(a: (i64, i64), ma: Move, b: (i64, i64), mb: Move) -> bool {
+    for t in 1..=ma.steps.max(mb.steps) {
+        let (ta, tb) = (t.min(ma.steps), t.min(mb.steps));
+        if a.0 + ma.dr * ta == b.0 + mb.dr * tb and a.1 + ma.dc * ta == b.1 + mb.dc * tb {
+            return true;
+        }
+    }
+    false
+}
+
+fn count_combinations(pieces: Vec[String], positions: Vec[(i64, i64)]) -> i64 {
+    let n = pieces.len();
+    let options: Vec[Vec[Move]] = (0..n).map(|i| moves_of(pieces[i], positions[i].0, positions[i].1)).collect();
+    let mut layer: Vec[Vec[Move]] = [Vec.new()].to_vec();
+    for i in 0..n {
+        layer = layer
+            .iter()
+            .flat_map(|combo| {
+                options[i]
+                    .iter()
+                    .filter(|m| (0..i).all(|j| not collide(positions[j], combo[j], positions[i], m)))
+                    .map(|m| {
+                        let mut next = combo.clone();
+                        next.push(m);
+                        next
+                    })
+            })
+            .collect();
+    }
+    layer.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` pieces of random kinds on distinct squares of the board's first
+// `rows` rows and `cols` columns
+fn draw(n: i64, rows: i64, cols: i64, seed: mut ref i64) -> (Vec[String], Vec[(i64, i64)]) {
+    let kinds = ["rook", "queen", "bishop"];
+    let mut pieces: Vec[String] = Vec.new();
+    let mut positions: Vec[(i64, i64)] = Vec.new();
+    while positions.len() < n {
+        let r = next_random(mut seed) % rows + 1;
+        let c = next_random(mut seed) % cols + 1;
+        let kind = kinds[next_random(mut seed) % 3].clone();
+        if not positions.contains((r, c)) {
+            pieces.push(kind);
+            positions.push((r, c));
+        }
+    }
+    (pieces, positions)
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [
+        (["rook"].to_vec(), [(1, 1)].to_vec()),
+        (["queen"].to_vec(), [(1, 1)].to_vec()),
+        (["bishop"].to_vec(), [(4, 3)].to_vec()),
+        (["rook", "rook"].to_vec(), [(1, 1), (8, 8)].to_vec()),
+        (["queen", "bishop"].to_vec(), [(5, 7), (3, 4)].to_vec()),
+        (["rook", "rook"].to_vec(), [(1, 1), (1, 2)].to_vec()),
+        (["queen", "queen", "rook"].to_vec(), [(4, 4), (4, 5), (5, 4)].to_vec()),
+    ];
+    for (kinds, positions) in examples.iter() {
+        let pieces: Vec[String] = kinds.iter().map(|k| k.to_string()).collect();
+        println(f"{pieces} {positions} -> {count_combinations(pieces.clone(), positions.clone())}");
+    }
+    // 300 boards of 1 to 3 pieces, crowded into a corner or not
+    let mut seed = 2056;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 3 + 1;
+        let side = next_random(mut seed) % 6 + 3;
+        let (pieces, positions) = draw(n, side, side, mut seed);
+        let count = count_combinations(pieces, positions);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"300 boards: sum {total}, checksum {check}");
+    // 4 boards of 4 pieces
+    total = 0;
+    check = 0;
+    for _ in 0..4 {
+        let (pieces, positions) = draw(4, 8, 8, mut seed);
+        let count = count_combinations(pieces, positions);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"4 boards of 4: sum {total}, checksum {check}");
+}

@@ -1,0 +1,184 @@
+// LeetCode #2057: Smallest Index With Equal Value -- the differential.
+// The six arms, against the statement read literally: the index `i` whose
+// `i mod 10` is its element and no smaller index's is, or -1. 2000 arrays
+// of 1 to 100 digits, every one drawn before any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is -1 or an index of the array whose last digit is its
+//     element
+// P3  no index before the answer matches; with -1, no index matches
+// P4  the array with digits appended answers the same when it found one;
+//     when it found none, -1 or an index among the appended
+// P5  one element set to its index's last digit answers the smaller of
+//     that index and the old answer
+// P6  each arm agrees with at least three of the other five
+
+// ---- equal.kara: the ★ arm, the indices walked from the front
+fn star_smallest_equal(nums: Vec[i64]) -> i64 {
+    for i in 0..nums.len() {
+        if i % 10 == nums[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+// ---- equal_brute.kara: every match gathered with `filter`, the smallest with `min`
+fn brute_smallest_equal(nums: Vec[i64]) -> i64 {
+    (0..nums.len()).filter(|i| i % 10 == nums[i]).min().unwrap_or(-1)
+}
+
+// ---- equal_position.kara: the first match found with `position`
+fn position_smallest_equal(nums: Vec[i64]) -> i64 {
+    match nums.iter().enumerate().position(|(i, x)| i % 10 == x) {
+        Some(i) => i,
+        None => -1,
+    }
+}
+
+// ---- equal_chunks.kara: the array cut into `chunks` of ten
+fn chunks_smallest_equal(nums: Vec[i64]) -> i64 {
+    for (k, chunk) in nums.chunks(10).iter().enumerate() {
+        if let Some(j) = (0..chunk.len()).find(|j| chunk[j] == j) {
+            return k * 10 + j;
+        }
+    }
+    -1
+}
+
+// ---- equal_recursive.kara: the answer from each index on
+fn recursive_first_from(nums: Vec[i64], i: i64) -> i64 {
+    if i == nums.len() {
+        -1
+    } else if i % 10 == nums[i] {
+        i
+    } else {
+        recursive_first_from(nums, i + 1)
+    }
+}
+
+fn recursive_smallest_equal(nums: Vec[i64]) -> i64 {
+    recursive_first_from(nums, 0)
+}
+
+// ---- equal_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn smallest_equal(nums: Vec[i32]) -> i32 {
+        nums.iter()
+            .enumerate()
+            .find(|(i, x)| i % 10 == x as i64)
+            .map_or(-1, |(i, _)| i as i32)
+    }
+}
+
+fn solution_smallest_equal(nums: Vec[i64]) -> i64 {
+    Solution.smallest_equal(nums.iter().map(|x| x as i32).collect())
+}
+
+// ---- the statement read literally
+
+fn literal(nums: Vec[i64]) -> i64 {
+    let mut answer = -1;
+    for i in 0..nums.len() {
+        let matches = i - i / 10 * 10 == nums[i];
+        let earlier = (0..i).any(|j| j - j / 10 * 10 == nums[j]);
+        if matches and not earlier {
+            answer = i;
+        }
+    }
+    answer
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => star_smallest_equal(nums),
+        1 => brute_smallest_equal(nums),
+        2 => position_smallest_equal(nums),
+        3 => chunks_smallest_equal(nums),
+        4 => recursive_smallest_equal(nums),
+        _ => solution_smallest_equal(nums),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// as the harness draws them
+fn draw(n: i64, rare: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let d = next_random(mut seed) % 10;
+        nums.push(if d == i % 10 and next_random(mut seed) % rare != 0 { (d + 1) % 10 } else { d });
+    }
+    nums
+}
+
+fn main() {
+    let names = ["star", "brute", "position", "chunks", "recursive", "solution"];
+    let mut seed = 2057;
+    let mut problems: Vec[(Vec[i64], Vec[i64], i64)] = Vec.new();
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let rare = next_random(mut seed) % 20 + 1;
+        let nums = draw(n, rare, mut seed);
+        let extra = draw(next_random(mut seed) % 30 + 1, rare, mut seed);
+        let k = next_random(mut seed) % n;
+        problems.push((nums, extra, k));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for (nums, extra, k) in problems.iter() {
+        let n = nums.len();
+        let truth = literal(nums.clone());
+        check = (check * 31 + truth + 2) % 1000000007;
+        let mut longer = nums.clone();
+        longer.extend(extra.iter());
+        let mut set = nums.clone();
+        set[k] = k % 10;
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, nums.clone())).collect();
+        for arm in 0..6 {
+            let x = got[arm];
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let valid = x == -1 or (x >= 0 and x < n and nums[x] == x % 10);
+            let upto = if x == -1 { n } else { x.max(0).min(n) };
+            let first = not (0..upto).any(|i| nums[i] == i % 10);
+            let ext = answer(arm, longer.clone());
+            let kept = if x >= 0 { ext == x } else { ext == -1 or ext >= n };
+            let after = answer(arm, set.clone());
+            let smaller = if x >= 0 { x.min(k) } else { k };
+            let verdicts = [x == truth, valid, first, kept, after == smaller, same >= 3];
+            for p in 0..6 {
+                checks += 1;
+                if not verdicts[p] {
+                    by_property[p] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"{nums} arm {names[arm]}: P{p + 1} fails, answer {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"2000 arrays: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for p in 0..6 {
+            if by_property[p] > 0 {
+                println(f"P{p + 1} {by_property[p]}");
+            }
+        }
+    }
+}

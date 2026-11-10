@@ -1,0 +1,317 @@
+// LeetCode #2055: Plates Between Candles -- the differential. The six
+// arms, against the statement read literally: each plate in a query's
+// range counted when a candle stands in the range on each side of it. 500
+// strings of 3 to 40 places, 1 to 20 queries each, every one drawn before
+// any arm answers.
+//
+// P1  the answer is the statement read literally
+// P2  the answer is at least 0, at most the plates in the range, and at
+//     most the range's length less two
+// P3  the string reversed, each query mirrored, has the same answers
+// P4  a query split at a candle inside it answers the sum of its two
+//     parts; with none inside, it answers the places between its ends when
+//     both are candles, and 0 otherwise
+// P5  the string with a candle put at each end, asked for its whole
+//     length, answers every plate in the string
+// P6  each arm agrees with at least three of the other five
+
+// ---- plates.kara: the ★ arm, plate counts and nearest candles on each side
+fn star_plates_between_candles(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let places: Vec[char] = s.chars().collect();
+    let n = places.len();
+    let mut plates: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut candle_before: Vec[i64] = Vec.filled(n, -1);
+    let mut last = -1;
+    for i in 0..n {
+        plates[i + 1] = plates[i] + if places[i] == '*' { 1 } else { 0 };
+        if places[i] == '|' {
+            last = i;
+        }
+        candle_before[i] = last;
+    }
+    let mut candle_after: Vec[i64] = Vec.filled(n, n);
+    let mut next = n;
+    for i in (0..n).rev() {
+        if places[i] == '|' {
+            next = i;
+        }
+        candle_after[i] = next;
+    }
+    let mut answers: Vec[i64] = Vec.new();
+    for (left, right) in queries.iter() {
+        let first = candle_after[left];
+        let last = candle_before[right];
+        answers.push(if first < last { plates[last] - plates[first] } else { 0 });
+    }
+    answers
+}
+
+// ---- plates_brute.kara: each query's places walked
+fn brute_plates_between_candles(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let places: Vec[char] = s.chars().collect();
+    let mut answers: Vec[i64] = Vec.new();
+    for (left, right) in queries.iter() {
+        let mut lit = false;
+        let mut counted = 0;
+        let mut kept = 0;
+        for i in left..right + 1 {
+            if places[i] == '|' {
+                lit = true;
+                kept = counted;
+            } else if lit {
+                counted += 1;
+            }
+        }
+        answers.push(kept);
+    }
+    answers
+}
+
+// ---- plates_search.kara: the candles listed, each query's found with `partition_point`
+fn search_plates_between_candles(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let candles: Vec[i64] = s.chars().enumerate().filter(|(_, c)| c == '|').map(|(i, _)| i).collect();
+    let mut answers: Vec[i64] = Vec.new();
+    for (left, right) in queries.iter() {
+        let first = candles.partition_point(|c| c < left);
+        let past = candles.partition_point(|c| c <= right);
+        if past - first >= 2 {
+            let (a, b) = (candles[first], candles[past - 1]);
+            answers.push(b - a - (past - 1 - first));
+        } else {
+            answers.push(0);
+        }
+    }
+    answers
+}
+
+// ---- plates_sorted.kara: the candles' ranks in a `SortedMap`, `ceiling` and `floor`
+fn sorted_plates_between_candles(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut rank: SortedMap[i64, i64] = SortedMap.new();
+    for (i, c) in s.chars().enumerate() {
+        if c == '|' {
+            rank.insert(i, rank.len());
+        }
+    }
+    let mut answers: Vec[i64] = Vec.new();
+    for (left, right) in queries.iter() {
+        let plates = match (rank.ceiling(left), rank.floor(right)) {
+            (Some((a, ra)), Some((b, rb))) if a < b => b - a - (rb - ra),
+            _ => 0,
+        };
+        answers.push(plates);
+    }
+    answers
+}
+
+// ---- plates_text.kara: each query's slice, `find`, `rfind` and `filter`
+fn text_plates_between_candles(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut answers: Vec[i64] = Vec.new();
+    for (left, right) in queries.iter() {
+        let part = s[left..right + 1];
+        let plates = match (part.find("|"), part.rfind("|")) {
+            (Some(a), Some(b)) => part[a..b].chars().filter(|c| c == '*').count(),
+            _ => 0,
+        };
+        answers.push(plates);
+    }
+    answers
+}
+
+// ---- plates_solution.kara: LeetCode's Rust template, carried by `karac fix`
+struct Solution {}
+
+impl Solution {
+    pub fn plates_between_candles(s: String, queries: Vec[Vec[i32]]) -> Vec[i32] {
+        let n = s.len();
+        let b = s.bytes();
+        let mut prefix = Vec.filled(n + 1, 0i32);
+        let mut left = Vec.filled(n, -1);
+        let mut right = Vec.filled(n, n as i32);
+        let mut last = -1;
+        for i in 0..n {
+            // `{ 1i32 }` by hand: an `if` of literals is typed `i64` at once (kara B-2026-11-10-6)
+            prefix[i + 1] = prefix[i] + if b[i] == b'*' { 1i32 } else { 0 };
+            if b[i] == b'|' {
+                last = i as i32;
+            }
+            left[i] = last;
+        }
+        let mut next = n as i32;
+        for i in (0..n).rev() {
+            if b[i] == b'|' {
+                next = i as i32;
+            }
+            right[i] = next;
+        }
+        queries
+            .iter()
+            .map(|q| {
+                let (l, r) = (right[q[0] as usize], left[q[1] as usize]);
+                if l < r {
+                    prefix[r as usize] - prefix[l as usize]
+                } else {
+                    0
+                }
+            })
+            .collect()
+    }
+}
+
+fn solution_plates_between_candles(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows: Vec[Vec[i32]] = queries.iter().map(|(l, r)| [l as i32, r as i32]).collect();
+    Solution.plates_between_candles(s, rows).iter().map(|a| a as i64).collect()
+}
+
+// ---- the statement read literally
+
+fn literal(s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let places: Vec[char] = s.chars().collect();
+    let mut answers: Vec[i64] = Vec.new();
+    for (left, right) in queries.iter() {
+        let mut plates = 0;
+        for k in left..right + 1 {
+            let candle_left = (left..k).any(|i| places[i] == '|');
+            let candle_right = (k + 1..right + 1).any(|i| places[i] == '|');
+            if places[k] == '*' and candle_left and candle_right {
+                plates += 1;
+            }
+        }
+        answers.push(plates);
+    }
+    answers
+}
+
+fn answer(arm: i64, s: String, queries: Vec[(i64, i64)]) -> Vec[i64] {
+    match arm {
+        0 => star_plates_between_candles(s, queries),
+        1 => brute_plates_between_candles(s, queries),
+        2 => search_plates_between_candles(s, queries),
+        3 => sorted_plates_between_candles(s, queries),
+        4 => text_plates_between_candles(s, queries),
+        _ => solution_plates_between_candles(s, queries),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// as the harness draws them
+fn draw(n: i64, every: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(if next_random(mut seed) % every == 0 { '|' } else { '*' });
+    }
+    s
+}
+
+fn ask(n: i64, q: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut queries: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..q {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        queries.push((a.min(b), a.max(b)));
+    }
+    queries
+}
+
+fn main() {
+    let names = ["star", "brute", "search", "sorted", "text", "solution"];
+    let mut seed = 2055;
+    let mut problems: Vec[(String, Vec[(i64, i64)])] = Vec.new();
+    for _ in 0..500 {
+        let n = next_random(mut seed) % 38 + 3;
+        let every = next_random(mut seed) % 5 + 1;
+        let s = draw(n, every, mut seed);
+        let q = next_random(mut seed) % 20 + 1;
+        problems.push((s, ask(n, q, mut seed)));
+    }
+    let mut failures: Vec[String] = Vec.new();
+    let mut by_property = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut check = 0;
+    for (s, queries) in problems.iter() {
+        let places: Vec[char] = s.chars().collect();
+        let n = places.len();
+        let truth = literal(s, queries);
+        for t in truth.iter() {
+            check = (check * 31 + t + 1) % 1000000007;
+        }
+        let reversed: String = places.iter().rev().collect();
+        let mirrored: Vec[(i64, i64)] = queries.iter().map(|(l, r)| (n - 1 - r, n - 1 - l)).collect();
+        // each query split at its middle candle, if it has one inside
+        let mut halves: Vec[(i64, i64)] = Vec.new();
+        let mut splits: Vec[i64] = Vec.new();
+        for (l, r) in queries.iter() {
+            let inside: Vec[i64] = (l + 1..r).filter(|i| places[i] == '|').collect();
+            if inside.is_empty() {
+                splits.push(-1);
+            } else {
+                let m = inside[inside.len() / 2];
+                splits.push(m);
+                halves.push((l, m));
+                halves.push((m, r));
+            }
+        }
+        let walled = f"|{s}|";
+        let every_plate = places.iter().filter(|c| c == '*').count();
+        let got: Vec[Vec[i64]] = (0..6).map(|arm| answer(arm, s.clone(), queries.clone())).collect();
+        for arm in 0..6 {
+            let x = got[arm].clone();
+            let mut same = 0;
+            for o in 0..6 {
+                if o != arm and got[o] == x {
+                    same += 1;
+                }
+            }
+            let back = answer(arm, reversed.clone(), mirrored.clone());
+            let parts = answer(arm, s.clone(), halves.clone());
+            let whole = answer(arm, walled.clone(), [(0, n + 1)].to_vec());
+            let mut bounded = x.len() == queries.len();
+            let mut split_ok = true;
+            let mut h = 0;
+            for qi in 0..queries.len().min(x.len()) {
+                let (l, r) = queries[qi];
+                let plates = (l..r + 1).filter(|i| places[i] == '*').count();
+                bounded = bounded and x[qi] >= 0 and x[qi] <= plates and x[qi] <= (r - l - 1).max(0);
+                if splits[qi] < 0 {
+                    let walls = places[l] == '|' and places[r] == '|' and r > l;
+                    split_ok = split_ok and x[qi] == if walls { r - l - 1 } else { 0 };
+                } else {
+                    split_ok = split_ok and h + 1 < parts.len() and x[qi] == parts[h] + parts[h + 1];
+                    h += 2;
+                }
+            }
+            let verdicts = [
+                x == truth,
+                bounded,
+                back == x,
+                split_ok,
+                whole == [every_plate].to_vec(),
+                same >= 3,
+            ];
+            for p in 0..6 {
+                checks += 1;
+                if not verdicts[p] {
+                    by_property[p] += 1;
+                    if failures.len() < 10 {
+                        failures.push(f"\"{s}\" {queries} arm {names[arm]}: P{p + 1} fails, answers {x}, literal {truth}");
+                    }
+                }
+            }
+        }
+    }
+    let total = by_property.iter().sum();
+    println(f"500 strings: checksum {check}, {checks} checks over 6 arms: {total} failures");
+    if total > 0 {
+        for f in failures.iter() {
+            println(f);
+        }
+        for p in 0..6 {
+            if by_property[p] > 0 {
+                println(f"P{p + 1} {by_property[p]}");
+            }
+        }
+    }
+}

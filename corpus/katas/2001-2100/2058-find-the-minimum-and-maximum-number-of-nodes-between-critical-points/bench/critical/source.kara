@@ -1,0 +1,66 @@
+// LeetCode #2058: Find the Minimum and Maximum Number of Nodes Between
+// Critical Points -- the ★ arm's benchmark. 50 lists of 100000 values, the
+// constraints' limit, from 1 to 2, 3, 10 or 100000, each built node by node
+// and answered by one walk.
+
+shared struct ListNode {
+    val: i64,
+    next: Option[ListNode],
+}
+
+fn nodes_between_critical_points(head: Option[ListNode]) -> Vec[i64] {
+    let Some(first_node) = head else {
+        return [-1, -1].to_vec();
+    };
+    let mut before = first_node.val;
+    let mut cur = first_node.next;
+    let mut at = 1;
+    let mut first = -1;
+    let mut last = -1;
+    let mut nearest = -1;
+    while let Some(node) = cur {
+        if let Some(after) = node.next {
+            let v = node.val;
+            if (v > before and v > after.val) or (v < before and v < after.val) {
+                if first < 0 {
+                    first = at;
+                } else if nearest < 0 or at - last < nearest {
+                    nearest = at - last;
+                }
+                last = at;
+            }
+        }
+        before = node.val;
+        cur = node.next;
+        at += 1;
+    }
+    if nearest < 0 {
+        [-1, -1].to_vec()
+    } else {
+        [nearest, last - first].to_vec()
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let tops = [2, 3, 10, 100000];
+    let mut seed = 2058;
+    let mut total = 0;
+    let mut check = 0;
+    for t in 0..50 {
+        let top = tops[t % 4];
+        let mut head: Option[ListNode] = None;
+        for _ in 0..100000 {
+            head = Some(ListNode { val: next_random(mut seed) % top + 1, next: head });
+        }
+        let d = nodes_between_critical_points(head);
+        total += d[0] + d[1];
+        check = (check * 31 + d[0] + 2) % 1000000007;
+        check = (check * 31 + d[1] + 2) % 1000000007;
+    }
+    println(f"50 lists: sum {total}, checksum {check}");
+}
