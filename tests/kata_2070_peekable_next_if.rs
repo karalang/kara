@@ -14,7 +14,7 @@ fn run(src: &str) -> String {
 #[test]
 fn kata_2070_next_if_takes_while_the_predicate_holds_and_keeps_the_rest() {
     // Over `v.iter()` the items are borrowed; the arm's `while let` loop of
-    // `next_if` calls is refused by MIR borrowck (PREDICTS B-2026-11-10-18),
+    // `next_if` calls is refused by MIR borrowck (PREDICTS B-2026-11-10-24),
     // so the calls are written out.
     let src = "fn main() {
     let v = [1, 2, 3, 7, 8].to_vec();
