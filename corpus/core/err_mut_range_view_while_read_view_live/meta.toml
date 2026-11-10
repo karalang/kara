@@ -1,0 +1,13 @@
+source = "corpus/core/err_mut_range_view_while_read_view_live"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["slice"]
+class = "a"
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "B-2026-11-10-4: a range passed `mut a[1..3]` borrows `a` mutably, and any index projection overlaps the whole collection, so it is refused while the read view `head` of `a` is live (core-semantics §5.6). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
+classified_with = "595f6ff02"

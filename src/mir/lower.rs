@@ -8943,7 +8943,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         return self.string_range_by(object, index, dest);
                     }
                     let t = self.expr_ty(e)?;
-                    let s = self.slice_view_by(object, index, t)?;
+                    let s = self.slice_view_by(object, index, t, false)?;
                     self.assign(dest, Rvalue::Use(Operand::Move(Place::local(s))));
                     return Ok(());
                 };
@@ -19998,6 +19998,41 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => pt,
         };
         if let HK::Slice { mutable, .. } = self.tys().tcx().kind(slice_t) {
+            // `poke(mut w[2..4])`: a range of a collection passed for a
+            // `mut Slice` is a view for writing, its collection borrowed
+            // `mut`, so borrowck refuses it while a read view of `w` is
+            // live (core-semantics §5.6; B-2026-11-10-4). As a plain value
+            // the range was viewed on a shared borrow, which the
+            // literal-table pass trusted (B-2026-11-09-82).
+            let view = match &a.kind {
+                ExprKind::Index { object, index } if mutable && !self.is_place(a) => {
+                    let ot = self.expr_ty(object)?;
+                    if matches!(self.strip_ty(ot), HK::Str | HK::StaticStr) {
+                        None
+                    } else if let ExprKind::Range {
+                        start,
+                        end,
+                        inclusive,
+                    } = &index.kind
+                    {
+                        let range = (start.as_deref(), end.as_deref(), *inclusive);
+                        Some(self.slice_view(object, Some(range), slice_t, true)?)
+                    } else {
+                        Some(self.slice_view_by(object, index, slice_t, true)?)
+                    }
+                }
+                _ => None,
+            };
+            if let Some(s) = view {
+                return Ok(match borrow {
+                    Some(kind) => {
+                        let r = self.temp(pt);
+                        self.assign(r, Rvalue::Ref(kind, Place::local(s)));
+                        Operand::Move(Place::local(r))
+                    }
+                    None => Operand::Move(Place::local(s)),
+                });
+            }
             let reborrow = mutable
                 && self.is_place(a)
                 && matches!(self.strip_ty(at), HK::Slice { mutable: true, .. });
@@ -20490,9 +20525,15 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `coll[r]` for a range value `r` (`let r = 1..3; v[r]`): the view
     /// `slice_view` makes for the range written out, its bounds read from
-    /// `r`'s fields after `coll` is named.
-    fn slice_view_by(&mut self, coll: &'a Expr, rng: &'a Expr, slice_t: Ty) -> R<Local> {
-        let p = self.expr_place(coll, false)?;
+    /// `r`'s fields after `coll` is named; `mutable` for a `mut Slice`.
+    fn slice_view_by(
+        &mut self,
+        coll: &'a Expr,
+        rng: &'a Expr,
+        slice_t: Ty,
+        mutable: bool,
+    ) -> R<Local> {
+        let p = self.expr_place(coll, mutable)?;
         let (p, ct) = self.strip_refs(p);
         let rp = if self.is_place(rng) {
             self.expr_place(rng, false)?
@@ -20543,11 +20584,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         };
         let s = self.temp(slice_t);
-        let rt = self.tys().tcx().reference(ct, false);
+        let rt = self.tys().tcx().reference(ct, mutable);
         let r = self.temp(rt);
-        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+        let (kind, method) = if mutable {
+            (BorrowKind::Mut, "slice_mut")
+        } else {
+            (BorrowKind::Shared, "slice")
+        };
+        self.assign(r, Rvalue::Ref(kind, p));
         self.call_native(
-            &format!("{name}.slice"),
+            &format!("{name}.{method}"),
             vec![Operand::Move(Place::local(r)), lo, hi],
             Place::local(s),
         );

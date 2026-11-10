@@ -1,0 +1,12 @@
+fn first_up(xs: mut Slice[i64]) {
+    xs[0] = xs[0] + 10;
+}
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    a.push(3);
+    let head: Slice[i64] = a[0..2];
+    first_up(mut a[1..3]);
+    println(f"{head[0]}");
+}
