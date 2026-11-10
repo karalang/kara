@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 224 |
+| diagnostics | 225 |
 | false-positive | 179 |
-| perf | 151 |
-| missing-feature | 129 |
+| perf | 152 |
+| missing-feature | 130 |
 | soundness | 60 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -75,8 +75,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 356 |
-| mir-llvm | 194 |
+| typecheck | 357 |
+| mir-llvm | 195 |
 | mir | 167 |
 | cli | 94 |
 | ownership | 73 |
@@ -84,8 +84,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 46 |
 | runtime | 32 |
 | effect | 29 |
+| resolver | 23 |
 | codegen | 22 |
-| resolver | 22 |
 | other | 7 |
 | autopar | 4 |
 | lexer | 1 |
@@ -120,6 +120,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-37 | 2026-11-10 | mir-llvm | low | LLVM 22 keeps hsearch's (275) bounds check on `citations[mid]` in a binary search: instcombine rewrites karac's `assume(mid >= lo)` into `assume(hi - lo > -2)`, so IPSCCP no longer folds the check; costs nothing measurable on Emerald Rapids at HEAD, Cascade Lake not re-measured | — |
 | B-2026-11-10-38 | 2026-11-10 | mir-llvm | low | A program that names no library method still typechecks, ownership-checks and lowers 510 library methods (378 at f1416771a4): the word-based library prune keeps what any kept body names, and the library grew 25% since 11-02 | — |
 | B-2026-11-10-26 | 2026-11-10 | mir | low | Rust's `Iterator::eq` is missing: `a.iter().eq(b.iter().rev())` is refused with "`VecIter` does not implement `PartialEq`", and adding `eq` to the library's `Iterator` trait breaks `==` in its other generic bodies on every MIR lane | — |
+| B-2026-11-10-39 | 2026-11-10 | mir-llvm | medium | `SortedMap.insert` of a key smaller than every key present is O(n): the map is one sorted array, so 100000 inserts of falling keys take 1.8 s compiled against 0.018 s for rising ones, where collections.md promises a B-tree with O(log n) operations | — |
+| B-2026-11-10-40 | 2026-11-10 | typecheck | low | A narrowing refusal on a value popped from a heap whose pushed literal kept the `i64` default asks for `as i32` at each use, not for the literal: `heap.push((0, 0))` then `while let Some((d, u)) = heap.pop()` makes `d` an `i64`, and `return d` / `dist[v] = d + t` in an `i32` context are refused without naming the `0` | — |
+| B-2026-11-10-41 | 2026-11-10 | resolver | low | Rust's `Reverse` on one part of a heap's tuple item has no Kāra spelling and no fix: `BinaryHeap<(Reverse<i32>, String)>` and `BinaryHeap<(i32, Reverse<String>)>` are refused at every `Reverse`, and the remaining repair is a hand-written `Ord` or a negated number, impossible for a `String` | — |
 
 ### Relocated
 
