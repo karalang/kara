@@ -6408,6 +6408,40 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// [`Self::is_literal_tree`] with every integer literal's value in
+    /// `peer`'s range: `if c { 300 } else { 2 }` does not take `u8`.
+    pub(super) fn literal_tree_fits(e: &Expr, peer: &Type) -> bool {
+        if !Self::is_literal_tree(e, peer) {
+            return false;
+        }
+        let Some((lo, hi)) = Self::int_literal_range(peer) else {
+            return true;
+        };
+        fn leaves_fit(e: &Expr, lo: i128, hi: i128) -> bool {
+            match &e.kind {
+                ExprKind::Block(b) => b
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| leaves_fit(t, lo, hi)),
+                ExprKind::If {
+                    then_block,
+                    else_branch: Some(els),
+                    ..
+                } => {
+                    then_block
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(|t| leaves_fit(t, lo, hi))
+                        && leaves_fit(els, lo, hi)
+                }
+                ExprKind::Match { arms, .. } => arms.iter().all(|a| leaves_fit(&a.body, lo, hi)),
+                _ => super::TypeChecker::int_literal_operator_tree_value(e)
+                    .is_none_or(|v| v >= lo && v <= hi),
+            }
+        }
+        leaves_fit(e, lo, hi)
+    }
+
     /// Give every literal of an [`Self::is_literal_tree`] expression, and
     /// each block, `if` and `match` holding them, the type `peer`.
     pub(super) fn promote_literal_tree(&mut self, e: &Expr, peer: &Type) {
@@ -6436,10 +6470,17 @@ impl<'a> super::TypeChecker<'a> {
             _ => {
                 if let Some(lit) = Self::literal_taking_branch_type(e, peer) {
                     self.record_promoted_literal(lit, peer);
+                    // The MIR reads a literal's type by its node: `-1`'s
+                    // and the `1` it negates (B-2026-11-10-6).
+                    self.record_node_type(lit.id, peer);
+                    if let ExprKind::Unary { operand, .. } = &lit.kind {
+                        self.record_node_type(operand.id, peer);
+                    }
                 }
             }
         }
         self.record_expr_type(&e.span, peer);
+        self.record_node_type(e.id, peer);
     }
 
     /// Two closure return types that agree once each fills in what the other

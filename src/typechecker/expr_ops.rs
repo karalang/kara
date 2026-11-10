@@ -4484,6 +4484,48 @@ impl<'a> super::TypeChecker<'a> {
         for key in borrowed {
             self.borrowed_deref_operands.remove(&key);
         }
+        // An `if`, `match` or block whose every value is an unsuffixed
+        // literal takes the other operand's numeric type, as a literal
+        // written there does: `r += if up { 1 } else { -1 }` with `r: i32`
+        // (design.md §8 Literals, B-2026-11-10-6, kata 2087).
+        if !matches!(op, BinOp::And | BinOp::Or | BinOp::Shl | BinOp::Shr) {
+            let compound = |e: &Expr| {
+                matches!(
+                    e.kind,
+                    ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_)
+                )
+            };
+            let numeric = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+            let l = self.resolved_now(strip_refs_for_compare(&left_ty));
+            let r = self.resolved_now(strip_refs_for_compare(&right_ty));
+            if compound(right) && numeric(&l) && r != l && Self::literal_tree_fits(right, &l) {
+                // Its branches' literals may still be one open variable
+                // (`if c { 1 } else { -1 }`): it is this type too.
+                if let Some((id, _)) = self.unbound_literal_var(&r) {
+                    super::inference::unify_types(
+                        &Type::TypeVar(id),
+                        &l,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                }
+                self.promote_literal_tree(right, &l);
+                self.record_node_type(right.id, &l);
+                right_ty = l;
+            } else if compound(left) && numeric(&r) && l != r && Self::literal_tree_fits(left, &r) {
+                if let Some((id, _)) = self.unbound_literal_var(&l) {
+                    super::inference::unify_types(
+                        &Type::TypeVar(id),
+                        &r,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                }
+                self.promote_literal_tree(left, &r);
+                self.record_node_type(left.id, &r);
+                left_ty = r;
+            }
+        }
         if let Some(t) = self.literal_binary(op, &mut left_ty, &mut right_ty, left, right) {
             return t;
         }
