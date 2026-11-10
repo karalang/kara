@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 219 |
+| diagnostics | 220 |
 | false-positive | 174 |
-| perf | 145 |
+| perf | 146 |
 | missing-feature | 126 |
-| soundness | 56 |
-| miscompile | 52 |
+| soundness | 57 |
+| miscompile | 53 |
 | run-vs-build | 30 |
 | other | 27 |
 | codegen-gap | 26 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 350 |
-| mir-llvm | 185 |
-| mir | 162 |
+| typecheck | 351 |
+| mir-llvm | 187 |
+| mir | 163 |
 | cli | 94 |
 | ownership | 70 |
 | parser | 58 |
@@ -91,7 +91,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-10). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-98 | 2026-11-09 | mir | medium | A `Str` view of a parameter passed through a closure combinator is refused as returning a borrow of a temporary: `fn unquote(s: Str) -> Str { s.strip_prefix("\"").and_then(|t| t.strip_suffix("\"")).unwrap_or(s) }` is E0509 "the result borrows a temporary value, which this function owns", as are `.map(|t| t.trim())` and `split_once(..).map(|p| p.0)`; the same chain without a closure, or a `match`, passes | — |
 | B-2026-11-09-100 | 2026-11-09 | typecheck+ownership | medium | A method's `mut ref` argument needs no `mut` marker, so an immutable binding is written through it unreported: `let s = String.new(); r.fill(s);` with `fn fill(ref self, buf: mut ref String)` checks clean and fills `s` | — |
 | B-2026-11-09-101 | 2026-11-09 | ownership | medium | The `let mut` rule misses receiver writes its hand-written method table lacks: `let w: VecDeque[i64] = VecDeque.new(); w.push_back(1);` checks clean | — |
+| B-2026-11-10-4 | 2026-11-10 | mir | medium | A range view passed `mut v[a..b]` is lowered on a shared borrow of `v` (`_r = &v; Vec[T].slice(move _r, a, b)`), so MIR borrowck does not see it write: corpus fixtures/codegen/slices/test_e2e_slice_equality_compares_contents mutably lends `a[0..2]` while `let s1: Slice[i64] = a[0..2]` is still read later, and is accepted | — |
 
 ### Relocated
 
@@ -996,6 +997,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-94 | typecheck | low | `opt ?? "" == value` (`??` binds loosest, so it is `opt ?? ("" == value)`) gives three type mismatches (`expected 'String', found 'bool'`, the closur… | e922bfc642 |
 | B-2026-11-09-95 | typecheck | low | A `ref Str` (an element of `pairs.iter()` over a `Slice[(Str, Str)]`) handed to a `String` parameter gets "expected 'String', found 'ref Str'" with n… | e922bfc642 |
 | B-2026-11-09-99 | ownership | medium | A `let` inside a block outlived it for the `let mut` rule: `let mut q = 7; if c { let q = 3; } q = 8;` was refused as a write to the inner, immutable… | df878ae40f |
+| B-2026-11-10-1 | mir-llvm | medium | A plain `karac build` whose auto-par verdicts parallelize nothing shipped the recording lowering, which puts a block between every statement of a blo… | ba29c00d5c |
+| B-2026-11-10-2 | mir-llvm | high | `v.as_slice_mut()` and a range view passed `mut v[a..b]`, on a `Vec` of literals, lowered on a shared borrow, so the literal-table pass made the `Vec… | ba29c00d5c |
+| B-2026-11-10-3 | typecheck | low | A `flat_map` closure whose body is an `if`/`else` or a `match` giving a list from each branch (`\|x\| if x == 0 { [0, 0] } else { [x] }`, as Rust's `fl… | ba29c00d5c |
 
 </details>
 
