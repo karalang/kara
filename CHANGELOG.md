@@ -223,6 +223,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   a temporary (the array literal) outliving its statement, in the check
   and again in MIR borrowck; the `Vec` copies the elements and carries
   only what they borrow (B-2026-11-09-50).
+- `let v = it.collect();` whose target a later use decides, such as
+  passing `v` to a `Vec[T]` parameter, checked clean and then stopped at
+  lowering with "the method call `.collect` with no resolved callee"; it now
+  builds the parameter's type, and an item type that collection cannot hold
+  is the same `FromIterator` error an annotated binding gets
+  (B-2026-11-09-56).
+- A closure whose body ends in `collect()` builds what its uses decide
+  (`take(to32(a))` with `take(v: Vec[i32])`), where it stopped at lowering
+  with `UnsolvedParam("C")` (B-2026-11-09-40).
 - A program's own `struct Entry` (a cache's entry) kept none of its own
   methods: every call on it went to the map entry's dispatch and was
   "no method ... on type 'Entry'". Only the map entry's `or_insert`,
@@ -529,6 +538,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A `let v = it.collect();` used as a receiver or an indexed base before
+  the use that decides its target is "cannot infer what this `collect`
+  builds where it is first used", with the binding's type as a fix, where it
+  was "a type that failed to check is not lowered yet" (B-2026-11-09-56).
 - Each bad format spec of an f-string is reported at its own hole, not at
   the literal's closing quote (B-2026-11-09-91).
 - A field named `private` (or another structural marker) is reported once,

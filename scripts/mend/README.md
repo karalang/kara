@@ -52,8 +52,8 @@ At the commit that added this file, over 39 programs:
 | `impl<T>` | 5 | 5/5 | 5/5 | 5/5 |
 | `fn f<T>` | 5 | 5/5 | 5/5 | 5/5 |
 | `.collect::<Vec<T>>()` | 16 | 16/16 | 16/16 | 16/16 |
-| `.collect::<Vec<_>>()` | 16 | 16/16 | 10/16 | 10/16 |
-| `let mut` never reassigned | 20 | 0/20 | 20/20 | 0/20 |
+| `.collect::<Vec<_>>()` | 16 | 16/16 | 16/16 | 16/16 |
+| `let mut` never reassigned | 20 | 19/20 | 20/20 | 19/20 |
 | `Some(ref x)` | 17 | 3/17 | 17/17 | 17/17 |
 | `x as T` where `x` is a `T` | 20 | 20/20 | 20/20 | 20/20 |
 | `println!("{}", x)` | 20 | 20/20 | 20/20 | 20/20 |
@@ -67,15 +67,17 @@ At the commit that added this file, over 39 programs:
 diagnostics are a correct ownership error (moving out through the `ref`),
 which `karac fix` repairs.
 
-The two short of a full pass are rows in `docs/bugs-v2.jsonl` (tagged
-`probe:rustism-audit`):
+The rows short of a full pass were filed in `docs/bugs-v2.jsonl` (tagged
+`probe:rustism-audit`), and the table is re-run as they close:
 
-- **`let mut` never reassigned** draws nothing: Kāra has no lint for an
-  unwritten `let mut`, and adding one is a spec change.
+- **`let mut` never reassigned** drew nothing until the `unused_mut` lint
+  (B-2026-11-09-99). The one program it still misses passes a `mut ref`
+  binding as `mut child`, which the lint counts as a write to the binding.
 - **`.collect::<Vec<_>>()`**: the fix removes the turbofish and annotates the
   binding when nothing else decides the target. In 6 programs a later use
-  decides it (the `Vec` is passed to a `Vec[T]` parameter), which the type
-  checker accepts and MIR does not lower yet.
+  decided it, which the type checker accepted and MIR did not lower
+  (B-2026-11-09-56); in 2 of them a method call used the binding before that
+  use, which now asks for the annotation, as Rust's `collect()` does.
 
 Before the fixes in that commit, the same audit found no machine-applicable
 fix for `pub(crate)` (0/20), an unreachable `_ =>` arm (0/11), `?` in a unit

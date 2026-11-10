@@ -4820,6 +4820,33 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A binding whose type nothing has decided yet (`let cs = it.collect();`)
+    /// lent to a `ref T` or `mut ref T` parameter holds a `T`: the borrow is
+    /// the call's, not the binding's. Settle it to `T` before the argument is
+    /// checked against the reference, which would otherwise make the binding
+    /// itself a reference and leave `collect`'s target unresolvable
+    /// (B-2026-11-09-56).
+    pub(super) fn settle_binding_lent_to_ref(&mut self, arg: &Expr, param_ty: &Type) {
+        let (Type::Ref(inner) | Type::MutRef(inner), ExprKind::Identifier(name)) =
+            (param_ty, &arg.kind)
+        else {
+            return;
+        };
+        let Some(t) = self.local_scope.lookup(name).cloned() else {
+            return;
+        };
+        if let Type::TypeVar(v) = self.resolved_now(&t) {
+            if inference::literal_var_kind(v).is_none() {
+                unify_types(
+                    &Type::TypeVar(v),
+                    inner,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+            }
+        }
+    }
+
     // B-2026-08-22-3 — the thin `check_call_args_with_substitution` wrapper
     // that used to live here is GONE, not merely unused. Its whole body was a
     // call to `_full` with `None` for `explicit_generic_args`,
@@ -4948,6 +4975,7 @@ impl<'a> super::TypeChecker<'a> {
                     // an owned parameter.
                     self.check_expr(&arg.value, inner)
                 } else {
+                    self.settle_binding_lent_to_ref(&arg.value, param_ty);
                     self.check_expr(&arg.value, param_ty)
                 };
                 self.note_named_arg_lent_into_ref(&arg.value, param_ty);
@@ -6573,7 +6601,10 @@ impl<'a> super::TypeChecker<'a> {
                     Type::TypeVar(v) if inference::literal_var_kind(v).is_none()
                 )
             });
-            let Some((_, name)) = unsolved else { continue };
+            let Some((_, name)) = unsolved else {
+                self.report_collect_used_early(span, &names);
+                continue;
+            };
             if name == "<closure>" {
                 self.type_error(
                     "cannot infer closure parameter type; annotate or call in a context \
@@ -6641,6 +6672,54 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::CannotInferTypeParam,
             );
         }
+    }
+
+    /// A `let v = it.collect();` a later use fixed, used before that as a
+    /// receiver or an indexed base, which needs its type then
+    /// (B-2026-11-09-56): as Rust's `collect()` there, the binding names it.
+    fn report_collect_used_early(&mut self, span: Span, names: &HashMap<TypeVarId, String>) {
+        let key = SpanKey::from_span(&span);
+        let (Some((used, var)), Some(at)) = (
+            self.collect_early_uses.get(&key).copied(),
+            self.untyped_let_names.get(&key).copied(),
+        ) else {
+            return;
+        };
+        let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
+        let ty = resolve_type_vars(
+            &Type::TypeVar(var),
+            &self.env.substitutions,
+            names,
+            &self.env.const_substitutions,
+            &no_consts,
+        );
+        if contains_type_var(&ty) || contains_type_param(&ty) {
+            return;
+        }
+        let shown = match &ty {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                format!("Vec[{}]", Self::vec_elem_source(&args[0]))
+            }
+            t => type_display(t),
+        };
+        self.type_error_with_fix_it(
+            format!(
+                "cannot infer what this `collect` builds where it is first used, at {}:{}: \
+                 a later use fixes it, but a method call or an index needs it already \
+                 (design.md § Type inference); name it on the binding, `: {shown}`",
+                used.line, used.column
+            ),
+            span,
+            TypeErrorKind::CannotInferTypeParam,
+            FixIt {
+                span: Span {
+                    offset: at.offset + at.length,
+                    length: 0,
+                    ..at
+                },
+                replacement: format!(": {shown}"),
+            },
+        );
     }
 
     /// B-2026-11-06-7: the bounds of an impl a method call resolved to while
@@ -6783,7 +6862,12 @@ impl<'a> super::TypeChecker<'a> {
                     .node
                     .and_then(|node| self.node_call_subs.get(&node)?.get(n))
                 {
-                    Some(c) if contains_type_param(&t) || !type_is_fully_concrete(&t) => c.clone(),
+                    // It may be a variable a later use settled (`let v =
+                    // ...collect(); f(v)`, B-2026-11-09-56).
+                    Some(c) if contains_type_param(&t) || !type_is_fully_concrete(&t) => {
+                        let c = c.clone();
+                        self.resolved_now(&c)
+                    }
                     _ => t,
                 };
                 if type_is_fully_concrete(&t) && !contains_type_param(&t) {
@@ -10232,7 +10316,45 @@ impl<'a> super::TypeChecker<'a> {
             self.explain_rust_binary_search_branches(expr, errors_before);
             return ty;
         }
-        self.infer_expr_unexplained(expr)
+        let ty = self.infer_expr_unexplained(expr);
+        self.note_collect_used_early(expr);
+        ty
+    }
+
+    /// A method call on, or an index into, a `let v = it.collect();` binding
+    /// whose target nothing has fixed yet has no type to resolve against and
+    /// fails without a word of its own; a use after it may still fix the
+    /// target, so the binding is remembered and judged with the other open
+    /// lets (B-2026-11-09-56).
+    fn note_collect_used_early(&mut self, expr: &Expr) {
+        let (ExprKind::MethodCall { object, .. } | ExprKind::Index { object, .. }) = &expr.kind
+        else {
+            return;
+        };
+        let ExprKind::Identifier(name) = &object.kind else {
+            return;
+        };
+        let Some(t) = self.local_scope.lookup(name).cloned() else {
+            return;
+        };
+        let mut t = self.resolved_now(&t);
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = *inner;
+        }
+        let Type::TypeVar(v) = t else {
+            return;
+        };
+        let Some(at) = self
+            .unsolved_call_vars
+            .iter()
+            .find(|(_, vs)| vs.iter().any(|(id, _)| *id == v))
+            .map(|(at, _)| SpanKey::from_span(at))
+        else {
+            return;
+        };
+        if self.collect_items.contains_key(&at) {
+            self.collect_early_uses.entry(at).or_insert((expr.span, v));
+        }
     }
 
     fn infer_expr_unexplained(&mut self, expr: &Expr) -> Type {

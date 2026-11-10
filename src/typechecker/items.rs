@@ -7773,6 +7773,13 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(inferred, Type::Error | Type::Pointer { .. }) {
             return inferred;
         }
+        // A call whose whole type is a parameter it left open (`collect`'s
+        // `C`, which the generic path keeps out of its frame) takes the
+        // variable as that argument too (B-2026-11-09-56).
+        let bare = match &inferred {
+            Type::TypeParam(n) => Some(n.clone()),
+            _ => None,
+        };
         let (ty, mut vars) = self.open_unbound_params(inferred);
         // A variable the initializer left open itself (`Vec.new()`'s
         // element, a closure parameter nothing typed) is judged at the end
@@ -7815,9 +7822,61 @@ impl<'a> super::TypeChecker<'a> {
                 for t in frame.values_mut() {
                     *t = substitute_type_params(t, &subs);
                 }
+                if let Some((id, name)) = vars.iter().find(|(_, n)| Some(n) == bare.as_ref()) {
+                    frame.entry(name.clone()).or_insert(Type::TypeVar(*id));
+                }
+            }
+            // A closure's result its body's last call left open (`|v|
+            // v.iter().collect()`, `collect`'s `C`) is that call's: the call
+            // takes the variable, so what a use of the closure solves is
+            // what the call builds (B-2026-11-09-40).
+            if let ExprKind::Closure { body, .. } = &value.kind {
+                self.open_closure_tail_params(body, &vars, &subs);
             }
         }
         ty
+    }
+
+    /// The tail call of a closure body whose type names one of `vars`'
+    /// parameters takes the variable, in its type and as its own type
+    /// argument.
+    fn open_closure_tail_params(
+        &mut self,
+        body: &Expr,
+        vars: &[(super::types::TypeVarId, String)],
+        subs: &HashMap<String, SubstValue>,
+    ) {
+        let mut tail = body;
+        while let ExprKind::Block(b) = &tail.kind {
+            match b.final_expr.as_deref() {
+                Some(e) => tail = e,
+                None => return,
+            }
+        }
+        if !matches!(
+            tail.kind,
+            ExprKind::MethodCall { .. } | ExprKind::Call { .. }
+        ) || tail.id.is_dummy()
+        {
+            return;
+        }
+        let Some((tail_ty, frame)) = self.node_types.get(&tail.id).cloned() else {
+            return;
+        };
+        let opened = substitute_type_params(&tail_ty, subs);
+        if opened == tail_ty {
+            return;
+        }
+        self.node_types.insert(tail.id, (opened, frame));
+        let call_frame = self.node_call_subs.entry(tail.id).or_default();
+        for (id, name) in vars {
+            if tail_ty == Type::TypeParam(name.clone()) {
+                call_frame.entry(name.clone()).or_insert(Type::TypeVar(*id));
+            }
+        }
+        for t in call_frame.values_mut() {
+            *t = substitute_type_params(t, subs);
+        }
     }
 
     /// Each type parameter `ty` leaves unbound (not the enclosing item's,

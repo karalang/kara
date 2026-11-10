@@ -4037,6 +4037,10 @@ pub struct TypeChecker<'a> {
     /// iterator's item, so a `collect` whose target nothing fixes can be
     /// annotated as the `Vec` Rust's `collect::<Vec<_>>()` meant.
     pub(super) collect_items: FxHashMap<SpanKey, Type>,
+    /// A `let v = it.collect();` used as a receiver or an indexed base before
+    /// anything fixed its target: the let's span to the first such use
+    /// (B-2026-11-09-56).
+    pub(super) collect_early_uses: FxHashMap<SpanKey, (Span, types::TypeVarId)>,
     /// `Name(a, b)` calling a program struct, by the callee's span: the
     /// edits that make it the struct literal (see `note_struct_called`).
     pub(super) struct_call_literals: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
@@ -4503,6 +4507,7 @@ impl<'a> TypeChecker<'a> {
             iter_lets: FxHashMap::default(),
             untyped_let_names: FxHashMap::default(),
             collect_items: FxHashMap::default(),
+            collect_early_uses: FxHashMap::default(),
             struct_call_literals: FxHashMap::default(),
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
