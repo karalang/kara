@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 224 |
-| false-positive | 178 |
+| false-positive | 179 |
 | perf | 148 |
 | missing-feature | 127 |
 | soundness | 59 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 355 |
+| typecheck | 356 |
 | mir-llvm | 190 |
 | mir | 166 |
 | cli | 94 |
@@ -126,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-22 | 2026-11-10 | ownership | medium | An immutable `let` of a `shared` value can be lent as `mut` and rebound by the callee: `let tail = T { v: 1 }; advance(mut tail);` with `fn advance(t: mut ref T) { *t = n; }` checks clean and leaves `tail` naming a different object, though `let` froze the handle | — |
 | B-2026-11-10-24 | 2026-11-10 | mir | high | `while let Some(x) = it.find(|x| ..)` (or `next_if`) over `v.iter()` is refused E0516: the closure passed by reference is taken to be stored into the `mut ref` iterator (§9.5), whose type cannot hold it, so the next iteration's closure conflicts | — |
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
+| B-2026-11-10-23 | 2026-11-10 | typecheck | medium | A closure with no declared return type that returns a non-`i64` integer (`return i as i32;`) and has an unsuffixed literal tail or `return` (`0`) is refused: "closure returns conflicting types: 'i64' vs 'i32'"; `karac fix` produces this shape when it deletes Rust's `|..| -> i32` | — |
 
 ### Relocated
 
