@@ -3,7 +3,8 @@
 //! an array. The library has no `slice` method; a run is the range index
 //! `v[a..b]` (collections.md), and the checker said only "no method 'slice'
 //! on type 'Vec'". It now names the range index, and `karac fix` writes it
-//! when both bounds are an integer literal or a name (B-2026-11-09-17).
+//! (B-2026-11-09-17), each bound as it reads: first only a literal or a
+//! name, then, from kata 2060, any bound but a range.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -53,18 +54,20 @@ fn kata_1078_slice_on_a_vec_is_fixed_to_a_range_index() {
 }
 
 #[test]
-fn kata_1078_slice_with_a_computed_bound_gets_the_hint_alone() {
-    let src = "fn main() {\n    let v = [1, 2, 3, 4];\n    let n = v.slice(0, v.len() - 1).len();\n    println(f\"{n}\");\n}";
-    let (first, text, clean, _) = one_round("hint", src);
+fn kata_1078_slice_with_a_computed_bound_is_fixed_too() {
+    // Kata 2060's `sums(digits.slice(k + 1, digits.len()))` on a
+    // `Slice[char]`: bounds the checker once could not write back.
+    let src = "fn rest(d: Slice[i64], k: i64) -> i64 {\n    d.slice(k + 1, d.len()).len()\n}\n\nfn main() {\n    let v = [1, 2, 3, 4];\n    let n = v.slice(0, v.len() - 1).len();\n    println(f\"{n} {rest(v, 0)}\");\n}";
+    let (first, text, clean, out) = one_round("computed", src);
     assert!(
         first.contains(
             "no method 'slice' on type 'Vec[i64]': a run of elements is the range index `v[a..b]`"
         ),
         "{first}"
     );
-    assert!(
-        !clean,
-        "a bound the checker cannot write back has no edit:\n{text}"
-    );
-    assert!(text.contains("v.slice(0, v.len() - 1)"), "{text}");
+    assert!(first.contains("on type 'Slice[i64]'"), "{first}");
+    assert!(clean, "still refused after one fix:\n{text}");
+    assert!(text.contains("v[0..v.len() - 1].len()"), "{text}");
+    assert!(text.contains("d[k + 1..d.len()].len()"), "{text}");
+    assert_eq!(out.trim_end(), "3 3", "{text}");
 }

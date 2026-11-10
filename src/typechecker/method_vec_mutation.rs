@@ -939,9 +939,8 @@ impl<'a> super::TypeChecker<'a> {
     /// spelling of a run of elements. The library has no
     /// such method: a run is the range index `v[a..b]`, a `Slice[T]`
     /// (collections.md), copied out with `.to_vec()`. Refused by name with
-    /// that pointer, and with the edit to `[a..b]` when both bounds are an
-    /// integer literal or a name, which are the only arguments the checker
-    /// can write back without the source text (B-2026-11-09-17).
+    /// that pointer, and with the edit to `[a..b]`, each bound written back
+    /// as it reads (B-2026-11-09-17; any bound but a range since kata 2060).
     pub(super) fn reject_slice_method_on_sequence(
         &mut self,
         object: &Expr,
@@ -979,10 +978,15 @@ impl<'a> super::TypeChecker<'a> {
             type_display(inner),
             type_display(&element)
         );
+        // A bound that is itself an expression is written back by the
+        // formatter (`.slice(k + 1, v.len())` -> `[k + 1..v.len()]`, kata
+        // 2060); a range has the lowest precedence, so any bound but a
+        // range reads the same inside one.
         let bound = |e: &Expr| match &e.kind {
             ExprKind::Integer(n, None) => Some(n.to_string()),
             ExprKind::Identifier(name) => Some(name.clone()),
-            _ => None,
+            ExprKind::Range { .. } => None,
+            _ => Some(crate::formatter::render_expr(e)),
         };
         // The edit rewrites `.slice(a, b)` whole, offered only when it sits
         // right after the receiver and both bounds can be written back.
