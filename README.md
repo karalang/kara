@@ -214,6 +214,14 @@ Pre-1.0. The current release, [0.8.1](https://github.com/karalang/kara/releases/
 
 Not there yet: Windows and Intel-Mac binaries, the browser WebAssembly target, an HTTP/2 server, and a package ecosystem (C libraries are callable through `extern "C"`). Every bug found is logged in the public ledger, [docs/bugs-v2.jsonl](docs/bugs-v2.jsonl).
 
+## How Kāra was built
+
+It all started with an idea: what if? All the major languages have been built over several years by hundreds of contributors. Now that we have powerful AI models that can keep a huge amount of context at once, what if I could design a language from scratch, consolidating decades of learning, pain points, mistakes, workarounds and fixes? Ownership from Rust, parameters that borrow by default from Swift, an effect system from Koka, and Go-style blocking I/O without async.
+
+What does a modern programming language look like? I started with this idea and it quickly drew me into that rabbit hole. I spent a good chunk of time on the initial design before writing the first line of code. After the design felt solid, all the dev work was done by vibe coding with Claude, and tested against a corpus of about 10,000 programs with expected outputs (98% pass), LeetCode katas up to #1060 and about 460 small apps as dogfooding.
+
+Kāra is now feature-complete for a 0.8 beta. I am working on more testing and bug fixing.
+
 ## Prior art
 
 | Language | What Kāra takes |
