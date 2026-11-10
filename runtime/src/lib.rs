@@ -7031,20 +7031,46 @@ fn http_status_error(fetched: &HttpFetched) -> Option<String> {
     (fetched.status >= 400).then(|| format!("{}: status code {}", fetched.url, fetched.status))
 }
 
-/// Private current-thread tokio runtime for the synchronous client FFI.
-/// A dedicated runtime (rather than the serve loops') keeps the client
-/// callable from anywhere: a plain thread, a serve handler running
-/// under `block_in_place`, or a test harness — `block_on` here never
-/// re-enters an outer runtime.
+/// Run `f` on this thread's private current-thread tokio runtime for the
+/// synchronous client FFI. A dedicated runtime (rather than the serve
+/// loops') keeps the client callable from anywhere: a plain thread, a serve
+/// handler running under `block_in_place`, or a test harness — `block_on`
+/// here never re-enters an outer runtime.
+///
+/// One per thread, not one per process. In a shared current-thread
+/// runtime one of the threads blocked in `block_on` drives the IO driver
+/// for all of them, touching sockets the others registered, and
+/// ThreadSanitizer reports those accesses as races in
+/// tokio's `ScheduledIo` (`apps/service/http_cache` on the TSan lane; a
+/// tokio-only program sharing one runtime the same way reports them too,
+/// and one runtime per thread reports none). Each thread here drives the
+/// sockets it registers. The client opens a connection per request and
+/// keeps no IO resource between calls, so nothing crosses runtimes. A
+/// thread's runtime goes with the thread, shut down without blocking so
+/// that a thread ending inside another runtime's context cannot panic.
 #[cfg(feature = "tls")]
-fn http_client_runtime() -> &'static tokio::runtime::Runtime {
-    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-    RT.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()
-            .expect("current-thread tokio runtime for the http client")
+fn with_http_client_runtime<R>(f: impl FnOnce(&tokio::runtime::Runtime) -> R) -> R {
+    struct ClientRuntime(Option<tokio::runtime::Runtime>);
+    impl Drop for ClientRuntime {
+        fn drop(&mut self) {
+            if let Some(rt) = self.0.take() {
+                rt.shutdown_background();
+            }
+        }
+    }
+    thread_local! {
+        static RT: ClientRuntime = ClientRuntime(Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .expect("current-thread tokio runtime for the http client"),
+        ));
+    }
+    RT.with(|rt| {
+        f(rt.0
+            .as_ref()
+            .expect("the http client runtime is shut down only at thread exit"))
     })
 }
 
@@ -7094,18 +7120,20 @@ fn http_fetch_blocking(
     headers: &[(String, String)],
     timeout_ms: i64,
 ) -> Result<HttpFetched, String> {
-    http_client_runtime().block_on(async {
-        let fut = http_fetch_redirects(method, url, body, headers);
-        if timeout_ms > 0 {
-            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms as u64), fut)
-                .await
-            {
-                Ok(r) => r,
-                Err(_) => Err(format!("{url}: request timed out after {timeout_ms} ms")),
+    with_http_client_runtime(|rt| {
+        rt.block_on(async {
+            let fut = http_fetch_redirects(method, url, body, headers);
+            if timeout_ms > 0 {
+                match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms as u64), fut)
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(_) => Err(format!("{url}: request timed out after {timeout_ms} ms")),
+                }
+            } else {
+                fut.await
             }
-        } else {
-            fut.await
-        }
+        })
     })
 }
 
@@ -7339,7 +7367,7 @@ where
         hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io))
             .await
             .map_err(|e| format!("{url}: HTTP/1.1 handshake failed: {e}"))?;
-    tokio::task::spawn(async move {
+    let conn = tokio::task::spawn(async move {
         let _ = conn.await;
     });
     let default_port = if scheme == "https" { 443 } else { 80 };
@@ -7355,12 +7383,28 @@ where
             .map(|p| p.as_str().to_string())
             .unwrap_or_else(|| "/".to_string())
     };
-    let req = http_build_request(method, &target, Some(&host_header), body, headers, url)?;
-    let resp = sender
-        .send_request(req)
-        .await
-        .map_err(|e| format!("{url}: request failed: {e}"))?;
-    http_collect_response(resp, url).await
+    let fetched = async {
+        let req = http_build_request(method, &target, Some(&host_header), body, headers, url)?;
+        let resp = sender
+            .send_request(req)
+            .await
+            .map_err(|e| format!("{url}: request failed: {e}"))?;
+        http_collect_response(resp, url).await
+    }
+    .await;
+    http_close_conn(sender, conn).await;
+    fetched
+}
+
+/// Close a client connection before its request's `block_on` returns: drop
+/// the request half, and drive the connection task until hyper shuts the
+/// socket. The client runtime is per thread (`with_http_client_runtime`)
+/// and runs only inside a request, so a connection task left behind would
+/// hold its socket open until that thread's next request, perhaps never.
+#[cfg(feature = "tls")]
+async fn http_close_conn<S>(sender: S, conn: tokio::task::JoinHandle<()>) {
+    drop(sender);
+    let _ = conn.await;
 }
 
 /// HTTP/2 exchange over a TLS stream that negotiated `h2` via ALPN. The
@@ -7384,15 +7428,20 @@ where
     )
     .await
     .map_err(|e| format!("{url}: HTTP/2 handshake failed: {e}"))?;
-    tokio::task::spawn(async move {
+    let conn = tokio::task::spawn(async move {
         let _ = conn.await;
     });
-    let req = http_build_request(method, &uri.to_string(), None, body, headers, url)?;
-    let resp = sender
-        .send_request(req)
-        .await
-        .map_err(|e| format!("{url}: request failed: {e}"))?;
-    http_collect_response(resp, url).await
+    let fetched = async {
+        let req = http_build_request(method, &uri.to_string(), None, body, headers, url)?;
+        let resp = sender
+            .send_request(req)
+            .await
+            .map_err(|e| format!("{url}: request failed: {e}"))?;
+        http_collect_response(resp, url).await
+    }
+    .await;
+    http_close_conn(sender, conn).await;
+    fetched
 }
 
 /// Assemble the hyper request: method, target (origin-form for h1,
