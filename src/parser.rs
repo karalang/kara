@@ -208,12 +208,16 @@ pub(crate) fn kara_module_call<S: AsRef<str>>(names: &[S], at: usize) -> bool {
 /// `format!` or f-string is a rewrite of its own; those, a comment and a line
 /// break keep the call unrewritten.
 fn format_arg_fits_hole(arg: &str) -> bool {
-    if arg.contains('\n') || arg.contains("f\"") || arg.contains("!(") || arg.contains("![") {
+    if arg.contains('\n') || arg.contains("!(") || arg.contains("![") {
         return false;
     }
     let mut depth = 0usize;
     let mut quote: Option<char> = None;
     let mut prev = ' ';
+    // The character before `prev`: an `f` opens an f-string only where it
+    // starts a word, so `"f"`, a literal ending in `f`, is no f-string
+    // (B-2026-11-10-50).
+    let mut before = ' ';
     for c in arg.chars() {
         match quote {
             Some(q) => match c {
@@ -222,6 +226,9 @@ fn format_arg_fits_hole(arg: &str) -> bool {
                 _ => {}
             },
             None => match c {
+                '"' if prev == 'f' && !(before.is_alphanumeric() || before == '_') => {
+                    return false;
+                }
                 '"' | '\'' => quote = Some(c),
                 ':' | '\\' => return false,
                 '/' if prev == '/' => return false,
@@ -234,6 +241,7 @@ fn format_arg_fits_hole(arg: &str) -> bool {
                 _ => {}
             },
         }
+        before = prev;
         prev = c;
     }
     depth == 0 && quote.is_none()
