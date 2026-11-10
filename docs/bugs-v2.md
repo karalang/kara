@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 224 |
 | false-positive | 179 |
-| perf | 150 |
+| perf | 151 |
 | missing-feature | 128 |
 | soundness | 60 |
 | miscompile | 53 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 356 |
-| mir-llvm | 193 |
+| mir-llvm | 194 |
 | mir | 166 |
 | cli | 94 |
 | ownership | 73 |
@@ -116,9 +116,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-6 | 2026-11-10 | typecheck | medium | A block, `if` or `match` whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)`, `let z = { 1 }; take_i32(z)`, and kata 2055's `prefix[i + 1] = prefix[i] + if b[i] == b'*' { 1 } else { 0 }` with `prefix: Vec[i32]` are refused as narrowing, with no fix | — |
 | B-2026-11-10-24 | 2026-11-10 | mir | high | `while let Some(x) = it.find(|x| ..)` (or `next_if`) over `v.iter()` is refused E0516: the closure passed by reference is taken to be stored into the `mut ref` iterator (§9.5), whose type cannot hold it, so the next iteration's closure conflicts | — |
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
-| B-2026-11-10-29 | 2026-11-10 | mir-llvm | low | `karac build` is ~21% slower than at f1416771a4 on the ADR-2 frozen set (tip 0.886x legacy, was 0.734x): within the bars, but the MIR is built three times per build and typecheck and ownership grew | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-10-37 | 2026-11-10 | mir-llvm | low | LLVM 22 keeps hsearch's (275) bounds check on `citations[mid]` in a binary search: instcombine rewrites karac's `assume(mid >= lo)` into `assume(hi - lo > -2)`, so IPSCCP no longer folds the check; costs nothing measurable on Emerald Rapids at HEAD, Cascade Lake not re-measured | — |
+| B-2026-11-10-38 | 2026-11-10 | mir-llvm | low | A program that names no library method still typechecks, ownership-checks and lowers 510 library methods (378 at f1416771a4): the word-based library prune keeps what any kept body names, and the library grew 25% since 11-02 | — |
 
 ### Relocated
 
@@ -1020,6 +1020,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-22 | ownership | medium | An immutable `let` of a `shared` value can be lent as `mut` and rebound by the callee: `let tail = T { v: 1 }; advance(mut tail);` with `fn advance(t… | e705e5be7e |
 | B-2026-11-10-23 | typecheck | medium | A closure with no declared return type that returns a non-`i64` integer (`return i as i32;`) and has an unsuffixed literal tail or `return` (`0`) is… | 900693f6bb |
 | B-2026-11-10-28 | interp+mir-llvm | medium | `BufReader`/`BufWriter` over a `TlsStream` is refused at check (E0297, "not built yet"), and over a socket a `Network` provider opened stops at the c… | 23ce3eab43 |
+| B-2026-11-10-29 | mir-llvm | low | `karac build` was ~21% slower than at f1416771a4 on the ADR-2 frozen set (0.886x legacy, was 0.734x): the in-order program was lowered after the auto… | 2991314acf |
 
 </details>
 
