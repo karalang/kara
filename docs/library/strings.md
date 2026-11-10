@@ -51,6 +51,7 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 | `find` | `fn find(self, pat: Str) -> Option[i64]` | Byte offset of the first match. A valid place to cut with `s[a..b]` |
 | `rfind` | `fn rfind(self, pat: Str) -> Option[i64]` | Byte offset of the last match. An empty `pat` is found at the end |
 | `match_indices` | `fn match_indices(self, pat: Str) -> impl Iterator[Item = (i64, Str)]` | Every non-overlapping match, left to right, with its byte offset; the `Str` is a view into `self`. An empty `pat` matches at every char boundary, the end included (B-2026-11-09-57) |
+| `matches` | `fn matches(self, pat: Str) -> impl Iterator[Item = Str]` | Every non-overlapping match, left to right, each a view into `self`: `match_indices` without the offsets. `s.matches(pat).count()` counts the occurrences of `pat` without overlap |
 | `split_once` | `fn split_once(self, sep: Str) -> Option[(Str, Str)]` | The text before and after the first `sep`, both views into `self`; `None` when `sep` does not occur |
 | `rsplit_once` | `fn rsplit_once(self, sep: Str) -> Option[(Str, Str)]` | The same at the last `sep` |
 | `split_at` | `fn split_at(self, mid: i64) -> (Str, Str)` | The text before and after byte `mid`, both views into `self`. Panics if `mid` is past the end or falls inside a multi-byte code point, as `s[a..b]` does |

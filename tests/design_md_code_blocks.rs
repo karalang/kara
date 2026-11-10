@@ -769,6 +769,8 @@ const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[
         "match_indices",
         "every non-overlapping match with its byte offset",
     ),
+    // Kata 2086: in the Kāra library the v2 check and MIR read.
+    ("matches", "every non-overlapping match"),
 ];
 
 #[test]

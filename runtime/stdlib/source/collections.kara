@@ -1364,6 +1364,12 @@ impl StringSlice {
     fn match_indices(self, pat: Str) -> StrMatchIndices {
         StrMatchIndices { s: self, pat: pat, pos: 0 }
     }
+
+    /// Every non-overlapping match of `pat`, left to right, each a view
+    /// into the text: `match_indices` without the offsets (kata 2086).
+    fn matches(self, pat: Str) -> StrMatches {
+        StrMatches { inner: self.match_indices(pat) }
+    }
 }
 
 impl String {
@@ -1451,6 +1457,11 @@ impl String {
     fn match_indices(ref self, pat: Str) -> StrMatchIndices {
         self.as_str().match_indices(pat)
     }
+
+    /// `matches` of the text as a `Str`: each match is a view into `self`.
+    fn matches(ref self, pat: Str) -> StrMatches {
+        self.as_str().matches(pat)
+    }
 }
 
 /// The chars of a `Str` with their byte offsets: `char_indices`.
@@ -1517,6 +1528,23 @@ impl Iterator for StrMatchIndices {
                 self.pos = n + 1;
                 None
             }
+        }
+    }
+}
+
+/// The non-overlapping matches of `pat` in a `Str`, left to right:
+/// `matches`, the matches of `match_indices` without their offsets.
+struct StrMatches {
+    inner: StrMatchIndices,
+}
+
+impl Iterator for StrMatches {
+    type Item = Str;
+
+    fn next(mut ref self) -> Option[Str] {
+        match self.inner.next() {
+            Some((_, m)) => Some(m),
+            None => None,
         }
     }
 }

@@ -3225,6 +3225,7 @@ const ITER_CHAIN_METHODS: &[&str] = &[
     "splitn",
     "char_indices",
     "match_indices",
+    "matches",
     // adaptors
     "chain",
     "chunk_by",
