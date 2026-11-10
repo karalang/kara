@@ -56,11 +56,12 @@ By hand:
   holding a nested `format!`, since a nested f-string is deprecated
   (design.md §3). The `.kara` writes the closure as a block that binds
   `streak` first.
-- `std.mem.take(&mut g.value.events)` is `mem.take(mut g.value.events)`:
-  a path starting at `std` does not resolve in an expression, with no help
-  (B-2026-11-10-16).
 
 Found while writing it:
+- `std.mem.take(&mut g.value.events)` failed "undefined name 'std'" with
+  no help (B-2026-11-10-16). `karac fix` now writes `mem.take(..)`, and
+  keeps Kāra's module in `std.fs.read_to_string(p)` (fixed by 3c5e8c8dc5
+  and 47514a3c77).
 - `serve_backend` reads its connection through
   `BufReader.new(conn.try_clone().unwrap()).lines()`. A `BufReader` first
   wrapped only a `File` or a child pipe: the interpreter failed with
