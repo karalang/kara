@@ -37,7 +37,9 @@ impl<'a> super::TypeChecker<'a> {
     /// `SortedSet` are `min` / `max`, and `first_key_value` /
     /// `last_key_value` on a `SortedMap` are `first` / `last`. The fix renames
     /// the call where `.name()` sits right after the receiver (kata 1061:
-    /// `class.first()`). A user impl's method of the name keeps it.
+    /// `class.first()`). A user impl's method of the name keeps it. And
+    /// `count()` on a `Set` / `SortedSet` is `len()`: Rust's set operations
+    /// give an iterator (kata 2077).
     pub(super) fn rename_sorted_twin(
         &mut self,
         object: &Expr,
@@ -58,6 +60,10 @@ impl<'a> super::TypeChecker<'a> {
             ("SortedMap", "last_key_value") => "last",
             ("SortedSet", "first") => "min",
             ("SortedSet", "last") => "max",
+            // Rust's `a.intersection(&b).count()`: Rust's set operations
+            // give an iterator, Kāra's a set, which holds its size (kata
+            // 2077).
+            ("Set" | "SortedSet", "count") => "len",
             _ => return None,
         };
         if !args.is_empty()
@@ -68,10 +74,19 @@ impl<'a> super::TypeChecker<'a> {
         {
             return None;
         }
-        let msg = format!(
-            "no method '{method}' on type '{name}': Kāra's is `{twin}()` \
-             (library/collections.md)"
-        );
+        let msg = if method == "count" {
+            format!(
+                "no method 'count' on type '{name}': a `{name}` holds its size, `len()`; \
+                 Kāra's `union`, `intersection` and `difference` give a `{name}`, not \
+                 Rust's iterator, so `a.intersection(b).count()` is \
+                 `a.intersection(b).len()` (library/collections.md)"
+            )
+        } else {
+            format!(
+                "no method '{method}' on type '{name}': Kāra's is `{twin}()` \
+                 (library/collections.md)"
+            )
+        };
         let object_end = object.span.offset + object.span.length;
         let to = span.offset + span.length;
         let from = to.saturating_sub(method.len() + 3);
