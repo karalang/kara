@@ -498,6 +498,7 @@ fn lower_program_inner<'a>(
         resource_bounds: FxHashMap::default(),
         trait_defs: FxHashMap::default(),
         impl_method_trait: FxHashMap::default(),
+        method_trait: FxHashMap::default(),
         trait_impl_fns: FxHashMap::default(),
         bound_resources: FxHashSet::default(),
         bindings: FxHashMap::default(),
@@ -686,9 +687,31 @@ fn lower_program_inner<'a>(
                     .iter()
                     .flat_map(|g| g.params.iter().map(|p| p.name.as_str()))
                     .collect();
+                // A trait method's result is a view as the trait declares
+                // it: `fn next(mut ref self) -> Option[Str]` in an impl
+                // with `type Item = Str` is the trait's `Option[Self.Item]`
+                // spelled out (B-2026-11-10-7). A `ref` the impl writes
+                // keeps the receiver's borrow (core semantics §5, "Items
+                // borrow what the receiver borrows").
+                let written_ref = i.f.return_type.as_ref().is_some_and(writes_ref);
+                let declared = lcx
+                    .method_trait
+                    .get(&SpanKey::from_span(&i.f.span))
+                    .and_then(|t| lcx.trait_defs.get(t.as_str()))
+                    .and_then(|td| {
+                        td.items.iter().find_map(|it| match it {
+                            ast::TraitItem::Method(m) if m.name == i.f.name => {
+                                m.return_type.as_ref()
+                            }
+                            _ => None,
+                        })
+                    })
+                    .filter(|_| !written_ref);
                 i.f.return_type
                     .as_ref()
-                    .is_some_and(|t| view_result(t, &params))
+                    .into_iter()
+                    .chain(declared)
+                    .any(|t| view_result(t, &params))
             });
             lcx.lower_instance(def, &args, &name);
             // A receiver the body borrows, written or (D5) a bare `self`.
@@ -790,6 +813,20 @@ const HASHER_METHODS: [&str; 12] = [
 /// receiver, since a value cannot borrow itself, so the result borrows
 /// what the receiver's value borrows (§5.4). A `ref` written in the type,
 /// or a named type that may hold one, keeps the receiver's place.
+/// Whether `t` writes a `ref` or `mut ref` anywhere in it.
+fn writes_ref(t: &ast::TypeExpr) -> bool {
+    match &t.kind {
+        ast::TypeKind::Ref(_) | ast::TypeKind::MutRef(_) => true,
+        ast::TypeKind::Path(p) => p.generic_args.as_ref().is_some_and(|g| {
+            g.iter()
+                .any(|a| matches!(a, ast::GenericArg::Type(t) if writes_ref(t)))
+        }),
+        ast::TypeKind::Tuple(ts) => ts.iter().any(writes_ref),
+        ast::TypeKind::Array { element, .. } => writes_ref(element),
+        _ => false,
+    }
+}
+
 fn view_result(t: &ast::TypeExpr, params: &[&str]) -> bool {
     match &t.kind {
         ast::TypeKind::Path(p) => {
@@ -1256,6 +1293,9 @@ struct Lcx<'a> {
     /// its own, by the method's span: such a method is held to its trait
     /// method's clause (B-2026-11-04-26).
     impl_method_trait: FxHashMap<SpanKey, &'a String>,
+    /// The trait each trait impl's method implements, by the method's
+    /// span, whatever its effects.
+    method_trait: FxHashMap<SpanKey, &'a String>,
     /// The methods of the first impl of each trait, which stand for the
     /// trait's own when its declaration is not in the program (the
     /// library's `EnvProvider` is the checker's, not the MIR library's).
@@ -1727,6 +1767,7 @@ impl<'a> Lcx<'a> {
                     if let Some(t) = b.trait_name.as_ref().and_then(|t| t.segments.last()) {
                         for it in &b.items {
                             if let ImplItem::Method(f) = it {
+                                self.method_trait.insert(SpanKey::from_span(&f.span), t);
                                 if f.effects.is_none() {
                                     self.impl_method_trait
                                         .insert(SpanKey::from_span(&f.span), t);

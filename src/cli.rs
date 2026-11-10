@@ -2733,6 +2733,7 @@ impl Pipeline {
             };
             let kind = match e.code {
                 "E0517" => crate::typechecker::TypeErrorKind::WriteThroughSharedRef,
+                "E0509" => crate::typechecker::TypeErrorKind::BorrowOutlivesOwner,
                 _ => crate::typechecker::TypeErrorKind::BorrowConflict,
             };
             let class = crate::typechecker::class_for_type_error_kind(&kind);

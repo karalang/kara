@@ -1,0 +1,1 @@
+ERROR E0509 at line 33: the result borrows the receiver's own field; an item may borrow only what its `ref` fields borrow

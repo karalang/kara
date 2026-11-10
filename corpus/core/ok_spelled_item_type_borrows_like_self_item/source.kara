@@ -1,0 +1,42 @@
+struct Hits {
+    s: Str,
+    pos: i64,
+}
+
+impl Iterator for Hits {
+    type Item = (i64, Str);
+
+    fn next(mut ref self) -> Option[(i64, Str)] {
+        if self.pos >= self.s.len() {
+            return None;
+        }
+        let at = self.pos;
+        self.pos = at + 2;
+        Some((at, self.s.slice(at, at + 1)))
+    }
+}
+
+struct Words {
+    s: Str,
+    pos: i64,
+}
+
+impl Iterator for Words {
+    type Item = Str;
+
+    fn next(mut ref self) -> Option[Str] {
+        if self.pos >= self.s.len() {
+            return None;
+        }
+        let at = self.pos;
+        self.pos = at + 1;
+        Some(self.s.slice(at, at + 1))
+    }
+}
+
+fn main() {
+    let v: Vec[(i64, Str)] = Hits { s: "abcd", pos: 0 }.collect();
+    println(v);
+    let w: Vec[Str] = Words { s: "abc", pos: 0 }.collect();
+    println(w);
+}

@@ -2019,6 +2019,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::RefOperandUnsupported => "E0283",
                 crate::typechecker::TypeErrorKind::BorrowConflict => "E0516",
                 crate::typechecker::TypeErrorKind::WriteThroughSharedRef => "E0517",
+                crate::typechecker::TypeErrorKind::BorrowOutlivesOwner => "E0509",
                 crate::typechecker::TypeErrorKind::FnKindMismatch => "E0518",
                 crate::typechecker::TypeErrorKind::CapturePrefixRemoved => "E0519",
                 crate::typechecker::TypeErrorKind::RemovedInCore => "E0520",

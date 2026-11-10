@@ -1022,6 +1022,11 @@ pub enum TypeErrorKind {
     BorrowConflict,
     /// v2 core §5.9: a write through a shared `ref` (E0517).
     WriteThroughSharedRef,
+    /// v2 core §5: a result or stored view that borrows what it may not
+    /// keep (E0509), as MIR borrowck reports it under `karac check`: an
+    /// iterator's item borrowing the iterator itself, a view stored where
+    /// its borrow is not kept (B-2026-11-10-7).
+    BorrowOutlivesOwner,
     /// v2 core §9.6: a function value of a less permissive kind passed where
     /// a more permissive one is expected (a closure that mutates a capture
     /// where `Fn` is expected), or a `MutFn` called through a `ref` (E0518).
@@ -1734,9 +1739,9 @@ pub(crate) fn class_for_type_error_kind(
         // E0516 / E0517 are borrow rules (core-semantics §5.6, §5.9), not
         // type mismatches: `karac explain` describes them by this class
         // (B-2026-11-07-47).
-        TypeErrorKind::BorrowConflict | TypeErrorKind::WriteThroughSharedRef => {
-            Some(DC::OwnershipBorrowConflict)
-        }
+        TypeErrorKind::BorrowConflict
+        | TypeErrorKind::WriteThroughSharedRef
+        | TypeErrorKind::BorrowOutlivesOwner => Some(DC::OwnershipBorrowConflict),
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)
         }

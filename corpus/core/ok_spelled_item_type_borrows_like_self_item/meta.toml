@@ -1,0 +1,13 @@
+source = "corpus/core/ok_spelled_item_type_borrows_like_self_item"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["iterator"]
+class = "e"
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-10-7: an impl's `next` written `-> Option[Str]` (or `Option[(i64, Str)]`) with `type Item = Str` is the trait's `Option[Self.Item]` spelled out, so its items borrow what the receiver's value borrows (core-semantics §5, 'Items borrow what the receiver borrows'), and `collect()` keeps them. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "77bf7dfba"

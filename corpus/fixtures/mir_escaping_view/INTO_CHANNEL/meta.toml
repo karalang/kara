@@ -1,6 +1,6 @@
 source = "tests/mir_escaping_view.rs::INTO_CHANNEL"
 dedup_of = []
-expect = "error:E0516"
+expect = "error:E0509"
 exit = 1
 tags = ["post-m1:par"]
 class = "a"
@@ -11,7 +11,7 @@ rules = []
 backends = []
 env = {}
 bucket = "a:refused"
-classified_with = "9913c6855"
+classified_with = "77bf7dfba"
 extracted_src = "95f9eeaa"
 model_rev = "3acf4472"
 model_src = "95f9eeaa"

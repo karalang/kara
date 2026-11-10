@@ -2766,6 +2766,10 @@ fn main() -> () {
             // A `collect()` kept by a `ref` binding is refused by the
             // checker's temporary rule (§5.5, B-2026-11-08-43).
             "err_collect_temporary_kept_by_ref_let",
+            // `Iterator`, whose `next` declares the item type an impl
+            // spells out, and `collect` are the library's (B-2026-11-10-7).
+            "ok_spelled_item_type_borrows_like_self_item",
+            "err_spelled_item_type_lends_from_receiver",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
