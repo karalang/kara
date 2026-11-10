@@ -1,0 +1,803 @@
+// object_store: a small S3-style object store over HTTP. Objects live under
+// /o/<key>; each has an ETag (a SHA-256 prefix of its bytes), a content type
+// and x-meta-* metadata. GET answers byte ranges (206, 416), conditional
+// requests (If-Match, If-None-Match: 304 and 412) and listings by prefix
+// with a delimiter's common prefixes and pagination. PUT can be made
+// conditional to create-only or to compare-and-swap. Large objects arrive as
+// multipart uploads whose parts are checked on completion, as S3 does. Every
+// change is written to a data directory (one file per object and an index
+// replaced by rename), and a restart reloads it, verifying each object
+// against its ETag. The handler is tested first by calling it directly,
+// then served on loopback to a real client.
+
+import std.sync.{TaskGroup, Mutex};
+import std.time.{Duration, sleep};
+import std.crypto.sha2.{sha256};
+import std.encoding.{hex_encode, percent_decode};
+
+const ADDR: Str = "127.0.0.1:47755";
+const MIN_PART: i64 = 5;
+const MAX_KEYS: i64 = 1000;
+
+struct Response {
+    status: i64,
+    body: String,
+    headers: Vec[(String, String)],
+}
+
+fn header_of(headers: Vec[(String, String)], name: Str) -> Option[String] {
+    for (k, v) in headers.iter() {
+        if k.to_lowercase() == name.to_lowercase() {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn digest_hex(data: Str) -> String {
+    hex_encode(sha256(data.bytes()))
+}
+
+fn etag_of(body: Str) -> String {
+    let h = digest_hex(body);
+    f"\"{h[0..32]}\""
+}
+
+#[derive(Clone)]
+struct Object {
+    key: String,
+    body: String,
+    etag: String,
+    content_type: String,
+    meta: Vec[(String, String)],
+}
+
+struct Upload {
+    key: String,
+    parts: Map[i64, (String, String)],
+}
+
+struct State {
+    objects: SortedMap[String, Object],
+    uploads: Map[String, Upload],
+    next_upload: i64,
+    dir: Option[String],
+    events: Vec[String],
+}
+
+sync struct Store {
+    state: Mutex[State],
+}
+
+fn new_store(dir: own Option[String]) -> Store {
+    Store {
+        state: Mutex.new(State {
+            objects: SortedMap.new(),
+            uploads: Map.new(),
+            next_upload: 0,
+            dir: dir,
+            events: Vec.new(),
+        }),
+    }
+}
+
+// ------------------------------------------------------------ persistence
+
+fn object_file(dir: Str, key: Str) -> String {
+    let h = digest_hex(key);
+    f"{dir}/objects/{h[0..16]}"
+}
+
+fn escape_field(s: Str) -> String {
+    s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+}
+
+fn unescape_field(s: Str) -> String {
+    let mut out = String.new();
+    let mut esc = false;
+    for c in s.chars() {
+        if esc {
+            match c {
+                't' => out.push('\t'),
+                'n' => out.push('\n'),
+                _ => out.push(c),
+            }
+            esc = false;
+        } else if c == '\\' {
+            esc = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn index_text(objects: SortedMap[String, Object]) -> String {
+    let mut out = String.new();
+    for (key, o) in objects.iter() {
+        let meta: Vec[String] = o.meta.iter().map(|(k, v)| f"{k}={v}").collect();
+        out.push_str(f"{escape_field(key)}\t{o.etag}\t{o.content_type}\t{escape_field(meta.join(";"))}\n");
+    }
+    out
+}
+
+fn persist(st: mut ref State, key: Str) -> Result[(), IoError] {
+    let dir = match st.dir {
+        Some(d) => d.clone(),
+        None => return Ok(()),
+    };
+    fs.create_dir_all(f"{dir}/objects")?;
+    match st.objects.get(key) {
+        Some(o) => fs.write(object_file(dir, key), o.body)?,
+        None => {
+            let path = object_file(dir, key);
+            if fs.exists(path) {
+                fs.remove_file(path)?;
+            }
+        }
+    }
+    let tmp = f"{dir}/index.tsv.tmp";
+    fs.write(tmp, index_text(st.objects))?;
+    fs.rename(tmp, f"{dir}/index.tsv")?;
+    Ok(())
+}
+
+// Loads the index and every object file; an object whose bytes no longer
+// match its ETag is reported and left out.
+fn load(dir: Str) -> Result[(Store, Vec[String]), IoError] {
+    let store = new_store(Some(dir.to_string()));
+    let mut problems = Vec.new();
+    let index = f"{dir}/index.tsv";
+    if not fs.exists(index) {
+        return Ok((store, problems));
+    }
+    let text = fs.read_to_string(index)?;
+    {
+        let g = store.state.lock();
+        for line in text.lines() {
+            let fields: Vec[Str] = line.split("\t").collect();
+            if fields.len() != 4 {
+                problems.push(f"bad index line: {line}");
+                continue;
+            }
+            let key = unescape_field(fields[0]);
+            let body = match fs.read_to_string(object_file(dir, key)) {
+                Ok(b) => b,
+                Err(e) => {
+                    problems.push(f"{key}: {e}");
+                    continue;
+                }
+            };
+            let etag = fields[1].to_string();
+            if not etag.contains("-") and etag_of(body) != etag {
+                problems.push(f"{key}: content does not match its etag {etag}");
+                continue;
+            }
+            let mut meta = Vec.new();
+            let m = unescape_field(fields[3]);
+            for pair in m.split(";") {
+                if let Some((k, v)) = pair.split_once("=") {
+                    meta.push((k.to_string(), v.to_string()));
+                }
+            }
+            g.value.objects.insert(key.clone(), Object {
+                key: key,
+                body: body,
+                etag: etag,
+                content_type: fields[2].to_string(),
+                meta: meta,
+            });
+        }
+    }
+    Ok((store, problems))
+}
+
+// ----------------------------------------------------------------- answers
+
+fn answer(status: i64, body: Str) -> Response {
+    Response {
+        status: status,
+        body: body.to_string(),
+        headers: [("Content-Type", "text/plain")],
+    }
+}
+
+fn error(status: i64, code: Str, detail: Str) -> Response {
+    answer(status, f"{code}: {detail}")
+}
+
+fn object_headers(o: Object) -> Vec[(String, String)] {
+    let mut h = [
+        ("ETag", o.etag.clone()),
+        ("Content-Type", o.content_type.clone()),
+        ("Accept-Ranges", "bytes"),
+    ];
+    for (k, v) in o.meta.iter() {
+        h.push((f"x-meta-{k}", v.clone()));
+    }
+    h
+}
+
+// ------------------------------------------------------------------ ranges
+
+enum RangeSpec {
+    Whole,
+    Part(i64, i64),
+    Unsatisfiable,
+}
+
+// `bytes=a-b`, `bytes=a-` and `bytes=-n` (RFC 9110 §14.1.2). A header that
+// does not parse, or names several ranges, is ignored and the whole object
+// is sent, as the RFC allows.
+fn parse_range(header: Option[String], len: i64) -> RangeSpec {
+    let h = match header {
+        Some(h) => h,
+        None => return RangeSpec.Whole,
+    };
+    let spec = match h.trim().strip_prefix("bytes=") {
+        Some(s) => s.trim(),
+        None => return RangeSpec.Whole,
+    };
+    if spec.contains(",") {
+        return RangeSpec.Whole;
+    }
+    let (a, b) = match spec.split_once("-") {
+        Some(p) => p,
+        None => return RangeSpec.Whole,
+    };
+    if a.is_empty() {
+        let n = match i64.parse(b) {
+            Ok(n) => n,
+            Err(_) => return RangeSpec.Whole,
+        };
+        if n == 0 {
+            return RangeSpec.Unsatisfiable;
+        }
+        if len == 0 {
+            return RangeSpec.Unsatisfiable;
+        }
+        let start = if n > len { 0 } else { len - n };
+        return RangeSpec.Part(start, len - 1);
+    }
+    let start = match i64.parse(a) {
+        Ok(n) => n,
+        Err(_) => return RangeSpec.Whole,
+    };
+    let end = if b.is_empty() {
+        len - 1
+    } else {
+        match i64.parse(b) {
+            Ok(n) => n,
+            Err(_) => return RangeSpec.Whole,
+        }
+    };
+    if not b.is_empty() and end < start {
+        return RangeSpec.Whole;
+    }
+    if start >= len {
+        return RangeSpec.Unsatisfiable;
+    }
+    RangeSpec.Part(start, min(end, len - 1))
+}
+
+// ------------------------------------------------------------ conditionals
+
+fn tag_list_matches(header: Str, etag: Str, weak: bool) -> bool {
+    for t in header.split(",") {
+        let t = t.trim();
+        if t == "*" {
+            return true;
+        }
+        let t = if weak { t.strip_prefix("W/").unwrap_or(t) } else { t };
+        if t == etag {
+            return true;
+        }
+    }
+    false
+}
+
+// Some(response) when a precondition decides the answer.
+fn preconditions(req: Request, current: Option[ref Object], read: bool) -> Option[Response] {
+    if let Some(m) = req.header("If-Match") {
+        let ok = match current {
+            Some(o) => tag_list_matches(m, o.etag, false),
+            None => false,
+        };
+        if not ok {
+            return Some(error(412, "PreconditionFailed", "If-Match"));
+        }
+    }
+    if let Some(m) = req.header("If-None-Match") {
+        if let Some(o) = current {
+            if tag_list_matches(m, o.etag, true) {
+                if read {
+                    let mut r = answer(304, "");
+                    r.headers = [("ETag", o.etag.clone())];
+                    return Some(r);
+                }
+                return Some(error(412, "PreconditionFailed", "If-None-Match"));
+            }
+        }
+    }
+    None
+}
+
+// ------------------------------------------------------------------ handler
+
+fn query_param(req: Request, name: Str) -> Option[String] {
+    for (k, v) in req.query().into_iter() {
+        if k == name {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn has_param(req: Request, name: Str) -> bool {
+    req.query().iter().any(|(k, _)| k == name)
+}
+
+fn get_object(store: Store, req: Request, key: Str) -> Response {
+    let g = store.state.lock();
+    let o = match g.value.objects.get(key) {
+        Some(o) => o,
+        None => return error(404, "NoSuchKey", key),
+    };
+    if let Some(r) = preconditions(req, Some(o), true) {
+        return r;
+    }
+    let len = o.body.len();
+    match parse_range(req.header("Range"), len) {
+        RangeSpec.Whole => Response { status: 200, body: o.body.clone(), headers: object_headers(o) },
+        RangeSpec.Part(a, b) => {
+            let mut h = object_headers(o);
+            h.push(("Content-Range", f"bytes {a}-{b}/{len}"));
+            Response { status: 206, body: o.body[a..b + 1].to_string(), headers: h }
+        }
+        RangeSpec.Unsatisfiable => {
+            let mut r = error(416, "InvalidRange", f"bytes */{len}");
+            r.headers.push(("Content-Range", f"bytes */{len}"));
+            r
+        }
+    }
+}
+
+fn put_object(store: Store, req: Request, key: Str) -> Response {
+    let g = store.state.lock();
+    if let Some(r) = preconditions(req, g.value.objects.get(key), false) {
+        return r;
+    }
+    let body = req.body();
+    let mut meta = Vec.new();
+    for (k, v) in req.headers().into_iter() {
+        if let Some(name) = k.to_lowercase().strip_prefix("x-meta-") {
+            meta.push((name.to_string(), v));
+        }
+    }
+    meta.sort();
+    let o = Object {
+        key: key.to_string(),
+        etag: etag_of(body),
+        content_type: req.header("Content-Type").unwrap_or("application/octet-stream"),
+        body: body,
+        meta: meta,
+    };
+    let etag = o.etag.clone();
+    g.value.objects.insert(key.to_string(), o);
+    g.value.events.push(f"put {key} {etag}");
+    if let Err(e) = persist(mut g.value, key) {
+        return error(500, "InternalError", f"{e}");
+    }
+    let mut r = answer(200, "");
+    r.headers.push(("ETag", etag));
+    r
+}
+
+fn delete_object(store: Store, key: Str) -> Response {
+    let g = store.state.lock();
+    if g.value.objects.remove(key).is_none() {
+        return error(404, "NoSuchKey", key);
+    }
+    g.value.events.push(f"delete {key}");
+    if let Err(e) = persist(mut g.value, key) {
+        return error(500, "InternalError", f"{e}");
+    }
+    answer(204, "")
+}
+
+// GET /o/?prefix=p&delimiter=d&max-keys=n&start-after=k
+fn list(store: Store, req: Request) -> Response {
+    let prefix = query_param(req, "prefix").unwrap_or(String.new());
+    let delimiter = query_param(req, "delimiter").unwrap_or(String.new());
+    let start_after = query_param(req, "start-after").unwrap_or(String.new());
+    let max_keys = match query_param(req, "max-keys") {
+        Some(s) => match i64.parse(s) {
+            Ok(n) if n >= 0 => min(n, MAX_KEYS),
+            _ => return error(400, "InvalidArgument", f"max-keys {s}"),
+        },
+        None => MAX_KEYS,
+    };
+    let g = store.state.lock();
+    let mut lines = Vec.new();
+    let mut prefixes: Vec[String] = Vec.new();
+    let mut count = 0;
+    let mut last = String.new();
+    let mut truncated = false;
+    for (key, o) in g.value.objects.iter() {
+        if not key.starts_with(prefix) or key.as_str() <= start_after.as_str() {
+            continue;
+        }
+        let rest = key[prefix.len()..];
+        let entry = if not delimiter.is_empty() {
+            match rest.find(delimiter) {
+                Some(i) => Some(f"{prefix}{rest[0..i + delimiter.len()]}"),
+                None => None,
+            }
+        } else {
+            None
+        };
+        if let Some(p) = entry {
+            if prefixes.last() == Some(ref p) {
+                continue;
+            }
+            if count == max_keys {
+                truncated = true;
+                break;
+            }
+            prefixes.push(p.clone());
+            lines.push(f"prefix {p}");
+            last = p;
+        } else {
+            if count == max_keys {
+                truncated = true;
+                break;
+            }
+            lines.push(f"key {key} {o.body.len()} {o.etag}");
+            last = key.clone();
+        }
+        count += 1;
+    }
+    if truncated {
+        lines.push(f"truncated next={last}");
+    }
+    answer(200, lines.join("\n"))
+}
+
+// ---------------------------------------------------------------- multipart
+
+fn create_upload(store: Store, key: Str) -> Response {
+    let g = store.state.lock();
+    g.value.next_upload += 1;
+    let id = f"u{g.value.next_upload}";
+    g.value.uploads.insert(id.clone(), Upload { key: key.to_string(), parts: Map.new() });
+    g.value.events.push(f"upload {id} {key}");
+    answer(200, id)
+}
+
+fn upload_part(store: Store, req: Request, key: Str, id: Str) -> Response {
+    let n = match query_param(req, "partNumber").and_then(|s| i64.parse(s).ok()) {
+        Some(n) if n >= 1 and n <= 10000 => n,
+        _ => return error(400, "InvalidArgument", "partNumber"),
+    };
+    let g = store.state.lock();
+    let up = match g.value.uploads.get_mut(id) {
+        Some(u) if u.key == key => u,
+        _ => return error(404, "NoSuchUpload", id),
+    };
+    let body = req.body();
+    let etag = etag_of(body);
+    up.parts.insert(n, (etag.clone(), body));
+    let mut r = answer(200, "");
+    r.headers.push(("ETag", etag));
+    r
+}
+
+// The body lists `<part> <etag>` a line, in ascending part order. The
+// object's ETag is the digest of the parts' digests and their count.
+fn complete_upload(store: Store, req: Request, key: Str, id: Str) -> Response {
+    let g = store.state.lock();
+    let up = match g.value.uploads.get(id) {
+        Some(u) if u.key == key => u,
+        _ => return error(404, "NoSuchUpload", id),
+    };
+    let mut wanted: Vec[(i64, String)] = Vec.new();
+    for line in req.body().lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (n, tag) = match line.split_once(" ") {
+            Some((a, b)) => match i64.parse(a) {
+                Ok(n) => (n, b.trim().to_string()),
+                Err(_) => return error(400, "MalformedXML", line),
+            },
+            None => return error(400, "MalformedXML", line),
+        };
+        if let Some((prev, _)) = wanted.last() {
+            if n <= prev {
+                return error(400, "InvalidPartOrder", f"part {n}");
+            }
+        }
+        wanted.push((n, tag));
+    }
+    if wanted.is_empty() {
+        return error(400, "MalformedXML", "no parts");
+    }
+    let mut body = String.new();
+    let mut digests = String.new();
+    for i in 0..wanted.len() {
+        let (n, tag) = ref wanted[i];
+        let (etag, data) = match up.parts.get(n) {
+            Some(p) => p,
+            None => return error(400, "InvalidPart", f"part {n} was not uploaded"),
+        };
+        if etag != tag {
+            return error(400, "InvalidPart", f"part {n} etag {tag}");
+        }
+        if i + 1 < wanted.len() and data.len() < MIN_PART {
+            return error(400, "EntityTooSmall", f"part {n} is {data.len()} bytes");
+        }
+        body.push_str(data);
+        digests.push_str(etag.replace("\"", ""));
+    }
+    let etag = f"\"{digest_hex(digests)[0..32]}-{wanted.len()}\"";
+    let o = Object {
+        key: key.to_string(),
+        body: body,
+        etag: etag.clone(),
+        content_type: "application/octet-stream",
+        meta: Vec.new(),
+    };
+    g.value.uploads.remove(id);
+    g.value.objects.insert(key.to_string(), o);
+    g.value.events.push(f"complete {id} {key} {etag}");
+    if let Err(e) = persist(mut g.value, key) {
+        return error(500, "InternalError", f"{e}");
+    }
+    let mut r = answer(200, etag.clone());
+    r.headers.push(("ETag", etag));
+    r
+}
+
+fn abort_upload(store: Store, key: Str, id: Str) -> Response {
+    let g = store.state.lock();
+    match g.value.uploads.get(id) {
+        Some(u) if u.key == key => {}
+        _ => return error(404, "NoSuchUpload", id),
+    }
+    g.value.uploads.remove(id);
+    g.value.events.push(f"abort {id}");
+    answer(204, "")
+}
+
+fn handle(store: Store, req: Request) -> Response {
+    let path = req.path();
+    if path == "/o" or path == "/o/" {
+        return match req.method().as_str() {
+            "GET" => list(store, req),
+            _ => error(405, "MethodNotAllowed", req.method()),
+        };
+    }
+    let raw = match path.strip_prefix("/o/") {
+        Some(k) => k,
+        None => return error(404, "NoSuchBucket", path),
+    };
+    let key = match percent_decode(raw).ok().and_then(|b| String.from_utf8(b).ok()) {
+        Some(k) => k,
+        None => return error(400, "InvalidURI", raw),
+    };
+    if key.len() > 1024 {
+        return error(400, "KeyTooLongError", f"{key.len()} bytes");
+    }
+    let upload = query_param(req, "uploadId");
+    match (req.method().as_str(), upload) {
+        ("POST", None) if has_param(req, "uploads") => create_upload(store, key),
+        ("PUT", Some(id)) => upload_part(store, req, key, id),
+        ("POST", Some(id)) => complete_upload(store, req, key, id),
+        ("DELETE", Some(id)) => abort_upload(store, key, id),
+        ("GET", None) => get_object(store, req, key),
+        ("PUT", None) => put_object(store, req, key),
+        ("DELETE", None) => delete_object(store, key),
+        (m, _) => error(405, "MethodNotAllowed", m),
+    }
+}
+
+// ---------------------------------------------------------------- self-test
+
+fn show(store: Store, req: Request) {
+    let line = f"{req.method()} {req.url()}";
+    let r = handle(store, req);
+    let mut shown = Vec.new();
+    for name in ["ETag", "Content-Range", "Content-Type"] {
+        if let Some(v) = header_of(r.headers, name) {
+            shown.push(f"{name}: {v}");
+        }
+    }
+    for (k, v) in r.headers.iter() {
+        if k.starts_with("x-meta-") {
+            shown.push(f"{k}: {v}");
+        }
+    }
+    let body = r.body.replace("\n", " | ");
+    println(f"  {line} -> {r.status} [{shown.join(", ")}] {body}");
+}
+
+fn req(method: Str, url: Str) -> Request {
+    Request.new(method.to_string(), url.to_string())
+}
+
+fn self_test() {
+    println("== self-test");
+    let store = new_store(None);
+    show(store, req("PUT", "/o/notes/today.txt").with_header("Content-Type", "text/plain").with_header("X-Meta-Author", "ana").with_body("hello, object store"));
+    show(store, req("GET", "/o/notes/today.txt"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=0-4"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=7-"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=-5"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=-100"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=10-400"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=19-"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=-0"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=0-1,4-5"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "lines=1-2"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("Range", "bytes=5-2"));
+    let tag = etag_of("hello, object store");
+    show(store, req("GET", "/o/notes/today.txt").with_header("If-None-Match", tag.clone()));
+    show(store, req("GET", "/o/notes/today.txt").with_header("If-None-Match", f"W/{tag}"));
+    show(store, req("GET", "/o/notes/today.txt").with_header("If-Match", "\"stale\""));
+    show(store, req("GET", "/o/notes/today.txt").with_header("If-Match", f"\"x\", {tag}"));
+    show(store, req("PUT", "/o/notes/today.txt").with_header("If-None-Match", "*").with_body("again"));
+    show(store, req("PUT", "/o/notes/today.txt").with_header("If-Match", "\"stale\"").with_body("lost update"));
+    show(store, req("PUT", "/o/notes/today.txt").with_header("If-Match", tag).with_body("hello, version two"));
+    show(store, req("PUT", "/o/notes/new.txt").with_header("If-Match", "*").with_body("nothing to match"));
+    show(store, req("PUT", "/o/notes/new.txt").with_header("If-None-Match", "*").with_body("created once"));
+    show(store, req("GET", "/o/notes/missing.txt"));
+    show(store, req("PUT", "/o/a%20b%2Fc.txt").with_body("spaces and a slash"));
+    show(store, req("GET", "/o/a%20b%2Fc.txt"));
+    show(store, req("GET", "/o/bad%zz"));
+    for k in ["photos/2024/jan/1.jpg", "photos/2024/feb/2.jpg", "photos/2025/mar/3.jpg", "photos/readme", "videos/x.mp4"] {
+        show(store, req("PUT", f"/o/{k}").with_body(k.clone()));
+    }
+    show(store, req("GET", "/o/?prefix=photos/"));
+    show(store, req("GET", "/o/?prefix=photos/&delimiter=/"));
+    show(store, req("GET", "/o/?delimiter=/"));
+    show(store, req("GET", "/o/?prefix=photos/&max-keys=2"));
+    show(store, req("GET", "/o/?prefix=photos/&max-keys=2&start-after=photos/2024/jan/1.jpg"));
+    show(store, req("GET", "/o/?max-keys=-1"));
+    show(store, req("DELETE", "/o/videos/x.mp4"));
+    show(store, req("DELETE", "/o/videos/x.mp4"));
+    show(store, req("PATCH", "/o/notes/new.txt"));
+    show(store, req("GET", "/elsewhere"));
+
+    println("== self-test: multipart");
+    show(store, req("POST", "/o/big.log?uploads"));
+    show(store, req("PUT", "/o/big.log?uploadId=u1&partNumber=1").with_body("first-"));
+    show(store, req("PUT", "/o/big.log?uploadId=u1&partNumber=2").with_body("second-"));
+    show(store, req("PUT", "/o/big.log?uploadId=u1&partNumber=3").with_body("end"));
+    show(store, req("PUT", "/o/big.log?uploadId=u1&partNumber=0").with_body("zero"));
+    show(store, req("PUT", "/o/other.log?uploadId=u1&partNumber=1").with_body("wrong key"));
+    let p1 = etag_of("first-");
+    let p2 = etag_of("second-");
+    let p3 = etag_of("end");
+    show(store, req("POST", "/o/big.log?uploadId=u1").with_body(f"2 {p2}\n1 {p1}\n"));
+    show(store, req("POST", "/o/big.log?uploadId=u1").with_body(f"1 {p1}\n2 \"nope\"\n"));
+    show(store, req("POST", "/o/big.log?uploadId=u1").with_body(f"1 {p1}\n4 {p3}\n"));
+    show(store, req("POST", "/o/big.log?uploadId=u1").with_body(f"1 {p1}\n3 {p3}\n"));
+    show(store, req("GET", "/o/big.log"));
+    show(store, req("POST", "/o/big.log?uploadId=u1").with_body(f"1 {p1}\n"));
+    show(store, req("POST", "/o/tiny.bin?uploads"));
+    show(store, req("PUT", "/o/tiny.bin?uploadId=u2&partNumber=1").with_body("abc"));
+    show(store, req("PUT", "/o/tiny.bin?uploadId=u2&partNumber=2").with_body("def"));
+    let t1 = etag_of("abc");
+    let t2 = etag_of("def");
+    show(store, req("POST", "/o/tiny.bin?uploadId=u2").with_body(f"1 {t1}\n2 {t2}\n"));
+    show(store, req("DELETE", "/o/tiny.bin?uploadId=u2"));
+    show(store, req("DELETE", "/o/tiny.bin?uploadId=u2"));
+    show(store, req("GET", "/o/tiny.bin"));
+    let g = store.state.lock();
+    println(f"  events: {g.value.events.len()}, objects: {g.value.objects.len()}, open uploads: {g.value.uploads.len()}");
+}
+
+// ------------------------------------------------------------------- live
+
+fn call(c: Client, method: Str, path: Str, headers: Slice[(Str, Str)], body: Str) {
+    let mut b = c.request(method.to_string(), f"http://{ADDR}{path}").timeout(3000);
+    for (k, v) in headers.iter() {
+        b = b.header(k.to_string(), v.to_string());
+    }
+    if not body.is_empty() {
+        b = b.body(body.to_string());
+    }
+    let shown: Vec[String] = headers.iter().map(|(k, v)| f" {k}: {v}").collect();
+    match b.send() {
+        Ok(r) => {
+            let tag = r.header("ETag") ?? "-";
+            let range = r.header("Content-Range") ?? "-";
+            let text = r.body.replace("\n", " | ");
+            println(f"  {method} {path}{shown.join("")} -> {r.status} {tag} {range} {text}");
+        }
+        Err(e) => println(f"  {method} {path}{shown.join("")} -> error: {e.message()}"),
+    }
+}
+
+fn dump(store: Store) {
+    let g = store.state.lock();
+    for (key, o) in g.value.objects.iter() {
+        println(f"  {key} {o.body.len()} {o.etag} {o.content_type}");
+    }
+}
+
+fn main() {
+    self_test();
+
+    let dir = "objstore_data";
+    let _ = fs.remove_dir_all(dir);
+    let store = new_store(Some(dir.to_string()));
+    let group = TaskGroup.new();
+    group.spawn(|| Server.serve(ADDR.to_string(), |req| handle(store, req)));
+    let mut up = false;
+    for _ in 0..100 {
+        if TcpStream.connect(ADDR).is_ok() {
+            up = true;
+            break;
+        }
+        sleep(Duration.ms(20));
+    }
+    println(f"== live: server up {up}");
+    let c = Client.new();
+    call(c, "PUT", "/o/site/index.html", [("Content-Type", "text/html"), ("X-Meta-Owner", "web")], "<h1>home</h1>");
+    call(c, "PUT", "/o/site/about.html", [("Content-Type", "text/html")], "<h1>about</h1>");
+    call(c, "PUT", "/o/site/css/main.css", [("Content-Type", "text/css")], "body { margin: 0 }");
+    call(c, "PUT", "/o/logs/2025-01-01.log", [], "boot ok\nready\n");
+    call(c, "GET", "/o/site/index.html", [], "");
+    call(c, "GET", "/o/site/index.html", [("Range", "bytes=4-7")], "");
+    call(c, "GET", "/o/site/index.html", [("Range", "bytes=50-")], "");
+    let home = etag_of("<h1>home</h1>");
+    call(c, "GET", "/o/site/index.html", [("If-None-Match", home.as_str())], "");
+    call(c, "PUT", "/o/site/index.html", [("If-Match", "\"old\"")], "<h1>lost</h1>");
+    call(c, "PUT", "/o/site/index.html", [("If-Match", home.as_str()), ("Content-Type", "text/html")], "<h1>home v2</h1>");
+    call(c, "GET", "/o/?prefix=site/&delimiter=/", [], "");
+    call(c, "GET", "/o/?max-keys=2", [], "");
+    call(c, "POST", "/o/backup.tar?uploads", [], "");
+    call(c, "PUT", "/o/backup.tar?uploadId=u1&partNumber=1", [], "aaaaaaaa");
+    call(c, "PUT", "/o/backup.tar?uploadId=u1&partNumber=2", [], "bbbb");
+    let b1 = etag_of("aaaaaaaa");
+    let b2 = etag_of("bbbb");
+    call(c, "POST", "/o/backup.tar?uploadId=u1", [], f"1 {b1}\n2 {b2}\n");
+    call(c, "GET", "/o/backup.tar", [("Range", "bytes=-6")], "");
+    call(c, "DELETE", "/o/logs/2025-01-01.log", [], "");
+    call(c, "GET", "/o/logs/2025-01-01.log", [], "");
+    group.cancel();
+
+    println("== live: on disk");
+    let mut files = fs.read_dir(f"{dir}/objects").unwrap_or(Vec.new());
+    files.sort();
+    println(f"  {files.len()} object files");
+    for line in fs.read_to_string(f"{dir}/index.tsv").unwrap_or(String.new()).lines() {
+        println(f"  {line.replace("\t", " ")}");
+    }
+
+    println("== restart");
+    match load(dir) {
+        Ok((s, problems)) => {
+            dump(s);
+            println(f"  problems: {problems.len()}");
+        }
+        Err(e) => println(f"  load failed: {e}"),
+    }
+
+    println("== restart after damage");
+    let _ = fs.write(object_file(dir, "site/about.html"), "<h1>tampered</h1>");
+    let _ = fs.remove_file(object_file(dir, "site/css/main.css"));
+    match load(dir) {
+        Ok((s, problems)) => {
+            dump(s);
+            for p in problems.iter() {
+                println(f"  problem: {p}");
+            }
+        }
+        Err(e) => println(f"  load failed: {e}"),
+    }
+    let _ = fs.remove_dir_all(dir);
+    println("done");
+}

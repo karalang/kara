@@ -1,0 +1,100 @@
+== self-test
+  PUT /o/notes/today.txt -> 200 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Type: text/plain] 
+  GET /o/notes/today.txt -> 200 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Type: text/plain, x-meta-author: ana] hello, object store
+  GET /o/notes/today.txt -> 206 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Range: bytes 0-4/19, Content-Type: text/plain, x-meta-author: ana] hello
+  GET /o/notes/today.txt -> 206 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Range: bytes 7-18/19, Content-Type: text/plain, x-meta-author: ana] object store
+  GET /o/notes/today.txt -> 206 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Range: bytes 14-18/19, Content-Type: text/plain, x-meta-author: ana] store
+  GET /o/notes/today.txt -> 206 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Range: bytes 0-18/19, Content-Type: text/plain, x-meta-author: ana] hello, object store
+  GET /o/notes/today.txt -> 206 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Range: bytes 10-18/19, Content-Type: text/plain, x-meta-author: ana] ect store
+  GET /o/notes/today.txt -> 416 [Content-Range: bytes */19, Content-Type: text/plain] InvalidRange: bytes */19
+  GET /o/notes/today.txt -> 416 [Content-Range: bytes */19, Content-Type: text/plain] InvalidRange: bytes */19
+  GET /o/notes/today.txt -> 200 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Type: text/plain, x-meta-author: ana] hello, object store
+  GET /o/notes/today.txt -> 200 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Type: text/plain, x-meta-author: ana] hello, object store
+  GET /o/notes/today.txt -> 200 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Type: text/plain, x-meta-author: ana] hello, object store
+  GET /o/notes/today.txt -> 304 [ETag: "93d2c22922e02b2dc620d966877f0089"] 
+  GET /o/notes/today.txt -> 304 [ETag: "93d2c22922e02b2dc620d966877f0089"] 
+  GET /o/notes/today.txt -> 412 [Content-Type: text/plain] PreconditionFailed: If-Match
+  GET /o/notes/today.txt -> 200 [ETag: "93d2c22922e02b2dc620d966877f0089", Content-Type: text/plain, x-meta-author: ana] hello, object store
+  PUT /o/notes/today.txt -> 412 [Content-Type: text/plain] PreconditionFailed: If-None-Match
+  PUT /o/notes/today.txt -> 412 [Content-Type: text/plain] PreconditionFailed: If-Match
+  PUT /o/notes/today.txt -> 200 [ETag: "6384007339692b72cfdb62d232ccc48c", Content-Type: text/plain] 
+  PUT /o/notes/new.txt -> 412 [Content-Type: text/plain] PreconditionFailed: If-Match
+  PUT /o/notes/new.txt -> 200 [ETag: "bc743b082cfaf67690489530ed174fe8", Content-Type: text/plain] 
+  GET /o/notes/missing.txt -> 404 [Content-Type: text/plain] NoSuchKey: notes/missing.txt
+  PUT /o/a%20b%2Fc.txt -> 200 [ETag: "4e0e7aae25321af61ba6d28738b6a377", Content-Type: text/plain] 
+  GET /o/a%20b%2Fc.txt -> 200 [ETag: "4e0e7aae25321af61ba6d28738b6a377", Content-Type: application/octet-stream] spaces and a slash
+  GET /o/bad%zz -> 400 [Content-Type: text/plain] InvalidURI: bad%zz
+  PUT /o/photos/2024/jan/1.jpg -> 200 [ETag: "09e2ae13f859af90178858ff63175bac", Content-Type: text/plain] 
+  PUT /o/photos/2024/feb/2.jpg -> 200 [ETag: "d242e9a484742e9f95032db8ce57ccad", Content-Type: text/plain] 
+  PUT /o/photos/2025/mar/3.jpg -> 200 [ETag: "a21ba8dcdd51eaa2d58225004f6ce09e", Content-Type: text/plain] 
+  PUT /o/photos/readme -> 200 [ETag: "fb0f351bb741f408bff825f2987d60c9", Content-Type: text/plain] 
+  PUT /o/videos/x.mp4 -> 200 [ETag: "d06e1b89c1a780eebcdf7c24daf8df25", Content-Type: text/plain] 
+  GET /o/?prefix=photos/ -> 200 [Content-Type: text/plain] key photos/2024/feb/2.jpg 21 "d242e9a484742e9f95032db8ce57ccad" | key photos/2024/jan/1.jpg 21 "09e2ae13f859af90178858ff63175bac" | key photos/2025/mar/3.jpg 21 "a21ba8dcdd51eaa2d58225004f6ce09e" | key photos/readme 13 "fb0f351bb741f408bff825f2987d60c9"
+  GET /o/?prefix=photos/&delimiter=/ -> 200 [Content-Type: text/plain] prefix photos/2024/ | prefix photos/2025/ | key photos/readme 13 "fb0f351bb741f408bff825f2987d60c9"
+  GET /o/?delimiter=/ -> 200 [Content-Type: text/plain] prefix a b/ | prefix notes/ | prefix photos/ | prefix videos/
+  GET /o/?prefix=photos/&max-keys=2 -> 200 [Content-Type: text/plain] key photos/2024/feb/2.jpg 21 "d242e9a484742e9f95032db8ce57ccad" | key photos/2024/jan/1.jpg 21 "09e2ae13f859af90178858ff63175bac" | truncated next=photos/2024/jan/1.jpg
+  GET /o/?prefix=photos/&max-keys=2&start-after=photos/2024/jan/1.jpg -> 200 [Content-Type: text/plain] key photos/2025/mar/3.jpg 21 "a21ba8dcdd51eaa2d58225004f6ce09e" | key photos/readme 13 "fb0f351bb741f408bff825f2987d60c9"
+  GET /o/?max-keys=-1 -> 400 [Content-Type: text/plain] InvalidArgument: max-keys -1
+  DELETE /o/videos/x.mp4 -> 204 [Content-Type: text/plain] 
+  DELETE /o/videos/x.mp4 -> 404 [Content-Type: text/plain] NoSuchKey: videos/x.mp4
+  PATCH /o/notes/new.txt -> 405 [Content-Type: text/plain] MethodNotAllowed: PATCH
+  GET /elsewhere -> 404 [Content-Type: text/plain] NoSuchBucket: /elsewhere
+== self-test: multipart
+  POST /o/big.log?uploads -> 200 [Content-Type: text/plain] u1
+  PUT /o/big.log?uploadId=u1&partNumber=1 -> 200 [ETag: "1abf3c5845f4d58df9122cc06043d23c", Content-Type: text/plain] 
+  PUT /o/big.log?uploadId=u1&partNumber=2 -> 200 [ETag: "4fb1b10dfacdb4146687f831b2e70468", Content-Type: text/plain] 
+  PUT /o/big.log?uploadId=u1&partNumber=3 -> 200 [ETag: "361e48d0308f20e32dba5fb56328baf1", Content-Type: text/plain] 
+  PUT /o/big.log?uploadId=u1&partNumber=0 -> 400 [Content-Type: text/plain] InvalidArgument: partNumber
+  PUT /o/other.log?uploadId=u1&partNumber=1 -> 404 [Content-Type: text/plain] NoSuchUpload: u1
+  POST /o/big.log?uploadId=u1 -> 400 [Content-Type: text/plain] InvalidPartOrder: part 1
+  POST /o/big.log?uploadId=u1 -> 400 [Content-Type: text/plain] InvalidPart: part 2 etag "nope"
+  POST /o/big.log?uploadId=u1 -> 400 [Content-Type: text/plain] InvalidPart: part 4 was not uploaded
+  POST /o/big.log?uploadId=u1 -> 200 [ETag: "929b01b07be541cbc7a7a02edf042feb-2", Content-Type: text/plain] "929b01b07be541cbc7a7a02edf042feb-2"
+  GET /o/big.log -> 200 [ETag: "929b01b07be541cbc7a7a02edf042feb-2", Content-Type: application/octet-stream] first-end
+  POST /o/big.log?uploadId=u1 -> 404 [Content-Type: text/plain] NoSuchUpload: u1
+  POST /o/tiny.bin?uploads -> 200 [Content-Type: text/plain] u2
+  PUT /o/tiny.bin?uploadId=u2&partNumber=1 -> 200 [ETag: "ba7816bf8f01cfea414140de5dae2223", Content-Type: text/plain] 
+  PUT /o/tiny.bin?uploadId=u2&partNumber=2 -> 200 [ETag: "cb8379ac2098aa165029e3938a51da0b", Content-Type: text/plain] 
+  POST /o/tiny.bin?uploadId=u2 -> 400 [Content-Type: text/plain] EntityTooSmall: part 1 is 3 bytes
+  DELETE /o/tiny.bin?uploadId=u2 -> 204 [Content-Type: text/plain] 
+  DELETE /o/tiny.bin?uploadId=u2 -> 404 [Content-Type: text/plain] NoSuchUpload: u2
+  GET /o/tiny.bin -> 404 [Content-Type: text/plain] NoSuchKey: tiny.bin
+  events: 14, objects: 8, open uploads: 0
+== live: server up true
+  PUT /o/site/index.html Content-Type: text/html X-Meta-Owner: web -> 200 "b5f4ea2e4df5ee6b81b35f2fffa96056" - 
+  PUT /o/site/about.html Content-Type: text/html -> 200 "7c9da8d6c5f3e6bf79711c98fa424d39" - 
+  PUT /o/site/css/main.css Content-Type: text/css -> 200 "997faceca2605a983126895af39c5da4" - 
+  PUT /o/logs/2025-01-01.log -> 200 "ff450a5aa7e775c724cb42b9afd65b82" - 
+  GET /o/site/index.html -> 200 "b5f4ea2e4df5ee6b81b35f2fffa96056" - <h1>home</h1>
+  GET /o/site/index.html Range: bytes=4-7 -> 206 "b5f4ea2e4df5ee6b81b35f2fffa96056" bytes 4-7/13 home
+  GET /o/site/index.html Range: bytes=50- -> error: http://127.0.0.1:47755/o/site/index.html: status code 416
+  GET /o/site/index.html If-None-Match: "b5f4ea2e4df5ee6b81b35f2fffa96056" -> 304 "b5f4ea2e4df5ee6b81b35f2fffa96056" - 
+  PUT /o/site/index.html If-Match: "old" -> error: http://127.0.0.1:47755/o/site/index.html: status code 412
+  PUT /o/site/index.html If-Match: "b5f4ea2e4df5ee6b81b35f2fffa96056" Content-Type: text/html -> 200 "35dd43e6cff0327fb20ec73d04eb732b" - 
+  GET /o/?prefix=site/&delimiter=/ -> 200 - - key site/about.html 14 "7c9da8d6c5f3e6bf79711c98fa424d39" | prefix site/css/ | key site/index.html 16 "35dd43e6cff0327fb20ec73d04eb732b"
+  GET /o/?max-keys=2 -> 200 - - key logs/2025-01-01.log 14 "ff450a5aa7e775c724cb42b9afd65b82" | key site/about.html 14 "7c9da8d6c5f3e6bf79711c98fa424d39" | truncated next=site/about.html
+  POST /o/backup.tar?uploads -> 200 - - u1
+  PUT /o/backup.tar?uploadId=u1&partNumber=1 -> 200 "1f3ce40415a2081fa3eee75fc39fff8e" - 
+  PUT /o/backup.tar?uploadId=u1&partNumber=2 -> 200 "81cc5b17018674b401b42f35ba07bb79" - 
+  POST /o/backup.tar?uploadId=u1 -> 200 "489533e9a8cd889481411d7738d63cf5-2" - "489533e9a8cd889481411d7738d63cf5-2"
+  GET /o/backup.tar Range: bytes=-6 -> 206 "489533e9a8cd889481411d7738d63cf5-2" bytes 6-11/12 aabbbb
+  DELETE /o/logs/2025-01-01.log -> 204 - - 
+  GET /o/logs/2025-01-01.log -> error: http://127.0.0.1:47755/o/logs/2025-01-01.log: status code 404
+== live: on disk
+  4 object files
+  backup.tar "489533e9a8cd889481411d7738d63cf5-2" application/octet-stream 
+  site/about.html "7c9da8d6c5f3e6bf79711c98fa424d39" text/html 
+  site/css/main.css "997faceca2605a983126895af39c5da4" text/css 
+  site/index.html "35dd43e6cff0327fb20ec73d04eb732b" text/html 
+== restart
+  backup.tar 12 "489533e9a8cd889481411d7738d63cf5-2" application/octet-stream
+  site/about.html 14 "7c9da8d6c5f3e6bf79711c98fa424d39" text/html
+  site/css/main.css 18 "997faceca2605a983126895af39c5da4" text/css
+  site/index.html 16 "35dd43e6cff0327fb20ec73d04eb732b" text/html
+  problems: 0
+== restart after damage
+  backup.tar 12 "489533e9a8cd889481411d7738d63cf5-2" application/octet-stream
+  site/index.html 16 "35dd43e6cff0327fb20ec73d04eb732b" text/html
+  problem: site/about.html: content does not match its etag "7c9da8d6c5f3e6bf79711c98fa424d39"
+  problem: site/css/main.css: not found
+done
