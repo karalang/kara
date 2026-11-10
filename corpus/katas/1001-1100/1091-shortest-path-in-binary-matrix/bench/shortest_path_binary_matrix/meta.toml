@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1091-shortest-path-in-binary-matrix/bench/shortest_path_binary_matrix.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:vecdeque", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1091 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "c9f04eb67"
+extracted_src = "cb37d3de"
