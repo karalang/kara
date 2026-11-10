@@ -2315,6 +2315,19 @@ impl<'a> super::TypeChecker<'a> {
         // rides the same path — a `Mutex[T]` (spinlock-guarded cell) is built by
         // `assoc_call.rs`'s `Mutex && "new"` arm, and `lock m { ... }` operates
         // on the resulting binding. Both lower to `Wrapper[type_of(v)]`.
+        // `BufReader.new(r)` / `BufWriter.new(w)`: what `r` or `w` is, is
+        // judged at the end, once the body has fixed it (B-2026-11-10-14).
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if let ([ty, ctor], Some(first)) = (segments.as_slice(), args.first()) {
+                if (ty == "BufReader" || ty == "BufWriter")
+                    && (ctor == "new" || ctor == "with_capacity")
+                {
+                    self.pending_buf_sources
+                        .push((first.value.span, ty == "BufReader"));
+                }
+            }
+        }
+
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2
                 && (segments[0] == "Atomic" || segments[0] == "Mutex")

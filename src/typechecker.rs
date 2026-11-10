@@ -1124,6 +1124,12 @@ pub enum TypeErrorKind {
     /// divergence. (`Mutex[T]` is unrestricted — a lock guards any type — so
     /// this kind is `Atomic`-specific.)
     AtomicInvalidInnerType,
+    /// `BufReader.new(r)` / `BufWriter.new(w)` (or `with_capacity`) over a
+    /// value the buffered wrappers do not take: they wrap a `File` or a child
+    /// process's pipe (docs/library/io.md § Buffered I/O). Run-fatal: the
+    /// interpreter fails at the call, and a compiled build frees the value as
+    /// a file (B-2026-11-10-14).
+    BufferedIoInvalidSource,
     /// A `#[repr(transparent)]` carrier violates a shape rule (design.md §
     /// `#[repr(transparent)]` for distinct-type FFI). One kind for the whole
     /// family; the specific rule is named by the symbolic code embedded in the
@@ -1675,6 +1681,7 @@ impl TypeErrorKind {
                 | TypeErrorKind::SharedFieldNotMut
                 | TypeErrorKind::AtomicMissingOrdering
                 | TypeErrorKind::AtomicInvalidInnerType
+                | TypeErrorKind::BufferedIoInvalidSource
                 | TypeErrorKind::ImplTraitMultipleWitnesses
         )
     }
@@ -1704,6 +1711,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ReturnTypeMismatch
         | TypeErrorKind::ImplTraitMultipleWitnesses
         | TypeErrorKind::AtomicInvalidInnerType
+        | TypeErrorKind::BufferedIoInvalidSource
         | TypeErrorKind::InvalidTupleIndex
         | TypeErrorKind::RefOperandUnsupported
         | TypeErrorKind::IndexMoveNonCopy
@@ -3615,6 +3623,10 @@ pub struct TypeChecker<'a> {
     /// `Atomic.new(v)` arguments still a variable at the call, judged at the
     /// end against library/concurrency.md's five (B-2026-11-07-21).
     pub(super) pending_atomic_inners: Vec<(Span, Type, Option<String>)>,
+    /// The argument of each `BufReader.new` / `BufWriter.new` (or
+    /// `with_capacity`), with whether it makes a reader, judged at the end
+    /// once its type is fixed (B-2026-11-10-14).
+    pub(super) pending_buf_sources: Vec<(Span, bool)>,
     /// Inside a generic body, each `Atomic.new(x)` whose element is a bare
     /// type parameter, keyed by the body's callee key: the element is judged
     /// at each call that instantiates it ([`Self::emit_atomic_instance_errors`];
@@ -4413,6 +4425,7 @@ impl<'a> TypeChecker<'a> {
             unsolved_call_consts: Vec::new(),
             collection_vars: FxHashSet::default(),
             pending_atomic_inners: Vec::new(),
+            pending_buf_sources: Vec::new(),
             atomic_generic_params: FxHashMap::default(),
             call_site_callers: FxHashMap::default(),
             aliased_call_vars: Vec::new(),
@@ -4859,6 +4872,7 @@ impl<'a> TypeChecker<'a> {
         self.settle_deferred_call_vars();
         self.discharge_deferred_call_bounds();
         self.report_pending_atomic_inners();
+        self.report_pending_buf_sources();
         self.report_unsolved_call_vars();
         self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();

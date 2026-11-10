@@ -1160,6 +1160,7 @@ pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
         K::SharedFieldNotMut => "E0269",
         K::AtomicMissingOrdering => "E0270",
         K::AtomicInvalidInnerType => "E0272",
+        K::BufferedIoInvalidSource => "E0297",
         K::PatternScrutineeMismatch => "E0273",
         K::BindingNameClass => "E0128",
         _ => "E0200",

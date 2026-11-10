@@ -688,6 +688,13 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("UnusedDocComment", Some(DiagnosticClass::LintWarning)),
     ),
     (
+        "E0297",
+        ty(
+            "BufferedIoInvalidSource",
+            Some(DiagnosticClass::TypeMismatch),
+        ),
+    ),
+    (
         "E0290",
         ty("ReturnClauseOnFn", Some(DiagnosticClass::LintWarning)),
     ),

@@ -2046,6 +2046,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // integer, `bool`, or raw pointer). Run-fatal: codegen crashes
                 // the LLVM verifier while the interpreter silently accepts it.
                 crate::typechecker::TypeErrorKind::AtomicInvalidInnerType => "E0272",
+                // B-2026-11-10-14 — `BufReader.new(x)` / `BufWriter.new(x)`
+                // over something other than a file or a child's pipe.
+                crate::typechecker::TypeErrorKind::BufferedIoInvalidSource => "E0297",
                 // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
                 crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
                 // B-2026-07-17-6 — an enum-variant pattern (`Some(v)`, `Ok(e)`,

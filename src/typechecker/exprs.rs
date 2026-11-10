@@ -6410,6 +6410,62 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-10-14: a `BufReader` wraps a `File` or a child's output
+    /// pipe, a `BufWriter` a `File` or a child's input pipe
+    /// (docs/library/io.md § Buffered I/O). Anything else passed check and
+    /// then failed in the interpreter, or was freed as a file by a compiled
+    /// build. A type parameter is left to the instantiation, unjudged.
+    pub(super) fn report_pending_buf_sources(&mut self) {
+        for (span, reader) in std::mem::take(&mut self.pending_buf_sources) {
+            let Some(ty) = self.expr_types.get(&SpanKey::from_span(&span)).cloned() else {
+                continue;
+            };
+            let resolved = resolve_type_vars(
+                &ty,
+                &self.env.substitutions,
+                &HashMap::new(),
+                &self.env.const_substitutions,
+                &HashMap::new(),
+            );
+            let name = match &resolved {
+                Type::Named { name, .. } => name.as_str(),
+                Type::TypeVar(_) | Type::TypeParam(_) | Type::Error => continue,
+                _ => "",
+            };
+            let takes: &[&str] = if reader {
+                &["File", "ChildStdout", "ChildStderr"]
+            } else {
+                &["File", "ChildStdin"]
+            };
+            if takes.contains(&name) {
+                continue;
+            }
+            let (wrapper, list) = if reader {
+                ("BufReader", "a `File`, `ChildStdout` or `ChildStderr`")
+            } else {
+                ("BufWriter", "a `File` or `ChildStdin`")
+            };
+            let socket = matches!(name, "TcpStream" | "TlsStream");
+            let help = if socket && reader {
+                "; buffering a socket is not built yet (B-2026-11-10-14), so read it with \
+                 `read` into a buffer and split the lines yourself"
+            } else if socket {
+                "; buffering a socket is not built yet (B-2026-11-10-14), so write it with \
+                 `write_all`"
+            } else {
+                ""
+            };
+            self.type_error(
+                format!(
+                    "`{wrapper}` wraps {list} (library/io.md § Buffered I/O), not a `{}`{help}",
+                    type_display(&resolved)
+                ),
+                span,
+                TypeErrorKind::BufferedIoInvalidSource,
+            );
+        }
+    }
+
     /// The E0272 refusal of an `Atomic[T]` whose `T` no atomic holds.
     pub(super) fn report_atomic_inner(&mut self, inner: &Type, span: Span) {
         if let Some(kind) = super::expr_call::atomic_ineligible_inner_kind(inner) {

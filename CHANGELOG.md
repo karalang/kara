@@ -20,6 +20,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `BufReader.new(x)` / `BufWriter.new(x)` (and `with_capacity`) over
+  anything but a `File` or a child's pipe is refused with E0297. A
+  `BufReader` over a `TcpStream` passed check, then failed under `karac
+  run` ("of a closed file") and was freed as a file by a compiled build.
+  Buffering a `TcpStream` or `TlsStream` is the library's (io.md § Buffered
+  I/O) and is still to be built; until then it is refused with the rest
+  (B-2026-11-10-14).
 - A program's impl of a library trait for a library type that the library
   already implements is refused as an overlap, naming the library's impl
   (design.md § Coherence: the application is exempt from the orphan rule,
