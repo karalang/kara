@@ -6602,10 +6602,14 @@ impl super::TypeChecker<'_> {
     /// Rust's one-argument `m.range(a..b)` / `m.range(a..=b)` where Kāra's
     /// `range` takes two: the parser's edit to `range(a, b)` or
     /// `range_inclusive(a, b)` (kata 2008), with the advice that names it.
-    /// A range open at an end (`..=q`, `a..`, `..`) has no edit, since
-    /// Kāra's ranges name both ends, and gets advice alone: the bound to
-    /// supply, and the one-entry lookup Rust's open range is most often
-    /// standing in for (kata 2070's `range(..=q).next_back()`).
+    /// A range open at an end (`..=q`, `a..`, `..`) gets advice: the bound
+    /// to supply, and the one-entry lookup Rust's open range is most often
+    /// standing in for (kata 2070's `range(..=q).next_back()`). Its edit
+    /// names the missing bound when `elem`, the element (or key) type, is
+    /// an integer: `T.MIN` for an open start and `T.MAX` for an open end,
+    /// the same range (kata 1099); `range(..)` is `iter()` whatever the
+    /// type. Any other element type has no smallest value to write, and
+    /// the error keeps its advice alone.
     pub(super) fn range_arg_fix(
         &self,
         receiver: &str,
@@ -6613,6 +6617,7 @@ impl super::TypeChecker<'_> {
         args: &[CallArg],
         wanted: usize,
         span: &Span,
+        elem: Option<&Type>,
     ) -> Option<(String, Option<super::FixIt>)> {
         if !matches!(receiver, "SortedMap" | "SortedSet")
             || name != "range"
@@ -6624,6 +6629,33 @@ impl super::TypeChecker<'_> {
         let Some(edit) = self.program.range_arg_edits.get(&args[0].value.span.offset) else {
             return Self::open_range_advice(receiver, &args[0].value).map(|a| (a, None));
         };
+        let (min, max) = (crate::ast::OPEN_RANGE_MIN, crate::ast::OPEN_RANGE_MAX);
+        if edit.replacement == "iter()"
+            || edit.replacement.contains(min)
+            || edit.replacement.contains(max)
+        {
+            let mut advice = Self::open_range_advice(receiver, &args[0].value)?;
+            let mut replacement = edit.replacement.clone();
+            if replacement != "iter()" {
+                let Some(ty) = elem.filter(|t| matches!(t, Type::Int(_) | Type::UInt(_))) else {
+                    return Some((advice, None));
+                };
+                let ty = super::types::type_display(ty);
+                replacement = replacement
+                    .replace(min, &format!("{ty}.MIN"))
+                    .replace(max, &format!("{ty}.MAX"));
+                advice = format!("{advice}; over `{ty}`, `{replacement}` is the same range");
+            }
+            let fix = super::FixIt {
+                span: Span {
+                    offset: edit.offset,
+                    length: edit.length,
+                    ..*span
+                },
+                replacement,
+            };
+            return Some((advice, Some(fix)));
+        }
         let advice = format!(
             "Rust's one range argument is two here, `{}` (`range` is half-open, \
              `range_inclusive` closed; docs/library/collections.md)",

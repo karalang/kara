@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 230 |
+| diagnostics | 231 |
 | false-positive | 179 |
 | perf | 152 |
 | missing-feature | 134 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 366 |
+| typecheck | 367 |
 | mir-llvm | 196 |
 | mir | 167 |
 | cli | 94 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-48 | 2026-11-10 | typecheck | low | An unknown method in a `let` initializer (`text.trim_end_matches('\n').split("\n").collect()`) is followed by a spurious "a reference to a temporary outlives its statement (core-semantics.md §5.5)" at the same span | — |
 | B-2026-11-10-49 | 2026-11-10 | typecheck | medium | A `let` bound to an `if`, `match` or block whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 ("A join of literals is a literal") says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)` and kata 2103's `let bit = match pair[0] { b'R' => 1, b'G' => 2, _ => 4 }; rods[i] |= bit` over a `[u8; 10]` are refused as narrowing (the binding half of B-2026-11-10-6) | — |
 | B-2026-11-10-30 | 2026-11-10 | typecheck | medium | A binary search over an `i32` interface written as Rust writes it, `let mut lo = 0; let mut hi = n - 1;` (n: i32), is refused at every `mid` use with only `as i32` advice and `karac fix` has nothing to apply: a value computed from a defaulted literal binding (`let mid = (lo + hi) / 2`), a tuple `let mut (l, r) = (0, n - 1)` read through `m = l + (r - l) / 2`, and `for (lo, hi, s) in [(0, peak, 1), ..]` get no annotation | — |
+| B-2026-11-10-31 | 2026-11-10 | typecheck | low | Rust's open range on a `SortedSet`/`SortedMap`, `seen.range(..k - x).next_back()`, is refused with advice naming the end to supply but `karac fix` has nothing to apply, though over an integer element type the missing end is `T.MIN`/`T.MAX` | — |
 
 ### Relocated
 

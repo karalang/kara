@@ -1464,7 +1464,25 @@ impl<'a> super::TypeChecker<'a> {
                             expected,
                             args.len()
                         );
-                        match self.range_arg_fix(&type_name, method, args, params.len(), span) {
+                        let elem = match type_name.as_str() {
+                            "SortedSet" => recv_subs.get("T"),
+                            "SortedMap" => recv_subs.get("K"),
+                            _ => None,
+                        }
+                        .and_then(|s| match s {
+                            SubstValue::Type(t) => {
+                                Some(resolve_type_var_top(t, &self.env.substitutions))
+                            }
+                            _ => None,
+                        });
+                        match self.range_arg_fix(
+                            &type_name,
+                            method,
+                            args,
+                            params.len(),
+                            span,
+                            elem.as_ref(),
+                        ) {
                             Some((advice, Some(fix))) => self.type_error_with_fix_it(
                                 format!("{message}: {advice}"),
                                 *span,

@@ -797,6 +797,14 @@ pub struct RustHeapSides {
     pub unsure: rustc_hash::FxHashSet<usize>,
 }
 
+/// The stand-in, in a [`Program::range_arg_edits`] replacement, for the
+/// start Rust's `range(..b)` leaves open: the element type's `MIN` once the
+/// typechecker knows it is an integer (kata 1099).
+pub const OPEN_RANGE_MIN: &str = "\u{1}MIN\u{1}";
+/// The stand-in for the end Rust's `range(a..)` leaves open: the element
+/// type's `MAX` (kata 1099).
+pub const OPEN_RANGE_MAX: &str = "\u{1}MAX\u{1}";
+
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
@@ -948,6 +956,13 @@ pub struct Program {
     /// and the argument list. Set by the PARSER; the typechecker attaches it
     /// where `SortedMap` / `SortedSet` `range` finds one argument for two
     /// (kata 2008).
+    ///
+    /// A Rust range open at an end is recorded too (kata 1099): `..b` as
+    /// `range(OPEN_RANGE_MIN, b)`, `..=b` as `range_inclusive(OPEN_RANGE_MIN,
+    /// b)`, `a..` as `range_inclusive(a, OPEN_RANGE_MAX)` and `..` as
+    /// `iter()`. Only the typechecker knows the element type, so it writes
+    /// `T.MIN` / `T.MAX` in place of the stand-ins when `T` is an integer
+    /// type, and leaves the error without an edit otherwise.
     pub range_arg_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a

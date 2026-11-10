@@ -1347,25 +1347,37 @@ impl Parser {
     /// `m.range(a..b)` or `m.range(a..=b)`, Rust's one-argument range: the
     /// edit that writes `range(a, b)` or `range_inclusive(a, b)` from the
     /// method's name to the call's `)`, keyed by the argument's offset
-    /// ([`crate::ast::Program::range_arg_edits`], kata 2008).
+    /// ([`crate::ast::Program::range_arg_edits`], kata 2008). A range open
+    /// at an end gets the edit with a stand-in for the missing bound, which
+    /// the typechecker fills from the element type (kata 1099).
     fn note_range_arg(&mut self, name: Span, arg: &Expr, close: Span) {
         let (from, to, inclusive) = match &arg.kind {
             ExprKind::Range {
-                start: Some(from),
-                end: Some(to),
+                start,
+                end,
                 inclusive,
-            } => (from.as_ref(), to.as_ref(), *inclusive),
+            } => (start.as_deref(), end.as_deref(), *inclusive),
             ExprKind::Binary {
                 op: op @ (BinOp::Range | BinOp::RangeInclusive),
                 left,
                 right,
-            } => (left.as_ref(), right.as_ref(), *op == BinOp::RangeInclusive),
+            } => (
+                Some(left.as_ref()),
+                Some(right.as_ref()),
+                *op == BinOp::RangeInclusive,
+            ),
             _ => return,
         };
-        let (Some(a), Some(b)) = (
-            self.source_at(from.span.offset, from.span.length),
-            self.source_at(to.span.offset, to.span.length),
-        ) else {
+        let text = |e: Option<&Expr>| -> Result<Option<String>, ()> {
+            match e {
+                Some(e) => self
+                    .source_at(e.span.offset, e.span.length)
+                    .map(|t| Some(t.to_string()))
+                    .ok_or(()),
+                None => Ok(None),
+            }
+        };
+        let (Ok(a), Ok(b)) = (text(from), text(to)) else {
             return;
         };
         let method = if inclusive {
@@ -1373,7 +1385,12 @@ impl Parser {
         } else {
             "range"
         };
-        let replacement = format!("{method}({a}, {b})");
+        let replacement = match (a, b) {
+            (Some(a), Some(b)) => format!("{method}({a}, {b})"),
+            (None, Some(b)) => format!("{method}({}, {b})", crate::ast::OPEN_RANGE_MIN),
+            (Some(a), None) => format!("range_inclusive({a}, {})", crate::ast::OPEN_RANGE_MAX),
+            (None, None) => "iter()".to_string(),
+        };
         self.range_arg_edits.insert(
             arg.span.offset,
             crate::resolver::TextEdit {
