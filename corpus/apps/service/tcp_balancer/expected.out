@@ -1,0 +1,50 @@
+== self-test: health checks
+  round 1
+    alpha=down(1) beta=down gamma=down delta=down
+  round 2
+    event: alpha up
+    alpha=up beta=down gamma=down delta=down
+  round 3
+    alpha=up beta=down(1) gamma=down delta=down
+  round 4
+    event: beta up
+    alpha=up beta=up gamma=down(1) delta=down
+  round 5
+    event: gamma up
+    alpha=up beta=up gamma=up delta=down
+== self-test: picking
+  round-robin: alpha beta gamma alpha beta
+  least-conn from 3/1/1: beta gamma beta gamma
+  all down: true
+== live: listening true
+== live: alpha and beta come up; gamma is not running
+  event: alpha up
+  event: beta up
+  client 1: alpha HELLO | alpha WORLD
+  client 2: beta ONE
+  client 3: alpha TWO | alpha THREE | alpha FOUR
+  client 4: 
+== live: beta reports FAIL
+  event: beta down: answered FAIL
+  client 5: alpha FIVE
+  client 6: alpha SIX
+== live: gamma starts
+  listening true
+  event: gamma up
+  client 7: gamma SEVEN
+  client 8: alpha EIGHT
+== live: least connections, one client held open
+  held: alpha HELD
+  client 9: gamma NINE
+  client 10: gamma TEN
+  held, after: 
+== live: every backend sick
+  event: alpha down: answered FAIL
+  event: gamma down: answered FAIL
+  client 11: 503 no backend available
+  event: refused a client: no backend up
+== live: totals
+  alpha: down, 6 connections, 47 bytes in, 101 bytes out
+  beta: down, 2 connections, 4 bytes in, 9 bytes out
+  gamma: down, 3 connections, 15 bytes in, 33 bytes out
+done
