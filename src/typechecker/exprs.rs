@@ -3904,11 +3904,25 @@ impl<'a> super::TypeChecker<'a> {
                     .zip(expected_params.iter())
                     .enumerate()
                     .map(|(i, (p, expected_pty))| {
-                        let ty = p
-                            .ty
-                            .as_ref()
-                            .map(|t| self.lower_type_expr(t, &[]))
-                            .unwrap_or_else(|| expected_pty.clone());
+                        let annotated = p.ty.as_ref().map(|t| self.lower_type_expr(t, &[]));
+                        // An annotated parameter says what the slot's open
+                        // parameter is before the body is checked: `fold(None,
+                        // |acc: Option[i64], x| Some(x))` solves `B` from
+                        // `acc`, so the tail is checked against `Option[i64]`
+                        // and reads `x` as its value (B-2026-11-09-36).
+                        if let Some(ann) = &annotated {
+                            let mut open = Vec::new();
+                            type_var_ids(&self.resolved_now(expected_pty), &mut open);
+                            if !open.is_empty() {
+                                unify_types(
+                                    expected_pty,
+                                    ann,
+                                    &mut self.env.substitutions,
+                                    &mut self.env.const_substitutions,
+                                );
+                            }
+                        }
+                        let ty = annotated.unwrap_or_else(|| expected_pty.clone());
                         let ty = self.d5_closure_param_borrows(&p.ty, ty, expected_pty);
                         let bound = self.copy_item_param(&expr.span, i, p, ty.clone());
                         if !self.is_irrefutable_pattern(&p.pattern, &bound) {
@@ -3953,7 +3967,12 @@ impl<'a> super::TypeChecker<'a> {
                     expected: Some(expected_ret.clone()),
                     ..Default::default()
                 });
-                let mut body_ty = self.check_expr(body, expected_ret);
+                // A return type an annotated parameter solved above
+                // (`B` from `acc: Option[i64]`) is checked against as that
+                // type, so `Some(x)` reads a scalar `x: ref i64` as its value
+                // as it does against a declared `Option[i64]`.
+                let ret_now = resolve_type_var_top(expected_ret, &self.env.substitutions);
+                let mut body_ty = self.check_expr(body, &ret_now);
                 let body_ty_opened = self.open_unsolved_closure_tail(expected_ret, body_ty, body);
                 body_ty = body_ty_opened;
                 // An expression body is the closure's tail: `|p: S| p.t` moves

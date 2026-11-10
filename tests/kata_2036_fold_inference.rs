@@ -102,13 +102,14 @@ fn kata_2036_map_closure_mixing_a_ref_and_a_value_branch() {
     assert_eq!(out, "[3, 1, 1, -2]\n");
 }
 
-/// An annotated `acc: Option[i64]` against a tail `Some(x)` with
-/// `x: ref i64` is refused rather than built: the build printed an address
-/// for the value.
+/// An annotated `acc: Option[i64]` solves `fold`'s `B` before the tail is
+/// checked, so the tail `Some(x)` with `x: ref i64` reads the scalar as its
+/// value (B-2026-11-09-36). It was refused with `Option[ref i64]`, and before
+/// that the build printed an address for the value.
 #[test]
-fn kata_2036_annotated_accumulator_against_a_ref_tail_is_refused() {
+fn kata_2036_annotated_accumulator_against_a_ref_tail_takes_the_value() {
     let src = "fn main() {\n    let v = [1, 2, 3].to_vec();\n    let r = v.iter().fold(None, |acc: Option[i64], x| Some(x));\n    println(r);\n}";
-    let (clean, check, _) = run("annotated-ref", src);
-    assert!(!clean, "{check}");
-    assert!(check.contains("Option[ref i64]"), "{check}");
+    let (clean, check, out) = run("annotated-ref", src);
+    assert!(clean, "{check}");
+    assert_eq!(out, "Some(3)\n");
 }

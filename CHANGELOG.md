@@ -233,6 +233,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`let s: Set[i64] = (|v: ref Vec[i64]| v.iter().collect())(a);`) builds
   what the call's context decides, where it stopped at lowering with
   `UnknownParam("C")` (B-2026-11-10-18).
+- `v.iter().fold(None, |acc: Option[i64], x| Some(x))` was refused with
+  `Option[ref i64]`: the annotation on `acc` did not settle `fold`'s
+  accumulator type before the tail was checked. It now does, and the tail
+  `Some(x)` reads `x` as its value, as `let o: Option[i64] = Some(x);`
+  does, printing `Some(3)` (B-2026-11-09-36).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket
