@@ -299,6 +299,43 @@ impl RangeStep for usize {
     }
 }
 
+// A char steps through the Unicode scalars, over the surrogate gap
+// `0xD800..=0xDFFF` as Rust's `Step for char` does, so `'a'..='z'` counts
+// the letters (kata 2083). Its ordinal closes the gap: a scalar above it
+// counts `0x800` lower.
+fn char_ordinal(c: char) -> i64 {
+    let code = c as i64;
+    if code >= 0xE000 { code - 0x800 } else { code }
+}
+
+fn char_of_ordinal(n: i64) -> char {
+    let code = if n >= 0xD800 { n + 0x800 } else { n };
+    char.try_from(code).unwrap()
+}
+
+impl RangeStep for char {
+    fn step_forward(ref self) -> char {
+        char_of_ordinal(char_ordinal(self) + 1)
+    }
+
+    fn step_backward(ref self) -> char {
+        char_of_ordinal(char_ordinal(self) - 1)
+    }
+
+    fn step_forward_within(ref self, n: i64, end: ref char) -> Option[char] {
+        let to = char_ordinal(self) + n;
+        if to > char_ordinal(end) {
+            return None;
+        }
+        Some(char_of_ordinal(to))
+    }
+
+    fn last_step_within(ref self, step: i64, end: ref char) -> char {
+        let s = char_ordinal(self);
+        char_of_ordinal(s + (char_ordinal(end) - s) / step * step)
+    }
+}
+
 /// The values from `start` up to, but not including, `end`. A range is a
 /// pair of bounds, so it copies like one: `for i in r { for j in r {..} }`
 /// walks `r` twice.

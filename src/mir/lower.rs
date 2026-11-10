@@ -14479,6 +14479,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => (&**left, &**right),
             _ => return self.for_range(e, label, pattern, iterable, body, dest),
         };
+        if self.range_of_chars(left)? {
+            return self.for_range(e, label, pattern, iterable, body, dest);
+        }
         let mut skip: FxHashSet<SymbolId> = match &pattern.kind {
             PatternKind::Binding(n) => self
                 .lcx
@@ -14838,6 +14841,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             } if end.is_some() || !*inclusive => (left, end.as_deref(), *inclusive),
             _ => return self.for_collection(e, label, pattern, iterable, body, dest),
         };
+        // A range of chars steps over the surrogate gap, which a counting
+        // loop would walk into, so it is the library's `Range` iterated
+        // (`for c in 'a'..='z'`, kata 2083).
+        if self.range_of_chars(left)? {
+            return self.for_collection(e, label, pattern, iterable, body, dest);
+        }
         if !matches!(
             pattern.kind,
             PatternKind::Binding(_) | PatternKind::Wildcard
@@ -14850,6 +14859,18 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.pop_scope()?;
         self.assign(dest, Rvalue::Use(unit_const(self.unit())));
         Ok(())
+    }
+
+    /// Whether a range whose start is `left` counts chars, through a
+    /// reference or not.
+    fn range_of_chars(&mut self, left: &'a Expr) -> R<bool> {
+        let t = self.expr_ty(left)?;
+        let tcx = self.tys().tcx();
+        let t = match tcx.kind(t) {
+            HK::Ref(inner) | HK::MutRef(inner) => inner,
+            _ => t,
+        };
+        Ok(matches!(tcx.kind(t), HK::Char))
     }
 
     /// A range loop's bounds, evaluated, and the type the counter takes.
