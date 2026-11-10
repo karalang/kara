@@ -60,10 +60,6 @@ right):
   (B-2026-11-09-67).
 
 By hand:
-- `drop(log)` to close the incident log's `BufWriter` early: Kāra has no
-  `drop` function (B-2026-11-09-72), so each writer lives in a block. This
-  came first: the `undefined name` stops the type checker, so the fixes
-  above appear on the second `karac fix` run.
 - `eps.last_mut().unwrap()` is refused by design ("write through an index
   instead"); `mut ref eps[last]`.
 - A nested f-string in a call (`fs.exists(f"{state_path}.tmp")`) is
@@ -84,8 +80,9 @@ Compiler gaps this app found:
 - `File` had no `write_all` (B-2026-11-09-70, fixed).
 - `karac fix`'s `main` fix left bare `return;`s that no longer checked
   (B-2026-11-09-67, fixed), and `.1f` had no fix (B-2026-11-09-68, fixed).
-- No `drop(x)` (B-2026-11-09-72, open).
-- `set_read_timeout` on a fake `Network` socket is `Unsupported`, so a TCP
-  check that sets a timeout cannot be tested against a fake: the
-  self-test's `cache` fails with `set timeout: unsupported`
-  (B-2026-11-09-73, open).
+- No `drop(x)`, so each incident-log writer lived in a block until the
+  prelude gained `drop` (B-2026-11-09-72, fixed; the app now calls it as
+  first written).
+- `set_read_timeout` on a fake `Network` socket was `Unsupported`, so the
+  self-test's TCP check `cache` failed with `set timeout: unsupported`; a
+  fake's socket now accepts the timeout (B-2026-11-09-73, fixed).

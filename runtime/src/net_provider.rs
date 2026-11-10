@@ -26,6 +26,9 @@ use std::sync::Mutex;
 /// (src/backend/mir/io.rs `NET_ERRORS`).
 const PROVIDER_UNAVAILABLE: i32 = 10;
 
+/// The runtime's code for `NetError.InvalidInput`.
+const INVALID_INPUT: i32 = 7;
+
 /// The runtime's code for `NetError.Unsupported`.
 pub(crate) const UNSUPPORTED: i32 = 11;
 
@@ -125,6 +128,29 @@ pub extern "C" fn karac_mir_net_adopt(provider: *mut u8, h: i64) -> i64 {
         std::process::abort();
     };
     adopt(&mut t, extent, h)
+}
+
+/// `karac_mir_net`'s `op` on the provided socket `fd`, which has no
+/// address and no clone: a read timeout (`op` 1, `ms` as that function
+/// passes it) is accepted, since a provider's reads never wait, and only
+/// one below 1 ms is refused, as on an OS socket (B-2026-11-09-73).
+/// Anything else is `Unsupported`, and every op is `ProviderUnavailable`
+/// once the override has ended.
+pub(crate) fn other(op: i32, fd: i64, timeout_set: bool, ms: i64) -> Result<(), i32> {
+    let live = {
+        let t = table();
+        t.sockets
+            .get(index(fd))
+            .copied()
+            .flatten()
+            .is_some_and(|(extent, _)| t.extents[extent].live)
+    };
+    match op {
+        _ if !live => Err(PROVIDER_UNAVAILABLE),
+        1 if timeout_set && ms < 1 => Err(INVALID_INPUT),
+        1 => Ok(()),
+        _ => Err(UNSUPPORTED),
+    }
 }
 
 /// `karac_mir_tcp`'s `op` on the provided socket `fd`, with its result

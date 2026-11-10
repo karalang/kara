@@ -10042,6 +10042,11 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(object.kind, ExprKind::StringLit(_)) {
                     return None;
                 }
+                // `[..].to_vec()` copies the elements out, so the `Vec`
+                // carries what they borrow, not the array (B-2026-11-09-50).
+                if let (ExprKind::ArrayLiteral(items), "to_vec") = (&object.kind, method.as_str()) {
+                    return items.iter().find_map(|x| self.core_view_temp_origin(x));
+                }
                 if self.core_expr_is_temp(object) {
                     return Some(object.span);
                 }

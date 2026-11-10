@@ -20554,7 +20554,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(s)
     }
 
-    /// `swap(mut a, mut b)`, `replace(mut a, v)`, `take(mut a)` (`std.mem`):
+    /// `swap(mut a, mut b)`, `replace(mut a, v)`, `take(mut a)` (`std.mem`)
+    /// and the prelude's `drop(x)`:
     /// the library's moves through borrowed places, which MIR does not
     /// spell (a move out of `*r` is refused, core semantics §3.7). `take`
     /// is `replace` with the type's default.
@@ -20600,6 +20601,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Operand::Move(Place::local(nv)),
                 ];
                 self.call_native("mem.replace", ops, dest);
+                Ok(true)
+            }
+            // `drop(x)` (B-2026-11-09-72): `x` moves in and is dropped at
+            // the call, as the library's empty body would at its end.
+            ("drop", [a]) => {
+                let t = self.expr_ty(&a.value)?;
+                let op = self.expr_operand(&a.value)?;
+                let op = self.settle(op);
+                let v = self.temp(t);
+                self.assign(Place::local(v), Rvalue::Use(op));
+                let next = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::Drop {
+                        place: Place::local(v),
+                        target: next,
+                        unwind: UnwindAction::Abort,
+                    },
+                    next,
+                );
+                let u = self.unit();
+                self.assign(dest, Rvalue::Use(unit_const(u)));
                 Ok(true)
             }
             _ => Ok(false),
@@ -28737,6 +28759,9 @@ fn result_borrows(
                     | "swap_remove"
                     | "recv"
                     | "try_recv"
+                    // A copy of the elements carries what they borrow, not
+                    // a borrow of the sequence (B-2026-11-09-50).
+                    | "to_vec"
             )
         );
     // An element read out of a sequence of shared references

@@ -2786,6 +2786,7 @@ pub const PRELUDE_FN_ARITY: &[(&str, usize)] = &[
     ("swap", 2),
     ("replace", 2),
     ("take", 1),
+    ("drop", 1),
     ("sleep_ms", 1),
     ("spawn", 1),
     ("collect_all_vec", 1),
@@ -2884,6 +2885,9 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // T.default())`), not a `#[compiler_builtin]`; it monomorphizes per
     // concrete `T`. Registered here so the bare identifier resolves.
     "take",
+    // `std.mem::drop[T](x: own T)` — ends a value's life early; an ordinary
+    // body (B-2026-11-09-72). Registered here so the bare identifier resolves.
+    "drop",
     // `std.time::sleep_ms(ms: i64) with suspends` — native async sleep,
     // the leaf `suspends` timer primitive (auto-par divergence slice
     // A2a-2.2). See `runtime/stdlib/time.kara`. Codegen intercepts the

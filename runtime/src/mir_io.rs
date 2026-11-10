@@ -890,10 +890,17 @@ pub unsafe extern "C" fn karac_mir_net(
     use std::net::{TcpListener, TcpStream, UdpSocket};
     use std::os::fd::IntoRawFd;
     let armed = sock::take_armed();
-    // A provider's socket (core semantics §14.12) has no address or
-    // timeout.
+    // A provider's socket (core semantics §14.12) has no address; its
+    // read timeout is accepted and never fires.
     if crate::net_provider::is_provided(fd) {
-        return crate::net_provider::UNSUPPORTED;
+        return match crate::net_provider::other(op, fd, addr_len != 0, len) {
+            Ok(()) => {
+                // SAFETY: the caller's contract.
+                unsafe { *value = 0 };
+                -1
+            }
+            Err(code) => code,
+        };
     }
     // A datagram call that can wait, under the reactor contract
     // (`mir_sock.rs`): an armed one that would block is `IO_NOT_READY`.

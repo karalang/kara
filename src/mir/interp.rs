@@ -5865,7 +5865,14 @@ impl<'a> Interp<'a> {
     /// override runs, and `ProviderUnavailable` after. Anything else is
     /// `Unsupported`. A drop closes it through the provider's `close`, or
     /// does nothing once the override has ended.
-    fn fake_socket_method(&mut self, method: &str, fd: i64, rest: &[Value], ret: Ty) -> R<Value> {
+    fn fake_socket_method(
+        &mut self,
+        method: &str,
+        fd: i64,
+        rest: &[Value],
+        rest_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
         let at = usize::try_from(-2 - fd).ok();
         let Some(Some((extent, h))) = at.and_then(|i| self.fake_sockets.get(i)).cloned() else {
             return err(format!("{method} of a closed socket"));
@@ -5925,6 +5932,17 @@ impl<'a> Interp<'a> {
                     _ => Ok(Value::Variant(k, fields)),
                 }
             }
+            // A fake's reads never wait, so a timeout cannot fire: the
+            // call is accepted, and only a timeout below 1 ms is refused,
+            // as on an operating-system socket (B-2026-11-09-73).
+            ("set_read_timeout", [ms]) => match self.timeout_arg(ms, rest_tys.first().copied())? {
+                Ok(_) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+                Err(()) => {
+                    let payload =
+                        self.variant_named(ret, Some("Err"), "InvalidInput", Vec::new())?;
+                    self.variant_named(ret, None, "Err", vec![payload])
+                }
+            },
             _ => {
                 let payload = self.variant_named(ret, Some("Err"), "Unsupported", Vec::new())?;
                 self.variant_named(ret, None, "Err", vec![payload])
@@ -7020,7 +7038,8 @@ impl<'a> Interp<'a> {
                 if let [Value::Int(fd)] = self.struct_value(recv, name)?.as_slice() {
                     if *fd < -1 {
                         let fd = *fd as i64;
-                        return self.fake_socket_method(method, fd, &args[1..], ret);
+                        let tys = arg_tys.get(1..).unwrap_or(&[]);
+                        return self.fake_socket_method(method, fd, &args[1..], tys, ret);
                     }
                 }
             }

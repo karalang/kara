@@ -41,8 +41,7 @@ config: 8 endpoints, 0 errors
   flaky: fail: [STATUS] (503) == 200
   login (no page): fail: [STATUS] (0) == 200; [BODY] () == pat(*Sign in*)
     error: http://127.0.0.1:47751/login: connection refused
-  cache: fail: [BODY] () == +PONG
-    error: set timeout: unsupported
+  cache: pass
 == self-test: state files against a fake file system
   missing config: not found
   config from fake fs: 8 endpoints, 0 errors

@@ -924,15 +924,14 @@ fn main() -> Result[(), AnyError] {
             return Ok(());
         }
     };
-    {
-        let mut log = BufWriter.new(log_file);
-        for round in 1..=8 {
-            run_round(c, eps, mut hs, round, mut log);
-            if let Err(e) = save_state(state_path, state_text(eps, hs, round)) {
-                println(f"  state not saved: {e}");
-            }
+    let mut log = BufWriter.new(log_file);
+    for round in 1..=8 {
+        run_round(c, eps, mut hs, round, mut log);
+        if let Err(e) = save_state(state_path, state_text(eps, hs, round)) {
+            println(f"  state not saved: {e}");
         }
     }
+    drop(log);
 
     println("== restart");
     let (eps, _) = parse_config(CONFIG);
@@ -951,11 +950,10 @@ fn main() -> Result[(), AnyError] {
             println(f"  {eps[i].name}: {h.failures} failures in a row, triggered {h.triggered}");
         }
     }
-    {
-        let mut log = BufWriter.new(File.append(log_path).unwrap());
-        run_round(c, eps, mut hs, round + 1, mut log);
-        let _ = save_state(state_path, state_text(eps, hs, round + 1));
-    }
+    let mut log = BufWriter.new(File.append(log_path).unwrap());
+    run_round(c, eps, mut hs, round + 1, mut log);
+    let _ = save_state(state_path, state_text(eps, hs, round + 1));
+    drop(log);
 
     println("== incidents");
     match File.open(log_path) {

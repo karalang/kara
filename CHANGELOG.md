@@ -69,6 +69,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `drop(x)` in the prelude, an ordinary `fn drop[T](x: own T) {}`: `x`
+  moves in and drops at the call, so a `BufWriter` flushes and a file
+  closes there. A program's own `fn drop` still wins (B-2026-11-09-72).
 - `File.write_all`, as `TcpStream`, `BufWriter` and `ChildStdin` have it:
   every byte of the buffer, by `write` until none is left
   (B-2026-11-09-70).
@@ -131,6 +134,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `set_read_timeout` on a socket a `Network` fake opened returns `Ok(())`
+  and changes nothing, since a fake's read never waits; it was
+  `Err(Unsupported)`, so a client that sets a timeout could not be tested
+  against a fake as it ships. Below 1 ms it is still `InvalidInput`, and
+  once the override has ended a compiled program's call is
+  `ProviderUnavailable` as the interpreter's was (B-2026-11-09-73).
 - **`is_ok()` and `is_err()` on an `Option` are deprecated.** They are
   `Result` methods that an `Option` accepted as `is_some()` and
   `is_none()`; `karac check` now warns (`deprecated`), `karac fix`
@@ -198,6 +207,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `let v: Vec[Str] = ["a", "b"].to_vec();` was refused as a reference to
+  a temporary (the array literal) outliving its statement, in the check
+  and again in MIR borrowck; the `Vec` copies the elements and carries
+  only what they borrow (B-2026-11-09-50).
 - A program's own `struct Entry` (a cache's entry) kept none of its own
   methods: every call on it went to the map entry's dispatch and was
   "no method ... on type 'Entry'". Only the map entry's `or_insert`,

@@ -384,8 +384,9 @@ class CheckError(Exception):
 
 class FakeNet:
     """The Kara program's FakeNet provider, with its StepClock: every
-    reading of the clock is 120 ms after the last; a fake socket has no
-    read timeout (`set_read_timeout` is Unsupported)."""
+    reading of the clock is 120 ms after the last; a fake socket's
+    `set_read_timeout` is accepted and never fires, and every read returns
+    the whole reply."""
 
     def __init__(self, pages):
         self.pages = pages
@@ -403,7 +404,7 @@ class FakeNet:
         raise CheckError(f"{url}: connection refused")
 
     def tcp_exchange(self, host, port, payload, timeout_ms):
-        return True, None, "set timeout: unsupported"
+        return True, "+PONG\r\n", ""
 
 
 def check_http(net, ep):

@@ -31,3 +31,9 @@ pub fn replace[T](dest: mut ref T, value: own T) -> T { value }
 // `T.default()` resolvable (interpreter) / dispatchable to the derived
 // `<Concrete>.default` (codegen, via the monomorph's type substitution).
 pub fn take[T: Default](dest: mut ref T) -> T { replace(dest, T.default()) }
+
+// End a value's life early: `x` moves in and drops when `drop` returns, so a
+// `BufWriter` flushes and a file closes there (library/README.md § The
+// prelude; core-semantics.md §7). An ordinary function: the move and the
+// drop at its end are the rules every function follows (B-2026-11-09-72).
+pub fn drop[T](x: own T) {}
