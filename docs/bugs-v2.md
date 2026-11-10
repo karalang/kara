@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 236 |
-| false-positive | 179 |
+| diagnostics | 235 |
+| false-positive | 180 |
 | perf | 152 |
 | missing-feature | 135 |
 | soundness | 60 |
@@ -113,14 +113,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-10-26 | 2026-11-10 | mir | low | Rust's `Iterator::eq` is missing: `a.iter().eq(b.iter().rev())` is refused with "`VecIter` does not implement `PartialEq`", and adding `eq` to the library's `Iterator` trait breaks `==` in its other generic bodies on every MIR lane | — |
 | B-2026-11-10-39 | 2026-11-10 | mir-llvm | medium | `SortedMap.insert` of a key smaller than every key present is O(n): the map is one sorted array, so 100000 inserts of falling keys take 1.8 s compiled against 0.018 s for rising ones, where collections.md promises a B-tree with O(log n) operations | — |
-| B-2026-11-10-40 | 2026-11-10 | typecheck | low | A narrowing refusal on a value popped from a heap whose pushed literal kept the `i64` default asks for `as i32` at each use, not for the literal: `heap.push((0, 0))` then `while let Some((d, u)) = heap.pop()` makes `d` an `i64`, and `return d` / `dist[v] = d + t` in an `i32` context are refused without naming the `0` | — |
 | B-2026-11-10-41 | 2026-11-10 | resolver | low | Rust's `Reverse` on one part of a heap's tuple item has no Kāra spelling and no fix: `BinaryHeap<(Reverse<i32>, String)>` and `BinaryHeap<(i32, Reverse<String>)>` are refused at every `Reverse`, and the remaining repair is a hand-written `Ord` or a negated number, impossible for a `String` | — |
 | B-2026-11-10-44 | 2026-11-10 | typecheck+interp+mir-llvm | medium | No `read_exact` on any reader (`TcpStream`, `TlsStream`, `File`, `BufReader`, child pipes): Rust's `conn.read_exact(&mut hdr)?`, the usual way to read a binary protocol's fixed-size header (SOCKS5, DNS over TCP, Postgres, length-prefixed frames), fails "no method 'read_exact' on type 'TcpStream'" with no help | — |
 | B-2026-11-10-45 | 2026-11-10 | typecheck | medium | `port.to_be_bytes()` / `u16.from_be_bytes(b)` (and the `le` forms) are refused, "did you mean 'to_ne_bytes'" (a different byte order, reported twice), though both backends already implement `to_le_bytes` and `to_be_bytes` | — |
 | B-2026-11-10-46 | 2026-11-10 | typecheck | low | `Result.unwrap_or_default()` does not exist (`String.from_utf8(v).unwrap_or_default()` fails "no method 'unwrap_or_default' on type 'Result'"), though `Option` has it (library/core-types.md) and Rust has both | — |
 | B-2026-11-10-47 | 2026-11-10 | typecheck | low | Rust's `let local = [127u8, 0, 0, 1];` (an array in Rust, a `Vec` by default in Kāra) passed to an `Array[u8, 4]` parameter gets "expected 'Array[u8, 4]', found 'Vec[u8]'" at each use, with no fix to annotate the `let` | — |
 | B-2026-11-10-48 | 2026-11-10 | typecheck | low | An unknown method in a `let` initializer (`text.trim_end_matches('\n').split("\n").collect()`) is followed by a spurious "a reference to a temporary outlives its statement (core-semantics.md §5.5)" at the same span | — |
-| B-2026-11-10-49 | 2026-11-10 | typecheck | medium | A `let` bound to an `if`, `match` or block whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 ("A join of literals is a literal") says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)` and kata 2103's `let bit = match pair[0] { b'R' => 1, b'G' => 2, _ => 4 }; rods[i] |= bit` over a `[u8; 10]` are refused as narrowing (the binding half of B-2026-11-10-6) | — |
 | B-2026-11-10-35 | 2026-11-10 | parser+typecheck | low | Rust's `use std::iter::Peekable; use std::str::Chars;` and `fn read(chars: &mut Peekable<Chars>)` reach `std.iter has no item Peekable` and `unknown module std.str` with no fix, though Kāra has `Peekable` and the type is `Peekable[StrChars, char]` | — |
 
 ### Relocated
@@ -1032,8 +1030,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-29 | mir-llvm | low | `karac build` was ~21% slower than at f1416771a4 on the ADR-2 frozen set (0.886x legacy, was 0.734x): the in-order program was lowered after the auto… | 2991314acf |
 | B-2026-11-10-37 | mir-llvm | low | LLVM 22 keeps hsearch's (275) bounds check on `citations[mid]` in a binary search: instcombine rewrites karac's `assume(mid >= lo)` into `assume(hi -… | 5a072c1314 |
 | B-2026-11-10-38 | mir-llvm | low | A program that names no library method still kept and checked Iterator's min/max/sum/count/last/find/collect/cloned/take/enumerate and ExactSizeItera… | 5244494204 |
+| B-2026-11-10-40 | typecheck | low | A tuple of literals was typed `(i64, i64)` where it was written, not left open as design.md §8 leaves a bare literal -- filed as a diagnostics gap (t… | d70ec4a181 |
 | B-2026-11-10-33 | typecheck | medium | A bare handle parameter handed to `BufReader.new` / `BufWriter.new` (`fn serve(conn: TcpStream) { BufReader.new(conn) }`, a Rust port's owned paramet… | 0e5453a321 |
 | B-2026-11-10-34 | typecheck | low | `let s: String = pieces.map(\|x\| f"[{x}]").collect()`, Rust's `FromIterator<String> for String`, is refused with only "`String` implements `FromIterat… | 0e5453a321 |
+| B-2026-11-10-49 | typecheck | medium | A `let` bound to an `if`, `match` or block whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §… | a6491451e1 |
 | B-2026-11-10-30 | typecheck | medium | A binary search over an `i32` interface written as Rust writes it, `let mut lo = 0; let mut hi = n - 1;` (n: i32), is refused at every `mid` use with… | 6a4c75838e |
 | B-2026-11-10-31 | typecheck | low | Rust's open range on a `SortedSet`/`SortedMap`, `seen.range(..k - x).next_back()`, is refused with advice naming the end to supply but `karac fix` ha… | e6bd0300b4 |
 | B-2026-11-10-32 | typecheck | low | A Rust `scan` closure with a `return None;` guard, `(1..).scan(candies, \|left, gift\| { if *left <= 0 { return None; } let given = gift.min(*left); *l… | a54501be77 |
