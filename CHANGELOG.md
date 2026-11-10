@@ -220,6 +220,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- **A closure handed to a bare `f: F` parameter with `F: Fn(i64) -> i64`
+  takes the bound's signature.** A bare parameter borrows, so its slot is
+  `ref F`, and the bound was looked up only for a plain `F`: a closure whose
+  body fixes nothing about its parameter (`ap(1, |x| x)`, `|x| { println("a");
+  x }`) passed `karac check` and then stopped every backend with an invalid
+  `ap[Fn(()) -> ()]`, and `|x| { let y = x; y }` was refused. A named
+  function handed to such a parameter also solves what only the bound
+  mentions: `app(double, 4)` over `F: Fn(i64) -> U` is a `U = i64`
+  (B-2026-11-09-39).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

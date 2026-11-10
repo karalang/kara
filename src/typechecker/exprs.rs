@@ -5490,6 +5490,35 @@ impl<'a> super::TypeChecker<'a> {
                 // bound (`f: F` where `F: Fn(i64) -> U`) also solves the
                 // parameters only its bound mentions: `app(double, 4)` fixes
                 // `U` from `double`'s return type.
+                // A bare `f: F` borrows (core-semantics §4.1), so the slot
+                // is `ref F`, and the bound is `F`'s all the same
+                // (B-2026-11-09-39). Only a function whose parameters are
+                // known: an unannotated closure held in a binding (`let g =
+                // |s| s`) keeps the refusal its open parameter gets.
+                let known_params = match arg_ty {
+                    Type::Function { params, .. } => {
+                        let mut ids = Vec::new();
+                        for p in params {
+                            type_var_ids(
+                                &resolve_type_vars(
+                                    p,
+                                    &self.env.substitutions,
+                                    &Default::default(),
+                                    &self.env.const_substitutions,
+                                    &Default::default(),
+                                ),
+                                &mut ids,
+                            );
+                        }
+                        ids.is_empty()
+                    }
+                    _ => false,
+                };
+                let formal = if known_params {
+                    peel_slot_ref(formal)
+                } else {
+                    formal
+                };
                 if let (Type::TypeParam(p), Type::Function { .. }) = (formal, arg_ty) {
                     if let Some(sig) = self.call_fn_bound_expectation(
                         p,
@@ -5539,7 +5568,12 @@ impl<'a> super::TypeChecker<'a> {
         {
             // A closure for a parameter typed by a type parameter with a
             // function-trait bound is checked against the bound's signature.
-            let bound_sig = match (arg_ty_opt, formal) {
+            // The slot of a bare `f: F` is `ref F`, which the bound is still
+            // the signature of: matched on `F` alone, the closure was checked
+            // against nothing, and a body that fixes nothing about its
+            // parameter (`|x| x`, `|x| { println("a"); x }`) left it open to
+            // default to `()` in the instance (B-2026-11-09-39).
+            let bound_sig = match (arg_ty_opt, peel_slot_ref(formal)) {
                 (None, Type::TypeParam(p)) => self.call_fn_bound_expectation(
                     p,
                     where_clause,
@@ -5724,8 +5758,15 @@ impl<'a> super::TypeChecker<'a> {
                     // routes through slice 2b correctly.
                     let saved_borrow_ctx = self.borrow_context;
                     let saved_mut_through = self.mut_through_param_arg;
-                    self.borrow_context = borrow_context_for_param(&resolved);
-                    self.mut_through_param_arg = param_mutates_through(&resolved);
+                    // The closure is checked against the bound's signature;
+                    // how the slot holds it (`ref F`) is still the slot's.
+                    let slot = match (&bound_sig, formal) {
+                        (Some(_), Type::Ref(_)) => Type::Ref(Box::new(resolved.clone())),
+                        (Some(_), Type::MutRef(_)) => Type::MutRef(Box::new(resolved.clone())),
+                        _ => resolved.clone(),
+                    };
+                    self.borrow_context = borrow_context_for_param(&slot);
+                    self.mut_through_param_arg = param_mutates_through(&slot);
                     let arg_ty = self.check_expr(&arg.value, &resolved);
                     self.borrow_context = saved_borrow_ctx;
                     self.mut_through_param_arg = saved_mut_through;
@@ -5757,7 +5798,7 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                     if apply_call_site_marker {
-                        self.check_call_site_marker(arg, &resolved, &arg_ty);
+                        self.check_call_site_marker(arg, &slot, &arg_ty);
                     }
                 }
             }
@@ -15254,6 +15295,15 @@ impl<'a> super::TypeChecker<'a> {
 /// not borrow positions for union-field-access purposes. The mut-slice
 /// case is handled by the slice-assignment write-only contract (no
 /// read of the union storage), so it intentionally does not gate.
+/// The type a borrowed slot holds: `F` for `ref F` or `mut ref F`, the
+/// slot itself otherwise.
+fn peel_slot_ref(slot: &Type) -> &Type {
+    match slot {
+        Type::Ref(inner) | Type::MutRef(inner) => inner,
+        t => t,
+    }
+}
+
 pub(super) fn borrow_context_for_param(param_ty: &Type) -> Option<&'static str> {
     match param_ty {
         Type::Ref(_) => Some("ref"),
