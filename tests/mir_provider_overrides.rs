@@ -497,9 +497,9 @@ impl FileSystemProvider for Tagged {
     }
 }
 
-fn peek(f: ref File) -> i64 with writes(FileSystem) {
+fn peek(f: ref File) -> i64 with reads(FileSystem) {
     let mut b = [0u8; 2];
-    match f.read(b[..]) {
+    match f.read(mut b[..]) {
         Ok(n) => n,
         Err(_) => -1,
     }
@@ -611,11 +611,11 @@ fn main() {
                 Err(e) => println(f"err {e}"),
             }
         }
-        let r2 = BufReader.new(File.open("in.txt").unwrap());
+        let mut r2 = BufReader.new(File.open("in.txt").unwrap());
         let mut first = String.new();
-        let n = r2.read_line(first).unwrap();
+        let n = r2.read_line(mut first).unwrap();
         let mut rest = String.new();
-        let m = r2.read_to_string(rest).unwrap();
+        let m = r2.read_to_string(mut rest).unwrap();
         println(f"{n} [{first.trim()}] {m} [{rest.replace("\n", "|").replace("\r", "")}]");
         let w = BufWriter.new(File.create("out.txt").unwrap());
         w.write_all("hello buffered world\n".bytes()).unwrap();
@@ -626,9 +626,9 @@ fn main() {
         late_w.push(BufWriter.new(File.create("late.txt").unwrap()));
         println("dropping");
     });
-    let r = late.pop().unwrap();
+    let mut r = late.pop().unwrap();
     let mut s = String.new();
-    match r.read_line(s) {
+    match r.read_line(mut s) {
         Ok(n) => println(f"late {n}"),
         Err(e) => println(f"late err {e}"),
     }
