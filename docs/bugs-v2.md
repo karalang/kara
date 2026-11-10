@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 220 |
 | false-positive | 174 |
-| perf | 146 |
+| perf | 147 |
 | missing-feature | 126 |
 | soundness | 57 |
 | miscompile | 53 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 351 |
-| mir-llvm | 187 |
+| mir-llvm | 188 |
 | mir | 163 |
 | cli | 94 |
 | ownership | 70 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-100 | 2026-11-09 | typecheck+ownership | medium | A method's `mut ref` argument needs no `mut` marker, so an immutable binding is written through it unreported: `let s = String.new(); r.fill(s);` with `fn fill(ref self, buf: mut ref String)` checks clean and fills `s` | — |
 | B-2026-11-09-101 | 2026-11-09 | ownership | medium | The `let mut` rule misses receiver writes its hand-written method table lacks: `let w: VecDeque[i64] = VecDeque.new(); w.push_back(1);` checks clean | — |
 | B-2026-11-10-4 | 2026-11-10 | mir | medium | A range view passed `mut v[a..b]` is lowered on a shared borrow of `v` (`_r = &v; Vec[T].slice(move _r, a, b)`), so MIR borrowck does not see it write: corpus fixtures/codegen/slices/test_e2e_slice_equality_compares_contents mutably lends `a[0..2]` while `let s1: Slice[i64] = a[0..2]` is still read later, and is accepted | — |
+| B-2026-11-10-5 | 2026-11-10 | mir-llvm | medium | `karac run` of apps/cli/mini_tldextract (21.8k lines) takes 92 s on one core, where `karac build` takes 16 s wall (42 s CPU over four units) and the interpreter 4.3 s | — |
 
 ### Relocated
 
