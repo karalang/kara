@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 231 |
+| diagnostics | 236 |
 | false-positive | 179 |
 | perf | 152 |
-| missing-feature | 134 |
+| missing-feature | 135 |
 | soundness | 60 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 367 |
+| typecheck | 370 |
 | mir-llvm | 196 |
-| mir | 167 |
+| mir | 168 |
 | cli | 94 |
 | ownership | 73 |
-| parser | 59 |
+| parser | 62 |
 | interp | 47 |
 | runtime | 32 |
 | effect | 29 |
@@ -124,6 +124,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-49 | 2026-11-10 | typecheck | medium | A `let` bound to an `if`, `match` or block whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 ("A join of literals is a literal") says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)` and kata 2103's `let bit = match pair[0] { b'R' => 1, b'G' => 2, _ => 4 }; rods[i] |= bit` over a `[u8; 10]` are refused as narrowing (the binding half of B-2026-11-10-6) | — |
 | B-2026-11-10-30 | 2026-11-10 | typecheck | medium | A binary search over an `i32` interface written as Rust writes it, `let mut lo = 0; let mut hi = n - 1;` (n: i32), is refused at every `mid` use with only `as i32` advice and `karac fix` has nothing to apply: a value computed from a defaulted literal binding (`let mid = (lo + hi) / 2`), a tuple `let mut (l, r) = (0, n - 1)` read through `m = l + (r - l) / 2`, and `for (lo, hi, s) in [(0, peak, 1), ..]` get no annotation | — |
 | B-2026-11-10-31 | 2026-11-10 | typecheck | low | Rust's open range on a `SortedSet`/`SortedMap`, `seen.range(..k - x).next_back()`, is refused with advice naming the end to supply but `karac fix` has nothing to apply, though over an integer element type the missing end is `T.MIN`/`T.MAX` | — |
+| B-2026-11-10-32 | 2026-11-10 | typecheck | low | A Rust `scan` closure with a `return None;` guard, `(1..).scan(candies, |left, gift| { if *left <= 0 { return None; } let given = gift.min(*left); *left -= given; Some(given) })`, gets advice alone where the same closure without the guard gets the rewrite to Kāra's `Some((state, item))` shape | — |
+| B-2026-11-10-50 | 2026-11-10 | parser | low | `format!("{}{}{}", &s[..i], if v { "t" } else { "f" }, &s[j..])` gets advice alone: the f-string rewrite refuses any argument containing `f"`, which a plain `"f"` literal does | — |
+| B-2026-11-10-51 | 2026-11-10 | typecheck | low | `let top = frames.last_mut().unwrap();` followed by `top.seen_true = true;` gets advice alone: the `last_mut` rewrite (B-2026-11-08-46) covers only `match` and `if let` | — |
+| B-2026-11-10-35 | 2026-11-10 | parser+typecheck | low | Rust's `use std::iter::Peekable; use std::str::Chars;` and `fn read(chars: &mut Peekable<Chars>)` reach `std.iter has no item Peekable` and `unknown module std.str` with no fix, though Kāra has `Peekable` and the type is `Peekable[StrChars, char]` | — |
+| B-2026-11-10-42 | 2026-11-10 | parser | low | `address.split('.').collect::<Vec<&str>>().join("[.]")` gets advice alone (bind a typed `let` first), though `Vec[Str].from_iter(address.split(".")).join("[.]")` now names the type at the call and runs | — |
+| B-2026-11-10-43 | 2026-11-10 | mir | low | `String.from_iter(s.chars().rev())` passes the type checker and stops in the MIR builder: "a call with no resolved callee is not lowered yet" | — |
 
 ### Relocated
 
