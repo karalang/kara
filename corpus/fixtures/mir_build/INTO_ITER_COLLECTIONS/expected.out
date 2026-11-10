@@ -1,0 +1,12 @@
+2 3
+[a]
+w
+x
+1 one
+got 1 10
+drop 10
+drop 20
+drop 30
+after
+[a, b]
+3

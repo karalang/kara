@@ -1,0 +1,11 @@
+4 true 31 2
+[1, 2, 3]
+[a, b] [] true false
+true true
+cde [ab, fg]
+none [ab, fg]
+[-1.5, 0.5, 2.5, NaN]
+[x, y] [x, y]
+[s1, s2, s3]
+[s1, s2, s3]
+[7, 7, 7, 7] 4

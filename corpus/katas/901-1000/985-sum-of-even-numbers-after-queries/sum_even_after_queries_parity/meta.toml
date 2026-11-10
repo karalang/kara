@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/985-sum-of-even-numbers-after-queries/sum_even_after_queries_parity.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-bucket = "e-differs:stdout"
-classified_with = "3eefb7774"
+expected_from = "mirror"
+note = "mirror: kara-katas 985's sum_even_after_queries.py, which mirrors the ★ arm and prints this; every arm prints the same (pre-launch review 2026-11-10: the entry had no expectation, as the mirror the README names had not been committed) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "c8ccde517+local"
 extracted_src = "8c20f524"

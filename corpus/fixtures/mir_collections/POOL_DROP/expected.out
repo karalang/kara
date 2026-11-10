@@ -1,0 +1,11 @@
+use 3
+end of scope
+close 3
+after
+close 2
+released to other
+next 2
+other 40
+end
+close 40
+close 2
