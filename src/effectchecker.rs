@@ -877,6 +877,9 @@ pub struct DynCoercion {
 pub struct NodeTypeFacts {
     pub ints: FxHashSet<crate::ids::NodeId>,
     pub heap: FxHashSet<crate::ids::NodeId>,
+    /// Expressions typed `BufReader[TcpStream]` or `BufWriter[TcpStream]`:
+    /// a call on one has the connection's effects (B-2026-11-10-14).
+    pub net_buffers: FxHashSet<crate::ids::NodeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -1155,6 +1158,8 @@ pub struct EffectChecker<'a> {
     /// Expressions typed as a heap collection (`Vec`, `Map`, `Set`, …): a
     /// bare `[1, 2]` literal typed `Vec[i64]` allocates (B-2026-11-04-28).
     pub(crate) heap_nodes: FxHashSet<crate::ids::NodeId>,
+    /// [`NodeTypeFacts::net_buffers`].
+    pub(crate) net_buffer_nodes: FxHashSet<crate::ids::NodeId>,
     /// B-2026-10-15-21: per function, the `(type parameter, method)` pairs its
     /// body calls through a bound whose trait method declares no effects,
     /// directly or through a generic callee instantiated at one of its own
@@ -1356,6 +1361,7 @@ impl<'a> EffectChecker<'a> {
             typeparam_nodes: FxHashMap::default(),
             int_nodes: FxHashSet::default(),
             heap_nodes: FxHashSet::default(),
+            net_buffer_nodes: FxHashSet::default(),
             bound_calls: FxHashMap::default(),
             bound_events: std::cell::RefCell::new(None),
             trait_names: FxHashSet::default(),
@@ -1429,6 +1435,7 @@ impl<'a> EffectChecker<'a> {
     pub fn with_node_type_facts(mut self, facts: NodeTypeFacts) -> Self {
         self.int_nodes = facts.ints;
         self.heap_nodes = facts.heap;
+        self.net_buffer_nodes = facts.net_buffers;
         self
     }
 
@@ -1964,6 +1971,16 @@ impl<'a> EffectChecker<'a> {
                 "TlsStream.read",
                 "TlsStream.write",
                 "TlsStream.write_all",
+                // A buffer over a connection (B-2026-11-10-14): the
+                // `MethodCall` arm keys a call on one this way.
+                "BufReader[TcpStream].read_line",
+                "BufReader[TcpStream].read_to_string",
+                "BufReader[TcpStream].read",
+                "BufReader[TcpStream].lines",
+                "BufReader[TcpStream].fill_buf",
+                "BufWriter[TcpStream].write",
+                "BufWriter[TcpStream].write_all",
+                "BufWriter[TcpStream].flush",
                 // WebSocket
                 "WebSocket.accept",
                 "WebSocket.accept_tls",

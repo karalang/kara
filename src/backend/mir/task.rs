@@ -158,6 +158,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 let drain = i8t.const_int(u64::from(method != "read"), false);
                 self.rt_flag("ready_pipe", &[handle.into(), drain.into()])?
             }
+            // A buffered reader over a connection: what its read needs is
+            // read ahead, or the task waits for the socket (B-2026-11-10-14).
+            ("BufReader", "read" | "read_line" | "read_to_string" | "fill_buf", [b, ..])
+            | ("LinesIter", "next", [b, ..])
+                if crate::mir::coroutine::buffered_socket(ty) =>
+            {
+                let (at, _) = self.behind_refs(b)?;
+                let handle = self.load_ptr(at)?;
+                let need = match method {
+                    "read" | "fill_buf" => 0,
+                    "read_to_string" => 2,
+                    _ => 1,
+                };
+                let need = i8t.const_int(need, false);
+                self.rt_flag("ready_buf", &[handle.into(), need.into()])?
+            }
             // Ready at once, armed, unless the task has a connect under way.
             ("TcpStream", "connect", _) => self.rt_flag("ready_connect", &[])?,
             // The request goes to a helper; ready once its answer is in

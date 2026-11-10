@@ -2943,6 +2943,20 @@ pub(crate) fn ready_io(fd: i32, ready: bool, out: bool, by: Option<Duration>) ->
     }
 }
 
+/// The `__ready` of a read whose readiness its own layer worked out (a
+/// buffered reader over a connection, `mir_bufsock.rs`): `ready`, or the
+/// running task waits for `fd` to turn readable, by its read timeout.
+#[cfg(all(feature = "net", unix))]
+pub(crate) fn ready_read(fd: i32, ready: bool) -> u8 {
+    if EXEC.with(|e| e.borrow().cur().is_none()) {
+        return 1;
+    }
+    match read_timeout(fd) {
+        Some(t) => read_by(fd, ready, 1, t),
+        None => note(ready, fd_wait(fd, 1, None)),
+    }
+}
+
 /// [`ready_read_by`] with the readiness given and the wait on `events`.
 #[cfg(unix)]
 fn read_by(fd: i32, readable: bool, events: i16, t: Duration) -> u8 {

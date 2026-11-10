@@ -33,19 +33,18 @@
 // (`("LinesIter", "Item") -> Result[String, IoError]` in
 // `env_build.rs::register_compiler_intrinsic_env`) since the baked struct
 // carries no syntactic `Item` binding; the interpreter represents it as
-// `Value::LinesIter` (Arc-sharing the wrapped reader). `LinesIter` is
-// non-generic at v1: its element type is concrete and the wrapped reader
-// type is erased in the interpreter, so a `[R]` parameter would buy nothing
-// (and the resolved-method path doesn't yet substitute an impl-level `R`
-// from the receiver). It can gain a parameter additively when
-// effect-polymorphic readers (Stdin / network streams) land.
+// `Value::LinesIter` (Arc-sharing the wrapped reader). `LinesIter[R]`
+// names the reader it reads, so a line read over a connection
+// (`LinesIter[TcpStream].next`) waits inside a task as the connection's own
+// read does, and has its effects (B-2026-11-10-14). Its element type is
+// concrete whatever `R` is.
 
 struct BufReader[=R] { }
 
 // Iterator over the lines of a `BufReader`, yielded by `.lines()`. Empty
 // body — the iteration state is the shared wrapped reader, held on the
 // `Value::LinesIter` interpreter variant.
-struct LinesIter { }
+struct LinesIter[=R] { }
 
 impl[R] BufReader[R] {
     // Wrap `reader` with a default-capacity (8 KiB) internal buffer.
@@ -85,7 +84,7 @@ impl[R] BufReader[R] {
     // site of its own, so the effect is attributed here at the `lines()`
     // call (see `try_eval_bufreader_method`).
     #[compiler_builtin]
-    fn lines(ref self) -> LinesIter with reads(FileSystem) { LinesIter { } }
+    fn lines(ref self) -> LinesIter[R] with reads(FileSystem) { LinesIter { } }
 
     // Low-level peek: fill the internal buffer (if empty) from the
     // underlying reader and return its currently-buffered, not-yet-consumed
@@ -105,7 +104,7 @@ impl[R] BufReader[R] {
     fn consume(mut ref self, n: i64) { }
 }
 
-impl LinesIter {
+impl[R] LinesIter[R] {
     // The next line, without its `\n` / `\r\n`, or `None` at EOF. A `for`
     // loop over `lines()` calls it once per round (the MIR backends' native
     // `LinesIter.next`); the legacy interpreter drains `Value::LinesIter`

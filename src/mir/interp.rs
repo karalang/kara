@@ -6137,7 +6137,27 @@ impl<'a> Interp<'a> {
                 .iter()
                 .any(|p| name.starts_with(&format!("{base}[{p}]")));
             let reader = base == "BufReader";
-            let buf = if piped {
+            let socket = name.starts_with(&format!("{base}[TcpStream]"));
+            let buf = if socket {
+                // Over a connection (B-2026-11-10-14): the socket stays in
+                // `sockets`, read and written through the buffer, and closes
+                // when the buffer drops.
+                let fd = self.socket_of(file, name)?;
+                if fd < -1 {
+                    return err(format!(
+                        "{name} of a socket a `Network` provider opened is not built yet \
+                         (B-2026-11-10-14)"
+                    ));
+                }
+                Buf::Provided {
+                    file: i128::from(fd),
+                    cap,
+                    data: std::collections::VecDeque::new(),
+                    eof: false,
+                    writer: !reader,
+                    socket: true,
+                }
+            } else if piped {
                 let id = self.handle_id(file, name)?;
                 match (reader, self.procs.take_pipe(id)) {
                     (true, Some(Pipe::Out(o))) => {
@@ -6161,6 +6181,7 @@ impl<'a> Interp<'a> {
                     data: std::collections::VecDeque::new(),
                     eof: false,
                     writer: !reader,
+                    socket: false,
                 }
             } else {
                 let id = self.chan_id(Some(file), name)?;
@@ -6237,19 +6258,27 @@ impl<'a> Interp<'a> {
             cap,
             data,
             eof,
+            socket,
             ..
         } = b
         else {
             unreachable!()
         };
-        let (file, cap) = (*file, *cap);
+        let (file, cap, socket) = (*file, *cap, *socket);
         // Reads ahead until `enough` holds of the bytes or the input ends.
         macro_rules! fill {
             ($enough:expr) => {
                 while !*eof && !$enough(&*data) {
-                    match self.provided_read(file, cap)? {
+                    match self.staged_read(file, cap, socket)? {
                         Ok(bytes) if bytes.is_empty() => *eof = true,
                         Ok(bytes) => data.extend(bytes),
+                        // A `LinesIter`'s `next` yields the failure as
+                        // `Some(Err(..))`.
+                        Err(f) if method == "next" => {
+                            let inner = self.option_payload(ret, name)?;
+                            let item = self.fail_into(inner, f)?;
+                            return self.option(ret, Some(item));
+                        }
                         Err(f) => return self.fail_into(ret, f),
                     }
                 }
@@ -6275,13 +6304,7 @@ impl<'a> Interp<'a> {
                     )
                 });
                 if method == "next" {
-                    let inner = self
-                        .tys
-                        .tcx()
-                        .adt_of(ret)
-                        .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Some"))
-                        .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0))
-                        .ok_or_else(|| Stop::Error(format!("{name} returns no `Option`")))?;
+                    let inner = self.option_payload(ret, name)?;
                     let item = match text {
                         Ok(s) if s.is_empty() => return self.option(ret, None),
                         Ok(mut s) => {
@@ -6317,7 +6340,7 @@ impl<'a> Interp<'a> {
                 // As the standard library's: a read at least as long as the
                 // buffer, with nothing buffered, goes to the file directly.
                 if data.is_empty() && len as usize >= cap && !*eof {
-                    match self.provided_read(file, len as usize)? {
+                    match self.staged_read(file, len as usize, socket)? {
                         Ok(bytes) => data.extend(bytes),
                         Err(f) => return self.fail_into(ret, f),
                     }
@@ -6356,7 +6379,7 @@ impl<'a> Interp<'a> {
                 // long as the buffer go to the file directly, in one write
                 // for `write` and until all are written for `write_all`.
                 if data.len() + bytes.len() > cap {
-                    if let Err(f) = self.provided_flush(file, data, false)? {
+                    if let Err(f) = self.staged_flush(file, data, false, socket)? {
                         return self.fail_into(ret, f);
                     }
                 }
@@ -6370,7 +6393,7 @@ impl<'a> Interp<'a> {
                     return self.variant_named(ret, None, "Ok", vec![v]);
                 }
                 let once = method == "write";
-                match self.provided_flush(file, &mut bytes, once)? {
+                match self.staged_flush(file, &mut bytes, once, socket)? {
                     Ok(()) if once => {
                         let n = len as usize - bytes.len();
                         self.variant_named(ret, None, "Ok", vec![Value::Int(n as i128)])
@@ -6379,14 +6402,89 @@ impl<'a> Interp<'a> {
                     Err(f) => self.fail_into(ret, f),
                 }
             }
-            ("flush", []) => match self.provided_flush(file, data, false)? {
+            ("flush", []) => match self.staged_flush(file, data, false, socket)? {
                 // The file's own flush, which needs its provider.
-                Ok(()) if self.provided(file)?.is_none() => self.provider_unavailable(ret),
+                Ok(()) if !socket && self.provided(file)?.is_none() => {
+                    self.provider_unavailable(ret)
+                }
                 Ok(()) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
                 Err(f) => self.fail_into(ret, f),
             },
             _ => err(format!("call of unknown function {name}")),
         }
+    }
+
+    /// The payload type of the `Option` type `ret` that `name` returns.
+    fn option_payload(&self, ret: Ty, name: &str) -> R<Ty> {
+        self.tys
+            .tcx()
+            .adt_of(ret)
+            .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Some"))
+            .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0))
+            .ok_or_else(|| Stop::Error(format!("{name} returns no `Option`")))
+    }
+
+    /// Up to `cap` bytes for a buffered reader: from the provider's file
+    /// `file`, or (`socket`) from the connection whose descriptor it is.
+    fn staged_read(&mut self, file: i128, cap: usize, socket: bool) -> R<Result<Vec<u8>, Fail>> {
+        if !socket {
+            return self.provided_read(file, cap);
+        }
+        use std::io::Read;
+        let fd = file as i64;
+        if self.sockets.timed_out.remove(&fd) {
+            return Ok(Err(Fail::Os(read_timed_out())));
+        }
+        if let Some(e) = self.sockets.failed.remove(&fd) {
+            return Ok(Err(Fail::Os(e)));
+        }
+        let Some(s) = self.sockets.streams.get_mut(&fd) else {
+            return Ok(Err(Fail::Os(std::io::Error::other(
+                "a read of a closed socket",
+            ))));
+        };
+        let mut bytes = vec![0u8; cap.max(1)];
+        Ok(match s.read(&mut bytes) {
+            Ok(n) => {
+                bytes.truncate(n);
+                Ok(bytes)
+            }
+            Err(e) if timed_out(&e) => Err(Fail::Os(read_timed_out())),
+            Err(e) => Err(Fail::Os(e)),
+        })
+    }
+
+    /// [`Self::provided_flush`], or (`socket`) the same to the connection
+    /// whose descriptor `file` is.
+    fn staged_flush(
+        &mut self,
+        file: i128,
+        data: &mut std::collections::VecDeque<u8>,
+        once: bool,
+        socket: bool,
+    ) -> R<Result<(), Fail>> {
+        if !socket {
+            return self.provided_flush(file, data, once);
+        }
+        use std::io::Write;
+        let Some(s) = self.sockets.streams.get_mut(&(file as i64)) else {
+            return Ok(Err(Fail::Os(std::io::Error::other(
+                "a write to a closed socket",
+            ))));
+        };
+        let bytes: Vec<u8> = data.iter().copied().collect();
+        let got = if once {
+            s.write(&bytes)
+        } else {
+            s.write_all(&bytes).map(|()| bytes.len())
+        };
+        Ok(match got {
+            Ok(n) => {
+                data.drain(..n.min(data.len()));
+                Ok(())
+            }
+            Err(e) => Err(Fail::Os(e)),
+        })
     }
 
     /// The provider's file `file` and the running call it belongs to, or
@@ -6511,6 +6609,7 @@ impl<'a> Interp<'a> {
                 let payload = self.variant_named(ret, Some("Err"), "Other", vec![m])?;
                 self.variant_named(ret, None, "Err", vec![payload])
             }
+            Fail::Os(e) => self.io_err(ret, e),
         }
     }
 
@@ -7151,12 +7250,7 @@ impl<'a> Interp<'a> {
                 match (base, method, rest) {
                     (_, "drop", []) => {
                         // Closed by going out of scope here.
-                        self.sockets.listeners.remove(&fd);
-                        self.sockets.streams.remove(&fd);
-                        self.sockets.udp.remove(&fd);
-                        self.sockets.accepted.remove(&fd);
-                        self.sockets.written.remove(&fd);
-                        self.sockets.failed.remove(&fd);
+                        self.sockets.close(fd);
                         return Ok(Value::Unit);
                     }
                     ("TcpListener", "local_addr", []) => {
@@ -14645,14 +14739,26 @@ impl<'a> Interp<'a> {
                                 file,
                                 mut data,
                                 writer,
+                                socket,
                                 ..
                             }) = held
                             {
                                 if writer {
-                                    let _ = self.provided_flush(file, &mut data, false)?;
+                                    let _ = self.staged_flush(file, &mut data, false, socket)?;
                                 }
-                                let unit = self.tys.unit();
-                                self.fake_file_method("File.drop", "drop", file, Vec::new(), unit)?;
+                                if socket {
+                                    // The connection closes with its buffer.
+                                    self.sockets.close(file as i64);
+                                } else {
+                                    let unit = self.tys.unit();
+                                    self.fake_file_method(
+                                        "File.drop",
+                                        "drop",
+                                        file,
+                                        Vec::new(),
+                                        unit,
+                                    )?;
+                                }
                             }
                             if let Some(w) = self.buf_windows.remove(&id) {
                                 self.free_slot(w);
@@ -15230,6 +15336,7 @@ impl<'a> Interp<'a> {
                 }
                 Wait::Read(_, Some(at))
                 | Wait::Datagram(_, Some(at))
+                | Wait::Buffered(_, _, Some(at))
                 | Wait::Tls(_, _, Some(at)) => {
                     nearest = Some(nearest.map_or(*at, |n| n.min(*at)));
                     io = true;
@@ -15239,6 +15346,7 @@ impl<'a> Interp<'a> {
                 | Wait::Write(..)
                 | Wait::Datagram(..)
                 | Wait::Tls(..)
+                | Wait::Buffered(..)
                 | Wait::Child(_)
                 | Wait::Http(_)
                 | Wait::Pipe(..) => io = true,
@@ -15372,6 +15480,11 @@ impl<'a> Interp<'a> {
             ("Client", "get" | "post", _) | ("RequestBuilder", "send", _) => {
                 self.ready_http(base, method, rest, &callee)?
             }
+            // A buffered reader over a connection waits for what its read
+            // needs: some bytes, a line, or the end (B-2026-11-10-14). One
+            // over a file reads at once.
+            ("BufReader", "read" | "read_line" | "read_to_string" | "fill_buf", [b, ..])
+            | ("LinesIter", "next", [b, ..]) => self.buffered_wait(b, method, &callee)?,
             ("ChildStdout" | "ChildStderr", "read" | "read_to_end" | "read_to_string", [p, ..]) => {
                 let id = self.handle_field(Some(p), &callee)?;
                 Some(Wait::Pipe(id, method != "read"))
@@ -15399,10 +15512,91 @@ impl<'a> Interp<'a> {
             let t = &mut self.tasks[self.cur_task];
             t.deadline = None;
             t.slept = true;
-        } else if let Some(Wait::Read(..) | Wait::Datagram(..) | Wait::Tls(..)) = wait {
+        } else if let Some(
+            Wait::Read(..) | Wait::Datagram(..) | Wait::Tls(..) | Wait::Buffered(..),
+        ) = wait
+        {
             self.tasks[self.cur_task].deadline = None;
         }
         Ok(Value::Bool(ready))
+    }
+
+    /// What the buffered reader `b`'s `method` waits for when it reads a
+    /// connection: some bytes (`read`, `fill_buf`), a line (`read_line`, a
+    /// `LinesIter`'s `next`) or the end (`read_to_string`), by the socket's
+    /// read timeout. `None` for a reader over a file.
+    fn buffered_wait(&mut self, b: &Value, method: &str, callee: &str) -> R<Option<Wait>> {
+        let id = self.chan_id(Some(b), callee)?;
+        let fd = match usize::try_from(id - 1).ok().and_then(|i| self.bufs.get(i)) {
+            Some(Some(Buf::Provided {
+                file, socket: true, ..
+            })) => *file as i64,
+            _ => return Ok(None),
+        };
+        let need = match method {
+            "read" | "fill_buf" => 0,
+            "read_to_string" => 2,
+            _ => 1,
+        };
+        let timeout = self
+            .sockets
+            .streams
+            .get(&fd)
+            .and_then(|s| s.read_timeout().ok())
+            .flatten();
+        Ok(Some(Wait::Buffered(id, need, self.read_deadline(timeout))))
+    }
+
+    /// Whether the buffered reader `id` over a connection holds what a read
+    /// needs (`need` as [`Self::buffered_wait`] has it), reading what the
+    /// socket has without waiting. A failure is kept for the read to report,
+    /// and the deadline passing makes it a timeout.
+    fn buffered_holds(&mut self, id: i128, need: u8, at: Option<std::time::Instant>) -> bool {
+        use std::io::{ErrorKind::WouldBlock, Read};
+        let Some(Some(Buf::Provided {
+            file,
+            cap,
+            data,
+            eof,
+            socket: true,
+            ..
+        })) = usize::try_from(id - 1)
+            .ok()
+            .and_then(|i| self.bufs.get_mut(i))
+        else {
+            return true;
+        };
+        let fd = *file as i64;
+        if self.sockets.failed.contains_key(&fd) {
+            return true;
+        }
+        loop {
+            let enough = *eof
+                || match need {
+                    0 => !data.is_empty(),
+                    1 => data.contains(&b'\n'),
+                    _ => false,
+                };
+            if enough {
+                return true;
+            }
+            let Some(s) = self.sockets.streams.get_mut(&fd) else {
+                return true;
+            };
+            let mut bytes = vec![0u8; (*cap).max(1)];
+            let _ = s.set_nonblocking(true);
+            let got = s.read(&mut bytes);
+            let _ = s.set_nonblocking(false);
+            match got {
+                Ok(0) => *eof = true,
+                Ok(n) => data.extend(&bytes[..n]),
+                Err(e) if e.kind() == WouldBlock => return self.sockets.past(fd, at),
+                Err(e) => {
+                    self.sockets.failed.insert(fd, e);
+                    return true;
+                }
+            }
+        }
     }
 
     /// When a suspended read on a socket with read timeout `timeout` ends
@@ -15600,6 +15794,7 @@ impl<'a> Interp<'a> {
             }
             Wait::Http(t) => t.done(),
             Wait::Pipe(id, drain) => self.procs.pipe_ready(*id, *drain),
+            Wait::Buffered(id, need, at) => self.buffered_holds(*id, *need, *at),
             Wait::Child(id) => {
                 let slot = usize::try_from(*id - 1).ok();
                 match slot.and_then(|i| self.procs.children.get_mut(i)) {
@@ -17675,6 +17870,10 @@ enum Wait {
     Pipe(i128, bool),
     /// A pool, by id, to have a value to lend, or the deadline to pass.
     Pool(i128, std::time::Instant),
+    /// A buffered reader over a connection, by id, to hold some bytes (0),
+    /// a line (1) or the end (2), or its read timeout's deadline to pass
+    /// (B-2026-11-10-14).
+    Buffered(i128, u8, Option<std::time::Instant>),
     /// A spawned task to return, by handle id.
     Join(usize),
     /// Room under a group's limit, or (`true`) all its tasks returned.
@@ -17716,6 +17915,17 @@ struct Sockets {
 impl Sockets {
     /// Whether a suspended read on `fd` has reached deadline `at`, which
     /// its read then reports.
+    /// Closes the socket `fd` and forgets what was kept for it.
+    fn close(&mut self, fd: i64) {
+        self.listeners.remove(&fd);
+        self.streams.remove(&fd);
+        self.udp.remove(&fd);
+        self.accepted.remove(&fd);
+        self.written.remove(&fd);
+        self.failed.remove(&fd);
+        self.timed_out.remove(&fd);
+    }
+
     fn past(&mut self, fd: i64, at: Option<std::time::Instant>) -> bool {
         let past = at.is_some_and(|at| std::time::Instant::now() >= at);
         if past {
@@ -17753,6 +17963,12 @@ fn wait_readable(s: &std::net::TcpStream, deadline: Option<std::time::Instant>) 
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+}
+
+/// A buffered read's timeout on a socket: `Other("timed out")` as an
+/// `IoError`, as a compiled build reports it.
+fn read_timed_out() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out")
 }
 
 fn timed_out(e: &std::io::Error) -> bool {
@@ -17910,13 +18126,17 @@ enum Buf {
     Writer(std::io::BufWriter<Box<dyn std::io::Write>>),
     /// Over a `File` a `FileSystem` provider opened (core semantics
     /// §14.11), whose bytes only the provider's methods reach: a reader's
-    /// bytes read ahead, or a writer's not yet written.
+    /// bytes read ahead, or a writer's not yet written. With `socket`, over
+    /// the connected `TcpStream` whose descriptor is `file` instead
+    /// (B-2026-11-10-14): a read inside a task waits for what it needs
+    /// (`Wait::Buffered`) before it reads, so it never blocks the others.
     Provided {
         file: i128,
         cap: usize,
         data: std::collections::VecDeque<u8>,
         eof: bool,
         writer: bool,
+        socket: bool,
     },
 }
 
@@ -17926,6 +18146,8 @@ enum Fail {
     Unavailable,
     Io(Vec<Value>),
     Other(String),
+    /// A socket's own failure, under a buffered reader or writer.
+    Os(std::io::Error),
 }
 
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).

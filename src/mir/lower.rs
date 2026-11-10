@@ -17006,12 +17006,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(ret) = ret else {
             return self.unsupported(iterable.span, "a line iterator without its library types");
         };
-        Ok(Some((
-            DefId(u32::MAX),
-            Vec::new(),
-            format!("{iter}.next"),
-            ret,
-        )))
+        // Named with the reader it reads (`LinesIter[TcpStream].next`), so
+        // a read of a connection waits as one (B-2026-11-10-14).
+        let shown = self.tys().display(t);
+        let name = if shown.starts_with(&format!("{iter}[")) {
+            format!("{shown}.next")
+        } else {
+            format!("{iter}.next")
+        };
+        Ok(Some((DefId(u32::MAX), Vec::new(), name, ret)))
     }
 
     /// The `iter` of `coll`'s `Iterable` impl, instanced for `coll`'s
@@ -18998,8 +19001,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let declared_own = owns.get(i).copied().unwrap_or(false) && {
                             let (_, b) = self.strip_ty_full(t);
                             self.tys().tcx().adt_of(b).is_some_and(|(a, _)| {
-                                a.library_name()
-                                    .is_some_and(|n| crate::ty::HANDLES.contains(&n))
+                                // A connection moves into the buffer that
+                                // wraps it (`BufReader.new(conn)`,
+                                // B-2026-11-10-14).
+                                a.library_name().is_some_and(|n| {
+                                    crate::ty::HANDLES.contains(&n) || n == "TcpStream"
+                                })
                             })
                         };
                         // A closure moves in, as into a library method.

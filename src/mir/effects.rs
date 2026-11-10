@@ -1504,6 +1504,27 @@ pub fn is_fn_value(body: &Body, tys: &TyInterner, arg: &Operand) -> bool {
     )
 }
 
+/// [`native_effects`] of a `BufReader`, `BufWriter` or `LinesIter` over a
+/// connection: a read receives from it and a write sends to it, keyed by the
+/// buffer as the connection's own calls are by the connection.
+fn buffered_socket_effects(
+    base: &str,
+    method: &str,
+) -> Option<Vec<(Verb, &'static str, Option<usize>)>> {
+    use Verb::*;
+    const HEAP: (Verb, &str, Option<usize>) = (Allocates, "Heap", None);
+    Some(match (base, method) {
+        ("BufReader", "read" | "read_line" | "read_to_string" | "fill_buf")
+        | ("LinesIter", "next") => {
+            vec![(Receives, "Network", Some(0)), (Blocks, "", None), HEAP]
+        }
+        ("BufWriter", "write" | "write_all" | "flush") => {
+            vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
+        }
+        _ => return native_effects(base, method),
+    })
+}
+
 /// What a library native does, by `(type, method)` with the type's
 /// arguments stripped; `None` for a native this table does not know, which
 /// the caller turns into an unknown effect. The `usize` is the argument
@@ -2700,7 +2721,17 @@ impl<'p> Analysis<'p> {
             eff.add(Effect::new(Verb::Suspends, "", Key::Any));
         }
         let (base, method) = split_native(name);
-        match native_effects(base, method).filter(|_| native) {
+        // A buffered reader or writer over a connection has the
+        // connection's effects, not a file's (B-2026-11-10-14).
+        let over_socket = name
+            .rsplit_once('.')
+            .is_some_and(|(ty, _)| super::coroutine::buffered_socket(ty));
+        let table = if over_socket {
+            buffered_socket_effects(base, method)
+        } else {
+            native_effects(base, method)
+        };
+        match table.filter(|_| native) {
             Some(table) => {
                 for (verb, class, key_arg) in table {
                     // `Network` and `FileSystem` with no value to root them

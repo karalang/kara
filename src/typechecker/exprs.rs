@@ -6493,9 +6493,10 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// B-2026-11-10-14: a `BufReader` wraps a `File` or a child's output
-    /// pipe, a `BufWriter` a `File` or a child's input pipe
-    /// (docs/library/io.md § Buffered I/O). Anything else passed check and
+    /// B-2026-11-10-14: a `BufReader` wraps a `File`, a child's output
+    /// pipe or a `TcpStream`, a `BufWriter` a `File`, a child's input pipe or
+    /// a `TcpStream` (docs/library/io.md § Buffered I/O; a `TlsStream` is
+    /// still to come). Anything else passed check and
     /// then failed in the interpreter, or was freed as a file by a compiled
     /// build. A type parameter is left to the instantiation, unjudged.
     pub(super) fn report_pending_buf_sources(&mut self) {
@@ -6516,25 +6517,24 @@ impl<'a> super::TypeChecker<'a> {
                 _ => "",
             };
             let takes: &[&str] = if reader {
-                &["File", "ChildStdout", "ChildStderr"]
+                &["File", "ChildStdout", "ChildStderr", "TcpStream"]
             } else {
-                &["File", "ChildStdin"]
+                &["File", "ChildStdin", "TcpStream"]
             };
             if takes.contains(&name) {
                 continue;
             }
             let (wrapper, list) = if reader {
-                ("BufReader", "a `File`, `ChildStdout` or `ChildStderr`")
+                (
+                    "BufReader",
+                    "a `File`, `ChildStdout`, `ChildStderr` or `TcpStream`",
+                )
             } else {
-                ("BufWriter", "a `File` or `ChildStdin`")
+                ("BufWriter", "a `File`, `ChildStdin` or `TcpStream`")
             };
-            let socket = matches!(name, "TcpStream" | "TlsStream");
-            let help = if socket && reader {
-                "; buffering a socket is not built yet (B-2026-11-10-14), so read it with \
-                 `read` into a buffer and split the lines yourself"
-            } else if socket {
-                "; buffering a socket is not built yet (B-2026-11-10-14), so write it with \
-                 `write_all`"
+            let help = if name == "TlsStream" {
+                "; buffering a `TlsStream` is not built yet (B-2026-11-10-14), so use its own \
+                 `read` and `write_all`"
             } else {
                 ""
             };

@@ -1,8 +1,9 @@
 //! What `BufReader` and `BufWriter` wrap (docs/library/io.md § Buffered
-//! I/O; B-2026-11-10-14): a `File` or a child process's pipe. Anything else
-//! passed check, then failed in the interpreter ("of a closed file") or was
-//! freed as a file by a compiled build (an invalid free under ASan). It is
-//! refused at check, E0297.
+//! I/O; B-2026-11-10-14): a `File`, a child process's pipe or a
+//! `TcpStream`. Anything else passed check, then failed in the interpreter
+//! ("of a closed file") or was freed as a file by a compiled build (an
+//! invalid free under ASan). It is refused at check, E0297, and so, until
+//! it is built, is a `TlsStream`.
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,21 +57,78 @@ fn main() {
 }
 
 #[test]
-fn a_buffered_reader_over_a_socket_is_refused() {
+fn buffered_wrappers_take_a_tcp_stream() {
     let (ok, out) = check(
         r#"import std.io.{BufReader, BufWriter};
 fn main() {
     let l = TcpListener.bind("127.0.0.1:0").unwrap();
     let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
     let r = BufReader.new(c.try_clone().unwrap());
-    let w = BufWriter.new(c);
+    let w = BufWriter.with_capacity(c, 64);
+    drop(w);
+    drop(r);
 }
 "#,
     );
+    assert!(ok, "{out}");
+    assert!(!out.contains("E0297"), "{out}");
+}
+
+#[test]
+fn a_buffered_reader_over_a_tls_stream_is_refused_until_built() {
+    let (ok, out) = check(
+        r#"import std.io.{BufReader};
+fn wrap(s: own TlsStream) {
+    let r = BufReader.new(s);
+    drop(r);
+}
+fn main() {}
+"#,
+    );
     assert!(!ok, "{out}");
-    assert_eq!(out.matches("E0297").count(), 2, "{out}");
-    assert!(out.contains("not a `TcpStream`"), "{out}");
+    assert!(out.contains("E0297"), "{out}");
+    assert!(out.contains("not a `TlsStream`"), "{out}");
     assert!(out.contains("B-2026-11-10-14"), "{out}");
+}
+
+/// Over a connection a buffer's calls have the connection's effects
+/// (`sends(Network) receives(Network) blocks`, as `TcpStream.read`), not a
+/// file's `reads(FileSystem)`.
+#[test]
+fn a_socket_buffer_has_the_network_effects() {
+    let (ok, out) = check(
+        r#"import std.io.{BufReader, BufWriter};
+pub fn first_line(conn: own TcpStream) -> String with sends(Network) receives(Network) blocks {
+    let r = BufReader.new(conn);
+    let mut s = String.new();
+    let _ = r.read_line(mut s);
+    for line in r.lines() {
+        s.push_str(line.unwrap_or(String.new()));
+    }
+    s
+}
+pub fn say(conn: own TcpStream) with sends(Network) receives(Network) blocks {
+    let mut w = BufWriter.new(conn);
+    let _ = w.write_all("hi".bytes());
+    let _ = w.flush();
+}
+fn main() {}
+"#,
+    );
+    assert!(ok, "{out}");
+    let (ok, out) = check(
+        r#"import std.io.{BufReader};
+pub fn first_line(conn: own TcpStream) -> String with reads(FileSystem) blocks {
+    let r = BufReader.new(conn);
+    let mut s = String.new();
+    let _ = r.read_line(mut s);
+    s
+}
+fn main() {}
+"#,
+    );
+    assert!(!ok, "{out}");
+    assert!(out.contains("Network"), "{out}");
 }
 
 #[test]

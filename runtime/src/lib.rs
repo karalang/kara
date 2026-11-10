@@ -130,6 +130,8 @@ pub mod interner;
 pub mod lazy;
 pub mod map;
 pub mod mir;
+#[cfg(all(feature = "net", unix))]
+pub mod mir_bufsock;
 pub mod mir_flags;
 pub mod mir_io;
 pub mod mir_log;
@@ -653,6 +655,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_sock::karac_mir_io_wait,
         mir_task::karac_mir_io_forget,
         mir_sock::karac_mir_sock_close,
+        mir_io::karac_mir_ready_buf,
     );
     // `Request` on the MIR backend (`src/http1.rs`), and the natives of the
     // servers in runtime/stdlib/source/http_server.kara.

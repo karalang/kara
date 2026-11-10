@@ -228,6 +228,12 @@ fn open_options(flags: i64) -> std::io::Result<std::fs::OpenOptions> {
 pub enum KaracBuf {
     Reader(std::io::BufReader<Box<dyn std::io::Read>>),
     Writer(std::io::BufWriter<Box<dyn std::io::Write>>),
+    /// A reader over a connection, with the state its readiness reads
+    /// (`mir_bufsock.rs`, B-2026-11-10-14).
+    SockReader(
+        std::io::BufReader<Box<dyn std::io::Read>>,
+        std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    ),
 }
 
 /// Appends `b` to the `String` at `s`, growing its buffer into a fresh
@@ -312,7 +318,8 @@ pub(crate) unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 
 /// `ptr[..len]`; `flush` (8); `consume` (9) of `len` bytes; `fill_buf`
 /// (12), a view of the reader's buffer as a pointer and a length at
 /// `value[0..2]` (B-2026-10-14-72), which stays valid until the next call
-/// on the handle.
+/// on the handle. Ops 13 and 14 are `BufReader.new` / `BufWriter.new` over
+/// a connection, whose descriptor `handle` carries (B-2026-11-10-14).
 ///
 /// # Safety
 /// `handle` is a live file handle for ops 0-1 and a live buffered handle
@@ -328,9 +335,35 @@ pub unsafe extern "C" fn karac_mir_buf(
     msg: *mut RawVec,
 ) -> i32 {
     use std::io::{BufRead, Read, Write};
-    if op <= 1 || op == 10 || op == 11 {
+    if matches!(op, 0 | 1 | 10 | 11 | 13 | 14) {
         let cap = usize::try_from(len).ok().filter(|&n| n > 0).unwrap_or(8192);
-        let buf = if op >= 10 {
+        let buf = if op >= 13 {
+            // Over a connection, whose descriptor `handle` carries
+            // (B-2026-11-10-14); the buffer takes it.
+            let fd = handle as i64;
+            #[cfg(all(feature = "net", unix))]
+            if !crate::net_provider::is_provided(fd) {
+                let fd = fd as std::os::fd::RawFd;
+                let buf = if op == 13 {
+                    let (r, state) = crate::mir_bufsock::reader(fd);
+                    KaracBuf::SockReader(std::io::BufReader::with_capacity(cap, Box::new(r)), state)
+                } else {
+                    let w = crate::mir_bufsock::writer(fd);
+                    KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, Box::new(w)))
+                };
+                // SAFETY: the caller's contract.
+                unsafe { value.write(Box::into_raw(Box::new(buf)) as i64) };
+                return -1;
+            }
+            let _ = fd;
+            // As the interpreter stops: the constructor has no `Result`.
+            crate::mir::karac_mir_flush();
+            eprintln!(
+                "error: a buffer over a socket a `Network` provider opened is not built yet \
+                 (B-2026-11-10-14)"
+            );
+            std::process::exit(101);
+        } else if op >= 10 {
             // SAFETY: a live pipe from `karac_mir_child`, which this takes.
             match unsafe { crate::mir_process::take_pipe(handle) } {
                 Ok(r) => KaracBuf::Reader(std::io::BufReader::with_capacity(cap, r)),
@@ -368,7 +401,7 @@ pub unsafe extern "C" fn karac_mir_buf(
     let buf = unsafe { &mut *handle.cast::<KaracBuf>() };
     let n = usize::try_from(len).unwrap_or(0);
     let res: std::io::Result<i64> = match (op, buf) {
-        (2 | 3, KaracBuf::Reader(r)) => {
+        (2 | 3, KaracBuf::Reader(r) | KaracBuf::SockReader(r, _)) => {
             let mut s = Vec::new();
             let got = if op == 2 {
                 r.read_until(b'\n', &mut s)
@@ -383,13 +416,15 @@ pub unsafe extern "C" fn karac_mir_buf(
                 Ok(k as i64)
             })
         }
-        (4, KaracBuf::Reader(r)) if ptr.is_null() || n == 0 => r.read(&mut []).map(|k| k as i64),
-        (4, KaracBuf::Reader(r)) => {
+        (4, KaracBuf::Reader(r) | KaracBuf::SockReader(r, _)) if ptr.is_null() || n == 0 => {
+            r.read(&mut []).map(|k| k as i64)
+        }
+        (4, KaracBuf::Reader(r) | KaracBuf::SockReader(r, _)) => {
             // SAFETY: the caller's contract.
             let out = unsafe { std::slice::from_raw_parts_mut(ptr, n) };
             r.read(out).map(|k| k as i64)
         }
-        (5, KaracBuf::Reader(r)) => {
+        (5, KaracBuf::Reader(r) | KaracBuf::SockReader(r, _)) => {
             let mut s = Vec::new();
             match r.read_until(b'\n', &mut s) {
                 Ok(0) => return -2,
@@ -421,11 +456,11 @@ pub unsafe extern "C" fn karac_mir_buf(
             w.write_all(unsafe { buf_bytes(ptr, n) }).map(|()| 0)
         }
         (8, KaracBuf::Writer(w)) => w.flush().map(|()| 0),
-        (9, KaracBuf::Reader(r)) => {
+        (9, KaracBuf::Reader(r) | KaracBuf::SockReader(r, _)) => {
             r.consume(n);
             Ok(0)
         }
-        (12, KaracBuf::Reader(r)) => match r.fill_buf() {
+        (12, KaracBuf::Reader(r) | KaracBuf::SockReader(r, _)) => match r.fill_buf() {
             Ok(b) => {
                 // SAFETY: the caller's contract.
                 unsafe {
@@ -446,6 +481,23 @@ pub unsafe extern "C" fn karac_mir_buf(
         }
         // SAFETY: the caller's contract.
         Err(e) => unsafe { io_error_code(&e, msg) },
+    }
+}
+
+/// `__ready` of a read of the buffered reader at `handle`: over a
+/// connection, whether it holds what the read needs (`need` 0 for some
+/// bytes, 1 for a line, 2 for the end) or the task waits for the socket
+/// (`mir_bufsock.rs`, B-2026-11-10-14); over a file, ready at once.
+///
+/// # Safety
+/// `handle` is a live buffered handle.
+#[cfg(all(feature = "net", unix))]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_ready_buf(handle: *mut std::ffi::c_void, need: u8) -> u8 {
+    // SAFETY: the caller's contract.
+    match unsafe { &*handle.cast::<KaracBuf>() } {
+        KaracBuf::SockReader(r, state) => crate::mir_bufsock::ready(&**state, r.buffer(), need),
+        _ => crate::mir_task::karac_mir_ready(1),
     }
 }
 

@@ -1320,6 +1320,20 @@ impl<'a> super::EffectChecker<'a> {
                 let precise = self
                     .resolve_method_callee_key(&expr.span)
                     .filter(|_| !through_dyn);
+                // A buffer over a connection has the connection's effects,
+                // not a file's (B-2026-11-10-14).
+                let precise = match precise {
+                    Some(k) if self.net_buffer_nodes.contains(&object.id) => {
+                        let key = self.interner.resolve(k).to_string();
+                        match key.split_once('.') {
+                            Some((ty @ ("BufReader" | "BufWriter"), m)) => {
+                                Some(self.interner.intern(&format!("{ty}[TcpStream].{m}")))
+                            }
+                            _ => Some(k),
+                        }
+                    }
+                    other => other,
+                };
                 if let Some(precise_key) = precise {
                     calls.push((precise_key, expr.span));
                     if self.method_bodies.contains_key(&precise_key) {

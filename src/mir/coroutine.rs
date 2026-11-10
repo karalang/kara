@@ -31,6 +31,19 @@ pub fn suspends_native(name: &str) -> bool {
         return false;
     };
     let base = ty.split('[').next().unwrap_or(ty);
+    // A buffered reader over a connection waits as the connection's own
+    // read does (B-2026-11-10-14); one over a file does not.
+    if buffered_socket(ty)
+        && matches!(
+            (base, method),
+            (
+                "BufReader",
+                "read" | "read_line" | "read_to_string" | "fill_buf"
+            ) | ("LinesIter", "next")
+        )
+    {
+        return true;
+    }
     matches!(
         (base, method),
         ("Receiver" | "Channel", "recv" | "recv_blocking")
@@ -51,6 +64,15 @@ pub fn suspends_native(name: &str) -> bool {
             | ("RequestBuilder", "send")
             | ("Pool", "acquire")
     )
+}
+
+/// Whether the native type `ty` is a `BufReader`, `BufWriter` or
+/// `LinesIter` over a connection (`BufReader[TcpStream]`).
+pub fn buffered_socket(ty: &str) -> bool {
+    ["BufReader[", "BufWriter[", "LinesIter["].iter().any(|p| {
+        ty.strip_prefix(p)
+            .is_some_and(|r| r.starts_with("TcpStream"))
+    })
 }
 
 /// The readiness native the transform asks before each suspending native:

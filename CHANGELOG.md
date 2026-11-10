@@ -21,12 +21,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 ### Programs 0.8.1 accepted that are now refused
 
 - `BufReader.new(x)` / `BufWriter.new(x)` (and `with_capacity`) over
-  anything but a `File` or a child's pipe is refused with E0297. A
-  `BufReader` over a `TcpStream` passed check, then failed under `karac
-  run` ("of a closed file") and was freed as a file by a compiled build.
-  Buffering a `TcpStream` or `TlsStream` is the library's (io.md § Buffered
-  I/O) and is still to be built; until then it is refused with the rest
-  (B-2026-11-10-14).
+  anything but a `File`, a child's pipe or a `TcpStream` is refused with
+  E0297, and so, until it is built, is a `TlsStream`. A `BufReader` over a
+  `TcpStream` passed check, then failed under `karac run` ("of a closed
+  file") and was freed as a file by a compiled build (B-2026-11-10-14).
 - A program's impl of a library trait for a library type that the library
   already implements is refused as an overlap, naming the library's impl
   (design.md § Coherence: the application is exempt from the orphan rule,
@@ -76,6 +74,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `BufReader` and `BufWriter` wrap a `TcpStream` (io.md § Buffered I/O):
+  `BufReader.new(conn).lines()` reads a connection line by line, a read
+  waits inside its task as the connection's own does, the calls have the
+  connection's effects, and dropping the buffer closes the connection
+  (B-2026-11-10-14).
 - `drop(x)` in the prelude, an ordinary `fn drop[T](x: own T) {}`: `x`
   moves in and drops at the call, so a `BufWriter` flushes and a file
   closes there. A program's own `fn drop` still wins (B-2026-11-09-72).

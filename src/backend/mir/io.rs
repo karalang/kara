@@ -376,6 +376,14 @@ impl<'ctx> Cx<'ctx, '_> {
         })
     }
 
+    /// Whether `t` is a connection (`TcpStream`).
+    fn is_stream(&self, t: Ty) -> bool {
+        self.tys
+            .tcx()
+            .adt_of(t)
+            .is_some_and(|(a, _)| &*a.name == "TcpStream")
+    }
+
     /// Whether `t` is one of a child's pipes.
     fn is_pipe(&self, t: Ty) -> bool {
         self.tys
@@ -416,9 +424,13 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             _ => return Ok(None),
         };
-        // Over a child's pipe rather than a `File` (B-2026-10-15-44).
+        // Over a child's pipe rather than a `File` (B-2026-10-15-44), or
+        // over a connection, whose descriptor the buffer takes
+        // (B-2026-11-10-14).
         let op = if op <= 1 && self.is_pipe(self.operand_type(&args[0])?) {
             10 + op
+        } else if op <= 1 && self.is_stream(self.operand_type(&args[0])?) {
+            13 + op
         } else {
             op
         };
@@ -426,7 +438,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let zero = self.i64(0);
         let i32t = self.llcx.i32_type();
         let opv = i32t.const_int(op, false);
-        if op <= 1 || op == 10 || op == 11 {
+        if matches!(op, 0 | 1 | 10 | 11 | 13 | 14) {
             // The `File` moves in and the runtime takes it, so nothing
             // drops it here.
             let f = self.operand_ptr(&args[0])?;
