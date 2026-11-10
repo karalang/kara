@@ -34,7 +34,7 @@ use super::types::{
 };
 use super::BreakFrame;
 use super::TypeErrorKind;
-use super::{class_for_type_error_kind, CoreLent, FixIt, TypeError};
+use super::{class_for_type_error_kind, CoreLent, FixIt, TupleElem, TypeError};
 
 /// Validate an f-string format specifier `{expr:spec}` against the hole's
 /// inferred type (Phase 8 format specifiers). Runs at typecheck so `karac run`
@@ -1421,7 +1421,177 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// A tuple literal whose elements borrow where the tuple wants them
+    /// owned (`out.push((k, v))` with `k`, `v` bound by `for (k, v) in
+    /// headers` over a bare, so borrowing, parameter): the one-element form's
+    /// remedy, element by element (B-2026-11-09-96). Bound out of one bare
+    /// parameter, the fix is its `own` (kata 2046); otherwise each borrowed
+    /// element takes `.clone()`. Returns whether it reported.
+    pub(super) fn reject_borrowed_tuple_elements(
+        &mut self,
+        span: Span,
+        expected: &Type,
+        actual: &Type,
+    ) -> bool {
+        if !self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        let (Type::Tuple(slots), Type::Tuple(actuals)) = (expected, actual) else {
+            return false;
+        };
+        let Some(elems) = self
+            .tuple_literal_elems
+            .get(&SpanKey::from_span(&span))
+            .cloned()
+        else {
+            return false;
+        };
+        if elems.len() != slots.len() || elems.len() != actuals.len() {
+            return false;
+        }
+        let mut lent: Vec<TupleElem> = Vec::new();
+        for ((e, slot), got) in elems.iter().zip(slots.iter()).zip(actuals.iter()) {
+            let got = resolve_type_var_top(got, &self.env.substitutions);
+            let slot = resolve_type_var_top(slot, &self.env.substitutions);
+            if got == slot {
+                continue;
+            }
+            match got {
+                Type::Ref(inner)
+                    if *inner == slot
+                        && self.type_cannot_leave_a_borrowed_place(&slot)
+                        && self.type_supports_clone(&slot) =>
+                {
+                    lent.push(e.clone())
+                }
+                _ => return false,
+            }
+        }
+        if lent.is_empty() {
+            return false;
+        }
+        let shown = type_display(expected);
+        let got_shown = type_display(actual);
+        let mut named: Vec<String> = lent
+            .iter()
+            .map(|e| match &e.name {
+                Some(n) => format!("`{n}`"),
+                None => "an element".to_string(),
+            })
+            .collect();
+        let verb = if named.len() == 1 { "is" } else { "are" };
+        let last = named.pop().unwrap_or_default();
+        let names = if named.is_empty() {
+            format!("{last} {verb}")
+        } else {
+            format!("{} and {last} {verb}", named.join(", "))
+        };
+        let params: Vec<Option<(String, Span)>> = lent
+            .iter()
+            .map(|e| self.d5_param_of_local_at(e.span))
+            .collect();
+        if let Some(Some((param, at))) = params.first().cloned() {
+            if params
+                .iter()
+                .all(|p| p.as_ref().is_some_and(|(q, _)| *q == param))
+            {
+                self.errors.push(TypeError {
+                    message: format!(
+                        "expected '{shown}', found '{got_shown}': {names} bound out of parameter \
+                         `{param}`, and a bare parameter borrows (core-semantics §4.1). Take \
+                         `{param}` by value with `own`, or take owned copies with `.clone()`"
+                    ),
+                    span,
+                    kind: TypeErrorKind::TypeMismatch,
+                    lint_name: None,
+                    fix_it: Some(super::FixIt {
+                        span: at,
+                        replacement: "own ".to_string(),
+                    }),
+                    class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                    expected: Some(shown),
+                    got: Some(got_shown),
+                });
+                return true;
+            }
+        }
+        let postfix = lent.iter().all(|e| e.postfix);
+        let edits: Vec<crate::resolver::TextEdit> = if postfix {
+            lent.iter()
+                .map(|e| crate::resolver::TextEdit {
+                    offset: e.span.offset + e.span.length,
+                    length: 0,
+                    replacement: ".clone()".to_string(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let fix_it = (edits.len() == 1).then(|| super::FixIt {
+            span: Span {
+                line: lent[0].span.line,
+                column: lent[0].span.column + lent[0].span.length,
+                offset: lent[0].span.offset + lent[0].span.length,
+                length: 0,
+            },
+            replacement: ".clone()".to_string(),
+        });
+        if edits.len() > 1 {
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&span), edits);
+        }
+        self.errors.push(TypeError {
+            message: format!(
+                "expected '{shown}', found '{got_shown}': {names} borrowed, and a borrowed \
+                 value cannot be moved out of what it borrows. Take owned copies with \
+                 `.clone()`"
+            ),
+            span,
+            kind: TypeErrorKind::TypeMismatch,
+            lint_name: None,
+            fix_it,
+            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+            expected: Some(shown),
+            got: Some(got_shown),
+        });
+        true
+    }
+
+    /// Remember a tuple literal's elements by the literal's span, for
+    /// [`Self::reject_borrowed_tuple_elements`], which sees only the span.
+    fn note_tuple_literal(&mut self, expr: &Expr) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let ExprKind::Tuple(elems) = &expr.kind else {
+            return;
+        };
+        let elems = elems
+            .iter()
+            .map(|e| TupleElem {
+                span: e.span,
+                name: match &e.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    _ => None,
+                },
+                postfix: matches!(
+                    e.kind,
+                    ExprKind::Identifier(_)
+                        | ExprKind::Path { .. }
+                        | ExprKind::FieldAccess { .. }
+                        | ExprKind::TupleIndex { .. }
+                        | ExprKind::Index { .. }
+                        | ExprKind::Call { .. }
+                        | ExprKind::MethodCall { .. }
+                ),
+            })
+            .collect();
+        self.tuple_literal_elems
+            .insert(SpanKey::from_span(&expr.span), elems);
+    }
+
     fn check_expr_unexplained(&mut self, expr: &Expr, expected: &Type) -> Type {
+        self.note_tuple_literal(expr);
         self.warn_vec_macro(expr);
         self.note_loose_expr(expr);
         if matches!(expr.kind, ExprKind::Cast { .. }) {
@@ -10565,6 +10735,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn infer_expr_unexplained(&mut self, expr: &Expr) -> Type {
+        self.note_tuple_literal(expr);
         self.note_loose_expr(expr);
         self.warn_vec_macro(expr);
         // B-2026-09-14-3: hand `infer_call`'s callee-position marker on to a

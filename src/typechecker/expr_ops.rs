@@ -3526,6 +3526,25 @@ impl<'a> super::TypeChecker<'a> {
             );
             return;
         }
+        let to_string = if fix.is_some() {
+            None
+        } else {
+            self.option_str_some_fix(right, right_ty, left_ty)
+                .or_else(|| self.option_str_some_fix(left, left_ty, right_ty))
+        };
+        if let Some(fix) = to_string {
+            self.type_error_with_fix_it(
+                format!(
+                    "{message}: an `Option` compares items of one type, so the `Some` of a \
+                     `Str` does not meet an `Option[String]` (a `String` and a `Str` compare \
+                     only bare); `.to_string()` makes its item a `String`"
+                ),
+                span,
+                TypeErrorKind::InvalidBinaryOp,
+                fix,
+            );
+            return;
+        }
         let as_slice = if fix.is_some() {
             None
         } else {
@@ -3663,6 +3682,72 @@ impl<'a> super::TypeChecker<'a> {
     /// `e` is a place, for any `T` (B-2026-11-04-61): `Some(ref e)` is an
     /// `Option[ref T]` built in place (design.md § Views), so a non-`Copy`
     /// item needs no copy. Returns the edit and the argument's span.
+    /// `opt != Some(TOKEN)` with `opt: Option[String]` and a `Str` constant
+    /// or literal in the `Some` (B-2026-11-09-97): `String == Str` compares,
+    /// but an `Option` compares items of one type, and the library has no
+    /// view of an `Option[String]` as an `Option[Str]`. The edit gives the
+    /// `Some` an owned item: `Some(TOKEN.to_string())`.
+    fn option_str_some_fix(&self, side: &Expr, side_ty: &Type, other_ty: &Type) -> Option<FixIt> {
+        let ExprKind::Call { callee, args } = &side.kind else {
+            return None;
+        };
+        let is_some = match &callee.kind {
+            ExprKind::Identifier(n) => n == "Some",
+            ExprKind::Path { segments, .. } => {
+                segments.len() == 2 && segments[0] == "Option" && segments[1] == "Some"
+            }
+            _ => false,
+        };
+        let [arg] = args.as_slice() else {
+            return None;
+        };
+        if !is_some || arg.label.is_some() || arg.mut_marker {
+            return None;
+        }
+        if !matches!(
+            arg.value.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::Path { .. }
+                | ExprKind::StringLit(_)
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::TupleIndex { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+        ) {
+            return None;
+        }
+        let item = |t: &Type| -> Option<Type> {
+            match strip_refs_for_compare(t) {
+                Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                    let mut t = resolve_type_var_top(&args[0], &self.env.substitutions);
+                    while let Type::Ref(inner) = t {
+                        t = *inner;
+                    }
+                    Some(t)
+                }
+                _ => None,
+            }
+        };
+        let is_view = matches!(
+            item(side_ty)?,
+            Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
+        );
+        if !is_view || item(other_ty)? != Type::Str {
+            return None;
+        }
+        let end = arg.value.span.offset + arg.value.span.length;
+        Some(FixIt {
+            span: Span {
+                line: arg.value.span.line,
+                column: arg.value.span.column + arg.value.span.length,
+                offset: end,
+                length: 0,
+            },
+            replacement: ".to_string()".to_string(),
+        })
+    }
+
     fn option_some_view_fix(
         &self,
         side: &Expr,

@@ -921,6 +921,15 @@ pub struct FixIt {
     pub replacement: String,
 }
 
+/// A tuple literal's element, as `reject_borrowed_tuple_elements` reads it
+/// (B-2026-11-09-96).
+#[derive(Debug, Clone)]
+pub(crate) struct TupleElem {
+    pub span: Span,
+    pub name: Option<String>,
+    pub postfix: bool,
+}
+
 /// An unannotated `let` bound to a library iterator (see
 /// `TypeChecker::iter_lets`).
 #[derive(Debug, Clone)]
@@ -3583,6 +3592,8 @@ pub struct TypeChecker<'a> {
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// Each tuple literal's elements by its span (B-2026-11-09-96).
+    pub(super) tuple_literal_elems: FxHashMap<SpanKey, Vec<TupleElem>>,
     /// A `match`/`if let` over `v.last_mut()` or `v.first_mut()`, keyed by
     /// the receiver's span: the whole expression's span and its rewrite
     /// through an index, which the refusal of the method carries
@@ -4437,6 +4448,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
+            tuple_literal_elems: FxHashMap::default(),
             end_mut_rewrites: FxHashMap::default(),
             unit_main_questions: Vec::new(),
             loose_expr_spans: FxHashSet::default(),
@@ -8579,6 +8591,9 @@ impl<'a> TypeChecker<'a> {
         // p.peek().unwrap()`): the value cannot leave what it borrows from,
         // so the owned copy is taken explicitly. Copied and counted types
         // read out of a borrow freely and never reach here as a mismatch.
+        if self.reject_borrowed_tuple_elements(span, expected, found) {
+            return false;
+        }
         if self.cli_lint_overrides.strict_core {
             if let Type::Ref(inner) = found {
                 if **inner == *expected

@@ -617,6 +617,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - Collecting text into a `String` (`let s: String = parts.map(..).collect()`,
   Rust's `FromIterator<String> for String`) says to collect a `Vec[String]`
   and `join("")` it (B-2026-11-10-34).
+- A tuple of borrowed elements moved where owned ones are wanted
+  (`out.push((k, v))` in `for (k, v) in headers` over a bare parameter)
+  names the borrowed elements, and `karac fix` adds `.clone()` to each, as
+  the one-element form already did; bound out of one bare parameter, the
+  fix is that parameter's `own` (B-2026-11-09-96).
+- `opt != Some(TOKEN)` with an `Option[String]` and a `Str` in the `Some`
+  explains that an `Option` compares items of one type, and `karac fix`
+  writes `Some(TOKEN.to_string())` (B-2026-11-09-97).
 - A Rust path through a module Kāra's expressions name keeps that module
   in its fix: `std.fs.read_to_string(p)` and `std::fs::read_to_string(p)`
   become `fs.read_to_string(p)`, `std::env::args()` `env.args()` and
