@@ -178,6 +178,45 @@ pub(crate) fn starts_upper(s: &str) -> bool {
     s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Whether a `format!` argument's text can stand in an f-string hole as it
+/// is. An `if`, `match` or block expression can: its braces balance, and a
+/// hole takes them (B-2026-11-10-17). A `:` outside a literal (a Rust path, an
+/// ascription) would read as the hole's format spec, a literal holding a
+/// brace, a colon or an escape would end or split the hole, and a nested
+/// `format!` or f-string is a rewrite of its own; those, a comment and a line
+/// break keep the call unrewritten.
+fn format_arg_fits_hole(arg: &str) -> bool {
+    if arg.contains('\n') || arg.contains("f\"") || arg.contains("!(") || arg.contains("![") {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut prev = ' ';
+    for c in arg.chars() {
+        match quote {
+            Some(q) => match c {
+                '{' | '}' | ':' | '\\' => return false,
+                c if c == q => quote = None,
+                _ => {}
+            },
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                ':' | '\\' => return false,
+                '/' if prev == '/' => return false,
+                '*' if prev == '/' => return false,
+                '{' => depth += 1,
+                '}' => match depth.checked_sub(1) {
+                    Some(d) => depth = d,
+                    None => return false,
+                },
+                _ => {}
+            },
+        }
+        prev = c;
+    }
+    depth == 0 && quote.is_none()
+}
+
 // ── Parser ───────────────────────────────────────────────────────
 
 /// FFI calling-convention ABIs the grammar recognizes but reserves for a
@@ -1959,8 +1998,7 @@ impl Parser {
         let mut args = args.into_iter().map(|(f, l)| {
             let start = f.offset.checked_sub(*base)?;
             let arg = source.get(start..l.offset - base + l.length)?;
-            let bad = ['{', '}', ':', '\\', '\n'];
-            (!arg.contains(bad) && !arg.contains("//") && !arg.contains("/*")).then_some(arg)
+            format_arg_fits_hole(arg).then_some(arg)
         });
         let mut out = String::from("f\"");
         let mut chars = body.chars().peekable();
@@ -2016,7 +2054,15 @@ impl Parser {
                         if arg.starts_with("mut ") || arg.starts_with("mut\t") {
                             return None;
                         }
-                        out.push_str(arg);
+                        // A block argument opens with the brace that, after
+                        // the hole's own, would read as an escaped `{{`.
+                        if arg.starts_with('{') {
+                            out.push('(');
+                            out.push_str(arg);
+                            out.push(')');
+                        } else {
+                            out.push_str(arg);
+                        }
                     } else if is_ident {
                         out.push_str(captured);
                     } else {

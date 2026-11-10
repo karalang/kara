@@ -53,7 +53,7 @@ At the commit that added this file, over 39 programs:
 | `fn f<T>` | 5 | 5/5 | 5/5 | 5/5 |
 | `.collect::<Vec<T>>()` | 16 | 16/16 | 16/16 | 16/16 |
 | `.collect::<Vec<_>>()` | 16 | 16/16 | 16/16 | 16/16 |
-| `let mut` never reassigned | 20 | 19/20 | 20/20 | 19/20 |
+| `let mut` never reassigned | 20 | 20/20 | 20/20 | 20/20 |
 | `Some(ref x)` | 17 | 3/17 | 17/17 | 17/17 |
 | `x as T` where `x` is a `T` | 20 | 20/20 | 20/20 | 20/20 |
 | `println!("{}", x)` | 20 | 20/20 | 20/20 | 20/20 |
@@ -71,8 +71,9 @@ The rows short of a full pass were filed in `docs/bugs-v2.jsonl` (tagged
 `probe:rustism-audit`), and the table is re-run as they close:
 
 - **`let mut` never reassigned** drew nothing until the `unused_mut` lint
-  (B-2026-11-09-99). The one program it still misses passes a `mut ref`
-  binding as `mut child`, which the lint counts as a write to the binding.
+  (B-2026-11-09-99). The last program it missed passed a `mut ref` binding
+  as `mut child`, which the lint had counted as a write to the binding
+  (B-2026-11-10-19).
 - **`.collect::<Vec<_>>()`**: the fix removes the turbofish and annotates the
   binding when nothing else decides the target. In 6 programs a later use
   decided it, which the type checker accepted and MIR did not lower

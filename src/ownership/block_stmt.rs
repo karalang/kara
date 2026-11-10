@@ -463,6 +463,8 @@ impl<'a> super::OwnershipChecker<'a> {
                     // assignment to such a binding is a reassignment. Cannot
                     // double-report against the `Uninit`/`InitOnce` arms
                     // below: `LetUninit` never enters `immutable_lets`.
+                    // A rebind uses the `mut` whatever the binding holds.
+                    self.mark_mut_let_written(name);
                     self.report_write_to_immutable_binding(
                         name,
                         &target.span,
@@ -554,7 +556,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         // `unused_mut`: a write through the place uses the
                         // root's `mut` even where the rule below exempts it
                         // (`let mut a = p;` copies a borrowed `p`).
-                        self.mark_mut_let_written(&root);
+                        self.mark_mut_let_written_through(&root, false);
                         // B-2026-07-27-9 — writing through a place rooted at
                         // an immutable binding (`p.x = 1;`, `v[0] = 1;`)
                         // mutates that binding's value just as surely as a
@@ -610,7 +612,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     if let Some(usage) = param_usage.get_mut(&root) {
                         *usage = ParamUsage::Mutated;
                     }
-                    self.mark_mut_let_written(&root);
+                    self.mark_mut_let_written_through(&root, false);
                     // A compound assignment to a `mut ref` field writes the
                     // value it borrows: `g.value += 1` on a `MutexGuard[i64]`
                     // (concurrency.md; B-2026-10-21-72).

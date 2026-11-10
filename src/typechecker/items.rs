@@ -7837,10 +7837,44 @@ impl<'a> super::TypeChecker<'a> {
         ty
     }
 
+    /// A closure literal's type, called where it is written: each parameter
+    /// its result leaves unbound becomes a variable the call's context
+    /// solves, taken by the body's tail call too, and judged with the other
+    /// open lets when nothing does (B-2026-11-10-18).
+    pub(super) fn open_called_closure_result(
+        &mut self,
+        callee_ty: Type,
+        body: &Expr,
+        span: &Span,
+    ) -> Type {
+        let (Type::Function { return_type, .. } | Type::OnceFunction { return_type, .. }) =
+            &callee_ty
+        else {
+            return callee_ty;
+        };
+        let (opened, vars) = self.open_unbound_params((**return_type).clone());
+        if vars.is_empty() {
+            return callee_ty;
+        }
+        let subs: HashMap<String, SubstValue> = vars
+            .iter()
+            .map(|(id, n)| (n.clone(), SubstValue::Type(Type::TypeVar(*id))))
+            .collect();
+        self.open_closure_tail_params(body, &vars, &subs);
+        self.unsolved_call_vars.push((*span, vars));
+        let mut callee_ty = callee_ty;
+        if let Type::Function { return_type, .. } | Type::OnceFunction { return_type, .. } =
+            &mut callee_ty
+        {
+            **return_type = opened;
+        }
+        callee_ty
+    }
+
     /// The tail call of a closure body whose type names one of `vars`'
     /// parameters takes the variable, in its type and as its own type
     /// argument.
-    fn open_closure_tail_params(
+    pub(super) fn open_closure_tail_params(
         &mut self,
         body: &Expr,
         vars: &[(super::types::TypeVarId, String)],
@@ -7881,7 +7915,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Each type parameter `ty` leaves unbound (not the enclosing item's,
     /// not an `impl Trait`'s spelling) replaced by a fresh variable.
-    fn open_unbound_params(
+    pub(super) fn open_unbound_params(
         &mut self,
         mut ty: Type,
     ) -> (Type, Vec<(super::types::TypeVarId, String)>) {

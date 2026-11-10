@@ -2,7 +2,8 @@
 //! binding lent to a `ref` parameter holds the value, not a reference, so
 //! `collect` builds the parameter's type, and its `FromIterator` bound is
 //! checked against it. And a closure whose body ends in `collect()` builds
-//! what its uses decide (B-2026-11-09-40).
+//! what its uses decide, bound by a `let` (B-2026-11-09-40) or called where
+//! it is written (B-2026-11-10-18).
 
 use std::process::{Command, Output};
 
@@ -166,5 +167,21 @@ fn main() {
         "a 2 2\n",
         "{}",
         text(&run)
+    );
+}
+
+#[test]
+fn a_closure_called_where_it_is_written_builds_what_the_call_decides() {
+    runs(
+        "called.kara",
+        "fn take(v: Vec[i32]) -> i64 { v.len() }
+fn main() {
+    let a = Vec[1, 2, 2];
+    let s: Set[i64] = (|v: ref Vec[i64]| v.iter().map(|x| x + 1).collect())(a);
+    let n = take((|v: ref Vec[i64]| v.iter().map(|x| x as i32).collect())(a));
+    println(f\"{s.len()} {n}\");
+}
+",
+        "2 3\n",
     );
 }

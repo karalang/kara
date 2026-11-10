@@ -229,6 +229,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   function handed to such a parameter also solves what only the bound
   mentions: `app(double, 4)` over `F: Fn(i64) -> U` is a `U = i64`
   (B-2026-11-09-39).
+- A closure called where it is written whose body ends in `collect()`
+  (`let s: Set[i64] = (|v: ref Vec[i64]| v.iter().collect())(a);`) builds
+  what the call's context decides, where it stopped at lowering with
+  `UnknownParam("C")` (B-2026-11-10-18).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket
@@ -554,6 +558,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `unused_mut` warns a `let mut` of a `mut ref` binding written only
+  through it (a field store, a mutating method, `f(mut r)`), which needs no
+  `mut`; a rebind, a `shared` value lent whole as `mut`, and a `let mut`
+  that copies a `Copy` value out of a reference keep theirs
+  (B-2026-11-10-19).
+- `format!` whose argument is an `if`, `match` or block expression gets the
+  f-string rewrite as its fix, a block argument in parentheses
+  (B-2026-11-10-17).
 - A `let v = it.collect();` used as a receiver or an indexed base before
   the use that decides its target is "cannot infer what this `collect`
   builds where it is first used", with the binding's type as a fix, where it

@@ -3090,6 +3090,14 @@ impl<'a> super::TypeChecker<'a> {
         let mut callee_ty = self.infer_expr(annotated_callee.as_ref().unwrap_or(callee));
         self.variant_ctor_in_callee = false;
         self.fn_item_in_callee = false;
+        // A closure called where it is written, whose body's last call left a
+        // parameter open (`(|v| v.iter().collect())(a)`, `collect`'s `C`):
+        // the call's context decides it, as for a `let`-bound closure
+        // (B-2026-11-10-18).
+        if let ExprKind::Closure { body, .. } = &callee.kind {
+            callee_ty = self.open_called_closure_result(callee_ty, body, span);
+            self.record_node_type(callee.id, &callee_ty);
+        }
         // A value whose type is a type parameter with a function-trait bound
         // (`f: F` with `F: MutFn(T) -> U`) is called with the bound's
         // signature.

@@ -2124,7 +2124,7 @@ impl<'a> OwnershipChecker<'a> {
         kind: OwnershipErrorKind,
         message: String,
     ) {
-        self.mark_mut_let_written(name);
+        self.mark_mut_let_written_through(name, false);
         let Some(let_span) = self.immutable_lets.get(name).cloned() else {
             return;
         };
@@ -2162,6 +2162,31 @@ impl<'a> OwnershipChecker<'a> {
             if !m.written && m.names.iter().any(|n| n == name) {
                 m.written = true;
             }
+        }
+    }
+
+    /// `unused_mut`: a write rooted at `name` that is not a rebind. One
+    /// through a reference handle (a `mut ref T`, a `shared` value, a raw
+    /// pointer, a `mut Slice`) lands in the referent and leaves the binding
+    /// as it was, so it needs no `let mut` and uses none (B-2026-11-10-19);
+    /// the error path exempts it for the same reason. Not a `let mut` whose
+    /// initializer is a `ref T`, or a `mut ref T` of a `Copy` `T`: that
+    /// `let mut` makes the binding a copy of the value (core-semantics.md
+    /// §1.1), so the write is the binding's and dropping the `mut` would
+    /// turn it into a write through the reference. `whole` is a lend of the
+    /// binding itself (`f(mut x)`, `x.m()` with a `mut ref self` `m`): only a
+    /// `mut ref` or `mut Slice` binding forwards its borrow there, while a
+    /// `shared` one is lent as the handle, which the callee can rebind
+    /// (`*tail = n`), so that write uses the `mut`.
+    pub(crate) fn mark_mut_let_written_through(&mut self, name: &str, whole: bool) {
+        let lands_elsewhere = match self.binding_types.get(name) {
+            Some(Type::Ref(_)) => false,
+            Some(Type::MutRef(t)) => !self.is_copy_type(t),
+            Some(Type::Slice { mutable: true, .. }) => true,
+            _ => !whole && self.binding_is_reference_handle(name),
+        };
+        if !lands_elsewhere {
+            self.mark_mut_let_written(name);
         }
     }
 
@@ -2249,7 +2274,8 @@ impl<'a> OwnershipChecker<'a> {
     pub(crate) fn report_mut_marked_arg_write(&mut self, arg: &crate::ast::CallArg) {
         if arg.mut_marker {
             if let Some(root) = Self::root_identifier(&arg.value) {
-                self.mark_mut_let_written(&root);
+                let whole = matches!(arg.value.kind, ExprKind::Identifier(_));
+                self.mark_mut_let_written_through(&root, whole);
             }
         }
         if !arg.mut_marker || self.place_writes_through_shared(&arg.value) {

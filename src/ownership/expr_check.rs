@@ -855,7 +855,8 @@ impl<'a> super::OwnershipChecker<'a> {
                         .contains(&SpanKey::from_span(&expr.span))
                 {
                     if let Some(root) = Self::root_identifier(object) {
-                        self.mark_mut_let_written(&root);
+                        let whole = matches!(object.kind, ExprKind::Identifier(_));
+                        self.mark_mut_let_written_through(&root, whole);
                     }
                 }
                 if (range_view_write
@@ -954,7 +955,8 @@ impl<'a> super::OwnershipChecker<'a> {
                     // place too: it uses a `let mut` (`unused_mut`).
                     if !arg.mut_marker && self.method_arg_is_mut_ref(expr, i) {
                         if let Some(root) = Self::root_identifier(&arg.value) {
-                            self.mark_mut_let_written(&root);
+                            let whole = matches!(arg.value.kind, ExprKind::Identifier(_));
+                            self.mark_mut_let_written_through(&root, whole);
                         }
                     }
                 }
