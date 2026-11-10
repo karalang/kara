@@ -1303,15 +1303,27 @@ impl Cx<'_> {
                 self.tys.kind(pt.ty),
                 TyKind::MutRef(t) if matches!(self.tys.kind(t), TyKind::Fn { .. })
             );
+            // A pointee whose type has no place for a closure (`VecIter[i64]`
+            // given `find(ref closure)`) cannot keep the reference to one:
+            // it may keep only what the closure holds, which a call of the
+            // closure can hand back (B-2026-11-10-24).
+            let pointee = match self.tys.kind(pt.ty) {
+                TyKind::MutRef(t) | TyKind::Ref(t) => Some(t),
+                _ => None,
+            };
+            let closure_free = pointee.is_some_and(|t| !may_hold_closure(self.tys, t));
             let mut others = LoanSet::default();
             let rest = args.iter().enumerate().filter(|(j, _)| *j != i);
             for a in std::iter::once(func).chain(rest.map(|(_, a)| a)) {
-                let behind_ref = fn_slot
-                    && a.place().is_some_and(|q| {
-                        place_ty(self.body, self.tys, q).is_ok_and(|qt| {
-                            matches!(self.tys.kind(qt.ty), TyKind::Ref(_) | TyKind::MutRef(_))
-                        })
-                    });
+                let behind_ref = a.place().is_some_and(|q| {
+                    place_ty(self.body, self.tys, q).is_ok_and(|qt| match self.tys.kind(qt.ty) {
+                        TyKind::Ref(t) | TyKind::MutRef(t) => {
+                            fn_slot
+                                || (closure_free && matches!(self.tys.kind(t), TyKind::Closure(..)))
+                        }
+                        _ => false,
+                    })
+                });
                 if behind_ref {
                     self.held_behind(&before, a, &mut others);
                 } else {
@@ -1484,6 +1496,66 @@ pub(crate) fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
         }
     }
     go(tys, ty, false, &mut Vec::new())
+}
+
+/// Can a value of type `ty` keep a closure, or a reference to one: a
+/// closure, erased function or `dyn` value anywhere in it, a type MIR
+/// cannot see into, a `shared` handle (whose object may hold anything its
+/// fields declare) or a `TaskGroup`.
+fn may_hold_closure(tys: &TyInterner, ty: Ty) -> bool {
+    fn go(tys: &TyInterner, ty: Ty, seen: &mut Vec<Ty>) -> bool {
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        match tys.kind(ty) {
+            TyKind::Closure(..)
+            | TyKind::Fn { .. }
+            | TyKind::Dyn { .. }
+            | TyKind::Other
+            | TyKind::Shared(_)
+            | TyKind::Weak(_) => true,
+            TyKind::Ref(t)
+            | TyKind::MutRef(t)
+            | TyKind::Array(t, _)
+            | TyKind::Slice(t)
+            | TyKind::RawPtr { pointee: t, .. } => go(tys, t, seen),
+            TyKind::Tuple(ts) => ts.iter().any(|t| go(tys, *t, seen)),
+            TyKind::Intrinsic(
+                IntrinsicTy::Vec(e)
+                | IntrinsicTy::Set(e)
+                | IntrinsicTy::VecDeque(e)
+                | IntrinsicTy::SortedSet(e),
+            ) => go(tys, e, seen),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                go(tys, k, seen) || go(tys, v, seen)
+            }
+            TyKind::Intrinsic(_) => false,
+            TyKind::Adt(a) => {
+                if is_task_group(tys, ty) {
+                    return true;
+                }
+                let adt = tys.adt(a);
+                let is_enum = adt.is_enum;
+                let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
+                counts.iter().enumerate().any(|(v, n)| {
+                    (0..*n as u32).any(|f| {
+                        tys.field_ty(ty, is_enum.then_some(v as u32), f)
+                            .is_none_or(|t| go(tys, t, seen))
+                    })
+                })
+            }
+            TyKind::Bool
+            | TyKind::Char
+            | TyKind::Int(_)
+            | TyKind::Float(_)
+            | TyKind::Unit
+            | TyKind::Never
+            | TyKind::Str
+            | TyKind::FnDef(_) => false,
+        }
+    }
+    go(tys, ty, &mut Vec::new())
 }
 
 /// Whether a value of type `outer` can have a `inner` inside it: as

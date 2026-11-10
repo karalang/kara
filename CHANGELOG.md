@@ -278,6 +278,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   typed yet now waits for the later use design.md § Closures lets type
   them, and prints 3; a parameter no use types gets the closure message,
   "cannot infer closure parameter type", alone (B-2026-11-10-8).
+- `while let Some(x) = it.find(|x| x < 5) { .. }` over `v.iter()`, and
+  the same with `Peekable.next_if` or a `find` in a `for` body, was refused
+  E0516: the iterator, given `mut ref`, was taken to keep the reference to
+  the closure passed to it, so the next iteration's closure conflicted. A
+  value whose type has no place for a closure now keeps only what the
+  closure holds (B-2026-11-10-24).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket
