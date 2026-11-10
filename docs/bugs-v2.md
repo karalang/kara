@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 224 |
 | false-positive | 179 |
-| perf | 149 |
+| perf | 150 |
 | missing-feature | 128 |
 | soundness | 60 |
 | miscompile | 53 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 356 |
-| mir-llvm | 192 |
+| mir-llvm | 193 |
 | mir | 166 |
 | cli | 94 |
 | ownership | 73 |
@@ -101,7 +101,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Kata 1665 (a gated `sort_by` partition) still executes 1.17x legacy's instructions on the M5 at 3dc7786b7f; 314 and 318 are within the 1.15x bar, and 214, 247, 288 and 895's par lane wait on their first M5 figures since filing | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Kata 333 executes 1.28x legacy's instructions on the M5 at 3dc7786b7f (1.19x at eb17818b45): ce0cf3209b's `dereferenceable` on its `mut ref` parameter added 6.0% (x86 too); 321, 337, 338, 339 and 343 are within | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
-| B-2026-11-05-27 | 2026-11-05 | mir-llvm | medium | x86 only, within on the M5: two kata benches run about 2x slower on LLVM 22 than on LLVM 18 on x86, min_stack (155) 951 ms vs 444 and hsearch (275) 1074 vs 526; Gowtham's M5 run at 7c63217740 reads 0.904x and 1.056x legacy's cycles; teemo, the third of B-2026-11-05-4, is fixed | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-07-10 | 2026-11-07 | typecheck | low | Tracker for the next minor release: an implied derive (`Copy` without `Clone`, `Eq` or `PartialOrd` without `PartialEq`, `Ord` without `PartialOrd`/`Eq`, `Hash` relying on the filled-in `Eq`) becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that adds the derive (bb8531c2c4, design.md §9 37d71cee7f) | — |
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
@@ -119,6 +118,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
 | B-2026-11-10-29 | 2026-11-10 | mir-llvm | low | `karac build` is ~21% slower than at f1416771a4 on the ADR-2 frozen set (tip 0.886x legacy, was 0.734x): within the bars, but the MIR is built three times per build and typecheck and ownership grew | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
+| B-2026-11-10-37 | 2026-11-10 | mir-llvm | low | LLVM 22 keeps hsearch's (275) bounds check on `citations[mid]` in a binary search: instcombine rewrites karac's `assume(mid >= lo)` into `assume(hi - lo > -2)`, so IPSCCP no longer folds the check; costs nothing measurable on Emerald Rapids at HEAD, Cascade Lake not re-measured | — |
 
 ### Relocated
 
@@ -737,6 +737,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-24 | typecheck | low | A use of a deprecated item through a module binding (`import util;` then `util.old()`) is warned with the caret on the call's closing paren, not on `… | 244ab1cf33 |
 | B-2026-11-05-25 | mir-llvm | low | The backend still emits none of the LLVM 19-22 facts B-2026-11-04-83 left: `range` attributes on parameters and returns, `icmp samesign`, and `captur… | 049261c58f |
 | B-2026-11-05-26 | cli | low | package mode: `karac check --output=jsonl` on a package member prints `type_error` lines (no `type` stream, no ids) and stops at typecheck, `karac bu… | 532e17a65b |
+| B-2026-11-05-27 | mir-llvm | medium | x86, host-dependent: min_stack (155) ran about 3.5x slower on LLVM 22 than on LLVM 18 because a four-case switch with an unreachable default became a… | 787f0559a5 |
 | B-2026-11-05-28 | cli | low | diagnostics carry no `concept` id, and `karac explain` knows no concept ids from the diagnostic taxonomy (`ownership/move-semantics`) and no items (`… | 7966b30c9e |
 | B-2026-11-05-29 | cli | low | E0400 carries no `derivation`, `inferred_effects` or `declared_effects` and `karac fix` cannot add the missing clause; a match missing an arm is not… | 49c047aa9a |
 | B-2026-11-05-30 | cli | low | fix hints have two shapes, neither the spec's `diff {file, line, old, new}`: single-file JSON gives `replacement {offset, length, text}` beside a pro… | 7449bc90ba |
