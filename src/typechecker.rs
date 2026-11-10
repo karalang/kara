@@ -3599,6 +3599,9 @@ pub struct TypeChecker<'a> {
     /// through an index, which the refusal of the method carries
     /// (`rust_last_mut`, B-2026-11-08-46).
     pub(super) end_mut_rewrites: FxHashMap<SpanKey, (Span, String)>,
+    /// B-2026-11-10-51: `let x = v.last_mut().unwrap();`'s rewrite, keyed
+    /// by the receiver's span.
+    pub(super) end_mut_let_rewrites: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// The `?`s in a `fn main()` that returns `()`, which `check_function`
     /// fixes by declaring a `Result` return (B-2026-11-07-43), each with its
     /// operand's error type and whether that converts to `AnyError`; `None`
@@ -4450,6 +4453,7 @@ impl<'a> TypeChecker<'a> {
             error_fix_diffs: FxHashMap::default(),
             tuple_literal_elems: FxHashMap::default(),
             end_mut_rewrites: FxHashMap::default(),
+            end_mut_let_rewrites: FxHashMap::default(),
             unit_main_questions: Vec::new(),
             loose_expr_spans: FxHashSet::default(),
             as_str_calls: FxHashMap::default(),

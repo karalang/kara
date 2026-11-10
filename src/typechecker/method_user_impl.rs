@@ -2023,6 +2023,14 @@ impl<'a> super::TypeChecker<'a> {
                                         replacement: text,
                                     }],
                                 );
+                            } else if let Some(edits) = self.end_mut_let_rewrite(&object.span) {
+                                // B-2026-11-10-51: `let x = v.last_mut().unwrap();`
+                                // and the statements after it.
+                                msg.push_str(
+                                    "; this `let` and the uses of its binding after it \
+                                     rewrite mechanically, as `karac fix` writes them",
+                                );
+                                self.error_fix_diffs.insert(SpanKey::from_span(span), edits);
                             }
                         } else if let Some(suggestion) =
                             crate::edit_distance::suggest_method(method, &candidate_refs)

@@ -9,9 +9,15 @@
 //! and g' { body' } else { other }`, where `'` reads `v[v.len() - 1]` (or
 //! `v[0]`) for `x`. The `match`/`if let` is noted when it is checked, and
 //! the refusal of `last_mut` on it carries the rewrite.
+//!
+//! `let x = v.last_mut().unwrap();` (or `.expect(..)`) is the third shape
+//! (B-2026-11-10-51): the `let` goes, and every `x` the statements after it
+//! write or read through (`x.f`, `x[i]`, `*x`, `x.m(..)`) reads `v[v.len() -
+//! 1]`, edited in place so the rest of the block keeps its own text. As
+//! above, nothing after the `let` may name `v` or bind `x` again.
 
-use crate::ast::{Expr, ExprKind, Pattern, PatternKind};
-use crate::resolver::SpanKey;
+use crate::ast::{Block, Expr, ExprKind, Pattern, PatternKind, StmtKind};
+use crate::resolver::{SpanKey, TextEdit};
 use crate::span_visitor::MutVisitor;
 use crate::token::Span;
 
@@ -218,7 +224,139 @@ fn rewrite(e: &Expr) -> Option<(Span, Span, String)> {
     Some((recv.span, e.span, text))
 }
 
+/// The edits for `let x = v.last_mut().unwrap();` in `block`, keyed by the
+/// receiver's span: the `let` deleted, and each `x` read through after it
+/// replaced by the element.
+fn let_rewrites(block: &Block) -> Vec<(Span, Vec<TextEdit>)> {
+    let mut out = Vec::new();
+    for (i, stmt) in block.stmts.iter().enumerate() {
+        let StmtKind::Let {
+            pattern,
+            ty: None,
+            value,
+            ..
+        } = &stmt.kind
+        else {
+            continue;
+        };
+        let PatternKind::Binding(bound) = &pattern.kind else {
+            continue;
+        };
+        let ExprKind::MethodCall { object, method, .. } = &value.kind else {
+            continue;
+        };
+        if !matches!(method.as_str(), "unwrap" | "expect") {
+            continue;
+        }
+        let Some((recv, last)) = end_mut_call(object) else {
+            continue;
+        };
+        let Some(recv_root) = root(recv) else {
+            continue;
+        };
+        // Where the `let` ends: the next statement, or the tail.
+        let Some(next) = block
+            .stmts
+            .get(i + 1)
+            .map(|s| s.span)
+            .or_else(|| block.final_expr.as_ref().map(|e| e.span))
+        else {
+            continue;
+        };
+        let rest = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block.stmts[i + 1..].to_vec(),
+                final_expr: block.final_expr.clone(),
+                span: block.span,
+            }),
+            span: block.span,
+            id: crate::ids::NodeId::DUMMY,
+        };
+        if names(&rest, recv_root) || rebinds(&rest, bound) {
+            continue;
+        }
+        let is_bound = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if n == bound);
+        // Every use of `x`, and the uses that read or write through it with
+        // the span each one's replacement covers (`*x` as a whole).
+        let mut uses: Vec<Span> = Vec::new();
+        let mut through: Vec<(Span, Span)> = Vec::new();
+        crate::span_visitor::for_each_expr(&rest, &mut |x| match &x.kind {
+            ExprKind::Identifier(n) if n == bound => uses.push(x.span),
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::Index { object, .. }
+            | ExprKind::MethodCall { object, .. }
+                if is_bound(object) =>
+            {
+                through.push((object.span, object.span))
+            }
+            ExprKind::Unary {
+                op: crate::ast::UnaryOp::Deref,
+                operand,
+            } if is_bound(operand) => through.push((operand.span, x.span)),
+            _ => {}
+        });
+        let key = |s: &Span| (s.offset, s.length);
+        if uses.is_empty()
+            || uses
+                .iter()
+                .any(|u| !through.iter().any(|(t, _)| key(t) == key(u)))
+        {
+            continue;
+        }
+        let r = crate::formatter::render_expr(recv);
+        let at = if last {
+            format!("{r}[{r}.len() - 1]")
+        } else {
+            format!("{r}[0]")
+        };
+        let mut edits = vec![TextEdit {
+            offset: stmt.span.offset,
+            length: next.offset.saturating_sub(stmt.span.offset),
+            replacement: String::new(),
+        }];
+        // A `*x` covers its `x`: one edit for the two.
+        through.sort_by_key(|(_, whole)| (whole.offset, std::cmp::Reverse(whole.length)));
+        let mut end = 0;
+        for (_, whole) in through {
+            if whole.offset < end {
+                continue;
+            }
+            end = whole.offset + whole.length;
+            edits.push(TextEdit {
+                offset: whole.offset,
+                length: whole.length,
+                replacement: at.clone(),
+            });
+        }
+        out.push((recv.span, edits));
+    }
+    out
+}
+
 impl TypeChecker<'_> {
+    /// Notes the rewrites of `let x = v.last_mut().unwrap();` in a block for
+    /// the refusal of `last_mut` to carry (B-2026-11-10-51).
+    pub(super) fn note_end_mut_let_rewrites(&mut self, block: &Block) {
+        if !block.stmts.iter().any(|s| {
+            matches!(&s.kind, StmtKind::Let { value: Expr { kind: ExprKind::MethodCall { method, .. }, .. }, .. }
+                if method == "unwrap" || method == "expect")
+        }) {
+            return;
+        }
+        for (recv, edits) in let_rewrites(block) {
+            self.end_mut_let_rewrites
+                .insert(SpanKey::from_span(&recv), edits);
+        }
+    }
+
+    /// The noted rewrite of the `let` whose `last_mut` call has the
+    /// receiver at `recv`.
+    pub(super) fn end_mut_let_rewrite(&self, recv: &Span) -> Option<Vec<TextEdit>> {
+        self.end_mut_let_rewrites
+            .get(&SpanKey::from_span(recv))
+            .cloned()
+    }
+
     /// Notes the rewrite of a `match`/`if let` over `v.last_mut()` for the
     /// refusal of `last_mut` to carry.
     pub(super) fn note_end_mut_rewrite(&mut self, e: &Expr) {
