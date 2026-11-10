@@ -128,6 +128,31 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(lenp, len.into())
     }
 
+    /// A push into room the caller has shown is there: no capacity test
+    /// and no growth path, only the store and the length bump, which
+    /// cannot wrap since `len < cap` (B-2026-11-09-47).
+    pub(super) fn vec_push_reserved(
+        &mut self,
+        v: PointerValue<'ctx>,
+        x: PointerValue<'ctx>,
+        et: Ty,
+    ) -> R<()> {
+        let size = self.layout(et)?.size;
+        if size == 0 {
+            return self.rt("vec_push", &[v.into(), x.into(), self.i64(0).into()]);
+        }
+        let lenp = self.offset(v, 8)?;
+        let len = self.load_i64(lenp)?;
+        let buf = self.load_ptr(v)?;
+        let at = self.elem_ptr(buf, len, size)?;
+        self.copy(at, x, et)?;
+        let len = self
+            .builder
+            .build_int_nsw_add(len, self.i64(1), "")
+            .map_err(e)?;
+        self.store(lenp, len.into())
+    }
+
     /// Appends the `n` bytes at `s` to the `String` at `v` in line: the
     /// bytes are copied straight in while they fit, and only a full
     /// buffer (or a borrowed literal, whose capacity is 0) goes to the

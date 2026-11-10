@@ -917,7 +917,10 @@ impl<'a> Analysis<'a> {
         if let Some(Recv { vec: k, kind }) = self.recv[b] {
             let ls = self.len_slot[k];
             match (kind, method) {
-                (BorrowKind::Mut, Some("push" | "__push_within" | "__push_exact")) => {
+                (
+                    BorrowKind::Mut,
+                    Some("push" | "__push_within" | "__push_exact" | "__push_reserved"),
+                ) => {
                     let l = &mut st.iv[ls as usize];
                     *l = l
                         .shift(1)

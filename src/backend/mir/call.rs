@@ -1550,6 +1550,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 let room = self.int_arg(&args[2])?;
                 self.vec_push_within(v, x, et, Some((room, m == "__push_exact")))
             }
+            // A push a chars collect knows has room: its reservation, the
+            // text's byte length, covers every char (B-2026-11-09-47).
+            ("Vec", "__push_reserved") => {
+                let v = self.ref_arg(&args[0])?;
+                let et = self.vec_elem(name, &args[0])?;
+                let x = self.operand_as(&args[1], et)?;
+                self.vec_push_reserved(v, x, et)
+            }
             ("Vec", "push") => {
                 let v = self.ref_arg(&args[0])?;
                 let et = self.vec_elem(name, &args[0])?;

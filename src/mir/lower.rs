@@ -15478,21 +15478,21 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// already stepped).
     /// `reserve`, when given, is a `Vec` the walk fills with one push per
     /// char: it is presized to the text's byte length, a ceiling on its
-    /// chars, as legacy's `chars().collect()` sized its buffer.
+    /// chars, as legacy's `chars().collect()` sized its buffer. When that
+    /// reservation covers the whole length (it is clamped for a huge
+    /// text), the walk runs in a copy whose `each` is told so (its third
+    /// argument), and may push without testing the capacity: the pushes
+    /// cannot outnumber the bytes (B-2026-11-09-47).
     fn walk_chars(
         &mut self,
         label: &Option<String>,
         text: &'a Expr,
         reserve: Option<(Local, Ty)>,
-        each: &mut dyn FnMut(&mut Self, Local) -> R<()>,
+        each: &mut dyn FnMut(&mut Self, Local, bool) -> R<()>,
     ) -> R<()> {
-        let (i64_t, bool_t, char_t) = {
+        let (i64_t, bool_t) = {
             let tcx = self.tys().tcx();
-            (
-                tcx.intern(HK::Int(IntSize::I64)),
-                tcx.intern(HK::Bool),
-                tcx.intern(HK::Char),
-            )
+            (tcx.intern(HK::Int(IntSize::I64)), tcx.intern(HK::Bool))
         };
         let p = if self.is_place(text) {
             self.expr_place(text, false)?
@@ -15512,26 +15512,79 @@ impl<'l, 'a> Bx<'l, 'a> {
         let n = self.temp(i64_t);
         let r = reborrow(self);
         self.call_native("String.len", vec![r], Place::local(n));
-        if let Some((v, vt)) = reserve {
-            let name = self.tys().display(vt);
-            let mt = self.tys().tcx().reference(vt, true);
-            let unit_t = self.unit();
-            let r = self.temp(mt);
-            self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
-            let u = self.temp(unit_t);
-            self.call_native(
-                &format!("{name}.presize"),
-                vec![
-                    Operand::Move(Place::local(r)),
-                    Operand::Copy(Place::local(n)),
-                    Operand::Const(Const {
-                        ty: i64_t,
-                        kind: ConstKind::Scalar(0),
-                    }),
-                ],
-                Place::local(u),
-            );
-        }
+        let Some((v, vt)) = reserve else {
+            return self.walk_chars_loop(label, h, rt, n, false, each);
+        };
+        let name = self.tys().display(vt);
+        let mt = self.tys().tcx().reference(vt, true);
+        let r = self.temp(mt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
+        // The reach `presize` reserved room up to: the vector is fresh, so
+        // every char fits when it is the whole byte length.
+        let reach = self.temp(i64_t);
+        self.call_native(
+            &format!("{name}.presize"),
+            vec![
+                Operand::Move(Place::local(r)),
+                Operand::Copy(Place::local(n)),
+                Operand::Const(Const {
+                    ty: i64_t,
+                    kind: ConstKind::Scalar(0),
+                }),
+            ],
+            Place::local(reach),
+        );
+        let fits = self.temp(bool_t);
+        self.assign(
+            fits,
+            Rvalue::BinaryOp(
+                BinOp::Le,
+                Operand::Copy(Place::local(n)),
+                Operand::Copy(Place::local(reach)),
+            ),
+        );
+        let (fast, slow, done) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(fits)),
+                targets: SwitchTargets::if_else(fast, slow),
+            },
+            fast,
+        );
+        self.walk_chars_loop(label, h, rt, n, true, each)?;
+        self.goto(done);
+        self.cur = slow;
+        self.walk_chars_loop(label, h, rt, n, false, each)?;
+        self.goto(done);
+        self.cur = done;
+        Ok(())
+    }
+
+    /// One loop of [`Self::walk_chars`] over the string `h` borrows, of
+    /// byte length `n`; `fits` is passed on to `each`.
+    fn walk_chars_loop(
+        &mut self,
+        label: &Option<String>,
+        h: Local,
+        rt: Ty,
+        n: Local,
+        fits: bool,
+        each: &mut dyn FnMut(&mut Self, Local, bool) -> R<()>,
+    ) -> R<()> {
+        let (i64_t, bool_t, char_t) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.intern(HK::Int(IntSize::I64)),
+                tcx.intern(HK::Bool),
+                tcx.intern(HK::Char),
+            )
+        };
+        let reborrow = |this: &mut Self| {
+            let r = this.temp(rt);
+            let target = Place::local(h).project(ProjElem::Deref);
+            this.assign(r, Rvalue::Ref(BorrowKind::Shared, target));
+            Operand::Move(Place::local(r))
+        };
         let i = self.temp(i64_t);
         self.assign(
             i,
@@ -15591,7 +15644,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         });
         let r = (|| {
             self.push_scope();
-            each(self, ch)?;
+            each(self, ch, fits)?;
             self.pop_scope()
         })();
         self.loops.pop();
@@ -15612,7 +15665,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         let char_t = self.tys().tcx().intern(HK::Char);
         self.push_scope();
-        let r = self.walk_chars(label, text, None, &mut |this, ch| {
+        let r = self.walk_chars(label, text, None, &mut |this, ch, _| {
             let mut binds = Vec::new();
             this.bind_pattern(pattern, &Place::local(ch), char_t, false, &mut binds)?;
             for &(l, t) in &binds {
@@ -15645,12 +15698,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.call_native(&format!("{name}.new"), vec![], Place::local(v));
         let mt = self.tys().tcx().reference(vt, true);
         let unit_t = self.unit();
-        self.walk_chars(&None, text, Some((v, vt)), &mut |this, ch| {
+        self.walk_chars(&None, text, Some((v, vt)), &mut |this, ch, fits| {
             let r = this.temp(mt);
             this.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
             let u = this.temp(unit_t);
+            let push = if fits { "__push_reserved" } else { "push" };
             this.call_native(
-                &format!("{name}.push"),
+                &format!("{name}.{push}"),
                 vec![
                     Operand::Move(Place::local(r)),
                     Operand::Copy(Place::local(ch)),
