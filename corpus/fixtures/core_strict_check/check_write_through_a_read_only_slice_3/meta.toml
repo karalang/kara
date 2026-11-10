@@ -1,10 +1,10 @@
 source = "tests/core_strict_check.rs::check_write_through_a_read_only_slice"
 dedup_of = []
-expect = "error:E0200"
+expect = "error:E0517"
 exit = 1
 tags = []
 class = "a"
-expected_from = "legacy-run"
+expected_from = "decision"
 legacy_backend = "legacy-build"
 legacy_exit = 1
 rules = []
@@ -15,3 +15,4 @@ classified_with = "9913c6855"
 extracted_src = "d033a9ff"
 model_rev = "3acf4472"
 model_src = "d033a9ff"
+note = "B-2026-11-09-79: the core check refuses the write through a read-only `Slice` view as E0517 (WriteThroughSharedRef: a place reached through a `ref` is written) before the type check's E0200; the legacy-run expect was stale. Ruled by the review thread 2026-11-09"

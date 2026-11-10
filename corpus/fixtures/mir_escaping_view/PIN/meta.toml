@@ -1,10 +1,10 @@
 source = "tests/mir_escaping_view.rs::PIN"
 dedup_of = []
-expect = "error:E0516"
+expect = "error:E0515"
 exit = 1
 tags = ["closure"]
 class = "a"
-expected_from = "legacy-run"
+expected_from = "decision"
 legacy_backend = "legacy-build"
 legacy_exit = 1
 rules = []
@@ -15,3 +15,4 @@ classified_with = "9913c6855"
 extracted_src = "b02b0461"
 model_rev = "3acf4472"
 model_src = "b02b0461"
+note = "B-2026-11-09-80: the ownership check refuses the escaping closure as E0515 (MoveOutOfPlace: it captures a place behind a borrow by move, core-semantics §9.3, §3.7) before MIR borrowck's E0516; the legacy-run expect was stale. Ruled by the review thread 2026-11-09"
