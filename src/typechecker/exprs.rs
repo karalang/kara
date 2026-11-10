@@ -6308,6 +6308,35 @@ impl<'a> super::TypeChecker<'a> {
         self.retype_partial_node(e.id, ty);
     }
 
+    /// One step of a closure's return type: `t`, a `return`'s type or the
+    /// tail's, unified with what the closure returns so far (B-2026-07-31-18).
+    /// A `!` or erroneous `t` adds nothing; a `return None` beside a `Some(x)`
+    /// agrees with it (B-2026-10-14-59); any other difference is refused at
+    /// the closure.
+    fn fold_closure_return(&mut self, ret_ty: &mut Option<Type>, t: Type, span: &Span) {
+        if matches!(t, Type::Never | Type::Error) {
+            return;
+        }
+        match ret_ty.clone() {
+            None => *ret_ty = Some(t),
+            Some(cur) if self.merge_closure_returns(&cur, &t).is_some() => {
+                *ret_ty = self.merge_closure_returns(&cur, &t);
+            }
+            Some(cur) if cur != t && cur != Type::Error => {
+                self.type_error(
+                    format!(
+                        "closure returns conflicting types: '{}' vs '{}'",
+                        type_display(&cur),
+                        type_display(&t)
+                    ),
+                    *span,
+                    TypeErrorKind::ReturnTypeMismatch,
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// design.md § 6: `if` without `else` has type `()`, so its block must
     /// produce `()` too; a block that produces a value is a type error even
     /// in statement position, where the value would be silently discarded
@@ -14227,36 +14256,62 @@ impl<'a> super::TypeChecker<'a> {
                 // concrete types are a hard error at the closure, matching
                 // how a fn body's tail-vs-return mismatch reports.
                 let body_ty = {
+                    // An unsuffixed integer literal returned or left as the
+                    // tail was typed `i64` for want of a context; it waits
+                    // for the other returns, and takes their integer type
+                    // when they agree on one (B-2026-11-10-23): `return
+                    // i as i32; .. 0` is an `i32` closure, as it is once
+                    // `karac fix` drops Rust's `-> i32` from the closure.
+                    let tail = match &body.kind {
+                        ExprKind::Block(b) => b.final_expr.as_deref(),
+                        _ => {
+                            let e: &Expr = body;
+                            Some(e)
+                        }
+                    };
+                    let tail_literal = tail
+                        .filter(|t| Self::is_int_literal_operator_tree(t))
+                        .filter(|_| !matches!(body_ty, Type::Never));
+                    let literal_at: std::collections::HashSet<usize> =
+                        collected.literal_returns.iter().map(|(i, _)| *i).collect();
                     let mut ret_ty = match body_ty {
                         Type::Never => None,
+                        _ if tail_literal.is_some() => None,
                         ref t => Some(t.clone()),
                     };
-                    for (t, _span) in collected.returns.iter() {
+                    let mut deferred: Vec<Type> = Vec::new();
+                    for (i, (t, _span)) in collected.returns.iter().enumerate() {
                         let t = resolve_type_var_top(t, &self.env.substitutions);
-                        if matches!(t, Type::Never | Type::Error) {
-                            continue;
+                        if literal_at.contains(&i) {
+                            deferred.push(t);
+                        } else {
+                            self.fold_closure_return(&mut ret_ty, t, &expr.span);
                         }
-                        match &ret_ty {
-                            None => ret_ty = Some(t),
-                            // A `return None` beside a tail `Some(x)` (or the
-                            // reverse) agrees with it: the side that still names
-                            // an unsolved parameter takes the other's type
-                            // (B-2026-10-14-59).
-                            Some(cur) if self.merge_closure_returns(cur, &t).is_some() => {
-                                ret_ty = self.merge_closure_returns(cur, &t);
+                    }
+                    let literal_ty = match &ret_ty {
+                        Some(t @ (Type::Int(_) | Type::UInt(_)))
+                            if *t != Type::Int(IntSize::I64) =>
+                        {
+                            Some(t.clone())
+                        }
+                        _ => None,
+                    };
+                    if let Some(ty) = literal_ty {
+                        for (_, e) in collected.literal_returns.iter() {
+                            self.promote_int_literal_operator_tree(e, &ty);
+                        }
+                        if let Some(t) = tail_literal {
+                            if self.promote_int_literal_operator_tree(t, &ty) {
+                                self.record_expr_type(&body.span, &ty);
+                                self.record_node_type(body.id, &ty);
                             }
-                            Some(cur) if *cur != t && *cur != Type::Error => {
-                                self.type_error(
-                                    format!(
-                                        "closure returns conflicting types: '{}' vs '{}'",
-                                        type_display(cur),
-                                        type_display(&t)
-                                    ),
-                                    expr.span,
-                                    TypeErrorKind::ReturnTypeMismatch,
-                                );
-                            }
-                            _ => {}
+                        }
+                    } else {
+                        if tail_literal.is_some() {
+                            deferred.push(body_ty.clone());
+                        }
+                        for t in deferred {
+                            self.fold_closure_return(&mut ret_ty, t, &expr.span);
                         }
                     }
                     ret_ty.unwrap_or(Type::Never)
@@ -14331,6 +14386,11 @@ impl<'a> super::TypeChecker<'a> {
                         .closure_return_types
                         .last_mut()
                         .expect("checked non-empty above");
+                    if let Some(e) = inner.as_deref() {
+                        if Self::is_int_literal_operator_tree(e) {
+                            frame.literal_returns.push((frame.returns.len(), e.clone()));
+                        }
+                    }
                     frame.returns.push((t, span));
                     if let Some(e) = inner {
                         frame.return_exprs.push(e.id);

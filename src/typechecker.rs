@@ -2830,6 +2830,11 @@ pub(super) struct ClosureReturnFrame {
     /// type is known, one typed only partly (`return None`) records it
     /// (B-2026-10-14-59).
     pub(super) return_exprs: Vec<crate::ids::NodeId>,
+    /// The `return E` whose `E` is an unsuffixed integer literal (or an
+    /// operator tree of them), by its index in `returns`: with no expected
+    /// type it was typed `i64`, and it takes the integer type the closure's
+    /// other returns or tail give (B-2026-11-10-23).
+    pub(super) literal_returns: Vec<(usize, crate::ast::Expr)>,
 }
 
 /// One element of a tuple-literal scrutinee, for
