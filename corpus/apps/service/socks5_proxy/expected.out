@@ -1,0 +1,22 @@
+== clients
+1 connect: method 05 02; login 01 00; reply 05 00 00 01 00 00 00 00 00 00; relay echo: HELLO | echo: WORLD
+2 no password method: method 05 ff
+3 wrong password: method 05 02; login 01 01
+4 bind: method 05 02; login 01 00; reply 05 07 00 01 00 00 00 00 00 00
+5 ipv6: method 05 02; login 01 00; reply 05 08 00 01 00 00 00 00 00 00
+6 by name: method 05 02; login 01 00; reply 05 00 00 01 00 00 00 00 00 00; relay echo: VIA NAME
+7 unknown name: method 05 02; login 01 00; reply 05 04 00 01 00 00 00 00 00 00
+8 port 22: method 05 02; login 01 00; reply 05 02 00 01 00 00 00 00 00 00
+9 refused: method 05 02; login 01 00; reply 05 05 00 01 00 00 00 00 00 00
+10 socks4: closed (0 bytes)
+== proxy log
+1: alice: 127.0.0.1:47762 relayed 12 up, 24 down
+2: no acceptable method
+3: login failed for alice
+4: bob: command 2 not supported
+5: alice: IPv6 not supported
+6: bob: 127.0.0.1:47762 relayed 9 up, 15 down
+7: alice: cannot resolve example.invalid
+8: alice: port 22 not allowed
+9: alice: 127.0.0.1:47763 refused
+10: version 4: closed

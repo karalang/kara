@@ -1,0 +1,359 @@
+// socks5_proxy: a SOCKS5 proxy (RFC 1928) with username/password login
+// (RFC 1929) on loopback. Each client connection is a task: the greeting
+// picks the password method, the login is checked against a table, and a
+// CONNECT request to an IPv4 address or the name `localhost` on an allowed
+// port opens the upstream connection and relays bytes both ways, one
+// direction in a task of its own, passing each half-close through. Every
+// refusal answers with the RFC's reply code and a lingering close. An echo
+// service upstream answers each line in capitals; scripted clients exercise
+// the success paths and each refusal, then the proxy's log is printed.
+
+import std.sync.{TaskGroup, Mutex};
+import std.io.{BufReader};
+
+const PROXY: Str = "127.0.0.1:47761";
+const ECHO: Str = "127.0.0.1:47762";
+const ECHO_PORT: u16 = 47762;
+const CLOSED_PORT: u16 = 47763;
+const CONNECTIONS: i64 = 10;
+const RELAYED: i64 = 2;
+
+const OK: u8 = 0;
+const NOT_ALLOWED: u8 = 2;
+const HOST_UNREACHABLE: u8 = 4;
+const REFUSED: u8 = 5;
+const BAD_COMMAND: u8 = 7;
+const BAD_ADDRESS: u8 = 8;
+
+fn password_for(user: Str) -> Option[Str] {
+    match user {
+        "alice" => Some("wonderland"),
+        "bob" => Some("builder"),
+        _ => None,
+    }
+}
+
+struct Target {
+    user: String,
+    host: String,
+    port: u16,
+}
+
+sync struct Log {
+    lines: Mutex[SortedMap[i64, Vec[String]]],
+}
+
+// VER REP RSV ATYP=IPv4 BND.ADDR=0.0.0.0 BND.PORT=0
+fn reply(code: u8) -> Vec[u8] {
+    [5, code, 0, 1, 0, 0, 0, 0, 0, 0]
+}
+
+// Rust's `Read::read_exact`, which a Kāra `TcpStream` does not have
+// (B-2026-11-10-44).
+fn read_exact(conn: TcpStream, buf: mut Slice[u8]) -> Result[(), String] {
+    let mut off = 0;
+    while off < buf.len() {
+        match conn.read(mut buf[off..]) {
+            Ok(0) => return Err("closed"),
+            Ok(n) => off += n,
+            Err(e) => return Err(f"{e}"),
+        }
+    }
+    Ok(())
+}
+
+fn read_byte(conn: TcpStream) -> Result[u8, String] {
+    let mut b = [0u8; 1];
+    read_exact(conn, mut b)?;
+    Ok(b[0])
+}
+
+fn read_n(conn: TcpStream, n: i64) -> Result[Vec[u8], String] {
+    let mut buf = Vec.filled(n, 0u8);
+    read_exact(conn, mut buf)?;
+    Ok(buf)
+}
+
+// The greeting, the RFC 1929 login and the request. `Ok(None)` once the
+// connection has been answered with a refusal.
+fn handshake(conn: TcpStream, log: mut ref Vec[String]) -> Result[Option[Target], String] {
+    let mut head = [0u8; 2];
+    read_exact(conn, mut head)?;
+    if head[0] != 5 {
+        log.push(f"version {head[0]}: closed");
+        return Ok(None);
+    }
+    let methods = read_n(conn, head[1])?;
+    if not methods.contains(2) {
+        let _ = conn.write_all([5, 0xFF]);
+        log.push("no acceptable method");
+        return Ok(None);
+    }
+    let _ = conn.write_all([5, 2]);
+    let ver = read_byte(conn)?;
+    let ulen = read_byte(conn)?;
+    let user = String.from_utf8(read_n(conn, ulen)?).unwrap_or(String.new());
+    let plen = read_byte(conn)?;
+    let password = String.from_utf8(read_n(conn, plen)?).unwrap_or(String.new());
+    if ver != 1 or password_for(user) != Some(password.as_str()) {
+        let _ = conn.write_all([1, 1]);
+        log.push(f"login failed for {user}");
+        return Ok(None);
+    }
+    let _ = conn.write_all([1, 0]);
+    let mut req = [0u8; 4];
+    read_exact(conn, mut req)?;
+    let cmd = req[1];
+    let atyp = req[3];
+    let host = match atyp {
+        1 => {
+            let a = read_n(conn, 4)?;
+            f"{a[0]}.{a[1]}.{a[2]}.{a[3]}"
+        }
+        3 => {
+            let n = read_byte(conn)?;
+            String.from_utf8(read_n(conn, n)?).unwrap_or(String.new())
+        }
+        4 => {
+            read_n(conn, 18)?;
+            let _ = conn.write_all(reply(BAD_ADDRESS));
+            log.push(f"{user}: IPv6 not supported");
+            return Ok(None);
+        }
+        other => {
+            let _ = conn.write_all(reply(BAD_ADDRESS));
+            log.push(f"{user}: address type {other}");
+            return Ok(None);
+        }
+    };
+    let mut pb = [0u8; 2];
+    read_exact(conn, mut pb)?;
+    let port = ((pb[0] as u16) << 8) | pb[1];
+    if cmd != 1 {
+        let _ = conn.write_all(reply(BAD_COMMAND));
+        log.push(f"{user}: command {cmd} not supported");
+        return Ok(None);
+    }
+    let host = if host == "localhost" {
+        "127.0.0.1"
+    } else if atyp == 3 {
+        let _ = conn.write_all(reply(HOST_UNREACHABLE));
+        log.push(f"{user}: cannot resolve {host}");
+        return Ok(None);
+    } else {
+        host
+    };
+    if port != ECHO_PORT and port != CLOSED_PORT {
+        let _ = conn.write_all(reply(NOT_ALLOWED));
+        log.push(f"{user}: port {port} not allowed");
+        return Ok(None);
+    }
+    Ok(Some(Target { user, host, port }))
+}
+
+// Copies `src` to `dst` until `src` ends, then half-closes `dst`.
+fn pump(src: TcpStream, dst: TcpStream) -> i64 {
+    let mut buf = [0u8; 4096];
+    let mut total = 0;
+    loop {
+        let n = match src.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if dst.write_all(buf[..n]).is_err() {
+            break;
+        }
+        total += n;
+    }
+    let _ = dst.shutdown_write();
+    total
+}
+
+// Shuts the write side and drains what the client still sends before
+// closing, so a refused client reads the answer rather than a reset.
+fn linger_close(conn: TcpStream) {
+    let _ = conn.shutdown_write();
+    let _ = conn.set_read_timeout(Some(500));
+    let mut buf = [0u8; 4096];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+}
+
+fn serve(conn: TcpStream, id: i64, logs: Log) {
+    let mut log = Vec.new();
+    match handshake(conn, mut log) {
+        Ok(Some(t)) => match TcpStream.connect(f"{t.host}:{t.port}") {
+            Ok(up) => {
+                let _ = conn.write_all(reply(OK));
+                let up2 = up.try_clone().unwrap();
+                let conn2 = conn.try_clone().unwrap();
+                let group = TaskGroup.new();
+                let down = group.spawn(|| pump(up2, conn2));
+                let sent = pump(conn, up);
+                let got = down.join();
+                log.push(f"{t.user}: {t.host}:{t.port} relayed {sent} up, {got} down");
+            }
+            Err(_) => {
+                let _ = conn.write_all(reply(REFUSED));
+                log.push(f"{t.user}: {t.host}:{t.port} refused");
+            }
+        },
+        Ok(None) => {}
+        Err(_) => log.push("closed mid-handshake"),
+    }
+    linger_close(conn);
+    let mut g = logs.lines.lock();
+    g.value.insert(id, log);
+}
+
+fn run_proxy(listener: TcpListener, logs: Log) {
+    let tasks = TaskGroup.new();
+    for id in 1..=CONNECTIONS {
+        let conn = listener.accept().unwrap();
+        tasks.spawn(|| serve(conn, id, logs));
+    }
+}
+
+fn echo_one(conn: TcpStream) {
+    let reader = BufReader.new(conn.try_clone().unwrap());
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        if conn.write_all(f"echo: {line.to_uppercase()}\n".bytes()).is_err() {
+            break;
+        }
+    }
+}
+
+fn run_echo(listener: TcpListener) {
+    let tasks = TaskGroup.new();
+    for _ in 0..RELAYED {
+        let conn = listener.accept().unwrap();
+        tasks.spawn(|| echo_one(conn));
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+fn hexs(b: Slice[u8]) -> String {
+    let parts: Vec[String] = b.iter().map(|x| f"{x:02x}").collect();
+    parts.join(" ")
+}
+
+fn recv_all(s: TcpStream) -> Vec[u8] {
+    let mut out = Vec.new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match s.read(mut buf) {
+            Ok(0) | Err(_) => return out,
+            Ok(n) => out.extend_from_slice(buf[..n]),
+        }
+    }
+}
+
+fn ipv4_request(cmd: u8, addr: Array[u8, 4], port: u16) -> Vec[u8] {
+    let mut v = [5, cmd, 0, 1];
+    v.extend_from_slice(addr);
+    v.extend_from_slice([(port >> 8) as u8, (port & 0xFF) as u8]);
+    v
+}
+
+fn name_request(name: Str, port: u16) -> Vec[u8] {
+    let mut v = [5, 1, 0, 3, name.len() as u8];
+    v.extend_from_slice(name.bytes());
+    v.extend_from_slice([(port >> 8) as u8, (port & 0xFF) as u8]);
+    v
+}
+
+fn login(user: Str, password: Str) -> Vec[u8] {
+    let mut v = [1, user.len() as u8];
+    v.extend_from_slice(user.bytes());
+    v.push(password.len() as u8);
+    v.extend_from_slice(password.bytes());
+    v
+}
+
+fn client(tag: Str, greeting: Slice[u8], auth: Slice[u8], request: Slice[u8], payload: Slice[u8]) {
+    let s = TcpStream.connect(PROXY).unwrap();
+    let _ = s.set_read_timeout(Some(2000));
+    let mut parts: Vec[String] = Vec.new();
+    let _ = s.write_all(greeting);
+    if greeting[0] != 5 {
+        let rest = recv_all(s);
+        parts.push(f"closed ({rest.len()} bytes)");
+        println(f"{tag}: {parts.join("; ")}");
+        return;
+    }
+    let mut choice = [0u8; 2];
+    read_exact(s, mut choice).unwrap();
+    parts.push(f"method {hexs(choice)}");
+    if choice[1] == 2 {
+        let _ = s.write_all(auth);
+        let mut status = [0u8; 2];
+        read_exact(s, mut status).unwrap();
+        parts.push(f"login {hexs(status)}");
+        if status[1] == 0 {
+            let _ = s.write_all(request);
+            let mut rep = [0u8; 10];
+            read_exact(s, mut rep).unwrap();
+            parts.push(f"reply {hexs(rep)}");
+            if rep[1] == 0 {
+                let _ = s.write_all(payload);
+                let _ = s.shutdown_write();
+                let text = String.from_utf8(recv_all(s)).unwrap_or(String.new());
+                let lines: Vec[Str] = text.strip_suffix("\n").unwrap_or(text).split("\n").collect();
+                parts.push(f"relay {lines.join(" | ")}");
+            }
+        }
+    }
+    let rest = recv_all(s);
+    if not rest.is_empty() {
+        parts.push(f"then {hexs(rest)}");
+    }
+    println(f"{tag}: {parts.join("; ")}");
+}
+
+fn main() {
+    let echo_l = TcpListener.bind(ECHO).unwrap();
+    let proxy_l = TcpListener.bind(PROXY).unwrap();
+    let logs = Log { lines: Mutex.new(SortedMap.new()) };
+    let group = TaskGroup.new();
+    let echo = group.spawn(|| run_echo(echo_l));
+    let proxy = group.spawn(|| run_proxy(proxy_l, logs));
+
+    println("== clients");
+    let pw = [5u8, 2, 0, 2];
+    let good = login("alice", "wonderland");
+    let local: Array[u8, 4] = [127u8, 0, 0, 1];
+    client("1 connect", pw, good, ipv4_request(1, local, ECHO_PORT), b"hello\nworld\n");
+    client("2 no password method", [5, 1, 0], [], [], []);
+    client("3 wrong password", pw, login("alice", "looking-glass"), [], []);
+    client("4 bind", pw, login("bob", "builder"), ipv4_request(2, local, ECHO_PORT), []);
+    let mut v6 = [5u8, 1, 0, 4];
+    v6.extend_from_slice([0u8; 15]);
+    v6.push(1);
+    v6.extend_from_slice([(ECHO_PORT >> 8) as u8, (ECHO_PORT & 0xFF) as u8]);
+    client("5 ipv6", pw, good, v6, []);
+    client("6 by name", pw, login("bob", "builder"), name_request("localhost", ECHO_PORT), b"via name\n");
+    client("7 unknown name", pw, good, name_request("example.invalid", ECHO_PORT), []);
+    client("8 port 22", pw, good, ipv4_request(1, local, 22), []);
+    client("9 refused", pw, good, ipv4_request(1, local, CLOSED_PORT), []);
+    client("10 socks4", [4, 1, 0, 80, 127, 0, 0, 1, 0], [], [], []);
+
+    proxy.join();
+    echo.join();
+    println("== proxy log");
+    let g = logs.lines.lock();
+    for (id, lines) in g.value.iter() {
+        for line in lines.iter() {
+            println(f"{id}: {line}");
+        }
+    }
+}

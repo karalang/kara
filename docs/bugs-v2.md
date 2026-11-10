@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 227 |
+| diagnostics | 229 |
 | false-positive | 179 |
 | perf | 152 |
-| missing-feature | 130 |
+| missing-feature | 133 |
 | soundness | 60 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 359 |
-| mir-llvm | 195 |
+| typecheck | 364 |
+| mir-llvm | 196 |
 | mir | 167 |
 | cli | 94 |
 | ownership | 73 |
 | parser | 59 |
-| interp | 46 |
+| interp | 47 |
 | runtime | 32 |
 | effect | 29 |
 | resolver | 23 |
@@ -122,6 +122,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-39 | 2026-11-10 | mir-llvm | medium | `SortedMap.insert` of a key smaller than every key present is O(n): the map is one sorted array, so 100000 inserts of falling keys take 1.8 s compiled against 0.018 s for rising ones, where collections.md promises a B-tree with O(log n) operations | — |
 | B-2026-11-10-40 | 2026-11-10 | typecheck | low | A narrowing refusal on a value popped from a heap whose pushed literal kept the `i64` default asks for `as i32` at each use, not for the literal: `heap.push((0, 0))` then `while let Some((d, u)) = heap.pop()` makes `d` an `i64`, and `return d` / `dist[v] = d + t` in an `i32` context are refused without naming the `0` | — |
 | B-2026-11-10-41 | 2026-11-10 | resolver | low | Rust's `Reverse` on one part of a heap's tuple item has no Kāra spelling and no fix: `BinaryHeap<(Reverse<i32>, String)>` and `BinaryHeap<(i32, Reverse<String>)>` are refused at every `Reverse`, and the remaining repair is a hand-written `Ord` or a negated number, impossible for a `String` | — |
+| B-2026-11-10-44 | 2026-11-10 | typecheck+interp+mir-llvm | medium | No `read_exact` on any reader (`TcpStream`, `TlsStream`, `File`, `BufReader`, child pipes): Rust's `conn.read_exact(&mut hdr)?`, the usual way to read a binary protocol's fixed-size header (SOCKS5, DNS over TCP, Postgres, length-prefixed frames), fails "no method 'read_exact' on type 'TcpStream'" with no help | — |
+| B-2026-11-10-45 | 2026-11-10 | typecheck | medium | `port.to_be_bytes()` / `u16.from_be_bytes(b)` (and the `le` forms) are refused, "did you mean 'to_ne_bytes'" (a different byte order, reported twice), though both backends already implement `to_le_bytes` and `to_be_bytes` | — |
+| B-2026-11-10-46 | 2026-11-10 | typecheck | low | `Result.unwrap_or_default()` does not exist (`String.from_utf8(v).unwrap_or_default()` fails "no method 'unwrap_or_default' on type 'Result'"), though `Option` has it (library/core-types.md) and Rust has both | — |
+| B-2026-11-10-47 | 2026-11-10 | typecheck | low | Rust's `let local = [127u8, 0, 0, 1];` (an array in Rust, a `Vec` by default in Kāra) passed to an `Array[u8, 4]` parameter gets "expected 'Array[u8, 4]', found 'Vec[u8]'" at each use, with no fix to annotate the `let` | — |
+| B-2026-11-10-48 | 2026-11-10 | typecheck | low | An unknown method in a `let` initializer (`text.trim_end_matches('\n').split("\n").collect()`) is followed by a spurious "a reference to a temporary outlives its statement (core-semantics.md §5.5)" at the same span | — |
 
 ### Relocated
 
