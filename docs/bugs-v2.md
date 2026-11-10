@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 223 |
-| false-positive | 176 |
+| diagnostics | 224 |
+| false-positive | 177 |
 | perf | 147 |
 | missing-feature | 127 |
 | soundness | 58 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 354 |
+| typecheck | 355 |
 | mir-llvm | 189 |
 | mir | 165 |
 | cli | 94 |
@@ -85,7 +85,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | runtime | 32 |
 | effect | 29 |
 | codegen | 22 |
-| resolver | 21 |
+| resolver | 22 |
 | other | 7 |
 | autopar | 4 |
 | lexer | 1 |
@@ -1010,6 +1010,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-3 | typecheck | low | A `flat_map` closure whose body is an `if`/`else` or a `match` giving a list from each branch (`\|x\| if x == 0 { [0, 0] } else { [x] }`, as Rust's `fl… | ba29c00d5c |
 | B-2026-11-10-5 | mir-llvm | medium | `karac run` of apps/cli/mini_tldextract (21.8k lines) takes 92 s on one core, where `karac build` takes 16 s wall (42 s CPU over four units) and the… | 5f76094346 |
 | B-2026-11-10-15 | interp | medium | The interpreter's readiness peek for a waiting socket read swallowed a pending socket error: a reset TCP connection read as an end of stream (`Ok(0)`… | 1ca1f71e30 |
+| B-2026-11-10-20 | typecheck | medium | `s.extend(v.iter())` on a `String`, with `v` a `Vec[char]` (an iterator lending `ref char`), is refused as ambiguous between `Extend[char]` and `Exte… | e609854dde |
+| B-2026-11-10-21 | resolver | low | LeetCode's Rust template `impl Solution { pub fn f(..) }` with no `struct Solution;` (the site supplies it) gets only "undefined type 'Solution'", an… | e609854dde |
 
 </details>
 
