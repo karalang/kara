@@ -1,0 +1,13 @@
+source = "corpus/core/err_cursor_used_while_reborrow_live"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["borrow", "reborrow"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3", "5.6"]
+backends = []
+env = {}
+note = "B-2026-11-09-45: core-semantics.md §5.3/§5.6, until the cursor is reassigned, writing through it while a reborrow of its referent (`n`) is still used is a conflict. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
+classified_with = "75f3e1cac"

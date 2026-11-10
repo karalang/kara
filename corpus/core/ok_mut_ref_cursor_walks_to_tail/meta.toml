@@ -1,0 +1,13 @@
+source = "corpus/core/ok_mut_ref_cursor_walks_to_tail"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["borrow", "reborrow"]
+class = "e"
+expected_from = "spec"
+rules = ["5.3", "5.6"]
+backends = []
+env = {}
+note = "B-2026-11-09-45: core-semantics.md §5.3, a borrow through a reference is not a borrow of the reference, so a `mut ref` cursor rebinds to `mut ref n.next` of its own referent and walks to the tail. Expected output worked by hand. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "75f3e1cac"

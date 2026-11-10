@@ -1,0 +1,21 @@
+struct N {
+    v: i64,
+    next: Option[N],
+}
+
+fn last(list: Option[N]) -> i64 {
+    let mut cur = ref list;
+    let mut seen = 0;
+    while let Some(n) = cur {
+        seen = n.v;
+        cur = ref n.next;
+    }
+    seen
+}
+
+fn main() {
+    let l = Some(N { v: 4, next: Some(N { v: 5, next: Some(N { v: 6, next: None }) }) });
+    println(f"{last(l)}");
+    let e: Option[N] = None;
+    println(f"{last(e)}");
+}

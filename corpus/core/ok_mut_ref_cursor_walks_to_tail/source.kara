@@ -1,0 +1,25 @@
+struct N {
+    v: i64,
+    next: Option[N],
+}
+
+fn append(list: own Option[N], rest: own Option[N]) -> Option[N] {
+    let mut list = list;
+    let mut tail = mut ref list;
+    while let Some(n) = tail {
+        tail = mut ref n.next;
+    }
+    *tail = rest;
+    list
+}
+
+fn main() {
+    let l = Some(N { v: 1, next: Some(N { v: 2, next: None }) });
+    let r = append(l, Some(N { v: 3, next: None }));
+    let mut cur = ref r;
+    while let Some(n) = cur {
+        print(f"{n.v} ");
+        cur = ref n.next;
+    }
+    println("");
+}

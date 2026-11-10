@@ -1,0 +1,14 @@
+struct N {
+    v: i64,
+    next: Option[N],
+}
+
+fn main() {
+    let mut list = Some(N { v: 1, next: None });
+    let mut tail = mut ref list;
+    while let Some(n) = tail {
+        tail = mut ref n.next;
+    }
+    println(f"{list.is_some()}");
+    *tail = Some(N { v: 2, next: None });
+}

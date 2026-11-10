@@ -1,0 +1,13 @@
+source = "corpus/core/err_cursor_walk_reads_root_while_cursor_live"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["borrow", "reborrow"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3", "5.6"]
+backends = []
+env = {}
+note = "B-2026-11-09-45: after the cursor walk, reading `list` while the cursor (which keeps `list`'s borrow through each reborrow) is used afterwards is refused (core-semantics.md §5.3/§5.6). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
+classified_with = "75f3e1cac"

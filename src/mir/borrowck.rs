@@ -311,6 +311,9 @@ pub fn borrow_errors(
         writes_slices: writes_slices(body, tys, &loans),
     };
     let origins = origins_dataflow(&cx, entry);
+    let scopes = scope_dataflow(body, &loans);
+    let by_site: std::collections::HashMap<(usize, usize), usize> =
+        loans.iter().enumerate().map(|(li, l)| (l.at, li)).collect();
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
     let live_out = liveness_with(body, &drop_uses);
     let view = body.arg_count > 0
@@ -323,6 +326,7 @@ pub fn borrow_errors(
         let Some(mut o) = origins[bi].clone() else {
             continue; // unreachable
         };
+        let mut in_scope = scopes[bi].clone().unwrap_or_default();
         // Liveness before each statement, walking back from the block end.
         let n = block.statements.len();
         let mut live_before = vec![Vec::new(); n + 1];
@@ -351,7 +355,7 @@ pub fn borrow_errors(
             for (place, access) in accesses {
                 for li in live_loans.iter() {
                     let loan = &loans[li];
-                    if loan.at == at {
+                    if loan.at == at || !in_scope.0.contains(&(li as u32)) {
                         continue;
                     }
                     // Two branches of one `par` run as tasks of one group,
@@ -419,6 +423,13 @@ pub fn borrow_errors(
             }
             if si < n {
                 cx.transfer(&mut o, &block.statements[si].kind, at);
+                scope_transfer(
+                    &mut in_scope,
+                    &loans,
+                    &by_site,
+                    &block.statements[si].kind,
+                    at,
+                );
             } else if let TerminatorKind::Return = block.terminator.kind {
                 for li in o.get(Local::RETURN_PLACE).clone().iter() {
                     let loan = &loans[li];
@@ -1643,6 +1654,79 @@ fn origins_dataflow(cx: &Cx, entry: Origins) -> Vec<Option<Origins>> {
     states
 }
 
+/// The loans in scope where each block starts: created on some path to it
+/// and not killed since. Assigning a whole reference local `r` kills the
+/// loans of places reached through `*r` (`&mut (*r).f`, a pattern binding
+/// of `*r`): their path names what `r` held before, which no access
+/// through the new `r` reaches, and which the reborrow keeps borrowed
+/// through `r`'s own loans (§5.3, "A borrow through a reference is not a
+/// borrow of the reference"; B-2026-11-09-45). Rust's NLL kills the same
+/// loans. A loan out of scope conflicts with nothing.
+fn scope_dataflow(body: &Body, loans: &[Loan]) -> Vec<Option<LoanSet>> {
+    let mut states: Vec<Option<LoanSet>> = vec![None; body.blocks.len()];
+    if body.blocks.is_empty() {
+        return states;
+    }
+    states[0] = Some(LoanSet::default());
+    let at: std::collections::HashMap<(usize, usize), usize> =
+        loans.iter().enumerate().map(|(li, l)| (l.at, li)).collect();
+    let mut work = vec![0usize];
+    while let Some(bi) = work.pop() {
+        let mut o = states[bi].clone().expect("queued blocks have a state");
+        let block = &body.blocks[bi];
+        for (si, st) in block.statements.iter().enumerate() {
+            scope_transfer(&mut o, loans, &at, &st.kind, (bi, si));
+        }
+        if let TerminatorKind::Call { destination, .. } = &block.terminator.kind {
+            kill_through(&mut o, loans, destination);
+        }
+        for s in block.terminator.kind.successors() {
+            let si = s.index();
+            let changed = match &mut states[si] {
+                None => {
+                    states[si] = Some(o.clone());
+                    true
+                }
+                Some(cur) => cur.union(&o),
+            };
+            if changed && !work.contains(&si) {
+                work.push(si);
+            }
+        }
+    }
+    states
+}
+
+/// Moves `in_scope` past statement `s` at `at` ([`scope_dataflow`]).
+fn scope_transfer(
+    in_scope: &mut LoanSet,
+    loans: &[Loan],
+    by_site: &std::collections::HashMap<(usize, usize), usize>,
+    s: &StatementKind,
+    at: (usize, usize),
+) {
+    if let StatementKind::Assign(dest, rv) = s {
+        if matches!(rv, Rvalue::Ref(..)) {
+            if let Some(&li) = by_site.get(&at) {
+                in_scope.insert(li);
+            }
+        }
+        kill_through(in_scope, loans, dest);
+    }
+}
+
+/// Takes out of `in_scope` the loans reached through `*dest` when `dest`
+/// is a whole local.
+fn kill_through(in_scope: &mut LoanSet, loans: &[Loan], dest: &Place) {
+    if !dest.projection.is_empty() || in_scope.is_empty() {
+        return;
+    }
+    in_scope.0.retain(|&li| {
+        let l = &loans[li as usize];
+        !((l.through_mut_ref || l.through_shared_ref) && l.place.local == dest.local)
+    });
+}
+
 // ---- liveness ----
 
 fn place_uses(p: &Place, out: &mut Vec<Local>) {
@@ -1958,9 +2042,11 @@ fn conflicts(loan: &Loan, place: &Place, access: Access) -> bool {
     // A reborrow through a `mut ref` (`&mut (*x)`) borrows the pointee, so
     // ending the reference's storage, or dropping it, leaves it valid:
     // `Some(x) => x` returning a binding out of a `mut ref` scrutinee.
+    // Nor does assigning the reference a new value: what it held stays
+    // borrowed, and the loan goes out of scope (`scope_dataflow`).
     if loan.through_mut_ref
         && place.projection.is_empty()
-        && matches!(access, Access::StorageDead | Access::Drop)
+        && matches!(access, Access::StorageDead | Access::Drop | Access::Write)
     {
         return false;
     }
@@ -2766,6 +2852,9 @@ fn main() -> () {
         // The build in `built_core_pins_match_their_expected_output` runs
         // them with the library, through the same move and borrow checks.
         let needs_library = [
+            // `Option` is option.kara's.
+            "ok_mut_ref_cursor_walks_to_tail",
+            "ok_ref_cursor_rebinds",
             "select_source_order",
             "isolating_panic_ends_its_task",
             "panic_track_caller_reports_the_call",
