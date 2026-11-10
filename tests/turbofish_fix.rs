@@ -81,27 +81,49 @@ fn turbofish_outside_a_whole_let_initializer_is_only_deleted() {
 }
 
 /// A `collect` whose result is the receiver of a further call has no type to
-/// infer from its use, so deleting the list is not offered: the message
-/// names the typed `let` instead, at the turbofish (B-2026-10-29-8). This
-/// flips the pin that held the delete-only fix for
-/// `.collect::<Vec<char>>().len()`.
+/// infer from its use, so deleting the list is not offered (B-2026-10-29-8).
+/// The collection's own `from_iter` names the type at the call and keeps the
+/// order of evaluation, so the fix writes it (B-2026-11-10-42): this flips
+/// the pin that held advice alone for the two calls below. A `sum`, and a
+/// `collect` whose type has a `_`, still name the typed `let` with no fix.
 #[test]
-fn turbofish_on_a_receiver_collect_names_a_typed_let_with_no_fix() {
+fn turbofish_on_a_receiver_collect_is_rewritten_to_from_iter() {
+    let src = "fn main() {\n\
+               let lab: Vec[i64] = [1, 2];\n\
+               let text = \"(\" + lab.iter().map(|v| v.to_string()).collect::[Vec[String]]().join(\", \") + \")\";\n\
+               let n = \"ab\".chars().collect::<Vec<char>>().len();\n\
+               println(f\"{text} {n}\");\n\
+               }\n";
+    let out = fixed(src);
+    for want in [
+        "let text = \"(\" + Vec[String].from_iter(lab.iter().map(|v| v.to_string())).join(\", \") + \")\";",
+        "let n = Vec[char].from_iter(\"ab\".chars()).len();",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    let run = karac::mir::lower::run_source(&out).unwrap_or_else(|e| panic!("build: {e}\n{out}"));
+    assert_eq!(run.output, "(1, 2) 2\n");
+}
+
+#[test]
+fn turbofish_on_a_receiver_sum_or_open_collect_names_a_typed_let_with_no_fix() {
     for (src, shown) in [
         (
-            "let text = \"(\" + lab.iter().map(|v| v.to_string()).collect::[Vec[String]]().join(\", \") + \")\";",
-            "let v: Vec[String] = it.collect();",
+            "let n = v.iter().sum::<i64>().abs();",
+            "let v: i64 = it.sum();",
         ),
         (
-            "let n = \"ab\".chars().collect::<Vec<char>>().len();",
-            "let v: Vec[char] = it.collect();",
+            "let n = \"ab\".chars().collect::<Vec<_>>().len();",
+            "let v: T = it.collect();",
         ),
     ] {
         let src = format!("fn main() {{\n{src}\n}}\n");
         let result = karac::parse(&src);
         assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
         assert!(
-            result.errors[0].message.contains("is the receiver of a further call")
+            result.errors[0]
+                .message
+                .contains("is the receiver of a further call")
                 && result.errors[0].message.contains(shown),
             "{}",
             result.errors[0].message

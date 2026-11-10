@@ -4144,6 +4144,42 @@ impl super::Parser {
         // error far from here. Name the typed `let` instead, with no fix
         // (B-2026-10-29-8).
         if matches!(method.as_str(), "collect" | "sum" | "product") && self.call_is_a_receiver() {
+            // `it.collect::<Vec<&str>>().join(..)`: the collection's own
+            // `from_iter` names the type at the call and keeps the order of
+            // evaluation, so the fix writes `Vec[Str].from_iter(it).join(..)`
+            // (B-2026-11-10-42).
+            let target = ty.as_deref().and_then(collect_target_type);
+            if let (true, Some(t), Some(dot)) = (method == "collect", target, dot) {
+                if matches!(self.peek_token_ref_at(1), Token::RightParen) {
+                    let close = self.tokens[self.pos + 1].span;
+                    self.error_at(
+                        &format!(
+                            "`::<..>` after a method name is Rust's turbofish; Kāra has no \
+                             call-site type arguments, and this `collect`'s result is the \
+                             receiver of a further call -- the collection is named before \
+                             the call: `{t}.from_iter(it)`"
+                        ),
+                        start,
+                    );
+                    self.fix_diffs.insert(
+                        crate::resolver::SpanKey::from_span(&start),
+                        vec![
+                            crate::resolver::TextEdit {
+                                offset: receiver.offset,
+                                length: 0,
+                                replacement: format!("{t}.from_iter("),
+                            },
+                            crate::resolver::TextEdit {
+                                offset: dot,
+                                length: close.offset + close.length - dot,
+                                replacement: ")".to_string(),
+                            },
+                        ],
+                    );
+                    self.turbofishes.push((start, method, self.pos, None));
+                    return;
+                }
+            }
             let shown = ty.clone().unwrap_or_else(|| "T".to_string());
             self.error_at(
                 &format!(
@@ -4977,4 +5013,27 @@ fn is_select_op(op: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// The collection a mid-chain `collect::<T>()` builds, spelled as an
+/// expression names it (`Vec[Str]` for Rust's `Vec<&str>`, `Set[i64]` for
+/// `HashSet<i64>`), or `None` when it is not a collection whose
+/// `from_iter` the fix can name: `T` is the turbofish's type with its
+/// brackets already square (B-2026-11-10-42).
+fn collect_target_type(ty: &str) -> Option<String> {
+    let t = ty
+        .replace("&str", "Str")
+        .replace("BTreeMap[", "SortedMap[")
+        .replace("BTreeSet[", "SortedSet[")
+        .replace("HashMap[", "Map[")
+        .replace("HashSet[", "Set[");
+    if t.contains(['&', '\'', '<', '>']) {
+        return None;
+    }
+    let outer = t.split('[').next()?.trim();
+    matches!(
+        outer,
+        "Vec" | "String" | "Set" | "Map" | "SortedSet" | "SortedMap" | "VecDeque"
+    )
+    .then_some(t)
 }

@@ -18769,6 +18769,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let t = self.expr_ty(e)?;
                         return self.type_param_call(e, t, m, args, dest);
                     }
+                    // `String.from_iter(it)`: the library's `impl
+                    // FromIterator[char] for String`, a primitive's impl
+                    // the checker records no callee for (B-2026-11-10-43).
+                    if let ("String", "from_iter", [_]) = (tp.as_str(), m.as_str(), args) {
+                        let t = self.expr_ty(e)?;
+                        return self.type_param_call(e, t, m, args, dest);
+                    }
                 }
             }
         }
