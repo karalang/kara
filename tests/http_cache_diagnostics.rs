@@ -5,7 +5,8 @@
 //!   parameter) takes `.clone()` on each borrowed element, as the
 //!   one-element form does, or `own` on the parameter it was bound out of.
 //! - B-2026-11-09-97: an `Option[String]` against the `Some` of a `Str`
-//!   (`opt != Some(TOKEN)`) takes `.to_string()` in the `Some`.
+//!   (`opt != Some(TOKEN)`) takes `.as_deref()` on the owned side
+//!   (core-types.md, review ruling 2026-11-10; B-2026-11-10-ASDEREF).
 //!
 //! And one false refusal: B-2026-11-09-98, a `Str` view of a parameter
 //! passed through a closure combinator (`s.split_once("=").map(|p|
@@ -123,7 +124,7 @@ fn main() {
 }
 
 #[test]
-fn an_option_string_against_some_of_a_str_constant_takes_to_string() {
+fn an_option_string_against_some_of_a_str_constant_takes_as_deref() {
     refused_then_fixed(
         "option_str.kara",
         "const PURGE_TOKEN: Str = \"s3cret\";
@@ -135,11 +136,11 @@ fn main() {
     if g == Some(lm) { println(\"fresh\"); } else { println(\"stale\"); }
 }
 ",
-        "cannot compare 'Option[String]' and 'Option[Str]': an `Option` compares items of \
-         one type",
+        "cannot compare 'Option[String]' and 'Option[Str]': comparison looks through each \
+         operand but not inside type arguments",
         &[
-            "h != Some(PURGE_TOKEN.to_string())",
-            "g == Some(lm.to_string())",
+            "h.as_deref() != Some(PURGE_TOKEN)",
+            "g.as_deref() == Some(lm)",
         ],
         "purge\nstale\n",
     );

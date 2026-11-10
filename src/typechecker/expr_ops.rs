@@ -3529,15 +3529,16 @@ impl<'a> super::TypeChecker<'a> {
         let to_string = if fix.is_some() {
             None
         } else {
-            self.option_str_some_fix(right, right_ty, left_ty)
-                .or_else(|| self.option_str_some_fix(left, left_ty, right_ty))
+            self.option_str_as_deref_fix(right_ty, (left, left_ty))
+                .or_else(|| self.option_str_as_deref_fix(left_ty, (right, right_ty)))
         };
         if let Some(fix) = to_string {
             self.type_error_with_fix_it(
                 format!(
-                    "{message}: an `Option` compares items of one type, so the `Some` of a \
-                     `Str` does not meet an `Option[String]` (a `String` and a `Str` compare \
-                     only bare); `.to_string()` makes its item a `String`"
+                    "{message}: comparison looks through each operand but not inside type \
+                     arguments (design.md), so an `Option[String]` never meets an \
+                     `Option[Str]`; `.as_deref()` views the owned side as an `Option[Str]`, \
+                     without moving or allocating (library/core-types.md)"
                 ),
                 span,
                 TypeErrorKind::InvalidBinaryOp,
@@ -3682,69 +3683,57 @@ impl<'a> super::TypeChecker<'a> {
     /// `e` is a place, for any `T` (B-2026-11-04-61): `Some(ref e)` is an
     /// `Option[ref T]` built in place (design.md § Views), so a non-`Copy`
     /// item needs no copy. Returns the edit and the argument's span.
-    /// `opt != Some(TOKEN)` with `opt: Option[String]` and a `Str` constant
-    /// or literal in the `Some` (B-2026-11-09-97): `String == Str` compares,
-    /// but an `Option` compares items of one type, and the library has no
-    /// view of an `Option[String]` as an `Option[Str]`. The edit gives the
-    /// `Some` an owned item: `Some(TOKEN.to_string())`.
-    fn option_str_some_fix(&self, side: &Expr, side_ty: &Type, other_ty: &Type) -> Option<FixIt> {
-        let ExprKind::Call { callee, args } = &side.kind else {
-            return None;
-        };
-        let is_some = match &callee.kind {
-            ExprKind::Identifier(n) => n == "Some",
-            ExprKind::Path { segments, .. } => {
-                segments.len() == 2 && segments[0] == "Option" && segments[1] == "Some"
+    /// `opt != Some(TOKEN)` with `opt: Option[String]` and a `Str` in the
+    /// `Some` (B-2026-11-09-97): comparison looks through each operand but
+    /// not inside type arguments, so the edit views the owned side,
+    /// `opt.as_deref() != Some(TOKEN)` (core-types.md § `as_deref`, review
+    /// ruling 2026-11-10). `view_ty` is the `Option[Str]` side's type,
+    /// `owned` the `Option[String]` operand.
+    fn option_str_as_deref_fix(
+        &self,
+        view_ty: &Type,
+        (owned, owned_ty): (&Expr, &Type),
+    ) -> Option<FixIt> {
+        let item = |t: &Type| -> Option<Type> {
+            match t {
+                Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                    Some(resolve_type_var_top(&args[0], &self.env.substitutions))
+                }
+                _ => None,
             }
-            _ => false,
         };
-        let [arg] = args.as_slice() else {
-            return None;
-        };
-        if !is_some || arg.label.is_some() || arg.mut_marker {
+        let view_item = item(strip_refs_for_compare(view_ty))?;
+        let is_view = matches!(
+            view_item,
+            Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
+        );
+        // The owned side by value: `.as_deref()` reads a place or a call's
+        // result, and a reference to an `Option` auto-derefs the same way.
+        if !is_view || item(strip_refs_for_compare(owned_ty))? != Type::Str {
             return None;
         }
-        if !matches!(
-            arg.value.kind,
+        let postfix = matches!(
+            owned.kind,
             ExprKind::Identifier(_)
                 | ExprKind::Path { .. }
-                | ExprKind::StringLit(_)
                 | ExprKind::FieldAccess { .. }
                 | ExprKind::Index { .. }
                 | ExprKind::TupleIndex { .. }
                 | ExprKind::Call { .. }
                 | ExprKind::MethodCall { .. }
-        ) {
-            return None;
-        }
-        let item = |t: &Type| -> Option<Type> {
-            match strip_refs_for_compare(t) {
-                Type::Named { name, args } if name == "Option" && args.len() == 1 => {
-                    let mut t = resolve_type_var_top(&args[0], &self.env.substitutions);
-                    while let Type::Ref(inner) = t {
-                        t = *inner;
-                    }
-                    Some(t)
-                }
-                _ => None,
-            }
-        };
-        let is_view = matches!(
-            item(side_ty)?,
-            Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
         );
-        if !is_view || item(other_ty)? != Type::Str {
+        if !postfix {
             return None;
         }
-        let end = arg.value.span.offset + arg.value.span.length;
+        let end = owned.span.offset + owned.span.length;
         Some(FixIt {
             span: Span {
-                line: arg.value.span.line,
-                column: arg.value.span.column + arg.value.span.length,
+                line: owned.span.line,
+                column: owned.span.column + owned.span.length,
                 offset: end,
                 length: 0,
             },
-            replacement: ".to_string()".to_string(),
+            replacement: ".as_deref()".to_string(),
         })
     }
 

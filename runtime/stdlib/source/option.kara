@@ -199,6 +199,18 @@ impl[T: Clone] Option[ref T] {
     }
 }
 
+impl Option[String] {
+    /// A view of the string, without moving or allocating:
+    /// `req.header("X-Token").as_deref() == Some(TOKEN)` with `TOKEN: Str`
+    /// (core-types.md; B-2026-11-09-97).
+    fn as_deref(ref self) -> Option[Str] {
+        match self {
+            Some(s) => Some(s.as_str()),
+            None => None,
+        }
+    }
+}
+
 impl[T] Option[Option[T]] {
     /// The inner option: `Some(Some(x))` is `Some(x)`, anything else `None`.
     fn flatten(own self) -> Option[T] {
