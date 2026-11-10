@@ -26171,7 +26171,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.debug_text(object, dest);
         }
         match (key, method) {
-            (_, "as_slice" | "as_mut_slice")
+            // `as_slice_mut` is the spelling the library documents; it was
+            // lowered as an ordinary call on a shared borrow, which let the
+            // literal-table pass take a `Vec` written through it for a
+            // constant (B-2026-11-10-2).
+            (_, "as_slice" | "as_mut_slice" | "as_slice_mut")
                 if matches!(
                     self.tys().tcx().kind(base),
                     HK::Array { .. }
@@ -26182,7 +26186,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ) =>
             {
                 let t = self.expr_ty(e)?;
-                let s = self.slice_view(object, None, t, method == "as_mut_slice")?;
+                let s = self.slice_view(object, None, t, method != "as_slice")?;
                 self.assign(dest, Rvalue::Use(Operand::Move(Place::local(s))));
                 Ok(())
             }
@@ -28388,7 +28392,13 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<(Lowered, Option<Fr
             break;
         }
     }
-    Ok((first, None))
+    // Nothing runs as tasks, so the program is the in-order one. Not
+    // `first`: the recording build puts a block between every statement of
+    // a block to delimit its candidates, and code generated from it differs
+    // from `KARAC_AUTO_PAR=0`'s (kata 1088's bench, which parallelizes
+    // nothing, ran 15% slower from it, B-2026-11-10-1).
+    drop(first);
+    Ok((finish_build(front.lower(AutoPar::Off)?)?, None))
 }
 
 /// A body the parallel build `second` made suspend, by joining a loop's
@@ -29445,7 +29455,11 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // write, so the verdicts see the statements that read the table
     // depend on the `let` that builds it.
     if std::env::var("KARAC_MIR_LITERAL_TABLES").as_deref() != Ok("0") && !lowered.auto_par_record {
-        crate::mir::literal_tables::promote_literal_tables(&mut lowered.program, &coroutines);
+        crate::mir::literal_tables::promote_literal_tables(
+            &mut lowered.program,
+            &lowered.tys,
+            &coroutines,
+        );
     }
     // `KARAC_MIR_RC_BORROW=0` counts every handle read out of a borrowed
     // parameter (`rc_borrow`).

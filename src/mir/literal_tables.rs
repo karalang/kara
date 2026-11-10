@@ -17,7 +17,9 @@
 //!   else; each `ei` is a constant or `move s` of a local `s` written only
 //!   by `s = String.from(const "...")` and named nowhere else;
 //! - every other mention of `t` is a shared borrow `&t`, a `drop(t)` or a
-//!   storage marker.
+//!   storage marker, and no such borrow is made a `mut Slice` (a range view
+//!   passed `mut v[a..b]` borrows `v` shared and writes through the view,
+//!   B-2026-11-10-2).
 //!
 //! The writes become `goto`s and no-ops, each `&t` the static's borrow, and
 //! each `drop(t)` a `goto`. `KARAC_MIR_LITERAL_TABLES=0` turns it off.
@@ -31,7 +33,11 @@ use std::collections::BTreeSet;
 /// Promote every table of literals in `program`'s bodies to a static.
 /// Coroutine bodies are left alone: the coroutine transform turns their
 /// locals into frame fields.
-pub fn promote_literal_tables(program: &mut Program, coroutines: &BTreeSet<String>) {
+pub fn promote_literal_tables(
+    program: &mut Program,
+    tys: &super::ty::TyInterner,
+    coroutines: &BTreeSet<String>,
+) {
     let names: Vec<String> = program.bodies.keys().cloned().collect();
     let mut inits = Vec::new();
     for name in names {
@@ -39,7 +45,7 @@ pub fn promote_literal_tables(program: &mut Program, coroutines: &BTreeSet<Strin
             continue;
         }
         let body = program.bodies.get_mut(&name).unwrap();
-        for table in tables(body) {
+        for table in tables(body, tys) {
             let idx = program.statics.len() as u32;
             let init = format!("static.table{idx}");
             inits.push(init_body(body, &table, &init));
@@ -122,7 +128,25 @@ fn only_call_into(body: &Body, l: Local) -> Option<(BasicBlock, &str, &[Operand]
     found
 }
 
-fn tables(body: &Body) -> Vec<Table> {
+/// Whether the borrow in `r` is handed to a call whose result is a
+/// `mut Slice`, a view written through.
+fn lent_to_mut_slice(body: &Body, tys: &super::ty::TyInterner, r: Local) -> bool {
+    body.blocks.iter().any(|b| match &b.terminator.kind {
+        TerminatorKind::Call {
+            args, destination, ..
+        } => {
+            args.iter()
+                .any(|a| matches!(a, Operand::Move(p) | Operand::Copy(p) if p.local == r))
+                && matches!(
+                    tys.tcx().kind(body.local(destination.local).ty),
+                    crate::ty::TyKind::Slice { mutable: true, .. }
+                )
+        }
+        _ => false,
+    })
+}
+
+fn tables(body: &Body, tys: &super::ty::TyInterner) -> Vec<Table> {
     let mut out = Vec::new();
     // Only a `from_array` call's destination can be a table; asking every
     // local scans every block per local (B-2026-10-21-33).
@@ -209,7 +233,8 @@ fn tables(body: &Body) -> Vec<Table> {
         if !ok {
             continue;
         }
-        // Every other mention of `t` borrows it shared or drops it.
+        // Every other mention of `t` borrows it shared, for reading, or
+        // drops it.
         let mut others = 0;
         for b in &body.blocks {
             for s in &b.statements {
@@ -218,6 +243,7 @@ fn tables(body: &Body) -> Vec<Table> {
                         && p.projection.is_empty()
                         && d.projection.is_empty()
                         && d.local != t
+                        && !lent_to_mut_slice(body, tys, d.local)
                     {
                         others += 1;
                     }

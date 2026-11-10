@@ -1182,6 +1182,30 @@ impl<'a> super::TypeChecker<'a> {
     ) {
         fn value_end(e: &Expr) -> Option<Span> {
             match &e.kind {
+                // A closure whose body is an `if` with an `else`, or a
+                // `match`, gives its value from every branch: the
+                // `.into_iter()` follows the whole expression, which is not a
+                // statement there (kata 1089: `|x| if x == 0 { [0, 0] } else
+                // { [x] }`, B-2026-11-10-3). A block's last `if` would end at
+                // its `}`, so only the closure's own body takes it.
+                ExprKind::Closure { body, .. }
+                    if matches!(
+                        &body.kind,
+                        ExprKind::If {
+                            else_branch: Some(_),
+                            ..
+                        } | ExprKind::IfLet {
+                            else_branch: Some(_),
+                            ..
+                        } | ExprKind::Match { .. }
+                    ) =>
+                {
+                    Some(Span {
+                        offset: body.span.offset + body.span.length,
+                        length: 0,
+                        ..body.span
+                    })
+                }
                 ExprKind::Closure { body, .. } => value_end(body),
                 ExprKind::Block(b) => value_end(b.final_expr.as_deref()?),
                 ExprKind::Identifier(_)
