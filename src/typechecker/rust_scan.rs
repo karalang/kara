@@ -13,7 +13,8 @@
 //! `scan` takes, and, when every write of the state is a statement of the
 //! body's own block, carries the rewrite: each `*m = e` becomes `let m =
 //! e`, each `*m op= e` `let m = m op e`, every other `*m` reads `m`, and
-//! the tail returns `Some((m, item))`.
+//! the tail returns `Some((m, item))`. A `return None` stays as it is:
+//! it ends the iteration in either shape (kata 1103).
 
 use crate::ast::{
     BinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Pattern, PatternKind, StmtKind, UnaryOp,
@@ -88,6 +89,27 @@ fn binding(name: &str, span: Span) -> Pattern {
     }
 }
 
+/// How far a rewritten closure's later lines are indented: one level out
+/// from its body's first statement when that starts a line of its own,
+/// else not at all.
+fn continuation_indent(closure: &Expr) -> usize {
+    let ExprKind::Closure { body, .. } = &closure.kind else {
+        return 0;
+    };
+    let ExprKind::Block(b) = &body.kind else {
+        return 0;
+    };
+    let first = match (b.stmts.first(), b.final_expr.as_deref()) {
+        (Some(s), _) => s.span,
+        (None, Some(e)) => e.span,
+        (None, None) => return 0,
+    };
+    if first.line == closure.span.line {
+        return 0;
+    }
+    first.column.saturating_sub(1).saturating_sub(4)
+}
+
 fn rust_scan(closure: &Expr) -> Option<RustScan> {
     let ExprKind::Closure { params, body, .. } = &closure.kind else {
         return None;
@@ -114,7 +136,9 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         rewrite: None,
     };
     // A `return` or a write of the state below the block's own statements
-    // has no mechanical rewrite.
+    // has no mechanical rewrite. `return None` is the exception: it ends
+    // the iteration and carries no state, so it reads the same in Kāra's
+    // shape (kata 1103's guard, `if *left <= 0 { return None; }`).
     let mut nested_write = false;
     let top: Vec<Span> = match &body.kind {
         ExprKind::Block(b) => b.stmts.iter().map(|s| s.span).collect(),
@@ -122,7 +146,11 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
     };
     let mut returns = false;
     crate::span_visitor::for_each_expr(body, &mut |x| {
-        returns |= matches!(x.kind, ExprKind::Return(_));
+        if let ExprKind::Return(value) = &x.kind {
+            let none = matches!(value.as_deref(),
+                Some(Expr { kind: ExprKind::Identifier(n), .. }) if n == "None");
+            returns |= !none;
+        }
     });
     if let ExprKind::Block(b) = &body.kind {
         crate::span_visitor::for_each_stmt_in_block(b, &mut |s| {
@@ -251,6 +279,23 @@ impl TypeChecker<'_> {
                 let one: Vec<&str> = text.lines().map(str::trim).collect();
                 if !text.contains('"') && one.iter().map(|l| l.len() + 1).sum::<usize>() <= 100 {
                     text = one.join(" ");
+                } else {
+                    // A longer one keeps its body where it was: the later
+                    // lines move out to one level outside the first
+                    // statement's column (B-2026-11-10-32).
+                    let pad = " ".repeat(continuation_indent(closure));
+                    text = text
+                        .lines()
+                        .enumerate()
+                        .map(|(i, l)| {
+                            if i == 0 || l.is_empty() {
+                                l.to_string()
+                            } else {
+                                format!("{pad}{l}")
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
                 }
                 self.error_fix_diffs.insert(
                     SpanKey::from_span(&closure.span),
