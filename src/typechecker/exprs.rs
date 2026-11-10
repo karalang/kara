@@ -11344,9 +11344,9 @@ impl<'a> super::TypeChecker<'a> {
         &mut self,
         pattern: &Pattern,
         iterable: &Expr,
-    ) -> Option<(String, Option<super::LiteralLet>)> {
+    ) -> Vec<(String, Option<super::LiteralLet>)> {
         let PatternKind::Binding(name) = &pattern.kind else {
-            return None;
+            return self.note_literal_for_tuple(pattern, iterable);
         };
         let entry = Self::collection_root_name(iterable)
             .and_then(|root| self.literal_pushes.get(root))
@@ -11356,7 +11356,58 @@ impl<'a> super::TypeChecker<'a> {
             Some(e) => self.literal_lets.insert(name.clone(), e),
             None => self.literal_lets.remove(name.as_str()),
         };
-        Some((name.clone(), prev))
+        vec![(name.clone(), prev)]
+    }
+
+    /// `for (lo, hi, sign) in [(0, peak, 1), (peak + 1, n - 1, -1)]`: each
+    /// tuple's literal is settled to `i64` when the tuple is built, so `lo`
+    /// is an `i64` beside an `i32` `peak`, and a refusal at a use of `lo`
+    /// offers the suffix on the first literal in its position, which types
+    /// that position of every tuple (kata 1095, B-2026-11-10-30).
+    fn note_literal_for_tuple(
+        &mut self,
+        pattern: &Pattern,
+        iterable: &Expr,
+    ) -> Vec<(String, Option<super::LiteralLet>)> {
+        let PatternKind::Tuple(pats) = &pattern.kind else {
+            return Vec::new();
+        };
+        let rows: Option<Vec<&Vec<Expr>>> = match &iterable.kind {
+            ExprKind::ArrayLiteral(elems) => elems
+                .iter()
+                .map(|e| match &e.kind {
+                    ExprKind::Tuple(xs) if xs.len() == pats.len() => Some(xs),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        };
+        let mut saved = Vec::new();
+        for (i, p) in pats.iter().enumerate() {
+            let PatternKind::Binding(name) = &p.kind else {
+                continue;
+            };
+            let entry = rows.as_ref().and_then(|rows| {
+                let lit = rows.iter().map(|r| &r[i]).find(|e| {
+                    matches!(e.kind, ExprKind::Integer(_, None))
+                        || matches!(&e.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
+                            if matches!(operand.kind, ExprKind::Integer(_, None)))
+                })?;
+                let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?.clone();
+                let at = Span {
+                    offset: lit.span.offset + lit.span.length,
+                    length: 0,
+                    ..lit.span
+                };
+                self.literal_entry(lit, &ty, at, true, false, name)
+            });
+            let prev = match entry {
+                Some(e) => self.literal_lets.insert(name.clone(), e),
+                None => self.literal_lets.remove(name.as_str()),
+            };
+            saved.push((name.clone(), prev));
+        }
+        saved
     }
 
     /// `for v in [10, -10, 5]`, an array literal of unsuffixed integer
@@ -11493,7 +11544,7 @@ impl<'a> super::TypeChecker<'a> {
     /// pushes onto a `Vec[i32]`). The copy's entry is the source's.
     fn literal_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
         let ExprKind::Identifier(source) = &value.kind else {
-            return None;
+            return self.literal_operator_copy(value, ty);
         };
         let Some((id, inference::LiteralKind::Int)) = self.unbound_literal_var(ty) else {
             return None;
@@ -11501,6 +11552,94 @@ impl<'a> super::TypeChecker<'a> {
         let entry = self.literal_lets.get(source.as_str())?;
         let var = entry.var?;
         (self.resolved_now(&Type::TypeVar(var)) == Type::TypeVar(id)).then(|| entry.clone())
+    }
+
+    /// A value computed from one literal binding and narrower integers,
+    /// `let mid = (lo + hi) / 2` with `let mut lo = 0` and `hi: i32`: `lo`
+    /// keeps the default `i64` beside the `i32` (design.md §8 Literals), so
+    /// `mid` is an `i64` only because of it, and a narrowing refused at
+    /// `mid` is fixed on `lo` (kata 1095: LeetCode's binary searches over
+    /// its `i32` interface, B-2026-11-10-30). Every other operand must be a
+    /// literal or an integer narrower than `i64`, so the annotation is the
+    /// whole fix; the entry is the literal binding's.
+    fn literal_operator_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
+        if !matches!(value.kind, ExprKind::Binary { .. } | ExprKind::Unary { .. }) {
+            return None;
+        }
+        let let_var = match self.unbound_literal_var(ty) {
+            Some((id, inference::LiteralKind::Int)) => Some(id),
+            Some(_) => return None,
+            None if resolve_type_var_top(ty, &self.env.substitutions)
+                == Type::Int(IntSize::I64) =>
+            {
+                None
+            }
+            None => return None,
+        };
+        fn leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match &e.kind {
+                ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    operand,
+                } => leaves(operand, out),
+                ExprKind::Binary { op, left, right } => match op {
+                    BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Div
+                    | BinOp::Mod
+                    | BinOp::BitAnd
+                    | BinOp::BitOr
+                    | BinOp::BitXor => {
+                        leaves(left, out);
+                        leaves(right, out);
+                    }
+                    BinOp::Shl | BinOp::Shr => leaves(left, out),
+                    _ => out.push(e),
+                },
+                _ => out.push(e),
+            }
+        }
+        let mut found = Vec::new();
+        leaves(value, &mut found);
+        let mut entry: Option<&super::LiteralLet> = None;
+        for leaf in found {
+            match &leaf.kind {
+                ExprKind::Integer(_, None) => {}
+                ExprKind::Identifier(n)
+                    if self
+                        .literal_lets
+                        .get(n.as_str())
+                        .is_some_and(|e| !e.element) =>
+                {
+                    let e = self.literal_lets.get(n.as_str())?;
+                    if entry.is_some_and(|f| f.root != e.root || f.at != e.at) {
+                        return None;
+                    }
+                    entry = Some(e);
+                }
+                _ => {
+                    let t = self.expr_types.get(&SpanKey::from_span(&leaf.span))?;
+                    match self.resolved_now(t) {
+                        Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32)
+                        | Type::UInt(UIntSize::U8 | UIntSize::U16 | UIntSize::U32) => {}
+                        _ => return None,
+                    }
+                }
+            }
+        }
+        let entry = entry?;
+        let i64_ty = Type::Int(IntSize::I64);
+        let same = match (entry.var, let_var) {
+            (Some(v), Some(id)) => self.resolved_now(&Type::TypeVar(v)) == Type::TypeVar(id),
+            (Some(v), None) => {
+                let r = self.resolved_now(&Type::TypeVar(v));
+                r == i64_ty || self.unbound_literal_var(&r).is_some()
+            }
+            (None, None) => true,
+            (None, Some(_)) => false,
+        };
+        same.then(|| entry.clone())
     }
 
     /// The fix for a fill's binding read whole at `use_span` where a
@@ -14292,7 +14431,7 @@ impl<'a> super::TypeChecker<'a> {
                         None => self.core_for_into_iter.remove(&n),
                     };
                 }
-                if let Some((n, prev)) = saved_literal_let {
+                for (n, prev) in saved_literal_let {
                     match prev {
                         Some(e) => self.literal_lets.insert(n, e),
                         None => self.literal_lets.remove(&n),
