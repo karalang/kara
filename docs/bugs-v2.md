@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 224 |
 | false-positive | 179 |
 | perf | 151 |
-| missing-feature | 128 |
+| missing-feature | 129 |
 | soundness | 60 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 356 |
 | mir-llvm | 194 |
-| mir | 166 |
+| mir | 167 |
 | cli | 94 |
 | ownership | 73 |
 | parser | 59 |
@@ -119,6 +119,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-10-37 | 2026-11-10 | mir-llvm | low | LLVM 22 keeps hsearch's (275) bounds check on `citations[mid]` in a binary search: instcombine rewrites karac's `assume(mid >= lo)` into `assume(hi - lo > -2)`, so IPSCCP no longer folds the check; costs nothing measurable on Emerald Rapids at HEAD, Cascade Lake not re-measured | — |
 | B-2026-11-10-38 | 2026-11-10 | mir-llvm | low | A program that names no library method still typechecks, ownership-checks and lowers 510 library methods (378 at f1416771a4): the word-based library prune keeps what any kept body names, and the library grew 25% since 11-02 | — |
+| B-2026-11-10-26 | 2026-11-10 | mir | low | Rust's `Iterator::eq` is missing: `a.iter().eq(b.iter().rev())` is refused with "`VecIter` does not implement `PartialEq`", and adding `eq` to the library's `Iterator` trait breaks `==` in its other generic bodies on every MIR lane | — |
 
 ### Relocated
 
