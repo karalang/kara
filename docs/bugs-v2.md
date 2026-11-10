@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 222 |
+| diagnostics | 223 |
 | false-positive | 176 |
 | perf | 147 |
 | missing-feature | 127 |
@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 53 |
 | run-vs-build | 31 |
 | other | 27 |
-| codegen-gap | 26 |
+| codegen-gap | 27 |
 | crash | 22 |
 | leak | 4 |
 | use-after-free | 2 |
@@ -77,9 +77,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 354 |
 | mir-llvm | 189 |
-| mir | 164 |
+| mir | 165 |
 | cli | 94 |
-| ownership | 70 |
+| ownership | 71 |
 | parser | 59 |
 | interp | 45 |
 | runtime | 32 |
@@ -111,12 +111,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-28 | 2026-11-09 | typecheck | low | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | — |
 | B-2026-11-09-36 | 2026-11-09 | typecheck | low | `v.iter().fold(None, |acc: Option[i64], x| Some(x))` is refused: the tail `Some(x)` with `x: ref i64` is an `Option[ref i64]`, though `Some(x)` against an `Option[i64]` slot elsewhere reads the scalar as its value (the remainder of the row that stopped it building an address) | — |
 | B-2026-11-09-39 | 2026-11-09 | typecheck+mir+mir-llvm | medium | A closure whose body fixes nothing about its parameter, handed to a bounded generic `F: Fn(i64) -> i64`, passes `karac check` but types its parameter and result as `()`: `ap(1, |x| { println("a"); x })` stops every backend with "invalid MIR: ap[Fn(()) -> ()]: argument 0 of a Fn call has the wrong type" | — |
-| B-2026-11-09-40 | 2026-11-09 | typecheck+mir | medium | A closure whose body ends in `collect()` takes its target from nowhere: `let to32 = |v: ref Vec[i64]| v.iter().map(|x| x as i32).collect();` used as `take(to32(a))` with `take(v: Vec[i32])`, or `let r: Vec[i64] = f(a)`, checks clean and then stops at lowering with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet"; a Kāra closure cannot declare its return type, so nothing can fix `C` | — |
 | B-2026-11-09-45 | 2026-11-09 | typecheck+mir | medium | A `mut ref` cursor cannot walk to a list's tail: Rust's `let mut tail = &mut list; while tail.is_some() { tail = &mut tail.as_mut().unwrap().next; } *tail = rest;` has no Kāra spelling, since `Option` has no `as_mut`, and the natural `while let Some(n) = tail { tail = mut ref n.next; }` (or the same as a `match` in a `loop`) is refused E0516 by both borrow checks: the rebinding reads as a use of `tail` while `tail` still borrows from itself | — |
 | B-2026-11-09-46 | 2026-11-09 | interp | medium | `karac __mir-run` builds an owned (non-`shared`) recursive list in quadratic time: `head = Some(N { v: i, next: head })` n times takes 3.2 s at n = 5000, 13.8 s at 10000 and 56 s at 20000, where the same program with `shared struct N` takes 0.29 s at 20000 and the compiled backend is linear | — |
 | B-2026-11-09-47 | 2026-11-09 | mir-llvm | low | `s.chars().collect()` into a Vec[char] runs 14 instructions a char against Rust's 11: the UTF-8 decode loop tests the reserved length on each push, and the loop copy B-2026-11-09-26 gives counted fills does not apply because the char count is not known at the way in | — |
 | B-2026-11-09-51 | 2026-11-09 | mir-llvm | low | Kata 1087's bench (20 million short words cloned into vectors and freed) runs 26% behind `rustc -O -C overflow-checks=on -C target-cpu=x86-64-v3` with the same allocations: 13.65G instructions against 10.45G, the extra in glibc's malloc slow path (14.8M `_int_malloc` calls against 2.7M) and in `malloc_consolidate` (0.72G, none in Rust) | — |
-| B-2026-11-09-56 | 2026-11-09 | mir | medium | `let v = it.collect();` whose `Vec` target a later use decides passes the type checker and is refused by MIR: `fn count(v: Vec[char]) -> i64` and `let cs = text.chars().collect(); count(cs)` draws "the method call `.collect` with no resolved callee is not lowered yet". 6 of 16 audit programs reached it once `karac fix` removed a `.collect::<Vec<_>>()` turbofish | — |
 | B-2026-11-09-96 | 2026-11-09 | typecheck | low | A tuple of borrowed elements moved where owned ones are wanted (`for (k, v) in headers { out.push((k, v)); }` with a bare, so borrowing, `headers: Vec[(String, String)]` parameter) gets "expected '(String, String)', found '(ref String, ref String)'" with no fix, where the one-element form gets `.clone()` | — |
 | B-2026-11-09-97 | 2026-11-09 | typecheck | low | `req.header("X-Purge-Token") != Some(PURGE_TOKEN)` (an `Option[String]` against an `Option[Str]` of a constant) is refused with "cannot compare 'Option[String]' and 'Option[Str]'" and no remedy; `String == Str` compares, and the library has no `as_deref` | — |
 | B-2026-11-09-98 | 2026-11-09 | mir | medium | A `Str` view of a parameter passed through a closure combinator is refused as returning a borrow of a temporary: `fn unquote(s: Str) -> Str { s.strip_prefix("\"").and_then(|t| t.strip_suffix("\"")).unwrap_or(s) }` is E0509 "the result borrows a temporary value, which this function owns", as are `.map(|t| t.trim())` and `split_once(..).map(|p| p.0)`; the same chain without a closure, or a `match`, passes | — |
@@ -129,6 +127,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-14 | 2026-11-10 | typecheck+mir-llvm | high | `BufReader.new(stream)` over a `TcpStream` (`BufReader.new(conn.try_clone().unwrap())`, then `.lines()`) passes check, though a `BufReader` wraps only a `File` or a child pipe: the interpreter fails "BufReader[TcpStream].new of a closed file" and a compiled build frees the socket as a file (ASan: attempting free on address which was not malloc()-ed, in karac_mir_buf) | — |
 | B-2026-11-10-16 | 2026-11-10 | resolver | low | A call through a path that starts at `std` (`std.mem.take(mut v)`, design.md's own example `std.fs.read_to_string(path)`) fails "undefined name 'std'" with no help, while `mem.take` and `fs.read_to_string` resolve | — |
 | B-2026-11-10-17 | 2026-11-10 | parser | low | `format!` whose argument is an `if`, `match` or block expression (`format!("{}={}", n, if up { "up" } else { "down" })`) gets E0001 with no machine fix, because the f-string rewrite refuses any argument containing `{`, `}` or `:`, though an f-string hole takes those expressions | — |
+| B-2026-11-10-18 | 2026-11-10 | mir | low | An immediately invoked closure whose body ends in `collect()` (`let s: Set[i64] = (|v: ref Vec[i64]| v.iter().map(|x| x + 1).collect())(a);`) reports "an expression whose type does not lower (Type(UnknownParam(\"C\"))) is not lowered yet" under typecheck; the same closure bound by a `let` and called builds the `Set` (remainder of B-2026-11-09-40) | — |
+| B-2026-11-10-19 | 2026-11-10 | ownership | low | `unused_mut` misses a `let mut` binding of a `mut ref` handle that is only passed as `mut child`: the call-site marker counts as a write to the binding, though the write lands in the referent and the binding needs no `mut` | — |
 
 ### Relocated
 
@@ -971,6 +971,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-35 | typecheck+mir+mir-llvm | high | A scalar `ref` handed to a type parameter a closure returns solved it as the `ref`: `m.map_or(x, \|k: i64\| k + 1)` with `x: ref i64` made `U` a `ref i… | 5a9b370550 |
 | B-2026-11-09-37 | typecheck+cli+other | low | No iterator or slice has `chunk_by`, yet `v.chunk_by(\|a, b\| a == b)` on a `Vec` is refused as an iterator adaptor with the machine fix `v.iter().chun… | 7842702532 |
 | B-2026-11-09-38 | parser+typecheck+cli | medium | A tuple value cannot be assigned to existing places: `(lo, hi) = if c { (lo, mid) } else { (mid + 1, hi) };` (Rust's destructuring assignment) is ref… | b415f2e55f |
+| B-2026-11-09-40 | typecheck+mir | medium | A closure whose body ends in `collect()` takes its target from nowhere: `let to32 = \|v: ref Vec[i64]\| v.iter().map(\|x\| x as i32).collect();` used as… | 86c3102afc |
 | B-2026-11-09-41 | typecheck+mir | medium | `PriorityQueue` has no `iter`, `into_iter`, `for`, `Clone` or `Display`, though collections.md says every collection works with `for` and is `Display… | 2f62c55005 |
 | B-2026-11-09-42 | parser+resolver | low | Rust's `heap.into_iter().map(\|Reverse(s)\| s)` gets no fix for the `Reverse` parameter, and `or_insert_with(BinaryHeap::new)` is not seen as a heap's… | 2f62c55005 |
 | B-2026-11-09-43 | typecheck | medium | `let t = text?;` on a bare (borrowed) `text: Option[String]` parameter is refused as "'?' operator requires `Result` or `Option`, found 'ref Option[S… | b490bc1d36 |
@@ -982,6 +983,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-53 | parser+typecheck | medium | Six Rust-isms were diagnosed with no fix `karac fix` applies: `pub(crate)` (and `pub(super)`, `pub(self)`), an unreachable `_ =>` arm, `?` in a unit… | 01d64b96db |
 | B-2026-11-09-54 | typecheck+mir | medium | Eleven library error types did not implement `Display` and `Error` though design.md §10 says the library's error types do (Utf8Error, NulError, NetEr… | 01d64b96db |
 | B-2026-11-09-55 | ownership | low | No lint reports a `let mut` binding that is never written: Rust's habit of `let mut` on a binding that is only read draws nothing (the Rust-ism audit… | df878ae40f |
+| B-2026-11-09-56 | mir | medium | `let v = it.collect();` whose `Vec` target a later use decides passes the type checker and is refused by MIR: `fn count(v: Vec[char]) -> i64` and `le… | 86c3102afc |
 | B-2026-11-09-57 | typecheck | low | Strings have no `match_indices` (nor `char_indices`): kata 2052's text arm wrote Rust's `sentence.match_indices(" ").map(\|(at, _)\| at + 1)` to find e… | 758eca16fe |
 | B-2026-11-09-67 | typecheck | medium | `karac fix`'s `fn main() -> Result[(), AnyError]` for a `?` in `main` left each bare `return;` of `main` as it was, so the fixed program failed to ch… | f42a83543c |
 | B-2026-11-09-68 | parser | medium | A format spec in Python's spelling, `{x:.1f}` or `{name:>8s}`, is refused as "unsupported type `f` (expected one of x, X, o, b, d)" with no fix, thou… | f42a83543c |
