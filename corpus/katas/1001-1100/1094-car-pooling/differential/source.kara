@@ -1,0 +1,309 @@
+// LeetCode #1094: Car Pooling -- a differential over the six arms. Each
+// answer is checked against the statement read literally (the car driven
+// stop by stop) and against five properties that do not compute the
+// answer; see the README.
+
+// ---- car_pooling.kara ----
+
+fn a0_car_pooling(trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    let mut change: Vec[i64] = Vec.filled(1001, 0);
+    for t in trips.iter() {
+        change[t[1]] += t[0];
+        change[t[2]] -= t[0];
+    }
+    let mut aboard = 0;
+    for c in change.iter() {
+        aboard += c;
+        if aboard > capacity {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- car_pooling_events.kara ----
+
+fn a1_car_pooling(trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    let mut events: Vec[(i64, i64)] = trips.iter().flat_map(|t| [(t[1], t[0]), (t[2], -t[0])].into_iter()).collect();
+    events.sort();
+    events.iter().scan(0, |aboard, (_, change)| { let aboard = aboard + change; Some((aboard, aboard)) }).all(|aboard| aboard <= capacity)
+}
+
+// ---- car_pooling_heap.kara ----
+
+fn a2_car_pooling(trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    let mut by_pickup = trips.clone();
+    by_pickup.sort_by_key(|t| t[1]);
+    let mut aboard: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    let mut seated = 0;
+    for t in by_pickup.iter() {
+        while let Some((off, n)) = aboard.peek() {
+            if off > t[1] {
+                break;
+            }
+            seated -= n;
+            aboard.pop();
+        }
+        seated += t[0];
+        if seated > capacity {
+            return false;
+        }
+        aboard.push((t[2], t[0]));
+    }
+    true
+}
+
+// ---- car_pooling_map.kara ----
+
+fn a3_car_pooling(trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    let mut change: SortedMap[i64, i64] = SortedMap.new();
+    for t in trips.iter() {
+        change[t[1]] = change.get(t[1]).unwrap_or(0) + t[0];
+        change[t[2]] = change.get(t[2]).unwrap_or(0) - t[0];
+    }
+    let mut aboard = 0;
+    for (_, c) in change.iter() {
+        aboard += c;
+        if aboard > capacity {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- car_pooling_pickups.kara ----
+
+fn a4_car_pooling(trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    trips.iter().all(|at| {
+        let stop = at[1];
+        let aboard: i64 = trips.iter().filter(|t| t[1] <= stop and stop < t[2]).map(|t| t[0]).sum();
+        aboard <= capacity
+    })
+}
+
+// ---- car_pooling_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_car_pooling(trips: Vec[Vec[i32]], capacity: i32) -> bool {
+        let mut events: Vec[(i32, i32)] = Vec.with_capacity(trips.len() * 2);
+        for t in ref trips {
+            events.push((t[1], t[0]));
+            events.push((t[2], -t[0]));
+        }
+        events.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(b.1)));
+        let mut cur = 0;
+        for (_, d) in events.iter() {
+            cur += d;
+            if cur > capacity {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn a5_car_pooling(trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    let t: Vec[Vec[i32]] = trips.iter().map(|r| r.iter().map(|x| x as i32).collect()).collect();
+    A5Solution.a5_car_pooling(t, capacity as i32)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    match which {
+        0 => a0_car_pooling(trips, capacity),
+        1 => a1_car_pooling(trips, capacity),
+        2 => a2_car_pooling(trips, capacity),
+        3 => a3_car_pooling(trips, capacity),
+        4 => a4_car_pooling(trips, capacity),
+        _ => a5_car_pooling(trips, capacity),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: the car drives from stop 0 to stop 1000;
+// at each stop everyone whose trip ends there gets off, then everyone
+// whose trip starts there gets on. The most passengers it ever carries.
+fn fullest(trips: Vec[Vec[i64]]) -> i64 {
+    let mut aboard: Vec[Vec[i64]] = [];
+    let mut most = 0;
+    for stop in 0..=1000 {
+        aboard.retain(|t| t[2] != stop);
+        for t in trips.iter() {
+            if t[1] == stop {
+                aboard.push(t.clone());
+            }
+        }
+        let seated: i64 = aboard.iter().map(|t| t[0]).sum();
+        most = most.max(seated);
+    }
+    most
+}
+
+struct Problem {
+    trips: Vec[Vec[i64]],
+    capacity: i64,
+    rotate: i64,
+    shift: i64,
+    pick: i64,
+    cut: i64,
+    part: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn show(trips: Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = trips.iter().map(|t| f"[{t[0]},{t[1]},{t[2]}]").collect();
+    parts.join("")
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let trips = p.trips.clone();
+    let c = p.capacity;
+    let most = fullest(trips.clone());
+    let ok = most <= c;
+    let n = trips.len();
+    // P3: the trips in another order, reversed and rotated
+    let mut reordered: Vec[Vec[i64]] = [];
+    for i in 0..n {
+        reordered.push(trips[(p.rotate + n - 1 - i) % n].clone());
+    }
+    // P4: every stop moved `shift` on (as far as stop 1000 allows), then
+    // the route driven backwards, stop s read as 1000 - s
+    let room = 1000 - trips.iter().map(|t| t[2]).max().unwrap();
+    let by = if room > 0 { p.shift % (room + 1) } else { 0 };
+    let moved: Vec[Vec[i64]] = trips.iter().map(|t| [t[0], 1000 - (t[2] + by), 1000 - (t[1] + by)].to_vec()).collect();
+    // P5: one trip cut in two at a stop inside it, and one trip's
+    // passengers split over two trips with the same stops
+    let mut split: Vec[Vec[i64]] = [];
+    for (i, tr) in trips.iter().enumerate() {
+        let (seats, on, off) = (tr[0], tr[1], tr[2]);
+        if i == p.pick % n and off - on > 1 {
+            let at = on + 1 + p.cut % (off - on - 1);
+            split.push([seats, on, at].to_vec());
+            split.push([seats, at, off].to_vec());
+        } else if i == (p.pick + 1) % n and seats > 1 {
+            let k = 1 + p.part % (seats - 1);
+            split.push([k, on, off].to_vec());
+            split.push([seats - k, on, off].to_vec());
+        } else {
+            split.push(tr.clone());
+        }
+    }
+    // P6: every trip's passengers doubled with the capacity; and one trip
+    // more than the car holds
+    let doubled: Vec[Vec[i64]] = trips.iter().map(|t| [2 * t[0], t[1], t[2]].to_vec()).collect();
+    let mut overfull = trips.clone();
+    overfull.push([c + 1, trips[0][1], trips[0][2]].to_vec());
+    for w in 0..6 {
+        let answer = arm(w, trips, c);
+        let what = f"arm {w}, capacity {c}, {show(trips.clone())} -> {answer}";
+        // P1: the statement read literally, at the capacity drawn
+        expect(mut t, 1, answer == ok, f"P1 {what}, fullest {most}");
+        // P2: more seats never hurt: refused one below the fullest the car
+        // gets, accepted at it and at 10^5
+        let below = most > 1 and arm(w, trips, most - 1);
+        expect(mut t, 2, not below and arm(w, trips, most) and arm(w, trips, 100000), f"P2 {what}");
+        let r = arm(w, reordered, c);
+        expect(mut t, 3, r == answer, f"P3 {what}, reordered -> {r}");
+        let m = arm(w, moved, c);
+        expect(mut t, 4, m == answer, f"P4 {what}, moved {by} and driven backwards -> {m}");
+        let s = arm(w, split, c);
+        expect(mut t, 5, s == answer, f"P5 {what}, split {show(split.clone())} -> {s}");
+        let d = arm(w, doubled, 2 * c);
+        let o = arm(w, overfull, c);
+        expect(mut t, 6, d == answer and not o, f"P6 {what}, doubled -> {d}, one trip over -> {o}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + most * 2 + if ok { 1 } else { 0 }) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems in four kinds, 500 each: 1 to 12 trips of 1 to 10
+    // passengers between stops 0 and 20; a chain of 1 to 10 trips, each
+    // getting on where the last got off; 1 to 40 trips of 1 to 100 over
+    // stops 0 to 1000; 1 to 8 trips nested inside one another or sharing
+    // their stops. The capacity is drawn from 1 to the passengers of all
+    // trips together. Every choice is drawn before any arm answers.
+    let mut seed = 10941;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let mut trips: Vec[Vec[i64]] = [];
+        match i % 4 {
+            0 => {
+                for _ in 0..next_random(mut seed) % 12 + 1 {
+                    let n = next_random(mut seed) % 10 + 1;
+                    let a = next_random(mut seed) % 20;
+                    let b = a + 1 + next_random(mut seed) % (20 - a);
+                    trips.push([n, a, b].to_vec());
+                }
+            }
+            1 => {
+                let mut at = next_random(mut seed) % 50;
+                for _ in 0..next_random(mut seed) % 10 + 1 {
+                    let to = at + 1 + next_random(mut seed) % 30;
+                    trips.push([next_random(mut seed) % 10 + 1, at, to].to_vec());
+                    at = to;
+                }
+            }
+            2 => {
+                for _ in 0..next_random(mut seed) % 40 + 1 {
+                    let n = next_random(mut seed) % 100 + 1;
+                    let a = next_random(mut seed) % 1000;
+                    let b = a + 1 + next_random(mut seed) % (1000 - a);
+                    trips.push([n, a, b].to_vec());
+                }
+            }
+            _ => {
+                let mut (a, b) = (next_random(mut seed) % 100, 900 + next_random(mut seed) % 101);
+                for _ in 0..next_random(mut seed) % 8 + 1 {
+                    trips.push([next_random(mut seed) % 10 + 1, a, b].to_vec());
+                    if next_random(mut seed) % 2 == 0 and b - a > 2 {
+                        a += 1 + next_random(mut seed) % ((b - a) / 2);
+                        b -= next_random(mut seed) % ((b - a) / 2);
+                    }
+                }
+            }
+        }
+        let all: i64 = trips.iter().map(|t| t[0]).sum();
+        let capacity = next_random(mut seed) % all + 1;
+        let rotate = next_random(mut seed);
+        let shift = next_random(mut seed);
+        let pick = next_random(mut seed);
+        let cut = next_random(mut seed);
+        let part = next_random(mut seed);
+        problems.push(Problem { trips, capacity, rotate, shift, pick, cut, part });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,56 @@
+// Benchmark: LeetCode #1099 Two Sum Less Than K -- the ★ arm, sorting and
+// two pointers. 64 arrays of 100 values from 1 to 1000, LeetCode's most,
+// are built once; each of 400 rounds changes one value in every array and
+// asks it for the best pair under 8 values of k from 1 to 2000, folding
+// the answers into a checksum. Mirrors two_sum_less_than_k.rs, .c, .py
+// and go-seq/.
+
+fn two_sum_less_than_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut v = nums.clone();
+    v.sort();
+    let mut best = -1;
+    let mut lo = 0;
+    let mut hi = v.len() - 1;
+    while lo < hi {
+        let sum = v[lo] + v[hi];
+        if sum < k {
+            best = best.max(sum);
+            lo += 1;
+        } else {
+            hi -= 1;
+        }
+    }
+    best
+}
+
+// ---- the workload ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1099;
+    let mut arrays: Vec[Vec[i64]] = [];
+    for _ in 0..64 {
+        arrays.push((0..100).map(|_| next_random(mut seed) % 1000 + 1).collect());
+    }
+    let mut found = 0;
+    let mut check = 0;
+    for round in 0..400 {
+        for j in 0..arrays.len() {
+            let at = (round * 7 + j * 13) % 100;
+            arrays[j][at] = (arrays[j][at] + round * 31) % 1000 + 1;
+            for q in 0..8 {
+                let k = (round * 97 + j * 61 + q * 251) % 2000 + 1;
+                let best = two_sum_less_than_k(arrays[j], k);
+                if best >= 0 {
+                    found += 1;
+                }
+                check = (check * 31 + best + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"400 rounds over 64 arrays of 100 values: {found} of 204800 with a pair, checksum {check}");
+}

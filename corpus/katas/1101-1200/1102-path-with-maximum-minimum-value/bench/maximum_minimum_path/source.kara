@@ -1,0 +1,57 @@
+// Benchmark: LeetCode #1102 Path With Maximum Minimum Value -- the ★ arm,
+// a best-first search with a largest-first `PriorityQueue`. 32 grids of
+// 100 by 100, LeetCode's largest, with values below 10^9, are built once;
+// each of 8 rounds lowers one cell in every grid, halving it, and
+// solves it again, folding the answers into a checksum. Mirrors
+// maximum_minimum_path.rs, .c, .py and go-seq/.
+
+fn maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let (m, n) = (grid.len(), grid[0].len());
+    let mut done: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.max_first();
+    queue.push((grid[0][0], 0, 0));
+    while let Some((low, r, c)) = queue.pop() {
+        if done[r][c] {
+            continue;
+        }
+        done[r][c] = true;
+        if r == m - 1 and c == n - 1 {
+            return low;
+        }
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and not done[nr][nc] {
+                queue.push((low.min(grid[nr][nc]), nr, nc));
+            }
+        }
+    }
+    -1
+}
+
+// ---- the workload ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1102;
+    let mut grids: Vec[Vec[Vec[i64]]] = [];
+    for _ in 0..32 {
+        grids.push((0..100).map(|_| (0..100).map(|_| next_random(mut seed) * 30517 % 1000000000).collect()).collect());
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..8 {
+        for j in 0..grids.len() {
+            let at = (round * 7919 + j * 104729) % 10000;
+            let (r, c) = (at / 100, at % 100);
+            grids[j][r][c] = grids[j][r][c] / 2;
+            let best = maximum_minimum_path(grids[j]);
+            total += best;
+            check = (check * 31 + best % 1000003 + 1) % 1000000007;
+        }
+    }
+    println(f"8 rounds over 32 grids of 100 by 100: minimums total {total}, checksum {check}");
+}

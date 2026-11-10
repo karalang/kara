@@ -1,0 +1,99 @@
+// LeetCode #1102: Path With Maximum Minimum Value -- a flood that rises
+// as the water falls: the cells grouped by value in a `SortedMap`, taken
+// from the largest down, and each one opened; an open cell next to the
+// flooded region (or the start itself) floods, and the flood spreads
+// through every open cell it touches. The value at which the end floods
+// is the answer.
+
+fn maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let (m, n) = (grid.len(), grid[0].len());
+    let mut by_value: SortedMap[i64, Vec[(i64, i64)]] = SortedMap.new();
+    for r in 0..m {
+        for c in 0..n {
+            by_value.entry(grid[r][c]).or_insert(Vec.new()).push((r, c));
+        }
+    }
+    let mut open = Vec.filled(m, Vec.filled(n, false));
+    let mut flooded = Vec.filled(m, Vec.filled(n, false));
+    let neighbours = |r: i64, c: i64| {
+        let mut out = Vec.new();
+        if r > 0 { out.push((r - 1, c)); }
+        if r + 1 < m { out.push((r + 1, c)); }
+        if c > 0 { out.push((r, c - 1)); }
+        if c + 1 < n { out.push((r, c + 1)); }
+        out
+    };
+    for (value, cells) in by_value.iter().rev() {
+        for (r, c) in cells.iter() {
+            open[r][c] = true;
+        }
+        for (r, c) in cells.iter() {
+            let touches = (r == 0 and c == 0) or neighbours(r, c).iter().any(|(a, b)| flooded[a][b]);
+            if flooded[r][c] or not touches {
+                continue;
+            }
+            flooded[r][c] = true;
+            let mut stack = [(r, c)];
+            while let Some((a, b)) = stack.pop() {
+                for (x, y) in neighbours(a, b) {
+                    if open[x][y] and not flooded[x][y] {
+                        flooded[x][y] = true;
+                        stack.push((x, y));
+                    }
+                }
+            }
+        }
+        if flooded[m - 1][n - 1] {
+            return *value;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_grid(seed: mut ref i64, m: i64, n: i64, top: i64) -> Vec[Vec[i64]] {
+    (0..m).map(|_| (0..n).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % top).collect()).collect()
+}
+
+fn main() {
+    let cases: Vec[Vec[Vec[i64]]] = [
+        [[5, 4, 5], [1, 2, 6], [7, 4, 6]],
+        [[2, 2, 1, 2, 2, 2], [1, 2, 2, 2, 1, 2]],
+        [[3, 4, 6, 3, 4], [0, 2, 1, 1, 7], [8, 8, 3, 2, 7], [3, 2, 4, 9, 8], [4, 1, 2, 0, 0], [4, 6, 5, 4, 3]],
+        [[7]],
+        [[0, 9], [9, 9]],
+        [[9, 1, 9]],
+        [[9], [3], [9]],
+        [[5, 1, 5], [5, 1, 5], [5, 5, 5]],
+        [[1000000000, 1000000000], [1000000000, 1000000000]],
+        [[8, 0, 9, 9, 9], [8, 0, 9, 0, 9], [8, 8, 8, 0, 4]],
+    ];
+    for grid in cases.iter() {
+        println(f"{maximum_minimum_path(grid.clone())}");
+    }
+    // 2000 random grids of 1 to 12 by 1 to 12, values below 2 to 1000
+    let mut seed = 1102;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let m = next_random(mut seed) % 12 + 1;
+        let n = next_random(mut seed) % 12 + 1;
+        let top = next_random(mut seed) % 999 + 2;
+        let best = maximum_minimum_path(random_grid(mut seed, m, n, top));
+        total += best;
+        check = (check * 31 + best + 1) % 1000000007;
+    }
+    println(f"2000 random grids: minimums total {total}, checksum {check}");
+    // 100 by 100, LeetCode's largest, values below 10^9
+    let grid = random_grid(mut seed, 100, 100, 1000000000);
+    println(f"100 by 100: {maximum_minimum_path(grid)}");
+    // a snake: one winding path of 9s through 0s
+    let snake: Vec[Vec[i64]] = (0..100).map(|r| (0..100).map(|c| if r % 2 == 1 or (r % 4 == 2 and c == 99) or (r % 4 == 0 and c == 0) { 9 - (r * 100 + c) % 7 % 3 } else { 1 }).collect()).collect();
+    println(f"100 by 100 snake: {maximum_minimum_path(snake)}");
+}

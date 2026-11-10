@@ -1,0 +1,102 @@
+// LeetCode #1106: Parsing A Boolean Expression -- a Rust solution as
+// LeetCode's Rust users write it, carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn parse_bool_expr(expression: String) -> bool {
+        let mut stk: Vec[char] = Vec.new();
+        for c in expression.chars() {
+            if c == ',' or c == '(' {
+                continue;
+            }
+            if c != ')' {
+                stk.push(c);
+                continue;
+            }
+            let mut has_t = false;
+            let mut has_f = false;
+            while let Some(top) = stk.last().cloned() {
+                if top != 't' and top != 'f' {
+                    break;
+                }
+                if top == 't' {
+                    has_t = true;
+                } else {
+                    has_f = true;
+                }
+                stk.pop();
+            }
+            let op = stk.pop().unwrap();
+            let v = match op {
+                '!' => has_f,
+                '&' => not has_f,
+                _ => has_t,
+            };
+            stk.push(if v { 't' } else { 'f' });
+        }
+        stk[0] == 't'
+    }
+}
+
+fn parse_bool_expr(expression: String) -> bool {
+    Solution.parse_bool_expr(expression)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random expression of about `budget` operators and values.
+fn random_expr(seed: mut ref i64, budget: i64, depth: i64) -> String {
+    if budget <= 1 or depth == 0 or next_random(mut seed) % 4 == 0 {
+        return if next_random(mut seed) % 2 == 0 { "t" } else { "f" };
+    }
+    let op = next_random(mut seed) % 3;
+    if op == 0 {
+        return f"!({random_expr(mut seed, budget - 1, depth - 1)})";
+    }
+    let k = next_random(mut seed) % 4 + 1;
+    let parts: Vec[String] = (0..k).map(|_| random_expr(mut seed, (budget - 1) / k, depth - 1)).collect();
+    let sign = if op == 1 { "&" } else { "|" };
+    f"{sign}({parts.join(",")})"
+}
+
+fn main() {
+    let cases = ["&(|(f))", "|(f,f,f,t)", "!(&(f,t))", "t", "f", "!(t)", "!(f)", "&(t,t,t)", "&(t,f,t)", "|(f)", "!(!(!(t)))", "|(&(t,f,t),!(t))", "&(|(f,t),!(&(f)),|(f,f,!(f)))"];
+    for e in cases.iter() {
+        println(f"{e} -> {parse_bool_expr(e.to_string())}");
+    }
+    // 2000 random expressions of up to 60 operators and values
+    let mut seed = 1106;
+    let mut trues = 0;
+    let mut length = 0;
+    for _ in 0..2000 {
+        let budget = next_random(mut seed) % 60 + 1;
+        let e = random_expr(mut seed, budget, 8);
+        length += e.len();
+        if parse_bool_expr(e) {
+            trues += 1;
+        }
+    }
+    println(f"2000 random expressions, {length} characters: {trues} true");
+    // LeetCode's longest: about 2 * 10^4 characters, deep and wide
+    let mut deep = "t";
+    for i in 0..6000 {
+        deep = if i % 3 == 0 { f"!({deep})" } else if i % 3 == 1 { f"&({deep},t)" } else { f"|(f,{deep})" };
+        if deep.len() > 19990 {
+            break;
+        }
+    }
+    println(f"deep, {deep.len()} characters: {parse_bool_expr(deep)}");
+    let wide = f"|({vec_of(9998)}t)";
+    println(f"wide, {wide.len()} characters: {parse_bool_expr(wide)}");
+}
+
+fn vec_of(n: i64) -> String {
+    let fs: Vec[String] = (0..n).map(|_| "f,").collect();
+    fs.join("")
+}

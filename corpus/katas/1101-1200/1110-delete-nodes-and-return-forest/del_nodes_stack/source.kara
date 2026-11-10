@@ -1,0 +1,197 @@
+// LeetCode #1110: Delete Nodes And Return Forest -- an explicit stack, as
+// Rust writes a walk with no recursion: each node is pushed with whether
+// its parent is gone, and its links to deleted children are cut when it
+// is popped. Written as Rust and carried to Kāra by `karac fix`. O(n).
+
+
+fn del_nodes(root: Option[TreeNode], to_delete: Vec[i32]) -> Vec[Option[TreeNode]] {
+    let gone: Set[i32] = to_delete.iter().cloned().collect();
+    let mut roots: Vec[Option[TreeNode]] = Vec.new();
+    let mut stack: Vec[(TreeNode, bool)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, true));
+    }
+    while let Some((n, parent_gone)) = stack.pop() {
+        let deleted = gone.contains(n.val);
+        if parent_gone and not deleted {
+            roots.push(Some(n.clone()));
+        }
+        for left in [true, false] {
+            let child = if left { n.left.clone() } else { n.right.clone() };
+            if let Some(c) = child {
+                if gone.contains(c.val) {
+                    if left {
+                        n.left = None;
+                    } else {
+                        n.right = None;
+                    }
+                }
+                stack.push((c, deleted));
+            }
+        }
+    }
+    roots
+}
+
+// ---- test harness ---------------------------------------------------------
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level-order form, "[1,2,null,4]": each node's two children
+// come next, in the order the nodes were met, "null" for none.
+fn parse(text: Str) -> Option[TreeNode] {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return None;
+    }
+    let items: Vec[Option[i32]] = inner.split(",").map(|s| if s == "null" { None } else { Some(i32.parse(s).unwrap()) }).collect();
+    let root = leaf(items[0].unwrap());
+    let mut queue: Vec[TreeNode] = [root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue[head];
+        head += 1;
+        if let Some(v) = items[i] {
+            let child = leaf(v);
+            node.left = Some(child);
+            queue.push(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = leaf(v);
+                node.right = Some(child);
+                queue.push(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+fn written(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = [root];
+    let mut head = 0;
+    while head < queue.len() {
+        match queue[head] {
+            Some(n) => {
+                out.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => out.push("null"),
+        }
+        head += 1;
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        let _ = out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// The forest in one order, whatever order an arm gives it: its trees
+// written out and sorted by their roots.
+fn forest(roots: Vec[Option[TreeNode]]) -> String {
+    let mut trees: Vec[(i32, String)] = roots.iter().map(|r| (r.unwrap().val, written(r))).collect();
+    trees.sort_by(|a, b| a.0.cmp(b.0));
+    let parts: Vec[String] = trees.iter().map(|t| t.1.clone()).collect();
+    f"[{parts.join(",")}]"
+}
+
+// A random tree of `size` nodes, its values the first `size` of a shuffle
+// of 1 to 1000, each node hung at a random free place below the ones
+// before it.
+fn random_tree(seed: mut ref i64, size: i64) -> (String, Vec[i32]) {
+    let mut pool: Vec[i32] = (1..1001).collect();
+    for i in 0..size {
+        let j = i + next_random(mut seed) % (1000 - i);
+        pool.swap(i, j);
+    }
+    let root = leaf(pool[0]);
+    let mut nodes: Vec[TreeNode] = [root];
+    for i in 1..size {
+        loop {
+            let at = nodes[next_random(mut seed) % nodes.len()];
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    let c = leaf(pool[i]);
+                    at.left = Some(c);
+                    nodes.push(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                let c = leaf(pool[i]);
+                at.right = Some(c);
+                nodes.push(c);
+                break;
+            }
+        }
+    }
+    let values: Vec[i32] = pool[0..size].to_vec();
+    (written(Some(root)), values)
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases: Vec[(Str, Vec[i32])] = [
+        ("[1,2,3,4,5,6,7]", [3, 5]),
+        ("[1,2,4,null,3]", [3]),
+        ("[1,2,3]", [1]),
+        ("[1,2,3]", []),
+        ("[1,2,3]", [1, 2, 3]),
+        ("[7]", [7]),
+        ("[7]", [8]),
+        ("[1,null,2,null,3,null,4]", [2, 4]),
+        ("[5,3,8,1,4,7,9]", [3, 8]),
+        ("[10,20,30,40,null,null,50]", [20, 50, 999]),
+    ];
+    for (text, to_delete) in cases.iter() {
+        println(f"{text} without {to_delete} -> {forest(del_nodes(parse(text), to_delete.clone()))}");
+    }
+    // 2000 random trees of 1 to 40 nodes, each value deleted one time in
+    // three
+    let mut seed = 1110;
+    let mut trees = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let size = next_random(mut seed) % 40 + 1;
+        let (text, values) = random_tree(mut seed, size);
+        let to_delete: Vec[i32] = values.iter().filter(|_| next_random(mut seed) % 3 == 0).collect();
+        let roots = del_nodes(parse(text), to_delete);
+        trees += roots.len();
+        check = fold(check, forest(roots));
+    }
+    println(f"2000 random trees: {trees} trees left, checksum {check}");
+    // LeetCode's largest: 1000 nodes, half of them deleted
+    let (text, values) = random_tree(mut seed, 1000);
+    let to_delete: Vec[i32] = values.iter().filter(|v| v % 2 == 0).collect();
+    let roots = del_nodes(parse(text), to_delete);
+    println(f"1000 nodes, the even values deleted: {roots.len()} trees, checksum {fold(0, forest(roots))}");
+    let chain: Vec[String] = (1..1001).map(|v| if v == 1 { "1" } else { f"null,{v}" }).collect();
+    let text = f"[{chain.join(",")}]";
+    let to_delete: Vec[i32] = (1..1001).filter(|v| v % 3 == 0).collect();
+    let roots = del_nodes(parse(text), to_delete);
+    println(f"a chain of 1000, every third deleted: {roots.len()} trees, checksum {fold(0, forest(roots))}");
+}

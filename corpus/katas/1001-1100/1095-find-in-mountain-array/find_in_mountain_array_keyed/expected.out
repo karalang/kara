@@ -1,0 +1,24 @@
+2 true
+-1 true
+1 true
+0 true
+-1 true
+1 true
+2 true
+0 true
+0 true
+-1 true
+1 true
+2000 random mountains: 1518 found, 0 over 100 calls, checksum 652413453
+10^4 values, peak at 9997: 4998 true
+10^4 values, peak at 9997: 9997 true
+10^4 values, peak at 9997: 9998 true
+10^4 values, peak at 9997: 9999 true
+10^4 values, peak at 5000: 2500 true
+10^4 values, peak at 5000: 5000 true
+10^4 values, peak at 5000: 7499 true
+10^4 values, peak at 5000: 9999 true
+10^4 values, peak at 2: 1 true
+10^4 values, peak at 2: 2 true
+10^4 values, peak at 2: 5000 true
+10^4 values, peak at 2: 9999 true

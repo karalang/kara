@@ -1,0 +1,112 @@
+// Benchmark: LeetCode #1096 Brace Expansion II -- the stack arm, two
+// `Vec[String]`s sorted and deduplicated at each `}`. 64 expressions of up
+// to 60 characters, LeetCode's longest, each a concatenation of five
+// unions of 2 or 3 options, some nested, are built once; each of 200
+// rounds changes one letter in every expression and expands it, folding
+// the number of words and the first and last word into a checksum.
+// Mirrors brace_expansion_ii.rs, .c, .py and go-seq/.
+
+fn join(words: Vec[String], part: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = [];
+    for a in words.iter() {
+        for b in part.iter() {
+            out.push(a + b);
+        }
+    }
+    out
+}
+
+fn brace_expansion_ii(expression: String) -> Vec[String] {
+    let mut stack: Vec[(Vec[String], Vec[String])] = [];
+    let mut union: Vec[String] = [];
+    let mut concat: Vec[String] = [""];
+    for c in expression.chars() {
+        match c {
+            '{' => {
+                stack.push((union, concat));
+                union = [];
+                concat = [""];
+            }
+            ',' => {
+                union.extend(concat);
+                concat = [""];
+            }
+            '}' => {
+                union.extend(concat);
+                union.sort();
+                union.dedup();
+                let (outer_union, outer_concat) = stack.pop().unwrap();
+                concat = join(outer_concat, union);
+                union = outer_union;
+            }
+            _ => concat = join(concat, [c.to_string()]),
+        }
+    }
+    union.extend(concat);
+    union.sort();
+    union.dedup();
+    union
+}
+
+// ---- the workload ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(seed: mut ref i64) -> char {
+    (b'a' + (next_random(mut seed) % 6) as u8) as char
+}
+
+// One option: a letter or two, or now and then a union of two letters
+// followed by a letter.
+fn option(seed: mut ref i64) -> String {
+    let mut s = String.new();
+    if next_random(mut seed) % 4 == 0 {
+        s.push('{');
+        s.push(letter(mut seed));
+        s.push(',');
+        s.push(letter(mut seed));
+        s.push('}');
+        s.push(letter(mut seed));
+    } else {
+        for _ in 0..next_random(mut seed) % 2 + 1 {
+            s.push(letter(mut seed));
+        }
+    }
+    s
+}
+
+fn main() {
+    let mut seed = 1096;
+    let mut expressions: Vec[Vec[char]] = [];
+    while expressions.len() < 64 {
+        let mut s = String.new();
+        for _ in 0..5 {
+            let options: Vec[String] = (0..next_random(mut seed) % 2 + 2).map(|_| option(mut seed)).collect();
+            s.push_str(f"{{{options.join(",")}}}");
+        }
+        if s.len() <= 60 {
+            expressions.push(s.chars().collect());
+        }
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..200 {
+        for j in 0..expressions.len() {
+            let e = mut ref expressions[j];
+            let at = (round * 7 + j * 13) % e.len();
+            if e[at].is_ascii_lowercase() {
+                e[at] = (b'a' + ((round + j) % 6) as u8) as char;
+            }
+            let words = brace_expansion_ii(e.iter().collect());
+            total += words.len();
+            check = (check * 31 + words.len()) % 1000000007;
+            for b in words[0].bytes().iter().chain(words[words.len() - 1].bytes().iter()) {
+                check = (check * 131 + b) % 1000000007;
+            }
+        }
+    }
+    println(f"200 rounds over 64 expressions: {total} words, checksum {check}");
+}

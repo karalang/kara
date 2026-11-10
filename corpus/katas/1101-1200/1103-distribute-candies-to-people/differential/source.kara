@@ -1,0 +1,317 @@
+// LeetCode #1103: Distribute Candies to People -- a differential over
+// the six arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- distribute_candies.kara ----
+
+fn a0_distribute_candies(candies: i64, num_people: i64) -> Vec[i64] {
+    let mut people: Vec[i64] = Vec.filled(num_people, 0);
+    let mut left = candies;
+    let mut gift = 1;
+    while left > 0 {
+        let given = gift.min(left);
+        people[(gift - 1) % num_people] += given;
+        left -= given;
+        gift += 1;
+    }
+    people
+}
+
+// ---- distribute_candies_formula.kara ----
+
+fn a1_distribute_candies(candies: i64, num_people: i64) -> Vec[i64] {
+    let n = num_people;
+    let mut k = (((8 * candies + 1) as f64).sqrt() as i64 - 1) / 2;
+    while (k + 1) * (k + 2) / 2 <= candies {
+        k += 1;
+    }
+    while k * (k + 1) / 2 > candies {
+        k -= 1;
+    }
+    let mut people = Vec.filled(n, 0);
+    for i in 0..n {
+        if i + 1 > k {
+            continue;
+        }
+        let t = (k - (i + 1)) / n + 1;
+        people[i] = t * (i + 1) + n * t * (t - 1) / 2;
+    }
+    people[(k % n)] += candies - k * (k + 1) / 2;
+    people
+}
+
+// ---- distribute_candies_rounds.kara ----
+
+fn a2_distribute_candies(candies: i64, num_people: i64) -> Vec[i64] {
+    let n = num_people;
+    let mut people = Vec.filled(n, 0);
+    let mut left = candies;
+    let mut round = 0;
+    while left >= n * n * round + n * (n + 1) / 2 {
+        for (i, c) in people.iter_mut().enumerate() {
+            *c += round * n + i + 1;
+        }
+        left -= n * n * round + n * (n + 1) / 2;
+        round += 1;
+    }
+    let mut gift = round * n + 1;
+    let mut i = 0;
+    while left > 0 {
+        let given = gift.min(left);
+        people[i] += given;
+        left -= given;
+        gift += 1;
+        i += 1;
+    }
+    people
+}
+
+// ---- distribute_candies_search.kara ----
+
+fn a3_distribute_candies(candies: i64, num_people: i64) -> Vec[i64] {
+    let n = num_people;
+    let mut (lo, hi) = (0, 50000);
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if mid * (mid + 1) / 2 <= candies {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let k = lo;
+    let (rounds, extra) = (k / n, k % n);
+    let mut people: Vec[i64] = (0..n)
+        .map(|i| rounds * (i + 1) + n * rounds * (rounds - 1) / 2 + if i < extra { rounds * n + i + 1 } else { 0 })
+        .collect();
+    people[extra as usize] += candies - k * (k + 1) / 2;
+    people
+}
+
+// ---- distribute_candies_scan.kara ----
+
+fn a4_distribute_candies(candies: i64, num_people: i64) -> Vec[i64] {
+    let n = num_people;
+    (1..)
+        .scan(candies, |left, gift: i64| {
+            if left <= 0 {
+                return None;
+            }
+            let given = gift.min(left);
+            let left = left - given;
+            Some((left, given))
+        })
+        .enumerate()
+        .fold(Vec.filled(n, 0), |people, (i, given)| {
+            let mut people = people;
+            people[i % n] += given;
+            people
+        })
+}
+
+// ---- distribute_candies_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_distribute_candies(candies: own i32, num_people: i32) -> Vec[i32] {
+        let mut candies = candies;
+        let n = num_people as i64;
+        let mut ans = Vec.filled(n, 0i32);
+        let mut i = 0;
+        while candies > 0 {
+            let give = candies.min(i as i32 + 1);
+            ans[i % n] += give;
+            candies -= give;
+            i += 1;
+        }
+        ans
+    }
+}
+
+fn a5_distribute_candies(candies: i64, num_people: i64) -> Vec[i64] {
+    A5Solution.a5_distribute_candies(candies as i32, num_people as i32).iter().map(|c| c as i64).collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, candies: i64, n: i64) -> Vec[i64] {
+    match which {
+        0 => a0_distribute_candies(candies, n),
+        1 => a1_distribute_candies(candies, n),
+        2 => a2_distribute_candies(candies, n),
+        3 => a3_distribute_candies(candies, n),
+        4 => a4_distribute_candies(candies, n),
+        _ => a5_distribute_candies(candies, n),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally, one candy at a time: each candy goes to
+// the person whose turn it is, and a turn ends when that person has had
+// one more candy than the turn before, or the candies run out.
+fn literal(candies: i64, n: i64) -> Vec[i64] {
+    let mut people: Vec[i64] = Vec.filled(n, 0);
+    let mut turn = 0;
+    let mut had = 0;
+    for _ in 0..candies {
+        people[turn % n] += 1;
+        had += 1;
+        if had == turn + 1 {
+            turn += 1;
+            had = 0;
+        }
+    }
+    people
+}
+
+// How many gifts the candies make, the last perhaps short.
+fn gifts(candies: i64) -> i64 {
+    let mut (g, given) = (0, 0);
+    while given < candies {
+        g += 1;
+        given += g;
+    }
+    g
+}
+
+// P2's second reading: each person's gifts peeled off in turn, i + 1,
+// i + 1 + n, ..., while the count covers the next; what is left is
+// smaller than that gift, and left at one person at most.
+fn peels(people: Vec[i64], candies: i64, n: i64) -> bool {
+    if people.len() != n or people.iter().any(|c| c < 0) or people.iter().sum() != candies {
+        return false;
+    }
+    let mut short = 0;
+    for i in 0..n {
+        let mut left = people[i];
+        let mut gift = i + 1;
+        while left >= gift {
+            left -= gift;
+            gift += n;
+        }
+        if left > 0 {
+            short += 1;
+        }
+    }
+    short <= 1
+}
+
+fn show(people: Vec[i64]) -> String {
+    let parts: Vec[String] = people.iter().map(|c| c.to_string()).collect();
+    f"[{parts.join(",")}]"
+}
+
+struct Problem {
+    candies: i64,
+    n: i64,
+    times: i64,
+    more: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let (candies, n) = (p.candies, p.n);
+    let want = literal(candies, n);
+    let g = gifts(candies);
+    // P6: the gifts made whole, k of them, and then one more round
+    let k = g;
+    let whole = k * (k + 1) / 2;
+    let round = (k + n) * (k + n + 1) / 2;
+    for w in 0..6 {
+        let answer = arm(w, candies, n);
+        let what = f"arm {w}, {candies} candies to {n} -> {show(answer.clone())}";
+        // P1: one candy at a time
+        expect(mut t, 1, answer == want, f"P1 {what}, one at a time {show(want.clone())}");
+        // P2: n counts, none negative, all the candies, each the person's
+        // own gifts and at most one short
+        expect(mut t, 2, peels(answer.clone(), candies, n), f"P2 {what}");
+        // P3: one candy more is one more for exactly one person
+        let next = arm(w, candies + 1, n);
+        let moved = (0..n).filter(|i| next[i] != answer[i]).count();
+        let ok = next.len() == n and moved == 1 and (0..n).all(|i| next[i] - answer[i] == 0 or next[i] - answer[i] == 1);
+        expect(mut t, 3, ok, f"P3 {what}, one more -> {show(next)}");
+        // P4: `times` as many people, folded back by place, give the answer
+        let wide = arm(w, candies, n * p.times);
+        let mut folded: Vec[i64] = Vec.filled(n, 0);
+        for (i, c) in wide.iter().enumerate() {
+            folded[i % n] += c;
+        }
+        expect(mut t, 4, wide.len() == n * p.times and folded == answer, f"P4 {what}, {n * p.times} people folded -> {show(folded)}");
+        // P5: as many people as gifts, or `more` more, differ only by the
+        // people with none
+        let few = arm(w, candies, g);
+        let many = arm(w, candies, g + p.more);
+        let ok = many.len() == g + p.more and (0..g).all(|i| many[i] == few[i]) and (g..g + p.more).all(|i| many[i] == 0);
+        expect(mut t, 5, ok, f"P5 {what}, {g} people -> {show(few)}, {g + p.more} -> {show(many)}");
+        // P6: from k whole gifts to one more round, gift k + j + 1
+        // goes to person (k + j) mod n, one gift each
+        let before = arm(w, whole, n);
+        let after = arm(w, round, n);
+        let ok = (0..n).all(|j| after[(k + j) % n] - before[(k + j) % n] == k + j + 1);
+        expect(mut t, 6, ok, f"P6 {what}, {whole} -> {show(before)}, {round} -> {show(after)}");
+    }
+    t.cases += 1;
+    for c in want.iter() {
+        t.check = (t.check * 31 + c + 1) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 200 candies among 1 to
+    // 10 people; up to 5000 among 1 to 100; a whole gift's end, one past
+    // it or one short, among 1 to 20; and up to 100 candies among more
+    // people than gifts. Every choice is drawn before any arm answers.
+    let mut seed = 11031;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let (candies, n) = match i % 4 {
+            0 => (next_random(mut seed) % 200 + 1, next_random(mut seed) % 10 + 1),
+            1 => (next_random(mut seed) % 5000 + 1, next_random(mut seed) % 100 + 1),
+            2 => {
+                let k = next_random(mut seed) % 60 + 2;
+                let d = next_random(mut seed) % 3 - 1;
+                (k * (k + 1) / 2 + d, next_random(mut seed) % 20 + 1)
+            }
+            _ => {
+                let candies = next_random(mut seed) % 100 + 1;
+                (candies, gifts(candies) + next_random(mut seed) % 10)
+            }
+        };
+        let times = next_random(mut seed) % 3 + 2;
+        let more = next_random(mut seed) % 5 + 1;
+        problems.push(Problem { candies, n, times, more });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

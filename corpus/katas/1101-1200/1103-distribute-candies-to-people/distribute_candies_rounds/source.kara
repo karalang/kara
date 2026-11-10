@@ -1,0 +1,62 @@
+// LeetCode #1103: Distribute Candies to People -- a whole round at a
+// time: round j gives person i exactly jn + i + 1, n^2 j + n(n + 1)/2
+// in all, so whole rounds are handed out while the candies cover one,
+// and the last round gift by gift.
+
+fn distribute_candies(candies: i64, num_people: i64) -> Vec[i64] {
+    let n = num_people;
+    let mut people = Vec.filled(n, 0);
+    let mut left = candies;
+    let mut round = 0;
+    while left >= n * n * round + n * (n + 1) / 2 {
+        for (i, c) in people.iter_mut().enumerate() {
+            *c += round * n + i + 1;
+        }
+        left -= n * n * round + n * (n + 1) / 2;
+        round += 1;
+    }
+    let mut gift = round * n + 1;
+    let mut i = 0;
+    while left > 0 {
+        let given = gift.min(left);
+        people[i] += given;
+        left -= given;
+        gift += 1;
+        i += 1;
+    }
+    people
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn fold(people: Vec[i64]) -> i64 {
+    people.iter().fold(0, |check, c| (check * 31 + c + 1) % 1000000007)
+}
+
+fn main() {
+    let cases: Vec[(i64, i64)] = [(7, 4), (10, 3), (1, 1), (1, 5), (6, 3), (7, 3), (21, 6), (22, 6), (100, 1), (55, 10), (60, 10)];
+    for (candies, n) in cases.iter() {
+        let people = distribute_candies(candies, n);
+        let shown: Vec[String] = people.iter().map(|c| c.to_string()).collect();
+        println(f"{candies} to {n}: [{shown.join(",")}]");
+    }
+    // 2000 random problems: up to 10^6 candies among 1 to 1000 people
+    let mut seed = 1103;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let candies = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000 + 1;
+        let n = next_random(mut seed) % 1000 + 1;
+        check = (check * 31 + fold(distribute_candies(candies, n))) % 1000000007;
+    }
+    println(f"2000 random problems: checksum {check}");
+    // LeetCode's largest: 10^9 candies among 1, 2, 999 and 1000 people
+    for n in [1, 2, 999, 1000] {
+        let people = distribute_candies(1000000000, n);
+        println(f"10^9 to {n}: first {people[0]}, last {people[n - 1]}, checksum {fold(people)}");
+    }
+}

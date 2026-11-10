@@ -1,0 +1,49 @@
+// LeetCode #1108: Defanging an IP Address -- the library's `replace`:
+// every `.` in the string replaced by `[.]` in one call, as most of
+// LeetCode's solutions in every language do it.
+
+fn defang_ip_addr(address: String) -> String {
+    address.replace(".", "[.]")
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random IPv4 address: four numbers from 0 to 255, each written with no
+// leading zero, most of them short.
+fn random_address(seed: mut ref i64) -> String {
+    let parts: Vec[String] = (0..4).map(|_| {
+        let n = match next_random(mut seed) % 3 {
+            0 => next_random(mut seed) % 10,
+            1 => next_random(mut seed) % 100,
+            _ => next_random(mut seed) % 256,
+        };
+        f"{n}"
+    }).collect();
+    parts.join(".")
+}
+
+fn main() {
+    let cases = ["1.1.1.1", "255.100.50.0", "0.0.0.0", "255.255.255.255", "10.0.0.1", "192.168.1.254", "8.8.4.4", "127.0.0.1", "1.22.133.4"];
+    for a in cases.iter() {
+        println(f"{a} -> {defang_ip_addr(a)}");
+    }
+    // 2000 random addresses: the lengths summed, and a checksum of every
+    // character of every answer
+    let mut seed = 1108;
+    let mut length = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let a = random_address(mut seed);
+        let d = defang_ip_addr(a);
+        length += d.len();
+        for c in d.chars() {
+            check = (check * 31 + c as i64) % 1000000007;
+        }
+    }
+    println(f"2000 random addresses: {length} characters, checksum {check}");
+}

@@ -1,0 +1,592 @@
+// LeetCode #1096: Brace Expansion II -- a differential over the six
+// arms. Each answer is checked against the grammar's rules read literally
+// and against five properties that do not compute the answer; see the
+// README.
+
+// ---- brace_expansion_ii.kara ----
+
+fn a0_union_of(s: Vec[char], at: mut ref i64) -> SortedSet[String] {
+    let mut words = a0_concat_of(s, mut at);
+    while *at < s.len() and s[*at] == ',' {
+        *at += 1;
+        for w in a0_concat_of(s, mut at).into_iter() {
+            words.insert(w);
+        }
+    }
+    words
+}
+
+fn a0_concat_of(s: Vec[char], at: mut ref i64) -> SortedSet[String] {
+    let mut words: SortedSet[String] = SortedSet.new();
+    words.insert(String.new());
+    while *at < s.len() and s[*at] != ',' and s[*at] != '}' {
+        let mut part: SortedSet[String] = SortedSet.new();
+        if s[*at] == '{' {
+            *at += 1;
+            part = a0_union_of(s, mut at);
+            *at += 1;
+        } else {
+            part.insert(s[*at].to_string());
+            *at += 1;
+        }
+        let mut joined: SortedSet[String] = SortedSet.new();
+        for a in words.iter() {
+            for b in part.iter() {
+                joined.insert(a + b);
+            }
+        }
+        words = joined;
+    }
+    words
+}
+
+fn a0_brace_expansion_ii(expression: String) -> Vec[String] {
+    let s: Vec[char] = expression.chars().collect();
+    let mut at = 0;
+    a0_union_of(s, mut at).into_iter().collect()
+}
+
+// ---- brace_expansion_ii_stack.kara ----
+
+fn a1_join(words: Vec[String], part: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = [];
+    for a in words.iter() {
+        for b in part.iter() {
+            out.push(a + b);
+        }
+    }
+    out
+}
+
+fn a1_brace_expansion_ii(expression: String) -> Vec[String] {
+    let mut stack: Vec[(Vec[String], Vec[String])] = [];
+    let mut union: Vec[String] = [];
+    let mut concat: Vec[String] = [""];
+    for c in expression.chars() {
+        match c {
+            '{' => {
+                stack.push((union, concat));
+                union = [];
+                concat = [""];
+            }
+            ',' => {
+                union.extend(concat);
+                concat = [""];
+            }
+            '}' => {
+                union.extend(concat);
+                union.sort();
+                union.dedup();
+                let (outer_union, outer_concat) = stack.pop().unwrap();
+                concat = a1_join(outer_concat, union);
+                union = outer_union;
+            }
+            _ => concat = a1_join(concat, [c.to_string()]),
+        }
+    }
+    union.extend(concat);
+    union.sort();
+    union.dedup();
+    union
+}
+
+// ---- brace_expansion_ii_rewrite.kara ----
+
+fn a2_brace_expansion_ii(expression: own String) -> Vec[String] {
+    let mut words: SortedSet[String] = SortedSet.new();
+    let mut seen: Set[String] = Set.new();
+    let mut queue: VecDeque[String] = VecDeque.new();
+    queue.push_back(expression);
+    while let Some(e) = queue.pop_front() {
+        let Some(close) = e.find("}") else {
+            words.insert(e);
+            continue;
+        };
+        let open = e[..close].rfind("{").unwrap();
+        let (before, after) = (e[..open], e[close + 1..]);
+        for option in e[open + 1..close].split(",") {
+            let next = f"{before}{option}{after}";
+            if seen.insert(next.clone()) {
+                queue.push_back(next);
+            }
+        }
+    }
+    words.into_iter().collect()
+}
+
+// ---- brace_expansion_ii_tree.kara ----
+
+enum A3Expr {
+    Letter(char),
+    Concat(Vec[A3Expr]),
+    Union(Vec[A3Expr]),
+}
+
+fn a3_parse_union(s: Vec[char], at: mut ref i64) -> A3Expr {
+    let mut options = [a3_parse_concat(s, mut at)];
+    while *at < s.len() and s[*at] == ',' {
+        *at += 1;
+        options.push(a3_parse_concat(s, mut at));
+    }
+    A3Expr.Union(options)
+}
+
+fn a3_parse_concat(s: Vec[char], at: mut ref i64) -> A3Expr {
+    let mut parts: Vec[A3Expr] = [];
+    while *at < s.len() and s[*at] != ',' and s[*at] != '}' {
+        if s[*at] == '{' {
+            *at += 1;
+            parts.push(a3_parse_union(s, mut at));
+        } else {
+            parts.push(A3Expr.Letter(s[*at]));
+        }
+        *at += 1;
+    }
+    A3Expr.Concat(parts)
+}
+
+fn a3_words(e: A3Expr) -> SortedSet[String] {
+    match e {
+        A3Expr.Letter(c) => [c.to_string()].into_iter().collect(),
+        A3Expr.Union(options) => options.iter().flat_map(|o| a3_words(o).into_iter()).collect(),
+        A3Expr.Concat(parts) => parts.iter().fold([String.new()].into_iter().collect(), |acc: SortedSet[String], p| {
+            let next = a3_words(p);
+            acc.iter().flat_map(|a| next.iter().map(|b| a + b)).collect()
+        }),
+    }
+}
+
+fn a3_brace_expansion_ii(expression: String) -> Vec[String] {
+    let s: Vec[char] = expression.chars().collect();
+    let mut at = 0;
+    a3_words(a3_parse_union(s, mut at)).into_iter().collect()
+}
+
+// ---- brace_expansion_ii_postfix.kara ----
+
+fn a4_precedence(op: char) -> i64 {
+    if op == '*' { 2 } else { 1 }
+}
+
+fn a4_to_postfix(expression: String) -> Vec[char] {
+    let chars: Vec[char] = expression.chars().collect();
+    let mut out: Vec[char] = [];
+    let mut ops: Vec[char] = [];
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 {
+            let prev = chars[i - 1];
+            if (prev.is_ascii_lowercase() or prev == '}') and (c.is_ascii_lowercase() or c == '{') {
+                while let Some(top) = ops.last() {
+                    if top == '{' or a4_precedence(top) < a4_precedence('*') {
+                        break;
+                    }
+                    out.push(ops.pop().unwrap());
+                }
+                ops.push('*');
+            }
+        }
+        match c {
+            '{' => ops.push(c),
+            '}' => {
+                while let Some(top) = ops.pop() {
+                    if top == '{' {
+                        break;
+                    }
+                    out.push(top);
+                }
+            }
+            ',' => {
+                while let Some(top) = ops.last() {
+                    if top == '{' {
+                        break;
+                    }
+                    out.push(ops.pop().unwrap());
+                }
+                ops.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    while let Some(top) = ops.pop() {
+        out.push(top);
+    }
+    out
+}
+
+fn a4_brace_expansion_ii(expression: String) -> Vec[String] {
+    let mut stack: Vec[Vec[String]] = [];
+    for t in a4_to_postfix(expression) {
+        if t.is_ascii_lowercase() {
+            stack.push([t.to_string()]);
+            continue;
+        }
+        let b = stack.pop().unwrap();
+        let a = stack.pop().unwrap();
+        let mut words: Vec[String] = if t == '*' {
+            a.iter().flat_map(|x| b.iter().map(|y| x + y)).collect()
+        } else {
+            a.into_iter().chain(b.into_iter()).collect()
+        };
+        words.sort();
+        words.dedup();
+        stack.push(words);
+    }
+    stack.pop().unwrap()
+}
+
+// ---- brace_expansion_ii_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_brace_expansion_ii(expression: String) -> Vec[String] {
+        let s = expression.bytes();
+        let mut i = 0;
+        A5Solution.parse_union(s, mut i).into_iter().collect()
+    }
+
+    fn parse_union(s: Slice[u8], i: mut ref i64) -> SortedSet[String] {
+        let mut res = SortedSet.new();
+        loop {
+            let part = A5Solution.parse_concat(s, mut i);
+            res.extend(part);
+            if *i < s.len() and s[*i] == b',' {
+                *i += 1;
+            } else {
+                break;
+            }
+        }
+        res
+    }
+
+    fn parse_concat(s: Slice[u8], i: mut ref i64) -> SortedSet[String] {
+        let mut res: SortedSet[String] = SortedSet.new();
+        res.insert(String.new());
+        while *i < s.len() and s[*i] != b',' and s[*i] != b'}' {
+            let cur = if s[*i] == b'{' {
+                *i += 1;
+                let u = A5Solution.parse_union(s, mut i);
+                *i += 1;
+                u
+            } else {
+                let mut t = SortedSet.new();
+                t.insert((s[*i] as char).to_string());
+                *i += 1;
+                t
+            };
+            let mut next = SortedSet.new();
+            for a in ref res {
+                for b in ref cur {
+                    next.insert(f"{a}{b}");
+                }
+            }
+            res = next;
+        }
+        res
+    }
+}
+
+fn a5_brace_expansion_ii(expression: String) -> Vec[String] {
+    A5Solution.a5_brace_expansion_ii(expression)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, e: String) -> Vec[String] {
+    match which {
+        0 => a0_brace_expansion_ii(e.clone()),
+        1 => a1_brace_expansion_ii(e.clone()),
+        2 => a2_brace_expansion_ii(e.clone()),
+        3 => a3_brace_expansion_ii(e.clone()),
+        4 => a4_brace_expansion_ii(e.clone()),
+        _ => a5_brace_expansion_ii(e.clone()),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The parts of a concatenation, as the grammar has them: each letter
+// alone, and each braced group whole.
+fn factors(e: String) -> Vec[String] {
+    let mut parts: Vec[String] = [];
+    let mut depth = 0;
+    let mut part = String.new();
+    for c in e.chars() {
+        part.push(c);
+        if c == '{' {
+            depth += 1;
+        } else if c == '}' {
+            depth -= 1;
+        }
+        if depth == 0 {
+            parts.push(part.clone());
+            part = String.new();
+        }
+    }
+    parts
+}
+
+// The options of a braced group: its inside cut at the commas outside any
+// inner group.
+fn options(group: String) -> Vec[String] {
+    let inside: Vec[char] = group.chars().collect();
+    let mut out: Vec[String] = [];
+    let mut depth = 0;
+    let mut option = String.new();
+    for c in inside[1..inside.len() - 1].iter() {
+        if c == ',' and depth == 0 {
+            out.push(option.clone());
+            option = String.new();
+            continue;
+        }
+        if c == '{' {
+            depth += 1;
+        } else if c == '}' {
+            depth -= 1;
+        }
+        option.push(c);
+    }
+    out.push(option);
+    out
+}
+
+// The grammar's rules read literally: a letter is itself, a group the
+// union of its options, a concatenation every word of each part in turn.
+fn literal(e: String) -> SortedSet[String] {
+    let mut words: SortedSet[String] = SortedSet.new();
+    words.insert(String.new());
+    for f in factors(e).into_iter() {
+        let mut part: SortedSet[String] = SortedSet.new();
+        if f.starts_with("{") {
+            for o in options(f) {
+                for w in literal(o).into_iter() {
+                    part.insert(w);
+                }
+            }
+        } else {
+            part.insert(f);
+        }
+        let mut joined: SortedSet[String] = SortedSet.new();
+        for a in words.iter() {
+            for b in part.iter() {
+                joined.insert(f"{a}{b}");
+            }
+        }
+        words = joined;
+    }
+    words
+}
+
+// Where in `w` a match of `e` can end, having started at any of `from`.
+fn ends(e: String, w: Vec[char], from: own SortedSet[i64]) -> SortedSet[i64] {
+    let mut at = from;
+    for f in factors(e) {
+        let mut next: SortedSet[i64] = SortedSet.new();
+        if f.starts_with("{") {
+            for o in options(f) {
+                for i in ends(o, w, at.clone()) {
+                    next.insert(i);
+                }
+            }
+        } else {
+            let c = f.chars().next().unwrap();
+            for i in at.iter() {
+                if i < w.len() and w[i] == c {
+                    next.insert(i + 1);
+                }
+            }
+        }
+        at = next;
+    }
+    at
+}
+
+fn matches(e: String, word: String) -> bool {
+    let w: Vec[char] = word.chars().collect();
+    let mut start: SortedSet[i64] = SortedSet.new();
+    start.insert(0);
+    ends(e, w, start).contains(w.len())
+}
+
+// An expression of the grammar: a concatenation of 1 to 3 parts, each a
+// run of letters or, while `depth` allows, a union of 2 to 3 expressions.
+fn expression(seed: mut ref i64, depth: i64, letters: Vec[char], run: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..next_random(mut seed) % 3 + 1 {
+        if depth == 0 or next_random(mut seed) % 2 == 0 {
+            for _ in 0..next_random(mut seed) % run + 1 {
+                s.push(letters[next_random(mut seed) % letters.len()]);
+            }
+        } else {
+            s.push('{');
+            for i in 0..next_random(mut seed) % 2 + 2 {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(expression(mut seed, depth - 1, letters, run));
+            }
+            s.push('}');
+        }
+    }
+    s
+}
+
+// One of four kinds, at most 24 characters, so that two side by side or
+// one inside another stay within LeetCode's 60.
+fn problem(seed: mut ref i64, kind: i64) -> String {
+    loop {
+        let e = match kind {
+            0 => {
+                let k = next_random(mut seed) % 4 + 2;
+                let letters: Vec[char] = "abcdef".chars().take(k).collect();
+                expression(mut seed, next_random(mut seed) % 4, letters, 2)
+            }
+            1 => {
+                // single letters and flat unions of single letters
+                let mut s = String.new();
+                for _ in 0..next_random(mut seed) % 4 + 1 {
+                    if next_random(mut seed) % 3 == 0 {
+                        s.push("xyz".chars().nth(next_random(mut seed) % 3).unwrap());
+                    } else {
+                        s.push('{');
+                        for i in 0..next_random(mut seed) % 3 + 2 {
+                            if i > 0 {
+                                s.push(',');
+                            }
+                            s.push("pqrst".chars().nth(next_random(mut seed) % 5).unwrap());
+                        }
+                        s.push('}');
+                    }
+                }
+                s
+            }
+            2 => expression(mut seed, 3, ['a', 'b'], 1),
+            _ => expression(mut seed, 2, ['a', 'b'], 3),
+        };
+        if e.len() <= 24 {
+            return e;
+        }
+    }
+}
+
+fn rename(word: String) -> String {
+    word.chars().map(|c| ('a' as u32 + 'z' as u32 - c as u32) as u8 as char).collect()
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn sorted_unique(words: Vec[String]) -> Vec[String] {
+    let mut out = words.clone();
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn check_case(t: mut ref Tally, e: String, f: String) {
+    let want: Vec[String] = literal(e.clone()).into_iter().collect();
+    // the words already shown to match, so each is matched once
+    let mut matched: SortedSet[String] = SortedSet.new();
+    for w in 0..6 {
+        let answer = arm(w, e.clone());
+        let what = f"arm {w}, {e} -> [{answer.join(",")}]";
+        // P1: the grammar's rules read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, the rules give [{want.join(",")}]");
+        // P2: sorted, no word twice, and every word matches the expression
+        let sorted = (1..answer.len()).all(|i| answer[i - 1] < answer[i]);
+        let mut all_match = true;
+        for word in answer.iter() {
+            if matched.contains(word) {
+                continue;
+            }
+            if matches(e.clone(), word.clone()) {
+                matched.insert(word.clone());
+            } else {
+                all_match = false;
+            }
+        }
+        expect(mut t, 2, sorted and all_match, f"P2 {what}");
+        // P3: the expression in braces, and as a union with itself
+        let braced = arm(w, f"{{{e}}}");
+        let twice = arm(w, f"{{{e},{e}}}");
+        expect(mut t, 3, braced == answer and twice == answer, f"P3 {what}, braced [{braced.join(",")}], twice [{twice.join(",")}]");
+        // P4: a union with another expression, either way round, is the
+        // two answers together
+        let other = arm(w, f.clone());
+        let mut both = answer.clone();
+        both.extend(other.clone());
+        let together = sorted_unique(both);
+        let ef = arm(w, f"{{{e},{f}}}");
+        let fe = arm(w, f"{{{f},{e}}}");
+        expect(mut t, 4, ef == together and fe == together, f"P4 {what}, with {f} -> [{ef.join(",")}] and [{fe.join(",")}]");
+        // P5: a concatenation with another expression is every word of
+        // one followed by every word of the other
+        let mut pairs: Vec[String] = [];
+        for a in answer.iter() {
+            for b in other.iter() {
+                pairs.push(f"{a}{b}");
+            }
+        }
+        let joined = arm(w, f"{e}{f}");
+        expect(mut t, 5, joined == sorted_unique(pairs), f"P5 {what}, followed by {f} -> [{joined.join(",")}]");
+        // P6: every letter renamed, a to z and z to a, renames the words
+        let renamed = arm(w, e.chars().map(|c| if c.is_ascii_lowercase() { ('a' as u32 + 'z' as u32 - c as u32) as u8 as char } else { c }).collect());
+        let want_renamed = sorted_unique(answer.iter().map(|word| rename(word.clone())).collect());
+        expect(mut t, 6, renamed == want_renamed, f"P6 {what}, renamed -> [{renamed.join(",")}]");
+    }
+    t.cases += 1;
+    let mut h = want.len();
+    for word in want.iter() {
+        for b in word.bytes() {
+            h = (h * 131 + b) % 1000000007;
+        }
+        h = (h * 131 + 1) % 1000000007;
+    }
+    t.check = (t.check * 31 + h) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems in four kinds, 500 each, every one at most 24
+    // characters: expressions of the grammar over 2 to 5 letters, nested
+    // up to 3 deep; single letters and flat unions of single letters;
+    // nested 3 deep over two letters, one at a time, so most words come
+    // more than one way; and runs of up to three of two letters, where
+    // different splits meet in the same word. Each is paired with
+    // another of the same kind. Every choice is drawn before any arm
+    // answers.
+    let mut seed = 10961;
+    let mut problems: Vec[(String, String)] = [];
+    for i in 0..2000 {
+        let e = problem(mut seed, i % 4);
+        let f = problem(mut seed, i % 4);
+        problems.push((e, f));
+    }
+    for (e, f) in problems.iter() {
+        check_case(mut t, e.clone(), f.clone());
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

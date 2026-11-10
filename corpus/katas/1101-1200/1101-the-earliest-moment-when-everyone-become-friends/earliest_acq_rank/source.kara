@@ -1,0 +1,120 @@
+// LeetCode #1101: The Earliest Moment When Everyone Become Friends -- a
+// disjoint-set `struct` with methods: `find` recursive, every node on the
+// path pointed at the root, and `union` by rank, returning whether two
+// groups joined. The logs sorted with `sort_by` and `cmp`.
+
+struct DisjointSet {
+    parent: Vec[i64],
+    rank: Vec[i64],
+    groups: i64,
+}
+
+impl DisjointSet {
+    fn new(n: i64) -> DisjointSet {
+        DisjointSet { parent: (0..n).collect(), rank: Vec.filled(n, 0), groups: n }
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        if self.parent[x] != x {
+            let root = self.find(self.parent[x]);
+            self.parent[x] = root;
+        }
+        self.parent[x]
+    }
+
+    fn union(mut ref self, a: i64, b: i64) -> bool {
+        let (a, b) = (self.find(a), self.find(b));
+        if a == b {
+            return false;
+        }
+        if self.rank[a] < self.rank[b] {
+            self.parent[a] = b;
+        } else if self.rank[a] > self.rank[b] {
+            self.parent[b] = a;
+        } else {
+            self.parent[b] = a;
+            self.rank[a] += 1;
+        }
+        self.groups -= 1;
+        true
+    }
+}
+
+fn earliest_acq(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut logs = logs.clone();
+    logs.sort_by(|a, b| a[0].cmp(b[0]));
+    let mut set = DisjointSet.new(n);
+    for log in ref logs {
+        if set.union(log[1], log[2]) and set.groups == 1 {
+            return log[0];
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// m logs over n people, every pair at most once, the timestamps distinct
+// and in no order.
+fn random_logs(seed: mut ref i64, n: i64, m: i64) -> Vec[Vec[i64]] {
+    let mut used: SortedSet[i64] = SortedSet.new();
+    let mut times: SortedSet[i64] = SortedSet.new();
+    let mut logs: Vec[Vec[i64]] = [];
+    while logs.len() < m and used.len() < n * (n - 1) / 2 {
+        let x = next_random(mut seed) % n;
+        let y = next_random(mut seed) % n;
+        if x == y or used.contains(x.min(y) * n + x.max(y)) {
+            continue;
+        }
+        let mut t = next_random(mut seed) % 1000000;
+        while times.contains(t) {
+            t = next_random(mut seed) % 1000000;
+        }
+        used.insert(x.min(y) * n + x.max(y));
+        times.insert(t);
+        logs.push([t, x, y]);
+    }
+    logs
+}
+
+fn main() {
+    let cases: Vec[(Vec[Vec[i64]], i64)] = [
+        ([[20190101, 0, 1], [20190104, 3, 4], [20190107, 2, 3], [20190211, 1, 5], [20190224, 2, 4], [20190301, 0, 3], [20190312, 1, 2], [20190322, 4, 5]], 6),
+        ([[0, 2, 0], [1, 0, 1], [3, 0, 3], [4, 1, 2], [7, 3, 1]], 4),
+        ([[5, 0, 1]], 2),
+        ([[5, 0, 1]], 3),
+        ([[9, 1, 2], [3, 0, 1]], 3),
+        ([[1, 0, 1], [2, 2, 3]], 4),
+        ([[1, 0, 1], [2, 0, 2], [3, 1, 2]], 3),
+        ([[1000000000, 0, 1], [0, 1, 2]], 3),
+        ([[4, 0, 3], [3, 1, 3], [2, 2, 3], [1, 0, 1]], 4),
+    ];
+    for (logs, n) in cases.iter() {
+        println(f"{earliest_acq(logs.clone(), n)}");
+    }
+    // 2000 random groups of 2 to 30 people with up to 60 logs
+    let mut seed = 1101;
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 29 + 2;
+        let m = next_random(mut seed) % 60 + 1;
+        let logs = random_logs(mut seed, n, m);
+        let t = earliest_acq(logs, n);
+        if t >= 0 {
+            found += 1;
+        }
+        check = (check * 31 + t + 2) % 1000000007;
+    }
+    println(f"2000 random groups: {found} come to one, checksum {check}");
+    // 100 people, LeetCode's most, every pair of them in a random order
+    let logs = random_logs(mut seed, 100, 4950);
+    println(f"100 people, {logs.len()} logs: {earliest_acq(logs, 100)}");
+    let chain: Vec[Vec[i64]] = (0..99).rev().map(|i| [i, i, i + 1].to_vec()).collect();
+    println(f"100 people in a chain: {earliest_acq(chain, 100)}");
+}

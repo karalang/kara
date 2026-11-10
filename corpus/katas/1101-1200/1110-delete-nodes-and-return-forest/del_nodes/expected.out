@@ -1,0 +1,13 @@
+[1,2,3,4,5,6,7] without [3, 5] -> [[1,2,null,4],[6],[7]]
+[1,2,4,null,3] without [3] -> [[1,2,4]]
+[1,2,3] without [1] -> [[2],[3]]
+[1,2,3] without [] -> [[1,2,3]]
+[1,2,3] without [1, 2, 3] -> []
+[7] without [7] -> []
+[7] without [8] -> [[7]]
+[1,null,2,null,3,null,4] without [2, 4] -> [[1],[3]]
+[5,3,8,1,4,7,9] without [3, 8] -> [[1],[4],[5],[7],[9]]
+[10,20,30,40,null,null,50] without [20, 50, 999] -> [[10,null,30],[40]]
+2000 random trees: 10187 trees left, checksum 201786803
+1000 nodes, the even values deleted: 242 trees, checksum 525146324
+a chain of 1000, every third deleted: 334 trees, checksum 811768685

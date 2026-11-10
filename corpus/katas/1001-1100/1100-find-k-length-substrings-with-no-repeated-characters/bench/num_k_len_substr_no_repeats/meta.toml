@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1100-find-k-length-substrings-with-no-repeated-characters/bench/num_k_len_substr_no_repeats.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1100 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "aec153b38"
+extracted_src = "e6949a51"

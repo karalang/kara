@@ -1,0 +1,80 @@
+// LeetCode #1109: Corporate Flight Bookings -- iterator chains: the
+// changes folded into a difference array, then the running total taken
+// with `scan` over it, as Rust writes a prefix sum.
+
+fn corp_flight_bookings(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    let change = bookings.iter().fold(Vec.filled(n + 1, 0), |change, b| {
+        let mut change = change;
+        change[b[0] - 1] += b[2];
+        change[b[1]] -= b[2];
+        change
+    });
+    change[..n]
+        .iter()
+        .scan(0, |running, d| { let running = running + d; Some((running, running)) })
+        .collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// m random bookings over flights 1 to n, each of 1 to `most` seats.
+fn random_bookings(seed: mut ref i64, n: i64, m: i64, most: i64) -> Vec[Vec[i64]] {
+    let mut bookings: Vec[Vec[i64]] = [];
+    for _ in 0..m {
+        let a = next_random(mut seed) % n + 1;
+        let b = next_random(mut seed) % n + 1;
+        let seats = next_random(mut seed) % most + 1;
+        bookings.push([a.min(b), a.max(b), seats]);
+    }
+    bookings
+}
+
+fn fold(check: i64, answer: Vec[i64]) -> i64 {
+    let mut c = check;
+    for x in answer.iter() {
+        c = (c * 31 + x) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    let cases: Vec[(Vec[Vec[i64]], i64)] = [
+        ([[1, 2, 10], [2, 3, 20], [2, 5, 25]], 5),
+        ([[1, 2, 10], [2, 2, 15]], 2),
+        ([[1, 1, 7]], 1),
+        ([[1, 4, 3]], 4),
+        ([[4, 4, 9], [1, 1, 2]], 4),
+        ([[1, 3, 1], [1, 3, 1], [1, 3, 1]], 3),
+        ([[2, 3, 10000], [1, 4, 10000]], 5),
+        ([[3, 5, 6], [1, 2, 4], [2, 4, 8], [5, 5, 1]], 6),
+    ];
+    for (bookings, n) in cases.iter() {
+        println(f"{corp_flight_bookings(bookings.clone(), n)}");
+    }
+    // 2000 random problems of up to 30 flights and 30 bookings
+    let mut seed = 1109;
+    let mut seats = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 30 + 1;
+        let m = next_random(mut seed) % 30 + 1;
+        let bookings = random_bookings(mut seed, n, m, 100);
+        let answer = corp_flight_bookings(bookings, n);
+        seats += answer.iter().sum();
+        check = fold(check, answer);
+    }
+    println(f"2000 random problems: {seats} seats, checksum {check}");
+    // LeetCode's largest: 2 * 10^4 flights and 2 * 10^4 bookings
+    let bookings = random_bookings(mut seed, 20000, 20000, 10000);
+    let answer = corp_flight_bookings(bookings, 20000);
+    let most = answer.iter().max().unwrap();
+    println(f"20000 flights, 20000 bookings: busiest {most}, checksum {fold(0, answer)}");
+    let whole: Vec[Vec[i64]] = (0..20000).map(|i| [1, 20000, i % 10000 + 1].to_vec()).collect();
+    let answer = corp_flight_bookings(whole, 20000);
+    println(f"20000 bookings of every flight: {answer[0]} {answer[19999]}");
+}

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1106-parsing-a-boolean-expression/bench/parse_bool_expr.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1106 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "aec153b38"
+extracted_src = "57af4cc1"

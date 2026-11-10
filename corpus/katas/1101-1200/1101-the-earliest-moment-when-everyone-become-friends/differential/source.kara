@@ -1,0 +1,495 @@
+// LeetCode #1101: The Earliest Moment When Everyone Become Friends -- a
+// differential over the six arms. Each answer is checked against the
+// statement read literally and against five properties that do not
+// compute the answer; see the README.
+
+// ---- earliest_acq.kara ----
+
+fn a0_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn a0_earliest_acq(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut logs = logs.clone();
+    logs.sort_by_key(|log| log[0]);
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut size: Vec[i64] = Vec.filled(n, 1);
+    let mut groups = n;
+    for log in logs.iter() {
+        let a = a0_find(mut parent, log[1]);
+        let b = a0_find(mut parent, log[2]);
+        if a == b {
+            continue;
+        }
+        let (big, small) = if size[a] >= size[b] { (a, b) } else { (b, a) };
+        parent[small] = big;
+        size[big] += size[small];
+        groups -= 1;
+        if groups == 1 {
+            return log[0];
+        }
+    }
+    -1
+}
+
+// ---- earliest_acq_rank.kara ----
+
+struct A1DisjointSet {
+    parent: Vec[i64],
+    rank: Vec[i64],
+    groups: i64,
+}
+
+impl A1DisjointSet {
+    fn new(n: i64) -> A1DisjointSet {
+        A1DisjointSet { parent: (0..n).collect(), rank: Vec.filled(n, 0), groups: n }
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        if self.parent[x] != x {
+            let root = self.find(self.parent[x]);
+            self.parent[x] = root;
+        }
+        self.parent[x]
+    }
+
+    fn union(mut ref self, a: i64, b: i64) -> bool {
+        let (a, b) = (self.find(a), self.find(b));
+        if a == b {
+            return false;
+        }
+        if self.rank[a] < self.rank[b] {
+            self.parent[a] = b;
+        } else if self.rank[a] > self.rank[b] {
+            self.parent[b] = a;
+        } else {
+            self.parent[b] = a;
+            self.rank[a] += 1;
+        }
+        self.groups -= 1;
+        true
+    }
+}
+
+fn a1_earliest_acq(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut logs = logs.clone();
+    logs.sort_by(|a, b| a[0].cmp(b[0]));
+    let mut set = A1DisjointSet.new(n);
+    for log in ref logs {
+        if set.union(log[1], log[2]) and set.groups == 1 {
+            return log[0];
+        }
+    }
+    -1
+}
+
+// ---- earliest_acq_search.kara ----
+
+fn a2_connected(logs: Vec[Vec[i64]], count: i64, n: i64) -> bool {
+    let mut friends: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for log in logs.iter().take(count) {
+        friends[log[1]].push(log[2]);
+        friends[log[2]].push(log[1]);
+    }
+    let mut seen = Vec.filled(n, false);
+    seen[0] = true;
+    let mut queue = VecDeque.new();
+    queue.push_back(0);
+    let mut reached = 1;
+    while let Some(p) = queue.pop_front() {
+        for q in friends[p].iter() {
+            if not seen[*q] {
+                seen[*q] = true;
+                reached += 1;
+                queue.push_back(*q);
+            }
+        }
+    }
+    reached == n
+}
+
+fn a2_earliest_acq(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut logs = logs.clone();
+    logs.sort_by_key(|log| log[0]);
+    let m = logs.len();
+    if not a2_connected(logs.clone(), m, n) {
+        return -1;
+    }
+    let mut (lo, hi) = (1, m);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if a2_connected(logs.clone(), mid, n) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    logs[(lo - 1)][0]
+}
+
+// ---- earliest_acq_relabel.kara ----
+
+fn a3_earliest_acq(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut logs = logs.clone();
+    logs.sort_by_key(|log| log[0]);
+    let mut label: Vec[i64] = (0..n).collect();
+    let mut members: Vec[Vec[i64]] = (0..n).map(|p| [p]).collect();
+    for log in logs.iter() {
+        let mut (a, b) = (label[log[1]], label[log[2]]);
+        if a == b {
+            continue;
+        }
+        if members[a].len() < members[b].len() {
+            swap(mut a, mut b);
+        }
+        let moved = take(mut members[b]);
+        for p in moved.iter() {
+            label[*p] = a;
+        }
+        members[a].extend(moved);
+        if members[a].len() == n {
+            return log[0];
+        }
+    }
+    -1
+}
+
+// ---- earliest_acq_heap.kara ----
+
+fn a4_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    if parent[x] == x {
+        return x;
+    }
+    let root = a4_find(mut parent, parent[x]);
+    parent[x] = root;
+    root
+}
+
+fn a4_earliest_acq(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut queue: PriorityQueue[(i64, i64, i64)] = logs.iter().map(|log| (log[0], log[1], log[2])).collect();
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut groups = n;
+    while let Some((t, x, y)) = queue.pop() {
+        let (a, b) = (a4_find(mut parent, x), a4_find(mut parent, y));
+        if a != b {
+            parent[a] = b;
+            groups -= 1;
+            if groups == 1 {
+                return t;
+            }
+        }
+    }
+    -1
+}
+
+// ---- earliest_acq_solution.kara ----
+
+fn a5_find(p: mut ref Vec[usize], x: usize) -> usize {
+    if p[x] != x {
+        let px = p[x];
+        p[x] = a5_find(mut p, px);
+    }
+    p[x]
+}
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_earliest_acq(logs: own Vec[Vec[i32]], n: i32) -> i32 {
+        let mut logs = logs;
+        logs.sort_by_key(|l| l[0]);
+        let mut p: Vec[usize] = (0..n as usize).collect();
+        let mut groups = n;
+        for l in logs {
+            let (a, b) = (a5_find(mut p, l[1] as usize), a5_find(mut p, l[2] as usize));
+            if a != b {
+                p[a] = b;
+                groups -= 1;
+                if groups == 1 {
+                    return l[0];
+                }
+            }
+        }
+        -1
+    }
+}
+
+fn a5_earliest_acq(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let logs: Vec[Vec[i32]] = logs.iter().map(|log| log.iter().map(|v| v as i32).collect()).collect();
+    A5Solution.a5_earliest_acq(logs, n as i32) as i64
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, logs: Vec[Vec[i64]], n: i64) -> i64 {
+    match which {
+        0 => a0_earliest_acq(logs, n),
+        1 => a1_earliest_acq(logs, n),
+        2 => a2_earliest_acq(logs, n),
+        3 => a3_earliest_acq(logs, n),
+        4 => a4_earliest_acq(logs, n),
+        _ => a5_earliest_acq(logs, n),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether everyone is reached from person 0 by the friendships made at
+// or before `upto`: a depth-first search over the logs themselves.
+fn reached_all(logs: Vec[Vec[i64]], n: i64, upto: i64) -> bool {
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    seen[0] = true;
+    let mut stack: Vec[i64] = [0];
+    let mut count = 1;
+    while let Some(p) = stack.pop() {
+        for log in logs.iter() {
+            if log[0] > upto {
+                continue;
+            }
+            let other = if log[1] == p { log[2] } else if log[2] == p { log[1] } else { -1 };
+            if other >= 0 and not seen[other] {
+                seen[other] = true;
+                count += 1;
+                stack.push(other);
+            }
+        }
+    }
+    count == n
+}
+
+// The statement read literally: the moments in order, and the first at
+// which everyone is acquainted with everyone, or -1.
+fn literal(logs: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut times: Vec[i64] = logs.iter().map(|log| log[0]).collect();
+    times.sort();
+    for t in times.iter() {
+        if reached_all(logs.clone(), n, t) {
+            return t;
+        }
+    }
+    -1
+}
+
+// A second reading for P2: every person labelled with the smallest label
+// among their friends, again and again until nothing changes; everyone is
+// acquainted when every label is 0.
+fn one_label(logs: Vec[Vec[i64]], n: i64, upto: i64) -> bool {
+    let mut label: Vec[i64] = (0..n).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for log in logs.iter() {
+            if log[0] <= upto {
+                let low = label[log[1]].min(label[log[2]]);
+                if label[log[1]] != low or label[log[2]] != low {
+                    label[log[1]] = low;
+                    label[log[2]] = low;
+                    changed = true;
+                }
+            }
+        }
+    }
+    label.iter().all(|l| l == 0)
+}
+
+// m logs over n people from `pairs`, at distinct random times.
+fn timed(seed: mut ref i64, pairs: Vec[(i64, i64)]) -> Vec[Vec[i64]] {
+    let mut times: SortedSet[i64] = SortedSet.new();
+    let mut logs: Vec[Vec[i64]] = [];
+    for (x, y) in pairs.iter() {
+        let mut t = next_random(mut seed) % 1000000;
+        while times.contains(t) {
+            t = next_random(mut seed) % 1000000;
+        }
+        times.insert(t);
+        if next_random(mut seed) % 2 == 0 {
+            logs.push([t, x, y]);
+        } else {
+            logs.push([t, y, x]);
+        }
+    }
+    logs
+}
+
+// up to m distinct pairs of n people at random
+fn random_pairs(seed: mut ref i64, n: i64, m: i64) -> Vec[(i64, i64)] {
+    let mut used: SortedSet[i64] = SortedSet.new();
+    let mut pairs: Vec[(i64, i64)] = [];
+    let mut tries = 0;
+    while pairs.len() < m and tries < 20 * m {
+        tries += 1;
+        let x = next_random(mut seed) % n;
+        let y = next_random(mut seed) % n;
+        if x != y and used.insert(x.min(y) * n + x.max(y)) {
+            pairs.push((x.min(y), x.max(y)));
+        }
+    }
+    pairs
+}
+
+struct Problem {
+    logs: Vec[Vec[i64]],
+    n: i64,
+    rotate: i64,
+    rename: Vec[i64],
+    newcomer: i64,
+    friend: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let logs = p.logs.clone();
+    let n = p.n;
+    let m = logs.len();
+    let want = literal(logs.clone(), n);
+    // P3: the logs in another order, each pair the other way round
+    let reordered: Vec[Vec[i64]] = (0..m).map(|i| {
+        let log = logs[(p.rotate + m - 1 - i) % m].clone();
+        [log[0], log[2], log[1]].to_vec()
+    }).collect();
+    // P4: the people renamed
+    let renamed: Vec[Vec[i64]] = logs.iter().map(|log| [log[0], p.rename[log[1]], p.rename[log[2]]].to_vec()).collect();
+    // P5: every moment t moved to 3t + 7
+    let later: Vec[Vec[i64]] = logs.iter().map(|log| [3 * log[0] + 7, log[1], log[2]].to_vec()).collect();
+    // P6: one more person, befriended at a moment of their own; and the log
+    // at the answer's moment taken away
+    let mut grown = logs.clone();
+    grown.push([p.newcomer, n, p.friend]);
+    let without: Vec[Vec[i64]] = logs.iter().filter(|log| log[0] != want).map(|log| log.clone()).collect();
+    for w in 0..6 {
+        let answer = arm(w, logs.clone(), n);
+        let what = f"arm {w}, {n} people, {m} logs -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, the moments in order give {want}");
+        // P2: -1 when everyone never is acquainted; otherwise a moment of
+        // the logs at which they are, and before which they are not
+        let last = logs.iter().map(|log| log[0]).max().unwrap();
+        let ok = if answer == -1 {
+            not one_label(logs.clone(), n, last)
+        } else {
+            logs.iter().any(|log| log[0] == answer) and one_label(logs.clone(), n, answer) and not one_label(logs.clone(), n, answer - 1)
+        };
+        expect(mut t, 2, ok, f"P2 {what}");
+        // P3: another order
+        let r = arm(w, reordered.clone(), n);
+        expect(mut t, 3, r == answer, f"P3 {what}, reordered -> {r}");
+        // P4: renamed
+        let q = arm(w, renamed.clone(), n);
+        expect(mut t, 4, q == answer, f"P4 {what}, renamed -> {q}");
+        // P5: later
+        let l = arm(w, later.clone(), n);
+        expect(mut t, 5, l == if answer < 0 { -1 } else { 3 * answer + 7 }, f"P5 {what}, 3t + 7 -> {l}");
+        // P6: the newcomer joins when both they and the rest have; without
+        // the answer's log, everyone is acquainted only later if at all
+        let g = arm(w, grown.clone(), n + 1);
+        let joined = if answer < 0 { -1 } else { answer.max(p.newcomer) };
+        let d = arm(w, without.clone(), n);
+        let ok = g == joined and (answer < 0 or d == -1 or d > answer);
+        expect(mut t, 6, ok, f"P6 {what}, newcomer at {p.newcomer} -> {g}, without -> {d}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want + 2) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: 2 to 12 people and up to 30
+    // random pairs; 2 to 6 people with every pair; 2 to 20 people joined
+    // by a random tree and up to 5 more pairs; and two groups of 2 to 8
+    // people joined within themselves, with one pair between them or
+    // none. Every choice is drawn before any arm answers.
+    let mut seed = 11011;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let (n, pairs) = match i % 4 {
+            0 => {
+                let n = next_random(mut seed) % 11 + 2;
+                let m = next_random(mut seed) % 30 + 1;
+                let mut pairs = random_pairs(mut seed, n, m);
+                if pairs.is_empty() {
+                    pairs.push((0, 1));
+                }
+                (n, pairs)
+            }
+            1 => {
+                let n = next_random(mut seed) % 5 + 2;
+                let mut pairs: Vec[(i64, i64)] = [];
+                for x in 0..n {
+                    for y in x + 1..n {
+                        pairs.push((x, y));
+                    }
+                }
+                (n, pairs)
+            }
+            2 => {
+                let n = next_random(mut seed) % 19 + 2;
+                let mut pairs: Vec[(i64, i64)] = (1..n).map(|x| (next_random(mut seed) % x, x)).collect();
+                let extra = random_pairs(mut seed, n, next_random(mut seed) % 6);
+                for (x, y) in extra.iter() {
+                    if not pairs.contains((x, y)) {
+                        pairs.push((x, y));
+                    }
+                }
+                (n, pairs)
+            }
+            _ => {
+                let a = next_random(mut seed) % 7 + 2;
+                let b = next_random(mut seed) % 7 + 2;
+                let mut pairs: Vec[(i64, i64)] = (1..a).map(|x| (next_random(mut seed) % x, x)).collect();
+                for x in 1..b {
+                    pairs.push((a + next_random(mut seed) % x, a + x));
+                }
+                if next_random(mut seed) % 4 != 0 {
+                    pairs.push((next_random(mut seed) % a, a + next_random(mut seed) % b));
+                }
+                (a + b, pairs)
+            }
+        };
+        let logs = timed(mut seed, pairs);
+        let rotate = next_random(mut seed);
+        let mut rename: Vec[i64] = (0..n).collect();
+        for j in (1..n).rev() {
+            rename.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let mut newcomer = next_random(mut seed) % 1000000;
+        while logs.iter().any(|log| log[0] == newcomer) {
+            newcomer = next_random(mut seed) % 1000000;
+        }
+        let friend = next_random(mut seed) % n;
+        problems.push(Problem { logs, n, rotate, rename, newcomer, friend });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

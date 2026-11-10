@@ -1,0 +1,82 @@
+// LeetCode #1105: Filling Bookcase Shelves -- a shortest path: the places
+// between books are nodes, a shelf holding books i to j - 1 an edge from
+// i to j weighing their tallest, and Dijkstra's search over a
+// `BinaryHeap` of `Reverse` heights finds the least height from the first
+// place to the last.
+
+
+fn min_height_shelves(books: Vec[Vec[i64]], shelf_width: i64) -> i64 {
+    let n = books.len();
+    let mut dist = Vec.filled(n + 1, i64.MAX);
+    let mut heap = PriorityQueue.new();
+    dist[0] = 0;
+    heap.push((0, 0));
+    while let Some((d, i)) = heap.pop() {
+        if d > dist[i] {
+            continue;
+        }
+        if i == n {
+            return d;
+        }
+        let mut (used, tallest) = (0, 0);
+        for j in i..n {
+            used += books[j][0];
+            if used > shelf_width {
+                break;
+            }
+            tallest = tallest.max(books[j][1]);
+            if d + tallest < dist[j + 1] {
+                dist[j + 1] = d + tallest;
+                heap.push((d + tallest, j + 1));
+            }
+        }
+    }
+    dist[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_books(seed: mut ref i64, n: i64, width: i64, top: i64) -> Vec[Vec[i64]] {
+    (0..n).map(|_| [next_random(mut seed) % width + 1, next_random(mut seed) % top + 1].to_vec()).collect()
+}
+
+fn main() {
+    let cases: Vec[(Vec[Vec[i64]], i64)] = [
+        ([[1, 1], [2, 3], [2, 3], [1, 1], [1, 1], [1, 1], [1, 2]], 4),
+        ([[1, 3], [2, 4], [3, 2]], 6),
+        ([[1, 1]], 1),
+        ([[5, 7]], 5),
+        ([[1, 2], [1, 3]], 1),
+        ([[1, 2], [1, 3]], 2),
+        ([[3, 1], [3, 9], [3, 1]], 6),
+        ([[2, 9], [1, 1], [1, 1], [2, 9]], 4),
+        ([[1, 1], [1, 1], [1, 1000], [1, 1], [1, 1]], 2),
+        ([[1000, 1000], [1000, 1000]], 1000),
+    ];
+    for (books, width) in cases.iter() {
+        println(f"{min_height_shelves(books.clone(), width)}");
+    }
+    // 2000 random bookcases of 1 to 40 books on shelves 1 to 30 wide
+    let mut seed = 1105;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 40 + 1;
+        let width = next_random(mut seed) % 30 + 1;
+        let books = random_books(mut seed, n, width, 20);
+        let h = min_height_shelves(books, width);
+        total += h;
+        check = (check * 31 + h) % 1000000007;
+    }
+    println(f"2000 random bookcases: heights total {total}, checksum {check}");
+    // LeetCode's largest: 1000 books on a shelf 1000 wide, heights to 1000
+    let books = random_books(mut seed, 1000, 1000, 1000);
+    println(f"1000 books, shelf 1000: {min_height_shelves(books, 1000)}");
+    let thin: Vec[Vec[i64]] = (0..1000).map(|i| [1, i % 997 + 1].to_vec()).collect();
+    println(f"1000 thin books, shelf 1000: {min_height_shelves(thin.clone(), 1000)}, shelf 7: {min_height_shelves(thin, 7)}");
+}

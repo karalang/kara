@@ -1,0 +1,466 @@
+// LeetCode #1095: Find in Mountain Array -- a differential over the six
+// arms. Each answer is checked against the statement read literally (the
+// first index holding the target) and against five properties that do not
+// compute the answer; see the README.
+
+// ---- find_in_mountain_array.kara ----
+
+fn a0_find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
+    let n = mountain.length();
+    let mut lo: i32 = 0;
+    let mut hi = n - 1;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if mountain.get(mid) < mountain.get(mid + 1) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let peak = lo;
+    lo = 0;
+    hi = peak;
+    while lo <= hi {
+        let mid = (lo + hi) / 2;
+        let v = mountain.get(mid);
+        if v == target {
+            return mid;
+        }
+        if v < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo = peak + 1;
+    hi = n - 1;
+    while lo <= hi {
+        let mid = (lo + hi) / 2;
+        let v = mountain.get(mid);
+        if v == target {
+            return mid;
+        }
+        if v > target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    -1
+}
+
+// ---- find_in_mountain_array_keyed.kara ----
+
+fn a1_first_at_least(lo: i32, hi: i32, at_least: Fn(i32) -> bool) -> i32 {
+    let mut (lo, hi) = (lo, hi);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if at_least(mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn a1_find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
+    let n = mountain.length();
+    let peak = a1_first_at_least(0, n - 1, |i| mountain.get(i) > mountain.get(i + 1));
+    for (lo, hi, sign) in [(0i32, peak, 1), (peak + 1, n - 1, -1)] {
+        if lo > hi {
+            continue;
+        }
+        let i = a1_first_at_least(lo, hi + 1, |i| i > hi or sign * mountain.get(i) >= sign * target);
+        if i <= hi and mountain.get(i) == target {
+            return i;
+        }
+    }
+    -1
+}
+
+// ---- find_in_mountain_array_recursive.kara ----
+
+fn a2_peak_in(m: MountainArray, lo: i32, hi: i32) -> i32 {
+    if lo == hi {
+        return lo;
+    }
+    let mid = (lo + hi) / 2;
+    if m.get(mid) < m.get(mid + 1) { a2_peak_in(m, mid + 1, hi) } else { a2_peak_in(m, lo, mid) }
+}
+
+fn a2_search(m: MountainArray, target: i32, lo: i32, hi: i32, rising: bool) -> Option[i32] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let v = m.get(mid);
+    if v == target {
+        Some(mid)
+    } else if (v < target) == rising {
+        a2_search(m, target, mid + 1, hi, rising)
+    } else {
+        a2_search(m, target, lo, mid - 1, rising)
+    }
+}
+
+fn a2_find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
+    let n = mountain.length();
+    let peak = a2_peak_in(mountain, 0, n - 1);
+    a2_search(mountain, target, 0, peak, true).or_else(|| a2_search(mountain, target, peak + 1, n - 1, false)).unwrap_or(-1)
+}
+
+// ---- find_in_mountain_array_cached.kara ----
+
+fn a3_read(m: MountainArray, seen: mut ref Map[i32, i32], i: i32) -> i32 {
+    if let Some(v) = seen.get(i) {
+        return v;
+    }
+    let v = m.get(i);
+    seen.insert(i, v);
+    v
+}
+
+fn a3_find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
+    let n = mountain.length();
+    let mut seen: Map[i32, i32] = Map.new();
+    let mut (lo, hi) = (1i32, n - 2);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if a3_read(mountain, mut seen, mid) < a3_read(mountain, mut seen, mid + 1) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let peak = lo;
+    let mut (lo, hi) = (0i32, peak);
+    while lo <= hi {
+        let mid = (lo + hi) / 2;
+        match a3_read(mountain, mut seen, mid).cmp(target) {
+            Ordering.Equal => return mid,
+            Ordering.Less => lo = mid + 1,
+            Ordering.Greater => hi = mid - 1,
+        }
+    }
+    let mut (lo, hi) = (peak + 1, n - 1);
+    while lo <= hi {
+        let mid = (lo + hi) / 2;
+        match a3_read(mountain, mut seen, mid).cmp(target) {
+            Ordering.Equal => return mid,
+            Ordering.Greater => lo = mid + 1,
+            Ordering.Less => hi = mid - 1,
+        }
+    }
+    -1
+}
+
+// ---- find_in_mountain_array_ternary.kara ----
+
+fn a4_find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
+    let n = mountain.length();
+    let mut (lo, hi) = (0i32, n - 1);
+    while hi - lo > 2 {
+        let a = lo + (hi - lo) / 3;
+        let b = hi - (hi - lo) / 3;
+        if mountain.get(a) < mountain.get(b) {
+            lo = a + 1;
+        } else {
+            hi = b - 1;
+        }
+    }
+    let mut peak = lo;
+    for i in lo + 1..=hi {
+        if mountain.get(i) > mountain.get(peak) {
+            peak = i;
+        }
+    }
+    let rising: Vec[i32] = (0..=peak).collect();
+    let i = rising.partition_point(|k| mountain.get(*k) < target) as i32;
+    if i <= peak and mountain.get(i) == target {
+        return i;
+    }
+    let falling: Vec[i32] = (peak + 1..n).collect();
+    let j = falling.partition_point(|k| mountain.get(*k) > target);
+    if j < falling.len() and mountain.get(falling[j]) == target {
+        return falling[j];
+    }
+    -1
+}
+
+// ---- find_in_mountain_array_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_find_in_mountain_array(target: i32, mountainArr: MountainArray) -> i32 {
+        let n = mountainArr.length();
+        let mut (l, r) = (0i32, n - 1);
+        while l < r {
+            let m = l + (r - l) / 2;
+            if mountainArr.get(m) < mountainArr.get(m + 1) {
+                l = m + 1;
+            } else {
+                r = m;
+            }
+        }
+        let peak = l;
+        let mut (l, r) = (0i32, peak);
+        while l <= r {
+            let m = l + (r - l) / 2;
+            let v = mountainArr.get(m);
+            if v == target {
+                return m;
+            } else if v < target {
+                l = m + 1;
+            } else {
+                r = m - 1;
+            }
+        }
+        let mut (l, r) = (peak + 1, n - 1);
+        while l <= r {
+            let m = l + (r - l) / 2;
+            let v = mountainArr.get(m);
+            if v == target {
+                return m;
+            } else if v > target {
+                l = m + 1;
+            } else {
+                r = m - 1;
+            }
+        }
+        -1
+    }
+}
+
+fn a5_find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
+    A5Solution.a5_find_in_mountain_array(target, mountain)
+}
+
+// ---- the mountain array ---------------------------------------------------
+
+// LeetCode's interface, in `i32` as LeetCode gives it: the array is read only through `get` and `length`,
+// and each `get` is counted (more than 100 is a wrong answer).
+struct MountainArray {
+    values: Vec[i32],
+    calls: Atomic[i64],
+}
+
+impl MountainArray {
+    fn get(self, index: i32) -> i32 {
+        self.calls.fetch_add(1);
+        self.values[index as i64]
+    }
+
+    fn length(self) -> i32 {
+        self.values.len() as i32
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+// The arm's answer, and how many times it called `get`.
+fn arm(which: i64, target: i32, m: MountainArray) -> (i32, i64) {
+    let before = m.calls.load();
+    let at = match which {
+        0 => a0_find_in_mountain_array(target, m),
+        1 => a1_find_in_mountain_array(target, m),
+        2 => a2_find_in_mountain_array(target, m),
+        3 => a3_find_in_mountain_array(target, m),
+        4 => a4_find_in_mountain_array(target, m),
+        _ => a5_find_in_mountain_array(target, m),
+    };
+    (at, m.calls.load() - before)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: the first index whose value is the target.
+fn first_index(values: Vec[i32], target: i32) -> i32 {
+    for (i, v) in values.iter().enumerate() {
+        if v == target {
+            return i as i32;
+        }
+    }
+    -1
+}
+
+// A mountain of `up` values rising and `down` falling after the peak, by
+// steps of 1 to `step`, from a base high enough that none falls below 0.
+fn mountain(seed: mut ref i64, up: i64, down: i64, step: i64) -> Vec[i32] {
+    let mut v: Vec[i64] = [down * step + next_random(mut seed) % 20];
+    for _ in 0..up {
+        let last = v[v.len() - 1];
+        v.push(last + 1 + next_random(mut seed) % step);
+    }
+    for _ in 0..down {
+        let last = v[v.len() - 1];
+        v.push(last - 1 - next_random(mut seed) % step);
+    }
+    v.iter().map(|x| x as i32).collect()
+}
+
+fn ask(values: Vec[i32]) -> MountainArray {
+    MountainArray { values: values.clone(), calls: Atomic.new(0) }
+}
+
+struct Problem {
+    values: Vec[i32],
+    target: i32,
+    shift: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let values = p.values.clone();
+    let target = p.target;
+    let n = values.len();
+    let literal = first_index(values, target);
+    let top = values.iter().max().unwrap();
+    let at_top = first_index(values, top);
+    let (first, last) = (values[0], values[n - 1]);
+    // P4: every value moved up by d (at least 1, as far as 10^9 allows),
+    // and one below the old first value put in front
+    let d = 1 + (p.shift % (1000000000 - top as i64)) as i32;
+    let mut moved: Vec[i32] = [first + d - 1];
+    moved.extend(values.iter().map(|v| v + d));
+    // P5: the mountain read from the other end
+    let reversed: Vec[i32] = values.iter().rev().collect();
+    // P6: every value doubled, and between each pair of neighbours a value
+    // between theirs, so value i sits at index 2i
+    let mut doubled: Vec[i32] = [];
+    for (i, v) in values.iter().enumerate() {
+        doubled.push(2 * v);
+        if i + 1 < n {
+            doubled.push(if i < at_top as i64 { 2 * v + 1 } else { 2 * v - 1 });
+        }
+    }
+    let (m, mm, mr, md) = (ask(values), ask(moved), ask(reversed), ask(doubled));
+    for w in 0..6 {
+        let (answer, calls) = arm(w, target, m);
+        let what = f"arm {w}, target {target}, {n} values from {first} up to {top} at {at_top} down to {last} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == literal, f"P1 {what}, first index {literal}");
+        // P2: at most 100 calls of `get`
+        expect(mut t, 2, calls <= 100, f"P2 {what}, {calls} calls");
+        // P3: the first value is at 0 and the peak's at the peak; the last
+        // value at the end or on the rising side; a value above the peak,
+        // or below both ends, nowhere
+        let (f, _) = arm(w, first, m);
+        let (k, _) = arm(w, top, m);
+        let (e, _) = arm(w, last, m);
+        let (above, _) = arm(w, top + 1, m);
+        let below = if first.min(last) > 0 { arm(w, first.min(last) - 1, m).0 } else { -1 };
+        let ends = f == 0 and k == at_top and e >= 0 and (e == n as i32 - 1 or (e <= at_top and values[e] == last));
+        expect(mut t, 3, ends and above == -1 and below == -1, f"P3 {what}: first -> {f}, peak -> {k}, last -> {e}, above -> {above}, below -> {below}");
+        // P4: moved up with one in front, the target moved up answers one
+        // index on, or 0 when it is the one in front
+        let (s, _) = arm(w, target + d, mm);
+        let want = if target == first - 1 { 0 } else if answer < 0 { -1 } else { answer + 1 };
+        expect(mut t, 4, s == want, f"P4 {what}, moved {d} with {first + d - 1} in front -> {s}");
+        // P5: reversed, the answer is the last index holding the target,
+        // never before the first
+        let (r, _) = arm(w, target, mr);
+        let back = if r >= 0 { n as i32 - 1 - r } else { -1 };
+        let fits = if answer < 0 { r == -1 } else { r >= 0 and back >= answer and values[back] == target };
+        expect(mut t, 5, fits, f"P5 {what}, reversed -> {r}");
+        // P6: doubled and filled in, the target doubled at twice the index
+        let (dd, _) = arm(w, 2 * target, md);
+        expect(mut t, 6, dd == if answer < 0 { -1 } else { 2 * answer }, f"P6 {what}, doubled -> {dd}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + literal + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems in four kinds, 500 each: random mountains of 3 to 61
+    // values, the target one of them or next to one; mountains rising and
+    // falling by 1, so most values sit on both sides, the target one of
+    // them; long mountains of 1000 to 6000 values with the peak within 5
+    // of either end; tiny mountains of 3 to 5 values from 0 to 9, the
+    // target 0 to 10. Every choice is drawn before any arm answers.
+    let mut seed = 10951;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let (values, target) = match i % 4 {
+            0 => {
+                let up = 1 + next_random(mut seed) % 30;
+                let down = 1 + next_random(mut seed) % 30;
+                let step = 1 + next_random(mut seed) % 4;
+                let v = mountain(mut seed, up, down, step);
+                let k = next_random(mut seed) % v.len();
+                let tg = v[k] + (next_random(mut seed) % 3) as i32 - 1;
+                (v, tg)
+            }
+            1 => {
+                let up = 1 + next_random(mut seed) % 40;
+                let down = 1 + next_random(mut seed) % 40;
+                let v = mountain(mut seed, up, down, 1);
+                let k = next_random(mut seed) % v.len();
+                let tg = v[k];
+                (v, tg)
+            }
+            2 => {
+                let n = 1000 + next_random(mut seed) % 5001;
+                let near = 1 + next_random(mut seed) % 5;
+                let up = if next_random(mut seed) % 2 == 0 { near } else { n - 1 - near };
+                let v = mountain(mut seed, up, n - 1 - up, 1 + next_random(mut seed) % 50000);
+                let k = next_random(mut seed) % v.len();
+                let tg = v[k];
+                (v, tg)
+            }
+            _ => {
+                let n = 3 + next_random(mut seed) % 3;
+                let mut v: Vec[i32] = [];
+                while v.len() < n {
+                    v = [];
+                    let top = 1 + next_random(mut seed) % (n - 2);
+                    let mut prev = -1;
+                    for j in 0..n {
+                        let x = next_random(mut seed) % 10;
+                        let ok = if j <= top { x > prev } else { x < prev };
+                        if not ok {
+                            break;
+                        }
+                        v.push(x as i32);
+                        prev = x;
+                    }
+                }
+                let tg = (next_random(mut seed) % 11) as i32;
+                (v, tg)
+            }
+        };
+        let shift = next_random(mut seed);
+        problems.push(Problem { values, target, shift });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,98 @@
+// LeetCode #1110: Delete Nodes And Return Forest -- the bench: the ★ arm
+// over 16 trees of 1000 nodes, LeetCode's largest, their shapes built
+// once; each round builds every tree afresh and deletes a third of its
+// values, a different third each time.
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn prune(node: Option[TreeNode], parent_gone: bool, gone: Set[i32], roots: mut ref Vec[Option[TreeNode]]) -> Option[TreeNode] {
+    let n = node?;
+    let deleted = gone.contains(n.val);
+    if parent_gone and not deleted {
+        roots.push(Some(n));
+    }
+    n.left = prune(n.left, deleted, gone, mut roots);
+    n.right = prune(n.right, deleted, gone, mut roots);
+    if deleted { None } else { Some(n) }
+}
+
+fn del_nodes(root: Option[TreeNode], to_delete: Vec[i32]) -> Vec[Option[TreeNode]] {
+    let gone: Set[i32] = to_delete.iter().collect();
+    let mut roots: Vec[Option[TreeNode]] = [];
+    let _ = prune(root, true, gone, mut roots);
+    roots
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree's shape: its values, and each node's children as indices, -1
+// for none.
+struct Shape {
+    values: Vec[i32],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn shape(seed: mut ref i64) -> Shape {
+    let mut values: Vec[i32] = (1..1001).collect();
+    for i in 0..1000 {
+        let j = i + next_random(mut seed) % (1000 - i);
+        values.swap(i, j);
+    }
+    let mut left: Vec[i64] = Vec.filled(1000, -1);
+    let mut right: Vec[i64] = Vec.filled(1000, -1);
+    for k in 1..1000 {
+        loop {
+            let at = next_random(mut seed) % k;
+            if next_random(mut seed) % 2 == 0 {
+                if left[at] < 0 {
+                    left[at] = k;
+                    break;
+                }
+            } else if right[at] < 0 {
+                right[at] = k;
+                break;
+            }
+        }
+    }
+    Shape { values, left, right }
+}
+
+fn build(s: Shape) -> Option[TreeNode] {
+    let nodes: Vec[TreeNode] = s.values.iter().map(|v| TreeNode { val: v, left: None, right: None }).collect();
+    for k in 0..1000 {
+        if s.left[k] >= 0 {
+            nodes[k].left = Some(nodes[s.left[k]]);
+        }
+        if s.right[k] >= 0 {
+            nodes[k].right = Some(nodes[s.right[k]]);
+        }
+    }
+    Some(nodes[0])
+}
+
+fn main() {
+    let mut seed = 1110;
+    let shapes: Vec[Shape] = (0..16).map(|_| shape(mut seed)).collect();
+    let mut trees = 0;
+    let mut check = 0;
+    for round in 0..200 {
+        for j in 0..shapes.len() {
+            let third = (round + j) % 3;
+            let to_delete: Vec[i32] = (1..1001).filter(|v| v % 3 == third).map(|v| v as i32).collect();
+            let roots = del_nodes(build(shapes[j]), to_delete);
+            trees += roots.len();
+            for r in roots.iter() {
+                check = (check * 31 + r.unwrap().val) % 1000000007;
+            }
+        }
+    }
+    println(f"200 rounds over 16 trees of 1000 nodes: {trees} trees, checksum {check}");
+}

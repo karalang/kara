@@ -1,0 +1,92 @@
+// LeetCode #1094: Car Pooling -- the car is fullest just after some pickup,
+// so only the pickup stops need checking: at each, the passengers aboard
+// are those of every trip that got on at or before it and gets off after
+// it. Iterator chains, `all` over the trips and a `filter` + `sum` inside.
+// O(n^2).
+
+fn car_pooling(trips: Vec[Vec[i64]], capacity: i64) -> bool {
+    trips.iter().all(|at| {
+        let stop = at[1];
+        let aboard: i64 = trips.iter().filter(|t| t[1] <= stop and stop < t[2]).map(|t| t[0]).sum();
+        aboard <= capacity
+    })
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The smallest capacity the arm accepts, by binary search over 1 to `most`:
+// the most passengers ever aboard at once, if the arm is right.
+fn smallest_capacity(trips: Vec[Vec[i64]], most: i64) -> i64 {
+    let mut (lo, hi) = (1, most);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if car_pooling(trips, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn main() {
+    let cases: Vec[(Vec[Vec[i64]], i64)] = [
+        ([[2, 1, 5], [3, 3, 7]], 4),
+        ([[2, 1, 5], [3, 3, 7]], 5),
+        ([[2, 1, 5], [3, 5, 7]], 3),
+        ([[3, 2, 7], [3, 7, 9], [8, 3, 9]], 11),
+        ([[3, 2, 7], [3, 7, 9], [8, 3, 9]], 10),
+        ([[5, 0, 1]], 4),
+        ([[5, 0, 1]], 5),
+        ([[1, 0, 1000]], 1),
+        ([[100, 999, 1000], [100, 0, 999]], 100),
+        ([[2, 0, 3], [2, 1, 4], [2, 2, 5], [2, 3, 6]], 6),
+        ([[2, 0, 3], [2, 1, 4], [2, 2, 5], [2, 3, 6]], 5),
+        ([[4, 5, 6], [4, 5, 6], [4, 5, 6]], 12),
+    ];
+    for (trips, capacity) in cases.iter() {
+        println(f"{car_pooling(trips, capacity)}");
+    }
+    // 2000 random trip lists: 1 to 12 trips of 1 to 10 passengers between
+    // stops 0 to 20; each list's smallest capacity, and whether a capacity
+    // drawn from 1 to 40 is enough
+    let mut seed = 1094;
+    let mut total = 0;
+    let mut enough = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let mut trips: Vec[Vec[i64]] = [];
+        for _ in 0..next_random(mut seed) % 12 + 1 {
+            let n = next_random(mut seed) % 10 + 1;
+            let a = next_random(mut seed) % 21;
+            let mut b = next_random(mut seed) % 21;
+            while b == a {
+                b = next_random(mut seed) % 21;
+            }
+            trips.push([n, a.min(b), a.max(b)]);
+        }
+        let capacity = next_random(mut seed) % 40 + 1;
+        let least = smallest_capacity(trips, 120);
+        total += least;
+        if car_pooling(trips, capacity) {
+            enough += 1;
+        }
+        check = (check * 31 + least) % 1000000007;
+    }
+    println(f"2000 random trip lists: smallest capacities sum to {total}, {enough} with enough seats, checksum {check}");
+    // 1000 trips, LeetCode's most, of up to 100 passengers over stops 0 to 1000
+    let mut trips: Vec[Vec[i64]] = [];
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let a = next_random(mut seed) % 1000;
+        let b = a + 1 + next_random(mut seed) % (1000 - a);
+        trips.push([n, a, b]);
+    }
+    let least = smallest_capacity(trips, 100000);
+    println(f"1000 trips: smallest capacity {least}, {car_pooling(trips, least)} at it, {car_pooling(trips, least - 1)} one below");
+}

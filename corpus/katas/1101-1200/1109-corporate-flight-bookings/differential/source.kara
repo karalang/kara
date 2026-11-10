@@ -1,0 +1,381 @@
+// LeetCode #1109: Corporate Flight Bookings -- a differential over the six
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- corp_flight_bookings.kara ----
+
+fn a0_corp_flight_bookings(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    let mut change: Vec[i64] = Vec.filled(n + 1, 0);
+    for b in bookings.iter() {
+        change[b[0] - 1] += b[2];
+        change[b[1]] -= b[2];
+    }
+    let mut seats: Vec[i64] = Vec.with_capacity(n);
+    let mut running = 0;
+    for i in 0..n {
+        running += change[i];
+        seats.push(running);
+    }
+    seats
+}
+
+// ---- corp_flight_bookings_fenwick.kara ----
+
+struct A1Fenwick {
+    tree: Vec[i64],
+}
+
+impl A1Fenwick {
+    fn new(n: i64) -> Self {
+        A1Fenwick { tree: Vec.filled(n + 1, 0) }
+    }
+
+    fn add(mut ref self, i: own i64, delta: i64) {
+        let mut i = i;
+        while i < self.tree.len() {
+            self.tree[i] += delta;
+            i += i & i.wrapping_neg();
+        }
+    }
+
+    fn prefix(self, i: own i64) -> i64 {
+        let mut i = i;
+        let mut sum = 0;
+        while i > 0 {
+            sum += self.tree[i];
+            i -= i & i.wrapping_neg();
+        }
+        sum
+    }
+}
+
+fn a1_corp_flight_bookings(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    let n = n;
+    let mut fw = A1Fenwick.new(n + 1);
+    for b in ref bookings {
+        fw.add(b[0], b[2]);
+        fw.add(b[1] + 1, -b[2]);
+    }
+    (1..=n).map(|i| fw.prefix(i)).collect()
+}
+
+// ---- corp_flight_bookings_sweep.kara ----
+
+fn a2_corp_flight_bookings(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    let mut events: SortedMap[i64, i64] = SortedMap.new();
+    for b in bookings.iter() {
+        *events.entry(b[0]).or_insert(0) += b[2];
+        *events.entry(b[1] + 1).or_insert(0) -= b[2];
+    }
+    let mut answer = Vec.with_capacity(n);
+    let mut open = 0;
+    let mut next = events.iter().peekable();
+    for flight in 1..=n {
+        while let Some((at, change)) = next.peek() {
+            if at > flight {
+                break;
+            }
+            open += change;
+            let _ = next.next();
+        }
+        answer.push(open);
+    }
+    answer
+}
+
+// ---- corp_flight_bookings_segment.kara ----
+
+fn a3_add(tree: mut ref Vec[i64], node: i64, lo: i64, hi: i64, a: i64, b: i64, seats: i64) {
+    if b < lo or hi < a {
+        return;
+    }
+    if a <= lo and hi <= b {
+        tree[node] += seats;
+        return;
+    }
+    let mid = (lo + hi) / 2;
+    a3_add(mut tree, 2 * node, lo, mid, a, b, seats);
+    a3_add(mut tree, 2 * node + 1, mid + 1, hi, a, b, seats);
+}
+
+fn a3_collect(tree: Vec[i64], node: i64, lo: i64, hi: i64, above: i64, out: mut ref Vec[i64]) {
+    let here = above + tree[node];
+    if lo == hi {
+        out.push(here);
+        return;
+    }
+    let mid = (lo + hi) / 2;
+    a3_collect(tree, 2 * node, lo, mid, here, mut out);
+    a3_collect(tree, 2 * node + 1, mid + 1, hi, here, mut out);
+}
+
+fn a3_corp_flight_bookings(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    let n = n;
+    let mut tree = Vec.filled(4 * n, 0);
+    for b in ref bookings {
+        a3_add(mut tree, 1, 1, n, b[0], b[1], b[2]);
+    }
+    let mut out = Vec.with_capacity(n);
+    a3_collect(tree, 1, 1, n, 0, mut out);
+    out
+}
+
+// ---- corp_flight_bookings_scan.kara ----
+
+fn a4_corp_flight_bookings(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    let change = bookings.iter().fold(Vec.filled(n + 1, 0), |change, b| {
+        let mut change = change;
+        change[b[0] - 1] += b[2];
+        change[b[1]] -= b[2];
+        change
+    });
+    change[..n]
+        .iter()
+        .scan(0, |running, d| { let running = running + d; Some((running, running)) })
+        .collect()
+}
+
+// ---- corp_flight_bookings_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_corp_flight_bookings(bookings: Vec[Vec[i32]], n: i32) -> Vec[i32] {
+        let n = n as i64;
+        let mut ans = Vec.filled(n, 0i32);
+        for b in bookings {
+            ans[(b[0] - 1) as i64] += b[2];
+            if (b[1] as i64) < n {
+                ans[b[1] as i64] -= b[2];
+            }
+        }
+        for i in 1..n {
+            ans[i] += ans[i - 1];
+        }
+        ans
+    }
+}
+
+fn a5_corp_flight_bookings(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    let bookings: Vec[Vec[i32]] = bookings.iter().map(|b| b.iter().map(|x| x as i32).collect()).collect();
+    A5Solution.a5_corp_flight_bookings(bookings, n as i32).iter().map(|x| x as i64).collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    match which {
+        0 => a0_corp_flight_bookings(bookings, n),
+        1 => a1_corp_flight_bookings(bookings, n),
+        2 => a2_corp_flight_bookings(bookings, n),
+        3 => a3_corp_flight_bookings(bookings, n),
+        4 => a4_corp_flight_bookings(bookings, n),
+        _ => a5_corp_flight_bookings(bookings, n),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: each flight's seats are the seats of
+// every booking whose range holds it.
+fn literal(bookings: Vec[Vec[i64]], n: i64) -> Vec[i64] {
+    (1..n + 1).map(|flight| {
+        let mut seats = 0;
+        for b in bookings.iter() {
+            if b[0] <= flight and flight <= b[1] {
+                seats += b[2];
+            }
+        }
+        seats
+    }).collect()
+}
+
+// P2's second reading, by the changes: the answer has n entries, from one
+// flight to the next it moves by the seats of the bookings that start at
+// the second less those that end at the first, and over all flights it
+// holds every booking's seats once for each flight it covers.
+fn by_changes(answer: Vec[i64], bookings: Vec[Vec[i64]], n: i64) -> bool {
+    if answer.len() != n {
+        return false;
+    }
+    for i in 0..n {
+        let before = if i == 0 { 0 } else { answer[i - 1] };
+        let mut moved = 0;
+        for b in bookings.iter() {
+            if b[0] == i + 1 {
+                moved += b[2];
+            }
+            if b[1] == i {
+                moved -= b[2];
+            }
+        }
+        if answer[i] - before != moved {
+            return false;
+        }
+    }
+    let covered: i64 = bookings.iter().map(|b| b[2] * (b[1] - b[0] + 1)).sum();
+    answer.iter().sum() == covered
+}
+
+struct Problem {
+    bookings: Vec[Vec[i64]],
+    n: i64,
+    rotate: i64,
+    cut: Vec[i64],
+    extra: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let bookings = p.bookings.clone();
+    let n = p.n;
+    let m = bookings.len();
+    let want = literal(bookings.clone(), n);
+    // P3: the bookings in another order
+    let reordered: Vec[Vec[i64]] = (0..m).map(|i| bookings[(p.rotate + m - 1 - i) % m].clone()).collect();
+    // P4: each booking of two or more flights cut in two at `cut`, and its
+    // seats shared out between two copies of a part
+    let mut pieces: Vec[Vec[i64]] = [];
+    for (i, b) in bookings.iter().enumerate() {
+        if b[0] < b[1] {
+            let c = b[0] + p.cut[i] % (b[1] - b[0]);
+            pieces.push([b[0], c, b[2]].to_vec());
+            if b[2] > 1 {
+                pieces.push([c + 1, b[1], b[2] / 2].to_vec());
+                pieces.push([c + 1, b[1], b[2] - b[2] / 2].to_vec());
+            } else {
+                pieces.push([c + 1, b[1], b[2]].to_vec());
+            }
+        } else {
+            pieces.push(b.clone());
+        }
+    }
+    // P5: the flights numbered from the other end
+    let mirrored: Vec[Vec[i64]] = bookings.iter().map(|b| [n + 1 - b[1], n + 1 - b[0], b[2]].to_vec()).collect();
+    // P6: every booking twice, and one more of every flight
+    let mut twice = bookings.clone();
+    for b in bookings.iter() {
+        twice.push(b.clone());
+    }
+    let mut whole = bookings.clone();
+    whole.push([1, n, p.extra].to_vec());
+    for w in 0..6 {
+        let answer = arm(w, bookings.clone(), n);
+        let what = f"arm {w}, {n} flights, {bookings} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: by the changes from flight to flight
+        expect(mut t, 2, by_changes(answer.clone(), bookings.clone(), n), f"P2 {what}");
+        // P3: another order
+        let r = arm(w, reordered.clone(), n);
+        expect(mut t, 3, r == answer, f"P3 {what}, reordered -> {r}");
+        // P4: cut in pieces
+        let c = arm(w, pieces.clone(), n);
+        expect(mut t, 4, c == answer, f"P4 {what}, in pieces -> {c}");
+        // P5: numbered from the other end, the answer reversed
+        let f = arm(w, mirrored.clone(), n);
+        let back: Vec[i64] = answer.iter().rev().collect();
+        expect(mut t, 5, f == back, f"P5 {what}, mirrored -> {f}");
+        // P6: twice the bookings twice the seats; one more booking of every
+        // flight adds its seats to each
+        let d = arm(w, twice.clone(), n);
+        let e = arm(w, whole.clone(), n);
+        let doubled: Vec[i64] = answer.iter().map(|x| 2 * x).collect();
+        let raised: Vec[i64] = answer.iter().map(|x| x + p.extra).collect();
+        expect(mut t, 6, d == doubled and e == raised, f"P6 {what}, twice -> {d}, plus {p.extra} -> {e}");
+    }
+    t.cases += 1;
+    for x in want.iter() {
+        t.check = (t.check * 31 + x) % 1000000007;
+    }
+}
+
+fn booking(seed: mut ref i64, n: i64, most: i64) -> Vec[i64] {
+    let a = next_random(mut seed) % n + 1;
+    let b = next_random(mut seed) % n + 1;
+    [a.min(b), a.max(b), next_random(mut seed) % most + 1].to_vec()
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 12 flights and 12
+    // bookings at random; one to three flights; bookings of one flight
+    // each over up to 20; and bookings nested inside one another over up
+    // to 30, each inside the one before. Every choice is drawn before any
+    // arm answers.
+    let mut seed = 11091;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let (n, bookings) = match i % 4 {
+            0 => {
+                let n = next_random(mut seed) % 12 + 1;
+                let m = next_random(mut seed) % 12 + 1;
+                let bs: Vec[Vec[i64]] = (0..m).map(|_| booking(mut seed, n, 50)).collect();
+                (n, bs)
+            }
+            1 => {
+                let n = next_random(mut seed) % 3 + 1;
+                let m = next_random(mut seed) % 6 + 1;
+                let bs: Vec[Vec[i64]] = (0..m).map(|_| booking(mut seed, n, 10000)).collect();
+                (n, bs)
+            }
+            2 => {
+                let n = next_random(mut seed) % 20 + 1;
+                let m = next_random(mut seed) % 15 + 1;
+                let bs: Vec[Vec[i64]] = (0..m).map(|_| {
+                    let f = next_random(mut seed) % n + 1;
+                    [f, f, next_random(mut seed) % 9 + 1].to_vec()
+                }).collect();
+                (n, bs)
+            }
+            _ => {
+                let n = next_random(mut seed) % 30 + 1;
+                let m = next_random(mut seed) % 8 + 1;
+                let mut lo = 1;
+                let mut hi = n;
+                let mut bs: Vec[Vec[i64]] = [];
+                for _ in 0..m {
+                    bs.push([lo, hi, next_random(mut seed) % 20 + 1].to_vec());
+                    if hi - lo >= 2 {
+                        lo += next_random(mut seed) % ((hi - lo) / 2) + 1;
+                        hi -= next_random(mut seed) % ((hi - lo) / 2 + 1);
+                    }
+                }
+                (n, bs)
+            }
+        };
+        let rotate = next_random(mut seed);
+        let cut: Vec[i64] = (0..bookings.len()).map(|_| next_random(mut seed)).collect();
+        let extra = next_random(mut seed) % 100 + 1;
+        problems.push(Problem { bookings, n, rotate, cut, extra });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

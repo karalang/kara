@@ -1,0 +1,430 @@
+// LeetCode #1106: Parsing A Boolean Expression -- a differential over
+// the six arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- parse_bool_expr.kara ----
+
+fn a0_parse(s: Vec[char], at: mut ref i64) -> bool {
+    let c = s[*at];
+    *at += 1;
+    match c {
+        't' => true,
+        'f' => false,
+        _ => {
+            *at += 1;
+            let mut values: Vec[bool] = [];
+            loop {
+                values.push(a0_parse(s, mut at));
+                let next = s[*at];
+                *at += 1;
+                if next == ')' {
+                    break;
+                }
+            }
+            match c {
+                '!' => not values[0],
+                '&' => values.iter().all(|v| v),
+                _ => values.iter().any(|v| v),
+            }
+        }
+    }
+}
+
+fn a0_parse_bool_expr(expression: String) -> bool {
+    let s: Vec[char] = expression.chars().collect();
+    let mut at = 0;
+    a0_parse(s, mut at)
+}
+
+// ---- parse_bool_expr_stack.kara ----
+
+fn a1_parse_bool_expr(expression: String) -> bool {
+    let mut stack: Vec[char] = Vec.new();
+    for c in expression.chars() {
+        match c {
+            ',' => {}
+            ')' => {
+                let mut (t, f) = (0, 0);
+                while let Some(top) = stack.pop() {
+                    if top == '(' {
+                        break;
+                    }
+                    if top == 't' { t += 1; } else { f += 1; }
+                }
+                let op = stack.pop().unwrap();
+                let value = match op {
+                    '!' => f > 0,
+                    '&' => f == 0,
+                    _ => t > 0,
+                };
+                stack.push(if value { 't' } else { 'f' });
+            }
+            _ => stack.push(c),
+        }
+    }
+    stack[0] == 't'
+}
+
+// ---- parse_bool_expr_tree.kara ----
+
+enum A2Expr {
+    Value(bool),
+    Not(Vec[A2Expr]),
+    And(Vec[A2Expr]),
+    Or(Vec[A2Expr]),
+}
+
+fn a2_read(chars: mut ref Peekable[StrChars, char]) -> A2Expr {
+    let c = chars.next().unwrap();
+    if c == 't' or c == 'f' {
+        return A2Expr.Value(c == 't');
+    }
+    let _ = chars.next();
+    let mut operands = Vec.new();
+    loop {
+        operands.push(a2_read(mut chars));
+        if chars.next() == Some(')') {
+            break;
+        }
+    }
+    match c {
+        '!' => A2Expr.Not(operands),
+        '&' => A2Expr.And(operands),
+        _ => A2Expr.Or(operands),
+    }
+}
+
+fn a2_eval(e: ref A2Expr) -> bool {
+    match e {
+        A2Expr.Value(v) => v,
+        A2Expr.Not(xs) => not a2_eval(xs[0]),
+        A2Expr.And(xs) => xs.iter().all(a2_eval),
+        A2Expr.Or(xs) => xs.iter().any(a2_eval),
+    }
+}
+
+fn a2_parse_bool_expr(expression: String) -> bool {
+    let mut chars = expression.chars().peekable();
+    a2_eval(a2_read(mut chars))
+}
+
+// ---- parse_bool_expr_frames.kara ----
+
+struct A3Frame {
+    op: u8,
+    seen_true: bool,
+    seen_false: bool,
+}
+
+fn a3_parse_bool_expr(expression: String) -> bool {
+    let mut frames: Vec[A3Frame] = [A3Frame { op: b'|', seen_true: false, seen_false: false }];
+    let bytes = expression.bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let value = match b {
+            b't' => Some(true),
+            b'f' => Some(false),
+            b'!' | b'&' | b'|' => {
+                frames.push(A3Frame { op: b, seen_true: false, seen_false: false });
+                i += 1;
+                None
+            }
+            b')' => {
+                let f = frames.pop().unwrap();
+                Some(match f.op {
+                    b'!' => f.seen_false,
+                    b'&' => not f.seen_false,
+                    _ => f.seen_true,
+                })
+            }
+            _ => None,
+        };
+        if let Some(v) = value {
+            if v {
+                frames[frames.len() - 1].seen_true = true;
+            } else {
+                frames[frames.len() - 1].seen_false = true;
+            }
+        }
+        i += 1;
+    }
+    frames[0].seen_true
+}
+
+// ---- parse_bool_expr_reduce.kara ----
+
+fn a4_parse_bool_expr(expression: own String) -> bool {
+    let mut s = expression;
+    while s.len() > 1 {
+        let open = s.rfind("(").unwrap();
+        let close = open + s[open..].find(")").unwrap();
+        let inside = s[open + 1..close];
+        let value = match s[open - 1..open] {
+            "!" => inside == "f",
+            "&" => not inside.contains("f"),
+            _ => inside.contains("t"),
+        };
+        s = f"{s[..open - 1]}{if value { "t" } else { "f" }}{s[close + 1..]}";
+    }
+    s == "t"
+}
+
+// ---- parse_bool_expr_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_parse_bool_expr(expression: String) -> bool {
+        let mut stk: Vec[char] = Vec.new();
+        for c in expression.chars() {
+            if c == ',' or c == '(' {
+                continue;
+            }
+            if c != ')' {
+                stk.push(c);
+                continue;
+            }
+            let mut has_t = false;
+            let mut has_f = false;
+            while let Some(top) = stk.last().cloned() {
+                if top != 't' and top != 'f' {
+                    break;
+                }
+                if top == 't' {
+                    has_t = true;
+                } else {
+                    has_f = true;
+                }
+                stk.pop();
+            }
+            let op = stk.pop().unwrap();
+            let v = match op {
+                '!' => has_f,
+                '&' => not has_f,
+                _ => has_t,
+            };
+            stk.push(if v { 't' } else { 'f' });
+        }
+        stk[0] == 't'
+    }
+}
+
+fn a5_parse_bool_expr(expression: String) -> bool {
+    A5Solution.a5_parse_bool_expr(expression)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, e: own String) -> bool {
+    match which {
+        0 => a0_parse_bool_expr(e),
+        1 => a1_parse_bool_expr(e),
+        2 => a2_parse_bool_expr(e),
+        3 => a3_parse_bool_expr(e),
+        4 => a4_parse_bool_expr(e),
+        _ => a5_parse_bool_expr(e),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The operator of an expression and its operands, split at the commas
+// outside every parenthesis; a letter has no operands.
+fn split(e: String) -> (char, Vec[String]) {
+    let cs: Vec[char] = e.chars().collect();
+    if cs.len() == 1 {
+        return (cs[0], []);
+    }
+    let mut parts: Vec[String] = [];
+    let mut depth = 0;
+    let mut start = 2;
+    for i in 2..cs.len() - 1 {
+        if cs[i] == '(' {
+            depth += 1;
+        } else if cs[i] == ')' {
+            depth -= 1;
+        } else if cs[i] == ',' and depth == 0 {
+            parts.push(cs[start..i].iter().collect());
+            start = i + 1;
+        }
+    }
+    parts.push(cs[start..cs.len() - 1].iter().collect());
+    (cs[0], parts)
+}
+
+// The statement read literally: `t` is true, `f` false, `!(e)` the
+// opposite of e, `&(..)` true when every operand is, `|(..)` when any is,
+// each operand cut out at the commas outside its parentheses.
+fn literal(e: String) -> bool {
+    let (op, parts) = split(e);
+    match op {
+        't' => true,
+        'f' => false,
+        '!' => not literal(parts[0].clone()),
+        '&' => parts.iter().all(|p| literal(p.clone())),
+        _ => parts.iter().any(|p| literal(p.clone())),
+    }
+}
+
+// P2's second reading, from the inside out: the innermost operator, the
+// last `(` and the `)` after it, replaced by its letter until one is left.
+fn innermost(e: String) -> bool {
+    let mut cs: Vec[char] = e.chars().collect();
+    while cs.len() > 1 {
+        let mut open = cs.len() - 1;
+        while cs[open] != '(' {
+            open -= 1;
+        }
+        let mut close = open;
+        while cs[close] != ')' {
+            close += 1;
+        }
+        let inside: Vec[char] = cs[open + 1..close].iter().filter(|c| c != ',').collect();
+        let value = match cs[open - 1] {
+            '!' => inside[0] == 'f',
+            '&' => inside.iter().all(|c| c == 't'),
+            _ => inside.iter().any(|c| c == 't'),
+        };
+        let mut next: Vec[char] = cs[0..open - 1].to_vec();
+        next.push(if value { 't' } else { 'f' });
+        for c in cs[close + 1..].iter() {
+            next.push(c);
+        }
+        cs = next;
+    }
+    cs[0] == 't'
+}
+
+fn letter(v: bool) -> String {
+    if v { "t" } else { "f" }
+}
+
+// A random expression of about `budget` operators and values.
+fn random_expr(seed: mut ref i64, budget: i64, depth: i64) -> String {
+    if budget <= 1 or depth == 0 or next_random(mut seed) % 4 == 0 {
+        return letter(next_random(mut seed) % 2 == 0);
+    }
+    let op = next_random(mut seed) % 3;
+    if op == 0 {
+        return f"!({random_expr(mut seed, budget - 1, depth - 1)})";
+    }
+    let k = next_random(mut seed) % 4 + 1;
+    let parts: Vec[String] = (0..k).map(|_| random_expr(mut seed, (budget - 1) / k, depth - 1)).collect();
+    let sign = if op == 1 { "&" } else { "|" };
+    f"{sign}({parts.join(",")})"
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, e: String) {
+    let want = literal(e.clone());
+    let (op, parts) = split(e.clone());
+    for w in 0..6 {
+        let answer = arm(w, e.clone());
+        let what = f"arm {w}, {e} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: from the inside out
+        expect(mut t, 2, answer == innermost(e.clone()), f"P2 {what}");
+        // P3: wrapped in operators that keep its value, or fix it
+        let keeps = [f"!(!({e}))", f"&({e})", f"|({e})", f"&({e},t)", f"|(f,{e})"];
+        let ok = keeps.iter().all(|k| arm(w, k.clone()) == answer) and not arm(w, f"&({e},f)") and arm(w, f"|(t,{e})");
+        expect(mut t, 3, ok, f"P3 {what}");
+        // P4: its negation is the opposite, with it never both, always one
+        let ok = arm(w, f"!({e})") == not answer and not arm(w, f"&({e},!({e}))") and arm(w, f"|(!({e}),{e})");
+        expect(mut t, 4, ok, f"P4 {what}");
+        // P5: De Morgan at the root: `&(..)` is `!(|(!(..),..))`, and `|`
+        // the other way round
+        let ok = if op == '&' or op == '|' {
+            let negated: Vec[String] = parts.iter().map(|p| f"!({p})").collect();
+            let dual = if op == '&' { "|" } else { "&" };
+            arm(w, f"!({dual}({negated.join(",")}))") == answer
+        } else {
+            true
+        };
+        expect(mut t, 5, ok, f"P5 {what}");
+        // P6: the root's operands reversed, and its first operand replaced
+        // by the arm's own letter for it
+        let ok = if op == '&' or op == '|' {
+            let rev: Vec[String] = parts.iter().rev().map(|p| p.clone()).collect();
+            let mut first = parts.clone();
+            first[0] = letter(arm(w, parts[0].clone()));
+            arm(w, f"{op}({rev.join(",")})") == answer and arm(w, f"{op}({first.join(",")})") == answer
+        } else if op == '!' {
+            arm(w, f"!({letter(arm(w, parts[0].clone()))})") == answer
+        } else {
+            true
+        };
+        expect(mut t, 6, ok, f"P6 {what}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + e.len() * 2 + if want { 1 } else { 0 }) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: small random expressions of
+    // up to 20 operators and values, 4 deep; a letter under up to 30
+    // nested operators of one operand; one `&` or `|` over up to 30
+    // letters; and random expressions of up to 60, 8 deep. Every choice is
+    // drawn before any arm answers.
+    let mut seed = 11061;
+    let mut problems: Vec[String] = [];
+    for i in 0..2000 {
+        let e = match i % 4 {
+            0 => {
+                let budget = next_random(mut seed) % 20 + 1;
+                random_expr(mut seed, budget, 4)
+            }
+            1 => {
+                let mut e = letter(next_random(mut seed) % 2 == 0);
+                for _ in 0..next_random(mut seed) % 31 {
+                    let sign = match next_random(mut seed) % 3 { 0 => "!", 1 => "&", _ => "|" };
+                    e = f"{sign}({e})";
+                }
+                e
+            }
+            2 => {
+                let sign = if next_random(mut seed) % 2 == 0 { "&" } else { "|" };
+                let n = next_random(mut seed) % 30 + 1;
+                let leaves: Vec[String] = (0..n).map(|_| letter(next_random(mut seed) % 5 != 0)).collect();
+                f"{sign}({leaves.join(",")})"
+            }
+            _ => {
+                let budget = next_random(mut seed) % 60 + 1;
+                random_expr(mut seed, budget, 8)
+            }
+        };
+        problems.push(e);
+    }
+    for e in problems.iter() {
+        check_case(mut t, e.clone());
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

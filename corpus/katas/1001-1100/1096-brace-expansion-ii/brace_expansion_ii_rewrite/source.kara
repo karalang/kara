@@ -1,0 +1,118 @@
+// LeetCode #1096: Brace Expansion II -- rewriting, breadth first: take
+// the first `}` and the `{` that opens it, an innermost group with no
+// braces inside, and replace the group by each of its options in turn,
+// queueing every new expression once (a `Set[String]` of those seen). An
+// expression with no braces left is a word.
+
+fn brace_expansion_ii(expression: own String) -> Vec[String] {
+    let mut words: SortedSet[String] = SortedSet.new();
+    let mut seen: Set[String] = Set.new();
+    let mut queue: VecDeque[String] = VecDeque.new();
+    queue.push_back(expression);
+    while let Some(e) = queue.pop_front() {
+        let Some(close) = e.find("}") else {
+            words.insert(e);
+            continue;
+        };
+        let open = e[..close].rfind("{").unwrap();
+        let (before, after) = (e[..open], e[close + 1..]);
+        for option in e[open + 1..close].split(",") {
+            let next = f"{before}{option}{after}";
+            if seen.insert(next.clone()) {
+                queue.push_back(next);
+            }
+        }
+    }
+    words.into_iter().collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An expression of the grammar: a concatenation of 1 to 3 parts, each a
+// run of 1 to 2 letters or, while `depth` allows, a union of 2 to 3
+// expressions in braces; the letters drawn from the first `k`.
+fn random_expression(seed: mut ref i64, depth: i64, k: i64) -> String {
+    let mut s = String.new();
+    let parts = next_random(mut seed) % 3 + 1;
+    for _ in 0..parts {
+        if depth == 0 or next_random(mut seed) % 2 == 0 {
+            for _ in 0..next_random(mut seed) % 2 + 1 {
+                s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+            }
+        } else {
+            s.push('{');
+            let n = next_random(mut seed) % 2 + 2;
+            for i in 0..n {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(random_expression(mut seed, depth - 1, k));
+            }
+            s.push('}');
+        }
+    }
+    s
+}
+
+fn checksum(words: Vec[String]) -> i64 {
+    let mut h = 0;
+    for w in words.iter() {
+        for b in w.bytes() {
+            h = (h * 131 + b) % 1000000007;
+        }
+        h = (h * 131 + 1) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases = [
+        "{a,b}{c,{d,e}}",
+        "{{a,z},a{b,c},{ab,z}}",
+        "a",
+        "abc",
+        "{a,b,c}",
+        "{a,a,a}",
+        "{c,b,a}{b,a}",
+        "{a{b,c}}{{d}}",
+        "{a,ab}{c,bc}",
+        "{{{{a}}}}",
+        "{z,y}x{w,v}",
+        "{a,b}c{d,e}f",
+    ];
+    for e in cases.iter() {
+        let words = brace_expansion_ii(e.to_string());
+        println(f"{e} -> [{words.join(",")}]");
+    }
+    // 2000 random expressions of at most 60 characters
+    let mut seed = 1096;
+    let mut total = 0;
+    let mut check = 0;
+    let mut tried = 0;
+    while tried < 2000 {
+        let depth = next_random(mut seed) % 4;
+        let k = next_random(mut seed) % 4 + 2;
+        let e = random_expression(mut seed, depth, k);
+        if e.len() > 60 {
+            continue;
+        }
+        tried += 1;
+        let words = brace_expansion_ii(e);
+        total += words.len();
+        check = (check * 31 + checksum(words)) % 1000000007;
+    }
+    println(f"2000 random expressions: {total} words, checksum {check}");
+    // the longest: eight unions of three letters, 56 characters, 3^8 words;
+    // and the same letters nested inside one another
+    let wide = "{a,b,c}".repeat(8);
+    let words = brace_expansion_ii(wide.clone());
+    println(f"{wide.len()} characters: {words.len()} words, first {words[0]}, last {words[words.len() - 1]}, checksum {checksum(words)}");
+    let deep = "{a,{b,{c,{d,{e,{f,{g,{h,{i,{j,{k,{l,{m,n}}}}}}}}}}}}}{x,y}";
+    let words = brace_expansion_ii(deep.to_string());
+    println(f"{deep.len()} characters: {words.len()} words, checksum {checksum(words)}");
+}

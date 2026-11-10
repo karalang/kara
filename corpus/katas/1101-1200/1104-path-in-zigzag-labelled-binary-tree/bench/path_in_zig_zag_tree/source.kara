@@ -1,0 +1,34 @@
+// LeetCode #1104: Path In Zigzag Labelled Binary Tree -- the bench: the
+// ★ arm over every label from 1 to 10^6, LeetCode's most, in a different
+// order each of 8 rounds.
+
+fn path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    let mut depth = 1;
+    while (1 << depth) <= label {
+        depth += 1;
+    }
+    let mut path: Vec[i64] = [];
+    let mut node = label;
+    while depth > 0 {
+        path.push(node);
+        let (start, end) = (1 << (depth - 1), (1 << depth) - 1);
+        node = (start + end - node) / 2;
+        depth -= 1;
+    }
+    path.reverse();
+    path
+}
+
+fn main() {
+    let mut nodes = 0;
+    let mut check = 0;
+    for round in 0..8 {
+        for i in 0..1000000 {
+            let label = (i * 7919 + round * 104729) % 1000000 + 1;
+            let path = path_in_zig_zag_tree(label);
+            nodes += path.len();
+            check = (check * 31 + path[path.len() / 2]) % 1000000007;
+        }
+    }
+    println(f"8 rounds over the labels 1 to 10^6: {nodes} nodes on their paths, checksum {check}");
+}

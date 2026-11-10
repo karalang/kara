@@ -1,0 +1,286 @@
+// LeetCode #1104: Path In Zigzag Labelled Binary Tree -- a differential
+// over the six arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- path_in_zig_zag_tree.kara ----
+
+fn a0_path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    let mut depth = 1;
+    while (1 << depth) <= label {
+        depth += 1;
+    }
+    let mut path: Vec[i64] = [];
+    let mut node = label;
+    while depth > 0 {
+        path.push(node);
+        let (start, end) = (1 << (depth - 1), (1 << depth) - 1);
+        node = (start + end - node) / 2;
+        depth -= 1;
+    }
+    path.reverse();
+    path
+}
+
+// ---- path_in_zig_zag_tree_plain.kara ----
+
+fn a1_path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    let depth = 64 - label.leading_zeros();
+    let mirror = |x: i64, d: i64| { (1 << (d - 1)) + (1 << d) - 1 - x };
+    let plain = if depth % 2 == 0 { mirror(label, depth) } else { label };
+    (1..=depth)
+        .map(|d| {
+            let p = plain >> (depth - d);
+            if d % 2 == 0 { mirror(p, d) } else { p }
+        })
+        .collect()
+}
+
+// ---- path_in_zig_zag_tree_rec.kara ----
+
+fn a2_row_of(label: i64) -> i64 {
+    if label == 1 { 1 } else { a2_row_of(label / 2) + 1 }
+}
+
+fn a2_path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    if label == 1 {
+        return [1];
+    }
+    let d = a2_row_of(label);
+    let parent = ((1 << (d - 1)) + (1 << d) - 1 - label) / 2;
+    let mut path = a2_path_in_zig_zag_tree(parent);
+    path.push(label);
+    path
+}
+
+// ---- path_in_zig_zag_tree_bits.kara ----
+
+fn a3_path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    let depth = f"{label:b}".len();
+    let mirror = |x: i64, d: i64| (3 << (d - 1)) - 1 - x;
+    let plain = if depth % 2 == 0 { mirror(label, depth) } else { label };
+    let digits = f"{plain:b}";
+    let mut path = Vec.new();
+    for d in 1..=depth {
+        let p = i64.from_str_radix(digits[..d], 2).unwrap();
+        path.push(if d % 2 == 0 { mirror(p, d) } else { p });
+    }
+    path
+}
+
+// ---- path_in_zig_zag_tree_iter.kara ----
+
+fn a4_path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    let mut path: Vec[i64] = successors(Some(label), |x| {
+        if x == 1 {
+            None
+        } else {
+            let high = 63 - x.leading_zeros();
+            Some((x ^ ((1 << high) - 1)) >> 1)
+        }
+    })
+    .collect();
+    path.reverse();
+    path
+}
+
+// ---- path_in_zig_zag_tree_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_path_in_zig_zag_tree(label: i32) -> Vec[i32] {
+        let mut level = 0;
+        while (1 << level) <= label {
+            level += 1;
+        }
+        let mut res = Vec.filled(level, 0i32);
+        let mut cur = label;
+        for i in (0..level).rev() {
+            res[i] = cur;
+            let lo: i32 = 1 << i;
+            let hi: i32 = (1 << (i + 1)) - 1;
+            cur = (lo + hi - cur) / 2;
+        }
+        res
+    }
+}
+
+fn a5_path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    A5Solution.a5_path_in_zig_zag_tree(label as i32).iter().map(|x| x as i64).collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, label: i64) -> Vec[i64] {
+    match which {
+        0 => a0_path_in_zig_zag_tree(label),
+        1 => a1_path_in_zig_zag_tree(label),
+        2 => a2_path_in_zig_zag_tree(label),
+        3 => a3_path_in_zig_zag_tree(label),
+        4 => a4_path_in_zig_zag_tree(label),
+        _ => a5_path_in_zig_zag_tree(label),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: the rows laid out, each in the order its
+// labels sit, left to right on the odd rows and right to left on the
+// even ones, down to the label's row; the label's place in its row found,
+// and its parent at half that place in the row above, up to the root.
+fn literal(label: i64) -> Vec[i64] {
+    let mut rows: Vec[Vec[i64]] = [];
+    let mut first = 1;
+    while first <= label {
+        let mut row: Vec[i64] = (first..2 * first).collect();
+        if rows.len() % 2 == 1 {
+            row.reverse();
+        }
+        rows.push(row);
+        first *= 2;
+    }
+    let mut place = rows[rows.len() - 1].iter().position(|x| x == label).unwrap();
+    let mut path: Vec[i64] = Vec.filled(rows.len(), 0);
+    for r in (0..rows.len()).rev() {
+        path[r] = rows[r][place];
+        place /= 2;
+    }
+    path
+}
+
+// A label's place in its row, counted from the left.
+fn place(z: i64, d: i64) -> i64 {
+    if d % 2 == 1 { z - (1 << (d - 1)) } else { (1 << d) - 1 - z }
+}
+
+// P2's second reading, from the top down: the path holds one label in
+// each row from the first to the label's, starts at 1 and ends at the
+// label, and each is one of the two children of the one before, at
+// places 2p and 2p + 1 below place p.
+fn descends(path: Vec[i64], label: i64) -> bool {
+    let rows = 64 - label.leading_zeros();
+    if path.len() != rows or path[0] != 1 or path[rows - 1] != label {
+        return false;
+    }
+    for d in 1..rows + 1 {
+        let z = path[d - 1];
+        if z < (1 << (d - 1)) or z >= (1 << d) {
+            return false;
+        }
+        if d > 1 and place(z, d) / 2 != place(path[d - 2], d - 1) {
+            return false;
+        }
+    }
+    true
+}
+
+// The label in row d that sits where z sits with the row turned round.
+fn mirror(z: i64) -> i64 {
+    let d = 64 - z.leading_zeros();
+    (1 << (d - 1)) + (1 << d) - 1 - z
+}
+
+fn show(path: Vec[i64]) -> String {
+    let parts: Vec[String] = path.iter().map(|x| x.to_string()).collect();
+    f"[{parts.join(",")}]"
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, label: i64, pick: i64) {
+    let want = literal(label);
+    let rows = want.len();
+    // P6: the label's two children, the labels in the row below whose
+    // place halves to the label's place
+    let below = rows + 1;
+    let children: Vec[i64] = ((1 << rows)..(1 << below)).filter(|c| place(c, below) / 2 == place(label, rows)).collect();
+    for w in 0..6 {
+        let answer = arm(w, label);
+        let what = f"arm {w}, {label} -> {show(answer.clone())}";
+        // P1: the rows laid out
+        expect(mut t, 1, answer == want, f"P1 {what}, the rows give {show(want.clone())}");
+        // P2: one label a row, each a child of the one before
+        expect(mut t, 2, descends(answer.clone(), label), f"P2 {what}");
+        // P3: the path to a node on the path is the path cut there
+        let j = pick % answer.len().max(1);
+        let ok = j < answer.len() and arm(w, answer[j]) == answer[0..j + 1].to_vec();
+        expect(mut t, 3, ok, f"P3 {what}, cut at {j}");
+        // P4: the label's sibling, label xor 1, shares all but the last
+        let ok = if label == 1 {
+            true
+        } else {
+            let s = arm(w, label ^ 1);
+            s.len() == answer.len() and s[0..rows - 1].to_vec() == answer[0..rows - 1].to_vec() and s[rows - 1] == label ^ 1
+        };
+        expect(mut t, 4, ok, f"P4 {what}, sibling {label ^ 1}");
+        // P5: the label's mirror in its row has every label mirrored
+        let m = arm(w, mirror(label));
+        let ok = m.len() == answer.len() and (0..m.len()).all(|i| m[i] == mirror(answer[i]));
+        expect(mut t, 5, ok, f"P5 {what}, mirror {mirror(label)} -> {show(m)}");
+        // P6: each child's path is the label's and the child
+        let ok = children.len() == 2 and children.iter().all(|c| {
+            let mut longer = answer.clone();
+            longer.push(c);
+            arm(w, c) == longer
+        });
+        expect(mut t, 6, ok, f"P6 {what}, children {show(children.clone())}");
+    }
+    t.cases += 1;
+    for x in want.iter() {
+        t.check = (t.check * 31 + x) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: a label below 2^11 at
+    // random; the first or last label of a row of 1 to 11; a label below
+    // 32; and the two labels in the middle of a row of 2 to 11. Every
+    // choice is drawn before any arm answers.
+    let mut seed = 11041;
+    let mut problems: Vec[(i64, i64)] = [];
+    for i in 0..2000 {
+        let label = match i % 4 {
+            0 => next_random(mut seed) % 2047 + 1,
+            1 => {
+                let d = next_random(mut seed) % 11 + 1;
+                if next_random(mut seed) % 2 == 0 { 1 << (d - 1) } else { (1 << d) - 1 }
+            }
+            2 => next_random(mut seed) % 31 + 1,
+            _ => {
+                let d = next_random(mut seed) % 10 + 2;
+                (3 << (d - 2)) - next_random(mut seed) % 2
+            }
+        };
+        problems.push((label, next_random(mut seed)));
+    }
+    for (label, pick) in problems.iter() {
+        check_case(mut t, label, pick);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

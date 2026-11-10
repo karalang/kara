@@ -1,0 +1,16 @@
+&(|(f)) -> false
+|(f,f,f,t) -> true
+!(&(f,t)) -> true
+t -> true
+f -> false
+!(t) -> false
+!(f) -> true
+&(t,t,t) -> true
+&(t,f,t) -> false
+|(f) -> false
+!(!(!(t))) -> false
+|(&(t,f,t),!(t)) -> false
+&(|(f,t),!(&(f)),|(f,f,!(f))) -> true
+2000 random expressions, 53073 characters: 1033 true
+deep, 19995 characters: true
+wide, 20000 characters: true

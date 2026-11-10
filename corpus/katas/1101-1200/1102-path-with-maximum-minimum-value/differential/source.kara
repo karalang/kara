@@ -1,0 +1,433 @@
+// LeetCode #1102: Path With Maximum Minimum Value -- a
+// differential over the six arms. Each answer is checked against the
+// statement read literally and against five properties that do not
+// compute the answer; see the README.
+
+// ---- maximum_minimum_path.kara ----
+
+fn a0_maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let (m, n) = (grid.len(), grid[0].len());
+    let mut done: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.max_first();
+    queue.push((grid[0][0], 0, 0));
+    while let Some((low, r, c)) = queue.pop() {
+        if done[r][c] {
+            continue;
+        }
+        done[r][c] = true;
+        if r == m - 1 and c == n - 1 {
+            return low;
+        }
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and not done[nr][nc] {
+                queue.push((low.min(grid[nr][nc]), nr, nc));
+            }
+        }
+    }
+    -1
+}
+
+// ---- maximum_minimum_path_union.kara ----
+
+fn a1_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut x = x;
+    while parent[x] != root {
+        let next = parent[x];
+        parent[x] = root;
+        x = next;
+    }
+    root
+}
+
+fn a1_maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let (m, n) = (grid.len(), grid[0].len());
+    let mut cells: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            cells.push((grid[r][c], r, c));
+        }
+    }
+    cells.sort_by(|a, b| b.0.cmp(a.0));
+    let mut parent: Vec[i64] = (0..m * n).collect();
+    let mut open = Vec.filled(m, Vec.filled(n, false));
+    for (value, r, c) in cells.iter() {
+        open[r][c] = true;
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr < 0 or nr >= m or nc < 0 or nc >= n or not open[nr][nc] {
+                continue;
+            }
+            let a = a1_find(mut parent, r * n + c);
+            let b = a1_find(mut parent, nr * n + nc);
+            parent[a] = b;
+        }
+        if a1_find(mut parent, 0) == a1_find(mut parent, m * n - 1) {
+            return value;
+        }
+    }
+    -1
+}
+
+// ---- maximum_minimum_path_search.kara ----
+
+fn a2_reaches(grid: Vec[Vec[i64]], low: i64) -> bool {
+    let (m, n) = (grid.len(), grid[0].len());
+    if grid[0][0] < low {
+        return false;
+    }
+    let mut seen = Vec.filled(m, Vec.filled(n, false));
+    let mut stack = [(0, 0)];
+    seen[0][0] = true;
+    while let Some((r, c)) = stack.pop() {
+        if r == m - 1 and c == n - 1 {
+            return true;
+        }
+        let mut next = Vec.new();
+        if r > 0 { next.push((r - 1, c)); }
+        if r + 1 < m { next.push((r + 1, c)); }
+        if c > 0 { next.push((r, c - 1)); }
+        if c + 1 < n { next.push((r, c + 1)); }
+        for (nr, nc) in next {
+            if not seen[nr][nc] and grid[nr][nc] >= low {
+                seen[nr][nc] = true;
+                stack.push((nr, nc));
+            }
+        }
+    }
+    false
+}
+
+fn a2_maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let mut values: Vec[i64] = grid.iter().flat_map(|v| v.iter()).cloned().collect();
+    values.sort();
+    values.dedup();
+    let mut (lo, hi) = (0, values.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if a2_reaches(grid, values[mid]) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    values[lo]
+}
+
+// ---- maximum_minimum_path_relax.kara ----
+
+fn a3_maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let (m, n) = (grid.len(), grid[0].len());
+    let mut best = Vec.filled(m, Vec.filled(n, -1));
+    best[0][0] = grid[0][0];
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((0, 0));
+    while let Some((r, c)) = queue.pop_front() {
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr < 0 or nr >= m or nc < 0 or nc >= n {
+                continue;
+            }
+            let carried = best[r][c].min(grid[nr][nc]);
+            if carried > best[nr][nc] {
+                best[nr][nc] = carried;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    best[(m - 1)][(n - 1)]
+}
+
+// ---- maximum_minimum_path_flood.kara ----
+
+fn a4_maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let (m, n) = (grid.len(), grid[0].len());
+    let mut by_value: SortedMap[i64, Vec[(i64, i64)]] = SortedMap.new();
+    for r in 0..m {
+        for c in 0..n {
+            by_value.entry(grid[r][c]).or_insert(Vec.new()).push((r, c));
+        }
+    }
+    let mut open = Vec.filled(m, Vec.filled(n, false));
+    let mut flooded = Vec.filled(m, Vec.filled(n, false));
+    let neighbours = |r: i64, c: i64| {
+        let mut out = Vec.new();
+        if r > 0 { out.push((r - 1, c)); }
+        if r + 1 < m { out.push((r + 1, c)); }
+        if c > 0 { out.push((r, c - 1)); }
+        if c + 1 < n { out.push((r, c + 1)); }
+        out
+    };
+    for (value, cells) in by_value.iter().rev() {
+        for (r, c) in cells.iter() {
+            open[r][c] = true;
+        }
+        for (r, c) in cells.iter() {
+            let touches = (r == 0 and c == 0) or neighbours(r, c).iter().any(|(a, b)| flooded[a][b]);
+            if flooded[r][c] or not touches {
+                continue;
+            }
+            flooded[r][c] = true;
+            let mut stack = [(r, c)];
+            while let Some((a, b)) = stack.pop() {
+                for (x, y) in neighbours(a, b) {
+                    if open[x][y] and not flooded[x][y] {
+                        flooded[x][y] = true;
+                        stack.push((x, y));
+                    }
+                }
+            }
+        }
+        if flooded[m - 1][n - 1] {
+            return *value;
+        }
+    }
+    -1
+}
+
+// ---- maximum_minimum_path_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_maximum_minimum_path(grid: Vec[Vec[i32]]) -> i32 {
+        let (m, n) = (grid.len(), grid[0].len());
+        let mut heap = PriorityQueue.max_first();
+        let mut vis = Vec.filled(m, Vec.filled(n, false));
+        heap.push((grid[0][0], 0, 0));
+        vis[0][0] = true;
+        let dirs = [(0, 1), (1, 0), (0, -1), (-1, 0)];
+        while let Some((v, i, j)) = heap.pop() {
+            if i == m - 1 and j == n - 1 {
+                return v;
+            }
+            for (di, dj) in dirs.iter() {
+                let (x, y) = (i as i32 + di, j as i32 + dj);
+                if x < 0 or y < 0 or x >= m as i32 or y >= n as i32 {
+                    continue;
+                }
+                let (x, y) = (x, y);
+                if not vis[x][y] {
+                    vis[x][y] = true;
+                    heap.push((v.min(grid[x][y]), x, y));
+                }
+            }
+        }
+        -1
+    }
+}
+
+fn a5_maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let grid: Vec[Vec[i32]] = grid.iter().map(|row| row.iter().map(|v| v as i32).collect()).collect();
+    A5Solution.a5_maximum_minimum_path(grid)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, grid: Vec[Vec[i64]]) -> i64 {
+    match which {
+        0 => a0_maximum_minimum_path(grid),
+        1 => a1_maximum_minimum_path(grid),
+        2 => a2_maximum_minimum_path(grid),
+        3 => a3_maximum_minimum_path(grid),
+        4 => a4_maximum_minimum_path(grid),
+        _ => a5_maximum_minimum_path(grid),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: every path from the start to the end
+// that visits no cell twice, walked one step at a time, and the largest
+// of their minimums. (A path that comes back to a cell has the same
+// minimum as one that does not.)
+fn walk(grid: Vec[Vec[i64]], seen: mut ref Vec[Vec[bool]], r: i64, c: i64, low: i64) -> i64 {
+    let (m, n) = (grid.len(), grid[0].len());
+    let low = low.min(grid[r][c]);
+    if r == m - 1 and c == n - 1 {
+        return low;
+    }
+    seen[r][c] = true;
+    let mut best = -1;
+    for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+        let (nr, nc) = (r + dr, c + dc);
+        if nr >= 0 and nr < m and nc >= 0 and nc < n and not seen[nr][nc] {
+            best = best.max(walk(grid, mut seen, nr, nc, low));
+        }
+    }
+    seen[r][c] = false;
+    best
+}
+
+fn literal(grid: Vec[Vec[i64]]) -> i64 {
+    let mut seen: Vec[Vec[bool]] = Vec.filled(grid.len(), Vec.filled(grid[0].len(), false));
+    walk(grid, mut seen, 0, 0, grid[0][0])
+}
+
+// For P2: whether the end is reached from the start through cells of at
+// least `low`, by spreading a mark one sweep at a time until it stops.
+fn spreads(grid: Vec[Vec[i64]], low: i64) -> bool {
+    let (m, n) = (grid.len(), grid[0].len());
+    let mut marked: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+    if grid[0][0] < low {
+        return false;
+    }
+    marked[0][0] = true;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..m {
+            for c in 0..n {
+                let near = (r > 0 and marked[r - 1][c]) or (r + 1 < m and marked[r + 1][c]) or (c > 0 and marked[r][c - 1]) or (c + 1 < n and marked[r][c + 1]);
+                if not marked[r][c] and grid[r][c] >= low and near {
+                    marked[r][c] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+    marked[m - 1][n - 1]
+}
+
+fn mapped(grid: Vec[Vec[i64]], f: Fn(i64) -> i64) -> Vec[Vec[i64]] {
+    grid.iter().map(|row| row.iter().map(|v| f(v)).collect()).collect()
+}
+
+// A snake of values 10 to 19 through values below 10, 5 rows by w: the
+// first row, down the last column, back along the middle row, down the
+// first column and along the last row, so the best path must step left;
+// transposed, it must step up.
+fn snake(seed: mut ref i64, w: i64, transpose: bool) -> Vec[Vec[i64]] {
+    let grid: Vec[Vec[i64]] = (0..5).map(|r| (0..w).map(|c| {
+        let on = r % 2 == 0 or (r == 1 and c == w - 1) or (r == 3 and c == 0);
+        if on { 10 + next_random(mut seed) % 10 } else { next_random(mut seed) % 10 }
+    }).collect()).collect();
+    if transpose {
+        (0..w).map(|c| (0..5).map(|r| grid[r][c]).collect()).collect()
+    } else {
+        grid
+    }
+}
+
+struct Problem {
+    grid: Vec[Vec[i64]],
+    cap: i64,
+    cell: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let grid = p.grid.clone();
+    let (m, n) = (grid.len(), grid[0].len());
+    let want = literal(grid.clone());
+    // P3: the grid transposed, and turned half round so that the start and
+    // the end change places
+    let transposed: Vec[Vec[i64]] = (0..n).map(|c| (0..m).map(|r| grid[r][c]).collect()).collect();
+    let turned: Vec[Vec[i64]] = (0..m).map(|r| (0..n).map(|c| grid[m - 1 - r][n - 1 - c]).collect()).collect();
+    // P4: every value v moved to 2v + 1; P5: every value capped
+    let doubled = mapped(grid.clone(), |v| 2 * v + 1);
+    let cap = p.cap;
+    let capped = mapped(grid.clone(), |v| v.min(cap));
+    // P6: one cell lowered to 0, and the same cell raised to the largest
+    // value
+    let top = grid.iter().map(|row| row.iter().max().unwrap()).max().unwrap();
+    let (r, c) = (p.cell / n % m, p.cell % n);
+    let mut lowered = grid.clone();
+    lowered[r][c] = 0;
+    let mut raised = grid.clone();
+    raised[r][c] = top;
+    let values: SortedSet[i64] = grid.iter().flat_map(|row| row.iter()).cloned().collect();
+    for w in 0..6 {
+        let answer = arm(w, grid.clone());
+        let what = f"arm {w}, {m} by {n} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, every path gives {want}");
+        // P2: the answer is a value of the grid, no larger than either end,
+        // a path of cells at least that large exists, and none of cells
+        // above it
+        let above = values.range_inclusive(answer + 1, i64.MAX).next();
+        let ok = values.contains(answer) and answer <= grid[0][0].min(grid[m - 1][n - 1]) and spreads(grid.clone(), answer) and (above == None or not spreads(grid.clone(), above.unwrap()));
+        expect(mut t, 2, ok, f"P2 {what}");
+        // P3: transposed and turned
+        let (a, b) = (arm(w, transposed.clone()), arm(w, turned.clone()));
+        expect(mut t, 3, a == answer and b == answer, f"P3 {what}, transposed -> {a}, turned -> {b}");
+        // P4: doubled
+        let d = arm(w, doubled.clone());
+        expect(mut t, 4, d == 2 * answer + 1, f"P4 {what}, 2v + 1 -> {d}");
+        // P5: capped
+        let k = arm(w, capped.clone());
+        expect(mut t, 5, k == answer.min(cap), f"P5 {what}, capped at {cap} -> {k}");
+        // P6: lowering a cell never helps, raising one never hurts
+        let (lo, hi) = (arm(w, lowered.clone()), arm(w, raised.clone()));
+        expect(mut t, 6, lo <= answer and hi >= answer, f"P6 {what}, cell ({r}, {c}) to 0 -> {lo}, to {top} -> {hi}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each, every grid at most 16 cells so
+    // that every path can be walked: up to 4 by 4 with values below 10; up
+    // to 4 by 4 with values below 3, so that many paths tie; one row or
+    // one column of 1 to 12 cells below 1000; and 5 by 2 or 3, or 2 or 3
+    // by 5, with a snake of values 10 to 19 through values below 10, so
+    // that the best path must step left or up. Every choice is drawn
+    // before any arm answers.
+    let mut seed = 11021;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let kind = i % 4;
+        let (m, n) = if kind == 2 {
+            let len = next_random(mut seed) % 12 + 1;
+            if next_random(mut seed) % 2 == 0 { (1, len) } else { (len, 1) }
+        } else if kind == 3 {
+            (5, next_random(mut seed) % 2 + 2)
+        } else {
+            (next_random(mut seed) % 4 + 1, next_random(mut seed) % 4 + 1)
+        };
+        let grid: Vec[Vec[i64]] = if kind == 3 {
+            let transpose = next_random(mut seed) % 2 == 0;
+            snake(mut seed, n, transpose)
+        } else {
+            let top = if kind == 0 { 10 } else if kind == 1 { 3 } else { 1000 };
+            (0..m).map(|_| (0..n).map(|_| next_random(mut seed) % top).collect()).collect()
+        };
+        let cap = next_random(mut seed) % 12;
+        let cell = next_random(mut seed);
+        problems.push(Problem { grid, cap, cell });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

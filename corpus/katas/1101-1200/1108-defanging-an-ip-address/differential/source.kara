@@ -1,0 +1,306 @@
+// LeetCode #1108: Defanging an IP Address -- a differential over the six
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- defang_ip_addr.kara ----
+
+fn a0_defang_ip_addr(address: String) -> String {
+    let mut out = String.with_capacity(address.len() + 6);
+    for c in address.chars() {
+        if c == '.' {
+            out.push_str("[.]");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ---- defang_ip_addr_replace.kara ----
+
+fn a1_defang_ip_addr(address: String) -> String {
+    address.replace(".", "[.]")
+}
+
+// ---- defang_ip_addr_split.kara ----
+
+fn a2_defang_ip_addr(address: String) -> String {
+    Vec[Str].from_iter(address.split(".")).join("[.]")
+}
+
+// ---- defang_ip_addr_bytes.kara ----
+
+fn a3_defang_ip_addr(address: String) -> String {
+    let mut out: Vec[u8] = Vec.with_capacity(address.len() + 6);
+    for b in address.bytes() {
+        if b == b'.' {
+            out.extend_from_slice(b"[.]");
+        } else {
+            out.push(b);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// ---- defang_ip_addr_flat_map.kara ----
+
+fn a4_defang_ip_addr(address: String) -> String {
+    address
+        .chars()
+        .flat_map(|c| if c == '.' { ['[', '.', ']'] } else { [c] }.into_iter())
+        .collect()
+}
+
+// ---- defang_ip_addr_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_defang_i_paddr(address: String) -> String {
+        let mut res = String.new();
+        for ch in address.chars() {
+            match ch {
+                '.' => res += "[.]",
+                _ => res.push(ch),
+            }
+        }
+        res
+    }
+}
+
+fn a5_defang_ip_addr(address: String) -> String {
+    A5Solution.a5_defang_i_paddr(address)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, a: String) -> String {
+    match which {
+        0 => a0_defang_ip_addr(a),
+        1 => a1_defang_ip_addr(a),
+        2 => a2_defang_ip_addr(a),
+        3 => a3_defang_ip_addr(a),
+        4 => a4_defang_ip_addr(a),
+        _ => a5_defang_ip_addr(a),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: every period replaced by `[.]`, one at a
+// time from the last, the text before it and after it kept as they are.
+fn literal(a: String) -> String {
+    let mut s: Vec[char] = a.chars().collect();
+    let mut i = s.len();
+    while i > 0 {
+        i -= 1;
+        if s[i] == '.' {
+            let mut next: Vec[char] = s[0..i].to_vec();
+            next.push('[');
+            next.push('.');
+            next.push(']');
+            for c in s[i + 1..].iter() {
+                next.push(c);
+            }
+            s = next;
+        }
+    }
+    s.iter().collect()
+}
+
+// The four numbers of an address, cut at its periods by hand.
+fn octets(a: String) -> Vec[String] {
+    let mut parts: Vec[String] = [];
+    let mut cur: Vec[char] = [];
+    for c in a.chars() {
+        if c == '.' {
+            parts.push(cur.iter().collect());
+            cur = [];
+        } else {
+            cur.push(c);
+        }
+    }
+    parts.push(cur.iter().collect());
+    parts
+}
+
+fn joined(parts: Vec[String], sep: String) -> String {
+    let mut out: Vec[char] = [];
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            for c in sep.chars() {
+                out.push(c);
+            }
+        }
+        for c in p.chars() {
+            out.push(c);
+        }
+    }
+    out.iter().collect()
+}
+
+// P2's second reading, back from the answer: every `[.]` read as one
+// period gives the address, and nothing else in the answer is a bracket
+// or a period.
+fn reads_back(d: String, a: String) -> bool {
+    let cs: Vec[char] = d.chars().collect();
+    let mut back: Vec[char] = [];
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '[' {
+            if i + 2 >= cs.len() or cs[i + 1] != '.' or cs[i + 2] != ']' {
+                return false;
+            }
+            back.push('.');
+            i += 3;
+        } else if cs[i] == '.' or cs[i] == ']' {
+            return false;
+        } else {
+            back.push(cs[i]);
+            i += 1;
+        }
+    }
+    let b: String = back.iter().collect();
+    b == a
+}
+
+// Every digit of `s` written twice; nothing else changed.
+fn twice(s: String) -> String {
+    let mut out: Vec[char] = [];
+    for c in s.chars() {
+        out.push(c);
+        if c >= '0' and c <= '9' {
+            out.push(c);
+        }
+    }
+    out.iter().collect()
+}
+
+// Every digit of `s` moved to `digits[d]`; nothing else changed.
+fn permuted(s: String, digits: Vec[char]) -> String {
+    s.chars().map(|c| if c >= '0' and c <= '9' { digits[c as i64 - 48] } else { c }).collect()
+}
+
+fn sorted_chars(s: String) -> Vec[char] {
+    let mut cs: Vec[char] = s.chars().collect();
+    cs.sort();
+    cs
+}
+
+fn random_octet(seed: mut ref i64, kind: i64) -> i64 {
+    match kind {
+        0 => match next_random(mut seed) % 3 {
+            0 => next_random(mut seed) % 10,
+            1 => next_random(mut seed) % 100,
+            _ => next_random(mut seed) % 256,
+        },
+        1 => next_random(mut seed) % 10,
+        2 => next_random(mut seed) % 156 + 100,
+        _ => {
+            let edges = [0, 1, 9, 10, 99, 100, 199, 200, 254, 255];
+            edges[next_random(mut seed) % 10]
+        }
+    }
+}
+
+struct Problem {
+    address: String,
+    digits: Vec[char],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let a = p.address.clone();
+    let want = literal(a.clone());
+    let parts = octets(a.clone());
+    // P4: the numbers in the other order
+    let reversed: Vec[String] = parts.iter().rev().map(|o| o.clone()).collect();
+    let reversed = joined(reversed, ".");
+    // P5: every digit written twice
+    let doubled = twice(a.clone());
+    // P6: the digits 1 to 9 moved by a permutation, 0 kept
+    let moved = permuted(a.clone(), p.digits.clone());
+    for w in 0..6 {
+        let answer = arm(w, a.clone());
+        let what = f"arm {w}, {a} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: read back, it is the address, with no stray bracket or period,
+        // and six characters longer
+        expect(mut t, 2, reads_back(answer.clone(), a.clone()) and answer.len() == a.len() + 6, f"P2 {what}");
+        // P3: the address in pieces, each number and each period alone,
+        // gives the same answer piece by piece
+        let mut pieces: Vec[String] = [];
+        for (i, o) in parts.iter().enumerate() {
+            if i > 0 {
+                pieces.push(arm(w, "."));
+            }
+            pieces.push(arm(w, o.clone()));
+        }
+        let glued = joined(pieces, "");
+        expect(mut t, 3, glued == answer, f"P3 {what}, piece by piece {glued}");
+        // P4: the numbers in the other order give the same characters, as
+        // many of each
+        let r = arm(w, reversed.clone());
+        expect(mut t, 4, sorted_chars(r.clone()) == sorted_chars(answer.clone()), f"P4 {what}, {reversed} -> {r}");
+        // P5: every digit written twice, before or after, gives the same
+        let d = arm(w, doubled.clone());
+        expect(mut t, 5, d == twice(answer.clone()), f"P5 {what}, {doubled} -> {d}");
+        // P6: the digits moved, before or after, give the same
+        let m = arm(w, moved.clone());
+        expect(mut t, 6, m == permuted(answer.clone(), p.digits.clone()), f"P6 {what}, {moved} -> {m}");
+    }
+    t.cases += 1;
+    for c in want.chars() {
+        t.check = (t.check * 31 + c as i64) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: octets of one, two or three
+    // digits at random; every octet one digit; every octet three digits;
+    // and octets from the edges, 0, 1, 9, 10, 99, 100, 199, 200, 254 and
+    // 255. Every choice is drawn before any arm answers.
+    let mut seed = 11081;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let kind = i % 4;
+        let parts: Vec[String] = (0..4).map(|_| f"{random_octet(mut seed, kind)}").collect();
+        let address = joined(parts, ".");
+        let mut digits: Vec[char] = "0123456789".chars().collect();
+        for j in (2..10).rev() {
+            digits.swap(j, next_random(mut seed) % j + 1);
+        }
+        problems.push(Problem { address, digits });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

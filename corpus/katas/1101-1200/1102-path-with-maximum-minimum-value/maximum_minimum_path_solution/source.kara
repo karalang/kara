@@ -1,0 +1,86 @@
+// LeetCode #1102: Path With Maximum Minimum Value -- a Rust solution as
+// LeetCode's Rust users write it, carried to Kāra by `karac fix`.
+
+
+struct Solution {}
+
+impl Solution {
+    pub fn maximum_minimum_path(grid: Vec[Vec[i32]]) -> i32 {
+        let (m, n) = (grid.len(), grid[0].len());
+        let mut heap = PriorityQueue.max_first();
+        let mut vis = Vec.filled(m, Vec.filled(n, false));
+        heap.push((grid[0][0], 0, 0));
+        vis[0][0] = true;
+        let dirs = [(0, 1), (1, 0), (0, -1), (-1, 0)];
+        while let Some((v, i, j)) = heap.pop() {
+            if i == m - 1 and j == n - 1 {
+                return v;
+            }
+            for (di, dj) in dirs.iter() {
+                let (x, y) = (i as i32 + di, j as i32 + dj);
+                if x < 0 or y < 0 or x >= m as i32 or y >= n as i32 {
+                    continue;
+                }
+                let (x, y) = (x, y);
+                if not vis[x][y] {
+                    vis[x][y] = true;
+                    heap.push((v.min(grid[x][y]), x, y));
+                }
+            }
+        }
+        -1
+    }
+}
+
+fn maximum_minimum_path(grid: Vec[Vec[i64]]) -> i64 {
+    let grid: Vec[Vec[i32]] = grid.iter().map(|row| row.iter().map(|v| v as i32).collect()).collect();
+    Solution.maximum_minimum_path(grid)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_grid(seed: mut ref i64, m: i64, n: i64, top: i64) -> Vec[Vec[i64]] {
+    (0..m).map(|_| (0..n).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % top).collect()).collect()
+}
+
+fn main() {
+    let cases: Vec[Vec[Vec[i64]]] = [
+        [[5, 4, 5], [1, 2, 6], [7, 4, 6]],
+        [[2, 2, 1, 2, 2, 2], [1, 2, 2, 2, 1, 2]],
+        [[3, 4, 6, 3, 4], [0, 2, 1, 1, 7], [8, 8, 3, 2, 7], [3, 2, 4, 9, 8], [4, 1, 2, 0, 0], [4, 6, 5, 4, 3]],
+        [[7]],
+        [[0, 9], [9, 9]],
+        [[9, 1, 9]],
+        [[9], [3], [9]],
+        [[5, 1, 5], [5, 1, 5], [5, 5, 5]],
+        [[1000000000, 1000000000], [1000000000, 1000000000]],
+        [[8, 0, 9, 9, 9], [8, 0, 9, 0, 9], [8, 8, 8, 0, 4]],
+    ];
+    for grid in cases.iter() {
+        println(f"{maximum_minimum_path(grid.clone())}");
+    }
+    // 2000 random grids of 1 to 12 by 1 to 12, values below 2 to 1000
+    let mut seed = 1102;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let m = next_random(mut seed) % 12 + 1;
+        let n = next_random(mut seed) % 12 + 1;
+        let top = next_random(mut seed) % 999 + 2;
+        let best = maximum_minimum_path(random_grid(mut seed, m, n, top));
+        total += best;
+        check = (check * 31 + best + 1) % 1000000007;
+    }
+    println(f"2000 random grids: minimums total {total}, checksum {check}");
+    // 100 by 100, LeetCode's largest, values below 10^9
+    let grid = random_grid(mut seed, 100, 100, 1000000000);
+    println(f"100 by 100: {maximum_minimum_path(grid)}");
+    // a snake: one winding path of 9s through 0s
+    let snake: Vec[Vec[i64]] = (0..100).map(|r| (0..100).map(|c| if r % 2 == 1 or (r % 4 == 2 and c == 99) or (r % 4 == 0 and c == 0) { 9 - (r * 100 + c) % 7 % 3 } else { 1 }).collect()).collect();
+    println(f"100 by 100 snake: {maximum_minimum_path(snake)}");
+}

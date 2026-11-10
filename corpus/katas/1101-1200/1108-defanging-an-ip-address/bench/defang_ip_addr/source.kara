@@ -1,0 +1,50 @@
+// LeetCode #1108: Defanging an IP Address -- the bench: the ★ arm over
+// 1024 random addresses, each round replacing one address with a new one
+// and defanging every address again.
+
+fn defang_ip_addr(address: String) -> String {
+    let mut out = String.with_capacity(address.len() + 6);
+    for c in address.chars() {
+        if c == '.' {
+            out.push_str("[.]");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_address(seed: mut ref i64) -> String {
+    let a = next_random(mut seed) % 256;
+    let b = next_random(mut seed) % 256;
+    let c = next_random(mut seed) % 256;
+    let d = next_random(mut seed) % 256;
+    f"{a}.{b}.{c}.{d}"
+}
+
+fn main() {
+    let mut seed = 1108;
+    let mut addresses: Vec[String] = (0..1024).map(|_| random_address(mut seed)).collect();
+    let mut length = 0;
+    let mut check = 0;
+    let mut calls = 0;
+    for round in 0..10000 {
+        addresses[(round * 7919) % 1024] = random_address(mut seed);
+        for a in addresses.iter() {
+            let d = defang_ip_addr(a);
+            length += d.len();
+            if calls % 64 == 0 {
+                for c in d.chars() {
+                    check = (check * 31 + c as i64) % 1000000007;
+                }
+            }
+            calls += 1;
+        }
+    }
+    println(f"10000 rounds over 1024 addresses: {calls} calls, {length} characters, checksum {check}");
+}

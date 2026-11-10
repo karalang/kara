@@ -1,0 +1,60 @@
+// LeetCode #1104: Path In Zigzag Labelled Binary Tree -- by recursion:
+// the path to a label is the path to its parent and then the label, the
+// parent found by mirroring the label in its row and halving.
+
+fn row_of(label: i64) -> i64 {
+    if label == 1 { 1 } else { row_of(label / 2) + 1 }
+}
+
+fn path_in_zig_zag_tree(label: i64) -> Vec[i64] {
+    if label == 1 {
+        return [1];
+    }
+    let d = row_of(label);
+    let parent = ((1 << (d - 1)) + (1 << d) - 1 - label) / 2;
+    let mut path = path_in_zig_zag_tree(parent);
+    path.push(label);
+    path
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(path: Vec[i64]) -> String {
+    let parts: Vec[String] = path.iter().map(|x| x.to_string()).collect();
+    f"[{parts.join(",")}]"
+}
+
+fn main() {
+    for label in [14, 26, 1, 2, 3, 4, 7, 8, 15, 16, 100, 1000000] {
+        println(f"{label}: {show(path_in_zig_zag_tree(label))}");
+    }
+    // every label from 1 to 2^14 - 1, the first fourteen rows
+    let mut total = 0;
+    let mut check = 0;
+    for label in 1..16384 {
+        let path = path_in_zig_zag_tree(label);
+        for x in path.iter() {
+            total += x;
+            check = (check * 31 + x) % 1000000007;
+        }
+    }
+    println(f"labels 1 to 16383: path labels total {total}, checksum {check}");
+    // 2000 random labels up to 10^6, LeetCode's most
+    let mut seed = 1104;
+    let mut steps = 0;
+    check = 0;
+    for _ in 0..2000 {
+        let label = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000 + 1;
+        let path = path_in_zig_zag_tree(label);
+        steps += path.len();
+        for x in path.iter() {
+            check = (check * 31 + x) % 1000000007;
+        }
+    }
+    println(f"2000 random labels: {steps} nodes on their paths, checksum {check}");
+}
