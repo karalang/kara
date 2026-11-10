@@ -625,6 +625,9 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], span: &Span) -> Type {
+        // Read here and cleared, so a `match` in the scrutinee or an arm is
+        // not taken for this one.
+        let open_arms = std::mem::take(&mut self.open_match_arms);
         let scrut_ty = self.infer_expr(scrutinee);
         let scrut_ty = self.freshen_scrutinee(scrutinee, scrut_ty);
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
@@ -712,10 +715,14 @@ impl<'a> super::TypeChecker<'a> {
                         .find(|t| **t != Type::Never && super::exprs::expectation_is_concrete(t))
                         .cloned()
                 });
+            let saved_open = open_arms.then(|| self.open_literal_expr.replace(arm.body.id));
             let arm_ty = match sibling {
                 Some(expected) => self.check_expr(&arm.body, &expected),
                 None => self.infer_expr(&arm.body),
             };
+            if let Some(saved) = saved_open {
+                self.open_literal_expr = saved;
+            }
             // The synth-mode twin of the check-mode arm hook above.
             self.warn_partial_move_of_drop_struct(&arm.body, &arm_ty);
             // v2 core §3.7: a bare arm body that hands back a `ref`

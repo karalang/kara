@@ -12766,8 +12766,16 @@ fn a_numeric_type_inside_a_compound_keeps_its_sign() {
     );
     rejected(
         "tuple-value-into-a-narrower-tuple",
-        "fn main() {\n    let a = (1, 2);\n    let b: (i64, i8) = a;\n    println(f\"{b.1}\");\n}\n",
+        "fn main() {\n    let one: i64 = 1;\n    let a = (one, one);\n    let b: (i64, i8) = a;\n    \
+         println(f\"{b.1}\");\n}\n",
         "expected '(i64, i8)', found '(i64, i64)'",
+    );
+    // A tuple of literals is literals, open until a use fixes them
+    // (design.md §8, B-2026-11-10-40).
+    accepted_and_runs(
+        "tuple-literal-into-a-narrower-tuple",
+        "fn main() {\n    let a = (1, 2);\n    let b: (i64, i8) = a;\n    println(f\"{b.1}\");\n}\n",
+        "2\n",
     );
     accepted_and_runs(
         "literals-take-the-slot-type",

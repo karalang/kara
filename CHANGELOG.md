@@ -296,6 +296,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from an `i32` function were refused as narrowing. A tuple of literals is
   literals now, open in a `let` and in a push until a use fixes them, as a
   bare literal is (B-2026-11-10-40).
+- `let x = if c { 1 } else { 0 }; take_i32(x)` was refused as narrowing,
+  as were a `match` and a block of literals bound the same way and kata
+  1118's `let feb = if leap { 29 } else { 28 }` returned from an `i32`
+  function. A join of literals is a literal now, in a `let` and as a list
+  element, open until a use fixes it. Beside a type that widens into the
+  default (`rods[i] |= bit` over `[u8; 10]`) it keeps `i64`, as a bare
+  literal does, and the refusal now names the binding and offers its
+  annotation (B-2026-11-10-49).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

@@ -11496,7 +11496,15 @@ impl<'a> super::TypeChecker<'a> {
         element: bool,
         root: &str,
     ) -> Option<super::LiteralLet> {
-        if !Self::is_int_literal_operator_tree(value) {
+        // A join of literals is a literal (`let bit = match c { .. }`,
+        // design.md §8; B-2026-11-10-49), its value unknown here.
+        let join = !suffix
+            && matches!(
+                value.kind,
+                ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::Match { .. }
+            )
+            && Self::is_literal_tree(value, &Type::Int(IntSize::I64));
+        if !join && !Self::is_int_literal_operator_tree(value) {
             return None;
         }
         // A tuple's or a fill's literal is settled when the aggregate is
@@ -11532,7 +11540,9 @@ impl<'a> super::TypeChecker<'a> {
             suffix,
             element,
             var,
-            value: Self::int_literal_operator_tree_value(value),
+            value: (!join)
+                .then(|| Self::int_literal_operator_tree_value(value))
+                .flatten(),
             low: None,
             root: root.to_string(),
         })
@@ -12319,6 +12329,39 @@ impl<'a> super::TypeChecker<'a> {
             value,
         });
         Some(Type::TypeVar(id))
+    }
+
+    /// `e` is a block, `if` or `match` whose every value is an unsuffixed
+    /// literal of one kind, inferred where a later use may fix a literal
+    /// (a `let`'s value): its literals join into one open variable.
+    pub(super) fn open_literal_join(&self, e: &Expr) -> bool {
+        self.open_literal_expr == Some(e.id)
+            && !e.id.is_dummy()
+            && matches!(
+                e.kind,
+                ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::Match { .. }
+            )
+            && (Self::is_literal_tree(e, &Type::Int(IntSize::I64))
+                || Self::is_literal_tree(e, &Type::Float(FloatSize::F64)))
+    }
+
+    /// An unsuffixed number, its negation, or a tuple of them: what a tuple
+    /// literal holds when its numbers are open with it (B-2026-11-10-40).
+    fn is_number_literal_tree(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(_, None) | ExprKind::Float(_, None) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => matches!(
+                operand.kind,
+                ExprKind::Integer(_, None) | ExprKind::Float(_, None)
+            ),
+            ExprKind::Tuple(parts) => {
+                !parts.is_empty() && parts.iter().all(Self::is_number_literal_tree)
+            }
+            _ => false,
+        }
     }
 
     /// [`Self::infer_expr`] leaving an integer or float literal's variable
@@ -13883,7 +13926,21 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             // Compound
-            ExprKind::Block(block) => self.infer_block(block),
+            ExprKind::Block(block) => {
+                // A block of literals left open is its tail's literal
+                // (design.md §8 "A join of literals is a literal",
+                // B-2026-11-10-49).
+                let tail = block
+                    .final_expr
+                    .as_deref()
+                    .filter(|_| self.open_literal_join(expr));
+                let saved = tail.map(|t| self.open_literal_expr.replace(t.id));
+                let ty = self.infer_block(block);
+                if let Some(saved) = saved {
+                    self.open_literal_expr = saved;
+                }
+                ty
+            }
             // `comptime { ... }` — the block runs at compile time and its
             // constant result is spliced in by the comptime fold pass
             // (`crate::comptime`, slice 2). For typing purposes the whole
@@ -13949,13 +14006,24 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => None,
                 };
+                // An `if` of literals left open joins its branches' literals
+                // into one, which later uses fix (design.md §8 "A join of
+                // literals is a literal", B-2026-11-10-49).
+                let open_join = self.open_literal_join(expr);
+                let then_tail = then_block.final_expr.as_deref().filter(|_| open_join);
+                let saved_open = then_tail.map(|t| self.open_literal_expr.replace(t.id));
                 let then_ty = match &early_else {
                     Some(t) if *t != Type::Never && expectation_is_concrete(t) => {
                         self.check_block_against(then_block, t)
                     }
                     _ => self.infer_block(then_block),
                 };
+                if let Some(saved) = saved_open {
+                    self.open_literal_expr = saved;
+                }
                 if let Some(ref else_expr) = else_branch {
+                    let saved_open =
+                        open_join.then(|| self.open_literal_expr.replace(else_expr.id));
                     let else_ty = match (early_else, sibling_array_expectation(else_expr, &then_ty))
                     {
                         (Some(t), _) => t,
@@ -13970,6 +14038,9 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         (None, None) => self.infer_expr(else_expr),
                     };
+                    if let Some(saved) = saved_open {
+                        self.open_literal_expr = saved;
+                    }
                     if then_ty == Type::Never {
                         return else_ty;
                     }
@@ -14138,7 +14209,13 @@ impl<'a> super::TypeChecker<'a> {
 
             ExprKind::Match { scrutinee, arms } => {
                 self.note_end_mut_rewrite(expr);
-                self.infer_match(scrutinee, arms, &expr.span)
+                // A `match` of literals left open joins its arms' literals
+                // (B-2026-11-10-49).
+                let open = self.open_literal_join(expr);
+                let saved = std::mem::replace(&mut self.open_match_arms, open);
+                let ty = self.infer_match(scrutinee, arms, &expr.span);
+                self.open_match_arms = saved;
+                ty
             }
 
             ExprKind::While {
@@ -14854,7 +14931,8 @@ impl<'a> super::TypeChecker<'a> {
                     // or a pushed element (`let t = (0, 0)`, `heap.push((0,
                     // 0))`): a tuple of literals is literals (B-2026-11-10-40).
                     let open = (self.open_tuple_literal == Some(expr.id)
-                        || self.open_literal_expr == Some(expr.id))
+                        || (self.open_literal_expr == Some(expr.id)
+                            && exprs.iter().all(Self::is_number_literal_tree)))
                         && !expr.id.is_dummy();
                     let types: Vec<Type> = exprs
                         .iter()
@@ -15488,10 +15566,17 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     let open = self.open_collection_let == Some(expr.id)
                         && !expr.id.is_dummy()
-                        && (elements
-                            .iter()
-                            .all(|e| Self::unsuffixed_int_literal_value(e).is_some())
-                            || elements.iter().all(unsuffixed_float));
+                        && (elements.iter().all(|e| {
+                            Self::unsuffixed_int_literal_value(e).is_some()
+                                // A join of literals is a literal (`[31, if
+                                // leap { 29 } else { 28 }]`, B-2026-11-10-49).
+                                || (matches!(
+                                    e.kind,
+                                    ExprKind::Block(_)
+                                        | ExprKind::If { .. }
+                                        | ExprKind::Match { .. }
+                                ) && Self::is_literal_tree(e, &Type::Int(IntSize::I64)))
+                        }) || elements.iter().all(unsuffixed_float));
                     let first_ty = if open {
                         let first = self.infer_expr_open(&elements[0]);
                         for e in &elements[1..] {

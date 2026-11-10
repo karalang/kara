@@ -3451,6 +3451,9 @@ pub struct TypeChecker<'a> {
     pub(super) open_literal_expr: Option<crate::ids::NodeId>,
     /// The tuple literal whose numbers [`Self::infer_element_open`] opens.
     pub(super) open_tuple_literal: Option<crate::ids::NodeId>,
+    /// The `match` being inferred joins its arms' literals into one open
+    /// variable (`TypeChecker::open_literal_join`, B-2026-11-10-49).
+    pub(super) open_match_arms: bool,
     /// The spans of [`Self::wide_int_literals`] an integer context has
     /// already range-checked.
     pub(super) wide_int_literals_judged: FxHashSet<SpanKey>,
@@ -4406,6 +4409,7 @@ impl<'a> TypeChecker<'a> {
             literal_typed_spans: Vec::new(),
             open_literal_expr: None,
             open_tuple_literal: None,
+            open_match_arms: false,
             wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             binding_class_reported: rustc_hash::FxHashSet::default(),

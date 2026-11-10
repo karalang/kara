@@ -4668,6 +4668,39 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(t) = self.defer_operator_on_open_vars(op, &left_ty, &right_ty, span) {
             return t;
         }
+        // A tuple of open literals (`let pair = (2, 5)`) compared with a
+        // tuple of values takes their types, read as values: `pair == (n, 5)`
+        // with `n: ref i64` (design.md §8 Literals, B-2026-11-10-40).
+        if compares {
+            let l = self.resolved_now(&left_ty);
+            let r = self.resolved_now(&right_ty);
+            for (mine, theirs, left_side) in [(l.clone(), r.clone(), true), (r, l, false)] {
+                let open_parts = |t: &Type| match t {
+                    Type::Tuple(ts) => ts.iter().any(|p| self.unbound_literal_var(p).is_some()),
+                    _ => false,
+                };
+                if !open_parts(&mine) {
+                    continue;
+                }
+                let want = Self::peel_scalar_refs_in_tuple(&theirs);
+                if super::exprs::contains_type_var(&want) {
+                    continue;
+                }
+                let mut subs = self.env.substitutions.clone();
+                let mut consts = self.env.const_substitutions.clone();
+                if super::inference::unify_types(&mine, &want, &mut subs, &mut consts) {
+                    self.env.substitutions = subs;
+                    self.env.const_substitutions = consts;
+                    let now = self.resolved_now(&mine);
+                    if left_side {
+                        left_ty = now;
+                    } else {
+                        right_ty = now;
+                    }
+                    break;
+                }
+            }
+        }
         // B-2026-10-29-35 — a constructor or tuple operand of a comparison is
         // checked against the other operand's type where it differs from it
         // only by `ref`s to `Copy` values: `value == Some(n)` with `n` an
