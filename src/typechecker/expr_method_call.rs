@@ -739,7 +739,7 @@ impl<'a> super::TypeChecker<'a> {
                 let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
                 let bindings: Vec<(String, Type)> = eqs
                     .iter()
-                    .map(|(a, te)| (a.clone(), self.lower_type_expr(te, &scope)))
+                    .map(|(a, te)| (a.clone(), self.lower_assoc_eq(te, &scope)))
                     .collect();
                 let trait_name = bound.path.last().cloned().unwrap_or_default();
                 let ret = self.dispatch_trait_method_on(
@@ -1241,7 +1241,7 @@ impl<'a> super::TypeChecker<'a> {
         eqs.sort_by(|x, y| x.0.cmp(&y.0));
         let mut out = ty.clone();
         for ((param, assoc, of), te) in eqs {
-            let bound = self.lower_type_expr(&te, &scope);
+            let bound = self.lower_assoc_eq(&te, &scope);
             out = super::types::substitute_assoc_bindings_of(
                 &out,
                 &param,

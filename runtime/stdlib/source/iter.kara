@@ -196,6 +196,27 @@ trait Iterator {
         true
     }
 
+    /// Whether this iterator and `other` give equal items, and the same
+    /// number of them; stops at the first that differ (Rust's
+    /// `Iterator::eq`, kata 2081).
+    fn eq[J: Iterator[Item = Self.Item]](own self, other: own J) -> bool where Self.Item: PartialEq {
+        let mut a = self;
+        let mut b = other;
+        loop {
+            match a.next() {
+                None => return b.next().is_none(),
+                Some(x) => match b.next() {
+                    None => return false,
+                    Some(y) => {
+                        if x != y {
+                            return false;
+                        }
+                    }
+                },
+            }
+        }
+    }
+
     /// The first item `pred` holds for.
     fn find(mut ref self, pred: own MutFn(Self.Item) -> bool) -> Option[Self.Item] {
         while let Some(x) = self.next() {

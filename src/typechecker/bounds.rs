@@ -560,7 +560,7 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
         let mut out = t.clone();
         for ((param, assoc, of), te) in eqs {
-            let bound = self.lower_type_expr(&te, &scope);
+            let bound = self.lower_assoc_eq(&te, &scope);
             out = super::types::substitute_assoc_bindings_of(
                 &out,
                 &param,
@@ -569,6 +569,52 @@ impl<'a> super::TypeChecker<'a> {
             );
         }
         out
+    }
+
+    /// A bound's equation (`J: Iterator[Item = Self.Item]`) lowered, with
+    /// `Self.Item` in an impl's method (a trait
+    /// default copied into `impl Iterator for IterRev[I]`, whose `Item` is
+    /// `I.Item`): the impl's own binding, so `J: Iterator[Item = Self.Item]`
+    /// makes `J.Item` the same type the body's `self.next()` gives
+    /// (B-2026-11-10-26).
+    pub(super) fn lower_assoc_eq(&mut self, te: &crate::ast::TypeExpr, scope: &[String]) -> Type {
+        let bound = self.lower_type_expr(te, scope);
+        self.resolve_self_projections(&bound)
+    }
+
+    fn resolve_self_projections(&self, t: &Type) -> Type {
+        let Some(Type::Named { name, args }) = self.current_self_type.clone() else {
+            return t.clone();
+        };
+        let recur = |a: &Type| self.resolve_self_projections(a);
+        match t {
+            Type::AssocProjection {
+                param,
+                assoc,
+                args: gat_args,
+                ..
+            } if param == "Self" => {
+                let projected = Type::AssocProjection {
+                    param: name.clone(),
+                    assoc: assoc.clone(),
+                    args: gat_args.iter().map(recur).collect(),
+                    receiver_args: args.clone(),
+                    trait_name: None,
+                };
+                match self.resolve_assoc_projections(&projected) {
+                    Type::AssocProjection { param: p, .. } if p == name => t.clone(),
+                    resolved => resolved,
+                }
+            }
+            Type::Named { name: n, args: a } => Type::Named {
+                name: n.clone(),
+                args: a.iter().map(recur).collect(),
+            },
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(recur).collect()),
+            Type::Ref(i) => Type::Ref(Box::new(recur(i))),
+            Type::MutRef(i) => Type::MutRef(Box::new(recur(i))),
+            other => other.clone(),
+        }
     }
 
     /// Emit the v1 trait-alias stub diagnostic at a use site.

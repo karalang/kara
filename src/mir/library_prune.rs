@@ -198,6 +198,15 @@ const ANSWERED_WHEN_SPELLED: &[&str] = &[
     "is_empty",
 ];
 
+/// `Iterator`'s comparisons (`a.iter().eq(b.iter())`) share their names
+/// with the operator methods in [`ALWAYS_KEPT`], so pinning them by name
+/// would check and lower a copy of each in every iterator impl a program
+/// keeps. And a kept `PartialEq` impl spells `eq`, so the word alone keeps
+/// them too. The compiler's `==` never calls them (an iterator is not
+/// `PartialEq`), so one is kept only when the program's own words name it
+/// or a kept body writes `.name` (B-2026-11-10-26).
+const ITERATOR_COMPARISONS: &[&str] = &["eq", "ne", "lt", "le", "gt", "ge", "cmp", "partial_cmp"];
+
 /// Built-in collections a program has a value of only by naming one, since
 /// no literal builds one unless an annotation or signature names it: their
 /// library impls go with the name, as a library type's do (`Vec`, `Map`
@@ -228,6 +237,25 @@ fn words(text: &str, out: &mut FxHashSet<String>) {
             }
         } else {
             i += 1;
+        }
+    }
+}
+
+/// The identifiers of `text` written right after a `.`: the methods it
+/// calls, and the items it names by a path (`Iterator.eq`).
+fn dotted_words(text: &str, out: &mut FxHashSet<String>) {
+    let b = text.as_bytes();
+    for (i, _) in text.match_indices('.') {
+        let mut j = i + 1;
+        while j < b.len() && b[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let start = j;
+        while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+            j += 1;
+        }
+        if j > start && !b[start].is_ascii_digit() && !out.contains(&text[start..j]) {
+            out.insert(text[start..j].to_string());
         }
     }
 }
@@ -284,6 +312,9 @@ struct Method {
     pinned: bool,
     /// A library trait's default body, or an impl's definition of one.
     trait_default: bool,
+    /// One of [`ITERATOR_COMPARISONS`] on `trait Iterator`: reached only
+    /// by the program's own words or a `.name` in kept text.
+    called_only: bool,
     kept: bool,
 }
 
@@ -362,6 +393,8 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
         let end = starts.get(k + 1).copied().unwrap_or(src.len()).max(start);
         // Name, offset, pinned, a library trait's default.
         let mut method_spans: Vec<(String, usize, bool, bool)> = Vec::new();
+        // The offsets of `trait Iterator`'s comparison defaults.
+        let mut called_only: FxHashSet<usize> = FxHashSet::default();
         let kind = match it {
             // The compiler calls several by name (`parse_result_int` decides
             // what `i64.parse` returns), so one is kept without its name
@@ -418,6 +451,12 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
                     if let TraitItem::Method(m) = ti {
                         let default = m.body.is_some();
                         method_spans.push((m.name.clone(), m.span.offset, !default, default));
+                        if t.name == "Iterator"
+                            && default
+                            && ITERATOR_COMPARISONS.contains(&m.name.as_str())
+                        {
+                            called_only.insert(m.span.offset);
+                        }
                     }
                 }
                 Kind::Always
@@ -447,6 +486,7 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
                 text: (*off, method_spans.get(j + 1).map_or(end, |n| n.1)),
                 pinned: *pinned,
                 trait_default: *trait_default,
+                called_only: called_only.contains(off),
                 kept: false,
             })
             .collect();
@@ -471,7 +511,14 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
         .filter(|s| !answered.contains(*s))
         .map(|s| s.to_string())
         .collect();
-    words(&src[..user_len.min(src.len())], &mut reached);
+    let user = &src[..user_len.min(src.len())];
+    words(user, &mut reached);
+    // What `called_only` methods answer to: the program's own words, and
+    // every `.name` the program or a kept part of the library writes.
+    let mut user_words: FxHashSet<String> = FxHashSet::default();
+    words(user, &mut user_words);
+    let mut dotted: FxHashSet<String> = FxHashSet::default();
+    dotted_words(user, &mut dotted);
     // A gated module the program imports (`std.log`, `std.path`) is checked
     // with it but is not in `src`, so what the module names is reached as
     // the program's own words are: each module whose path the words spell,
@@ -484,7 +531,9 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
             if !seeded[i] && path.iter().all(|s| reached.contains(*s)) {
                 seeded[i] = true;
                 more = true;
-                words(&without_comments(text), &mut reached);
+                let text = without_comments(text);
+                words(&text, &mut reached);
+                dotted_words(&text, &mut dotted);
             }
         }
         if !more {
@@ -527,20 +576,24 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
                 if p.kept {
                     changed = true;
                     words(text(p.head), &mut reached);
+                    dotted_words(text(p.head), &mut dotted);
                 }
             }
             if !p.kept {
                 continue;
             }
             for m in p.methods.iter_mut() {
-                if !m.kept
-                    && (m.pinned
-                        || reached.contains(&m.name)
-                        || (!m.trait_default && answered.contains(m.name.as_str())))
-                {
+                let named = if m.called_only {
+                    user_words.contains(&m.name) || dotted.contains(&m.name)
+                } else {
+                    reached.contains(&m.name)
+                        || (!m.trait_default && answered.contains(m.name.as_str()))
+                };
+                if !m.kept && (m.pinned || named) {
                     m.kept = true;
                     changed = true;
                     words(text(m.text), &mut reached);
+                    dotted_words(text(m.text), &mut dotted);
                 }
             }
         }
@@ -736,6 +789,37 @@ mod tests {
         for n in ANSWERED_WHEN_SPELLED {
             assert!(ALWAYS_KEPT.contains(n), "{n} is not in ALWAYS_KEPT");
         }
+    }
+
+    /// The trait methods left after pruning `lib` behind `user`.
+    fn trait_methods_left(user: &str, lib: &str) -> Vec<String> {
+        let src = format!("{user}{lib}");
+        let mut program = crate::parse(&src).program;
+        prune(&mut program, &src, user.len());
+        let mut out = Vec::new();
+        for it in &program.items {
+            if let Item::TraitDef(t) = it {
+                out.extend(t.items.iter().filter_map(|ti| match ti {
+                    TraitItem::Method(m) => Some(m.name.clone()),
+                    _ => None,
+                }));
+            }
+        }
+        out
+    }
+
+    /// `Iterator.eq` is a default every kept iterator impl copies, so it is
+    /// kept only for a program that names it, not for every `==`
+    /// (B-2026-11-10-26). An operator trait's `eq` stays pinned.
+    #[test]
+    fn iterator_comparisons_are_kept_only_when_called() {
+        let lib = "trait Iterator {\n    fn next(mut ref self) -> i64;\n    \
+            fn eq(own self, other: own i64) -> bool {\n        true\n    }\n}\n\
+            trait PartialEq {\n    fn eq(self, other: i64) -> bool {\n        true\n    }\n}\n";
+        let eq_op = "fn main() {\n    println(f\"{1 == 1}\");\n}\n";
+        assert_eq!(trait_methods_left(eq_op, lib), ["next", "eq"]);
+        let called = "fn main() {\n    let v = [1];\n    v.iter().eq(v.iter());\n}\n";
+        assert_eq!(trait_methods_left(called, lib), ["next", "eq", "eq"]);
     }
 
     /// A library method the MIR builder or backend names in a string literal
