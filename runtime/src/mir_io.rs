@@ -1013,10 +1013,43 @@ static MIR_RESPONSE_HEADERS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<usize, i64>>,
 > = std::sync::LazyLock::new(Default::default);
 
+/// The response an `HttpError` for a status of 400 or more keeps
+/// (docs/library/io.md § HTTP client, B-2026-11-09-44), by the address of
+/// its message's buffer, as `MIR_RESPONSE_HEADERS` keys a `Response`. The
+/// message is kept too and compared at each read, so an `HttpError` a
+/// program built (a fake provider's) that reuses a freed buffer finds
+/// nothing. In both archives: a fake provider's `HttpError` reads
+/// `None` from them without pulling in the client.
+struct MirErrorResponse {
+    message: Vec<u8>,
+    status: i64,
+    headers: i64,
+    body: Vec<u8>,
+}
+
+static MIR_ERROR_RESPONSES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<usize, MirErrorResponse>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// What `f` makes of the response the `HttpError` whose message is the
+/// `len` bytes at `msg` keeps, or `None` when it keeps none.
+fn mir_error_response<T>(
+    msg: *const u8,
+    len: u64,
+    f: impl FnOnce(&MirErrorResponse) -> T,
+) -> Option<T> {
+    let t = MIR_ERROR_RESPONSES.lock().ok()?;
+    let e = t.get(&(msg as usize))?;
+    // SAFETY: the caller's contract: the message's bytes are readable.
+    let now = unsafe { buf_bytes(msg, len as usize) };
+    (now == e.message.as_slice()).then(|| f(e))
+}
+
 /// `Client.get` (`op` 0, `a` the URL), `Client.post` (1, `a` the URL and
 /// `b` the body) and `RequestBuilder.send` (2, `handle`). Returns 1 with
 /// the status at `status` and the body as a `String` at `out`, or 0 with
-/// the error's message as a `String` at `out`.
+/// the error's message as a `String` at `out`; an error for a status of
+/// 400 or more keeps its response (`MIR_ERROR_RESPONSES`).
 ///
 /// # Safety
 ///
@@ -1119,6 +1152,30 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_send(
         if let Ok(mut t) = MIR_RESPONSE_HEADERS.lock() {
             t.insert(s.ptr as usize, headers);
         }
+    } else if st < 0 {
+        let n = usize::try_from(body_len).unwrap_or(0);
+        let kept = if body.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: the client wrote `n` bytes at `body` and gave it up.
+            let v = unsafe { std::slice::from_raw_parts(body, n) }.to_vec();
+            // SAFETY: as above; `body` came from `malloc`.
+            unsafe { free(body.cast()) };
+            v
+        };
+        // SAFETY: `s` is the message's fresh buffer of `s.len` bytes.
+        let message = unsafe { buf_bytes(s.ptr, s.len) }.to_vec();
+        if let Ok(mut t) = MIR_ERROR_RESPONSES.lock() {
+            t.insert(
+                s.ptr as usize,
+                MirErrorResponse {
+                    message,
+                    status: -st,
+                    headers,
+                    body: kept,
+                },
+            );
+        }
     }
     // SAFETY: the caller's contract.
     unsafe {
@@ -1208,6 +1265,71 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_headers(body: *const u8, 
     }
     // SAFETY: the caller's contract.
     unsafe { out.write(RawVec::new(items, n, n)) };
+}
+
+/// `HttpError.status()` for the error whose message is the `len` bytes at
+/// `msg`: the status of the response it keeps, or -1 when it keeps none.
+///
+/// # Safety
+///
+/// `msg` describes `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_error_mir_status(msg: *const u8, len: u64) -> i64 {
+    mir_error_response(msg, len, |e| e.status).unwrap_or(-1)
+}
+
+/// `HttpError.header(name)`: 1 with the value as a `String` at `out`, or 0
+/// when the error keeps no response or it has no such header (names
+/// compare without case).
+///
+/// # Safety
+///
+/// `msg` and `name` describe readable bytes, and `out` is writable for a
+/// `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_error_mir_header(
+    msg: *const u8,
+    len: u64,
+    name: *const u8,
+    name_len: u64,
+    out: *mut RawVec,
+) -> i32 {
+    let Some(h) = mir_error_response(msg, len, |e| e.headers) else {
+        return 0;
+    };
+    // SAFETY: the caller's contract; a hit is a NUL-terminated string the
+    // header table keeps until exit.
+    unsafe {
+        let v = crate::karac_runtime_http_response_header(h, name, name_len as usize);
+        if v.is_null() {
+            return 0;
+        }
+        string_of(out, std::ffi::CStr::from_ptr(v).to_bytes());
+    }
+    1
+}
+
+/// `HttpError.body()`: 1 with the kept response's body as a `String` at
+/// `out`, or 0 when the error keeps no response.
+///
+/// # Safety
+///
+/// `msg` describes `len` readable bytes, and `out` is writable for a
+/// `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_error_mir_body(
+    msg: *const u8,
+    len: u64,
+    out: *mut RawVec,
+) -> i32 {
+    match mir_error_response(msg, len, |e| e.body.clone()) {
+        Some(b) => {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(out, &b) };
+            1
+        }
+        None => 0,
+    }
 }
 
 // The WebSocket handshake's accept key, shared with the MIR interpreter

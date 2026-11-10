@@ -690,6 +690,14 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_runtime_http_client_mir_header,
         mir_io::karac_runtime_http_client_mir_headers,
     );
+    // `HttpError`'s readers of the response an error status keeps
+    // (B-2026-11-09-44): in both archives, as a fake provider's error
+    // reads `None` from them.
+    keep!(
+        mir_io::karac_runtime_http_error_mir_status,
+        mir_io::karac_runtime_http_error_mir_header,
+        mir_io::karac_runtime_http_error_mir_body,
+    );
     // Tracing spans (`runtime/src/tracing.rs`). Codegen emits calls to the
     // whole surface (span enter/exit bracketing + exporter/min-level
     // plumbing), so all of it must be JIT-resolvable — `karac run` failed
@@ -7008,6 +7016,16 @@ pub(crate) struct HttpFetched {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    /// The URL that answered (the last hop's), which a status of 400 or
+    /// more names in its error's message.
+    url: String,
+}
+
+/// The error a final status of 400 or more is (docs/library/io.md § HTTP
+/// client: the `HttpError` keeps the response), in ureq's message shape.
+#[cfg(feature = "tls")]
+fn http_status_error(fetched: &HttpFetched) -> Option<String> {
+    (fetched.status >= 400).then(|| format!("{}: status code {}", fetched.url, fetched.status))
 }
 
 /// Private current-thread tokio runtime for the synchronous client FFI.
@@ -7132,9 +7150,8 @@ async fn http_fetch_redirects(
                 continue;
             }
         }
-        if fetched.status >= 400 {
-            return Err(format!("{url}: status code {}", fetched.status));
-        }
+        // A status of 400 or more is an `Err` that keeps the response,
+        // which `http_deliver` makes of it (`http_status_error`).
         return Ok(fetched);
     }
     Err(format!("{url}: too many redirects"))
@@ -7430,6 +7447,7 @@ async fn http_collect_response(
         status,
         headers,
         body,
+        url: url.to_string(),
     })
 }
 
@@ -7619,12 +7637,13 @@ pub extern "C" fn karac_runtime_http_response_headers_free(handle: i64) {
 }
 
 /// Synchronously fetch `url` via HTTP GET and populate the success or
-/// error out-params. The two out-paths are mutually exclusive — only
-/// one of `(body_ptr, body_len)` / `(err_ptr, err_len)` carries a real
-/// buffer; the other is `(null, 0)`. The success/error discriminant is
-/// `*out_status`: `> 0` means HTTP transaction completed (the server
-/// returned a status code); `0` means transport error (DNS, connect,
-/// TLS, timeout — `err_ptr` carries the transport's error message).
+/// error out-params. The success/error discriminant is `*out_status`:
+/// `> 0` means the server answered with a status under 400 (the body
+/// buffer carries its entity); `< 0` means it answered with the negated
+/// status of 400 or more, with the error's message in `err_ptr` and the
+/// response's body and headers kept too (B-2026-11-09-44); `0` means a
+/// transport error (DNS, connect, TLS, timeout — `err_ptr` carries the
+/// transport's error message).
 /// Both buffers are libc::malloc-allocated; ownership transfers to
 /// the caller.
 ///
@@ -7671,16 +7690,15 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
             }
         };
 
-        match http_fetch_blocking("GET", url, &[], &[], 0) {
-            Ok(fetched) => {
-                *out_status = fetched.status as i64;
-                *out_headers_handle = capture_response_headers(&fetched.headers);
-                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-            }
-            Err(msg) => {
-                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
-            }
-        }
+        http_deliver(
+            http_fetch_blocking("GET", url, &[], &[], 0),
+            out_status,
+            out_body_ptr,
+            out_body_len,
+            out_err_ptr,
+            out_err_len,
+            out_headers_handle,
+        );
     }
 }
 
@@ -7740,16 +7758,15 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
             std::slice::from_raw_parts(body_ptr, body_len)
         };
 
-        match http_fetch_blocking("POST", url, body_bytes, &[], 0) {
-            Ok(fetched) => {
-                *out_status = fetched.status as i64;
-                *out_headers_handle = capture_response_headers(&fetched.headers);
-                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-            }
-            Err(msg) => {
-                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
-            }
-        }
+        http_deliver(
+            http_fetch_blocking("POST", url, body_bytes, &[], 0),
+            out_status,
+            out_body_ptr,
+            out_body_len,
+            out_err_ptr,
+            out_err_len,
+            out_headers_handle,
+        );
     }
 }
 
@@ -7792,8 +7809,9 @@ unsafe fn kara_str_to_str(s: &KaracStr) -> Option<&str> {
 /// Synchronously send an HTTP request via the chained-builder surface
 /// (`Client.request(method, url).header(...).body(...).timeout(...).send()`).
 /// Same out-param ownership convention as `karac_runtime_http_client_get`:
-/// `*out_status > 0` means HTTP transaction completed; `0` means
-/// transport error (`out_err_ptr` carries the transport's error message). Both
+/// `*out_status > 0` means HTTP transaction completed, `< 0` an error
+/// status kept with its response, `0` a transport error (`out_err_ptr`
+/// carries the error's message). Both
 /// `body` and `err` buffers are libc::malloc-allocated and freed by the
 /// Kāra-side `String { data, len, cap }`'s Drop.
 ///
@@ -7892,16 +7910,15 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
             std::slice::from_raw_parts(body_ptr, body_len)
         };
 
-        match http_fetch_blocking(method, url, body_bytes, &header_pairs, timeout_ms) {
-            Ok(fetched) => {
-                *out_status = fetched.status as i64;
-                *out_headers_handle = capture_response_headers(&fetched.headers);
-                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-            }
-            Err(msg) => {
-                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
-            }
-        }
+        http_deliver(
+            http_fetch_blocking(method, url, body_bytes, &header_pairs, timeout_ms),
+            out_status,
+            out_body_ptr,
+            out_body_len,
+            out_err_ptr,
+            out_err_len,
+            out_headers_handle,
+        );
     }
 }
 
@@ -8157,22 +8174,21 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
             }
         };
 
-        match http_fetch_blocking(
-            &state.method,
-            &state.url,
-            &state.body,
-            &state.headers,
-            state.timeout_ms,
-        ) {
-            Ok(fetched) => {
-                *out_status = fetched.status as i64;
-                *out_headers_handle = capture_response_headers(&fetched.headers);
-                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
-            }
-            Err(msg) => {
-                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
-            }
-        }
+        http_deliver(
+            http_fetch_blocking(
+                &state.method,
+                &state.url,
+                &state.body,
+                &state.headers,
+                state.timeout_ms,
+            ),
+            out_status,
+            out_body_ptr,
+            out_body_len,
+            out_err_ptr,
+            out_err_len,
+            out_headers_handle,
+        );
     }
 }
 
@@ -8269,9 +8285,18 @@ pub(crate) unsafe fn http_deliver(
     unsafe {
         match res {
             Ok(fetched) => {
-                *out_status = fetched.status as i64;
+                // A status of 400 or more comes back negated, with its
+                // message, headers and body: an `Err` that keeps the
+                // response (B-2026-11-09-44).
                 *out_headers_handle = capture_response_headers(&fetched.headers);
                 write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
+                match http_status_error(&fetched) {
+                    Some(msg) => {
+                        *out_status = -(fetched.status as i64);
+                        write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+                    }
+                    None => *out_status = fetched.status as i64,
+                }
             }
             Err(msg) => {
                 write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);

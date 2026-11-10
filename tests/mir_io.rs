@@ -834,6 +834,119 @@ fn http_client_natives_match_the_interpreter() {
     }
 }
 
+/// An `HttpError` for a status of 400 or more keeps its response: its
+/// status, a header by name without case, and the body. A refused
+/// connection, an error the program built and one whose message was
+/// copied keep none (io.md § HTTP client, B-2026-11-09-44).
+const HTTP_ERROR_RESPONSE: &str = r#"
+fn show(e: HttpError) {
+    let status = match e.status() {
+        Some(s) => f"{s}",
+        None => "none".to_string(),
+    };
+    let header = match e.header("X-KARA".to_string()) {
+        Some(v) => v,
+        None => "none".to_string(),
+    };
+    let absent = match e.header("x-absent".to_string()) {
+        Some(v) => v,
+        None => "none".to_string(),
+    };
+    let body = match e.body() {
+        Some(b) => f"[{b}]",
+        None => "none".to_string(),
+    };
+    println(f"{e.message()} | {status} {header} {absent} {body}");
+}
+
+fn main() {
+    let c = Client.new();
+    let base = "http://127.0.0.1:PORT";
+    match c.get(f"{base}/missing") {
+        Ok(r) => println(f"missing {r.status()}"),
+        Err(e) => {
+            let copied = HttpError { message: e.message() };
+            show(e);
+            show(copied);
+        }
+    }
+    let req = c.request("GET".to_string(), f"{base}/gone").timeout(5000);
+    match req.send() {
+        Ok(r) => println(f"gone {r.status()}"),
+        Err(e) => show(e),
+    }
+    match c.get("http://127.0.0.1:1/") {
+        Ok(r) => println(f"refused? {r.status()}"),
+        Err(e) => println(f"refused {e.status().is_none()} {e.body().is_none()}"),
+    }
+    show(HttpError { message: "built".to_string() });
+}
+"#;
+
+#[test]
+fn http_error_keeps_the_response_of_an_error_status() {
+    let port = http_server();
+    let dir = Scratch::new("http_error");
+    let src = HTTP_ERROR_RESPONSE.replace("PORT", &port.to_string());
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(
+        interp,
+        format!(
+            "http://127.0.0.1:{port}/missing: status code 404 | 404 yes none [nope]\n\
+             http://127.0.0.1:{port}/missing: status code 404 | none none none none\n\
+             http://127.0.0.1:{port}/gone: status code 404 | 404 yes none [nope]\n\
+             refused true true\n\
+             built | none none none none\n"
+        )
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
+/// An `HttpError` a fake `Network` provider returns, and one a program
+/// builds without any client (which links the lean runtime archive),
+/// keep no response: `status`, `header` and `body` are `None`
+/// (B-2026-11-09-44).
+#[test]
+fn http_error_a_program_builds_keeps_no_response() {
+    let dir = Scratch::new("http_error_built");
+    let fake = r#"
+struct Down {}
+
+impl NetworkProvider for Down {
+    fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
+        Err(HttpError { message: f"down: {req.path()}" })
+    }
+}
+
+fn main() {
+    with_provider[Network](Down {}, || {
+        match Client.new().get("http://api.test/x") {
+            Ok(r) => println(f"ok {r.status()}"),
+            Err(e) => println(f"{e.message()} {e.status().is_none()} {e.header("a".to_string()).is_none()} {e.body().is_none()}"),
+        }
+    });
+}
+"#;
+    let (interp, built) = interp_and_build(dir.path(), fake);
+    assert_eq!(interp, "down: /x true true true\n");
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+    let alone = r#"
+fn main() {
+    let e = HttpError { message: "built".to_string() };
+    println(f"{e.message()} {e.status().is_none()} {e.header("a".to_string()).is_none()} {e.body().is_none()}");
+}
+"#;
+    let (interp, built) = interp_and_build(dir.path(), alone);
+    assert_eq!(interp, "built true true true\n");
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
 /// `Server.serve` with a function handler returning a program's own
 /// `Response`, whose `headers` the server sends: the handler echoes what
 /// `Request`'s methods read.

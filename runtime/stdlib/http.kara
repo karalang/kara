@@ -192,6 +192,19 @@ impl Response {
 impl HttpError {
     #[compiler_builtin]
     fn message(ref self) -> String { "" }
+
+    // io.md § HTTP client: a status of 400 or more keeps its response, so
+    // the caller can read what the server said. All three are None for a
+    // failure that has no response (a refused connection, a bad URL, a
+    // provider's own `HttpError { message }`).
+    #[compiler_builtin]
+    fn status(ref self) -> Option[i64] { None }
+
+    #[compiler_builtin]
+    fn header(ref self, name: own String) -> Option[String] { None }
+
+    #[compiler_builtin]
+    fn body(ref self) -> Option[String] { None }
 }
 
 // ── Server surface (Slice B, 2026-05-09) ──────────────────────────────

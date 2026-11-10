@@ -72,6 +72,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `drop(x)` in the prelude, an ordinary `fn drop[T](x: own T) {}`: `x`
   moves in and drops at the call, so a `BufWriter` flushes and a file
   closes there. A program's own `fn drop` still wins (B-2026-11-09-72).
+- An `HttpError` for a status of 400 or more keeps the response:
+  `status()`, `header(name)` (names compared without case) and `body()`,
+  so a client can branch on a 409 or read a `Retry-After`. All three are
+  `None` for a failure with no response, and for an `HttpError` a program
+  or a fake provider builds. The message is unchanged
+  (`<url>: status code <n>`) (B-2026-11-09-44).
 - `File.write_all`, as `TcpStream`, `BufWriter` and `ChildStdin` have it:
   every byte of the buffer, by `write` until none is left
   (B-2026-11-09-70).

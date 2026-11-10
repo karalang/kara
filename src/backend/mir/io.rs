@@ -1709,6 +1709,71 @@ impl<'ctx> Cx<'ctx, '_> {
                     })?;
                 }
             }
+            // The response an error for a status of 400 or more keeps,
+            // by its message's buffer (`karac_runtime_http_error_mir_*`,
+            // B-2026-11-09-44); one the program built keeps none.
+            ("HttpError", "status" | "header" | "body") => {
+                let (at, ty) = self.behind_refs(&args[0])?;
+                let msg = self.offset(at, self.field_offset(ty, None, 0)?)?;
+                let mp = self.load_ptr(msg)?;
+                let mn = self.load_len(self.offset(msg, 8)?)?;
+                let d = self.place_ptr(dest)?;
+                let dty = self.place_type(dest)?;
+                let (some, none) = self.option_variants(dty)?;
+                let off = self.field_offset(dty, Some(some), 0)?;
+                self.store_tag(d, dty, none)?;
+                if method == "status" {
+                    let v = self.rt_named(
+                        "karac_runtime_http_error_mir_status",
+                        &[mp.into(), mn.into()],
+                        64,
+                    )?;
+                    let hit = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::SGE,
+                            v,
+                            self.llcx.i64_type().const_zero(),
+                            "",
+                        )
+                        .map_err(e)?;
+                    self.if_then(hit, |cx| {
+                        cx.store_tag(d, dty, some)?;
+                        cx.store(cx.offset(d, off)?, v.into())
+                    })?;
+                } else {
+                    let out = self.temp(string, "http.error")?;
+                    let found = if method == "header" {
+                        let (n, nn) = self.str_parts(&args[1])?;
+                        let found = self.rt_named(
+                            "karac_runtime_http_error_mir_header",
+                            &[mp.into(), mn.into(), n.into(), nn.into(), out.into()],
+                            32,
+                        )?;
+                        self.drop_moved(&args[1..])?;
+                        found
+                    } else {
+                        self.rt_named(
+                            "karac_runtime_http_error_mir_body",
+                            &[mp.into(), mn.into(), out.into()],
+                            32,
+                        )?
+                    };
+                    let hit = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            found,
+                            self.llcx.i32_type().const_zero(),
+                            "",
+                        )
+                        .map_err(e)?;
+                    self.if_then(hit, |cx| {
+                        cx.store_tag(d, dty, some)?;
+                        cx.copy(cx.offset(d, off)?, out, string)
+                    })?;
+                }
+            }
             _ => return Ok(None),
         }
         Ok(Some(()))

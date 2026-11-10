@@ -3786,7 +3786,11 @@ mod tests {
             "Response",
             &["status", "body", "bytes", "header", "headers"],
         );
-        assert_inherent_impl_compiler_builtin("http.kara", "HttpError", &["message"]);
+        assert_inherent_impl_compiler_builtin(
+            "http.kara",
+            "HttpError",
+            &["message", "status", "header", "body"],
+        );
         // Slice B (2026-05-09): server surface. `serve` is the Slice B
         // follow-up handler-dispatch entry (codegen + thin stdlib
         // declaration; runtime extern at `runtime/src/lib.rs:1879`).

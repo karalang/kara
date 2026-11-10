@@ -856,6 +856,7 @@ fn run_with(
         http_builders: Vec::new(),
         http_headers: rustc_hash::FxHashMap::default(),
         http_bodies: rustc_hash::FxHashMap::default(),
+        http_error_responses: rustc_hash::FxHashMap::default(),
         http_requests: rustc_hash::FxHashMap::default(),
         built_requests: Vec::new(),
         free_requests: Vec::new(),
@@ -1393,6 +1394,9 @@ struct Interp<'a> {
     /// A client response's body bytes, by the body's `String` box: what
     /// `Response.bytes()` returns, which the lossy `String` cannot hold.
     http_bodies: rustc_hash::FxHashMap<AllocId, Vec<u8>>,
+    /// The response an `HttpError` of a status of 400 or more keeps,
+    /// keyed by its message's box: status, headers and body bytes.
+    http_error_responses: rustc_hash::FxHashMap<AllocId, HttpAnswer>,
     /// The request each task's handler is answering, by task (the root's
     /// at 0), which `Request`'s methods read: a server answers each
     /// connection in a task of its own (B-2026-10-25-41).
@@ -14740,6 +14744,7 @@ impl<'a> Interp<'a> {
         self.caps.remove(&id);
         self.http_headers.remove(&id);
         self.http_bodies.remove(&id);
+        self.http_error_responses.remove(&id);
         if self.heap[id.0 as usize].take().is_some() {
             self.free.push(id.0);
         }
@@ -15650,6 +15655,28 @@ impl<'a> Interp<'a> {
             ("Response", "status") => {
                 field(status_k).ok_or_else(|| Stop::Error(format!("{name} of {recv:?}")))
             }
+            ("HttpError", "status" | "header" | "body") => {
+                let kept = match field(0) {
+                    Some(Value::Box(id)) => self.http_error_responses.get(&id).cloned(),
+                    _ => None,
+                };
+                let found = match (method, kept) {
+                    (_, None) => None,
+                    ("status", Some(a)) => Some(Value::Int(i128::from(a.status))),
+                    ("header", Some(a)) => {
+                        let want = self.string_at(&args[1])?;
+                        a.headers
+                            .into_iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case(&want))
+                            .map(|(_, v)| self.alloc_box("String", Value::Str(v)))
+                    }
+                    (_, Some(a)) => {
+                        let text = String::from_utf8_lossy(&a.raw).into_owned();
+                        Some(self.alloc_box("String", Value::Str(text)))
+                    }
+                };
+                self.option(ret, found)
+            }
             ("Response" | "HttpError", "body" | "message") => {
                 let text = match field(if base == "Response" { body_k } else { 0 }) {
                     Some(v) => self.string_at(&v)?,
@@ -15765,10 +15792,17 @@ impl<'a> Interp<'a> {
                 .unwrap_or_else(|| Err(format!("{}: the request failed", req.url))),
             None => http_fetch(&req, with_body),
         };
-        let a = match fetched {
+        let mut a = match fetched {
             Ok(a) => a,
             Err(msg) => return self.http_error(msg, ret),
         };
+        if let Some(msg) = a.error.take() {
+            let e = self.alloc_box("String", Value::Str(msg));
+            if let Value::Box(id) = e {
+                self.http_error_responses.insert(id, a);
+            }
+            return self.variant_named(ret, None, "Err", vec![Value::Agg(vec![e])]);
+        }
         // The body as it came, which `bytes()` returns: a body that is
         // not UTF-8 keeps its bytes there, as the compiled backend's does.
         let text = String::from_utf8_lossy(&a.raw).into_owned();
@@ -18206,10 +18240,15 @@ fn announced_port(at: std::net::SocketAddr, l: &std::net::TcpListener) -> Option
 
 /// A response as `http_fetch` received it: its status, headers in
 /// order, and body bytes.
+#[derive(Clone)]
 struct HttpAnswer {
     status: u16,
     headers: Vec<(String, String)>,
     raw: Vec<u8>,
+    /// The client's message for a status of 400 or more, which comes
+    /// back as an `HttpError` that keeps this response (io.md § HTTP
+    /// client, B-2026-11-09-44).
+    error: Option<String>,
 }
 
 /// What a request came to: the response, or the client's message.
@@ -18260,12 +18299,16 @@ fn http_fetch(req: &HttpBuilder, with_body: bool) -> HttpFetched {
             .into_iter()
             .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
             .collect();
+        // `ureq`'s own wording for an error status, which the compiled
+        // client's matches (runtime/src/lib.rs `http_status_error`).
+        let error = (status >= 400).then(|| format!("{}: status code {status}", resp.get_url()));
         let mut raw = Vec::new();
         let _ = std::io::Read::read_to_end(&mut resp.into_reader(), &mut raw);
         return Ok(HttpAnswer {
             status,
             headers,
             raw,
+            error,
         });
     }
     Err(format!("{url}: too many redirects"))
@@ -18359,7 +18402,8 @@ fn http_exchange(
         }
     }
     match result {
-        Ok(resp) => Ok(resp),
+        // An error status is still a response, which `http_fetch` keeps.
+        Ok(resp) | Err(ureq::Error::Status(_, resp)) => Ok(resp),
         Err(ureq::Error::Transport(t))
             if matches!(
                 t.kind(),

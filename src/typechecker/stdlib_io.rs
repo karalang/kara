@@ -380,7 +380,52 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
-            _ => self.require_known_method("HttpError", method, &["message"], args, span),
+            // io.md § HTTP client: the response a status of 400 or more
+            // kept, None for a failure without one (B-2026-11-09-44).
+            "status" | "body" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("HttpError.{method}() takes no arguments"),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                let inner = if method == "status" {
+                    Type::Int(IntSize::I64)
+                } else {
+                    Type::Str
+                };
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![inner],
+                }
+            }
+            "header" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "HttpError.header() takes 1 argument (the header name), got {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    self.check_expr(&arg.value, &Type::Str);
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Str],
+                }
+            }
+            _ => self.require_known_method(
+                "HttpError",
+                method,
+                &["body", "header", "message", "status"],
+                args,
+                span,
+            ),
         }
     }
 
