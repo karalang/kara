@@ -213,6 +213,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   timed out reading response", without the URL; it now says
   `<url>: request timed out after <ms> ms`, as a compiled program does
   (B-2026-11-09-69).
+- A `let` inside a block no longer outlives it for the `let mut` rule: `let
+  mut q = 7; if c { let q = 3; } q = 8;` was refused as a write to the inner,
+  immutable `q` (B-2026-11-09-99).
 - String literals in `[..].to_vec()` take the `Str` a `Vec[Str]` (or
   `Vec[(Str, T)]`) parameter wants; `total(["a", "b"].to_vec())` was
   refused as a `Vec[String]` (B-2026-11-09-49).
@@ -507,6 +510,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `karac fix`'s `fn main() -> Result[(), AnyError]` for a `?` in `main`
   also turns each bare `return;` of `main` into `return Ok(());`, so the
   fixed program checks; a closure's `return` stays (B-2026-11-09-67).
+- New lint `unused_mut` (warn by default): a `let mut` that nothing
+  writes, assigns through or borrows as `mut` is reported, and `karac fix`
+  deletes the `mut`. Calling a local `MutFn` closure counts as a write.
+  `#[allow(unused_mut)]` on a function or its `impl` block silences it
+  (B-2026-11-09-55).
 - A library type without a trait is named as the library's: `e.clone()` on
   a `JsonError` says "the library's `JsonError` does not implement
   `Clone`" instead of advising a derive on the library's declaration

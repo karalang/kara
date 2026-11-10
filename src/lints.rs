@@ -27,6 +27,26 @@
 
 use crate::token::Span;
 
+/// The level a lint attribute among `attrs` (`#[allow(name)]`, `#[warn]`,
+/// `#[deny]`, `#[expect]`) gives the lint `name`; the last one wins.
+pub fn attr_level(attrs: &[crate::ast::Attribute], name: &str) -> Option<LintLevel> {
+    attrs.iter().rev().find_map(|a| {
+        let level = ["allow", "warn", "deny", "expect"]
+            .into_iter()
+            .find_map(|k| a.is_bare(k).then(|| LintLevel::from_attr_name(k)).flatten())?;
+        a.args
+            .iter()
+            .any(|arg| {
+                arg.name.as_deref() == Some(name)
+                    || matches!(
+                        arg.value.as_ref().map(|v| &v.kind),
+                        Some(crate::ast::ExprKind::Identifier(n)) if n == name
+                    )
+            })
+            .then_some(level)
+    })
+}
+
 /// The four level overrides per `design.md § Lint Level
 /// Attributes`. `Expect` carries cleanup-tracking semantics in
 /// slice 5; today it is structurally identical to `Allow` at
@@ -166,6 +186,11 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         name: "redundant_alias_bound",
         default_level: LintLevel::Warn,
         description: "A bound on a type alias's parameter that the aliased type already requires (`type Sk[T: Ord] = SortedMap[T, i32]`).",
+    },
+    LintInfo {
+        name: "unused_mut",
+        default_level: LintLevel::Warn,
+        description: "A `let mut` binding that nothing writes, assigns through or borrows as `mut`.",
     },
     LintInfo {
         name: "lossless_cast",
@@ -785,6 +810,7 @@ mod tests {
             "redundant_suffix",
             "redundant_cast",
             "lossless_cast",
+            "unused_mut",
             "float_in_serialized_type",
             "f16_software_emulated",
             "pure_loop_in_par",

@@ -1856,6 +1856,108 @@ impl Pipeline {
         }
     }
 
+    /// `unused_mut` (design.md § Built-in lints, B-2026-11-09-55): each
+    /// `let mut` the ownership pass saw nothing write, at the level the
+    /// function's or `impl` block's attribute gives the lint, else the
+    /// command line's and the manifest's, else warn. The fix deletes `mut`
+    /// and the space after it; a `let` whose text is not `let mut ...` (one
+    /// the compiler wrote) is not reported.
+    fn report_unused_muts(&mut self) {
+        use crate::lints::LintLevel;
+        let user = self
+            .library_len
+            .unwrap_or_else(|| crate::prelude::gated_span_base(0));
+        let (Some(own), Some(typed), Some(src)) = (
+            self.ownership.as_ref(),
+            self.typed.as_mut(),
+            self.user_source.as_deref().or(self.source.as_deref()),
+        ) else {
+            return;
+        };
+        // An error leaves the walk that found the writes incomplete, and its
+        // fix may be the write (`add(v)` becomes `add(mut v)`), so the lint
+        // waits for a program with none.
+        let mut errs = self
+            .parsed
+            .errors
+            .iter()
+            .map(|e| e.span.offset)
+            .chain(
+                self.resolved
+                    .iter()
+                    .flat_map(|r| r.errors.iter().map(|e| e.span.offset)),
+            )
+            .chain(typed.errors.iter().map(|e| e.span.offset))
+            .chain(own.errors.iter().map(|e| e.span.offset));
+        if errs.any(|at| at < user) {
+            return;
+        }
+        for u in &own.unused_muts {
+            if u.let_span.offset >= user {
+                continue;
+            }
+            let level = u.source_level.unwrap_or_else(|| {
+                self.lint_overrides
+                    .level_for("unused_mut", LintLevel::Warn)
+                    .unwrap_or(LintLevel::Warn)
+            });
+            if matches!(level, LintLevel::Allow | LintLevel::Expect) {
+                continue;
+            }
+            let Some(rest) = src.get(u.let_span.offset..) else {
+                continue;
+            };
+            let Some(after_let) = rest.strip_prefix("let") else {
+                continue;
+            };
+            let ws = after_let.len() - after_let.trim_start().len();
+            let Some(after_mut) = after_let[ws..].strip_prefix("mut") else {
+                continue;
+            };
+            let gap = after_mut.len() - after_mut.trim_start().len();
+            if ws == 0 || gap == 0 {
+                continue;
+            }
+            let mut_at = u.let_span.offset + 3 + ws;
+            let mut_span = crate::token::Span {
+                line: u.let_span.line,
+                column: u.let_span.column + 3 + ws,
+                offset: mut_at,
+                length: 3,
+            };
+            let names: Vec<String> = u.names.iter().map(|n| format!("`{n}`")).collect();
+            let (subject, verb) = if names.len() == 1 {
+                (names[0].clone(), "is")
+            } else {
+                (names.join(", "), "are")
+            };
+            let entry = crate::typechecker::TypeError {
+                message: format!(
+                    "{subject} {verb} never written, assigned through or borrowed as `mut`, \
+                     so the `let` needs no `mut`"
+                ),
+                span: mut_span,
+                kind: crate::typechecker::TypeErrorKind::StyleLint,
+                lint_name: Some("unused_mut".to_string()),
+                fix_it: Some(crate::typechecker::FixIt {
+                    span: crate::token::Span {
+                        length: 3 + gap,
+                        ..mut_span
+                    },
+                    replacement: String::new(),
+                }),
+                class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
+                expected: None,
+                got: None,
+            };
+            if level == LintLevel::Deny {
+                typed.errors.push(entry);
+            } else {
+                typed.warnings.push(entry);
+            }
+        }
+    }
+
     /// B-2026-10-21-56 — `std.regex` and `std.json` items are used through an
     /// import; a bare use is an error whose fix-it adds it. Read from the
     /// program's own text, ahead of the appended library.
@@ -2584,6 +2686,7 @@ impl Pipeline {
         if self.strict_core && clean {
             self.mir_borrow_errors();
         }
+        self.report_unused_muts();
     }
 
     /// B-2026-10-19-7: what the MIR move and borrow checks refuse, check

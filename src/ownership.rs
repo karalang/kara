@@ -1004,6 +1004,27 @@ impl std::fmt::Display for OwnershipError {
 
 // ── Result ──────────────────────────────────────────────────────
 
+/// A `let mut` whose binding is never written (`unused_mut`).
+#[derive(Debug, Clone)]
+pub struct UnusedMut {
+    /// The `let` statement, from `let`.
+    pub let_span: Span,
+    /// The names the pattern binds, in order.
+    pub names: Vec<String>,
+    /// A lint attribute naming `unused_mut` on the function, else on its
+    /// `impl` block.
+    pub source_level: Option<crate::lints::LintLevel>,
+}
+
+/// One `let mut` of the function being checked, and whether a write to one
+/// of its names has been seen.
+#[derive(Debug, Clone)]
+pub(crate) struct MutLet {
+    let_span: Span,
+    names: Vec<String>,
+    written: bool,
+}
+
 pub struct OwnershipCheckResult {
     /// Inferred parameter modes: function name → [(param_name, mode)].
     pub param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
@@ -1035,6 +1056,11 @@ pub struct OwnershipCheckResult {
     /// cleanup disarm. Both are required — a copy alone leaks the source, a
     /// disarm-skip alone turns the use-after-free into a double free.
     pub use_after_move_consume_sites: std::collections::HashSet<(usize, usize)>,
+    /// `unused_mut` (design.md § Built-in lints, B-2026-11-09-55): each
+    /// `let mut` nothing in its function writes, assigns through or borrows
+    /// as `mut`. The CLI reports them at the lint's level with a fix that
+    /// deletes the `mut`, since only it holds the source text.
+    pub unused_muts: Vec<UnusedMut>,
     /// RC-elision safety set (env `KARAC_RC_ELIDE_REF_PARAMS`): function name →
     /// `(param_name, position)` of every `Ref`-mode parameter that is sound to
     /// RC-elide — no call site passes it a fresh rvalue and its function never
@@ -1879,18 +1905,28 @@ pub struct OwnershipChecker<'a> {
     /// (B-2026-07-27-9 — before that fix, `is_mut` was parsed, round-tripped
     /// by the formatter, and then enforced by nobody).
     ///
-    /// Keyed by bare name, exactly like the sibling `states` map, so it
-    /// inherits that map's shadowing model: a later `let mut x` removes the
-    /// entry, and a binding introduced in an inner block stays visible to the
-    /// outer scope after the block ends. That is an **under**-report (a write
-    /// the checker lets through), never a false positive, which is the safe
-    /// direction for a rule this broad.
+    /// Keyed by bare name, like the sibling `states` map: a later `let mut x`
+    /// removes the entry. `check_block` restores the map when a block ends,
+    /// so a `let` inside it does not outlive it: an inner `let x = 3;` once
+    /// left an outer `let mut x` unwritable after the block, a false
+    /// positive (B-2026-11-09-99). A binding a match arm or a `for` pattern
+    /// introduces still clears the name past its scope, which can only
+    /// under-report.
     ///
     /// `let x: T;` (the uninitialized form) is NOT tracked here — it has its
     /// own first-assignment-is-initialization state machine in `ValueState::
     /// {Uninit, InitOnce}`, which predates this map and already reports the
     /// same `ReassignToImmutable` diagnostic on the second write.
     pub(crate) immutable_lets: FxHashMap<String, Span>,
+    /// `unused_mut`: the current function's `let mut` statements, keyed by
+    /// the statement's offset (a loop body is walked more than once). A
+    /// write to a name marks every one of them that binds it, so a shadowed
+    /// `let mut` is never reported for a write the checker cannot place.
+    fn_mut_lets: FxHashMap<usize, MutLet>,
+    /// The `unused_mut` level the current function's or `impl` block's
+    /// attribute gives.
+    fn_unused_mut_level: Option<crate::lints::LintLevel>,
+    unused_muts: Vec<UnusedMut>,
     /// `Type.method` → declared receiver mode (`self` / `ref self` /
     /// `mut ref self`). Populated once at construction by walking the
     /// program's impl blocks and trait declarations. Consulted at every
@@ -2088,6 +2124,7 @@ impl<'a> OwnershipChecker<'a> {
         kind: OwnershipErrorKind,
         message: String,
     ) {
+        self.mark_mut_let_written(name);
         let Some(let_span) = self.immutable_lets.get(name).cloned() else {
             return;
         };
@@ -2116,6 +2153,30 @@ impl<'a> OwnershipChecker<'a> {
             })),
             consume_span: Some(let_span),
         });
+    }
+
+    /// `unused_mut`: a write to `name` uses every `let mut` of the current
+    /// function that binds it.
+    pub(crate) fn mark_mut_let_written(&mut self, name: &str) {
+        for m in self.fn_mut_lets.values_mut() {
+            if !m.written && m.names.iter().any(|n| n == name) {
+                m.written = true;
+            }
+        }
+    }
+
+    /// Calling a local `MutFn` closure needs `let mut` (design.md §7), so
+    /// the call uses its binding's `mut`.
+    pub(crate) fn mark_mut_fn_call(&mut self, callee: &Expr) {
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if self
+                .typecheck_result
+                .mut_fn_local_calls
+                .contains(&SpanKey::from_span(&callee.span))
+            {
+                self.mark_mut_let_written(name);
+            }
+        }
     }
 
     /// A `mut ref self` method called on a constant (`TABLE.sort()`,
@@ -2186,6 +2247,11 @@ impl<'a> OwnershipChecker<'a> {
     /// same reason it does: a path crossing a `shared` hop writes the
     /// reference-counted pointee, not the binding.
     pub(crate) fn report_mut_marked_arg_write(&mut self, arg: &crate::ast::CallArg) {
+        if arg.mut_marker {
+            if let Some(root) = Self::root_identifier(&arg.value) {
+                self.mark_mut_let_written(&root);
+            }
+        }
         if !arg.mut_marker || self.place_writes_through_shared(&arg.value) {
             return;
         }
@@ -2256,6 +2322,16 @@ impl<'a> OwnershipChecker<'a> {
     /// the idiom design.md § Variable Binding Rules prescribes for making one
     /// field of a destructure mutable) correctly unlocks writes.
     pub(crate) fn record_let_mutability(&mut self, pattern: &Pattern, is_mut: bool, span: &Span) {
+        if is_mut {
+            let names = pattern.binding_names();
+            if !names.is_empty() {
+                self.fn_mut_lets.entry(span.offset).or_insert(MutLet {
+                    let_span: *span,
+                    names,
+                    written: false,
+                });
+            }
+        }
         for (name, at) in pattern.binding_name_spans() {
             // A `mut ref name` binding is a mutable borrow whatever the `let`
             // says; the write it allows lands in the scrutinee, whose own
@@ -2326,6 +2402,9 @@ impl<'a> OwnershipChecker<'a> {
             binding_type_names: FxHashMap::default(),
             binding_types: FxHashMap::default(),
             immutable_lets: FxHashMap::default(),
+            fn_mut_lets: FxHashMap::default(),
+            fn_unused_mut_level: None,
+            unused_muts: Vec::new(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
             trait_static_methods: collect_trait_static_methods(program),
@@ -2591,6 +2670,7 @@ impl<'a> OwnershipChecker<'a> {
             declared_param_modes: self.declared_param_modes,
             param_mode_derivation: self.param_mode_derivation,
             use_after_move_consume_sites,
+            unused_muts: std::mem::take(&mut self.unused_muts),
             elidable_ref_params,
             closure_param_modes: self.closure_param_modes,
             closure_captures: self.closure_captures,
@@ -3164,7 +3244,27 @@ impl<'a> OwnershipChecker<'a> {
                 _ => {}
             }
         }
+        self.flush_unused_muts();
         self.check_moved_field_refills();
+    }
+
+    /// Move the finished function's unwritten `let mut`s into the result,
+    /// in source order.
+    fn flush_unused_muts(&mut self) {
+        let mut done: Vec<MutLet> = self
+            .fn_mut_lets
+            .drain()
+            .map(|(_, m)| m)
+            .filter(|m| !m.written)
+            .collect();
+        done.sort_by_key(|m| m.let_span.offset);
+        for m in done {
+            self.unused_muts.push(UnusedMut {
+                let_span: m.let_span,
+                names: m.names,
+                source_level: self.fn_unused_mut_level,
+            });
+        }
     }
 
     /// B-2026-09-08-3 — run after the whole-program walk, because the
@@ -3231,6 +3331,11 @@ impl<'a> OwnershipChecker<'a> {
         };
 
         self.current_function = fn_key.clone();
+        self.flush_unused_muts();
+        self.fn_unused_mut_level =
+            crate::lints::attr_level(&f.attributes, "unused_mut").or_else(|| {
+                impl_block.and_then(|i| crate::lints::attr_level(&i.attributes, "unused_mut"))
+            });
         self.suppress_rc_notes = f.attributes.iter().any(|a| {
             a.is_bare("allow")
                 && a.args.iter().any(|arg| {

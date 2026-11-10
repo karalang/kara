@@ -55,6 +55,9 @@ impl<'a> super::OwnershipChecker<'a> {
         // beyond this block's depth.
         self.current_scope_depth += 1;
         let entered_depth = self.current_scope_depth;
+        // A `let` inside the block ends with it: an inner `let x = 3;` must
+        // not leave an outer `let mut x` unwritable after the block.
+        let lets_at_entry = self.immutable_lets.clone();
         // The slice bindings this block's `let`s made, each with the index
         // of its `let`.
         let mut holders: Vec<(String, usize)> = Vec::new();
@@ -87,6 +90,7 @@ impl<'a> super::OwnershipChecker<'a> {
         }
         self.drain_borrows_at_depth(entered_depth);
         self.current_scope_depth = entered_depth - 1;
+        self.immutable_lets = lets_at_entry;
     }
 
     /// Ends the slice borrow a binding of this block holds once nothing in
@@ -547,6 +551,10 @@ impl<'a> super::OwnershipChecker<'a> {
                         if let Some(usage) = param_usage.get_mut(&root) {
                             *usage = ParamUsage::Mutated;
                         }
+                        // `unused_mut`: a write through the place uses the
+                        // root's `mut` even where the rule below exempts it
+                        // (`let mut a = p;` copies a borrowed `p`).
+                        self.mark_mut_let_written(&root);
                         // B-2026-07-27-9 — writing through a place rooted at
                         // an immutable binding (`p.x = 1;`, `v[0] = 1;`)
                         // mutates that binding's value just as surely as a
@@ -602,6 +610,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     if let Some(usage) = param_usage.get_mut(&root) {
                         *usage = ParamUsage::Mutated;
                     }
+                    self.mark_mut_let_written(&root);
                     // A compound assignment to a `mut ref` field writes the
                     // value it borrows: `g.value += 1` on a `MutexGuard[i64]`
                     // (concurrency.md; B-2026-10-21-72).

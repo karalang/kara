@@ -426,6 +426,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 }
             }
             ExprKind::Call { callee, args } => {
+                self.mark_mut_fn_call(callee);
                 // Slice 2 — call-statement-scoped slice borrows; see
                 // `check_expr_reading`'s Call arm for rationale.
                 let snapshot = self.snapshot_active_borrow_lens();
@@ -723,6 +724,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.check_expr_reading(operand, states, param_types, param_usage);
             }
             ExprKind::Call { callee, args } => {
+                self.mark_mut_fn_call(callee);
                 // Slice 2 — snapshot before arg walking so call-arg-
                 // coerced slice borrows AND ref-formal transient borrows
                 // are call-statement-scoped (drop at call return).
@@ -842,6 +844,20 @@ impl<'a> super::OwnershipChecker<'a> {
                 // through a shared handle is (see `place_writes_through_shared`):
                 // reference semantics mean `let` freezes the handle, not the
                 // reference-counted object it points at.
+                // `unused_mut`: a call the strict check reads as writing its
+                // receiver uses the root's `mut`, whatever the table below
+                // knows of the method.
+                if range_view_write
+                    || matches!(self.method_self_borrow_kind(expr), Some(BorrowKind::MutRef))
+                    || self
+                        .typecheck_result
+                        .receiver_write_calls
+                        .contains(&SpanKey::from_span(&expr.span))
+                {
+                    if let Some(root) = Self::root_identifier(object) {
+                        self.mark_mut_let_written(&root);
+                    }
+                }
                 if (range_view_write
                     || matches!(self.method_self_borrow_kind(expr), Some(BorrowKind::MutRef)))
                     && !self.receiver_is_shared_handle(object)
@@ -930,6 +946,16 @@ impl<'a> super::OwnershipChecker<'a> {
                         self.check_expr_reading(&arg.value, states, param_types, param_usage);
                     } else {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);
+                    }
+                    // A marked argument is a write, as in the `Call` arms
+                    // (design.md §7: the marker does not grant mutability).
+                    self.report_mut_marked_arg_write(arg);
+                    // An unmarked one at a `mut ref` parameter writes its
+                    // place too: it uses a `let mut` (`unused_mut`).
+                    if !arg.mut_marker && self.method_arg_is_mut_ref(expr, i) {
+                        if let Some(root) = Self::root_identifier(&arg.value) {
+                            self.mark_mut_let_written(&root);
+                        }
                     }
                 }
                 // B-2026-10-15-12: a closure

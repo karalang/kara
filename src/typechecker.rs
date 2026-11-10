@@ -1955,6 +1955,15 @@ pub struct TypeCheckResult {
     /// Each maps to the edits that make its moving bindings `ref`s, which
     /// is `karac fix`'s repair for a later use of the scrutinee.
     pub core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// Callee spans of calls to a local `MutFn` closure binding (design.md
+    /// §7: calling one needs `let mut`). The ownership pass counts each as a
+    /// write of the binding for `unused_mut` (B-2026-11-09-55).
+    pub mut_fn_local_calls: FxHashSet<SpanKey>,
+    /// Spans of method calls the strict check reads as writing their
+    /// receiver (`w.push_back(x)` on any library or program type). The
+    /// ownership pass counts each as a write of the receiver's root for
+    /// `unused_mut` (B-2026-11-09-55).
+    pub receiver_write_calls: FxHashSet<SpanKey>,
     /// v2 core (strict commands only): method receivers that are borrowed
     /// places (a `ref` parameter or binding, a view, a place reached through
     /// one or through a `shared` handle). A method taking `self` by value
@@ -3009,6 +3018,10 @@ pub struct TypeChecker<'a> {
     pub(super) forking: Option<provider_share::Forking>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// See [`TypeCheckResult::mut_fn_local_calls`].
+    pub(super) mut_fn_local_calls: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::receiver_write_calls`].
+    pub(super) receiver_write_calls: FxHashSet<SpanKey>,
     /// Set while a pattern binds a part that could move out of an owned
     /// scrutinee (a non-`Copy` value, or a bare type parameter's).
     pub(super) pattern_may_move: bool,
@@ -4265,6 +4278,8 @@ impl<'a> TypeChecker<'a> {
             fn_item_spans: FxHashSet::default(),
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
+            mut_fn_local_calls: FxHashSet::default(),
+            receiver_write_calls: FxHashSet::default(),
             pattern_may_move: false,
             moving_scrutinees: FxHashSet::default(),
             core_borrowed_receivers: FxHashSet::default(),
@@ -4927,6 +4942,8 @@ impl<'a> TypeChecker<'a> {
             core_ref_copy_nodes: self.core_ref_copy_nodes,
             core_consuming_for_iterables: self.core_consuming_for_iterables,
             core_moving_scrutinees: self.core_moving_scrutinees,
+            mut_fn_local_calls: self.mut_fn_local_calls,
+            receiver_write_calls: self.receiver_write_calls,
             core_borrowed_receivers: self.core_borrowed_receivers,
             core_for_into_iter_receivers: self.core_for_into_iter_receivers,
             core_own_param_receivers: self.core_own_param_receivers,

@@ -124,6 +124,10 @@ struct Walk<'t, 'a> {
     shared_once_fn_params: FxHashMap<String, Option<FixIt>>,
     /// Calls of a `MutFn` through a shared borrow (§9.6).
     shared_mut_fn_calls: Vec<(Span, String, Option<FixIt>)>,
+    /// See [`super::TypeCheckResult::mut_fn_local_calls`].
+    mut_fn_local_calls: FxHashSet<SpanKey>,
+    /// See [`super::TypeCheckResult::receiver_write_calls`].
+    receiver_write_calls: FxHashSet<SpanKey>,
     /// The scopes that hold a `for` pattern's bindings.
     for_item_scopes: Vec<usize>,
     /// Locals bound to a closure literal that writes a capture, with the
@@ -327,6 +331,8 @@ impl<'a> TypeChecker<'a> {
             shared_mut_fn_params: FxHashMap::default(),
             shared_once_fn_params: FxHashMap::default(),
             shared_mut_fn_calls: Vec::new(),
+            mut_fn_local_calls: FxHashSet::default(),
+            receiver_write_calls: FxHashSet::default(),
             for_item_scopes: Vec::new(),
             mut_closure_locals: Vec::new(),
             immutable_mut_closure_locals: Vec::new(),
@@ -468,6 +474,8 @@ impl<'a> TypeChecker<'a> {
         let mut errors = w.errors;
         let kind_errors = w.kind_errors;
         let shared_mut_fn_calls = w.shared_mut_fn_calls;
+        let mut_fn_local_calls = w.mut_fn_local_calls;
+        let receiver_write_calls = w.receiver_write_calls;
         let prefix_errors = w.prefix_errors;
         let once_calls = w.once_calls;
         let read_conflicts = w.read_conflicts;
@@ -481,6 +489,8 @@ impl<'a> TypeChecker<'a> {
                 e.replacement = e.replacement.replace("ref ", "mut ref ");
             }
         }
+        self.mut_fn_local_calls.extend(mut_fn_local_calls);
+        self.receiver_write_calls.extend(receiver_write_calls);
         for (span, message) in removed_calls {
             self.type_error(message, span, TypeErrorKind::RemovedInCore);
         }
@@ -1278,6 +1288,8 @@ impl Walk<'_, '_> {
             ExprKind::MethodCall { object, method, .. }
                 if self.method_writes_receiver(e, object, method) =>
             {
+                self.receiver_write_calls
+                    .insert(SpanKey::from_span(&e.span));
                 let action = match (&object.kind, place_root(object)) {
                     (ExprKind::Identifier(_) | ExprKind::SelfValue, Some(r)) => {
                         format!("`{r}.{method}` (a method that writes its receiver)")
@@ -1673,6 +1685,10 @@ impl Walk<'_, '_> {
         // design.md §7: "Calling a local MutFn needs let mut"
         // (B-2026-11-04-69).
         if let Some(Root::Local(i, j)) = self.binding_root(name) {
+            if self.mut_closure_locals.iter().any(|(r, _)| *r == (i, j)) {
+                self.mut_fn_local_calls
+                    .insert(SpanKey::from_span(&callee.span));
+            }
             let found = self
                 .immutable_mut_closure_locals
                 .iter()

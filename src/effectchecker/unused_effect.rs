@@ -47,27 +47,7 @@ pub const LINT_NAME: &str = "unused_effect";
 
 /// The level a lint attribute on `attrs` gives `unused_effect`.
 fn attr_level(attrs: &[Attribute]) -> Option<LintLevel> {
-    attrs.iter().rev().find_map(|a| {
-        let level = ["allow", "warn", "deny", "expect"]
-            .into_iter()
-            .find(|k| a.is_bare(k))?;
-        let named = a.args.iter().any(|arg| {
-            arg.name.as_deref() == Some(LINT_NAME)
-                || matches!(
-                    arg.value.as_ref().map(|v| &v.kind),
-                    Some(ExprKind::Identifier(n)) if n == LINT_NAME
-                )
-        });
-        if !named {
-            return None;
-        }
-        Some(match level {
-            "allow" => LintLevel::Allow,
-            "warn" => LintLevel::Warn,
-            "deny" => LintLevel::Deny,
-            _ => LintLevel::Expect,
-        })
-    })
+    crate::lints::attr_level(attrs, LINT_NAME)
 }
 
 /// One piece of a clause the lint can keep or drop: a resource of a verb

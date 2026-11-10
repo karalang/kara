@@ -180,6 +180,27 @@ impl<'a> super::OwnershipChecker<'a> {
         false
     }
 
+    /// Whether the method's parameter at `arg_index` is `mut ref`: the call
+    /// writes the argument's place. Resolved like
+    /// [`Self::method_arg_is_borrow_position`]: the span-resolved method
+    /// first, else any method of that name with a `mut ref` there.
+    pub(crate) fn method_arg_is_mut_ref(&self, method_call: &Expr, arg_index: usize) -> bool {
+        if let Some(m) = self
+            .resolved_method_mode_key(method_call)
+            .and_then(|key| self.method_param_modes.get(key))
+            .and_then(|modes| modes.get(arg_index))
+        {
+            return matches!(m, OwnershipMode::MutRef);
+        }
+        let ExprKind::MethodCall { method, .. } = &method_call.kind else {
+            return false;
+        };
+        let suffix = format!(".{method}");
+        self.method_param_modes.iter().any(|(key, modes)| {
+            key.ends_with(&suffix) && matches!(modes.get(arg_index), Some(OwnershipMode::MutRef))
+        })
+    }
+
     /// Returns `Some(mutable)` if the formal at `arg_index` of `callee` is a
     /// slice type (`Slice[T]` or `mut Slice[T]`); `None` for non-slice
     /// formals or unresolvable callees. Drives Slice 1's call-arg coercion
