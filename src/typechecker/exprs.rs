@@ -6530,7 +6530,10 @@ impl<'a> super::TypeChecker<'a> {
     /// file by a compiled build. A type parameter is judged at each call that
     /// instantiates the body ([`Self::emit_buf_instance_errors`]).
     pub(super) fn report_pending_buf_sources(&mut self) {
-        for (span, reader, key) in std::mem::take(&mut self.pending_buf_sources) {
+        for (span, reader, key, given) in std::mem::take(&mut self.pending_buf_sources) {
+            if given {
+                continue;
+            }
             let Some(ty) = self.expr_types.get(&SpanKey::from_span(&span)).cloned() else {
                 continue;
             };
@@ -7208,6 +7211,18 @@ impl<'a> super::TypeChecker<'a> {
                                 );
                                 continue;
                             }
+                        }
+                        // Rust's `String: FromIterator<String>`: a `String`
+                        // gathers `char`s, so text pieces are joined
+                        // (B-2026-11-10-34).
+                        if trait_name == "FromIterator"
+                            && type_display(&concrete) == "String"
+                            && matches!(render(&want).as_str(), "String" | "Str" | "StringSlice")
+                        {
+                            message.push_str(
+                                "; collect the pieces into a `Vec[String]` and join them, \
+                                 `pieces.join(\"\")`",
+                            );
                         }
                         // B-2026-10-18-35: lent pieces collected into owned
                         // `String`s are copied first.
@@ -15657,6 +15672,20 @@ pub(super) fn buf_source_takes(name: &str, reader: bool) -> bool {
 
 /// The E0297 refusal of a buffer over `ty`, or `None` when it takes one.
 pub(super) fn buf_source_refusal(ty: &Type, reader: bool) -> Option<String> {
+    // A borrowed handle: the wrapper takes its source, and a borrow cannot
+    // be taken (a bare parameter gets the D5 refusal and its `own` fix at
+    // the call instead; B-2026-11-10-33).
+    if let Type::Ref(inner) | Type::MutRef(inner) = ty {
+        if let Type::Named { name, .. } = &**inner {
+            if buf_source_takes(name, reader) {
+                let wrapper = if reader { "BufReader" } else { "BufWriter" };
+                return Some(format!(
+                    "`{wrapper}` takes the `{name}` it wraps, and closes it when it drops, \
+                     but this `{name}` is borrowed: pass an owned one"
+                ));
+            }
+        }
+    }
     let name = match ty {
         Type::Named { name, .. } => name.as_str(),
         _ => "",

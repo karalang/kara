@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 225 |
+| diagnostics | 227 |
 | false-positive | 179 |
 | perf | 152 |
 | missing-feature | 130 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 357 |
+| typecheck | 359 |
 | mir-llvm | 195 |
 | mir | 167 |
 | cli | 94 |
@@ -122,6 +122,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-39 | 2026-11-10 | mir-llvm | medium | `SortedMap.insert` of a key smaller than every key present is O(n): the map is one sorted array, so 100000 inserts of falling keys take 1.8 s compiled against 0.018 s for rising ones, where collections.md promises a B-tree with O(log n) operations | — |
 | B-2026-11-10-40 | 2026-11-10 | typecheck | low | A narrowing refusal on a value popped from a heap whose pushed literal kept the `i64` default asks for `as i32` at each use, not for the literal: `heap.push((0, 0))` then `while let Some((d, u)) = heap.pop()` makes `d` an `i64`, and `return d` / `dist[v] = d + t` in an `i32` context are refused without naming the `0` | — |
 | B-2026-11-10-41 | 2026-11-10 | resolver | low | Rust's `Reverse` on one part of a heap's tuple item has no Kāra spelling and no fix: `BinaryHeap<(Reverse<i32>, String)>` and `BinaryHeap<(i32, Reverse<String>)>` are refused at every `Reverse`, and the remaining repair is a hand-written `Ord` or a negated number, impossible for a `String` | — |
+| B-2026-11-10-33 | 2026-11-10 | typecheck | medium | A bare handle parameter handed to `BufReader.new` / `BufWriter.new` (`fn serve(conn: TcpStream) { BufReader.new(conn) }`, a Rust port's owned parameter) gets E0297 "not a `ref TcpStream`" with no fix, where any other `own` parameter gets the D5 refusal and the fix that writes `own`; before E0297 (d5307a5abd) it passed check and the buffer closed the caller's handle | — |
+| B-2026-11-10-34 | 2026-11-10 | typecheck | low | `let s: String = pieces.map(|x| f"[{x}]").collect()`, Rust's `FromIterator<String> for String`, is refused with only "`String` implements `FromIterator[char]`, not `FromIterator[String]`", without naming Kāra's spelling (collect a `Vec[String]` and `join("")`) | — |
 
 ### Relocated
 

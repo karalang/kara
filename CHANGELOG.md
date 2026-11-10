@@ -609,6 +609,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A bare `File`, child pipe or `TcpStream` parameter handed to
+  `BufReader.new` / `BufWriter.new` (`fn serve(conn: TcpStream)`, a Rust
+  port's owned parameter) gets the refusal any `own` parameter does, with
+  the fix that writes `own`, instead of E0297 "not a `ref TcpStream`"; any
+  other borrowed handle is refused by name (B-2026-11-10-33).
+- Collecting text into a `String` (`let s: String = parts.map(..).collect()`,
+  Rust's `FromIterator<String> for String`) says to collect a `Vec[String]`
+  and `join("")` it (B-2026-11-10-34).
 - A Rust path through a module Kāra's expressions name keeps that module
   in its fix: `std.fs.read_to_string(p)` and `std::fs::read_to_string(p)`
   become `fs.read_to_string(p)`, `std::env::args()` `env.args()` and

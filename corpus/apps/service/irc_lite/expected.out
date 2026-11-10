@@ -1,0 +1,85 @@
+== parse
+"NICK alice" -> NICK prefix=- params=[alice]
+":irc.example PRIVMSG #kara :hello  world " -> PRIVMSG prefix=irc.example params=[#kara][hello  world ]
+"privmsg bob :" -> PRIVMSG prefix=- params=[bob][]
+"JOIN   #a,#b" -> JOIN prefix=- params=[#a,#b]
+"PING" -> PING prefix=- params=
+"" -> (none)
+":only-prefix" -> (none)
+"USER bob 0 * :Bob Smith" -> USER prefix=- params=[bob][0][*][Bob Smith]
+"MODE #kara +o alice" -> MODE prefix=- params=[#kara][+o][alice]
+"a b c d e f g h i j k l m n o p q r" -> A prefix=- params=[b][c][d][e][f][g][h][i][j][k][l][m][n][o][p]
+== nicks
+"alice" ok
+"9lives" bad
+"a_b-c[1]" ok
+"toolongnick" bad
+"" bad
+"bob smith" bad
+"x|y" ok
+== live
+alice <- :kara.irc 001 alice :Welcome to kara.irc, alice!alice@localhost
+bob <- :kara.irc 451 * :You have not registered
+bob <- :kara.irc 433 * Alice :Nickname is already in use
+bob <- :kara.irc 432 * 9bob :Erroneous nickname
+bob <- :kara.irc 001 bob :Welcome to kara.irc, bob!bob@localhost
+carol <- :kara.irc 001 carol :Welcome to kara.irc, carol!carol@localhost
+carol <- :kara.irc 462 carol :You may not reregister
+alice <- :alice!alice@localhost JOIN #kara
+alice <- :kara.irc 353 alice = #kara :@alice
+alice <- :kara.irc 366 alice #kara :End of /NAMES list
+bob <- :bob!bob@localhost JOIN #kara
+bob <- :kara.irc 353 bob = #kara :@alice bob
+bob <- :kara.irc 366 bob #kara :End of /NAMES list
+bob <- :bob!bob@localhost JOIN #rust
+bob <- :kara.irc 353 bob = #rust :@bob
+bob <- :kara.irc 366 bob #rust :End of /NAMES list
+bob <- :kara.irc 403 bob x :No such channel
+alice <- :bob!bob@localhost JOIN #kara
+alice <- :alice!alice@localhost TOPIC #kara :Kara dev chat
+bob <- :alice!alice@localhost TOPIC #kara :Kara dev chat
+bob <- :kara.irc 482 bob #kara :You're not channel operator
+bob <- :kara.irc 332 bob #kara :Kara dev chat
+carol <- :carol!carol@localhost JOIN #kara
+carol <- :kara.irc 332 carol #kara :Kara dev chat
+carol <- :kara.irc 353 carol = #kara :@alice bob carol
+carol <- :kara.irc 366 carol #kara :End of /NAMES list
+alice <- :carol!carol@localhost JOIN #kara
+bob <- :carol!carol@localhost JOIN #kara
+bob <- :alice!alice@localhost PRIVMSG #kara :hello  everyone 
+carol <- :alice!alice@localhost PRIVMSG #kara :hello  everyone 
+carol <- :kara.irc 404 carol #rust :Cannot send to channel
+bob <- :carol!carol@localhost PRIVMSG BOB :psst
+carol <- :kara.irc 401 carol dave :No such nick/channel
+carol <- :kara.irc 411 carol :No recipient given (PRIVMSG)
+carol <- :kara.irc 412 carol :No text to send
+carol <- :kara.irc 417 carol :Input line was too long
+bob <- :bob!bob@localhost NICK robert
+alice <- :bob!bob@localhost NICK robert
+carol <- :bob!bob@localhost NICK robert
+alice <- :kara.irc PONG kara.irc :t1
+alice <- :kara.irc 421 alice WHO :Unknown command
+carol <- :kara.irc 442 carol #rust :You're not on that channel
+bob <- :robert!bob@localhost PART #rust :bye
+carol <- :kara.irc 366 carol #rust :End of /NAMES list
+alice <- :kara.irc 353 alice = #kara :@alice robert carol
+alice <- :kara.irc 366 alice #kara :End of /NAMES list
+alice <- :robert!bob@localhost QUIT :Connection closed
+carol <- :robert!bob@localhost QUIT :Connection closed
+carol <- ERROR :Closing link (gone home)
+carol <- (closed)
+alice <- :carol!carol@localhost QUIT :Quit: gone home
+alice <- ERROR :Closing link (Client Quit)
+alice <- (closed)
+== server
+JOIN 3
+NAMES 2
+NICK 6
+PART 2
+PING 1
+PRIVMSG 7
+QUIT 2
+TOPIC 3
+USER 4
+WHO 1
+clients 0 channels 0 nicks 0

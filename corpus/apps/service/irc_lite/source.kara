@@ -1,0 +1,629 @@
+// irc_lite: an IRC-style chat server (a subset of RFC 1459/2812) on
+// loopback. Each connection is a task that reads CRLF lines through a
+// BufReader; the server state (clients, nicknames, channels) is one Mutex,
+// and every line a command produces is written to its recipients' sockets
+// under that lock, so each client sees events in the order they happened.
+// Registration takes NICK and USER; then JOIN, PART, PRIVMSG, TOPIC,
+// NAMES, PING and QUIT, with the numeric replies and errors of the RFC.
+// The program parses a set of lines first, then scripts three clients
+// against the live server, each step reading exactly the lines it is owed.
+
+import std.sync.{TaskGroup, Mutex};
+import std.io.{BufReader, BufWriter};
+
+const ADDR: Str = "127.0.0.1:47760";
+const SERVER: Str = "kara.irc";
+const MAX_LINE: i64 = 510;
+const CLIENTS: i64 = 3;
+
+struct Message {
+    prefix: Option[String],
+    command: String,
+    params: Vec[String],
+}
+
+// One IRC line without its CRLF: an optional `:prefix`, a command and up
+// to 15 parameters, the last of which may be a `:trailing` one with spaces.
+fn parse_line(line: Str) -> Option[Message] {
+    let mut rest = line;
+    let mut prefix = None;
+    if rest.starts_with(":") {
+        let sp = rest.find(" ")?;
+        prefix = Some(rest[1..sp].to_string());
+        rest = rest[sp + 1..];
+    }
+    rest = rest.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let command = match rest.find(" ") {
+        Some(sp) => {
+            let c = rest[..sp].to_string();
+            rest = rest[sp + 1..];
+            c
+        }
+        None => {
+            let c = rest.to_string();
+            rest = "";
+            c
+        }
+    };
+    let mut params = Vec.new();
+    while not rest.is_empty() and params.len() < 15 {
+        if rest.starts_with(" ") {
+            rest = rest[1..];
+            continue;
+        }
+        if rest.starts_with(":") {
+            params.push(rest[1..].to_string());
+            break;
+        }
+        match rest.find(" ") {
+            Some(sp) => {
+                params.push(rest[..sp].to_string());
+                rest = rest[sp + 1..];
+            }
+            None => {
+                params.push(rest.to_string());
+                break;
+            }
+        }
+    }
+    Some(Message { prefix, command: command.to_uppercase(), params })
+}
+
+fn valid_nick(n: Str) -> bool {
+    let cs: Vec[char] = n.chars().collect();
+    if cs.is_empty() or cs.len() > 9 or not cs[0].is_ascii_alphabetic() {
+        return false;
+    }
+    cs.iter().all(|c| c.is_ascii_alphanumeric() or "-_[]\\`^{}|".contains((*c).to_string()))
+}
+
+struct Client {
+    out: TcpStream,
+    nick: Option[String],
+    user: Option[String],
+    real: String,
+    registered: bool,
+    channels: Vec[String],
+}
+
+struct Channel {
+    members: Vec[i64],
+    ops: Vec[i64],
+    topic: Option[String],
+}
+
+struct State {
+    clients: Map[i64, Client],
+    nicks: Map[String, i64],
+    channels: Map[String, Channel],
+    counts: SortedMap[String, i64],
+}
+
+sync struct Server {
+    state: Mutex[State],
+}
+
+fn mask(c: ref Client) -> String {
+    f"{c.nick.clone().unwrap_or_default()}!{c.user.clone().unwrap_or_default()}@localhost"
+}
+
+fn send(st: ref State, id: i64, line: Str) {
+    if let Some(c) = st.clients.get(id) {
+        let _ = c.out.write_all(f"{line}\r\n".bytes());
+    }
+}
+
+fn reply(st: ref State, id: i64, code: Str, text: Str) {
+    let nick = match st.clients.get(id) {
+        Some(c) => c.nick.clone().unwrap_or("*".to_string()),
+        None => "*".to_string(),
+    };
+    send(st, id, f":{SERVER} {code} {nick} {text}");
+}
+
+// The clients sharing a channel with `id`, each once, in id order.
+fn peers(st: ref State, id: i64) -> Vec[i64] {
+    let mut out = Vec.new();
+    for name in st.clients[id].channels.iter() {
+        for m in st.channels[name].members.iter() {
+            if *m != id and not out.contains(m) {
+                out.push(*m);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn names_line(st: ref State, name: Str) -> String {
+    let ch = ref st.channels[name];
+    let mut shown = Vec.new();
+    for m in ch.members.iter() {
+        let at = if ch.ops.contains(m) { "@" } else { "" };
+        shown.push(f"{at}{st.clients[*m].nick.clone().unwrap_or_default()}");
+    }
+    shown.join(" ")
+}
+
+fn leave(st: mut ref State, id: i64, name: Str) {
+    let ch = st.channels.get_mut(name).unwrap();
+    ch.members.retain(|m| m != id);
+    ch.ops.retain(|m| m != id);
+    let empty = ch.members.is_empty();
+    st.clients.get_mut(id).unwrap().channels.retain(|c| c != name);
+    if empty {
+        st.channels.remove(name);
+    }
+}
+
+fn quit_client(st: mut ref State, id: i64, reason: Str) {
+    let c = ref st.clients[id];
+    if c.registered {
+        let line = f":{mask(c)} QUIT :{reason}";
+        for p in peers(st, id) {
+            send(st, p, line);
+        }
+    }
+    let chans = st.clients[id].channels.clone();
+    for name in chans.iter() {
+        leave(mut st, id, name);
+    }
+    if let Some(n) = st.clients[id].nick.clone() {
+        st.nicks.remove(n.to_lowercase());
+    }
+    st.clients.remove(id);
+}
+
+fn welcome(st: mut ref State, id: i64) {
+    let c = st.clients.get_mut(id).unwrap();
+    if not c.registered and c.nick.is_some() and c.user.is_some() {
+        c.registered = true;
+        let text = f":Welcome to {SERVER}, {mask(c)}";
+        reply(st, id, "001", text);
+    }
+}
+
+// Runs one command; returns whether the connection ends.
+fn handle(st: mut ref State, id: i64, m: ref Message) -> bool {
+    let n = st.counts.get(m.command).cloned().unwrap_or(0);
+    st.counts.insert(m.command.clone(), n + 1);
+    let p = ref m.params;
+    let cmd = m.command.as_str();
+    if cmd == "PING" {
+        let token = if p.is_empty() { "" } else { p[0].as_str() };
+        send(st, id, f":{SERVER} PONG {SERVER} :{token}");
+        return false;
+    }
+    if cmd == "QUIT" {
+        let reason = if p.is_empty() { "Client Quit" } else { p[0].as_str() };
+        send(st, id, f"ERROR :Closing link ({reason})");
+        quit_client(mut st, id, f"Quit: {reason}");
+        return true;
+    }
+    if cmd == "NICK" {
+        if p.is_empty() {
+            reply(st, id, "431", ":No nickname given");
+            return false;
+        }
+        let new = p[0].clone();
+        if not valid_nick(new) {
+            reply(st, id, "432", f"{new} :Erroneous nickname");
+            return false;
+        }
+        if let Some(owner) = st.nicks.get(new.to_lowercase()) {
+            if *owner != id {
+                reply(st, id, "433", f"{new} :Nickname is already in use");
+                return false;
+            }
+        }
+        if st.clients[id].registered {
+            let line = f":{mask(st.clients[id])} NICK {new}";
+            send(st, id, line);
+            for q in peers(st, id) {
+                send(st, q, line);
+            }
+        }
+        if let Some(old) = st.clients[id].nick.clone() {
+            st.nicks.remove(old.to_lowercase());
+        }
+        st.clients.get_mut(id).unwrap().nick = Some(new.clone());
+        st.nicks.insert(new.to_lowercase(), id);
+        welcome(mut st, id);
+        return false;
+    }
+    if cmd == "USER" {
+        if p.len() < 4 {
+            reply(st, id, "461", "USER :Not enough parameters");
+            return false;
+        }
+        if st.clients[id].registered {
+            reply(st, id, "462", ":You may not reregister");
+            return false;
+        }
+        let c = st.clients.get_mut(id).unwrap();
+        c.user = Some(p[0].clone());
+        c.real = p[3].clone();
+        welcome(mut st, id);
+        return false;
+    }
+    if not st.clients[id].registered {
+        reply(st, id, "451", ":You have not registered");
+        return false;
+    }
+    let me = mask(st.clients[id]);
+    if cmd == "JOIN" {
+        if p.is_empty() {
+            reply(st, id, "461", "JOIN :Not enough parameters");
+            return false;
+        }
+        for name in p[0].split(",") {
+            if name.len() < 2 or not name.starts_with("#") {
+                reply(st, id, "403", f"{name} :No such channel");
+                continue;
+            }
+            if st.clients[id].channels.contains(name.to_string()) {
+                continue;
+            }
+            if not st.channels.contains_key(name) {
+                st.channels.insert(name.to_string(), Channel { members: Vec.new(), ops: [id], topic: None });
+            }
+            st.channels.get_mut(name).unwrap().members.push(id);
+            st.clients.get_mut(id).unwrap().channels.push(name.to_string());
+            let line = f":{me} JOIN {name}";
+            for q in st.channels[name].members.iter() {
+                send(st, *q, line);
+            }
+            if let Some(t) = ref st.channels[name].topic {
+                reply(st, id, "332", f"{name} :{t}");
+            }
+            reply(st, id, "353", f"= {name} :{names_line(st, name)}");
+            reply(st, id, "366", f"{name} :End of /NAMES list");
+        }
+        return false;
+    }
+    if cmd == "PART" {
+        if p.is_empty() {
+            reply(st, id, "461", "PART :Not enough parameters");
+            return false;
+        }
+        let name = p[0].as_str();
+        if not st.channels.contains_key(name) {
+            reply(st, id, "403", f"{name} :No such channel");
+            return false;
+        }
+        if not st.clients[id].channels.contains(name.to_string()) {
+            reply(st, id, "442", f"{name} :You're not on that channel");
+            return false;
+        }
+        let mut line = f":{me} PART {name}";
+        if p.len() > 1 {
+            line = f"{line} :{p[1]}";
+        }
+        for q in st.channels[name].members.iter() {
+            send(st, *q, line);
+        }
+        leave(mut st, id, name);
+        return false;
+    }
+    if cmd == "PRIVMSG" {
+        if p.is_empty() {
+            reply(st, id, "411", ":No recipient given (PRIVMSG)");
+            return false;
+        }
+        if p.len() < 2 or p[1].is_empty() {
+            reply(st, id, "412", ":No text to send");
+            return false;
+        }
+        let target = p[0].as_str();
+        let line = f":{me} PRIVMSG {target} :{p[1]}";
+        if target.starts_with("#") {
+            match st.channels.get(target) {
+                None => reply(st, id, "403", f"{target} :No such channel"),
+                Some(ch) => {
+                    if not ch.members.contains(id) {
+                        reply(st, id, "404", f"{target} :Cannot send to channel");
+                    } else {
+                        for q in ch.members.iter() {
+                            if *q != id {
+                                send(st, *q, line);
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        match st.nicks.get(target.to_lowercase()) {
+            None => reply(st, id, "401", f"{target} :No such nick/channel"),
+            Some(to) => send(st, *to, line),
+        }
+        return false;
+    }
+    if cmd == "TOPIC" {
+        if p.is_empty() {
+            reply(st, id, "461", "TOPIC :Not enough parameters");
+            return false;
+        }
+        let name = p[0].as_str();
+        if not st.channels.contains_key(name) {
+            reply(st, id, "403", f"{name} :No such channel");
+            return false;
+        }
+        if not st.channels[name].members.contains(id) {
+            reply(st, id, "442", f"{name} :You're not on that channel");
+            return false;
+        }
+        if p.len() < 2 {
+            match ref st.channels[name].topic {
+                None => reply(st, id, "331", f"{name} :No topic is set"),
+                Some(t) => reply(st, id, "332", f"{name} :{t}"),
+            }
+            return false;
+        }
+        if not st.channels[name].ops.contains(id) {
+            reply(st, id, "482", f"{name} :You're not channel operator");
+            return false;
+        }
+        st.channels.get_mut(name).unwrap().topic = Some(p[1].clone());
+        let line = f":{me} TOPIC {name} :{p[1]}";
+        for q in st.channels[name].members.iter() {
+            send(st, *q, line);
+        }
+        return false;
+    }
+    if cmd == "NAMES" {
+        if not p.is_empty() and st.channels.contains_key(p[0].as_str()) {
+            reply(st, id, "353", f"= {p[0]} :{names_line(st, p[0])}");
+        }
+        let name = if p.is_empty() { "*" } else { p[0].as_str() };
+        reply(st, id, "366", f"{name} :End of /NAMES list");
+        return false;
+    }
+    reply(st, id, "421", f"{cmd} :Unknown command");
+    false
+}
+
+fn serve(srv: ref Server, id: i64, conn: own TcpStream) {
+    let reader = BufReader.new(conn);
+    let mut ended = false;
+    for raw in reader.lines() {
+        let line = match raw {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let mut g = srv.state.lock();
+        if line.len() > MAX_LINE {
+            reply(g.value, id, "417", ":Input line was too long");
+            continue;
+        }
+        if let Some(m) = parse_line(line) {
+            if handle(mut g.value, id, m) {
+                ended = true;
+                break;
+            }
+        }
+    }
+    if not ended {
+        let mut g = srv.state.lock();
+        quit_client(mut g.value, id, "Connection closed");
+    }
+}
+
+fn run_server(srv: ref Server, listener: ref TcpListener) {
+    let tasks = TaskGroup.new();
+    for id in 1..=CLIENTS {
+        let conn = listener.accept().unwrap();
+        let out = conn.try_clone().unwrap();
+        {
+            let mut g = srv.state.lock();
+            g.value.clients.insert(id, Client {
+                out,
+                nick: None,
+                user: None,
+                real: String.new(),
+                registered: false,
+                channels: Vec.new(),
+            });
+        }
+        tasks.spawn(|| serve(srv, id, conn));
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+fn chomp(s: Str) -> Str {
+    let s = s.strip_suffix("\n").unwrap_or(s);
+    s.strip_suffix("\r").unwrap_or(s)
+}
+
+struct Peer {
+    name: String,
+    out: BufWriter[TcpStream],
+    inp: BufReader[TcpStream],
+}
+
+impl Peer {
+    fn connect(name: Str) -> Peer {
+        let s = TcpStream.connect(ADDR).unwrap();
+        let _ = s.set_read_timeout(Some(2000));
+        Peer { name: name.to_string(), out: BufWriter.new(s.try_clone().unwrap()), inp: BufReader.new(s) }
+    }
+
+    fn say(mut ref self, line: Str) {
+        let _ = self.out.write_all(f"{line}\r\n".bytes());
+        let _ = self.out.flush();
+    }
+
+    fn expect(mut ref self, n: i64) {
+        for _ in 0..n {
+            let mut s = String.new();
+            match self.inp.read_line(mut s) {
+                Ok(0) => {
+                    println(f"{self.name} <- (closed)");
+                    return;
+                }
+                Ok(_) => println(f"{self.name} <- {chomp(s)}"),
+                Err(e) => {
+                    println(f"{self.name} <- error {e}");
+                    return;
+                }
+            }
+        }
+    }
+
+    fn expect_close(mut ref self) {
+        let mut s = String.new();
+        match self.inp.read_line(mut s) {
+            Ok(0) => println(f"{self.name} <- (closed)"),
+            Ok(_) => println(f"{self.name} <- unexpected {s.trim_end()}"),
+            Err(e) => println(f"{self.name} <- error {e}"),
+        }
+    }
+}
+
+fn show(m: ref Option[Message]) -> String {
+    match m {
+        None => "(none)".to_string(),
+        Some(m) => {
+            let prefix = m.prefix.clone().unwrap_or("-".to_string());
+            let params: Vec[String] = m.params.iter().map(|x| f"[{x}]").collect();
+            f"{m.command} prefix={prefix} params={params.join("")}"
+        }
+    }
+}
+
+fn self_test() {
+    println("== parse");
+    let lines = [
+        "NICK alice",
+        ":irc.example PRIVMSG #kara :hello  world ",
+        "privmsg bob :",
+        "JOIN   #a,#b",
+        "PING",
+        "",
+        ":only-prefix",
+        "USER bob 0 * :Bob Smith",
+        "MODE #kara +o alice",
+        "a b c d e f g h i j k l m n o p q r",
+    ];
+    for line in lines.iter() {
+        println(f"\"{line}\" -> {show(parse_line(line))}");
+    }
+    println("== nicks");
+    for n in ["alice", "9lives", "a_b-c[1]", "toolongnick", "", "bob smith", "x|y"].iter() {
+        println(f"\"{n}\" {if valid_nick(n) { "ok" } else { "bad" }}");
+    }
+}
+
+fn main() {
+    self_test();
+    println("== live");
+    let listener = TcpListener.bind(ADDR).unwrap();
+    let srv = Server {
+        state: Mutex.new(State {
+            clients: Map.new(),
+            nicks: Map.new(),
+            channels: Map.new(),
+            counts: SortedMap.new(),
+        }),
+    };
+    let group = TaskGroup.new();
+    let server = group.spawn(|| run_server(srv, listener));
+
+    let mut alice = Peer.connect("alice");
+    alice.say("NICK alice");
+    alice.say("USER alice 0 * :Alice Liddell");
+    alice.expect(1);
+
+    let mut bob = Peer.connect("bob");
+    bob.say("PRIVMSG alice :hi");
+    bob.expect(1);
+    bob.say("NICK Alice");
+    bob.expect(1);
+    bob.say("NICK 9bob");
+    bob.expect(1);
+    bob.say("NICK bob");
+    bob.say("USER bob 0 * :Bob");
+    bob.expect(1);
+
+    let mut carol = Peer.connect("carol");
+    carol.say("NICK carol");
+    carol.say("USER carol 0 * :Carol");
+    carol.expect(1);
+    carol.say("USER carol 0 * :Again");
+    carol.expect(1);
+
+    alice.say("JOIN #kara");
+    alice.expect(3);
+    bob.say("JOIN #kara,#rust,x");
+    bob.expect(7);
+    alice.expect(1);
+    alice.say("TOPIC #kara :Kara dev chat");
+    alice.expect(1);
+    bob.expect(1);
+    bob.say("TOPIC #kara :mine now");
+    bob.expect(1);
+    bob.say("TOPIC #kara");
+    bob.expect(1);
+    carol.say("JOIN #kara");
+    carol.expect(4);
+    alice.expect(1);
+    bob.expect(1);
+
+    alice.say("PRIVMSG #kara :hello  everyone ");
+    bob.expect(1);
+    carol.expect(1);
+    carol.say("PRIVMSG #rust :hi");
+    carol.expect(1);
+    carol.say("PRIVMSG BOB :psst");
+    bob.expect(1);
+    carol.say("PRIVMSG dave :x");
+    carol.expect(1);
+    carol.say("PRIVMSG");
+    carol.expect(1);
+    carol.say("PRIVMSG bob");
+    carol.expect(1);
+    carol.say(f"PRIVMSG #kara :{"x".repeat(600)}");
+    carol.expect(1);
+
+    bob.say("NICK robert");
+    bob.expect(1);
+    alice.expect(1);
+    carol.expect(1);
+    alice.say("PING :t1");
+    alice.expect(1);
+    alice.say("WHO #kara");
+    alice.expect(1);
+    carol.say("PART #rust");
+    carol.expect(1);
+    bob.say("PART #rust :bye");
+    bob.expect(1);
+    carol.say("NAMES #rust");
+    carol.expect(1);
+    alice.say("NAMES #kara");
+    alice.expect(2);
+
+    drop(bob);
+    alice.expect(1);
+    carol.expect(1);
+    carol.say("QUIT :gone home");
+    carol.expect(1);
+    carol.expect_close();
+    alice.expect(1);
+    alice.say("QUIT");
+    alice.expect(1);
+    alice.expect_close();
+    drop(carol);
+    drop(alice);
+
+    server.join();
+    println("== server");
+    let g = srv.state.lock();
+    for (k, v) in g.value.counts.iter() {
+        println(f"{k} {v}");
+    }
+    println(f"clients {g.value.clients.len()} channels {g.value.channels.len()} nicks {g.value.nicks.len()}");
+}

@@ -3640,9 +3640,11 @@ pub struct TypeChecker<'a> {
     /// end against library/concurrency.md's five (B-2026-11-07-21).
     pub(super) pending_atomic_inners: Vec<(Span, Type, Option<String>)>,
     /// The argument of each `BufReader.new` / `BufWriter.new` (or
-    /// `with_capacity`), with whether it makes a reader and the body it sits
-    /// in, judged at the end once its type is fixed (B-2026-11-10-14).
-    pub(super) pending_buf_sources: Vec<(Span, bool, Option<String>)>,
+    /// `with_capacity`), with whether it makes a reader, the body it sits
+    /// in, and whether the D5 check already refused it as a borrowed
+    /// parameter given away (B-2026-11-10-33), judged at the end once its
+    /// type is fixed (B-2026-11-10-14).
+    pub(super) pending_buf_sources: Vec<(Span, bool, Option<String>, bool)>,
     /// Inside a generic body, each buffer whose source is a bare type
     /// parameter, keyed by the body's callee key, with whether it reads:
     /// the source is judged at each call that instantiates it

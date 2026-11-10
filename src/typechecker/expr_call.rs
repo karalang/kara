@@ -22,6 +22,17 @@ use super::types::{type_display, ConstArg, DimArg, IntSize, SubstValue, Type, UI
 use super::{FixIt, TypeErrorKind};
 use std::collections::HashMap;
 
+/// What a `BufReader` or `BufWriter` can wrap, of either kind (E0297 judges
+/// which side each takes).
+const BUF_SOURCES: &[&str] = &[
+    "File",
+    "ChildStdout",
+    "ChildStderr",
+    "ChildStdin",
+    "TcpStream",
+    "TlsStream",
+];
+
 /// The refusal of `Default.default()`, which `check_expr` finds again to add
 /// the fix the expected type gives.
 pub(super) const DEFAULT_NAMES_NO_TYPE: &str =
@@ -2322,10 +2333,24 @@ impl<'a> super::TypeChecker<'a> {
                 if (ty == "BufReader" || ty == "BufWriter")
                     && (ctor == "new" || ctor == "with_capacity")
                 {
+                    // A bare parameter handed over (`conn: TcpStream`)
+                    // is given away: the D5 check says so, with the fix
+                    // that writes `own` (B-2026-11-10-33).
+                    let mut given = false;
+                    if let ExprKind::Identifier(_) = &first.value.kind {
+                        if let Type::Ref(inner) = self.infer_expr(&first.value) {
+                            if matches!(&*inner, Type::Named { name, .. }
+                                if BUF_SOURCES.contains(&name.as_str()))
+                            {
+                                given = self.d5_give_away(&first.value, &inner).is_some();
+                            }
+                        }
+                    }
                     self.pending_buf_sources.push((
                         first.value.span,
                         ty == "BufReader",
                         self.current_fn_core_key.clone(),
+                        given,
                     ));
                 }
             }
