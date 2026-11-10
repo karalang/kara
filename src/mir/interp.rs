@@ -6137,18 +6137,15 @@ impl<'a> Interp<'a> {
                 .iter()
                 .any(|p| name.starts_with(&format!("{base}[{p}]")));
             let reader = base == "BufReader";
-            let socket = name.starts_with(&format!("{base}[TcpStream]"));
+            let socket = name.starts_with(&format!("{base}[TcpStream]"))
+                || name.starts_with(&format!("{base}[TlsStream]"));
             let buf = if socket {
                 // Over a connection (B-2026-11-10-14): the socket stays in
                 // `sockets`, read and written through the buffer, and closes
-                // when the buffer drops.
+                // when the buffer drops. A `TlsStream` keeps its connection
+                // there too, and a socket a `Network` provider opened is read
+                // and written through the provider (B-2026-11-10-28).
                 let fd = self.socket_of(file, name)?;
-                if fd < -1 {
-                    return err(format!(
-                        "{name} of a socket a `Network` provider opened is not built yet \
-                         (B-2026-11-10-14)"
-                    ));
-                }
                 Buf::Provided {
                     file: i128::from(fd),
                     cap,
@@ -6432,6 +6429,12 @@ impl<'a> Interp<'a> {
         }
         use std::io::Read;
         let fd = file as i64;
+        if fd < -1 {
+            return self.provided_socket_read(fd, cap);
+        }
+        if self.sockets.tls.contains_key(&fd) {
+            return Ok(self.tls_buffered_read(fd, cap));
+        }
         if self.sockets.timed_out.remove(&fd) {
             return Ok(Err(Fail::Os(read_timed_out())));
         }
@@ -6466,6 +6469,13 @@ impl<'a> Interp<'a> {
         if !socket {
             return self.provided_flush(file, data, once);
         }
+        let fd = file as i64;
+        if fd < -1 {
+            return self.provided_socket_flush(fd, data, once);
+        }
+        if self.sockets.tls.contains_key(&fd) {
+            return Ok(self.tls_buffered_flush(fd, data, once));
+        }
         use std::io::Write;
         let Some(s) = self.sockets.streams.get_mut(&(file as i64)) else {
             return Ok(Err(Fail::Os(std::io::Error::other(
@@ -6485,6 +6495,205 @@ impl<'a> Interp<'a> {
             }
             Err(e) => Err(Fail::Os(e)),
         })
+    }
+
+    /// Closes the connection `fd` a buffer took, as the stream's own drop
+    /// would: a `TlsStream` sends `close_notify` first, and a socket a
+    /// `Network` provider opened goes to the provider's `close`
+    /// (B-2026-11-10-28).
+    fn close_stream(&mut self, fd: i64) -> R<()> {
+        if fd < -1 {
+            let unit = self.tys.unit();
+            self.fake_socket_method("drop", fd, &[], &[], unit)?;
+            return Ok(());
+        }
+        if let (Some(c), Some(s)) = (
+            self.sockets.tls.get_mut(&fd),
+            self.sockets.streams.get_mut(&fd),
+        ) {
+            c.close(s);
+        }
+        self.sockets.tls.remove(&fd);
+        self.sockets.tls_timeouts.remove(&fd);
+        self.sockets.close(fd);
+        Ok(())
+    }
+
+    /// Up to `cap` bytes of plaintext from the `TlsStream` `fd` for its
+    /// buffered reader, waiting as the stream's own `read` does, by its read
+    /// timeout (B-2026-11-10-28).
+    fn tls_buffered_read(&mut self, fd: i64, cap: usize) -> Result<Vec<u8>, Fail> {
+        if self.sockets.timed_out.remove(&fd) {
+            return Err(Fail::Os(read_timed_out()));
+        }
+        if let Some(e) = self.sockets.failed.remove(&fd) {
+            return Err(Fail::Os(e));
+        }
+        let deadline = self
+            .sockets
+            .tls_timeouts
+            .get(&fd)
+            .map(|d| std::time::Instant::now() + *d);
+        let (Some(c), Some(s)) = (
+            self.sockets.tls.get_mut(&fd),
+            self.sockets.streams.get_mut(&fd),
+        ) else {
+            return Err(Fail::Os(std::io::Error::other("a read of a closed socket")));
+        };
+        let probe = s.try_clone();
+        let mut wait = |_: bool| match &probe {
+            Ok(p) => Ok(wait_readable(p, deadline)),
+            Err(e) => Err(std::io::Error::new(e.kind(), "")),
+        };
+        let mut bytes = vec![0u8; cap.max(1)];
+        match c.read(s, &mut bytes, &mut wait) {
+            Ok(n) => {
+                bytes.truncate(n);
+                Ok(bytes)
+            }
+            Err(e) => Err(Fail::Os(e.into_io())),
+        }
+    }
+
+    /// [`Self::staged_flush`] to the `TlsStream` `fd` (B-2026-11-10-28).
+    fn tls_buffered_flush(
+        &mut self,
+        fd: i64,
+        data: &mut std::collections::VecDeque<u8>,
+        once: bool,
+    ) -> Result<(), Fail> {
+        let (Some(c), Some(s)) = (
+            self.sockets.tls.get_mut(&fd),
+            self.sockets.streams.get_mut(&fd),
+        ) else {
+            return Err(Fail::Os(std::io::Error::other(
+                "a write to a closed socket",
+            )));
+        };
+        let probe = s.try_clone();
+        // A full send buffer is waited out a moment at a time, as the
+        // stream's own `write` does.
+        let mut wait = |out: bool| match &probe {
+            Ok(_) if out => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                Ok(true)
+            }
+            Ok(p) => Ok(wait_readable(p, None)),
+            Err(e) => Err(std::io::Error::new(e.kind(), "")),
+        };
+        while !data.is_empty() {
+            let bytes: Vec<u8> = data.iter().copied().collect();
+            match c.write(s, &bytes, &mut wait) {
+                Ok(n) => {
+                    data.drain(..n.min(data.len()));
+                }
+                Err(e) => return Err(Fail::Os(e.into_io())),
+            }
+            if once {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Up to `cap` bytes from the socket `fd` a `Network` provider opened,
+    /// through its `read_stream` (B-2026-11-10-28).
+    fn provided_socket_read(&mut self, fd: i64, cap: usize) -> R<Result<Vec<u8>, Fail>> {
+        let Some((x, h)) = self.provided_socket(fd)? else {
+            return Ok(Err(Fail::Unavailable));
+        };
+        let zeros = Value::Agg(vec![Value::Int(0); cap.max(1)]);
+        let Value::Box(w) = self.alloc_box("Vec[u8]", zeros) else {
+            return err("a read buffer".to_string());
+        };
+        let view = Value::Slice {
+            base: Box::new(Addr {
+                root: Root::Heap(w),
+                path: Path::new(),
+            }),
+            lo: 0,
+            len: cap.max(1) as u64,
+        };
+        let read = x.method("read_stream").to_string();
+        let res = self.call(&read, vec![x.provider, Value::Int(h), view])?;
+        let got = match self.ok_fields(res)? {
+            Ok(fields) => match fields.as_slice() {
+                [Value::Int(n)] => {
+                    let n = (*n).clamp(0, cap.max(1) as i128) as usize;
+                    let bytes = self.vec_elems(w)?[..n]
+                        .iter()
+                        .map(|v| match v {
+                            Value::Int(b) => *b as u8,
+                            _ => 0,
+                        })
+                        .collect();
+                    Ok(bytes)
+                }
+                other => return err(format!("read_stream returned {other:?}")),
+            },
+            Err(fields) => Err(net_failure(&fields)),
+        };
+        self.free_slot(w);
+        if self.trace {
+            self.events.push(Event::Free(w));
+        }
+        Ok(got)
+    }
+
+    /// [`Self::staged_flush`] to the socket `fd` a `Network` provider
+    /// opened, through its `write_stream` (B-2026-11-10-28).
+    fn provided_socket_flush(
+        &mut self,
+        fd: i64,
+        data: &mut std::collections::VecDeque<u8>,
+        once: bool,
+    ) -> R<Result<(), Fail>> {
+        let mut calls = 0;
+        while !data.is_empty() && !(once && calls == 1) {
+            calls += 1;
+            let Some((x, h)) = self.provided_socket(fd)? else {
+                return Ok(Err(Fail::Unavailable));
+            };
+            let elems = data.iter().map(|&b| Value::Int(b.into())).collect();
+            let Value::Box(w) = self.alloc_box("Vec[u8]", Value::Agg(elems)) else {
+                return err("a write buffer".to_string());
+            };
+            let view = Value::Slice {
+                base: Box::new(Addr {
+                    root: Root::Heap(w),
+                    path: Path::new(),
+                }),
+                lo: 0,
+                len: data.len() as u64,
+            };
+            let write = x.method("write_stream").to_string();
+            let res = self.call(&write, vec![x.provider, Value::Int(h), view])?;
+            self.free_slot(w);
+            if self.trace {
+                self.events.push(Event::Free(w));
+            }
+            match self.ok_fields(res)? {
+                Ok(fields) => match fields.as_slice() {
+                    [Value::Int(n)] if *n > 0 => {
+                        data.drain(..(*n as usize).min(data.len()));
+                    }
+                    _ => return Ok(Err(Fail::Other("failed to write the buffered data".into()))),
+                },
+                Err(fields) => return Ok(Err(net_failure(&fields))),
+            }
+        }
+        Ok(Ok(()))
+    }
+
+    /// The provider of the socket `fd` and the provider's own id for it,
+    /// or `None` once its override has ended.
+    fn provided_socket(&self, fd: i64) -> R<Option<(NetExtent, i128)>> {
+        let at = usize::try_from(-2 - fd).ok();
+        let Some(Some((extent, h))) = at.and_then(|i| self.fake_sockets.get(i)).cloned() else {
+            return err("an operation on a closed socket".to_string());
+        };
+        let x = self.net_extents[extent].clone();
+        Ok(x.live.then_some((x, h)))
     }
 
     /// The provider's file `file` and the running call it belongs to, or
@@ -14748,7 +14957,7 @@ impl<'a> Interp<'a> {
                                 }
                                 if socket {
                                     // The connection closes with its buffer.
-                                    self.sockets.close(file as i64);
+                                    self.close_stream(file as i64)?;
                                 } else {
                                     let unit = self.tys.unit();
                                     self.fake_file_method(
@@ -15533,17 +15742,26 @@ impl<'a> Interp<'a> {
             })) => *file as i64,
             _ => return Ok(None),
         };
+        // A provider's socket never waits (B-2026-11-10-28).
+        if fd < -1 {
+            return Ok(None);
+        }
         let need = match method {
             "read" | "fill_buf" => 0,
             "read_to_string" => 2,
             _ => 1,
         };
-        let timeout = self
-            .sockets
-            .streams
-            .get(&fd)
-            .and_then(|s| s.read_timeout().ok())
-            .flatten();
+        // A `TlsStream`'s socket is non-blocking: it keeps its timeout.
+        let timeout = match self.sockets.tls_timeouts.get(&fd) {
+            Some(d) => Some(*d),
+            None if self.sockets.tls.contains_key(&fd) => None,
+            None => self
+                .sockets
+                .streams
+                .get(&fd)
+                .and_then(|s| s.read_timeout().ok())
+                .flatten(),
+        };
         Ok(Some(Wait::Buffered(id, need, self.read_deadline(timeout))))
     }
 
@@ -15583,6 +15801,30 @@ impl<'a> Interp<'a> {
             let Some(s) = self.sockets.streams.get_mut(&fd) else {
                 return true;
             };
+            // Over a `TlsStream`, the plaintext its connection can give
+            // without waiting; a record half arrived gives none
+            // (B-2026-11-10-28).
+            if let Some(c) = self.sockets.tls.get_mut(&fd) {
+                if !c.ready(s, false).0 {
+                    return self.sockets.past(fd, at);
+                }
+                let mut bytes = vec![0u8; (*cap).max(1)];
+                let mut gave_up = false;
+                let got = c.read(s, &mut bytes, &mut |_| {
+                    gave_up = true;
+                    Ok(false)
+                });
+                match got {
+                    Err(_) if gave_up => return self.sockets.past(fd, at),
+                    Ok(0) => *eof = true,
+                    Ok(n) => data.extend(&bytes[..n]),
+                    Err(e) => {
+                        self.sockets.failed.insert(fd, e.into_io());
+                        return true;
+                    }
+                }
+                continue;
+            }
             let mut bytes = vec![0u8; (*cap).max(1)];
             let _ = s.set_nonblocking(true);
             let got = s.read(&mut bytes);
@@ -17963,6 +18205,54 @@ fn wait_readable(s: &std::net::TcpStream, deadline: Option<std::time::Instant>) 
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+}
+
+/// A `NetError` a `Network` provider's socket method returned, as a
+/// `BufReader` or `BufWriter` over the socket reports it, an `IoError`
+/// (B-2026-11-10-28). As runtime/src/net_provider.rs `failure_io` maps it:
+/// the variants both enums have keep their name, a timeout is
+/// `Other("timed out")`, an OS code the system's message, and the rest
+/// `Other` of `NetError`'s `to_string`.
+fn net_failure(fields: &[Value]) -> Fail {
+    use std::io::{Error, ErrorKind};
+    const TLS: [&str; 4] = [
+        "handshake failed",
+        "bad certificate",
+        "protocol error",
+        "connection closed unexpectedly",
+    ];
+    let (k, payload) = match fields {
+        [Value::Variant(k, p)] => (*k, p.as_slice()),
+        _ => return Fail::Other("a provider's read failed".into()),
+    };
+    // `NetError`'s variants in their declared order (net.kara).
+    let e = match k {
+        0 => ErrorKind::Interrupted.into(),
+        1 => match payload {
+            [Value::Int(code)] => Error::from_raw_os_error(*code as i32),
+            _ => Error::other("os error"),
+        },
+        2 => Error::other("address in use"),
+        3 => Error::other("connection refused"),
+        4 => ErrorKind::PermissionDenied.into(),
+        5 => read_timed_out(),
+        6 => Error::other("operation would block"),
+        7 => ErrorKind::InvalidInput.into(),
+        8 => {
+            let f = match payload {
+                [Value::Variant(c, _)] => *c as usize,
+                _ => 2,
+            };
+            Error::other(format!(
+                "TLS: {}",
+                TLS.get(f).copied().unwrap_or("protocol error")
+            ))
+        }
+        9 => Error::other("WebSocket protocol error"),
+        10 => return Fail::Unavailable,
+        _ => ErrorKind::Unsupported.into(),
+    };
+    Fail::Os(e)
 }
 
 /// A buffered read's timeout on a socket: `Other("timed out")` as an

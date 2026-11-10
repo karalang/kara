@@ -376,12 +376,13 @@ impl<'ctx> Cx<'ctx, '_> {
         })
     }
 
-    /// Whether `t` is a connection (`TcpStream`).
+    /// Whether `t` is a connection (`TcpStream`, or `TlsStream`,
+    /// B-2026-11-10-28): the runtime tells the two apart by descriptor.
     fn is_stream(&self, t: Ty) -> bool {
         self.tys
             .tcx()
             .adt_of(t)
-            .is_some_and(|(a, _)| &*a.name == "TcpStream")
+            .is_some_and(|(a, _)| matches!(&*a.name, "TcpStream" | "TlsStream"))
     }
 
     /// Whether `t` is one of a child's pipes.

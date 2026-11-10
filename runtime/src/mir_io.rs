@@ -319,7 +319,9 @@ pub(crate) unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 
 /// (12), a view of the reader's buffer as a pointer and a length at
 /// `value[0..2]` (B-2026-10-14-72), which stays valid until the next call
 /// on the handle. Ops 13 and 14 are `BufReader.new` / `BufWriter.new` over
-/// a connection, whose descriptor `handle` carries (B-2026-11-10-14).
+/// a connection, whose descriptor `handle` carries (B-2026-11-10-14): a
+/// `TcpStream`, a `TlsStream` or a socket a `Network` provider opened
+/// (B-2026-11-10-28).
 ///
 /// # Safety
 /// `handle` is a live file handle for ops 0-1 and a live buffered handle
@@ -339,30 +341,55 @@ pub unsafe extern "C" fn karac_mir_buf(
         let cap = usize::try_from(len).ok().filter(|&n| n > 0).unwrap_or(8192);
         let buf = if op >= 13 {
             // Over a connection, whose descriptor `handle` carries
-            // (B-2026-11-10-14); the buffer takes it.
+            // (B-2026-11-10-14); the buffer takes it. A socket a `Network`
+            // provider opened is read and written through the provider,
+            // and a `TlsStream` through its connection (B-2026-11-10-28).
             let fd = handle as i64;
-            #[cfg(all(feature = "net", unix))]
-            if !crate::net_provider::is_provided(fd) {
-                let fd = fd as std::os::fd::RawFd;
-                let buf = if op == 13 {
-                    let (r, state) = crate::mir_bufsock::reader(fd);
-                    KaracBuf::SockReader(std::io::BufReader::with_capacity(cap, Box::new(r)), state)
+            let over = |r: Box<dyn std::io::Read>| std::io::BufReader::with_capacity(cap, r);
+            if crate::net_provider::is_provided(fd) {
+                let s = crate::net_provider::ProvidedSocket(fd);
+                if op == 13 {
+                    KaracBuf::Reader(over(Box::new(s)))
                 } else {
-                    let w = crate::mir_bufsock::writer(fd);
-                    KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, Box::new(w)))
-                };
-                // SAFETY: the caller's contract.
-                unsafe { value.write(Box::into_raw(Box::new(buf)) as i64) };
-                return -1;
+                    KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, Box::new(s)))
+                }
+            } else {
+                #[cfg(all(feature = "net", unix))]
+                {
+                    let raw = fd as std::os::fd::RawFd;
+                    #[cfg(feature = "tls")]
+                    let tls = crate::mir_tls::is_tls(fd);
+                    #[cfg(not(feature = "tls"))]
+                    let tls = false;
+                    match (op == 13, tls) {
+                        #[cfg(feature = "tls")]
+                        (true, true) => {
+                            let (r, state) = crate::mir_tls::reader(raw);
+                            KaracBuf::SockReader(over(Box::new(r)), state)
+                        }
+                        #[cfg(feature = "tls")]
+                        (false, true) => KaracBuf::Writer(std::io::BufWriter::with_capacity(
+                            cap,
+                            Box::new(crate::mir_tls::writer(raw)),
+                        )),
+                        (true, _) => {
+                            let (r, state) = crate::mir_bufsock::reader(raw);
+                            KaracBuf::SockReader(over(Box::new(r)), state)
+                        }
+                        (false, _) => KaracBuf::Writer(std::io::BufWriter::with_capacity(
+                            cap,
+                            Box::new(crate::mir_bufsock::writer(raw)),
+                        )),
+                    }
+                }
+                #[cfg(not(all(feature = "net", unix)))]
+                {
+                    // No sockets in this build to have made `fd`.
+                    crate::mir::karac_mir_flush();
+                    eprintln!("error: a buffer over a socket in a build without sockets");
+                    std::process::exit(101);
+                }
             }
-            let _ = fd;
-            // As the interpreter stops: the constructor has no `Result`.
-            crate::mir::karac_mir_flush();
-            eprintln!(
-                "error: a buffer over a socket a `Network` provider opened is not built yet \
-                 (B-2026-11-10-14)"
-            );
-            std::process::exit(101);
         } else if op >= 10 {
             // SAFETY: a live pipe from `karac_mir_child`, which this takes.
             match unsafe { crate::mir_process::take_pipe(handle) } {

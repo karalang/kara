@@ -3634,9 +3634,14 @@ pub struct TypeChecker<'a> {
     /// end against library/concurrency.md's five (B-2026-11-07-21).
     pub(super) pending_atomic_inners: Vec<(Span, Type, Option<String>)>,
     /// The argument of each `BufReader.new` / `BufWriter.new` (or
-    /// `with_capacity`), with whether it makes a reader, judged at the end
-    /// once its type is fixed (B-2026-11-10-14).
-    pub(super) pending_buf_sources: Vec<(Span, bool)>,
+    /// `with_capacity`), with whether it makes a reader and the body it sits
+    /// in, judged at the end once its type is fixed (B-2026-11-10-14).
+    pub(super) pending_buf_sources: Vec<(Span, bool, Option<String>)>,
+    /// Inside a generic body, each buffer whose source is a bare type
+    /// parameter, keyed by the body's callee key, with whether it reads:
+    /// the source is judged at each call that instantiates it
+    /// ([`Self::emit_buf_instance_errors`]; B-2026-11-10-28).
+    pub(super) buf_generic_params: FxHashMap<String, Vec<(String, Span, bool)>>,
     /// Inside a generic body, each `Atomic.new(x)` whose element is a bare
     /// type parameter, keyed by the body's callee key: the element is judged
     /// at each call that instantiates it ([`Self::emit_atomic_instance_errors`];
@@ -4437,6 +4442,7 @@ impl<'a> TypeChecker<'a> {
             pending_atomic_inners: Vec::new(),
             pending_buf_sources: Vec::new(),
             atomic_generic_params: FxHashMap::default(),
+            buf_generic_params: FxHashMap::default(),
             call_site_callers: FxHashMap::default(),
             aliased_call_vars: Vec::new(),
             deferred_receiver_bounds: Vec::new(),
@@ -4907,6 +4913,7 @@ impl<'a> TypeChecker<'a> {
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
         self.emit_atomic_instance_errors(&node_call_subs);
+        self.emit_buf_instance_errors(&node_call_subs);
         self.emit_core_generic_move_errors(&node_call_subs);
         if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
             self.fn_env_cross_task_pass(&node_types, &node_call_subs);

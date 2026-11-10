@@ -877,8 +877,9 @@ pub struct DynCoercion {
 pub struct NodeTypeFacts {
     pub ints: FxHashSet<crate::ids::NodeId>,
     pub heap: FxHashSet<crate::ids::NodeId>,
-    /// Expressions typed `BufReader[TcpStream]` or `BufWriter[TcpStream]`:
-    /// a call on one has the connection's effects (B-2026-11-10-14).
+    /// Expressions typed `BufReader[TcpStream]` or `BufWriter[TcpStream]`
+    /// (or over a `TlsStream`, B-2026-11-10-28): a call on one has the
+    /// connection's effects (B-2026-11-10-14).
     pub net_buffers: FxHashSet<crate::ids::NodeId>,
 }
 

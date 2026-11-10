@@ -2322,8 +2322,11 @@ impl<'a> super::TypeChecker<'a> {
                 if (ty == "BufReader" || ty == "BufWriter")
                     && (ctor == "new" || ctor == "with_capacity")
                 {
-                    self.pending_buf_sources
-                        .push((first.value.span, ty == "BufReader"));
+                    self.pending_buf_sources.push((
+                        first.value.span,
+                        ty == "BufReader",
+                        self.current_fn_core_key.clone(),
+                    ));
                 }
             }
         }

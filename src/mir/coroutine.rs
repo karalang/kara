@@ -67,11 +67,12 @@ pub fn suspends_native(name: &str) -> bool {
 }
 
 /// Whether the native type `ty` is a `BufReader`, `BufWriter` or
-/// `LinesIter` over a connection (`BufReader[TcpStream]`).
+/// `LinesIter` over a connection (`BufReader[TcpStream]`, or a
+/// `TlsStream`, B-2026-11-10-28).
 pub fn buffered_socket(ty: &str) -> bool {
     ["BufReader[", "BufWriter[", "LinesIter["].iter().any(|p| {
         ty.strip_prefix(p)
-            .is_some_and(|r| r.starts_with("TcpStream"))
+            .is_some_and(|r| r.starts_with("TcpStream") || r.starts_with("TlsStream"))
     })
 }
 

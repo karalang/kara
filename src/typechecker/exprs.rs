@@ -6523,13 +6523,14 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// B-2026-11-10-14: a `BufReader` wraps a `File`, a child's output
-    /// pipe or a `TcpStream`, a `BufWriter` a `File`, a child's input pipe or
-    /// a `TcpStream` (docs/library/io.md § Buffered I/O; a `TlsStream` is
-    /// still to come). Anything else passed check and
-    /// then failed in the interpreter, or was freed as a file by a compiled
-    /// build. A type parameter is left to the instantiation, unjudged.
+    /// pipe, a `TcpStream` or a `TlsStream`, a `BufWriter` a `File`, a
+    /// child's input pipe, a `TcpStream` or a `TlsStream` (docs/library/io.md
+    /// § Buffered I/O; the `TlsStream`, B-2026-11-10-28). Anything else
+    /// passed check and then failed in the interpreter, or was freed as a
+    /// file by a compiled build. A type parameter is judged at each call that
+    /// instantiates the body ([`Self::emit_buf_instance_errors`]).
     pub(super) fn report_pending_buf_sources(&mut self) {
-        for (span, reader) in std::mem::take(&mut self.pending_buf_sources) {
+        for (span, reader, key) in std::mem::take(&mut self.pending_buf_sources) {
             let Some(ty) = self.expr_types.get(&SpanKey::from_span(&span)).cloned() else {
                 continue;
             };
@@ -6540,41 +6541,23 @@ impl<'a> super::TypeChecker<'a> {
                 &self.env.const_substitutions,
                 &HashMap::new(),
             );
-            let name = match &resolved {
-                Type::Named { name, .. } => name.as_str(),
-                Type::TypeVar(_) | Type::TypeParam(_) | Type::Error => continue,
-                _ => "",
-            };
-            let takes: &[&str] = if reader {
-                &["File", "ChildStdout", "ChildStderr", "TcpStream"]
-            } else {
-                &["File", "ChildStdin", "TcpStream"]
-            };
-            if takes.contains(&name) {
-                continue;
+            match &resolved {
+                Type::TypeParam(p) => {
+                    if let Some(key) = key {
+                        self.buf_generic_params.entry(key).or_default().push((
+                            p.clone(),
+                            span,
+                            reader,
+                        ));
+                    }
+                    continue;
+                }
+                Type::TypeVar(_) | Type::Error => continue,
+                _ => {}
             }
-            let (wrapper, list) = if reader {
-                (
-                    "BufReader",
-                    "a `File`, `ChildStdout`, `ChildStderr` or `TcpStream`",
-                )
-            } else {
-                ("BufWriter", "a `File`, `ChildStdin` or `TcpStream`")
-            };
-            let help = if name == "TlsStream" {
-                "; buffering a `TlsStream` is not built yet (B-2026-11-10-14), so use its own \
-                 `read` and `write_all`"
-            } else {
-                ""
-            };
-            self.type_error(
-                format!(
-                    "`{wrapper}` wraps {list} (library/io.md § Buffered I/O), not a `{}`{help}",
-                    type_display(&resolved)
-                ),
-                span,
-                TypeErrorKind::BufferedIoInvalidSource,
-            );
+            if let Some(msg) = buf_source_refusal(&resolved, reader) {
+                self.type_error(msg, span, TypeErrorKind::BufferedIoInvalidSource);
+            }
         }
     }
 
@@ -15657,4 +15640,43 @@ fn payload_preserving_root(mut e: &Expr) -> Option<&Expr> {
             _ => return None,
         }
     }
+}
+
+/// What a `BufReader` (`reader`) or `BufWriter` may wrap
+/// (docs/library/io.md § Buffered I/O).
+pub(super) fn buf_source_takes(name: &str, reader: bool) -> bool {
+    if reader {
+        matches!(
+            name,
+            "File" | "ChildStdout" | "ChildStderr" | "TcpStream" | "TlsStream"
+        )
+    } else {
+        matches!(name, "File" | "ChildStdin" | "TcpStream" | "TlsStream")
+    }
+}
+
+/// The E0297 refusal of a buffer over `ty`, or `None` when it takes one.
+pub(super) fn buf_source_refusal(ty: &Type, reader: bool) -> Option<String> {
+    let name = match ty {
+        Type::Named { name, .. } => name.as_str(),
+        _ => "",
+    };
+    if buf_source_takes(name, reader) {
+        return None;
+    }
+    let (wrapper, list) = if reader {
+        (
+            "BufReader",
+            "a `File`, `ChildStdout`, `ChildStderr`, `TcpStream` or `TlsStream`",
+        )
+    } else {
+        (
+            "BufWriter",
+            "a `File`, `ChildStdin`, `TcpStream` or `TlsStream`",
+        )
+    };
+    Some(format!(
+        "`{wrapper}` wraps {list} (library/io.md § Buffered I/O), not a `{}`",
+        type_display(ty)
+    ))
 }

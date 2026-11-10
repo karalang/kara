@@ -270,3 +270,80 @@ pub(crate) fn close(fd: i64) {
         f(ret.as_mut_ptr(), &provider, &h);
     }
 }
+
+/// A provided socket's failure as a `BufReader` or `BufWriter` over it
+/// reports it, an `IoError` (B-2026-11-10-28): `NetError` code `code` with
+/// `Other`'s or `Tls`'s payload `v`. The variants both enums have keep
+/// their name; a timeout is `Other("timed out")`, as over an OS socket; an
+/// OS code is the system's message; the rest are `Other` of `NetError`'s
+/// `to_string`. The interpreter maps them the same way
+/// (src/mir/interp.rs `net_failure_io`).
+fn failure_io(code: i32, v: i64) -> std::io::Error {
+    use std::io::{Error, ErrorKind};
+    const TLS: [&str; 4] = [
+        "handshake failed",
+        "bad certificate",
+        "protocol error",
+        "connection closed unexpectedly",
+    ];
+    match code {
+        0 => ErrorKind::Interrupted.into(),
+        1 => Error::from_raw_os_error(v as i32),
+        2 => Error::other("address in use"),
+        3 => Error::other("connection refused"),
+        4 => ErrorKind::PermissionDenied.into(),
+        5 => Error::new(ErrorKind::TimedOut, "timed out"),
+        6 => Error::other("operation would block"),
+        7 => ErrorKind::InvalidInput.into(),
+        8 => Error::other(format!(
+            "TLS: {}",
+            TLS.get(v as usize).copied().unwrap_or("protocol error")
+        )),
+        9 => Error::other("WebSocket protocol error"),
+        PROVIDER_UNAVAILABLE => Error::other(crate::fs_provider::ProvidedError {
+            code: crate::fs_provider::PROVIDER_UNAVAILABLE,
+            text: String::new(),
+        }),
+        _ => ErrorKind::Unsupported.into(),
+    }
+}
+
+/// A socket a provider opened, as `std::io` reads and writes it for a
+/// `BufReader` or `BufWriter` over it (B-2026-11-10-28): through the
+/// provider's `__read` and `__write`. The buffer owns the socket, so it
+/// closes (the provider's `close`) when the buffer drops.
+pub(crate) struct ProvidedSocket(pub(crate) i64);
+
+impl std::io::Read for ProvidedSocket {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut v = 0i64;
+        // SAFETY: `buf` is writable for its length; `v` is writable.
+        let code = unsafe { tcp(5, self.0, buf.as_mut_ptr(), buf.len() as i64, &mut v) };
+        match code {
+            -1 => Ok(v.clamp(0, buf.len() as i64) as usize),
+            c => Err(failure_io(c, v)),
+        }
+    }
+}
+
+impl std::io::Write for ProvidedSocket {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut v = 0i64;
+        // SAFETY: the provider's `__write` only reads the view.
+        let code = unsafe { tcp(6, self.0, buf.as_ptr().cast_mut(), buf.len() as i64, &mut v) };
+        match code {
+            -1 => Ok(v.clamp(0, buf.len() as i64) as usize),
+            c => Err(failure_io(c, v)),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for ProvidedSocket {
+    fn drop(&mut self) {
+        close(self.0);
+    }
+}

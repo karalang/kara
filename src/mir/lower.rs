@@ -19046,7 +19046,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 // wraps it (`BufReader.new(conn)`,
                                 // B-2026-11-10-14).
                                 a.library_name().is_some_and(|n| {
-                                    crate::ty::HANDLES.contains(&n) || n == "TcpStream"
+                                    crate::ty::HANDLES.contains(&n)
+                                        || n == "TcpStream"
+                                        || n == "TlsStream"
                                 })
                             })
                         };

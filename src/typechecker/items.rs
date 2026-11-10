@@ -3244,6 +3244,103 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-10-28: a `BufReader` or `BufWriter` a generic body builds
+    /// over a bare type parameter is judged at each call that instantiates
+    /// it (E0297), as [`Self::emit_atomic_instance_errors`] judges an
+    /// `Atomic`: a generic caller that passes its own parameter on carries
+    /// the requirement up to the call that names a type.
+    pub(super) fn emit_buf_instance_errors(
+        &mut self,
+        node_call_subs: &rustc_hash::FxHashMap<
+            crate::ids::NodeId,
+            rustc_hash::FxHashMap<String, Type>,
+        >,
+    ) {
+        if self.buf_generic_params.is_empty() {
+            return;
+        }
+        let sites = self.core_call_sites.clone();
+        let callee_of = |this: &Self, node: &crate::ids::NodeId, free: &Option<String>| {
+            free.clone()
+                .filter(|n| this.buf_generic_params.contains_key(n))
+                .or_else(|| this.node_method_callees.get(node).cloned())
+        };
+        loop {
+            let mut added: Vec<(String, String, Span, bool)> = Vec::new();
+            for (node, span, free) in &sites {
+                let Some(key) = callee_of(self, node, free) else {
+                    continue;
+                };
+                let (Some(params), Some(subs), Some(caller)) = (
+                    self.buf_generic_params.get(&key),
+                    node_call_subs.get(node),
+                    self.call_site_callers.get(node),
+                ) else {
+                    continue;
+                };
+                for (param, _, reader) in params {
+                    if let Some(Type::TypeParam(q)) = subs.get(param) {
+                        let known = self
+                            .buf_generic_params
+                            .get(caller)
+                            .is_some_and(|v| v.iter().any(|(p, _, r)| p == q && r == reader));
+                        if !known
+                            && !added
+                                .iter()
+                                .any(|(c, p, _, r)| c == caller && p == q && r == reader)
+                        {
+                            added.push((caller.clone(), q.clone(), *span, *reader));
+                        }
+                    }
+                }
+            }
+            if added.is_empty() {
+                break;
+            }
+            for (caller, q, span, reader) in added {
+                self.buf_generic_params
+                    .entry(caller)
+                    .or_default()
+                    .push((q, span, reader));
+            }
+        }
+        let mut seen: HashSet<SpanKey> = HashSet::new();
+        for (node, span, free) in &sites {
+            let Some(key) = callee_of(self, node, free) else {
+                continue;
+            };
+            let (Some(params), Some(subs)) =
+                (self.buf_generic_params.get(&key), node_call_subs.get(node))
+            else {
+                continue;
+            };
+            let found = params.iter().find_map(|(p, body, reader)| {
+                let arg = subs.get(p)?;
+                if matches!(arg, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error) {
+                    return None;
+                }
+                let msg = super::exprs::buf_source_refusal(arg, *reader)?;
+                Some((p.clone(), arg.clone(), *body, msg))
+            });
+            if let Some((param, arg, body, msg)) = found {
+                if !seen.insert(SpanKey::from_span(span)) {
+                    continue;
+                }
+                self.type_error(
+                    format!(
+                        "{msg}: this call instantiates `{param}` with `{arg}`, and `{key}` \
+                         buffers a `{param}` at line {}:{}",
+                        body.line,
+                        body.column,
+                        arg = super::types::type_display(&arg),
+                    ),
+                    *span,
+                    TypeErrorKind::BufferedIoInvalidSource,
+                );
+            }
+        }
+    }
+
     pub(super) fn emit_core_generic_move_errors(
         &mut self,
         node_call_subs: &rustc_hash::FxHashMap<

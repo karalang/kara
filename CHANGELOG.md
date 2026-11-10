@@ -21,10 +21,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 ### Programs 0.8.1 accepted that are now refused
 
 - `BufReader.new(x)` / `BufWriter.new(x)` (and `with_capacity`) over
-  anything but a `File`, a child's pipe or a `TcpStream` is refused with
-  E0297, and so, until it is built, is a `TlsStream`. A `BufReader` over a
-  `TcpStream` passed check, then failed under `karac run` ("of a closed
-  file") and was freed as a file by a compiled build (B-2026-11-10-14).
+  anything but a `File`, a child's pipe, a `TcpStream` or a `TlsStream` is
+  refused with E0297. A `BufReader` over a `TcpStream` passed check, then
+  failed under `karac run` ("of a closed file") and was freed as a file by a
+  compiled build (B-2026-11-10-14). A generic wrapper
+  (`fn wrap[R](r: own R) { BufReader.new(r) }`) is judged at each call that
+  instantiates it, and the call that makes it buffer a non-source is refused
+  there (B-2026-11-10-28).
 - A program's impl of a library trait for a library type that the library
   already implements is refused as an overlap, naming the library's impl
   (design.md § Coherence: the application is exempt from the orphan rule,
@@ -74,6 +77,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `BufReader` and `BufWriter` wrap a `TlsStream` and a socket a `Network`
+  provider opened, on `karac run` and compiled builds alike: a buffered read
+  over TLS waits inside its task, the handshake included, and a TLS failure
+  is an `IoError`; over a provider's socket the buffer calls the fake's
+  `read_stream` / `write_stream`, where the interpreter refused at the
+  constructor and a compiled build exited 101 (B-2026-11-10-28).
 - `BufReader` and `BufWriter` wrap a `TcpStream` (io.md § Buffered I/O):
   `BufReader.new(conn).lines()` reads a connection line by line, a read
   waits inside its task as the connection's own does, the calls have the

@@ -38,6 +38,16 @@ impl Failure {
             Failure::UnexpectedClose => 3,
         }
     }
+
+    /// `TlsFailure`'s `to_string` (runtime/stdlib/source/net.kara).
+    pub fn text(self) -> &'static str {
+        match self {
+            Failure::Handshake => "handshake failed",
+            Failure::BadCertificate => "bad certificate",
+            Failure::Protocol => "protocol error",
+            Failure::UnexpectedClose => "connection closed unexpectedly",
+        }
+    }
 }
 
 /// Why a TLS call failed: the socket's own error, or a TLS one.
@@ -50,6 +60,22 @@ pub enum Error {
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Error {
         Error::Io(e)
+    }
+}
+
+impl Error {
+    /// The failure as a `BufReader` or `BufWriter` over the stream reports
+    /// it, an `IoError` (docs/library/io.md § Buffered I/O, B-2026-11-10-28):
+    /// a TLS failure is `Other("TLS: <failure>")`, as `NetError`'s
+    /// `to_string` has it, and a read timeout `Other("timed out")`.
+    pub fn into_io(self) -> io::Error {
+        match self {
+            Error::Tls(f) => io::Error::other(format!("TLS: {}", f.text())),
+            Error::Io(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                io::Error::new(ErrorKind::TimedOut, "timed out")
+            }
+            Error::Io(e) => e,
+        }
     }
 }
 

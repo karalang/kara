@@ -726,7 +726,10 @@ pub fn node_type_facts(
             }
             Type::Named { name, args }
                 if matches!(name.as_str(), "BufReader" | "BufWriter")
-                    && matches!(args.as_slice(), [Type::Named { name, .. }] if name == "TcpStream") =>
+                    && matches!(
+                        args.as_slice(),
+                        [Type::Named { name, .. }] if name == "TcpStream" || name == "TlsStream"
+                    ) =>
             {
                 facts.net_buffers.insert(node);
             }

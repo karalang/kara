@@ -1,9 +1,9 @@
 //! What `BufReader` and `BufWriter` wrap (docs/library/io.md § Buffered
-//! I/O; B-2026-11-10-14): a `File`, a child process's pipe or a
-//! `TcpStream`. Anything else passed check, then failed in the interpreter
-//! ("of a closed file") or was freed as a file by a compiled build (an
-//! invalid free under ASan). It is refused at check, E0297, and so, until
-//! it is built, is a `TlsStream`.
+//! I/O; B-2026-11-10-14, B-2026-11-10-28): a `File`, a child process's pipe,
+//! a `TcpStream` or a `TlsStream`. Anything else passed check, then failed in
+//! the interpreter ("of a closed file") or was freed as a file by a compiled
+//! build (an invalid free under ASan). It is refused at check, E0297, and so
+//! is a generic wrapper's instance over it, at the call that instantiates it.
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -75,20 +75,52 @@ fn main() {
 }
 
 #[test]
-fn a_buffered_reader_over_a_tls_stream_is_refused_until_built() {
+fn buffered_wrappers_take_a_tls_stream() {
     let (ok, out) = check(
-        r#"import std.io.{BufReader};
-fn wrap(s: own TlsStream) {
+        r#"import std.io.{BufReader, BufWriter};
+pub fn wrap(s: own TlsStream, t: own TlsStream) with sends(Network) receives(Network) blocks {
     let r = BufReader.new(s);
-    drop(r);
+    let mut line = String.new();
+    let _ = r.read_line(mut line);
+    let mut w = BufWriter.with_capacity(t, 64);
+    let _ = w.write_all(line.bytes());
+    let _ = w.flush();
 }
 fn main() {}
 "#,
     );
+    assert!(ok, "{out}");
+    assert!(!out.contains("E0297"), "{out}");
+}
+
+/// A generic wrapper is judged at each instance: the body passes check for
+/// its type parameter, and the call that instantiates it with a value that
+/// is not a source is refused there (B-2026-11-10-28).
+#[test]
+fn a_generic_buffered_wrapper_is_judged_at_its_call() {
+    let (ok, out) = check(
+        r#"import std.io.{BufReader};
+fn wrap[R](r: own R) -> BufReader[R] {
+    BufReader.new(r)
+}
+fn outer[S](s: own S) -> BufReader[S] {
+    wrap(s)
+}
+fn main() {
+    let f = wrap(File.open("x.txt").unwrap());
+    drop(f);
+    let v: Vec[u8] = Vec.new();
+    let r = outer(v);
+    drop(r);
+}
+"#,
+    );
     assert!(!ok, "{out}");
-    assert!(out.contains("E0297"), "{out}");
-    assert!(out.contains("not a `TlsStream`"), "{out}");
-    assert!(out.contains("B-2026-11-10-14"), "{out}");
+    assert_eq!(out.matches("\"severity\":\"error\"").count(), 1, "{out}");
+    assert!(out.contains("\"E0297\""), "{out}");
+    assert!(out.contains("not a `Vec[u8]`"), "{out}");
+    assert!(out.contains("\"line\":12"), "{out}");
+    assert!(out.contains("instantiates"), "{out}");
 }
 
 /// Over a connection a buffer's calls have the connection's effects

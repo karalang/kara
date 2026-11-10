@@ -286,3 +286,170 @@ pub extern "C" fn karac_mir_tls_close(fd: i64) {
     }
     sock::close(raw);
 }
+
+// ── A `BufReader` / `BufWriter` over a `TlsStream` (B-2026-11-10-28) ──
+//
+// As `mir_bufsock.rs` buffers a `TcpStream`: the buffer takes the stream's
+// descriptor, and its connection stays here, read and written through the
+// same `TlsConn` calls as the stream's own `read` and `write`. Inside a
+// task, the readiness check reads the plaintext the connection can give
+// without waiting into the reader's `pending` bytes until the read has what
+// it needs, so the read never waits on the thread. A record half arrived
+// shows no plaintext, so readiness asks the connection, not the socket.
+
+/// Whether `fd` is a `TlsStream`'s descriptor.
+pub(crate) fn is_tls(fd: i64) -> bool {
+    with(|t| t.conns.contains_key(&(fd as RawFd)))
+}
+
+/// A buffered reader's stream, and the plaintext read ahead of its buffer.
+pub(crate) struct TlsState {
+    fd: RawFd,
+    pending: std::collections::VecDeque<u8>,
+    eof: bool,
+    /// A failure a readiness read met, for the read.
+    failed: Option<Error>,
+}
+
+impl Drop for TlsState {
+    fn drop(&mut self) {
+        karac_mir_tls_close(i64::from(self.fd));
+    }
+}
+
+fn lock(s: &Mutex<TlsState>) -> std::sync::MutexGuard<'_, TlsState> {
+    s.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// The `Read` a `TlsStream`'s `BufReader` reads through.
+pub(crate) struct TlsRead(Arc<Mutex<TlsState>>);
+
+impl std::io::Read for TlsRead {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let fd = {
+            let mut s = lock(&self.0);
+            if !s.pending.is_empty() {
+                let n = buf.len().min(s.pending.len());
+                for (d, b) in buf.iter_mut().zip(s.pending.drain(..n)) {
+                    *d = b;
+                }
+                return Ok(n);
+            }
+            if let Some(e) = s.failed.take() {
+                return Err(e);
+            }
+            if s.eof || buf.is_empty() {
+                return Ok(0);
+            }
+            s.fd
+        };
+        let timed = crate::mir_task::take_timed_out(fd);
+        on_conn(fd, |c| {
+            if timed {
+                return Err(tls_conn::Error::Io(ErrorKind::TimedOut.into()));
+            }
+            let deadline = c.timeout.map(|d| Instant::now() + d);
+            c.tls.read(&mut stream(fd), buf, &mut waiter(fd, deadline))
+        })
+        .unwrap_or_else(|| Err(tls_conn::Error::Io(Error::from_raw_os_error(9))))
+        .map_err(tls_conn::Error::into_io)
+    }
+}
+
+/// The `Write` a `TlsStream`'s `BufWriter` writes through; the stream
+/// closes (with `close_notify`) when the writer drops, after its last flush.
+pub(crate) struct TlsWrite(RawFd);
+
+impl std::io::Write for TlsWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let fd = self.0;
+        on_conn(fd, |c| {
+            c.tls.write(&mut stream(fd), buf, &mut waiter(fd, None))
+        })
+        .unwrap_or_else(|| Err(tls_conn::Error::Io(Error::from_raw_os_error(9))))
+        .map_err(tls_conn::Error::into_io)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for TlsWrite {
+    fn drop(&mut self) {
+        karac_mir_tls_close(i64::from(self.0));
+    }
+}
+
+/// A reader over the `TlsStream` `fd`, and the state its readiness reads.
+pub(crate) fn reader(fd: RawFd) -> (TlsRead, Arc<dyn std::any::Any + Send + Sync>) {
+    let s = Arc::new(Mutex::new(TlsState {
+        fd,
+        pending: std::collections::VecDeque::new(),
+        eof: false,
+        failed: None,
+    }));
+    (TlsRead(s.clone()), s)
+}
+
+/// A writer over the `TlsStream` `fd`.
+pub(crate) fn writer(fd: RawFd) -> TlsWrite {
+    TlsWrite(fd)
+}
+
+/// [`crate::mir_bufsock::ready`] for a reader over a `TlsStream`: `None`
+/// when `state` is not one.
+pub(crate) fn buffered_ready(
+    state: &(dyn std::any::Any + Send + Sync),
+    buffered: &[u8],
+    need: u8,
+) -> Option<u8> {
+    let state = state.downcast_ref::<Mutex<TlsState>>()?;
+    let mut s = lock(state);
+    let fd = s.fd;
+    let mut out = false;
+    let mut by = None;
+    let ready = loop {
+        let enough = s.eof
+            || s.failed.is_some()
+            || match need {
+                0 => !buffered.is_empty() || !s.pending.is_empty(),
+                1 => buffered.contains(&b'\n') || s.pending.contains(&b'\n'),
+                _ => false,
+            };
+        if enough {
+            break true;
+        }
+        // Moves the connection on, then takes the plaintext it holds; a
+        // read that would wait gives up at once instead.
+        let got = on_conn(fd, |c| {
+            by = c.timeout;
+            let (ready, wants_out) = c.tls.ready(&mut stream(fd), false);
+            out = wants_out;
+            if !ready {
+                return None;
+            }
+            let mut chunk = [0u8; 4096];
+            let mut gave_up = false;
+            let r = c.tls.read(&mut stream(fd), &mut chunk, &mut |_| {
+                gave_up = true;
+                Ok(false)
+            });
+            Some(match r {
+                Err(_) if gave_up => Ok(None),
+                Ok(n) => Ok(Some(chunk[..n].to_vec())),
+                Err(e) => Err(e),
+            })
+        });
+        match got {
+            // Not a TLS stream any more: the read reports it.
+            None => break true,
+            Some(None) | Some(Some(Ok(None))) => break false,
+            Some(Some(Ok(Some(b)))) if b.is_empty() => s.eof = true,
+            Some(Some(Ok(Some(b)))) => s.pending.extend(b),
+            Some(Some(Err(e))) => s.failed = Some(e.into_io()),
+        }
+    };
+    drop(s);
+    Some(crate::mir_task::ready_io(fd, ready, out, by))
+}

@@ -135,6 +135,11 @@ pub(crate) fn writer(fd: RawFd) -> SockWrite {
 /// enough.
 pub(crate) fn ready(state: &(dyn std::any::Any + Send + Sync), buffered: &[u8], need: u8) -> u8 {
     let Some(state) = state.downcast_ref::<Mutex<SockState>>() else {
+        // A reader over a `TlsStream` (B-2026-11-10-28).
+        #[cfg(feature = "tls")]
+        if let Some(r) = crate::mir_tls::buffered_ready(state, buffered, need) {
+            return r;
+        }
         return crate::mir_task::karac_mir_ready(1);
     };
     let mut s = lock(state);
