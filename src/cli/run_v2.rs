@@ -319,20 +319,29 @@ fn run_on_jit(
     timeout: Option<std::time::Duration>,
     argv: &[String],
 ) -> ! {
-    let ir = built
+    let code = built
         .map(crate::mir::lower::Lowered::for_this_pool)
         .and_then(|l| {
             crate::mir::lower::compiled_check(&l)?;
-            crate::backend::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
+            crate::backend::mir::compile_mir_for_jit(&l.program, &l.tys, &jit_handoff_stem())
                 .map_err(|e| format!("llvm: {e}"))
         })
         .unwrap_or_else(|e| refused(&e, output));
-    // `KARAC_MIR_LL=<path>` keeps a copy of the IR, as `__mir-llvm-run` does.
-    if let Some(keep) = std::env::var_os("KARAC_MIR_LL") {
-        let _ = std::fs::write(keep, &ir);
+    // `KARAC_MIR_LL=<path>` keeps a copy of the IR, as `__mir-llvm-run` does
+    // (and keeps the program on the IR path, `compile_mir_for_jit`).
+    if let (Some(keep), crate::backend::mir::JitCode::Ir(ir)) =
+        (std::env::var_os("KARAC_MIR_LL"), &code)
+    {
+        let _ = std::fs::write(keep, ir);
     }
-    let run =
-        run_ir_via_jit_subprocess_with(&ir, argv, timeout, output != OutputMode::Text, false, &[]);
+    let run = run_code_via_jit_subprocess_with(
+        code,
+        argv,
+        timeout,
+        output != OutputMode::Text,
+        false,
+        &[],
+    );
     if run.timed_out {
         timed_out(timeout);
     }

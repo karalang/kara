@@ -441,6 +441,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- **`karac run` of a large program compiles on every core, and no longer
+  builds one enormous function.** A program the build splits into codegen
+  units is compiled the same way for the JIT, one object per unit on its
+  own thread, and the runner links the objects. The JIT's inliner also stops
+  folding single-call functions into a caller past 10,000 instructions,
+  which turned mini_tldextract's hundred table functions into one function
+  of 183,000 instructions that code generation took 67 s over. On the
+  4-core container, `karac run` of mini_tldextract went from 92 s to 6.9 s
+  (its build: 16 s), mini_pyasn1 from 30 s to 8.8 s and mini_markdown from
+  24 s to 11.5 s, no slower than building it. The kata benches are
+  unchanged: the budget touches none of their 1,132 programs, and they are
+  below the split's size (B-2026-11-10-5).
 - **`PriorityQueue` sifts move a hole** instead of swapping a level at a
   time, as Rust's `BinaryHeap` does: the element being sifted is read out
   once, each element it passes moves one level, and a `defer` writes it

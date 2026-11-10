@@ -39,6 +39,7 @@ mod flag;
 mod fmt;
 mod foreign;
 mod hot_swap;
+mod inline_budget;
 mod io;
 mod key;
 mod log;
@@ -191,7 +192,48 @@ pub fn compile_mir_ir(program: &Program, tys: &TyInterner) -> R<String> {
 /// `KARAC_MIR_JIT_SROA=0` leaves the IR as built.
 pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> {
     let llcx = Context::create();
-    let module = compile_mir(&llcx, "main", program, tys)?;
+    let (module, passes) = jit_module(&llcx, program, tys)?;
+    jit_ir(&module, passes)
+}
+
+/// What `karac_jit_runner` loads for a program: its IR, or, for a program
+/// large enough to split, one object per codegen unit.
+pub enum JitCode {
+    /// The IR text, which the runner compiles on one thread.
+    Ir(String),
+    /// Objects compiled in parallel here (B-2026-11-10-5), which the runner
+    /// only links. The caller removes the files.
+    Objects(Vec<std::path::PathBuf>),
+}
+
+/// [`compile_mir_ir_for_jit`], except that a program the build would split
+/// into codegen units is compiled here, one unit per core, into objects
+/// named after `stem` (`mir_aot::compile_jit_units`). The JIT compiles a
+/// module on one thread: mini_tldextract's run took 92 s where its build
+/// took 16 s over four cores. `KARAC_MIR_LL`, which keeps the IR, keeps
+/// the IR path.
+pub fn compile_mir_for_jit(
+    program: &Program,
+    tys: &TyInterner,
+    stem: &std::path::Path,
+) -> R<JitCode> {
+    let llcx = Context::create();
+    let (module, passes) = jit_module(&llcx, program, tys)?;
+    if std::env::var_os("KARAC_MIR_LL").is_none() {
+        if let Some(parts) = super::mir_aot::compile_jit_units(&module, passes, stem)? {
+            return Ok(JitCode::Objects(parts));
+        }
+    }
+    jit_ir(&module, passes).map(JitCode::Ir)
+}
+
+/// The JIT's module, laid out for the host, with the passes it is to run.
+fn jit_module<'ctx>(
+    llcx: &'ctx Context,
+    program: &Program,
+    tys: &TyInterner,
+) -> R<(Module<'ctx>, Option<&'static str>)> {
+    let module = compile_mir(llcx, "main", program, tys)?;
     // The host's layout, as the AOT path stamps it (`mir_aot`). Without it
     // the passes below read the IR under LLVM's default layout, where an
     // `i64` is 4-aligned: a register pair `{ i8, i64 }` then has its `i64`
@@ -200,30 +242,50 @@ pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> 
     let tm = super::driver::create_target_machine()?;
     module.set_triple(&tm.get_triple());
     module.set_data_layout(&tm.get_target_data().get_data_layout());
-    if std::env::var("KARAC_MIR_JIT_SROA").as_deref() != Ok("0") {
-        // Inlining as well: every argument is passed by pointer, and a
-        // small callee left out of line costs its loads and stores at each
-        // call. On kata 3629's bench (release build) the run drops from
-        // 24.5 s to 8.1 s (legacy's JIT: 7.2 s), at a compile cost the
-        // largest programs feel: the 20,000-line mini_pyasn1 app takes
-        // 10.5 s to start where it took 7.6 s.
-        // `KARAC_MIR_JIT_INLINE=0` leaves it at `sroa`.
-        let passes = if std::env::var("KARAC_MIR_JIT_INLINE").as_deref() == Ok("0") {
-            "function(sroa)"
-        } else {
-            "function(sroa),cgscc(inline),function(sroa,instcombine<no-verify-fixpoint>,simplifycfg)"
-        };
-        module
-            .run_passes(passes, &tm, inkwell::passes::PassBuilderOptions::create())
-            .map_err(|e| format!("{passes}: {}", e.to_string()))?;
-        // `sroa` grows a name per split (`_463.sroa.0.sroa.0...`); past
-        // the IR parser's length limit two such names read back as one.
-        for f in module.get_functions() {
-            for b in f.get_basic_blocks() {
-                for i in b.get_instructions() {
-                    if i.get_name().is_some_and(|n| n.to_bytes().len() > 64) {
-                        let _ = i.set_name("");
-                    }
+    if std::env::var("KARAC_MIR_JIT_SROA").as_deref() == Ok("0") {
+        return Ok((module, None));
+    }
+    // Inlining as well: every argument is passed by pointer, and a
+    // small callee left out of line costs its loads and stores at each
+    // call. On kata 3629's bench (release build) the run drops from
+    // 24.5 s to 8.1 s (legacy's JIT: 7.2 s), at a compile cost the
+    // largest programs feel: the 20,000-line mini_pyasn1 app takes
+    // 10.5 s to start where it took 7.6 s.
+    // `KARAC_MIR_JIT_INLINE=0` leaves it at `sroa`.
+    if std::env::var("KARAC_MIR_JIT_INLINE").as_deref() == Ok("0") {
+        return Ok((module, Some("function(sroa)")));
+    }
+    // A function the inliner would grow past what code generation handles
+    // in reasonable time keeps its largest single-call callees out of line
+    // (B-2026-11-10-5).
+    let mut t = std::time::Instant::now();
+    // SAFETY: the module is live and this thread's alone.
+    let kept = unsafe { inline_budget::cap_inline_growth(module.as_mut_ptr()) };
+    crate::mir::lower::phase_time(&format!("inline budget, {kept} kept out"), &mut t);
+    Ok((
+        module,
+        Some(
+            "function(sroa),cgscc(inline),function(sroa,instcombine<no-verify-fixpoint>,simplifycfg)",
+        ),
+    ))
+}
+
+/// The JIT module's IR text after `passes`.
+fn jit_ir(module: &Module<'_>, passes: Option<&str>) -> R<String> {
+    let Some(passes) = passes else {
+        return Ok(module.print_to_string().to_string());
+    };
+    let tm = super::driver::create_target_machine()?;
+    module
+        .run_passes(passes, &tm, inkwell::passes::PassBuilderOptions::create())
+        .map_err(|e| format!("{passes}: {}", e.to_string()))?;
+    // `sroa` grows a name per split (`_463.sroa.0.sroa.0...`); past
+    // the IR parser's length limit two such names read back as one.
+    for f in module.get_functions() {
+        for b in f.get_basic_blocks() {
+            for i in b.get_instructions() {
+                if i.get_name().is_some_and(|n| n.to_bytes().len() > 64) {
+                    let _ = i.set_name("");
                 }
             }
         }

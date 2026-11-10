@@ -28,7 +28,7 @@ use llvm_sys::orc2::ee::{
 };
 use llvm_sys::orc2::lljit::{
     LLVMOrcCreateLLJIT, LLVMOrcCreateLLJITBuilder, LLVMOrcDisposeLLJIT,
-    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT,
+    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT, LLVMOrcLLJITAddObjectFile,
     LLVMOrcLLJITBuilderSetObjectLinkingLayerCreator, LLVMOrcLLJITGetDataLayoutStr,
     LLVMOrcLLJITGetExecutionSession, LLVMOrcLLJITGetGlobalPrefix, LLVMOrcLLJITGetMainJITDylib,
     LLVMOrcLLJITGetTripleString, LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
@@ -349,6 +349,28 @@ impl LLJITEngine {
         unsafe {
             let main_jd = LLVMOrcLLJITGetMainJITDylib(self.jit);
             let err = LLVMOrcLLJITAddLLVMIRModule(self.jit, main_jd, tsm);
+            if !err.is_null() {
+                return Err(consume_error(err));
+            }
+            Ok(())
+        }
+    }
+
+    /// Add a native object, compiled for this JIT's target
+    /// (`mir_aot::compile_jit_units`), to the main JITDylib. Its symbols
+    /// resolve against the other objects and modules there and against the
+    /// process, as an IR module's do (B-2026-11-10-5).
+    pub fn add_object_file(&self, bytes: &[u8], name: &str) -> Result<(), String> {
+        let name = CString::new(name).map_err(|e| format!("object name: {e}"))?;
+        unsafe {
+            // The JIT takes the copy; the caller's bytes stay theirs.
+            let buf = llvm_sys::core::LLVMCreateMemoryBufferWithMemoryRangeCopy(
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                name.as_ptr(),
+            );
+            let main_jd = LLVMOrcLLJITGetMainJITDylib(self.jit);
+            let err = LLVMOrcLLJITAddObjectFile(self.jit, main_jd, buf);
             if !err.is_null() {
                 return Err(consume_error(err));
             }

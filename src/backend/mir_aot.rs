@@ -83,6 +83,78 @@ pub fn compile_program_object_with(
     compile_module(&llcx, &module, obj, opt, true)
 }
 
+/// Compile a module `karac run` would hand the JIT as IR into one object
+/// per codegen unit instead, each unit optimised with `passes` and emitted
+/// on its own thread (B-2026-11-10-5). The JIT compiles a module on one
+/// thread, so a large program waited on one core for what a build spreads
+/// over all of them. The objects are emitted for the JIT's own target (the
+/// host's CPU, and the code model a JIT gets), so loading them is what the
+/// JIT would have produced from the same units.
+///
+/// `None` when the module is one unit, or carries the hot-swap table (whose
+/// constructor the JIT runs from IR): the runner compiles its IR as before.
+/// On `Some`, the caller owns the files, also when the run fails.
+pub(crate) fn compile_jit_units(
+    module: &Module<'_>,
+    passes: Option<&str>,
+    stem: &Path,
+) -> Result<Option<Vec<std::path::PathBuf>>, String> {
+    if module.get_global("karac_hotswap_table").is_some() {
+        return Ok(None);
+    }
+    let Some(plan) = split::plan(module.as_mut_ptr()).filter(|p| p.units() > 1) else {
+        return Ok(None);
+    };
+    let mut t = std::time::Instant::now();
+    let units = plan.units();
+    let (parts, compiled) = split::compile_parts(module.as_mut_ptr(), &plan, stem, &|m, part| {
+        let tm = super::driver::create_target_machine()?;
+        if let Some(passes) = passes {
+            m.run_passes(passes, &tm, PassBuilderOptions::create())
+                .map_err(|e| format!("{passes}: {}", e.to_string()))?;
+        }
+        // The runner lowers coroutines in the IR it parses
+        // (`lljit::run_coro_passes`); an object has to arrive lowered.
+        // SAFETY: the unit's module is live and this thread's alone.
+        let coro = unsafe { super::coro_passes::coro_lowering_pipeline(m.as_mut_ptr()) };
+        m.run_passes(coro, &tm, PassBuilderOptions::create())
+            .map_err(|e| format!("{coro}: {}", e.to_string()))?;
+        jit_target_machine()?
+            .write_to_file(m, FileType::Object, part)
+            .map_err(|e| format!("write {}: {}", part.display(), e.to_string()))
+    });
+    crate::mir::lower::phase_time(&format!("jit objects, {units} units"), &mut t);
+    match compiled {
+        Ok(()) => Ok(Some(parts)),
+        Err(e) => {
+            for p in &parts {
+                let _ = std::fs::remove_file(p);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// The target machine `LLJIT` builds for itself (`JITTargetMachineBuilder::
+/// detectHost`): the host's triple, CPU and features, the default
+/// relocation model, and the code model a JIT defaults to (large on
+/// x86-64, as the JIT's memory is not placed near the process's symbols).
+fn jit_target_machine() -> Result<TargetMachine, String> {
+    use inkwell::targets::{CodeModel, RelocMode, Target};
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).map_err(|e| e.to_string())?;
+    target
+        .create_target_machine(
+            &triple,
+            &TargetMachine::get_host_cpu_name().to_string(),
+            &TargetMachine::get_host_cpu_features().to_string(),
+            inkwell::OptimizationLevel::Default,
+            RelocMode::Default,
+            CodeModel::JITDefault,
+        )
+        .ok_or_else(|| "could not create the JIT's target machine".to_string())
+}
+
 /// The entry of the in-order program a parallel build carries
 /// ([`compile_dual_program_object`]).
 const IN_ORDER_MAIN: &str = "karac.main.seq";

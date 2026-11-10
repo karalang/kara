@@ -477,6 +477,24 @@ pub(super) fn compile_units(
     obj: &Path,
     compile: &(dyn Fn(&inkwell::module::Module<'_>, &Path) -> Result<(), String> + Sync),
 ) -> Result<(), String> {
+    let (parts, compiled) = compile_parts(module, plan, obj, compile);
+    let merged = compiled.and_then(|()| partial_link(obj, &parts));
+    for p in &parts {
+        let _ = std::fs::remove_file(p);
+    }
+    merged
+}
+
+/// [`compile_units`] without the merge: each unit's object is
+/// `<stem>.cgu<n>.o`, and the paths come back whether or not every unit
+/// compiled, so the caller can remove them either way. The JIT loads the
+/// objects as they are (B-2026-11-10-5).
+pub(super) fn compile_parts(
+    module: LLVMModuleRef,
+    plan: &Plan,
+    obj: &Path,
+    compile: &(dyn Fn(&inkwell::module::Module<'_>, &Path) -> Result<(), String> + Sync),
+) -> (Vec<PathBuf>, Result<(), String>) {
     let bitcode = bitcode(module);
     let parts: Vec<PathBuf> = (0..plan.units())
         .map(|u| {
@@ -520,14 +538,8 @@ pub(super) fn compile_units(
             })
             .collect()
     });
-    let merged = results
-        .into_iter()
-        .collect::<Result<(), String>>()
-        .and_then(|()| partial_link(obj, &parts));
-    for p in &parts {
-        let _ = std::fs::remove_file(p);
-    }
-    merged
+    let compiled = results.into_iter().collect::<Result<(), String>>();
+    (parts, compiled)
 }
 
 /// The cores codegen units share across every module a build compiles (a

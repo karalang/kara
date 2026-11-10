@@ -107,10 +107,12 @@ fn unlink_handoff_ir_if_ours() {
     if std::env::var_os("KARAC_JIT_IR_UNLINK").is_none() {
         return;
     }
-    if let Some(path) = std::env::args().nth(1) {
-        if !path.starts_with("--") {
-            let _ = std::fs::remove_file(path);
-        }
+    // Every handoff file: the IR, or the objects of a split program.
+    for path in std::env::args()
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+    {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -252,37 +254,37 @@ fn main() -> ExitCode {
         karac_runtime::mir::karac_mir_panic_record_enable();
     }
 
-    let Some(first) = std::env::args().nth(1).filter(|a| !a.starts_with("--")) else {
-        eprintln!("karac_jit_runner: usage: karac_jit_runner <ir-path>");
+    let paths: Vec<String> = std::env::args()
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .collect();
+    if paths.is_empty() {
+        eprintln!("karac_jit_runner: usage: karac_jit_runner <ir-path> | <object>...");
         return ExitCode::from(2);
-    };
-
-    oneshot_main(&first)
-}
-
-/// One-shot mode (slice c.3 + W3.4). Loads `ir_path`, runs it, exits.
-fn oneshot_main(ir_path: &str) -> ExitCode {
-    let read = std::fs::read_to_string(ir_path);
-
-    // B-2026-09-05-24: `karac run` hands the IR over through a temp file that
-    // IT removes once we exit — which never happens when it is killed before
-    // we do, so every interrupted run leaked a `/tmp/karac_run_<pid>_jit.ll`.
-    // The bytes are ours the moment the read returns, so unlink here instead
-    // and let the parent's own `remove_file` be the no-op it now is. Opt-in via
-    // the env var rather than unconditional: the other caller
-    // (`__mir-llvm-run`) passes a path it manages itself, and a runner that deletes its caller's files would be
-    // a surprise in the other direction.
-    if std::env::var_os("KARAC_JIT_IR_UNLINK").is_some() {
-        let _ = std::fs::remove_file(ir_path);
     }
 
-    let ir = match read {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("karac_jit_runner: read IR {ir_path}: {e}");
-            return ExitCode::from(2);
+    oneshot_main(&paths)
+}
+
+/// What one handoff file holds: IR text, or a native object compiled for
+/// this JIT (`.o`, one per codegen unit of a split program, B-2026-11-10-5).
+enum Code {
+    Ir(String),
+    Object(Vec<u8>),
+}
+
+/// One-shot mode (slice c.3 + W3.4). Loads `paths`, runs them, exits.
+fn oneshot_main(paths: &[String]) -> ExitCode {
+    let mut code = Vec::with_capacity(paths.len());
+    for path in paths {
+        match read_handoff(path) {
+            Ok(c) => code.push((path, c)),
+            Err(e) => {
+                eprintln!("karac_jit_runner: read {path}: {e}");
+                return ExitCode::from(2);
+            }
         }
-    };
+    }
 
     if let Err(e) = load_link_libraries() {
         eprintln!("karac_jit_runner: {e}");
@@ -297,12 +299,50 @@ fn oneshot_main(ir_path: &str) -> ExitCode {
         }
     };
 
-    if let Err(e) = engine.add_ir_module(&ir) {
-        eprintln!("karac_jit_runner: add_ir_module: {e}");
-        return ExitCode::from(2);
+    for (path, c) in &code {
+        let added = match c {
+            Code::Ir(ir) => engine
+                .add_ir_module(ir)
+                .map_err(|e| format!("add_ir_module: {e}")),
+            Code::Object(bytes) => engine
+                .add_object_file(bytes, path)
+                .map_err(|e| format!("add_object_file {path}: {e}")),
+        };
+        if let Err(e) = added {
+            eprintln!("karac_jit_runner: {e}");
+            return ExitCode::from(2);
+        }
     }
+    drop(code);
 
-    publish_spawn_sites(&engine);
+    run_loaded(&engine)
+}
+
+/// Read one handoff file, removing it when the spawner handed it over.
+fn read_handoff(path: &str) -> std::io::Result<Code> {
+    let read = if path.ends_with(".o") {
+        std::fs::read(path).map(Code::Object)
+    } else {
+        std::fs::read_to_string(path).map(Code::Ir)
+    };
+
+    // B-2026-09-05-24: `karac run` hands the IR over through a temp file that
+    // IT removes once we exit — which never happens when it is killed before
+    // we do, so every interrupted run leaked a `/tmp/karac_run_<pid>_jit.ll`.
+    // The bytes are ours the moment the read returns, so unlink here instead
+    // and let the parent's own `remove_file` be the no-op it now is. Opt-in via
+    // the env var rather than unconditional: the other caller
+    // (`__mir-llvm-run`) passes a path it manages itself, and a runner that deletes its caller's files would be
+    // a surprise in the other direction.
+    if std::env::var_os("KARAC_JIT_IR_UNLINK").is_some() {
+        let _ = std::fs::remove_file(path);
+    }
+    read
+}
+
+/// Run the loaded program's `main` and exit with its code.
+fn run_loaded(engine: &LLJITEngine) -> ExitCode {
+    publish_spawn_sites(engine);
 
     let addr = match engine.lookup_address("main") {
         Ok(a) => a,

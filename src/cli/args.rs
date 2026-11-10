@@ -190,35 +190,45 @@ pub fn parse_args(args: &[String]) -> Command {
             });
             crate::mir::interp::set_source_name(path);
             install_manifest_link(path);
-            let ir = crate::mir::lower::build_source(&src)
-                .map(crate::mir::lower::Lowered::for_this_pool)
-                .and_then(|l| {
-                    crate::mir::lower::compiled_check(&l)?;
-                    crate::backend::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
-                        .map_err(|e| format!("llvm: {e}"))
-                });
-            let ir = ir.unwrap_or_else(|e| {
-                eprintln!("error[mir]: {e}");
-                process::exit(3);
-            });
             let Some(runner) = crate::backend::runner::locate_karac_jit_runner() else {
                 eprintln!("error[mir]: llvm: no karac_jit_runner beside karac");
                 process::exit(3);
             };
-            // `KARAC_MIR_LL=<path>` keeps a copy of the IR for debugging.
-            if let Some(keep) = std::env::var_os("KARAC_MIR_LL") {
-                let _ = std::fs::write(keep, &ir);
-            }
-            let ll = std::env::temp_dir().join(format!("karac-mir-{}.ll", process::id()));
-            if let Err(e) = std::fs::write(&ll, ir) {
-                eprintln!("error[mir]: llvm: {}: {e}", ll.display());
+            let stem = std::env::temp_dir().join(format!("karac-mir-{}", process::id()));
+            let code = crate::mir::lower::build_source(&src)
+                .map(crate::mir::lower::Lowered::for_this_pool)
+                .and_then(|l| {
+                    crate::mir::lower::compiled_check(&l)?;
+                    crate::backend::mir::compile_mir_for_jit(&l.program, &l.tys, &stem)
+                        .map_err(|e| format!("llvm: {e}"))
+                });
+            let code = code.unwrap_or_else(|e| {
+                eprintln!("error[mir]: {e}");
                 process::exit(3);
-            }
+            });
+            // The IR, or a split program's objects (B-2026-11-10-5).
+            let files = match code {
+                crate::backend::mir::JitCode::Ir(ir) => {
+                    // `KARAC_MIR_LL=<path>` keeps a copy of the IR for debugging.
+                    if let Some(keep) = std::env::var_os("KARAC_MIR_LL") {
+                        let _ = std::fs::write(keep, &ir);
+                    }
+                    let ll = stem.with_extension("ll");
+                    if let Err(e) = std::fs::write(&ll, ir) {
+                        eprintln!("error[mir]: llvm: {}: {e}", ll.display());
+                        process::exit(3);
+                    }
+                    vec![ll]
+                }
+                crate::backend::mir::JitCode::Objects(parts) => parts,
+            };
             let mut cmd = process::Command::new(runner);
             jit_link_env(&mut cmd);
             program_args_env(&mut cmd);
-            let status = cmd.arg(&ll).status();
-            let _ = std::fs::remove_file(&ll);
+            let status = cmd.args(&files).status();
+            for f in &files {
+                let _ = std::fs::remove_file(f);
+            }
             match status {
                 Ok(s) => process::exit(s.code().unwrap_or(101)),
                 Err(e) => {

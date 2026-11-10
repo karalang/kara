@@ -376,19 +376,88 @@ pub(super) fn run_ir_via_jit_subprocess_with(
     quiet_stdout: bool,
     env: &[(&str, &str)],
 ) -> JitRun {
-    let failed = |code| JitRun {
-        code,
-        stderr: None,
-        timed_out: false,
-    };
-    let ir_path = std::env::temp_dir().join(format!("karac_run_{}_jit.ll", std::process::id()));
+    let ir_path = jit_handoff_stem().with_extension("ll");
     if let Err(e) = std::fs::write(&ir_path, ir) {
         eprintln!(
             "error: could not write JIT IR to {}: {e}",
             ir_path.display()
         );
-        return failed(1);
+        return JitRun {
+            code: 1,
+            stderr: None,
+            timed_out: false,
+        };
     }
+    run_files_via_jit_subprocess_with(
+        &[ir_path],
+        program_argv,
+        timeout,
+        capture_stderr,
+        quiet_stdout,
+        env,
+    )
+}
+
+/// Where this process's JIT handoff files go: `<tmp>/karac_run_<pid>_jit`,
+/// with `.ll` for IR and `.cgu<n>.o` for a split program's objects.
+#[cfg(feature = "llvm")]
+pub(super) fn jit_handoff_stem() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("karac_run_{}_jit", std::process::id()))
+}
+
+/// [`run_ir_via_jit_subprocess_with`] for what
+/// `backend::mir::compile_mir_for_jit` produced: the IR, or the objects of
+/// a split program (B-2026-11-10-5).
+#[cfg(feature = "llvm")]
+pub(super) fn run_code_via_jit_subprocess_with(
+    code: crate::backend::mir::JitCode,
+    program_argv: &[String],
+    timeout: Option<std::time::Duration>,
+    capture_stderr: bool,
+    quiet_stdout: bool,
+    env: &[(&str, &str)],
+) -> JitRun {
+    match code {
+        crate::backend::mir::JitCode::Ir(ir) => run_ir_via_jit_subprocess_with(
+            &ir,
+            program_argv,
+            timeout,
+            capture_stderr,
+            quiet_stdout,
+            env,
+        ),
+        crate::backend::mir::JitCode::Objects(parts) => run_files_via_jit_subprocess_with(
+            &parts,
+            program_argv,
+            timeout,
+            capture_stderr,
+            quiet_stdout,
+            env,
+        ),
+    }
+}
+
+/// Run the handoff `files` (IR, or objects) through the runner. The files
+/// are removed whatever happens.
+#[cfg(feature = "llvm")]
+fn run_files_via_jit_subprocess_with(
+    files: &[std::path::PathBuf],
+    program_argv: &[String],
+    timeout: Option<std::time::Duration>,
+    capture_stderr: bool,
+    quiet_stdout: bool,
+    env: &[(&str, &str)],
+) -> JitRun {
+    let failed = |code| JitRun {
+        code,
+        stderr: None,
+        timed_out: false,
+    };
+    let remove = || {
+        for f in files {
+            let _ = std::fs::remove_file(f);
+        }
+    };
     let runner = match crate::backend::runner::locate_karac_jit_runner() {
         Some(p) => p,
         None => {
@@ -396,7 +465,7 @@ pub(super) fn run_ir_via_jit_subprocess_with(
                 "error: karac_jit_runner not found — set KARAC_JIT_RUNNER, or install \
                  karac with --features llvm (the runner ships beside the karac binary)"
             );
-            let _ = std::fs::remove_file(&ir_path);
+            remove();
             return failed(1);
         }
     };
@@ -432,7 +501,7 @@ pub(super) fn run_ir_via_jit_subprocess_with(
     }
     command.envs(env.iter().copied());
     let child = command
-        .arg(&ir_path)
+        .args(files)
         .env("KARAC_PROGRAM_ARGS", program_argv.join("\u{1F}"))
         .env("KARAC_JIT_IR_UNLINK", "1")
         // Our OWN pid, so the runner's watchdog watches the process that
@@ -447,7 +516,7 @@ pub(super) fn run_ir_via_jit_subprocess_with(
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: could not spawn karac_jit_runner: {e}");
-            let _ = std::fs::remove_file(&ir_path);
+            remove();
             return failed(1);
         }
     };
@@ -481,7 +550,7 @@ pub(super) fn run_ir_via_jit_subprocess_with(
         }
     };
     drop(forwarder);
-    let _ = std::fs::remove_file(&ir_path);
+    remove();
     let stderr = reader.map(|r| r.join().unwrap_or_default());
     let code = match status {
         Ok(s) => exit_code_of(&s),
