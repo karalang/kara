@@ -122,8 +122,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-39 | 2026-11-10 | mir-llvm | medium | `SortedMap.insert` of a key smaller than every key present is O(n): the map is one sorted array, so 100000 inserts of falling keys take 1.8 s compiled against 0.018 s for rising ones, where collections.md promises a B-tree with O(log n) operations | — |
 | B-2026-11-10-40 | 2026-11-10 | typecheck | low | A narrowing refusal on a value popped from a heap whose pushed literal kept the `i64` default asks for `as i32` at each use, not for the literal: `heap.push((0, 0))` then `while let Some((d, u)) = heap.pop()` makes `d` an `i64`, and `return d` / `dist[v] = d + t` in an `i32` context are refused without naming the `0` | — |
 | B-2026-11-10-41 | 2026-11-10 | resolver | low | Rust's `Reverse` on one part of a heap's tuple item has no Kāra spelling and no fix: `BinaryHeap<(Reverse<i32>, String)>` and `BinaryHeap<(i32, Reverse<String>)>` are refused at every `Reverse`, and the remaining repair is a hand-written `Ord` or a negated number, impossible for a `String` | — |
-| B-2026-11-10-33 | 2026-11-10 | typecheck | medium | A bare handle parameter handed to `BufReader.new` / `BufWriter.new` (`fn serve(conn: TcpStream) { BufReader.new(conn) }`, a Rust port's owned parameter) gets E0297 "not a `ref TcpStream`" with no fix, where any other `own` parameter gets the D5 refusal and the fix that writes `own`; before E0297 (d5307a5abd) it passed check and the buffer closed the caller's handle | — |
-| B-2026-11-10-34 | 2026-11-10 | typecheck | low | `let s: String = pieces.map(|x| f"[{x}]").collect()`, Rust's `FromIterator<String> for String`, is refused with only "`String` implements `FromIterator[char]`, not `FromIterator[String]`", without naming Kāra's spelling (collect a `Vec[String]` and `join("")`) | — |
 
 ### Relocated
 
@@ -1027,6 +1025,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-23 | typecheck | medium | A closure with no declared return type that returns a non-`i64` integer (`return i as i32;`) and has an unsuffixed literal tail or `return` (`0`) is… | 900693f6bb |
 | B-2026-11-10-28 | interp+mir-llvm | medium | `BufReader`/`BufWriter` over a `TlsStream` is refused at check (E0297, "not built yet"), and over a socket a `Network` provider opened stops at the c… | 23ce3eab43 |
 | B-2026-11-10-29 | mir-llvm | low | `karac build` was ~21% slower than at f1416771a4 on the ADR-2 frozen set (0.886x legacy, was 0.734x): the in-order program was lowered after the auto… | 2991314acf |
+| B-2026-11-10-33 | typecheck | medium | A bare handle parameter handed to `BufReader.new` / `BufWriter.new` (`fn serve(conn: TcpStream) { BufReader.new(conn) }`, a Rust port's owned paramet… | 0e5453a321 |
+| B-2026-11-10-34 | typecheck | low | `let s: String = pieces.map(\|x\| f"[{x}]").collect()`, Rust's `FromIterator<String> for String`, is refused with only "`String` implements `FromIterat… | 0e5453a321 |
 
 </details>
 
