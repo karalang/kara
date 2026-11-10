@@ -2169,6 +2169,18 @@ impl<'a> Resolver<'a> {
     /// undeclared here: name Kāra's spelling instead of an edit-distance
     /// guess, with a fix where the rewrite is certain (B-2026-11-07-40).
     fn report_foreign_name(&mut self, name: &str, span: Span) -> bool {
+        // `std.mem.take(..)`: Rust's path written with dots (kata 2076).
+        if let Some((message, edit)) = self.program.rust_std_paths.get(&span.offset).cloned() {
+            self.errors.push(ResolveError {
+                message,
+                span,
+                kind: ResolveErrorKind::UndefinedName,
+                suggestion: None,
+                replacement: Some(Box::new(edit)),
+                stub_hint: None,
+            });
+            return true;
+        }
         let call = self
             .program
             .foreign_calls

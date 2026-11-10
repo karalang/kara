@@ -929,6 +929,13 @@ pub struct Program {
     /// the PARSER from the tokens; the resolver attaches it when nothing
     /// declares `Reverse` (kata 1058).
     pub rust_reverse_sort_keys: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Rust's `std::mem::take` written with dots, `std.mem.take(..)`, and
+    /// the like (`core.cmp.max`, `cmp.max`), keyed by the offset of the
+    /// root segment, with the message and the edit that deletes the module
+    /// segments Kāra has no use for (`std.`, `cmp.`, `collections.`; `mem.`
+    /// is Kāra's own and stays). Set by the PARSER from the tokens; the
+    /// resolver reports it when the root turns out undeclared (kata 2076).
+    pub rust_std_paths: rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit)>,
     /// Every `recv.parse()` with no arguments, keyed by the call's offset:
     /// the call's span, with the receiver's text as the replacement. Set by
     /// the PARSER; when only a later use names the target (`let x: f64 =

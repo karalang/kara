@@ -1049,6 +1049,7 @@ impl Parser {
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             rust_reverse_wraps: self.rust_reverse_wraps(),
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
+            rust_std_paths: self.rust_std_paths(),
             parse_target_edits: std::mem::take(&mut self.parse_target_edits),
             range_arg_edits: std::mem::take(&mut self.range_arg_edits),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
@@ -1385,6 +1386,75 @@ impl Parser {
     /// that writes the call `sort_by(|a, b| k[b].cmp(k[a]))` from the method's
     /// name to the call's `)` (kata 1058). A unary `*` on the parameter goes
     /// with it, since a closure's parameter is no reference to undo.
+    /// Rust's library paths written with `.`: `std.mem.take(mut v)`,
+    /// `std.cmp.max(a, b)`, `core.i64.MAX`, `cmp.min(a, b)`. The `::` form is
+    /// reported by [`Self::rewrite_rust_path`]; this one parses as field
+    /// accesses on an undeclared `std`, which alone said only "undefined
+    /// name 'std'" (kata 2076). Each such chain gets the message and the edit
+    /// that deletes its module segments: every lowercase segment before a
+    /// type, a primitive or the last, but `mem`, which is Kāra's
+    /// (`mem.take`, `mem.swap`). The resolver reports it only when the root
+    /// is undeclared, so a local named `std` (a standard deviation) is left
+    /// alone.
+    fn rust_std_paths(&self) -> rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit)> {
+        const ROOTS: &[&str] = &["std", "core", "alloc", "cmp", "collections"];
+        const PRIMITIVES: &[&str] = &[
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+            "f32", "f64", "bool", "char", "str",
+        ];
+        let mut out = rustc_hash::FxHashMap::default();
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let name_at = |i: usize| match tok(i) {
+            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+        for i in 0..self.tokens.len() {
+            let Some(root) = name_at(i) else { continue };
+            if !ROOTS.contains(&root)
+                || (i > 0 && matches!(tok(i - 1), Some(Token::Dot | Token::ColonColon)))
+            {
+                continue;
+            }
+            // the segments, at token indices i, i + 2, ..
+            let mut segments = vec![i];
+            while let Some(&last) = segments.last() {
+                if matches!(tok(last + 1), Some(Token::Dot)) && name_at(last + 2).is_some() {
+                    segments.push(last + 2);
+                } else {
+                    break;
+                }
+            }
+            if segments.len() < 2 {
+                continue;
+            }
+            let names: Vec<&str> = segments.iter().filter_map(|&k| name_at(k)).collect();
+            let mut dropped = 0;
+            while dropped < names.len() - 1
+                && !starts_upper(names[dropped])
+                && !PRIMITIVES.contains(&names[dropped])
+                && names[dropped] != "mem"
+            {
+                dropped += 1;
+            }
+            let start = self.tokens[i].span.offset;
+            let keep = self.tokens[segments[dropped]].span.offset;
+            let written = names.join(".");
+            let kara = names[dropped..].join(".");
+            let message = format!(
+                "`{written}` is a Rust path -- Kāra's library needs no `{}` module path: \
+                 write `{kara}`",
+                names[..dropped].join(".")
+            );
+            let edit = crate::resolver::TextEdit {
+                offset: start,
+                length: keep - start,
+                replacement: String::new(),
+            };
+            out.insert(start, (message, edit));
+        }
+        out
+    }
+
     fn rust_reverse_sort_keys(&self) -> rustc_hash::FxHashMap<usize, crate::resolver::TextEdit> {
         let mut out = rustc_hash::FxHashMap::default();
         let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
