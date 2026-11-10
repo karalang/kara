@@ -3021,6 +3021,22 @@ impl<'a> Interp<'a> {
                 },
                 _ => err(format!("{name} takes an integer")),
             },
+            // `char.from_digit(num, radix)`: the digit's char below the
+            // radix, as Rust's `char::from_digit` (kata 2081).
+            ("char", "from_digit") => match args.as_slice() {
+                [Value::Int(n), Value::Int(r)] => {
+                    if !(2..=36).contains(r) {
+                        self.panic_message = Some(FROM_DIGIT_RADIX.to_string());
+                        return self.native_panic();
+                    }
+                    let c = u32::try_from(*n)
+                        .ok()
+                        .and_then(|n| char::from_digit(n, *r as u32))
+                        .map(Value::Char);
+                    self.option(ret, c)
+                }
+                _ => err(format!("{name} takes a digit and a radix")),
+            },
             ("char", "len_utf8") => match args.as_slice() {
                 [Value::Char(c)] => Ok(Value::Int(c.len_utf8() as i128)),
                 _ => err(format!("{name} takes a char")),
@@ -17241,6 +17257,10 @@ impl fmt::Display for MethodName<'_> {
 }
 
 /// `char` methods [`Interp::char_method`] implements.
+/// The panic of `char.from_digit` with a radix outside 2..=36, the same
+/// text on every backend (`src/backend/mir/num.rs`).
+pub const FROM_DIGIT_RADIX: &str = "char.from_digit: the radix is not in 2..=36";
+
 const CHAR_METHODS: &[&str] = &[
     "is_alphabetic",
     "is_numeric",

@@ -103,6 +103,8 @@ Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).
 
 What the plain operators do on overflow, and the other numeric rules, are in [design.md §5](../design.md#numeric-semantics).
 
+**Char digits.** As Rust's: `c.to_digit(radix) -> Option[u32]` is the digit `c` stands for below the radix, `c.is_digit(radix) -> bool` whether it stands for one, and `char.from_digit(num: u32, radix: u32) -> Option[char]` the inverse, `0`..`9` then `a`..`z` for a `num` below the radix and `None` from the radix up. A radix outside 2..=36 panics in all three.
+
 **Float methods.** `f32` and `f64` have these methods, each returning `Self` unless noted. Kāra's power method is `pow`, not Rust's `powf`.
 
 | Group | Methods |

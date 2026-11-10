@@ -452,6 +452,50 @@ impl<'a> super::TypeChecker<'a> {
                         args: vec![char_ty, i64_ty],
                     });
                 }
+                // `char.from_digit(num: u32, radix: u32) -> Option[char]`,
+                // Rust's inverse of `c.to_digit(radix)`: `Some` of `0`..`9`
+                // or `a`..`z` for a digit below the radix, `None` above it,
+                // and a panic for a radix outside 2..=36 (kata 2081). Both
+                // arguments are `u32`, as `to_digit`'s radix is.
+                if method == "from_digit" && type_name == "char" {
+                    if args.len() != 2 {
+                        self.type_error(
+                            format!(
+                                "char.from_digit expects 2 arguments, a digit and a radix, got {}",
+                                args.len()
+                            ),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        return Some(Type::Error);
+                    }
+                    let u32_ty = Type::UInt(UIntSize::U32);
+                    for (arg, what) in args.iter().zip(["digit", "radix"]) {
+                        let arg = &arg.value;
+                        let arg_ty = self.infer_expr(arg);
+                        if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                            self.record_expr_type(&arg.span, &u32_ty);
+                        } else if arg_ty != Type::Error && arg_ty != u32_ty {
+                            self.type_error(
+                                format!(
+                                    "char.from_digit expects a {what} of type `u32`, got `{}` \
+                                     (cast with `as u32`)",
+                                    type_display(&arg_ty)
+                                ),
+                                arg.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Some(Type::Error);
+                        }
+                    }
+                    let char_ty = self
+                        .primitive_type("char")
+                        .expect("char is a known primitive");
+                    return Some(Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![char_ty],
+                    });
+                }
                 if method == "from" && args.len() == 1 {
                     let arg_ty = self.infer_expr(&args[0].value);
                     if arg_ty == Type::Error {

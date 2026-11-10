@@ -143,6 +143,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("mem", "replace") => return self.mem_replace(args, dest),
             ("Option", "take" | "replace") => return self.option_take(method, args, dest),
             ("char", "try_from") => return self.char_try_from(args, dest),
+            ("char", "from_digit") => return self.char_from_digit(args, dest),
             ("mem", "swap") => return self.mem_swap(args),
             (t, "try_from") if crate::numeric_conv::is_int_target(t) => {
                 return self.int_try_from(t, args, dest)
@@ -440,6 +441,42 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_int_z_extend(flag, self.llcx.i64_type(), "")
             .map_err(e)?;
         Ok(Some((v, exact)))
+    }
+
+    /// `char.from_digit(num, radix)`: `Some` of `0`..`9` or `a`..`z` for
+    /// a digit below the radix, else `None`; a radix outside 2..=36 panics
+    /// as the MIR interpreter does (kata 2081).
+    fn char_from_digit(&mut self, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let [n, r] = args else {
+            return Ok(None);
+        };
+        let n = self.int_arg(n)?;
+        let r = self.int_arg(r)?;
+        let b = &self.builder;
+        let off = b.build_int_sub(r, self.i64(2), "").map_err(e)?;
+        let ok = b
+            .build_int_compare(IntPredicate::ULT, off, self.i64(35), "")
+            .map_err(e)?;
+        self.abort_unless(ok, crate::mir::interp::FROM_DIGIT_RADIX)?;
+        let b = &self.builder;
+        let kept = b
+            .build_int_compare(IntPredicate::ULT, n, r, "")
+            .map_err(e)?;
+        let decimal = b
+            .build_int_compare(IntPredicate::ULT, n, self.i64(10), "")
+            .map_err(e)?;
+        let digit = b.build_int_add(n, self.i64(48), "").map_err(e)?;
+        let letter = b.build_int_add(n, self.i64(87), "").map_err(e)?;
+        let c = b
+            .build_select(decimal, digit, letter, "")
+            .map_err(e)?
+            .into_int_value();
+        let v = b
+            .build_select(kept, c, self.i64(u64::MAX), "")
+            .map_err(e)?
+            .into_int_value();
+        self.store_opt_int(dest, v)?;
+        Ok(Some(()))
     }
 
     /// `char.try_from(n)`: `Ok(c)` for a Unicode scalar, else `Err(n)`.
