@@ -254,6 +254,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A `Str` view of a parameter passed through a closure combinator and
+  returned (`s.split_once("=").map(|p| p.0).unwrap_or(s)`,
+  `.and_then(|t| t.strip_suffix(q))`) is accepted: the borrow check
+  counted the closure, lent to `map`, as something the result borrowed,
+  and refused it with E0509. A closure that lends one of the function's own
+  locals into the result is still refused (B-2026-11-09-98).
 - **A closure handed to a bare `f: F` parameter with `F: Fn(i64) -> i64`
   takes the bound's signature.** A bare parameter borrows, so its slot is
   `ref F`, and the bound was looked up only for a plain `F`: a closure whose

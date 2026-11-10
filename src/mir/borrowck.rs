@@ -1278,6 +1278,31 @@ impl Cx<'_> {
     /// one, else from every argument (§5.4); and a callee given a `mut ref`
     /// may store any other argument's borrows into its pointee, as
     /// `group.spawn(closure)` does (§9.5).
+    /// What an argument gives a call's result. A closure lent to the call
+    /// (`opt.map(|p| p.0)` passes `&closure`) gives what the closure
+    /// holds, not a loan of the closure local, unless the result's type has
+    /// a place for a closure: the callee calls the closure and drops the
+    /// borrow, as a call through a reference does (B-2026-11-09-98).
+    fn arg_origins(&self, o: &Origins, a: &Operand, dest: &Place, into: &mut LoanSet) {
+        let lent_closure = a.place().is_some_and(|p| {
+            place_ty(self.body, self.tys, p).is_ok_and(|pt| match self.tys.kind(pt.ty) {
+                TyKind::Ref(t) | TyKind::MutRef(t) => {
+                    matches!(self.tys.kind(t), TyKind::Closure(..))
+                }
+                _ => false,
+            })
+        });
+        // `may_hold_closure`, as for a pointee given one (B-2026-11-10-24).
+        let kept = lent_closure
+            && place_ty(self.body, self.tys, dest)
+                .map_or(true, |d| may_hold_closure(self.tys, d.ty));
+        if lent_closure && !kept {
+            self.held_behind(o, a, into);
+        } else {
+            self.operand_origins(o, a, into);
+        }
+    }
+
     fn transfer_call(&self, o: &mut Origins, func: &Operand, args: &[Operand], dest: &Place) {
         let borrows = match func {
             Operand::Const(Const {
@@ -1357,7 +1382,7 @@ impl Cx<'_> {
         match borrows {
             ResultBorrows::Args => {
                 for a in args {
-                    self.operand_origins(o, a, &mut val);
+                    self.arg_origins(o, a, dest, &mut val);
                 }
             }
             // A `str` is itself a view (core semantics §5.2): what a native
@@ -1381,7 +1406,7 @@ impl Cx<'_> {
                     self.operand_origins(o, &args[0], &mut val);
                 }
                 for a in &args[1..] {
-                    self.operand_origins(o, a, &mut val);
+                    self.arg_origins(o, a, dest, &mut val);
                 }
             }
             ResultBorrows::ReceiverValue => self.pointee_origins(o, &args[0], &mut val),

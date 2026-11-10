@@ -6,6 +6,10 @@
 //!   one-element form does, or `own` on the parameter it was bound out of.
 //! - B-2026-11-09-97: an `Option[String]` against the `Some` of a `Str`
 //!   (`opt != Some(TOKEN)`) takes `.to_string()` in the `Some`.
+//!
+//! And one false refusal: B-2026-11-09-98, a `Str` view of a parameter
+//! passed through a closure combinator (`s.split_once("=").map(|p|
+//! p.0).unwrap_or(s)`) was E0509, as if the result borrowed the closure.
 
 use std::process::{Command, Output};
 
@@ -139,4 +143,47 @@ fn main() {
         ],
         "purge\nstale\n",
     );
+}
+
+#[test]
+fn a_str_view_through_a_closure_combinator_is_returned() {
+    let path = scratch(
+        "view_combinator.kara",
+        "fn unquote(s: Str) -> Str { s.strip_prefix(\"\\\"\").and_then(|t| t.strip_suffix(\"\\\"\")).unwrap_or(s) }
+fn trimmed(s: Str) -> Str { s.strip_prefix(\"x\").map(|t| t.trim()).unwrap_or(s) }
+fn key(s: Str) -> Str { s.split_once(\"=\").map(|p| p.0).unwrap_or(s) }
+fn either(s: Str) -> Str { s.strip_prefix(\"y\").and_then(|t| t.strip_suffix(\"z\")) ?? s }
+fn main() {
+    println(unquote(\"\\\"hi\\\"\"));
+    println(trimmed(\"x  a \"));
+    println(key(\"a=b\"));
+    println(either(\"yqz\"));
+}
+",
+    );
+    let check = karac(&["check"], &path);
+    assert!(check.status.success(), "{}", text(&check));
+    let run = karac(&["__mir-run"], &path);
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "hi\na\na\nq\n",
+        "{}",
+        text(&run)
+    );
+}
+
+#[test]
+fn a_closure_lending_a_local_into_the_result_is_still_refused() {
+    let path = scratch(
+        "view_combinator_local.kara",
+        "fn leak(s: Str) -> Str {
+    let own_text = \"local\".to_string();
+    s.strip_prefix(\"x\").map(|_t| own_text.as_str()).unwrap_or(s)
+}
+fn main() { println(leak(\"xa\")); }
+",
+    );
+    let check = karac(&["check"], &path);
+    assert!(!check.status.success(), "{}", text(&check));
+    assert!(text(&check).contains("own_text"), "{}", text(&check));
 }
