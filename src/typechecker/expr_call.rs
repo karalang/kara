@@ -2205,6 +2205,20 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     self.infer_expr(&args[1].value)
                 };
+                // A borrowed `Copy` value fills the vector with its value, as
+                // `[k, k]` and `v.push(k)` take it (design.md §8):
+                // `Vec.filled(2, k)` over `for k in v.iter()` is a
+                // `Vec[i64]`, not a vector of borrows of the loop's element
+                // (kata 2090).
+                let elem_ty = match self.resolved_now(&elem_ty) {
+                    Type::Ref(inner)
+                        if !super::exprs::contains_type_var(&inner)
+                            && self.is_copy_type_during_check(&inner) =>
+                    {
+                        *inner
+                    }
+                    _ => elem_ty,
+                };
                 let ty = Type::Named {
                     name: "Vec".to_string(),
                     args: vec![elem_ty],

@@ -7993,6 +7993,21 @@ impl<'a> TypeChecker<'a> {
         if self.solve_freshened_scrutinee_var(found, expected) {
             return true;
         }
+        // A borrowed element of a collection of literals no use has fixed yet
+        // (`for k in [0, 1, 3].iter()`) handed to a by-value number slot is
+        // read as a `Copy` value there, so the slot fixes the literal as it
+        // would the value itself (`g(k)` with `k: i32`; kata 2090).
+        if let Type::Ref(inner) = self.resolved_now(found) {
+            if let Type::TypeVar(id) = *inner {
+                let want = self.resolved_now(expected);
+                if let Some(kind) = inference::literal_var_kind(id) {
+                    if types::is_numeric(&want) && inference::literal_takes(kind, &want) {
+                        self.env.substitutions.insert(id, want.clone());
+                        return self.check_assignable(expected, &Type::Ref(Box::new(want)), span);
+                    }
+                }
+            }
+        }
         // A literal no use has fixed yet is fixed by the slot it flows into,
         // including a slot whose own type a later use decides (`b.push(7)`
         // on a `Bag.new()`'s `Bag[?T]`; design.md § Type inference,

@@ -15161,12 +15161,22 @@ impl<'a> super::TypeChecker<'a> {
                     // `let v = [0, 7];` leaves its number literals open, as
                     // `[0; 26]` does, for a later use to fix: an argument, a
                     // return, an assignment (design.md §8 Literals;
-                    // B-2026-11-08-88).
+                    // B-2026-11-08-88). So does `let fs = [1.0, 3.0];` its
+                    // float literals, for an `f32` slot (kata 2090).
+                    let unsuffixed_float = |e: &Expr| match &e.kind {
+                        ExprKind::Float(_, None) => true,
+                        ExprKind::Unary {
+                            op: UnaryOp::Neg,
+                            operand,
+                        } => matches!(operand.kind, ExprKind::Float(_, None)),
+                        _ => false,
+                    };
                     let open = self.open_collection_let == Some(expr.id)
                         && !expr.id.is_dummy()
-                        && elements
+                        && (elements
                             .iter()
-                            .all(|e| Self::unsuffixed_int_literal_value(e).is_some());
+                            .all(|e| Self::unsuffixed_int_literal_value(e).is_some())
+                            || elements.iter().all(unsuffixed_float));
                     let first_ty = if open {
                         let first = self.infer_expr_open(&elements[0]);
                         for e in &elements[1..] {
