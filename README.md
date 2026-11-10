@@ -184,7 +184,15 @@ More in [`examples/std_net`](examples/std_net).
 
 ## Performance
 
-The compiler is held to measured bars before each release: run time and build time against the earlier compiler, binary size, an automatic-parallelism speedup floor, and a load test of 100,000 idle connections with tail-latency limits. Cross-language benchmarks against Rust, C and Go live in **[kara-katas](https://github.com/karalang/kara-katas)**, with the data and chart generator versioned beside the code. Figures for this README are being re-measured on the current compiler.
+The compiler is held to measured bars before each release: run time and build time against the earlier compiler, binary size, an automatic-parallelism speedup floor, and a load test of 100,000 idle connections with tail-latency limits. Cross-language benchmarks against Rust, C and Go live in **[kara-katas](https://github.com/karalang/kara-katas)**, with the data and chart generator versioned beside the code. Measured on the current compiler: 444 single-file algorithm programs on an Apple M5 ([BENCHMARKS.md](https://github.com/karalang/kara-katas/blob/main/BENCHMARKS.md)), as Kāra's run time divided by the other language's, median:
+
+| Lane | vs | Median |
+|---|---|---|
+| Sequential | Rust with overflow checks (Kāra always checks) | 1.00× |
+| Sequential | Rust / C / Go | 1.03× / 1.15× / 0.93× |
+| Automatic parallelism | Rust + rayon, 40 programs | 1.08× (Kāra faster on 14) |
+
+The spread matters as much as the median: 21 programs run over 2× Rust's time (the worst, #163, at 10.2×), and the slowest parallel program is 2.41× rayon's. Builds take about 1.3× `rustc`'s time. These are single-file kernels on one shared laptop, not application benchmarks.
 
 ## Targets
 
@@ -202,7 +210,9 @@ The compiler is held to measured bars before each release: run time and build ti
 
 ## Project status
 
-Pre-1.0. The first release, 0.8.0, is a beta: the language and tools are complete enough to build real programs, and 1.0 follows outside feedback. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. `dyn Trait`, effect variables for stored callbacks, and provider overrides for the file system, network and standard streams are in; what remains is release packaging and dogfooding.
+Pre-1.0. The current release, [0.8.1](https://github.com/karalang/kara/releases/tag/v0.8.1), is a beta (use it rather than 0.8.0, whose soundness holes it closes; see [CHANGELOG.md](CHANGELOG.md)): the language and tools are complete enough to build real programs, and 1.0 follows outside feedback. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. `dyn Trait`, effect variables for stored callbacks, and provider overrides for the file system, network and standard streams are in; what remains is release packaging and dogfooding.
+
+Not there yet: Windows and Intel-Mac binaries, the browser WebAssembly target, an HTTP/2 server, and a package ecosystem (C libraries are callable through `extern "C"`). Every bug found is logged in the public ledger, [docs/bugs-v2.jsonl](docs/bugs-v2.jsonl).
 
 ## Prior art
 
@@ -217,7 +227,7 @@ Pre-1.0. The first release, 0.8.0, is a beta: the language and tools are complet
 
 ### Install
 
-Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS are on the [releases page](https://github.com/karalang/kara/releases). Pick your platform's tarball (`x86_64-linux`, `aarch64-linux` or `aarch64-macos`), check it, unpack it anywhere and put its `bin/` on your PATH:
+Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS are on the [releases page](https://github.com/karalang/kara/releases). [karac.dev](https://karac.dev/guides/getting-started/) has a copy-paste install that picks your platform. Pick your platform's tarball (`x86_64-linux`, `aarch64-linux` or `aarch64-macos`), check it, unpack it anywhere and put its `bin/` on your PATH:
 
 ```bash
 V=0.8.1; P=x86_64-linux
@@ -252,7 +262,7 @@ karac --version
 
 ### Editor support
 
-The language server is `kara-lsp`, a separate binary: build it with `cargo build --release -p kara-lsp` (it lands beside `karac` in `target/release/`) and point your editor's LSP client at it. It gives diagnostics, hover with types and effects, and go-to-definition. Each 0.8.0 release also ships a VS Code extension (`kara-vscode-*-<platform>.vsix`) with `kara-lsp` bundled; install it with `code --install-extension <file>.vsix`. The extension's source is in [editors/vscode](editors/vscode). The WebAssembly and optional archives, and the full test gate, are in [CLAUDE.md](CLAUDE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+The language server is `kara-lsp`, a separate binary: build it with `cargo build --release -p kara-lsp` (it lands beside `karac` in `target/release/`) and point your editor's LSP client at it. It gives diagnostics, hover with types and effects, and go-to-definition. Each 0.8.x release also ships a VS Code extension (`kara-vscode-*-<platform>.vsix`) with `kara-lsp` bundled; install it with `code --install-extension <file>.vsix`. The extension's source is in [editors/vscode](editors/vscode). The WebAssembly and optional archives, and the full test gate, are in [CLAUDE.md](CLAUDE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
