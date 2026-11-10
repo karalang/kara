@@ -7102,6 +7102,7 @@ impl<'a> Interp<'a> {
                         self.sockets.udp.remove(&fd);
                         self.sockets.accepted.remove(&fd);
                         self.sockets.written.remove(&fd);
+                        self.sockets.failed.remove(&fd);
                         return Ok(Value::Unit);
                     }
                     ("TcpListener", "local_addr", []) => {
@@ -7154,8 +7155,10 @@ impl<'a> Interp<'a> {
                     ("UdpSocket", "recv_from" | "recv", [buf]) => {
                         let (at, lo, len) = self.view_of(buf)?;
                         let mut bytes = vec![0u8; len as usize];
+                        let failed = self.sockets.failed.remove(&fd);
                         let got = match self.sockets.udp.get(&fd) {
                             _ if self.sockets.timed_out.remove(&fd) => Err(("TimedOut", None)),
+                            _ if failed.is_some() => Err(failed.as_ref().map_or(not_open(), cause)),
                             None => Err(not_open()),
                             Some(u) if method == "recv" => {
                                 u.recv(&mut bytes).map(|n| (n, None)).map_err(|e| cause(&e))
@@ -7228,8 +7231,12 @@ impl<'a> Interp<'a> {
                     ("TcpStream", "read", [buf]) => {
                         let (at, lo, len) = self.view_of(buf)?;
                         let mut bytes = vec![0u8; len as usize];
+                        let failed = self.sockets.failed.remove(&fd);
                         let got = match self.sockets.streams.get_mut(&fd) {
                             _ if self.sockets.timed_out.remove(&fd) => Err(("TimedOut", None)),
+                            _ if failed.is_some() => {
+                                Err(failed.as_ref().map_or(not_open(), syscall))
+                            }
                             Some(s) if len > 0 => s.read(&mut bytes).map_err(|e| syscall(&e)),
                             Some(_) => Ok(0),
                             None => Err(not_open()),
@@ -15460,7 +15467,17 @@ impl<'a> Interp<'a> {
                 let _ = s.set_nonblocking(true);
                 let got = s.peek(&mut [0u8; 1]);
                 let _ = s.set_nonblocking(false);
-                !matches!(got, Err(e) if e.kind() == WouldBlock) || self.sockets.past(*fd, *at)
+                match got {
+                    Err(e) if e.kind() == WouldBlock => self.sockets.past(*fd, *at),
+                    // The peek took the socket's pending error (a reset),
+                    // so the read that follows reports it from here rather
+                    // than reading an end (B-2026-11-10-15).
+                    Err(e) => {
+                        self.sockets.failed.insert(*fd, e);
+                        true
+                    }
+                    Ok(_) => true,
+                }
             }
             // A write is tried without blocking, and what it came to kept
             // for the `write` that follows, as an accepted connection is.
@@ -15502,7 +15519,14 @@ impl<'a> Interp<'a> {
                 let _ = u.set_nonblocking(true);
                 let got = u.peek_from(&mut [0u8; 1]);
                 let _ = u.set_nonblocking(false);
-                !matches!(got, Err(e) if e.kind() == WouldBlock) || self.sockets.past(*fd, *at)
+                match got {
+                    Err(e) if e.kind() == WouldBlock => self.sockets.past(*fd, *at),
+                    Err(e) => {
+                        self.sockets.failed.insert(*fd, e);
+                        true
+                    }
+                    Ok(_) => true,
+                }
             }
             Wait::Pool(id, at) => {
                 std::time::Instant::now() >= *at || self.pool(*id).is_none_or(|p| pool_free(p))
@@ -17577,6 +17601,9 @@ struct Sockets {
     /// Sockets whose suspended read reached its read timeout's deadline
     /// with nothing to read, so the read that follows fails `TimedOut`.
     timed_out: rustc_hash::FxHashSet<i64>,
+    /// The error a suspended read's readiness peek took off its socket (a
+    /// reset, or a refused datagram), which that read then reports.
+    failed: rustc_hash::FxHashMap<i64, std::io::Error>,
     /// A TLS listener's config, by its descriptor.
     tls_configs: rustc_hash::FxHashMap<i64, std::sync::Arc<rustls::ServerConfig>>,
     /// An accepted TLS stream's connection, by its descriptor.

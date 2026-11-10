@@ -207,6 +207,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
+  and a connected `UdpSocket`'s `recv` after its datagram was refused
+  waited out its read timeout (`TimedOut`). The interpreter peeks a socket
+  to learn when a waiting read can go on, and the peek took the socket's
+  pending error; the read now reports it, `os error 104` and `connection
+  refused`, as a compiled build does (B-2026-11-10-15).
 - `let v: Vec[Str] = ["a", "b"].to_vec();` was refused as a reference to
   a temporary (the array literal) outliving its statement, in the check
   and again in MIR borrowck; the `Vec` copies the elements and carries
