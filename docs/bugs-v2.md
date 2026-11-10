@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 224 |
 | false-positive | 179 |
 | perf | 148 |
-| missing-feature | 127 |
+| missing-feature | 128 |
 | soundness | 59 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 356 |
-| mir-llvm | 190 |
+| mir-llvm | 191 |
 | mir | 166 |
 | cli | 94 |
 | ownership | 72 |
 | parser | 59 |
-| interp | 45 |
+| interp | 46 |
 | runtime | 32 |
 | effect | 29 |
 | codegen | 22 |
@@ -120,12 +120,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-6 | 2026-11-10 | typecheck | medium | A block, `if` or `match` whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)`, `let z = { 1 }; take_i32(z)`, and kata 2055's `prefix[i + 1] = prefix[i] + if b[i] == b'*' { 1 } else { 0 }` with `prefix: Vec[i32]` are refused as narrowing, with no fix | — |
 | B-2026-11-10-7 | 2026-11-10 | mir | medium | A user iterator over a `Str` field whose `next` spells its return `Option[Str]` (or `Option[(i64, Str)]`) instead of `Option[Self.Item]` passes `karac check`, then `collect()` on it is refused E0509 in `ItemValues[..].next`: "the result borrows (*_1).0, which the receiver owns"; the same impl written `-> Option[Self.Item]` runs | — |
 | B-2026-11-10-8 | 2026-11-10 | typecheck | medium | An unannotated closure parameter used with an operator is refused at the operator (`let f = |x, n| x + n; f(1, 2)` -> "type '?T0' does not implement trait Add"), though design.md §8 lets a later use in the same body fix it; when nothing does, the message is not §8's "cannot infer closure parameter type" | — |
-| B-2026-11-10-14 | 2026-11-10 | typecheck+mir-llvm | high | `BufReader.new(stream)` over a `TcpStream` (`BufReader.new(conn.try_clone().unwrap())`, then `.lines()`) passes check, though a `BufReader` wraps only a `File` or a child pipe: the interpreter fails "BufReader[TcpStream].new of a closed file" and a compiled build frees the socket as a file (ASan: attempting free on address which was not malloc()-ed, in karac_mir_buf) | — |
 | B-2026-11-10-16 | 2026-11-10 | resolver | low | A call through a path that starts at `std` (`std.mem.take(mut v)`, design.md's own example `std.fs.read_to_string(path)`) fails "undefined name 'std'" with no help, while `mem.take` and `fs.read_to_string` resolve | — |
 | B-2026-11-10-22 | 2026-11-10 | ownership | medium | An immutable `let` of a `shared` value can be lent as `mut` and rebound by the callee: `let tail = T { v: 1 }; advance(mut tail);` with `fn advance(t: mut ref T) { *t = n; }` checks clean and leaves `tail` naming a different object, though `let` froze the handle | — |
 | B-2026-11-10-24 | 2026-11-10 | mir | high | `while let Some(x) = it.find(|x| ..)` (or `next_if`) over `v.iter()` is refused E0516: the closure passed by reference is taken to be stored into the `mut ref` iterator (§9.5), whose type cannot hold it, so the next iteration's closure conflicts | — |
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
 | B-2026-11-10-23 | 2026-11-10 | typecheck | medium | A closure with no declared return type that returns a non-`i64` integer (`return i as i32;`) and has an unsuffixed literal tail or `return` (`0`) is refused: "closure returns conflicting types: 'i64' vs 'i32'"; `karac fix` produces this shape when it deletes Rust's `|..| -> i32` | — |
+| B-2026-11-10-28 | 2026-11-10 | interp+mir-llvm | medium | `BufReader`/`BufWriter` over a `TlsStream` is refused at check (E0297, "not built yet"), and over a socket a `Network` provider opened stops at the constructor; remainder of B-2026-11-10-14, whose fix buffers a plain `TcpStream` | — |
 
 ### Relocated
 
@@ -1010,6 +1010,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-3 | typecheck | low | A `flat_map` closure whose body is an `if`/`else` or a `match` giving a list from each branch (`\|x\| if x == 0 { [0, 0] } else { [x] }`, as Rust's `fl… | ba29c00d5c |
 | B-2026-11-10-4 | mir | medium | A range view passed `mut v[a..b]` is lowered on a shared borrow of `v` (`_r = &v; Vec[T].slice(move _r, a, b)`), so MIR borrowck does not see it writ… | 8819ec4dff |
 | B-2026-11-10-5 | mir-llvm | medium | `karac run` of apps/cli/mini_tldextract (21.8k lines) takes 92 s on one core, where `karac build` takes 16 s wall (42 s CPU over four units) and the… | 5f76094346 |
+| B-2026-11-10-14 | typecheck+mir-llvm | high | `BufReader.new(stream)` over a `TcpStream` (`BufReader.new(conn.try_clone().unwrap())`, then `.lines()`) passes check, though a `BufReader` wraps onl… | e1523f1438 |
 | B-2026-11-10-15 | interp | medium | The interpreter's readiness peek for a waiting socket read swallowed a pending socket error: a reset TCP connection read as an end of stream (`Ok(0)`… | 1ca1f71e30 |
 | B-2026-11-10-17 | parser | low | `format!` whose argument is an `if`, `match` or block expression (`format!("{}={}", n, if up { "up" } else { "down" })`) gets E0001 with no machine f… | 3be914cd0e |
 | B-2026-11-10-18 | mir | low | An immediately invoked closure whose body ends in `collect()` (`let s: Set[i64] = (\|v: ref Vec[i64]\| v.iter().map(\|x\| x + 1).collect())(a);`) reports… | 3be914cd0e |

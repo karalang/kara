@@ -297,26 +297,19 @@ sync struct Health {
 // Answers PING with PONG (FAIL while sick) and any other line with its
 // name and the line in capitals, until the client half-closes.
 fn serve_backend(name: Str, conn: TcpStream, health: Health, me: usize) {
-    let mut pending: Vec[u8] = Vec.new();
-    let mut buf = [0u8; 256];
-    loop {
-        let n = match conn.read(mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
+    let reader = BufReader.new(conn.try_clone().unwrap());
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
             Err(_) => break,
         };
-        pending.extend_from_slice(buf[0..n]);
-        while let Some(i) = pending.iter().position(|b| *b == 10u8) {
-            let raw: Vec[u8] = pending.drain(0..i + 1).collect();
-            let line = String.from_utf8(raw).unwrap_or(String.new()).trim_end().to_string();
-            let reply = if line == "PING" {
-                if health.sick[me].load() { "FAIL" } else { "PONG" }
-            } else {
-                f"{name} {line.to_uppercase()}"
-            };
-            if conn.write_all(f"{reply}\n".bytes()).is_err() {
-                return;
-            }
+        let reply = if line == "PING" {
+            if health.sick[me].load() { "FAIL" } else { "PONG" }
+        } else {
+            f"{name} {line.to_uppercase()}"
+        };
+        if conn.write_all(f"{reply}\n".bytes()).is_err() {
+            break;
         }
     }
 }

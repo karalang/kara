@@ -50,24 +50,25 @@ borrows, `<..>` generics, `!`, `&&`, `.to_string()` on literals,
 
 By hand:
 - `format!("{}={}{}", b.name, if b.up {..} else {..}, if b.streak > 0
-  { format!(..) } else {..})` in `show_pool` got no machine fix, because the
-  rewrite to an f-string refuses an argument containing braces
-  (B-2026-11-10-17). An f-string hole takes an `if` expression, so the
-  `.kara` writes the closure as a block that binds `streak` first (a
-  nested f-string is deprecated, design.md §3).
+  { format!(..) } else {..})` in `show_pool` gets no machine fix. The
+  rewrite to an f-string first refused any argument holding braces
+  (B-2026-11-10-17, fixed by 3be914cd0e); it now takes an `if`, but not one
+  holding a nested `format!`, since a nested f-string is deprecated
+  (design.md §3). The `.kara` writes the closure as a block that binds
+  `streak` first.
 - `std.mem.take(&mut g.value.events)` is `mem.take(mut g.value.events)`:
   a path starting at `std` does not resolve in an expression, with no help
   (B-2026-11-10-16).
-- `serve_backend` read its connection through
-  `BufReader.new(conn.try_clone().unwrap()).lines()`. That passes check,
-  but a `BufReader` wraps only a `File` or a child pipe (docs/library/io.md):
-  the interpreter fails with "BufReader[TcpStream].new of a closed file"
-  and a compiled build frees the socket as a file (ASan: free of an
-  address not malloc()-ed, in `karac_mir_buf`) (B-2026-11-10-14). The
-  `.kara` splits lines itself over `conn.read`.
 
-Found while writing it: the interpreter's wait for a socket read peeked
-the socket for readiness and dropped the peek's error, so a reset
-connection read as an end of stream under `__mir-run` while a compiled
-build and Python report `os error 104` (B-2026-11-10-15). The app's
-lingering close keeps resets out of its own output.
+Found while writing it:
+- `serve_backend` reads its connection through
+  `BufReader.new(conn.try_clone().unwrap()).lines()`. A `BufReader` first
+  wrapped only a `File` or a child pipe: the interpreter failed with
+  "BufReader[TcpStream].new of a closed file" and a compiled build freed
+  the socket as a file (B-2026-11-10-14, fixed by e1523f1438). It now reads a
+  connection, suspending a task while it waits.
+- The interpreter's wait for a socket read peeked the socket for
+  readiness and dropped the peek's error, so a reset connection read as an
+  end of stream under `__mir-run` while a compiled build and Python report
+  `os error 104` (B-2026-11-10-15, fixed by 1ca1f71e30). The app's
+  lingering close keeps resets out of its own output.
