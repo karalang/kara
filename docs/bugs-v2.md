@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 224 |
-| false-positive | 177 |
-| perf | 147 |
+| false-positive | 178 |
+| perf | 148 |
 | missing-feature | 127 |
 | soundness | 59 |
 | miscompile | 53 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 355 |
-| mir-llvm | 189 |
-| mir | 165 |
+| mir-llvm | 190 |
+| mir | 166 |
 | cli | 94 |
 | ownership | 72 |
 | parser | 59 |
@@ -111,7 +111,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-28 | 2026-11-09 | typecheck | low | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | — |
 | B-2026-11-09-36 | 2026-11-09 | typecheck | low | `v.iter().fold(None, |acc: Option[i64], x| Some(x))` is refused: the tail `Some(x)` with `x: ref i64` is an `Option[ref i64]`, though `Some(x)` against an `Option[i64]` slot elsewhere reads the scalar as its value (the remainder of the row that stopped it building an address) | — |
 | B-2026-11-09-45 | 2026-11-09 | typecheck+mir | medium | A `mut ref` cursor cannot walk to a list's tail: Rust's `let mut tail = &mut list; while tail.is_some() { tail = &mut tail.as_mut().unwrap().next; } *tail = rest;` has no Kāra spelling, since `Option` has no `as_mut`, and the natural `while let Some(n) = tail { tail = mut ref n.next; }` (or the same as a `match` in a `loop`) is refused E0516 by both borrow checks: the rebinding reads as a use of `tail` while `tail` still borrows from itself | — |
-| B-2026-11-09-46 | 2026-11-09 | interp | medium | `karac __mir-run` builds an owned (non-`shared`) recursive list in quadratic time: `head = Some(N { v: i, next: head })` n times takes 3.2 s at n = 5000, 13.8 s at 10000 and 56 s at 20000, where the same program with `shared struct N` takes 0.29 s at 20000 and the compiled backend is linear | — |
 | B-2026-11-09-47 | 2026-11-09 | mir-llvm | low | `s.chars().collect()` into a Vec[char] runs 14 instructions a char against Rust's 11: the UTF-8 decode loop tests the reserved length on each push, and the loop copy B-2026-11-09-26 gives counted fills does not apply because the char count is not known at the way in | — |
 | B-2026-11-09-51 | 2026-11-09 | mir-llvm | low | Kata 1087's bench (20 million short words cloned into vectors and freed) runs 26% behind `rustc -O -C overflow-checks=on -C target-cpu=x86-64-v3` with the same allocations: 13.65G instructions against 10.45G, the extra in glibc's malloc slow path (14.8M `_int_malloc` calls against 2.7M) and in `malloc_consolidate` (0.72G, none in Rust) | — |
 | B-2026-11-09-96 | 2026-11-09 | typecheck | low | A tuple of borrowed elements moved where owned ones are wanted (`for (k, v) in headers { out.push((k, v)); }` with a bare, so borrowing, `headers: Vec[(String, String)]` parameter) gets "expected '(String, String)', found '(ref String, ref String)'" with no fix, where the one-element form gets `.clone()` | — |
@@ -125,6 +124,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-14 | 2026-11-10 | typecheck+mir-llvm | high | `BufReader.new(stream)` over a `TcpStream` (`BufReader.new(conn.try_clone().unwrap())`, then `.lines()`) passes check, though a `BufReader` wraps only a `File` or a child pipe: the interpreter fails "BufReader[TcpStream].new of a closed file" and a compiled build frees the socket as a file (ASan: attempting free on address which was not malloc()-ed, in karac_mir_buf) | — |
 | B-2026-11-10-16 | 2026-11-10 | resolver | low | A call through a path that starts at `std` (`std.mem.take(mut v)`, design.md's own example `std.fs.read_to_string(path)`) fails "undefined name 'std'" with no help, while `mem.take` and `fs.read_to_string` resolve | — |
 | B-2026-11-10-22 | 2026-11-10 | ownership | medium | An immutable `let` of a `shared` value can be lent as `mut` and rebound by the callee: `let tail = T { v: 1 }; advance(mut tail);` with `fn advance(t: mut ref T) { *t = n; }` checks clean and leaves `tail` naming a different object, though `let` froze the handle | — |
+| B-2026-11-10-24 | 2026-11-10 | mir | high | `while let Some(x) = it.find(|x| ..)` (or `next_if`) over `v.iter()` is refused E0516: the closure passed by reference is taken to be stored into the `mut ref` iterator (§9.5), whose type cannot hold it, so the next iteration's closure conflicts | — |
+| B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
 
 ### Relocated
 
@@ -973,6 +974,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-42 | parser+resolver | low | Rust's `heap.into_iter().map(\|Reverse(s)\| s)` gets no fix for the `Reverse` parameter, and `or_insert_with(BinaryHeap::new)` is not seen as a heap's… | 2f62c55005 |
 | B-2026-11-09-43 | typecheck | medium | `let t = text?;` on a bare (borrowed) `text: Option[String]` parameter is refused as "'?' operator requires `Result` or `Option`, found 'ref Option[S… | b490bc1d36 |
 | B-2026-11-09-44 | interp+mir-llvm+runtime | medium | The HTTP client turns a status of 400 or more into `Err(HttpError)` carrying only a message ("<url>: status code 409"): a program cannot read the sta… | 9ca01280c9 |
+| B-2026-11-09-46 | interp | medium | `karac __mir-run` builds an owned (non-`shared`) recursive list in quadratic time: `head = Some(N { v: i, next: head })` n times takes 3.2 s at n = 5… | 8f5b9afb81 |
 | B-2026-11-09-48 | typecheck | medium | `Json` has no `.clone()`: `Some(v.clone())` on a field of a parsed request body is refused as "no method 'clone' on type 'Json': `Json` does not deri… | b8b6871a6c |
 | B-2026-11-09-49 | typecheck | medium | `["a", "b"].to_vec()` passed to a `Vec[Str]` parameter, or `[("event", v)].to_vec()` to a `Vec[(Str, Json)]` one, is refused as "expected 'Vec[Str]',… | b8b6871a6c |
 | B-2026-11-09-50 | typecheck+mir | low | `let v: Vec[Str] = ["a", "b"].to_vec();` is refused as a reference to a temporary that outlives its statement (typecheck §5.5, and E0516 in MIR borro… | a9fc6d3b59 |
