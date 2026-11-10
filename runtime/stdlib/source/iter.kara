@@ -930,6 +930,29 @@ impl[I: Iterator[Item = T], T] Peekable[I, T] {
             None => None,
         }
     }
+
+    /// The next item, taken only when `pred` holds for it; otherwise it
+    /// stays next and the call is `None`.
+    fn next_if(mut ref self, pred: own MutFn(T) -> bool) -> Option[T] {
+        let next = match self.peeked.take() {
+            Some(v) => v,
+            None => self.it.next(),
+        };
+        match next {
+            Some(x) => {
+                if pred(x) {
+                    Some(x)
+                } else {
+                    self.peeked = Some(Some(x));
+                    None
+                }
+            }
+            None => {
+                self.peeked = Some(None);
+                None
+            }
+        }
+    }
 }
 
 struct IterByRef[I] {

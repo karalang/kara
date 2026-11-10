@@ -6602,6 +6602,10 @@ impl super::TypeChecker<'_> {
     /// Rust's one-argument `m.range(a..b)` / `m.range(a..=b)` where Kāra's
     /// `range` takes two: the parser's edit to `range(a, b)` or
     /// `range_inclusive(a, b)` (kata 2008), with the advice that names it.
+    /// A range open at an end (`..=q`, `a..`, `..`) has no edit, since
+    /// Kāra's ranges name both ends, and gets advice alone: the bound to
+    /// supply, and the one-entry lookup Rust's open range is most often
+    /// standing in for (kata 2070's `range(..=q).next_back()`).
     pub(super) fn range_arg_fix(
         &self,
         receiver: &str,
@@ -6609,7 +6613,7 @@ impl super::TypeChecker<'_> {
         args: &[CallArg],
         wanted: usize,
         span: &Span,
-    ) -> Option<(String, super::FixIt)> {
+    ) -> Option<(String, Option<super::FixIt>)> {
         if !matches!(receiver, "SortedMap" | "SortedSet")
             || name != "range"
             || args.len() != 1
@@ -6617,10 +6621,9 @@ impl super::TypeChecker<'_> {
         {
             return None;
         }
-        let edit = self
-            .program
-            .range_arg_edits
-            .get(&args[0].value.span.offset)?;
+        let Some(edit) = self.program.range_arg_edits.get(&args[0].value.span.offset) else {
+            return Self::open_range_advice(receiver, &args[0].value).map(|a| (a, None));
+        };
         let advice = format!(
             "Rust's one range argument is two here, `{}` (`range` is half-open, \
              `range_inclusive` closed; docs/library/collections.md)",
@@ -6634,7 +6637,61 @@ impl super::TypeChecker<'_> {
             },
             replacement: edit.replacement.clone(),
         };
-        Some((advice, fix))
+        Some((advice, Some(fix)))
+    }
+
+    /// The advice for Rust's `range(..=q)`, `range(a..)` or `range(..)` on a
+    /// sorted collection, or `None` when `arg` is not a range open at an end.
+    fn open_range_advice(receiver: &str, arg: &Expr) -> Option<String> {
+        let ExprKind::Range {
+            start,
+            end,
+            inclusive,
+        } = &arg.kind
+        else {
+            return None;
+        };
+        let map = receiver == "SortedMap";
+        let item = if map { "key" } else { "element" };
+        let mut advice = match (start.is_some(), end.is_some()) {
+            (true, true) => return None,
+            (false, false) => {
+                return Some(format!(
+                    "Rust's `range(..)` is the whole {receiver} in order, `iter()` \
+                     (docs/library/collections.md)"
+                ));
+            }
+            (false, true) => format!(
+                "Kāra's `range` and `range_inclusive` take both ends and Rust's \
+                 range has no start, so name the smallest {item} wanted: \
+                 `{}(from, to)`",
+                if *inclusive {
+                    "range_inclusive"
+                } else {
+                    "range"
+                }
+            ),
+            (true, false) => format!(
+                "Kāra's `range` and `range_inclusive` take both ends and Rust's \
+                 range has no end, so name the largest {item} wanted: \
+                 `range_inclusive(from, to)`"
+            ),
+        };
+        if map {
+            match (start.is_some(), *inclusive) {
+                (false, true) => advice.push_str(
+                    "; the entry with the largest key at most `to`, Rust's \
+                     `range(..=to).next_back()`, is `floor(to)`",
+                ),
+                (true, _) => advice.push_str(
+                    "; the entry with the smallest key at least `from`, Rust's \
+                     `range(from..).next()`, is `ceiling(from)`",
+                ),
+                _ => {}
+            }
+        }
+        advice.push_str(" (docs/library/collections.md)");
+        Some(advice)
     }
 
     /// `v.drain(a..)`, `v.drain(..b)`, `v.drain(a..=b)` or `v.drain(..)` on a

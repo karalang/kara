@@ -112,6 +112,7 @@ fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
             | ("String", "pop")
             | ("VecDeque", "pop_front" | "pop_back")
             | ("PriorityQueue", "pop")
+            | ("SortedMap" | "SortedSet", "pop_first" | "pop_last")
             | ("Vec", "drain")
     )
 }
