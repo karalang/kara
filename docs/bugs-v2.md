@@ -59,9 +59,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 220 |
-| false-positive | 174 |
+| false-positive | 176 |
 | perf | 147 |
-| missing-feature | 126 |
+| missing-feature | 127 |
 | soundness | 57 |
 | miscompile | 53 |
 | run-vs-build | 30 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 351 |
+| typecheck | 353 |
 | mir-llvm | 188 |
-| mir | 163 |
+| mir | 164 |
 | cli | 94 |
 | ownership | 70 |
 | parser | 58 |
@@ -110,8 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-09-28 | 2026-11-09 | typecheck | low | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | — |
 | B-2026-11-09-36 | 2026-11-09 | typecheck | low | `v.iter().fold(None, |acc: Option[i64], x| Some(x))` is refused: the tail `Some(x)` with `x: ref i64` is an `Option[ref i64]`, though `Some(x)` against an `Option[i64]` slot elsewhere reads the scalar as its value (the remainder of the row that stopped it building an address) | — |
-| B-2026-11-09-37 | 2026-11-09 | typecheck+cli+other | low | No iterator or slice has `chunk_by`, yet `v.chunk_by(|a, b| a == b)` on a `Vec` is refused as an iterator adaptor with the machine fix `v.iter().chunk_by(..)`, which is refused in turn ("no method 'chunk_by' on type 'VecIter'") beside a stray "cannot compare '?T2' and '?T3'" | — |
-| B-2026-11-09-38 | 2026-11-09 | parser+typecheck+cli | medium | A tuple value cannot be assigned to existing places: `(lo, hi) = if c { (lo, mid) } else { (mid + 1, hi) };` (Rust's destructuring assignment) is refused E_ASSIGN_TARGET_NOT_PLACE with advice to drop the parentheses, and `lo, hi = if ..` is then a parse error ("2 target(s) but 1 value(s)"), so the halving step of a binary search carried as a pair has no spelling but a `let` and two assignments | — |
 | B-2026-11-09-39 | 2026-11-09 | typecheck+mir+mir-llvm | medium | A closure whose body fixes nothing about its parameter, handed to a bounded generic `F: Fn(i64) -> i64`, passes `karac check` but types its parameter and result as `()`: `ap(1, |x| { println("a"); x })` stops every backend with "invalid MIR: ap[Fn(()) -> ()]: argument 0 of a Fn call has the wrong type" | — |
 | B-2026-11-09-40 | 2026-11-09 | typecheck+mir | medium | A closure whose body ends in `collect()` takes its target from nowhere: `let to32 = |v: ref Vec[i64]| v.iter().map(|x| x as i32).collect();` used as `take(to32(a))` with `take(v: Vec[i32])`, or `let r: Vec[i64] = f(a)`, checks clean and then stops at lowering with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet"; a Kāra closure cannot declare its return type, so nothing can fix `C` | — |
 | B-2026-11-09-44 | 2026-11-09 | interp+mir-llvm+runtime | medium | The HTTP client turns a status of 400 or more into `Err(HttpError)` carrying only a message ("<url>: status code 409"): a program cannot read the status, the headers or the body of an error response, so a tus client cannot take `Upload-Offset` from a 409 and a REST client cannot read a JSON error body | — |
@@ -121,7 +119,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-50 | 2026-11-09 | typecheck+mir | low | `let v: Vec[Str] = ["a", "b"].to_vec();` is refused as a reference to a temporary that outlives its statement (typecheck §5.5, and E0516 in MIR borrowck once that passes), though the `Vec` holds static literals and borrows nothing from the array | — |
 | B-2026-11-09-51 | 2026-11-09 | mir-llvm | low | Kata 1087's bench (20 million short words cloned into vectors and freed) runs 26% behind `rustc -O -C overflow-checks=on -C target-cpu=x86-64-v3` with the same allocations: 13.65G instructions against 10.45G, the extra in glibc's malloc slow path (14.8M `_int_malloc` calls against 2.7M) and in `malloc_consolidate` (0.72G, none in Rust) | — |
 | B-2026-11-09-56 | 2026-11-09 | mir | medium | `let v = it.collect();` whose `Vec` target a later use decides passes the type checker and is refused by MIR: `fn count(v: Vec[char]) -> i64` and `let cs = text.chars().collect(); count(cs)` draws "the method call `.collect` with no resolved callee is not lowered yet". 6 of 16 audit programs reached it once `karac fix` removed a `.collect::<Vec<_>>()` turbofish | — |
-| B-2026-11-09-57 | 2026-11-09 | typecheck | low | Strings have no `match_indices` (nor `char_indices`): kata 2052's text arm wrote Rust's `sentence.match_indices(" ").map(|(at, _)| at + 1)` to find each word's start and was refused "no method 'match_indices' on type 'String'" with no hint at what to write instead | — |
 | B-2026-11-09-72 | 2026-11-09 | typecheck | low | There is no `drop(x)`: ending an owned value early (closing a `BufWriter[File]` before reopening its file) is "undefined name 'drop'" with no hint, and the only spellings are a block around the value's scope or a helper taking `own T` | — |
 | B-2026-11-09-73 | 2026-11-09 | interp+mir-llvm+runtime | low | `set_read_timeout` on a socket a `Network` fake opened returns `Err(Unsupported)`, so a TCP client that sets a timeout, as io.md tells a client to, cannot be tested against a fake without ignoring the error | — |
 | B-2026-11-09-96 | 2026-11-09 | typecheck | low | A tuple of borrowed elements moved where owned ones are wanted (`for (k, v) in headers { out.push((k, v)); }` with a bare, so borrowing, `headers: Vec[(String, String)]` parameter) gets "expected '(String, String)', found '(ref String, ref String)'" with no fix, where the one-element form gets `.clone()` | — |
@@ -131,6 +128,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-101 | 2026-11-09 | ownership | medium | The `let mut` rule misses receiver writes its hand-written method table lacks: `let w: VecDeque[i64] = VecDeque.new(); w.push_back(1);` checks clean | — |
 | B-2026-11-10-4 | 2026-11-10 | mir | medium | A range view passed `mut v[a..b]` is lowered on a shared borrow of `v` (`_r = &v; Vec[T].slice(move _r, a, b)`), so MIR borrowck does not see it write: corpus fixtures/codegen/slices/test_e2e_slice_equality_compares_contents mutably lends `a[0..2]` while `let s1: Slice[i64] = a[0..2]` is still read later, and is accepted | — |
 | B-2026-11-10-5 | 2026-11-10 | mir-llvm | medium | `karac run` of apps/cli/mini_tldextract (21.8k lines) takes 92 s on one core, where `karac build` takes 16 s wall (42 s CPU over four units) and the interpreter 4.3 s | — |
+| B-2026-11-10-6 | 2026-11-10 | typecheck | medium | A block, `if` or `match` whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)`, `let z = { 1 }; take_i32(z)`, and kata 2055's `prefix[i + 1] = prefix[i] + if b[i] == b'*' { 1 } else { 0 }` with `prefix: Vec[i32]` are refused as narrowing, with no fix | — |
+| B-2026-11-10-7 | 2026-11-10 | mir | medium | A user iterator over a `Str` field whose `next` spells its return `Option[Str]` (or `Option[(i64, Str)]`) instead of `Option[Self.Item]` passes `karac check`, then `collect()` on it is refused E0509 in `ItemValues[..].next`: "the result borrows (*_1).0, which the receiver owns"; the same impl written `-> Option[Self.Item]` runs | — |
+| B-2026-11-10-8 | 2026-11-10 | typecheck | medium | An unannotated closure parameter used with an operator is refused at the operator (`let f = |x, n| x + n; f(1, 2)` -> "type '?T0' does not implement trait Add"), though design.md §8 lets a later use in the same body fix it; when nothing does, the message is not §8's "cannot infer closure parameter type" | — |
 
 ### Relocated
 
@@ -971,6 +971,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-33 | cli | medium | kara-lsp: incremental user-code checking -- a completion re-checks the whole buffer and the unpruned library on every request: 186 ms on a 5-line fil… | de8310019f |
 | B-2026-11-09-34 | mir-llvm | high | A program's own `struct Response { status, body, headers }` (io.md § HTTP server) is also what `Client.get`/`send` return, and the compiled client wr… | 76b6fbd33a |
 | B-2026-11-09-35 | typecheck+mir+mir-llvm | high | A scalar `ref` handed to a type parameter a closure returns solved it as the `ref`: `m.map_or(x, \|k: i64\| k + 1)` with `x: ref i64` made `U` a `ref i… | 5a9b370550 |
+| B-2026-11-09-37 | typecheck+cli+other | low | No iterator or slice has `chunk_by`, yet `v.chunk_by(\|a, b\| a == b)` on a `Vec` is refused as an iterator adaptor with the machine fix `v.iter().chun… | 7842702532 |
+| B-2026-11-09-38 | parser+typecheck+cli | medium | A tuple value cannot be assigned to existing places: `(lo, hi) = if c { (lo, mid) } else { (mid + 1, hi) };` (Rust's destructuring assignment) is ref… | b415f2e55f |
 | B-2026-11-09-41 | typecheck+mir | medium | `PriorityQueue` has no `iter`, `into_iter`, `for`, `Clone` or `Display`, though collections.md says every collection works with `for` and is `Display… | 2f62c55005 |
 | B-2026-11-09-42 | parser+resolver | low | Rust's `heap.into_iter().map(\|Reverse(s)\| s)` gets no fix for the `Reverse` parameter, and `or_insert_with(BinaryHeap::new)` is not seen as a heap's… | 2f62c55005 |
 | B-2026-11-09-43 | typecheck | medium | `let t = text?;` on a bare (borrowed) `text: Option[String]` parameter is refused as "'?' operator requires `Result` or `Option`, found 'ref Option[S… | b490bc1d36 |
@@ -980,6 +982,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-53 | parser+typecheck | medium | Six Rust-isms were diagnosed with no fix `karac fix` applies: `pub(crate)` (and `pub(super)`, `pub(self)`), an unreachable `_ =>` arm, `?` in a unit… | 01d64b96db |
 | B-2026-11-09-54 | typecheck+mir | medium | Eleven library error types did not implement `Display` and `Error` though design.md §10 says the library's error types do (Utf8Error, NulError, NetEr… | 01d64b96db |
 | B-2026-11-09-55 | ownership | low | No lint reports a `let mut` binding that is never written: Rust's habit of `let mut` on a binding that is only read draws nothing (the Rust-ism audit… | df878ae40f |
+| B-2026-11-09-57 | typecheck | low | Strings have no `match_indices` (nor `char_indices`): kata 2052's text arm wrote Rust's `sentence.match_indices(" ").map(\|(at, _)\| at + 1)` to find e… | 758eca16fe |
 | B-2026-11-09-67 | typecheck | medium | `karac fix`'s `fn main() -> Result[(), AnyError]` for a `?` in `main` left each bare `return;` of `main` as it was, so the fixed program failed to ch… | f42a83543c |
 | B-2026-11-09-68 | parser | medium | A format spec in Python's spelling, `{x:.1f}` or `{name:>8s}`, is refused as "unsupported type `f` (expected one of x, X, o, b, d)" with no fix, thou… | f42a83543c |
 | B-2026-11-09-69 | interp | medium | An HTTP request past its `timeout` fails in `karac run` with ureq's "Network Error: Network Error: Error encountered in the status line: timed out re… | f42a83543c |
