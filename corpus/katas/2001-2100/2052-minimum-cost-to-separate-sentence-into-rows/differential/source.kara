@@ -132,7 +132,7 @@ fn path_minimum_cost(sentence: String, k: i64) -> i64 {
 fn text_minimum_cost(sentence: String, k: i64) -> i64 {
     // starts[j]: where word j starts; one past the end for j == n
     let mut starts = [0].to_vec();
-    starts.extend(sentence.chars().enumerate().filter(|(_, c)| c == ' ').map(|(at, _)| at + 1));
+    starts.extend(sentence.match_indices(" ").map(|(at, _)| at + 1));
     starts.push(sentence.len() + 1);
     let n = starts.len() - 1;
     let mut best: Vec[i64] = Vec.filled(n + 1, 0);

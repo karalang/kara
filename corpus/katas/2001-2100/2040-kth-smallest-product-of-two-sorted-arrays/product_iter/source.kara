@@ -24,7 +24,7 @@ fn kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
             return lo;
         }
         let mid = lo + (hi - lo).div_euclid(2);
-        (lo, hi) = if at_most(mid) >= k { (lo, mid) } else { (mid + 1, hi) };
+        lo, hi = if at_most(mid) >= k { (lo, mid) } else { (mid + 1, hi) };
     }
 }
 

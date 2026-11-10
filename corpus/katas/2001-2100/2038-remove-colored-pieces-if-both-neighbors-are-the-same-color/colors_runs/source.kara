@@ -1,24 +1,19 @@
 // LeetCode #2038: Remove Colored Pieces if Both Neighbors are the Same
-// Color -- run lengths. One scan measures each run of one color; a run of
-// `len` pieces gives its player `len - 2` moves when it has any. O(n).
+// Color -- run lengths. `chunk_by` cuts the pieces into runs of one color,
+// as Rust's `chunk_by` does; a run of `len` pieces gives its player
+// `len - 2` moves when it has any. O(n).
 
 fn winner_of_game(colors: String) -> bool {
     let c: Vec[char] = colors.chars().collect();
     let mut alice = 0;
     let mut bob = 0;
-    let mut start = 0;
-    while start < c.len() {
-        let mut end = start;
-        while end < c.len() and c[end] == c[start] {
-            end += 1;
-        }
-        let moves = (end - start - 2).max(0);
-        if c[start] == 'A' {
+    for run in c.chunk_by(|a, b| a == b) {
+        let moves = (run.len() - 2).max(0);
+        if run[0] == 'A' {
             alice += moves;
         } else {
             bob += moves;
         }
-        start = end;
     }
     alice > bob
 }

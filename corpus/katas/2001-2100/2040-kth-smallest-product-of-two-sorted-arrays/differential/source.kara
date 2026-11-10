@@ -1,7 +1,6 @@
 // LeetCode #2040: Kth Smallest Product of Two Sorted Arrays -- the
-// differential. The five arms that check, against the statement read
-// literally: every product formed, sorted, and the `k`-th taken. The
-// iterator arm is blocked (see the README) and not here. 1500 problems of 1
+// differential. The six arms, against the statement read literally: every
+// product formed, sorted, and the `k`-th taken. 1500 problems of 1
 // to 6 values a side, up to 1 to 30 either side, each with a value to add,
 // every one drawn before any arm answers.
 //
@@ -10,7 +9,7 @@
 // P3  both arrays negated (and reversed, to stay sorted) leave the answer
 // P4  one array negated turns the k-th smallest into minus the k-th largest
 // P5  a value added to the first array never raises the answer
-// P6  each arm agrees with at least two of the other four
+// P6  each arm agrees with at least three of the other five
 
 // ---- product.kara: the ★ arm, binary search on the answer by partition_point
 fn star_count_at_most(nums1: Vec[i64], nums2: Vec[i64], x: i64) -> i64 {
@@ -182,6 +181,32 @@ fn signs_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
     lo
 }
 
+// ---- product_iter.kara: the count as an iterator, the search a `(lo, hi)` pair
+fn iter_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+    let m = nums2.len();
+    let at_most: Fn(i64) -> i64 = |x: i64| {
+        nums1.iter().map(|a| {
+            if a > 0 {
+                nums2.partition_point(|b| a * b <= x)
+            } else if a < 0 {
+                m - nums2.partition_point(|b| a * b > x)
+            } else if x >= 0 {
+                m
+            } else {
+                0
+            }
+        }).sum()
+    };
+    let mut (lo, hi) = (-10000000000, 10000000000);
+    loop {
+        if lo == hi {
+            return lo;
+        }
+        let mid = lo + (hi - lo).div_euclid(2);
+        lo, hi = if at_most(mid) >= k { (lo, mid) } else { (mid + 1, hi) };
+    }
+}
+
 // ---- product_solution.kara: LeetCode's Rust template, carried by `karac fix`
 impl Solution {
     pub fn solution_kth_smallest_product(nums1: Vec[i32], nums2: Vec[i32], k: i64) -> i64 {
@@ -222,7 +247,7 @@ fn solution_kth_smallest_product(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i6
 
 // ---- the statement read literally
 
-fn literal(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+fn literal(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> i64 {
     let mut products: Vec[i64] = Vec.new();
     for a in nums1.iter() {
         for b in nums2.iter() {
@@ -233,13 +258,14 @@ fn literal(nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
     products[k - 1]
 }
 
-fn answer(arm: i64, nums1: Vec[i64], nums2: Vec[i64], k: i64) -> i64 {
+fn answer(arm: i64, nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> i64 {
     let (a, b) = (nums1.clone(), nums2.clone());
     match arm {
         0 => star_kth_smallest_product(a, b, k),
         1 => pointers_kth_smallest_product(a, b, k),
         2 => division_kth_smallest_product(a, b, k),
         3 => signs_kth_smallest_product(a, b, k),
+        4 => iter_kth_smallest_product(a, b, k),
         _ => solution_kth_smallest_product(a, b, k),
     }
 }
@@ -249,7 +275,7 @@ fn next_random(seed: mut ref i64) -> i64 {
     *seed / 65536
 }
 
-fn negated(xs: Vec[i64]) -> Vec[i64] {
+fn negated(xs: ref Vec[i64]) -> Vec[i64] {
     xs.iter().rev().map(|x| -x).collect()
 }
 
@@ -274,7 +300,7 @@ fn draw(seed: mut ref i64) -> Problem {
 }
 
 fn main() {
-    let names = ["star", "pointers", "division", "signs", "solution"];
+    let names = ["star", "pointers", "division", "signs", "iter", "solution"];
     let mut seed = 2040;
     let mut problems: Vec[Problem] = Vec.new();
     for _ in 0..1500 {
@@ -295,11 +321,11 @@ fn main() {
         let mut more = prob.nums1.clone();
         more.push(prob.added);
         more.sort();
-        let got: Vec[i64] = (0..5).map(|arm| answer(arm, prob.nums1, prob.nums2, k)).collect();
-        for arm in 0..5 {
+        let got: Vec[i64] = (0..6).map(|arm| answer(arm, prob.nums1, prob.nums2, k)).collect();
+        for arm in 0..6 {
             let x = got[arm];
             let mut same = 0;
-            for other in 0..5 {
+            for other in 0..6 {
                 if other != arm and got[other] == x {
                     same += 1;
                 }
@@ -310,7 +336,7 @@ fn main() {
                 answer(arm, minus1, minus2, k) == x,
                 answer(arm, minus1, prob.nums2, size + 1 - k) == -x,
                 answer(arm, more, prob.nums2, k) <= x,
-                same >= 2,
+                same >= 3,
             ];
             for q in 0..6 {
                 checks += 1;
@@ -324,7 +350,7 @@ fn main() {
         }
     }
     let total = by_property.iter().sum();
-    println(f"1500 problems: checksum {check}, {checks} checks over 5 arms: {total} failures");
+    println(f"1500 problems: checksum {check}, {checks} checks over 6 arms: {total} failures");
     if total > 0 {
         for f in failures.iter() {
             println(f);

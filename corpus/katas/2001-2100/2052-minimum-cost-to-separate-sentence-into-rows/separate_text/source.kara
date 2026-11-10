@@ -1,7 +1,7 @@
 // LeetCode #2052: Minimum Cost to Separate Sentence Into Rows -- the same
 // dynamic programming from the end, measured in the sentence's own text:
-// each word's start is found from the spaces in `chars().enumerate()` (the
-// library has no `match_indices`, B-2026-11-09-57), and a row of words
+// each word's start is one past a space `match_indices(" ")` finds, as
+// Rust writes it, and a row of words
 // `i..j` is as wide as the text from word `i`'s start to the space before
 // word `j`. Each `best[i]` is a `filter` and `map` over the row ends that
 // fit, folded with `min`.
@@ -9,7 +9,7 @@
 fn minimum_cost(sentence: String, k: i64) -> i64 {
     // starts[j]: where word j starts; one past the end for j == n
     let mut starts = [0].to_vec();
-    starts.extend(sentence.chars().enumerate().filter(|(_, c)| c == ' ').map(|(at, _)| at + 1));
+    starts.extend(sentence.match_indices(" ").map(|(at, _)| at + 1));
     starts.push(sentence.len() + 1);
     let n = starts.len() - 1;
     let mut best: Vec[i64] = Vec.filled(n + 1, 0);

@@ -41,19 +41,13 @@ fn runs_winner_of_game(colors: String) -> bool {
     let c: Vec[char] = colors.chars().collect();
     let mut alice = 0;
     let mut bob = 0;
-    let mut start = 0;
-    while start < c.len() {
-        let mut end = start;
-        while end < c.len() and c[end] == c[start] {
-            end += 1;
-        }
-        let moves = (end - start - 2).max(0);
-        if c[start] == 'A' {
+    for run in c.chunk_by(|a, b| a == b) {
+        let moves = (run.len() - 2).max(0);
+        if run[0] == 'A' {
             alice += moves;
         } else {
             bob += moves;
         }
-        start = end;
     }
     alice > bob
 }
