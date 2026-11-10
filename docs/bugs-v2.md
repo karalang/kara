@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 179 |
 | perf | 149 |
 | missing-feature | 128 |
-| soundness | 59 |
+| soundness | 60 |
 | miscompile | 53 |
 | run-vs-build | 31 |
 | other | 27 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 192 |
 | mir | 166 |
 | cli | 94 |
-| ownership | 72 |
+| ownership | 73 |
 | parser | 59 |
 | interp | 46 |
 | runtime | 32 |
@@ -114,13 +114,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-96 | 2026-11-09 | typecheck | low | A tuple of borrowed elements moved where owned ones are wanted (`for (k, v) in headers { out.push((k, v)); }` with a bare, so borrowing, `headers: Vec[(String, String)]` parameter) gets "expected '(String, String)', found '(ref String, ref String)'" with no fix, where the one-element form gets `.clone()` | — |
 | B-2026-11-09-97 | 2026-11-09 | typecheck | low | `req.header("X-Purge-Token") != Some(PURGE_TOKEN)` (an `Option[String]` against an `Option[Str]` of a constant) is refused with "cannot compare 'Option[String]' and 'Option[Str]'" and no remedy; `String == Str` compares, and the library has no `as_deref` | — |
 | B-2026-11-09-98 | 2026-11-09 | mir | medium | A `Str` view of a parameter passed through a closure combinator is refused as returning a borrow of a temporary: `fn unquote(s: Str) -> Str { s.strip_prefix("\"").and_then(|t| t.strip_suffix("\"")).unwrap_or(s) }` is E0509 "the result borrows a temporary value, which this function owns", as are `.map(|t| t.trim())` and `split_once(..).map(|p| p.0)`; the same chain without a closure, or a `match`, passes | — |
-| B-2026-11-09-100 | 2026-11-09 | typecheck+ownership | medium | A method's `mut ref` argument needs no `mut` marker, so an immutable binding is written through it unreported: `let s = String.new(); r.fill(s);` with `fn fill(ref self, buf: mut ref String)` checks clean and fills `s` | — |
-| B-2026-11-09-101 | 2026-11-09 | ownership | medium | The `let mut` rule misses receiver writes its hand-written method table lacks: `let w: VecDeque[i64] = VecDeque.new(); w.push_back(1);` checks clean | — |
 | B-2026-11-10-6 | 2026-11-10 | typecheck | medium | A block, `if` or `match` whose every value is an unsuffixed literal is typed `i64` at once, not as the literal variable design.md §8 says later uses fix: `let x = if c { 1 } else { 0 }; take_i32(x)`, `let z = { 1 }; take_i32(z)`, and kata 2055's `prefix[i + 1] = prefix[i] + if b[i] == b'*' { 1 } else { 0 }` with `prefix: Vec[i32]` are refused as narrowing, with no fix | — |
-| B-2026-11-10-22 | 2026-11-10 | ownership | medium | An immutable `let` of a `shared` value can be lent as `mut` and rebound by the callee: `let tail = T { v: 1 }; advance(mut tail);` with `fn advance(t: mut ref T) { *t = n; }` checks clean and leaves `tail` naming a different object, though `let` froze the handle | — |
 | B-2026-11-10-24 | 2026-11-10 | mir | high | `while let Some(x) = it.find(|x| ..)` (or `next_if`) over `v.iter()` is refused E0516: the closure passed by reference is taken to be stored into the `mut ref` iterator (§9.5), whose type cannot hold it, so the next iteration's closure conflicts | — |
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
 | B-2026-11-10-29 | 2026-11-10 | mir-llvm | low | `karac build` is ~21% slower than at f1416771a4 on the ADR-2 frozen set (tip 0.886x legacy, was 0.734x): within the bars, but the MIR is built three times per build and typecheck and ownership grew | — |
+| B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 
 ### Relocated
 
@@ -1001,6 +999,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-94 | typecheck | low | `opt ?? "" == value` (`??` binds loosest, so it is `opt ?? ("" == value)`) gives three type mismatches (`expected 'String', found 'bool'`, the closur… | e922bfc642 |
 | B-2026-11-09-95 | typecheck | low | A `ref Str` (an element of `pairs.iter()` over a `Slice[(Str, Str)]`) handed to a `String` parameter gets "expected 'String', found 'ref Str'" with n… | e922bfc642 |
 | B-2026-11-09-99 | ownership | medium | A `let` inside a block outlived it for the `let mut` rule: `let mut q = 7; if c { let q = 3; } q = 8;` was refused as a write to the inner, immutable… | df878ae40f |
+| B-2026-11-09-100 | typecheck+ownership | medium | A method's `mut ref` argument needs no `mut` marker, so an immutable binding is written through it unreported: `let s = String.new(); r.fill(s);` wit… | e705e5be7e |
+| B-2026-11-09-101 | ownership | medium | The `let mut` rule misses receiver writes its hand-written method table lacks: `let w: VecDeque[i64] = VecDeque.new(); w.push_back(1);` checks clean | e705e5be7e |
 | B-2026-11-10-1 | mir-llvm | medium | A plain `karac build` whose auto-par verdicts parallelize nothing shipped the recording lowering, which puts a block between every statement of a blo… | ba29c00d5c |
 | B-2026-11-10-2 | mir-llvm | high | `v.as_slice_mut()` and a range view passed `mut v[a..b]`, on a `Vec` of literals, lowered on a shared borrow, so the literal-table pass made the `Vec… | ba29c00d5c |
 | B-2026-11-10-3 | typecheck | low | A `flat_map` closure whose body is an `if`/`else` or a `match` giving a list from each branch (`\|x\| if x == 0 { [0, 0] } else { [x] }`, as Rust's `fl… | ba29c00d5c |
@@ -1016,6 +1016,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-19 | ownership | low | `unused_mut` misses a `let mut` binding of a `mut ref` handle that is only passed as `mut child`: the call-site marker counts as a write to the bindi… | 3be914cd0e |
 | B-2026-11-10-20 | typecheck | medium | `s.extend(v.iter())` on a `String`, with `v` a `Vec[char]` (an iterator lending `ref char`), is refused as ambiguous between `Extend[char]` and `Exte… | e609854dde |
 | B-2026-11-10-21 | resolver | low | LeetCode's Rust template `impl Solution { pub fn f(..) }` with no `struct Solution;` (the site supplies it) gets only "undefined type 'Solution'", an… | e609854dde |
+| B-2026-11-10-22 | ownership | medium | An immutable `let` of a `shared` value can be lent as `mut` and rebound by the callee: `let tail = T { v: 1 }; advance(mut tail);` with `fn advance(t… | e705e5be7e |
 | B-2026-11-10-23 | typecheck | medium | A closure with no declared return type that returns a non-`i64` integer (`return i as i32;`) and has an unsuffixed literal tail or `return` (`0`) is… | 900693f6bb |
 | B-2026-11-10-28 | interp+mir-llvm | medium | `BufReader`/`BufWriter` over a `TlsStream` is refused at check (E0297, "not built yet"), and over a socket a `Network` provider opened stops at the c… | 23ce3eab43 |
 
