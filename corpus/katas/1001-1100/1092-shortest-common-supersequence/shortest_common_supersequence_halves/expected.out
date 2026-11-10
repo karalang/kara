@@ -1,0 +1,15 @@
+abac cab -> 5, both in it
+aaaaaaaa aaaaaaaa -> 8, both in it
+a b -> 2, both in it
+abc abc -> 3, both in it
+abc def -> 6, both in it
+abcde ace -> 5, both in it
+ace abcde -> 5, both in it
+geek eke -> 5, both in it
+aggtab gxtxayb -> 9, both in it
+bbbaaaba bbababbb -> 11, both in it
+leetcode codeleet -> 12, both in it
+z zzzzz -> 5, both in it
+2000 random pairs: lengths sum to 19485, 0 missing a word, checksum 461624550
+1000 and 1000 letters from 26: 1675, both in it
+1000 and 1000 letters from 4: 1356, both in it

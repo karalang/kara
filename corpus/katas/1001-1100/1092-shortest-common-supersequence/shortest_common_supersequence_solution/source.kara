@@ -1,0 +1,120 @@
+// LeetCode #1092: Shortest Common Supersequence -- LeetCode's Rust
+// template, written as Rust writes it and carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn shortest_common_supersequence(str1: String, str2: String) -> String {
+        let a = str1.bytes();
+        let b = str2.bytes();
+        let (n, m) = (a.len(), b.len());
+        let mut dp = Vec.filled(n + 1, Vec.filled(m + 1, 0));
+        for i in 1..=n {
+            for j in 1..=m {
+                dp[i][j] = if a[i - 1] == b[j - 1] {
+                    dp[i - 1][j - 1] + 1
+                } else {
+                    dp[i - 1][j].max(dp[i][j - 1])
+                };
+            }
+        }
+        let mut res = Vec.new();
+        let mut (i, j) = (n, m);
+        while i > 0 or j > 0 {
+            if i == 0 {
+                res.push(b[j - 1]);
+                j -= 1;
+            } else if j == 0 {
+                res.push(a[i - 1]);
+                i -= 1;
+            } else if a[i - 1] == b[j - 1] {
+                res.push(a[i - 1]);
+                i -= 1;
+                j -= 1;
+            } else if dp[i - 1][j] > dp[i][j - 1] {
+                res.push(a[i - 1]);
+                i -= 1;
+            } else {
+                res.push(b[j - 1]);
+                j -= 1;
+            }
+        }
+        res.reverse();
+        String.from_utf8(res).unwrap()
+    }
+}
+
+fn shortest_common_supersequence(a: String, b: String) -> String {
+    Solution.shortest_common_supersequence(a, b)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether `a` can be read out of `s` in order, skipping letters of `s`.
+fn is_subsequence(a: String, s: String) -> bool {
+    let mut it = s.chars();
+    a.chars().all(|c| it.any(|d| d == c))
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    w
+}
+
+// The answer's length, and whether both words are in it: any shortest
+// supersequence is right, so arms that break ties apart print alike.
+fn judge(a: String, b: String) -> String {
+    let s = shortest_common_supersequence(a, b);
+    let ok = if is_subsequence(a, s) and is_subsequence(b, s) { "both in it" } else { "MISSING ONE" };
+    f"{s.len()}, {ok}"
+}
+
+fn main() {
+    let cases = [
+        ("abac", "cab"),
+        ("aaaaaaaa", "aaaaaaaa"),
+        ("a", "b"),
+        ("abc", "abc"),
+        ("abc", "def"),
+        ("abcde", "ace"),
+        ("ace", "abcde"),
+        ("geek", "eke"),
+        ("aggtab", "gxtxayb"),
+        ("bbbaaaba", "bbababbb"),
+        ("leetcode", "codeleet"),
+        ("z", "zzzzz"),
+    ];
+    for (a, b) in cases.iter() {
+        println(f"{a} {b} -> {judge(a, b)}");
+    }
+    // 2000 random pairs of 1 to 12 letters from a to c
+    let mut seed = 1092;
+    let mut total = 0;
+    let mut bad = 0;
+    let mut h = 0;
+    for _ in 0..2000 {
+        let a = random_word(mut seed, next_random(mut seed) % 12 + 1, 3);
+        let b = random_word(mut seed, next_random(mut seed) % 12 + 1, 3);
+        let s = shortest_common_supersequence(a, b);
+        if not (is_subsequence(a, s) and is_subsequence(b, s)) {
+            bad += 1;
+        }
+        total += s.len();
+        h = (h * 31 + s.len()) % 1000000007;
+    }
+    println(f"2000 random pairs: lengths sum to {total}, {bad} missing a word, checksum {h}");
+    // LeetCode's longest, 1000 letters each, from 26 letters and from 4
+    for letters in [26, 4] {
+        let a = random_word(mut seed, 1000, letters);
+        let b = random_word(mut seed, 1000, letters);
+        println(f"1000 and 1000 letters from {letters}: {judge(a, b)}");
+    }
+}

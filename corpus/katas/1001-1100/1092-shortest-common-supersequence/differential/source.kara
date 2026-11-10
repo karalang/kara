@@ -1,0 +1,520 @@
+// LeetCode #1092: Shortest Common Supersequence -- a differential over the
+// six arms. Each answer's length is checked against the statement read
+// literally (the fewest letters a writer needs before both words have been
+// read out of what it wrote) and against five properties that do not
+// compute the answer; see the README.
+
+// ---- shortest_common_supersequence.kara ----
+
+fn a0_shortest_common_supersequence(a: String, b: String) -> String {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let (n, m) = (x.len(), y.len());
+    let mut lcs = Vec.filled(n + 1, Vec.filled(m + 1, 0));
+    for i in 1..=n {
+        for j in 1..=m {
+            lcs[i][j] = if x[i - 1] == y[j - 1] {
+                lcs[i - 1][j - 1] + 1
+            } else {
+                lcs[i - 1][j].max(lcs[i][j - 1])
+            };
+        }
+    }
+    let mut out: Vec[char] = [];
+    let mut (i, j) = (n, m);
+    while i > 0 and j > 0 {
+        if x[i - 1] == y[j - 1] {
+            out.push(x[i - 1]);
+            i -= 1;
+            j -= 1;
+        } else if lcs[i - 1][j] >= lcs[i][j - 1] {
+            out.push(x[i - 1]);
+            i -= 1;
+        } else {
+            out.push(y[j - 1]);
+            j -= 1;
+        }
+    }
+    while i > 0 {
+        out.push(x[i - 1]);
+        i -= 1;
+    }
+    while j > 0 {
+        out.push(y[j - 1]);
+        j -= 1;
+    }
+    out.iter().rev().collect()
+}
+
+// ---- shortest_common_supersequence_table.kara ----
+
+fn a1_shortest_common_supersequence(a: String, b: String) -> String {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let (n, m) = (x.len(), y.len());
+    let mut scs = Vec.filled(n + 1, Vec.filled(m + 1, 0));
+    for i in (0..=n).rev() {
+        for j in (0..=m).rev() {
+            scs[i][j] = if i == n {
+                m - j
+            } else if j == m {
+                n - i
+            } else if x[i] == y[j] {
+                1 + scs[i + 1][j + 1]
+            } else {
+                1 + scs[i + 1][j].min(scs[i][j + 1])
+            };
+        }
+    }
+    let mut out = String.new();
+    let mut (i, j) = (0, 0);
+    while i < n or j < m {
+        if i == n {
+            out.push(y[j]);
+            j += 1;
+        } else if j == m {
+            out.push(x[i]);
+            i += 1;
+        } else if x[i] == y[j] {
+            out.push(x[i]);
+            i += 1;
+            j += 1;
+        } else if scs[i + 1][j] <= scs[i][j + 1] {
+            out.push(x[i]);
+            i += 1;
+        } else {
+            out.push(y[j]);
+            j += 1;
+        }
+    }
+    out
+}
+
+// ---- shortest_common_supersequence_memo.kara ----
+
+fn a2_shortest_len(x: Vec[char], y: Vec[char], i: i64, j: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == 0 or j == 0 {
+        return i + j;
+    }
+    if let Some(known) = memo.get((i, j)) {
+        return known;
+    }
+    let len = if x[i - 1] == y[j - 1] {
+        1 + a2_shortest_len(x, y, i - 1, j - 1, mut memo)
+    } else {
+        1 + a2_shortest_len(x, y, i - 1, j, mut memo).min(a2_shortest_len(x, y, i, j - 1, mut memo))
+    };
+    memo.insert((i, j), len);
+    len
+}
+
+fn a2_shortest_common_supersequence(a: String, b: String) -> String {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    let mut (i, j) = (x.len(), y.len());
+    let mut out: Vec[char] = [];
+    while i > 0 or j > 0 {
+        if i == 0 {
+            out.push(y[j - 1]);
+            j -= 1;
+        } else if j == 0 {
+            out.push(x[i - 1]);
+            i -= 1;
+        } else if x[i - 1] == y[j - 1] {
+            out.push(x[i - 1]);
+            i -= 1;
+            j -= 1;
+        } else if a2_shortest_len(x, y, i - 1, j, mut memo) <= a2_shortest_len(x, y, i, j - 1, mut memo) {
+            out.push(x[i - 1]);
+            i -= 1;
+        } else {
+            out.push(y[j - 1]);
+            j -= 1;
+        }
+    }
+    out.reverse();
+    out.iter().collect()
+}
+
+// ---- shortest_common_supersequence_halves.kara ----
+
+// The LCS lengths of `x` against every prefix of `y`, in one row.
+fn a3_lcs_row(x: Vec[char], y: Vec[char]) -> Vec[i64] {
+    let mut prev = Vec.filled(y.len() + 1, 0);
+    for c in x.iter() {
+        let mut cur = Vec.filled(y.len() + 1, 0);
+        for j in 1..=y.len() {
+            cur[j] = if c == y[j - 1] { prev[j - 1] + 1 } else { prev[j].max(cur[j - 1]) };
+        }
+        prev = cur;
+    }
+    prev
+}
+
+fn a3_lcs(x: Vec[char], y: Vec[char]) -> Vec[char] {
+    if x.is_empty() or y.is_empty() {
+        return [];
+    }
+    if x.len() == 1 {
+        return if y.contains(x[0]) { [x[0]] } else { [] };
+    }
+    let half = x.len() / 2;
+    let front = a3_lcs_row(x[..half].to_vec(), y);
+    let mut x_back = x[half..].to_vec();
+    x_back.reverse();
+    let mut y_back = y.clone();
+    y_back.reverse();
+    let back = a3_lcs_row(x_back, y_back);
+    let mut cut = 0;
+    for k in 0..=y.len() {
+        if front[k] + back[y.len() - k] > front[cut] + back[y.len() - cut] {
+            cut = k;
+        }
+    }
+    let mut left = a3_lcs(x[..half].to_vec(), y[..cut].to_vec());
+    left.extend(a3_lcs(x[half..].to_vec(), y[cut..].to_vec()).iter());
+    left
+}
+
+fn a3_shortest_common_supersequence(a: String, b: String) -> String {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let mut out = String.new();
+    let mut (i, j) = (0, 0);
+    for c in a3_lcs(x, y).iter() {
+        while x[i] != c {
+            out.push(x[i]);
+            i += 1;
+        }
+        while y[j] != c {
+            out.push(y[j]);
+            j += 1;
+        }
+        out.push(c);
+        i += 1;
+        j += 1;
+    }
+    out.extend(x[i..].iter());
+    out.extend(y[j..].iter());
+    out
+}
+
+// ---- shortest_common_supersequence_steps.kara ----
+
+enum Step {
+    Both,
+    FromA,
+    FromB,
+}
+
+fn a4_shortest_common_supersequence(a: String, b: String) -> String {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let (n, m) = (x.len(), y.len());
+    let mut steps: Vec[Vec[Step]] = Vec.filled(n + 1, Vec.filled(m + 1, Step.Both));
+    let mut below: Vec[i64] = (0..=m).map(|j| m - j).collect();
+    for i in (0..n).rev() {
+        let mut row = Vec.filled(m + 1, n - i);
+        steps[i][m] = Step.FromA;
+        for j in (0..m).rev() {
+            if x[i] == y[j] {
+                row[j] = 1 + below[j + 1];
+                steps[i][j] = Step.Both;
+            } else if below[j] <= row[j + 1] {
+                row[j] = 1 + below[j];
+                steps[i][j] = Step.FromA;
+            } else {
+                row[j] = 1 + row[j + 1];
+                steps[i][j] = Step.FromB;
+            }
+        }
+        below = row;
+    }
+    for j in 0..m {
+        steps[n][j] = Step.FromB;
+    }
+    let mut out = String.new();
+    let mut (i, j) = (0, 0);
+    while i < n or j < m {
+        match steps[i][j] {
+            Step.Both => {
+                out.push(x[i]);
+                i += 1;
+                j += 1;
+            }
+            Step.FromA => {
+                out.push(x[i]);
+                i += 1;
+            }
+            Step.FromB => {
+                out.push(y[j]);
+                j += 1;
+            }
+        }
+    }
+    out
+}
+
+// ---- shortest_common_supersequence_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_shortest_common_supersequence(str1: String, str2: String) -> String {
+        let a = str1.bytes();
+        let b = str2.bytes();
+        let (n, m) = (a.len(), b.len());
+        let mut dp = Vec.filled(n + 1, Vec.filled(m + 1, 0));
+        for i in 1..=n {
+            for j in 1..=m {
+                dp[i][j] = if a[i - 1] == b[j - 1] {
+                    dp[i - 1][j - 1] + 1
+                } else {
+                    dp[i - 1][j].max(dp[i][j - 1])
+                };
+            }
+        }
+        let mut res = Vec.new();
+        let mut (i, j) = (n, m);
+        while i > 0 or j > 0 {
+            if i == 0 {
+                res.push(b[j - 1]);
+                j -= 1;
+            } else if j == 0 {
+                res.push(a[i - 1]);
+                i -= 1;
+            } else if a[i - 1] == b[j - 1] {
+                res.push(a[i - 1]);
+                i -= 1;
+                j -= 1;
+            } else if dp[i - 1][j] > dp[i][j - 1] {
+                res.push(a[i - 1]);
+                i -= 1;
+            } else {
+                res.push(b[j - 1]);
+                j -= 1;
+            }
+        }
+        res.reverse();
+        String.from_utf8(res).unwrap()
+    }
+}
+
+fn a5_shortest_common_supersequence(a: String, b: String) -> String {
+    A5Solution.a5_shortest_common_supersequence(a, b)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, a: String, b: String) -> String {
+    match which {
+        0 => a0_shortest_common_supersequence(a, b),
+        1 => a1_shortest_common_supersequence(a, b),
+        2 => a2_shortest_common_supersequence(a, b),
+        3 => a3_shortest_common_supersequence(a, b),
+        4 => a4_shortest_common_supersequence(a, b),
+        _ => a5_shortest_common_supersequence(a, b),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: a writer puts down one letter at a time,
+// and each word is read out of what it wrote by taking its next letter
+// whenever the writer puts that letter down. `read[i][j]` is the fewest
+// letters after which i letters of `a` and j of `b` have been read, found
+// level by level from (0, 0) over every letter either word has (a letter
+// neither has reads nothing). The answer is the entry for both words whole.
+fn fewest_letters(a: String, b: String) -> i64 {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let (n, m) = (x.len(), y.len());
+    let mut letters: Vec[char] = [];
+    for c in x.iter().chain(y.iter()) {
+        if not letters.contains(c) {
+            letters.push(c);
+        }
+    }
+    let mut read = Vec.filled(n + 1, Vec.filled(m + 1, -1));
+    read[0][0] = 0;
+    let mut level: Vec[(i64, i64)] = [(0, 0)];
+    let mut written = 0;
+    while read[n][m] < 0 {
+        written += 1;
+        let mut next: Vec[(i64, i64)] = [];
+        for (i, j) in level.iter() {
+            for c in letters.iter() {
+                let ni = if i < n and x[i] == c { i + 1 } else { i };
+                let nj = if j < m and y[j] == c { j + 1 } else { j };
+                if read[ni][nj] < 0 {
+                    read[ni][nj] = written;
+                    next.push((ni, nj));
+                }
+            }
+        }
+        level = next;
+    }
+    read[n][m]
+}
+
+// Whether `a` can be read out of `s` in order, skipping letters of `s`.
+fn is_subsequence(a: String, s: String) -> bool {
+    let mut it = s.chars();
+    a.chars().all(|c| it.any(|d| d == c))
+}
+
+// Every letter one on: a to b, b to c, c to d, d to a.
+fn renamed(w: String) -> String {
+    w.chars()
+        .map(|c| match c {
+            'a' => 'b',
+            'b' => 'c',
+            'c' => 'd',
+            _ => 'a',
+        })
+        .collect()
+}
+
+fn letter(seed: mut ref i64, letters: i64) -> char {
+    ((97 + next_random(mut seed) % letters) as u8) as char
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push(letter(mut seed, letters));
+    }
+    w
+}
+
+// A word of runs: up to five runs of one letter each, 1 to 5 long.
+fn runs_word(seed: mut ref i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..next_random(mut seed) % 5 + 1 {
+        let c = letter(mut seed, letters);
+        for _ in 0..next_random(mut seed) % 5 + 1 {
+            w.push(c);
+        }
+    }
+    w
+}
+
+// A word made from `a`: each letter kept or not, and a letter put in
+// after it or not, so the two words share a long common subsequence.
+fn edited(seed: mut ref i64, a: String) -> String {
+    let mut w = String.new();
+    for c in a.chars() {
+        if next_random(mut seed) % 3 != 0 {
+            w.push(c);
+        }
+        if next_random(mut seed) % 3 == 0 {
+            w.push(letter(mut seed, 4));
+        }
+    }
+    if w.is_empty() {
+        w.push(letter(mut seed, 4));
+    }
+    w
+}
+
+struct Problem {
+    a: String,
+    b: String,
+    // put after both words for P5
+    last: char,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, pr: Problem) {
+    let (a, b) = (pr.a.clone(), pr.b.clone());
+    let fewest = fewest_letters(a, b);
+    let a_last = f"{a}{pr.last}";
+    let b_last = f"{b}{pr.last}";
+    for w in 0..6 {
+        let s = arm(w, a, b);
+        let what = f"arm {w}, {a} {b} -> {s}";
+        // P1: the statement read literally
+        expect(mut t, 1, s.len() == fewest, f"P1 {what}, read literally {fewest} letters");
+        // P2: both words can be read out of the answer
+        expect(mut t, 2, is_subsequence(a, s) and is_subsequence(b, s), f"P2 {what}");
+        // P3: the words the other way round, an answer as long
+        let swapped = arm(w, b, a);
+        expect(mut t, 3, swapped.len() == s.len(), f"P3 {what}, swapped -> {swapped}");
+        // P4: the letters renamed before the arm or after, the same answer
+        let after = arm(w, renamed(a), renamed(b));
+        expect(mut t, 4, after == renamed(s), f"P4 {what}, renamed first -> {after}");
+        // P5: one letter after both words, one letter longer
+        let longer = arm(w, a_last, b_last);
+        expect(mut t, 5, longer.len() == s.len() + 1, f"P5 {what}, {a_last} {b_last} -> {longer}");
+        // P6: the answer with either word gives the answer back
+        let back = arm(w, s, a);
+        let back_b = arm(w, b, s);
+        expect(mut t, 6, back == s and back_b == s, f"P6 {what}, back -> {back} and {back_b}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + fewest) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: [0; 7].to_vec() };
+    // 2000 problems in four kinds, 500 each: two words of 1 to 8 letters
+    // from a to c; of 1 to 16 from a and b; a word of 1 to 12 letters from
+    // a to d and a word made from it; two words of runs from a to d. Each
+    // has a letter from a to d to put after both words. Every choice is
+    // drawn before any arm answers.
+    let mut seed = 10921;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let (a, b) = match i % 4 {
+            0 => {
+                let a = random_word(mut seed, next_random(mut seed) % 8 + 1, 3);
+                (a, random_word(mut seed, next_random(mut seed) % 8 + 1, 3))
+            }
+            1 => {
+                let a = random_word(mut seed, next_random(mut seed) % 16 + 1, 2);
+                (a, random_word(mut seed, next_random(mut seed) % 16 + 1, 2))
+            }
+            2 => {
+                let a = random_word(mut seed, next_random(mut seed) % 12 + 1, 4);
+                let b = edited(mut seed, a);
+                (a, b)
+            }
+            _ => {
+                let a = runs_word(mut seed, 4);
+                (a, runs_word(mut seed, 4))
+            }
+        };
+        let last = letter(mut seed, 4);
+        problems.push(Problem { a, b, last });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

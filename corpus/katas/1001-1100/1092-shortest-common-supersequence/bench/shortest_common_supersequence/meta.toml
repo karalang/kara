@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1092-shortest-common-supersequence/bench/shortest_common_supersequence.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1092 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "e93b2c76e"
+extracted_src = "21e6047d"
