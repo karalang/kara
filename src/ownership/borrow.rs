@@ -174,6 +174,7 @@ impl<'a> super::OwnershipChecker<'a> {
         if let ExprKind::MethodCall { method, .. } = &method_call.kind {
             return crate::ownership::arg_is_borrow_by_method_name(
                 &self.method_param_modes,
+                &self.method_keys_by_name,
                 method,
                 arg_index,
             );
@@ -240,9 +241,14 @@ impl<'a> super::OwnershipChecker<'a> {
         let ExprKind::MethodCall { method, .. } = &method_call.kind else {
             return false;
         };
-        let suffix = format!(".{method}");
-        self.method_param_modes.iter().any(|(key, modes)| {
-            key.ends_with(&suffix) && matches!(modes.get(arg_index), Some(OwnershipMode::MutRef))
+        let keys = self.method_keys_by_name.get(method.as_str());
+        keys.into_iter().flatten().any(|key| {
+            matches!(
+                self.method_param_modes
+                    .get(key)
+                    .and_then(|m| m.get(arg_index)),
+                Some(OwnershipMode::MutRef)
+            )
         })
     }
 

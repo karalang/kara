@@ -28483,22 +28483,22 @@ fn in_order_later(src: &str, auto_par: bool) -> Result<(Lowered, Option<InOrder>
         }
         e
     };
-    let (lowered, front) = build_renamed_source(src, auto_par).map_err(unrename)?;
-    Ok((lowered, front.map(|front| InOrder { front, renames })))
+    let (lowered, seq) = build_renamed_source(src, auto_par).map_err(unrename)?;
+    Ok((lowered, seq.map(|seq| InOrder { seq, renames })))
 }
 
 /// The in-order program of a build that runs tasks, before it is lowered
 /// ([`build_source_in_order_later`]).
 pub struct InOrder {
-    front: Frontend,
+    /// Lowered beside the auto-par builds ([`build_renamed_source`]).
+    seq: Result<Lowered, String>,
     renames: Vec<(String, String)>,
 }
 
 impl InOrder {
     /// The program as `KARAC_AUTO_PAR=0` builds it.
     pub fn lower(self) -> Result<Lowered, String> {
-        let lowered = self.front.lower(AutoPar::Off).and_then(finish_build);
-        lowered.map_err(|mut e| {
+        self.seq.map_err(|mut e| {
             for (new, old) in &self.renames {
                 e = e.replace(new.as_str(), old);
             }
@@ -28523,11 +28523,78 @@ fn build_source_with(src: &str, auto_par: bool) -> Result<Lowered, String> {
 
 /// The build, and for one that runs loops or statements as tasks, the
 /// checked program to lower in order ([`Lowered::in_order`]).
-fn build_renamed_source(src: &str, auto_par: bool) -> Result<(Lowered, Option<Frontend>), String> {
+#[allow(clippy::type_complexity)]
+fn build_renamed_source(
+    src: &str,
+    auto_par: bool,
+) -> Result<(Lowered, Option<Result<Lowered, String>>), String> {
     if !auto_par {
         let lowered = finish_build(lower_source_for_checks(src, false, AutoPar::Off)?)?;
         return Ok((lowered, None));
     }
+    let front = frontend(src, false)?;
+    // The in-order program is the build when nothing runs as tasks, and
+    // the in-order half of one where something does, so it is lowered on
+    // a thread of its own while the recording and parallel builds run:
+    // one lowering fewer on the build's path (B-2026-11-10-29). The
+    // definitions both start from are built first, once.
+    front
+        .defs_res
+        .get_or_init(|| DefsRes::build(&front.program, &front.r, &front.tc));
+    std::thread::scope(|s| {
+        let seq = std::thread::Builder::new()
+            .name("karac-in-order".to_string())
+            .stack_size(1 << 30)
+            .spawn_scoped(s, || {
+                InOrderBuilt(front.lower(AutoPar::Off).and_then(finish_build))
+            });
+        let seq = match seq {
+            Ok(handle) => Seq::Running(handle),
+            // No thread to be had: lowered here when it is needed.
+            Err(_) => Seq::Later,
+        };
+        auto_par_builds(&front, src, seq)
+    })
+}
+
+/// The in-order lowering, made on the thread [`build_renamed_source`]
+/// starts for it.
+struct InOrderBuilt(Result<Lowered, String>);
+
+// SAFETY: a `Lowered` is not `Send` only for the `Rc`s of its type
+// interner (`TyCtxt`). The in-order thread makes every one of them: it
+// reads only the `Frontend`, which is `Sync` and so holds no `Rc` to share,
+// and keeps none once its closure returns (no thread-local of the lowering
+// holds a type). The value moves to the joining thread whole, after the
+// thread has ended, so no count is ever touched from two threads.
+unsafe impl Send for InOrderBuilt {}
+
+/// The in-order lowering of [`build_renamed_source`].
+enum Seq<'s> {
+    Running(std::thread::ScopedJoinHandle<'s, InOrderBuilt>),
+    Later,
+}
+
+impl Seq<'_> {
+    fn take(self, front: &Frontend) -> Result<Lowered, String> {
+        match self {
+            Seq::Running(h) => h
+                .join()
+                .map(|built| built.0)
+                .unwrap_or_else(|_| Err("the in-order lowering panicked".to_string())),
+            Seq::Later => front.lower(AutoPar::Off).and_then(finish_build),
+        }
+    }
+}
+
+/// The recording build, then the parallel one its verdicts pick, falling
+/// back on the in-order program `seq` (M4 item 14).
+#[allow(clippy::type_complexity)]
+fn auto_par_builds(
+    front: &Frontend,
+    src: &str,
+    seq: Seq<'_>,
+) -> Result<(Lowered, Option<Result<Lowered, String>>), String> {
     // M4 item 14: built once recording the candidates, whose verdicts
     // then pick the loops a second build lowers as tasks. That build's
     // own checks see the parallel form; when they refuse it, the first
@@ -28535,7 +28602,6 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<(Lowered, Option<Fr
     // function value loses its loops' hints, and the build runs again.
     // Each build lowers the one checked program.
     let debug = std::env::var("KARAC_AUTO_PAR_DEBUG").is_ok();
-    let front = frontend(src, false)?;
     let first = finish_build(front.lower(AutoPar::Record)?)?;
     let verdicts = crate::mir::effects::analyze(&first.program, &first.tys).auto_par;
     if debug {
@@ -28598,9 +28664,13 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<(Lowered, Option<Fr
                 }
             }
             // The recording build is not the in-order one (its loops are
-            // lowered for the verdicts), so that is lowered a third time.
+            // lowered for the verdicts), so the in-order lowering is.
             let tasks = !second.auto_par_tasks.is_empty() || !second.auto_par_groups.is_empty();
-            return Ok((second, tasks.then_some(front)));
+            if !tasks {
+                drop(second);
+                return Ok((seq.take(front)?, None));
+            }
+            return Ok((second, Some(seq.take(front))));
         };
         if debug {
             eprintln!("auto-par: `{name}` would suspend and is used as a function value");
@@ -28618,7 +28688,7 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<(Lowered, Option<Fr
     // from `KARAC_AUTO_PAR=0`'s (kata 1088's bench, which parallelizes
     // nothing, ran 15% slower from it, B-2026-11-10-1).
     drop(first);
-    Ok((finish_build(front.lower(AutoPar::Off)?)?, None))
+    Ok((seq.take(front)?, None))
 }
 
 /// A body the parallel build `second` made suspend, by joining a loop's
@@ -28778,6 +28848,7 @@ pub fn checked_borrow_errors(
         &FrozenHints::default(),
         true,
         AutoPar::Off,
+        None,
     ) {
         Ok(parts) => parts,
         Err(e) => {
@@ -29090,12 +29161,36 @@ struct Frontend {
     captures: FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     frozen: FrozenHints,
     check_only: bool,
+    /// The program's definitions and each node's resolution, which no
+    /// lowering changes: built by the first and shared by the rest
+    /// (B-2026-11-10-29).
+    defs_res: std::sync::OnceLock<DefsRes>,
+}
+
+/// What every lowering of one checked program starts from.
+struct DefsRes {
+    defs: ProgramDefs,
+    res: FxHashMap<NodeId, Res>,
+}
+
+impl DefsRes {
+    fn build(program: &ast::Program, r: &ResolveResult, tc: &TypeCheckResult) -> DefsRes {
+        let mut t = std::time::Instant::now();
+        let defs = ProgramDefs::build_for_program(program);
+        let mut res = crate::node_res::node_res(r, &defs, 0, None);
+        crate::node_res::add_variant_patterns(&mut res, &defs, 0, &tc.variant_patterns);
+        phase_time("defs+node_res", &mut t);
+        DefsRes { defs, res }
+    }
 }
 
 impl Frontend {
     /// The program's MIR, its loops and statements lowered as `auto_par`
     /// says.
     fn lower(&self, auto_par: AutoPar) -> Result<Lowered, String> {
+        let dr = self
+            .defs_res
+            .get_or_init(|| DefsRes::build(&self.program, &self.r, &self.tc));
         lower_typed(
             &self.program,
             &self.src,
@@ -29106,6 +29201,7 @@ impl Frontend {
             &self.frozen,
             self.check_only,
             auto_par,
+            Some(dr),
         )
     }
 }
@@ -29219,6 +29315,7 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
         captures: own.closure_captures,
         frozen,
         check_only,
+        defs_res: std::sync::OnceLock::new(),
     })
 }
 
@@ -29419,9 +29516,10 @@ fn lower_typed(
     frozen: &FrozenHints,
     check_only: bool,
     auto_par: AutoPar,
+    shared: Option<&DefsRes>,
 ) -> Result<Lowered, String> {
     let (lowered, moves) = lower_typed_parts(
-        program, src, user_len, tc, r, captures, frozen, check_only, auto_par,
+        program, src, user_len, tc, r, captures, frozen, check_only, auto_par, shared,
     )?;
     if !moves.is_empty() {
         return Err(format!("build: {}", moves.join("; ")));
@@ -29443,13 +29541,18 @@ fn lower_typed_parts(
     frozen: &FrozenHints,
     check_only: bool,
     auto_par: AutoPar,
+    shared: Option<&DefsRes>,
 ) -> Result<(Lowered, Vec<String>), String> {
+    let own;
+    let DefsRes { defs, res } = match shared {
+        Some(dr) => dr,
+        None => {
+            own = DefsRes::build(program, r, tc);
+            &own
+        }
+    };
     let mut t = std::time::Instant::now();
-    let defs = ProgramDefs::build_for_program(program);
-    let mut res = crate::node_res::node_res(r, &defs, 0, None);
-    crate::node_res::add_variant_patterns(&mut res, &defs, 0, &tc.variant_patterns);
-    phase_time("defs+node_res", &mut t);
-    let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
+    let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(defs, 0, res));
     phase_time("typed_hir", &mut t);
     let lower = |hir, cancel_at| {
         lower_program_inner(
@@ -29457,8 +29560,8 @@ fn lower_typed_parts(
             src,
             Some(user_len),
             tc,
-            &defs,
-            &res,
+            defs,
+            res,
             r,
             hir,
             captures,
@@ -29483,7 +29586,7 @@ fn lower_typed_parts(
         };
         if let Some(at) = at {
             let hir =
-                crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
+                crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(defs, 0, res));
             lowered = lower(hir, Some(at));
         }
     }

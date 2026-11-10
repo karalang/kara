@@ -67,6 +67,8 @@ pub struct ClassifierPrelude {
     callee_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     trait_static_methods: FxHashMap<String, Vec<String>>,
     method_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
+    /// `method_param_modes`' keys by method name.
+    method_keys_by_name: FxHashMap<String, Vec<String>>,
     unit_variant_names: HashSet<String>,
     /// The program's constants: each use builds a fresh value, so a use
     /// moves nothing (design.md § Constants, B-2026-11-06-21).
@@ -99,11 +101,14 @@ impl ClassifierPrelude {
     /// value across every `classify_function_body_with` call for the
     /// same `(program, tc)`.
     pub fn new(program: &Program, tc: &TypeCheckResult) -> Self {
+        let method_param_modes = collect_method_param_modes(program);
+        let method_keys_by_name = crate::ownership::method_keys_by_name(&method_param_modes);
         ClassifierPrelude {
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
             trait_static_methods: collect_trait_static_methods(program),
-            method_param_modes: collect_method_param_modes(program),
+            method_param_modes,
+            method_keys_by_name,
             unit_variant_names: collect_unit_variant_names(tc),
             const_names: program
                 .items
@@ -304,6 +309,7 @@ pub fn classify_function_body_with(
         callee_param_modes: &prelude.callee_param_modes,
         trait_static_methods: &prelude.trait_static_methods,
         method_param_modes: &prelude.method_param_modes,
+        method_keys_by_name: &prelude.method_keys_by_name,
         unit_variant_names: &prelude.unit_variant_names,
         const_names: &prelude.const_names,
         ref_bindings: &prelude.ref_bindings,
@@ -350,6 +356,7 @@ struct UseClassifier<'a> {
     callee_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
     trait_static_methods: &'a FxHashMap<String, Vec<String>>,
     method_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
+    method_keys_by_name: &'a FxHashMap<String, Vec<String>>,
     unit_variant_names: &'a HashSet<String>,
     const_names: &'a HashSet<String>,
     ref_bindings: &'a FxHashSet<SpanKey>,
@@ -2367,6 +2374,7 @@ impl<'a> UseClassifier<'a> {
         if let ExprKind::MethodCall { method, .. } = &method_call.kind {
             return crate::ownership::arg_is_borrow_by_method_name(
                 self.method_param_modes,
+                self.method_keys_by_name,
                 method,
                 arg_index,
             );

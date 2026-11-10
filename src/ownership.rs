@@ -245,17 +245,28 @@ pub(crate) fn is_place_projection(e: &Expr) -> bool {
     }
 }
 
+/// The keys of a `"Type.method"` table by the method's name.
+pub(crate) fn method_keys_by_name<V>(
+    table: &FxHashMap<String, V>,
+) -> FxHashMap<String, Vec<String>> {
+    let mut out: FxHashMap<String, Vec<String>> = FxHashMap::default();
+    for key in table.keys() {
+        if let Some((_, name)) = key.rsplit_once('.') {
+            out.entry(name.to_string()).or_default().push(key.clone());
+        }
+    }
+    out
+}
+
 pub(crate) fn arg_is_borrow_by_method_name(
     method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
+    keys_by_name: &FxHashMap<String, Vec<String>>,
     method: &str,
     arg_index: usize,
 ) -> bool {
-    let suffix = format!(".{method}");
     let mut saw_borrow = false;
-    for (key, modes) in method_param_modes {
-        if !key.ends_with(&suffix) {
-            continue;
-        }
+    let keys = keys_by_name.get(method).map_or(&[][..], Vec::as_slice);
+    for modes in keys.iter().filter_map(|k| method_param_modes.get(k)) {
         match modes.get(arg_index) {
             Some(OwnershipMode::Ref | OwnershipMode::MutRef) => saw_borrow = true,
             // An owned same-named arg → ambiguous; stay with the conservative
@@ -1967,6 +1978,10 @@ pub struct OwnershipChecker<'a> {
     /// `mut Slice` method arg be a borrow (read), not a consume — without it
     /// a borrowed struct arg was spuriously RC-promoted (B-2026-06-12-8).
     pub(crate) method_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
+    /// The keys of `method_param_modes` by method name (`"Vec.push"` under
+    /// `push`): a lookup by name reads its few entries rather than walking
+    /// every method of the program and the library (B-2026-11-10-29).
+    pub(crate) method_keys_by_name: FxHashMap<String, Vec<String>>,
     /// Callee name → per-position "is the formal a slice?" flag. `Some(true)`
     /// for `mut Slice[T]`, `Some(false)` for `Slice[T]`, `None` for
     /// non-slice formals. Drives the Slice 1 call-arg coercion site
@@ -2418,6 +2433,8 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     pub fn new(program: &'a Program, typecheck_result: &'a TypeCheckResult) -> Self {
+        let method_param_modes = collect_method_param_modes(program);
+        let method_keys_by_name = method_keys_by_name(&method_param_modes);
         OwnershipChecker {
             program,
             typecheck_result,
@@ -2482,7 +2499,8 @@ impl<'a> OwnershipChecker<'a> {
             imported_names: crate::use_classifier::collect_imported_names_pub(program)
                 .into_iter()
                 .collect(),
-            method_param_modes: collect_method_param_modes(program),
+            method_param_modes,
+            method_keys_by_name,
             callee_param_slice_kind: collect_callee_param_slice_kind(program),
             callee_existential_capture_indices: collect_callee_existential_capture_indices(
                 program,
