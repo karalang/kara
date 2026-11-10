@@ -876,6 +876,30 @@ mod once_fn_container_slot_tests {
     }
 
     #[test]
+    fn vec_fn_push_rejects_oncefn_closure_with_untyped_param_once() {
+        // Kata 2059: a closure with an unannotated parameter pushed into a
+        // `Vec[Fn(..)]` is checked against the element so the parameter
+        // takes the element's type. That check refuses a once-callable
+        // closure itself, so the slot check after it must not refuse it a
+        // second time.
+        let src = "struct Cfg { name: i64 }\n\
+                   fn apply(c: Cfg) -> i64 { 0 }\n\
+                   fn main() {\n\
+                       let cfg = Cfg { name: 7 };\n\
+                       let mut v: Vec[Fn(i64) -> i64] = Vec.new();\n\
+                       v.push(|x| apply(cfg) + x);\n\
+                   }";
+        let result = typecheck_src(src);
+        let hits = errors_of_kind(&result, &TypeErrorKind::OnceFnIntoFnSlot);
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected exactly one OnceFnIntoFnSlot error; all errors: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
     fn vec_fn_push_rejects_oncefn_closure_literal() {
         // `Vec[Fn()]` element slot — pushing a once-callable closure must
         // reject at the call site of `.push` because the slot promises

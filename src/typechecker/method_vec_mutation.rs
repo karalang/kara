@@ -127,6 +127,20 @@ impl<'a> super::TypeChecker<'a> {
                             ) || matches!(&elem, Type::Array { .. }))
                     }
                     ExprKind::Identifier(n) => n == "None",
+                    // A closure into a function-typed element takes its
+                    // parameter types from the element, as a closure passed
+                    // for a function parameter does (`ops.push(|x, n| x + n)`
+                    // on a `Vec[Fn(i64, i64) -> i64]`, kata 2059). Only a
+                    // closure with an unannotated parameter needs it; the
+                    // rest keep the inferred path, whose slot check still
+                    // refuses a once-callable closure in a `Fn` slot (E0235).
+                    ExprKind::Closure { params, .. } => {
+                        params.iter().any(|p| p.ty.is_none())
+                            && matches!(
+                                resolve_type_var_top(&elem, &self.env.substitutions),
+                                Type::Function { .. }
+                            )
+                    }
                     // A literal into a `Str` slot is a `Str` (B-2026-10-14-68).
                     ExprKind::StringLit(_) => super::exprs::is_str_view(&resolve_type_var_top(
                         &elem,
@@ -183,7 +197,15 @@ impl<'a> super::TypeChecker<'a> {
                     let slot = resolve_type_var_top(&elem, &self.env.substitutions);
                     self.check_expr(&args[0].value, &slot)
                 } else if open_value && super::exprs::expectation_is_concrete(&elem) {
-                    self.check_expr(&args[0].value, &elem)
+                    let checked = self.check_expr(&args[0].value, &elem);
+                    // A closure checked against the slot has had its slot
+                    // check there (E0235 for a once-callable one); the
+                    // assignability check below would report it twice.
+                    if matches!(args[0].value.kind, ExprKind::Closure { .. }) {
+                        elem.clone()
+                    } else {
+                        checked
+                    }
                 } else if number_branches {
                     self.check_expr(&args[0].value, &elem);
                     elem.clone()
