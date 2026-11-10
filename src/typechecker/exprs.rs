@@ -14849,8 +14849,13 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     // An open tuple literal's numbers are open too: `v.push((1,
                     // 2))` on a `Vec.new()` later handed to a `Vec[(i64,
-                    // u64)]` (design.md §8, B-2026-11-08-42).
-                    let open = self.open_tuple_literal == Some(expr.id) && !expr.id.is_dummy();
+                    // u64)]` (design.md §8, B-2026-11-08-42). So are those of
+                    // a tuple a later use may fix as a whole, a `let`'s value
+                    // or a pushed element (`let t = (0, 0)`, `heap.push((0,
+                    // 0))`): a tuple of literals is literals (B-2026-11-10-40).
+                    let open = (self.open_tuple_literal == Some(expr.id)
+                        || self.open_literal_expr == Some(expr.id))
+                        && !expr.id.is_dummy();
                     let types: Vec<Type> = exprs
                         .iter()
                         .map(|e| {

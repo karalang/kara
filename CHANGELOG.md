@@ -290,6 +290,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   the closure passed to it, so the next iteration's closure conflicted. A
   value whose type has no place for a closure now keeps only what the
   closure holds (B-2026-11-10-24).
+- A tuple literal's numbers were fixed as `i64` where they were written:
+  `let t = (0, 0); let (d, u) = t; take_i32(d)` and a Dijkstra that
+  pushes `(0, 0)` into a `PriorityQueue` and returns the popped distance
+  from an `i32` function were refused as narrowing. A tuple of literals is
+  literals now, open in a `let` and in a push until a use fixes them, as a
+  bare literal is (B-2026-11-10-40).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket
