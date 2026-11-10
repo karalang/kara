@@ -128,3 +128,14 @@ impl[T, E] Result[T, E] {
         }
     }
 }
+
+impl[T: Default, E] Result[T, E] {
+    /// The value, or `T`'s default on `Err`, as `Option.unwrap_or_default`
+    /// gives it on `None` (B-2026-11-10-46).
+    fn unwrap_or_default(own self) -> T {
+        match self {
+            Ok(x) => x,
+            Err(_) => T.default(),
+        }
+    }
+}

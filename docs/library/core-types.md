@@ -60,6 +60,7 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `expect_err` | `fn expect_err(own self, msg: Str) -> E` | Panics on `Ok` with `msg` |
 | `unwrap_or` | `fn unwrap_or(own self, default: own T) -> T` | |
 | `unwrap_or_else` | `fn unwrap_or_else(own self, f: own OnceFn(own E) -> T) -> T` | |
+| `unwrap_or_default` | `fn unwrap_or_default(own self) -> T where T: Default` | The error is dropped |
 
 `.context(msg)`, which turns an error into an `AnyError` with a context message, is in [design.md §10](../design.md#error-and-anyerror).
 
