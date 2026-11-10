@@ -447,6 +447,16 @@ fn route_heap(module: &Module<'_>) {
 /// 0.969x geomean, best 0.68x (kata 229), worst 1.05x.
 /// `KARAC_MIR_PHI_FOLD_THRESHOLD=<n>` sets another; 4 is LLVM's.
 ///
+/// A switch becomes a jump table only from 5 cases, not LLVM's 4 (GCC's
+/// x86 floor; aarch64 keeps its own). LLVM 22 proves `(state / 1024) % 4`
+/// is in [0, 3], so kata 155's `if op == 0 .. else if op == 1 .. else if
+/// op == 2 .. else` is a four-case switch with an unreachable default,
+/// and its one indirect jump on random data cost 690 ms against legacy's
+/// 233; at 5 it compares, 237 ms (B-2026-11-05-27). Over the 707
+/// frozen-set programs on x86, 127 build differently, 0.979x geomean,
+/// worst about 1.1x (kata 394, 6, 224) where a jump table over predictable
+/// text beat the compares. `KARAC_MIR_JUMP_TABLE_MIN=<n>` sets another.
+///
 /// `KARAC_MIR_ALIGN_BRANCHES=1` also keeps x86 jumps from crossing or
 /// ending on a 32-byte line (clang's `-mbranches-within-32B-boundaries`:
 /// the assembler pads, nothing else changes). It is off by default
@@ -490,6 +500,13 @@ fn unroll_threshold() {
                 );
             }
         }
+        let table = std::env::var("KARAC_MIR_JUMP_TABLE_MIN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(5);
+        args.push(
+            std::ffi::CString::new(format!("-min-jump-table-entries={table}")).unwrap_or_default(),
+        );
         let fold = std::env::var("KARAC_MIR_PHI_FOLD_THRESHOLD")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
