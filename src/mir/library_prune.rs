@@ -14,7 +14,9 @@
 //! without its name being written, so these are always kept:
 //!
 //! - every name in [`ALWAYS_KEPT`], the methods the compiler calls for an
-//!   operator, a `for` loop, `?`, an f-string, a derive or a drop;
+//!   operator, a `for` loop, `?`, an f-string, a derive or a drop, except
+//!   that one in [`ANSWERED_WHEN_SPELLED`] keeps a library trait's default
+//!   body only when it is spelled;
 //! - a trait method without a default body, and every impl's definition of
 //!   it (dropping one would leave an impl incomplete);
 //! - a method of an impl of a trait the library does not define, since
@@ -172,6 +174,30 @@ const ALWAYS_KEPT: &[&str] = &[
     "context",
 ];
 
+/// Names in [`ALWAYS_KEPT`] the compiler answers, natively or by
+/// rewriting, only at a call the program or a kept library body spells; it
+/// never calls one on its own. A library trait's default method of one of
+/// these names (`Iterator.min`, `ExactSizeIterator.is_empty`), and an
+/// impl's own definition of it, is therefore kept only when the name is
+/// spelled. Kept through [`ALWAYS_KEPT`], each default was copied into
+/// every kept impl of its trait and checked there, a program naming none
+/// of them included: 11 defaults times about 26 iterator impls, the bulk
+/// of an empty program's library typecheck (B-2026-11-10-38). Every other
+/// method of these names (`Vec.last`, `i64.max`) is still always kept.
+const ANSWERED_WHEN_SPELLED: &[&str] = &[
+    "min",
+    "max",
+    "sum",
+    "count",
+    "last",
+    "find",
+    "collect",
+    "cloned",
+    "take",
+    "enumerate",
+    "is_empty",
+];
+
 /// Built-in collections a program has a value of only by naming one, since
 /// no literal builds one unless an annotation or signature names it: their
 /// library impls go with the name, as a library type's do (`Vec`, `Map`
@@ -256,6 +282,8 @@ struct Method {
     text: (usize, usize),
     /// Kept whatever the program says (see the module docs).
     pinned: bool,
+    /// A library trait's default body, or an impl's definition of one.
+    trait_default: bool,
     kept: bool,
 }
 
@@ -332,7 +360,8 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
     for (k, it) in lib_items().enumerate() {
         let start = starts[k];
         let end = starts.get(k + 1).copied().unwrap_or(src.len()).max(start);
-        let mut method_spans: Vec<(String, usize, bool)> = Vec::new();
+        // Name, offset, pinned, a library trait's default.
+        let mut method_spans: Vec<(String, usize, bool, bool)> = Vec::new();
         let kind = match it {
             // The compiler calls several by name (`parse_result_int` decides
             // what `i64.parse` returns), so one is kept without its name
@@ -364,14 +393,17 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
                     .map(|p| defaults.get(p.segments.last().map_or("", String::as_str)));
                 for ii in &imp.items {
                     if let ImplItem::Method(m) = ii {
-                        let pinned = match trait_defaults {
+                        let (pinned, trait_default) = match trait_defaults {
                             // An inherent method.
-                            None => false,
+                            None => (false, false),
                             // A trait the library does not define.
-                            Some(None) => true,
-                            Some(Some(d)) => !d.contains(m.name.as_str()),
+                            Some(None) => (true, false),
+                            Some(Some(d)) => {
+                                let default = d.contains(m.name.as_str());
+                                (!default, default)
+                            }
                         };
-                        method_spans.push((m.name.clone(), m.span.offset, pinned));
+                        method_spans.push((m.name.clone(), m.span.offset, pinned, trait_default));
                     }
                 }
                 match last_segment(&imp.target_type) {
@@ -384,7 +416,8 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
             Item::TraitDef(t) => {
                 for ti in &t.items {
                     if let TraitItem::Method(m) = ti {
-                        method_spans.push((m.name.clone(), m.span.offset, m.body.is_none()));
+                        let default = m.body.is_some();
+                        method_spans.push((m.name.clone(), m.span.offset, !default, default));
                     }
                 }
                 Kind::Always
@@ -409,10 +442,11 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
         let methods = method_spans
             .iter()
             .enumerate()
-            .map(|(j, (name, off, pinned))| Method {
+            .map(|(j, (name, off, pinned, trait_default))| Method {
                 name: name.clone(),
                 text: (*off, method_spans.get(j + 1).map_or(end, |n| n.1)),
                 pinned: *pinned,
+                trait_default: *trait_default,
                 kept: false,
             })
             .collect();
@@ -429,7 +463,14 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
     // only a comment names (B-2026-10-28-37).
     let blanked = without_comments(src);
     let src = blanked.as_str();
-    let mut reached: FxHashSet<String> = ALWAYS_KEPT.iter().map(|s| s.to_string()).collect();
+    // The names in `ANSWERED_WHEN_SPELLED` enter only when spelled; the
+    // methods they keep anyway are judged below.
+    let answered: FxHashSet<&str> = ANSWERED_WHEN_SPELLED.iter().copied().collect();
+    let mut reached: FxHashSet<String> = ALWAYS_KEPT
+        .iter()
+        .filter(|s| !answered.contains(*s))
+        .map(|s| s.to_string())
+        .collect();
     words(&src[..user_len.min(src.len())], &mut reached);
     // A gated module the program imports (`std.log`, `std.path`) is checked
     // with it but is not in `src`, so what the module names is reached as
@@ -477,7 +518,9 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
                 p.kept = match &p.kind {
                     Kind::ImplOf(n) | Kind::Type(n) => is_reached(&reached, n),
                     Kind::Fn { name, over } => {
-                        is_reached(&reached, name) || over.iter().all(|t| is_reached(&reached, t))
+                        is_reached(&reached, name)
+                            || answered.contains(name.as_str())
+                            || over.iter().all(|t| is_reached(&reached, t))
                     }
                     Kind::Always => true,
                 };
@@ -490,7 +533,11 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
                 continue;
             }
             for m in p.methods.iter_mut() {
-                if !m.kept && (m.pinned || reached.contains(&m.name)) {
+                if !m.kept
+                    && (m.pinned
+                        || reached.contains(&m.name)
+                        || (!m.trait_default && answered.contains(m.name.as_str())))
+                {
                     m.kept = true;
                     changed = true;
                     words(text(m.text), &mut reached);
@@ -646,6 +693,49 @@ mod tests {
         assert_eq!(left(deque, HEAP), ["size", "deque_size", "plain"]);
         let by_name = "fn main() {\n    deque_size(make());\n}\n";
         assert_eq!(left(by_name, HEAP), ["size", "deque_size", "plain"]);
+    }
+
+    /// A library trait's default named in [`ANSWERED_WHEN_SPELLED`] is kept,
+    /// with an impl's own definition of it, only when spelled; an inherent
+    /// method of that name is still always kept (B-2026-11-10-38).
+    #[test]
+    fn an_answered_name_keeps_a_trait_default_only_when_spelled() {
+        let lib = "trait Walk {\n    fn next(self) -> i64;\n    fn count(self) -> i64 {\n        0\n    }\n}\n\
+            struct W {\n    x: i64,\n}\n\
+            impl Walk for W {\n    fn next(self) -> i64 {\n        self.x\n    }\n    fn count(self) -> i64 {\n        1\n    }\n}\n\
+            impl W {\n    fn last(self) -> i64 {\n        self.x\n    }\n}\n";
+        let trait_methods = |user: &str| {
+            let src = format!("{user}{lib}");
+            let mut program = crate::parse(&src).program;
+            prune(&mut program, &src, user.len());
+            program
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::TraitDef(t) => Some(t.items.iter().filter_map(|ti| match ti {
+                        TraitItem::Method(m) => Some(m.name.clone()),
+                        _ => None,
+                    })),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<_>>()
+        };
+        let unspelled = "fn main() {\n    let w = W { x: 1 };\n}\n";
+        assert_eq!(left(unspelled, lib), ["next", "last"]);
+        assert_eq!(trait_methods(unspelled), ["next"]);
+        let spelled = "fn main() {\n    let w = W { x: 1 };\n    w.count();\n}\n";
+        assert_eq!(left(spelled, lib), ["next", "count", "last"]);
+        assert_eq!(trait_methods(spelled), ["next", "count"]);
+    }
+
+    /// [`ANSWERED_WHEN_SPELLED`] narrows [`ALWAYS_KEPT`], so each of its names
+    /// is one of those.
+    #[test]
+    fn answered_names_are_always_kept_names() {
+        for n in ANSWERED_WHEN_SPELLED {
+            assert!(ALWAYS_KEPT.contains(n), "{n} is not in ALWAYS_KEPT");
+        }
     }
 
     /// A library method the MIR builder or backend names in a string literal
