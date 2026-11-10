@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::token::Span;
 
-use super::{ResolveError, ResolveErrorKind, ScopeKind, SymbolId, SymbolKind};
+use super::{ResolveError, ResolveErrorKind, ScopeKind, SymbolId, SymbolKind, TextEdit};
 
 impl<'a> super::Resolver<'a> {
     // ── Pass 2: Resolve all items ───────────────────────────────
@@ -604,6 +604,50 @@ impl<'a> super::Resolver<'a> {
         });
     }
 
+    /// LeetCode's Rust template is `impl Solution { pub fn f(..) }` with
+    /// the `struct Solution;` the site supplies left out (kata 1092). When an
+    /// inherent, non-generic impl names a type nothing declares and none of
+    /// its methods takes `self`, the type's only use is as a namespace, so
+    /// `karac fix` declares it as an empty struct above the impl
+    /// (B-2026-11-10-21). The error `resolve_type_expr` just pushed for the
+    /// target, the only one since `before`, takes the edit.
+    fn declare_missing_impl_target(&mut self, imp: &ImplBlock, before: usize) {
+        if imp.trait_name.is_some()
+            || imp.generic_params.is_some()
+            || self.errors.len() != before + 1
+        {
+            return;
+        }
+        let TypeKind::Path(path) = &imp.target_type.kind else {
+            return;
+        };
+        if path.segments.len() != 1 || path.generic_args.as_ref().is_some_and(|a| !a.is_empty()) {
+            return;
+        }
+        let only_namespace = imp.items.iter().all(|i| match i {
+            ImplItem::Method(f) => f.self_param.is_none(),
+            ImplItem::AssocType(_) => false,
+        });
+        let err = &mut self.errors[before];
+        if !only_namespace
+            || !matches!(err.kind, ResolveErrorKind::UndefinedType)
+            || err.replacement.is_some()
+        {
+            return;
+        }
+        let name = &path.segments[0];
+        err.message = format!(
+            "undefined type '{name}': nothing declares it, and its impl's functions take no \
+             `self`, so it is a namespace: declare it, `struct {name} {{}}` (LeetCode's Rust \
+             template leaves its `struct {name};` out)"
+        );
+        err.replacement = Some(Box::new(TextEdit {
+            offset: imp.span.offset,
+            length: 0,
+            replacement: format!("struct {name} {{}}\n\n"),
+        }));
+    }
+
     fn resolve_impl_block(&mut self, imp: &ImplBlock) {
         self.with_effect_vars(imp.generic_params.as_ref(), |r| {
             r.resolve_impl_block_scoped(imp)
@@ -629,7 +673,9 @@ impl<'a> super::Resolver<'a> {
         }
 
         // Resolve target type (may reference impl generic params)
+        let before = self.errors.len();
         self.resolve_type_expr(&imp.target_type);
+        self.declare_missing_impl_target(imp, before);
 
         // Resolve trait name
         if let Some(ref trait_path) = imp.trait_name {

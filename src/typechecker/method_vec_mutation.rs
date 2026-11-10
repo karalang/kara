@@ -1245,6 +1245,28 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether `src`, the argument of a `String`'s `extend`, is an iterator
+    /// whose items are `ref char`. Typed once here and kept when it is;
+    /// otherwise its diagnostics are dropped, for the impl dispatch that
+    /// types it again (B-2026-11-10-20).
+    pub(super) fn extends_by_lent_chars(&mut self, src: &Expr) -> bool {
+        let mark = (self.errors.len(), self.warnings.len());
+        let at = self.infer_expr(src);
+        let at = resolve_type_var_top(&at, &self.env.substitutions);
+        let lent = !matches!(at, Type::Ref(_) | Type::MutRef(_))
+            && self.extend_item_type(&at).is_some_and(|item| {
+                matches!(
+                    resolve_type_var_top(&item, &self.env.substitutions),
+                    Type::Ref(inner) if matches!(*inner, Type::Char)
+                )
+            });
+        if !lent {
+            self.errors.truncate(mark.0);
+            self.warnings.truncate(mark.1);
+        }
+        lent
+    }
+
     fn extend_item_type(&mut self, src: &Type) -> Option<Type> {
         match src {
             Type::Named { name, args } if name == "Iterator" && args.len() == 1 => {

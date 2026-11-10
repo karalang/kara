@@ -2242,6 +2242,17 @@ impl<'a> super::TypeChecker<'a> {
             self.option_unwrap_receivers
                 .insert(crate::resolver::SpanKey::from_span(&object.span));
         }
+        // `s.extend(chars.iter())`: `String`'s `Extend[char]` takes owned
+        // `char`s, and an iterator lending them is read out item by item, as
+        // a `Vec`'s `extend` reads a `Copy` item (B-2026-11-10-20). The MIR
+        // builder knows the call by the impl it does not record.
+        if method == "extend"
+            && args.len() == 1
+            && matches!(receiver_for_method_lookup(&obj_ty), Type::Str)
+            && self.extends_by_lent_chars(&args[0].value)
+        {
+            return Type::Unit;
+        }
         // A library type's method with a Kāra body (redesign A2) is typed
         // through that body's signature, so the call records the callee and
         // the method's own type arguments like any other source method.

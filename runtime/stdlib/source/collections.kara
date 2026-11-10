@@ -2067,6 +2067,18 @@ fn vec_extend_iter[T, I: Iterator](v: mut ref Vec[T], items: own I) {
     }
 }
 
+// `s.extend(chars.iter())`: an iterator lending `char`s, each read out as
+// `vec_extend_iter` reads a `Copy` item. The MIR builder calls it where the
+// typechecker took the call for one (B-2026-11-10-20); an iterator of owned
+// `char`s is `Extend[char]`'s.
+fn string_extend_iter[I: Iterator](s: mut ref String, items: own I) {
+    let mut it = items;
+    while let Some(x) = it.next() {
+        let c: char = iter_read_value(x);
+        s.push(c);
+    }
+}
+
 // A type that is `IntoIterator` and not itself an iterator gives its items
 // through `into_iter` (B-2026-10-20-32).
 fn vec_extend_into[T, C: IntoIterator[Item = T]](v: mut ref Vec[T], items: own C) {

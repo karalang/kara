@@ -22187,6 +22187,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let key = format!("{}.{method}", self.tys().display(base));
                 return self.builtin_method(e, &key, object, method, args, dest);
             }
+            // A `String` extended by an iterator lending `char`s, which the
+            // checker types without a callee: `Extend[char]` takes owned
+            // `char`s (B-2026-11-10-20).
+            if let ("extend", [src]) = (method, args) {
+                if matches!(self.strip_ty(rt), HK::Str) {
+                    return self.string_extend_lent_chars(object, src, dest);
+                }
+            }
             // `v.try_extend(src)`, which the checker types as `extend`'s
             // fallible companion without a callee of its own.
             if let ("try_extend", [_]) = (method, args) {
@@ -25744,6 +25752,45 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// (B-2026-10-13-19): a call of the library's `vec_extend_*` for that
     /// source, which moves each item onto the end. False when the native
     /// `extend` takes the source.
+    /// `s.extend(it)` for an iterator `it` lending `char`s: a call of the
+    /// library's `string_extend_iter` (B-2026-11-10-20).
+    fn string_extend_lent_chars(
+        &mut self,
+        object: &'a Expr,
+        src: &'a CallArg,
+        dest: Place,
+    ) -> R<()> {
+        let st = self.expr_ty(&src.value)?;
+        let Some(d) = self.lcx.defs.lookup(0, "string_extend_iter") else {
+            return self.unsupported(
+                src.value.span,
+                "`extend` without the library's `string_extend_iter`",
+            );
+        };
+        let inst_args = vec![st];
+        let f = self.lcx.fns[&d].f;
+        let recv = self.recv_place(object, true)?;
+        let pt = self.callee_param_ty(&f.params[1], &inst_args)?;
+        let pending = self.arg_pending(&src.value, pt)?;
+        let mut rest = self.finish_args(vec![pending])?;
+        let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+        ops.extend(rest);
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(())
+    }
+
     fn extend_from_iterable(
         &mut self,
         object: &'a Expr,
@@ -28080,6 +28127,7 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "iter_read_value",
     "iter_clone_value",
     "vec_extend_iter",
+    "string_extend_iter",
     "vec_extend_into",
     "vec_extend_set",
     "vec_extend_sorted_set",

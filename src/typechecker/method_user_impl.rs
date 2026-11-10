@@ -1002,8 +1002,13 @@ impl<'a> super::TypeChecker<'a> {
                     .iter()
                     .filter(|(imp, _)| {
                         let want = want(imp);
+                        // The item read through a borrow, as a `.iter()`
+                        // yields it: `s.extend(chars.iter())` is the
+                        // `Extend[char]` impl (B-2026-11-10-20).
                         types_compatible(&want, at)
-                            || (!matches!(item, Type::Error) && types_compatible(&want, item))
+                            || (!matches!(item, Type::Error)
+                                && (types_compatible(&want, item)
+                                    || types_compatible(&want, Self::peel_borrow(item))))
                     })
                     .cloned()
                     .collect()
