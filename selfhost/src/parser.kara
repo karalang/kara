@@ -3079,7 +3079,7 @@ impl Parser {
             };
             if next_is_brace {
                 self.advance(); // consume `.`
-                names = self.parse_import_group(name_spans);
+                names = self.parse_import_group(mut name_spans);
                 braced = true;
                 break;
             }

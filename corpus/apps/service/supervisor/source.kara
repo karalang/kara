@@ -503,11 +503,11 @@ fn give_up_or_retry(p: mut ref Prog, now: i64, why: Str) {
 
 fn finished(p: mut ref Prog, code: i64, now: i64) {
     let out = match p.out {
-        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(mut s); s },
         None => String.new(),
     };
     let err = match p.err {
-        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(mut s); s },
         None => String.new(),
     };
     p.child = None;

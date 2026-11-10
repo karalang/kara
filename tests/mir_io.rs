@@ -173,7 +173,7 @@ fn main() {
             match child.stdout() {
                 Some(out) => {
                     let mut s = String.new();
-                    match out.read_to_string(s) {
+                    match out.read_to_string(mut s) {
                         Ok(n) => println(f"read [{s}] {n}"),
                         Err(e) => println(show(e)),
                     }
@@ -202,7 +202,7 @@ fn main() {
             match child.stdout() {
                 Some(out) => {
                     let mut s = String.new();
-                    match out.read_to_string(s) {
+                    match out.read_to_string(mut s) {
                         Ok(_) => println(f"cat [{s}]"),
                         Err(e) => println(show(e)),
                     }
@@ -313,9 +313,9 @@ fn main() {
     c.wait().unwrap();
     let d = Command.new("printf").arg("\\377\\376").stdout(Stdio.piped()).stderr(Stdio.piped()).spawn().unwrap();
     let mut s = String.from("keep");
-    match d.stdout().unwrap().read_to_string(s) { Ok(_) => println("utf8?"), Err(e) => println(f"{show(e)} [{s}]") }
+    match d.stdout().unwrap().read_to_string(mut s) { Ok(_) => println("utf8?"), Err(e) => println(f"{show(e)} [{s}]") }
     let mut bytes: Vec[u8] = Vec.new();
-    let n = d.stderr().unwrap().read_to_end(bytes).unwrap();
+    let n = d.stderr().unwrap().read_to_end(mut bytes).unwrap();
     println(f"stderr bytes {n} {bytes.len()}");
     d.wait().unwrap();
     let e = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
@@ -1553,7 +1553,7 @@ fn main() {
     match fs.write(t, "a\nb\r\nc") { Ok(_) => {}, Err(_) => println("w") }
     match File.open(t) {
         Ok(f) => {
-            let r = BufReader.with_capacity(f, 2);
+            let mut r = BufReader.with_capacity(f, 2);
             let mut s = String.new();
             let n: i64 = r.read_line(mut s).unwrap_or(-1);
             println(f"{n} [{s.trim()}]");
@@ -1578,7 +1578,7 @@ fn main() {
     print(fs.read_to_string(u).unwrap_or(String.new()));
     match File.open(u) {
         Ok(f) => {
-            let r = BufReader.new(f);
+            let mut r = BufReader.new(f);
             let mut buf: Vec[u8] = vec![0; 3];
             let n = r.read(mut buf).unwrap_or(-1);
             println(f"read {n} {buf[0]}");
@@ -2024,7 +2024,7 @@ fn main() {
     println(f"sh {c.wait().unwrap().success()}");
     let sort = Command.new("sort").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
     feed(sort);
-    let r = BufReader.with_capacity(sort.stdout().unwrap(), 4);
+    let mut r = BufReader.with_capacity(sort.stdout().unwrap(), 4);
     let mut first = String.new();
     let n = r.read_line(mut first).unwrap();
     print(f"first {n} {first}");

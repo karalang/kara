@@ -6,7 +6,7 @@ fn main() {
             match child.stdout() {
                 Some(o) => {
                     let mut text = String.new();
-                    match o.read_to_string(text) {
+                    match o.read_to_string(mut text) {
                         Ok(_) => println(f"out={text}"),
                         Err(e) => println("read failed"),
                     }
@@ -33,7 +33,7 @@ fn main() {
             match child.stdout() {
                 Some(o) => {
                     let mut text = String.new();
-                    match o.read_to_string(text) {
+                    match o.read_to_string(mut text) {
                         Ok(_) => println(f"env={text}"),
                         Err(e) => println("env read failed"),
                     }
@@ -67,7 +67,7 @@ fn main() {
             match child.stdout() {
                 Some(o) => {
                     let mut text = String.new();
-                    match o.read_to_string(text) {
+                    match o.read_to_string(mut text) {
                         Ok(_) => println(f"cat={text}"),
                         Err(e) => println("cat read failed"),
                     }

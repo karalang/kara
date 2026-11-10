@@ -3773,7 +3773,7 @@ fn synthesize_user_hash_byte_wrappers(program: &mut Program) {
         src.push_str(&format!(
             "fn karac_hash_bytes_of_{t}(k: ref {t}) -> Vec[u8] {{\n\
              \x20   let mut s = KeyByteSink {{ bytes: [] }};\n\
-             \x20   k.hash(s);\n\
+             \x20   k.hash(mut s);\n\
              \x20   return s.bytes;\n\
              }}\n"
         ));

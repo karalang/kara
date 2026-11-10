@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
+use crate::typechecker::Type;
 
 use super::{
     borrow_kind_display, slice_conflict_message, stdlib_method_self_borrow_kind, ActiveBorrow,
@@ -184,6 +185,50 @@ impl<'a> super::OwnershipChecker<'a> {
     /// writes the argument's place. Resolved like
     /// [`Self::method_arg_is_borrow_position`]: the span-resolved method
     /// first, else any method of that name with a `mut ref` there.
+    /// An argument at a method's `mut ref` parameter with no `mut` marker,
+    /// from a place that is not itself a `mut ref` (a forwarded one follows
+    /// the free-function rule, strict check only), when the method resolves
+    /// to its own signature (B-2026-11-09-100).
+    pub(crate) fn note_unmarked_method_mut_arg(
+        &mut self,
+        method_call: &Expr,
+        arg_index: usize,
+        arg: &Expr,
+        param_types: &HashMap<String, Type>,
+    ) {
+        let precise = self
+            .resolved_method_mode_key(method_call)
+            .and_then(|key| self.method_param_modes.get(key))
+            .and_then(|modes| modes.get(arg_index))
+            .is_some_and(|m| matches!(m, OwnershipMode::MutRef));
+        if !precise || self.fn_allows_deprecated {
+            return;
+        }
+        let forwards = |t: &Type| matches!(t, Type::MutRef(_) | Type::Slice { mutable: true, .. });
+        // A range index's `mut Slice` is made at this call, of its base.
+        let range = matches!(&arg.kind,
+            ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }));
+        let arg_ty = self
+            .typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(&arg.span));
+        if !range && arg_ty.is_some_and(forwards) {
+            return;
+        }
+        // Classified by the place's root, as `is_arg_forwarded` does for a
+        // free function's argument.
+        if let Some(root) = Self::root_identifier(arg) {
+            let root_ty = self
+                .binding_types
+                .get(&root)
+                .or_else(|| param_types.get(&root));
+            if root_ty.is_some_and(forwards) {
+                return;
+            }
+        }
+        self.unmarked_method_mut_args.push(arg.span);
+    }
+
     pub(crate) fn method_arg_is_mut_ref(&self, method_call: &Expr, arg_index: usize) -> bool {
         if let Some(m) = self
             .resolved_method_mode_key(method_call)

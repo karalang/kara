@@ -1061,6 +1061,11 @@ pub struct OwnershipCheckResult {
     /// as `mut`. The CLI reports them at the lint's level with a fix that
     /// deletes the `mut`, since only it holds the source text.
     pub unused_muts: Vec<UnusedMut>,
+    /// Arguments at a method's `mut ref` parameter written without the
+    /// call-site `mut` marker, from a place that is not itself a `mut ref`
+    /// (design.md § Call-site `mut` markers). A deprecation in 0.8.x, an
+    /// error at the next minor (B-2026-11-09-100).
+    pub unmarked_method_mut_args: Vec<Span>,
     /// RC-elision safety set (env `KARAC_RC_ELIDE_REF_PARAMS`): function name →
     /// `(param_name, position)` of every `Ref`-mode parameter that is sound to
     /// RC-elide — no call site passes it a fresh rvalue and its function never
@@ -1926,7 +1931,10 @@ pub struct OwnershipChecker<'a> {
     /// The `unused_mut` level the current function's or `impl` block's
     /// attribute gives.
     fn_unused_mut_level: Option<crate::lints::LintLevel>,
+    /// `#[allow(deprecated)]` (or `expect`) on the function or its `impl`.
+    fn_allows_deprecated: bool,
     unused_muts: Vec<UnusedMut>,
+    unmarked_method_mut_args: Vec<Span>,
     /// `Type.method` → declared receiver mode (`self` / `ref self` /
     /// `mut ref self`). Populated once at construction by walking the
     /// program's impl blocks and trait declarations. Consulted at every
@@ -2125,9 +2133,6 @@ impl<'a> OwnershipChecker<'a> {
         message: String,
     ) {
         self.mark_mut_let_written_through(name, false);
-        let Some(let_span) = self.immutable_lets.get(name).cloned() else {
-            return;
-        };
         // A binding whose type is itself a reference handle (`mut ref T` from
         // `map.entry(k).or_insert(v)`, a raw `*mut T` from `as_mut_ptr()`, a
         // `shared`/`Rc`/`Arc` value) names a referent it does not own. Every
@@ -2138,6 +2143,21 @@ impl<'a> OwnershipChecker<'a> {
         if self.binding_is_reference_handle(name) {
             return;
         }
+        self.report_immutable_binding_error(name, write_span, kind, message);
+    }
+
+    /// The error for a write to `name`, a `let` without `mut`, with the fix
+    /// that adds it. Nothing when `name` is no such binding.
+    fn report_immutable_binding_error(
+        &mut self,
+        name: &str,
+        write_span: &Span,
+        kind: OwnershipErrorKind,
+        message: String,
+    ) {
+        let Some(let_span) = self.immutable_lets.get(name).cloned() else {
+            return;
+        };
         self.errors.push(OwnershipError {
             message: format!(
                 "{} — `{}` is declared without `mut` at line {}:{}",
@@ -2278,7 +2298,30 @@ impl<'a> OwnershipChecker<'a> {
                 self.mark_mut_let_written_through(&root, whole);
             }
         }
-        if !arg.mut_marker || self.place_writes_through_shared(&arg.value) {
+        if !arg.mut_marker {
+            return;
+        }
+        // The bare binding marked `mut` is lent itself, not its referent: a
+        // `shared` value (or any handle that is not a `mut ref` or `mut
+        // Slice`, which forward their borrow) can be rebound by the callee
+        // (`*t = n`), which is what `let mut` licenses (design.md § Call-site `mut`
+        // markers; B-2026-11-10-22).
+        if let ExprKind::Identifier(name) = &arg.value.kind {
+            let forwards = matches!(
+                self.binding_types.get(name),
+                Some(Type::MutRef(_) | Type::Slice { mutable: true, .. })
+            );
+            if !forwards && self.binding_is_reference_handle(name) {
+                self.report_immutable_binding_error(
+                    name,
+                    &arg.value.span,
+                    OwnershipErrorKind::MutateImmutableBinding,
+                    format!("cannot pass `{name}` as `mut`"),
+                );
+                return;
+            }
+        }
+        if self.place_writes_through_shared(&arg.value) {
             return;
         }
         // A marked argument that is itself a `mut ref` / `mut Slice` (`h.1`
@@ -2430,7 +2473,9 @@ impl<'a> OwnershipChecker<'a> {
             immutable_lets: FxHashMap::default(),
             fn_mut_lets: FxHashMap::default(),
             fn_unused_mut_level: None,
+            fn_allows_deprecated: false,
             unused_muts: Vec::new(),
+            unmarked_method_mut_args: Vec::new(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
             trait_static_methods: collect_trait_static_methods(program),
@@ -2697,6 +2742,7 @@ impl<'a> OwnershipChecker<'a> {
             param_mode_derivation: self.param_mode_derivation,
             use_after_move_consume_sites,
             unused_muts: std::mem::take(&mut self.unused_muts),
+            unmarked_method_mut_args: std::mem::take(&mut self.unmarked_method_mut_args),
             elidable_ref_params,
             closure_param_modes: self.closure_param_modes,
             closure_captures: self.closure_captures,
@@ -3362,6 +3408,12 @@ impl<'a> OwnershipChecker<'a> {
             crate::lints::attr_level(&f.attributes, "unused_mut").or_else(|| {
                 impl_block.and_then(|i| crate::lints::attr_level(&i.attributes, "unused_mut"))
             });
+        self.fn_allows_deprecated = matches!(
+            crate::lints::attr_level(&f.attributes, "deprecated").or_else(|| {
+                impl_block.and_then(|i| crate::lints::attr_level(&i.attributes, "deprecated"))
+            }),
+            Some(crate::lints::LintLevel::Allow | crate::lints::LintLevel::Expect)
+        );
         self.suppress_rc_notes = f.attributes.iter().any(|a| {
             a.is_bare("allow")
                 && a.args.iter().any(|arg| {

@@ -16,7 +16,7 @@ impl NetworkProvider for Loop {
 
 fn peek(s: ref TcpStream) -> i64 {
     let mut b = [0u8; 2];
-    match s.read(b[..]) {
+    match s.read(mut b[..]) {
         Ok(n) => n,
         Err(_) => -1,
     }

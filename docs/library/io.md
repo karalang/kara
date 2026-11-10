@@ -4,7 +4,7 @@
 
 **Effects.** Each function lists its effects ([design.md §12](../design.md#resources)):
 - **`FileSystem` and `Network` are capabilities**, not conflict keys: `reads(FileSystem)` means "may read files" and `sends(Network)` "may use the network". Path-taking functions such as `fs.write(path, content)` carry `writes(FileSystem)` (and `blocks`, like all I/O) and do not conflict with each other, so two `par` branches that write the same path by name are not detected.
-- **An open file or connection is keyed by its value**: `f.write(buf)` has `writes(f)` and `conn.read(buf)` has `receives(conn)`. Operations on two different files or connections do not conflict, and conflicting operations on the same one do ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10), item 5).
+- **An open file or connection is keyed by its value**: `f.write(buf)` has `writes(f)` and `conn.read(mut buf)` has `receives(conn)`. Operations on two different files or connections do not conflict, and conflicting operations on the same one do ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10), item 5).
 - **The standard streams** are the resources `Stdin`, `Stdout` and `Stderr`.
 
 ## Standard streams

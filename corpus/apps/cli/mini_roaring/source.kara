@@ -1372,7 +1372,7 @@ fn main() {
             continue;
         }
         out.push(f"> {t}");
-        if let Err(e) = s.job(t, out) {
+        if let Err(e) = s.job(t, mut out) {
             out.push(f"! {e}");
         }
     }

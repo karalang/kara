@@ -852,15 +852,23 @@ impl<'a> super::OwnershipChecker<'a> {
                     || self
                         .typecheck_result
                         .receiver_write_calls
-                        .contains(&SpanKey::from_span(&expr.span))
+                        .contains_key(&SpanKey::from_span(&expr.span))
                 {
                     if let Some(root) = Self::root_identifier(object) {
                         let whole = matches!(object.kind, ExprKind::Identifier(_));
                         self.mark_mut_let_written_through(&root, whole);
                     }
                 }
+                // A library method the table above does not list
+                // (`VecDeque.push_back`) is read off its baked impl by the
+                // strict check, which records the call (B-2026-11-09-101).
                 if (range_view_write
-                    || matches!(self.method_self_borrow_kind(expr), Some(BorrowKind::MutRef)))
+                    || matches!(self.method_self_borrow_kind(expr), Some(BorrowKind::MutRef))
+                    || self
+                        .typecheck_result
+                        .receiver_write_calls
+                        .get(&SpanKey::from_span(&expr.span))
+                        .is_some_and(|known| *known))
                     && !self.receiver_is_shared_handle(object)
                 {
                     if let Some(root_name) = Self::root_identifier(object) {
@@ -958,6 +966,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             let whole = matches!(arg.value.kind, ExprKind::Identifier(_));
                             self.mark_mut_let_written_through(&root, whole);
                         }
+                        self.note_unmarked_method_mut_arg(expr, i, &arg.value, param_types);
                     }
                 }
                 // B-2026-10-15-12: a closure

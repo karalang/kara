@@ -1338,7 +1338,7 @@ impl Client {
         let mut pkg = new_pkg(id);
         pkg.filename = Some(filename.to_string());
         pkg.pc_filedir = dir.clone();
-        self.add_var(pkg.vars, "pcfiledir", path_to_value(dir), true);
+        self.add_var(mut pkg.vars, "pcfiledir", path_to_value(dir), true);
         let b = to_bytes(text);
         let mut pos: i64 = 0;
         let mut lineno: i64 = 0;
@@ -1348,7 +1348,7 @@ impl Client {
                 None => break,
             };
             lineno += 1;
-            self.parse_line(pkg, lineno, line);
+            self.parse_line(mut pkg, lineno, line);
         }
         let mut valid = true;
         if pkg.realname.is_none() {

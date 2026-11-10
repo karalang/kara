@@ -278,7 +278,7 @@ impl DocTree {
 
     fn render(ref self) -> Vec[String] {
         let mut lines: Vec[String] = Vec.new();
-        self.render_into(self.root, 0, lines);
+        self.render_into(self.root, 0, mut lines);
         lines
     }
 

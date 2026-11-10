@@ -7,7 +7,7 @@ fn main() {
     let mut d: VecDeque[String] = VecDeque.new();
     d.push_back("b".to_string());
     d.push_front("a".to_string());
-    let e: VecDeque[String] = ["a".to_string(), "b".to_string()].into_iter().collect();
+    let mut e: VecDeque[String] = ["a".to_string(), "b".to_string()].into_iter().collect();
     let empty: VecDeque[i64] = VecDeque.new();
     println(f"{d} {empty} {d == e} {d < e}");
     e.push_back("c".to_string());

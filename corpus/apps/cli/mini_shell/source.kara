@@ -398,11 +398,11 @@ impl Shell {
             None => {}
         }
         let out = match child.stdout() {
-            Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
+            Some(r) => { let mut s = String.new(); let _ = r.read_to_string(mut s); s },
             None => String.new(),
         };
         let err = match child.stderr() {
-            Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
+            Some(r) => { let mut s = String.new(); let _ = r.read_to_string(mut s); s },
             None => String.new(),
         };
         match child.wait() {

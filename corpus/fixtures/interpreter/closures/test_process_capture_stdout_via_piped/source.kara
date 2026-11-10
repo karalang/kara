@@ -5,7 +5,7 @@ fn main() {
                  match child.stdout() {
                      Some(out) => {
                          let mut s = String.new();
-                         match out.read_to_string(s) {
+                         match out.read_to_string(mut s) {
                              Ok(_) => print(s),
                              Err(_) => println("read_err"),
                          }

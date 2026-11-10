@@ -338,11 +338,11 @@ fn sh(script: Str) -> Result[String, String] {
         Err(e) => return Err(f"spawn: {show(e)}"),
     };
     let out = match child.stdout() {
-        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(mut s); s },
         None => String.new(),
     };
     let err = match child.stderr() {
-        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(mut s); s },
         None => String.new(),
     };
     match child.wait() {

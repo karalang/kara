@@ -39,9 +39,9 @@ fn main() {
     c.wait().unwrap();
     let d = Command.new("printf").arg("\\377\\376").stdout(Stdio.piped()).stderr(Stdio.piped()).spawn().unwrap();
     let mut s = String.from("keep");
-    match d.stdout().unwrap().read_to_string(s) { Ok(_) => println("utf8?"), Err(e) => println(f"{show(e)} [{s}]") }
+    match d.stdout().unwrap().read_to_string(mut s) { Ok(_) => println("utf8?"), Err(e) => println(f"{show(e)} [{s}]") }
     let mut bytes: Vec[u8] = Vec.new();
-    let n = d.stderr().unwrap().read_to_end(bytes).unwrap();
+    let n = d.stderr().unwrap().read_to_end(mut bytes).unwrap();
     println(f"stderr bytes {n} {bytes.len()}");
     d.wait().unwrap();
     let e = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();

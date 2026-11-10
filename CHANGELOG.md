@@ -20,6 +20,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A `shared` value held by a plain `let` cannot be lent as `mut`: a `mut`
+  marker on the bare binding lends the binding itself, and a callee's
+  `*t = n` replaced the object the `let` named. `advance(mut tail)` with
+  `let tail = T { v: 1 }` was accepted; it now needs `let mut tail`, and
+  `karac fix` adds the `mut` (design.md § Call-site `mut` markers,
+  B-2026-11-10-22). A marker on a field or element of the value
+  (`bump(mut t.v)`) still writes through the handle and needs none.
+- A method that writes its receiver needs `let mut` on it for every library
+  type, not only those the ownership pass's own table listed:
+  `w.push_back(1)` on `let w: VecDeque[i64]` and `r.read_line(s)` on a plain
+  `let r` reader were accepted. The fix is `let mut` (B-2026-11-09-101).
 - `BufReader.new(x)` / `BufWriter.new(x)` (and `with_capacity`) over
   anything but a `File`, a child's pipe, a `TcpStream` or a `TlsStream` is
   refused with E0297. A `BufReader` over a `TcpStream` passed check, then
@@ -74,6 +85,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   temporary that outlives its statement (core-semantics §5.5), as
   `let q: ref Vec[i64] = make();` already was. It was accepted and the
   interpreter then stopped on `deref of non-reference` (B-2026-11-08-43).
+
+### Deprecated (errors at the next minor release)
+
+- An argument at a method's `mut ref` parameter takes the call-site `mut`
+  marker, as a free function's already does (design.md § Call-site `mut`
+  markers): `r.fill(s)` with `fn fill(ref self, buf: mut ref String)` warns
+  `deprecated` and `karac fix` writes `r.fill(mut s)`. A `mut ref` or
+  `mut Slice` forwarded from a parameter or binding needs no marker, and
+  `#[allow(deprecated)]` on the enclosing item silences it. The corpus and
+  the katas were migrated with `karac fix`, outputs unchanged. The next
+  minor release refuses the unmarked form (B-2026-11-09-100).
 
 ### Added
 

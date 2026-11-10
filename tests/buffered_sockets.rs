@@ -90,7 +90,7 @@ fn serve(conn: own TcpStream) {
 
 fn client(addr: Str, words: own Vec[Str]) -> String {
     let c = TcpStream.connect(addr).unwrap();
-    let r = BufReader.new(c.try_clone().unwrap());
+    let mut r = BufReader.new(c.try_clone().unwrap());
     let mut out = String.new();
     for w in words.into_iter() {
         let _ = c.write_all(f"{w}\n".bytes());
@@ -140,7 +140,7 @@ fn probe(tag: Str, l: TcpListener) {
     let _ = c.set_read_timeout(Some(200));
     let _ = c.write_all("unread\n".bytes());
     let s = l.accept().unwrap();
-    let r = BufReader.new(c);
+    let mut r = BufReader.new(c);
     let mut line = String.new();
     match r.read_line(mut line) {
         Ok(n) => println(f"{tag} first ok {n}"),

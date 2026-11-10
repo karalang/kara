@@ -12,7 +12,7 @@ fn main() {
     match fs.write(t, "a\nb\r\nc") { Ok(_) => {}, Err(_) => println("w") }
     match File.open(t) {
         Ok(f) => {
-            let r = BufReader.with_capacity(f, 2);
+            let mut r = BufReader.with_capacity(f, 2);
             let mut s = String.new();
             let n: i64 = r.read_line(mut s).unwrap_or(-1);
             println(f"{n} [{s.trim()}]");
@@ -37,7 +37,7 @@ fn main() {
     print(fs.read_to_string(u).unwrap_or(String.new()));
     match File.open(u) {
         Ok(f) => {
-            let r = BufReader.new(f);
+            let mut r = BufReader.new(f);
             let mut buf: Vec[u8] = vec![0; 3];
             let n = r.read(mut buf).unwrap_or(-1);
             println(f"read {n} {buf[0]}");

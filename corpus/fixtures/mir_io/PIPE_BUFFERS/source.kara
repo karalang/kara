@@ -17,7 +17,7 @@ fn main() {
     println(f"sh {c.wait().unwrap().success()}");
     let sort = Command.new("sort").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
     feed(sort);
-    let r = BufReader.with_capacity(sort.stdout().unwrap(), 4);
+    let mut r = BufReader.with_capacity(sort.stdout().unwrap(), 4);
     let mut first = String.new();
     let n = r.read_line(mut first).unwrap();
     print(f"first {n} {first}");

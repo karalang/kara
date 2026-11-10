@@ -12,6 +12,6 @@ backends = []
 env = {}
 bucket = "a"
 classified_with = "9913c6855"
-extracted_src = "f6d0b513"
+extracted_src = "f880b8ec"
 model_rev = "3acf4472"
 model_src = "f6d0b513"

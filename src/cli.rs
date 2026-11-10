@@ -2687,6 +2687,61 @@ impl Pipeline {
             self.mir_borrow_errors();
         }
         self.report_unused_muts();
+        self.report_unmarked_method_mut_args();
+    }
+
+    /// An argument at a method's `mut ref` parameter needs the call-site
+    /// `mut` marker (design.md § Call-site `mut` markers). 0.8.x warns, as a
+    /// deprecation whose fix inserts `mut `; the next minor refuses it
+    /// (B-2026-11-09-100, tracked by its tracker row).
+    fn report_unmarked_method_mut_args(&mut self) {
+        let user = self
+            .library_len
+            .unwrap_or_else(|| crate::prelude::gated_span_base(0));
+        let (Some(own), Some(typed)) = (self.ownership.as_ref(), self.typed.as_mut()) else {
+            return;
+        };
+        // As for `unused_mut`: an error's own fix may change the parameter
+        // the argument meets (a trait's `ref` mode replacing an impl's
+        // `mut ref`), so the marker waits for a program with none.
+        let mut errs = self
+            .parsed
+            .errors
+            .iter()
+            .map(|e| e.span.offset)
+            .chain(
+                self.resolved
+                    .iter()
+                    .flat_map(|r| r.errors.iter().map(|e| e.span.offset)),
+            )
+            .chain(typed.errors.iter().map(|e| e.span.offset))
+            .chain(own.errors.iter().map(|e| e.span.offset));
+        if errs.any(|at| at < user) {
+            return;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for span in &own.unmarked_method_mut_args {
+            if span.offset >= user || !seen.insert(span.offset) {
+                continue;
+            }
+            typed.warnings.push(crate::typechecker::TypeError {
+                message: "an argument at a method's `mut ref` parameter takes the call-site \
+                          marker: write `mut <expr>` (design.md § Call-site `mut` markers); \
+                          the unmarked form is deprecated and a later release refuses it — \
+                          suppress with `#[allow(deprecated)]` on the enclosing item"
+                    .to_string(),
+                span: *span,
+                kind: crate::typechecker::TypeErrorKind::Deprecated,
+                lint_name: Some("deprecated".to_string()),
+                fix_it: Some(crate::typechecker::FixIt {
+                    span: crate::token::Span { length: 0, ..*span },
+                    replacement: "mut ".to_string(),
+                }),
+                class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
+                expected: None,
+                got: None,
+            });
+        }
     }
 
     /// B-2026-10-19-7: what the MIR move and borrow checks refuse, check

@@ -612,7 +612,7 @@ fn play(script: Str) {
         }
         println(f"> {words.join(" ")}");
         let mut warnings: Vec[String] = Vec.new();
-        let result = player.run(words, warnings);
+        let result = player.run(words, mut warnings);
         for w in warnings.iter() {
             println(f"  warning: script.txt:{i + 1}: {w}");
         }

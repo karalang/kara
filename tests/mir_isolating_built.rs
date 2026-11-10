@@ -337,7 +337,7 @@ fn main() {
         m["missing"]
     });
     let d = g.spawn(|| {
-        let v: Vec[i64] = [1, 2, 3];
+        let mut v: Vec[i64] = [1, 2, 3];
         let w = v.split_off(9);
         w.len() as i64
     });

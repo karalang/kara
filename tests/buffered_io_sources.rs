@@ -79,7 +79,7 @@ fn buffered_wrappers_take_a_tls_stream() {
     let (ok, out) = check(
         r#"import std.io.{BufReader, BufWriter};
 pub fn wrap(s: own TlsStream, t: own TlsStream) with sends(Network) receives(Network) blocks {
-    let r = BufReader.new(s);
+    let mut r = BufReader.new(s);
     let mut line = String.new();
     let _ = r.read_line(mut line);
     let mut w = BufWriter.with_capacity(t, 64);
@@ -131,7 +131,7 @@ fn a_socket_buffer_has_the_network_effects() {
     let (ok, out) = check(
         r#"import std.io.{BufReader, BufWriter};
 pub fn first_line(conn: own TcpStream) -> String with sends(Network) receives(Network) blocks {
-    let r = BufReader.new(conn);
+    let mut r = BufReader.new(conn);
     let mut s = String.new();
     let _ = r.read_line(mut s);
     for line in r.lines() {
@@ -151,7 +151,7 @@ fn main() {}
     let (ok, out) = check(
         r#"import std.io.{BufReader};
 pub fn first_line(conn: own TcpStream) -> String with reads(FileSystem) blocks {
-    let r = BufReader.new(conn);
+    let mut r = BufReader.new(conn);
     let mut s = String.new();
     let _ = r.read_line(mut s);
     s

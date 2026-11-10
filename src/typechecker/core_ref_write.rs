@@ -127,7 +127,7 @@ struct Walk<'t, 'a> {
     /// See [`super::TypeCheckResult::mut_fn_local_calls`].
     mut_fn_local_calls: FxHashSet<SpanKey>,
     /// See [`super::TypeCheckResult::receiver_write_calls`].
-    receiver_write_calls: FxHashSet<SpanKey>,
+    receiver_write_calls: FxHashMap<SpanKey, bool>,
     /// The scopes that hold a `for` pattern's bindings.
     for_item_scopes: Vec<usize>,
     /// Locals bound to a closure literal that writes a capture, with the
@@ -332,7 +332,7 @@ impl<'a> TypeChecker<'a> {
             shared_once_fn_params: FxHashMap::default(),
             shared_mut_fn_calls: Vec::new(),
             mut_fn_local_calls: FxHashSet::default(),
-            receiver_write_calls: FxHashSet::default(),
+            receiver_write_calls: FxHashMap::default(),
             for_item_scopes: Vec::new(),
             mut_closure_locals: Vec::new(),
             immutable_mut_closure_locals: Vec::new(),
@@ -1288,8 +1288,9 @@ impl Walk<'_, '_> {
             ExprKind::MethodCall { object, method, .. }
                 if self.method_writes_receiver(e, object, method) =>
             {
+                let known = self.receiver_mode_known(e, object, method).is_some();
                 self.receiver_write_calls
-                    .insert(SpanKey::from_span(&e.span));
+                    .insert(SpanKey::from_span(&e.span), known);
                 let action = match (&object.kind, place_root(object)) {
                     (ExprKind::Identifier(_) | ExprKind::SelfValue, Some(r)) => {
                         format!("`{r}.{method}` (a method that writes its receiver)")
@@ -2016,6 +2017,16 @@ impl Walk<'_, '_> {
     }
 
     fn method_writes_receiver(&self, call: &Expr, object: &Expr, method: &str) -> bool {
+        self.receiver_mode_known(call, object, method)
+            .unwrap_or_else(|| {
+                MUTATING_BUILTINS.contains(&method)
+                    || crate::ast::is_mutating_collection_method(method)
+            })
+    }
+
+    /// Whether the method's own signature, or a mode the language states for
+    /// it, writes its receiver; `None` when only its name is known.
+    fn receiver_mode_known(&self, call: &Expr, object: &Expr, method: &str) -> Option<bool> {
         let key = self
             .tc
             .method_callee_types
@@ -2055,20 +2066,37 @@ impl Walk<'_, '_> {
             }
             // A baked stdlib impl is in the env only: its receiver is the
             // method signature's first parameter.
-            self.tc.env.impls.iter().find_map(|imp| {
+            let baked = self.tc.env.impls.iter().find_map(|imp| {
                 let sig = imp
                     .methods
                     .get(method)
                     .filter(|_| &imp.target_type == name)?;
                 sig.params.first().map(|p| matches!(p, Type::MutRef(_)))
+            });
+            // A growable collection whose methods are compiler builtins
+            // (`VecDeque.push_back`) is the one the mutating names describe;
+            // a value type's `reverse` (`Vector`) is not (B-2026-11-09-101).
+            baked.or_else(|| {
+                matches!(
+                    name.as_str(),
+                    "Vec"
+                        | "VecDeque"
+                        | "String"
+                        | "Map"
+                        | "Set"
+                        | "SortedMap"
+                        | "SortedSet"
+                        | "PriorityQueue"
+                )
+                .then(|| {
+                    MUTATING_BUILTINS.contains(&method)
+                        || crate::ast::is_mutating_collection_method(method)
+                })
             })
         };
         match key.and_then(|k| self.self_modes.get(k)) {
-            Some(m) => matches!(m, SelfParam::MutRef),
-            None => by_type().unwrap_or_else(|| {
-                MUTATING_BUILTINS.contains(&method)
-                    || crate::ast::is_mutating_collection_method(method)
-            }),
+            Some(m) => Some(matches!(m, SelfParam::MutRef)),
+            None => by_type(),
         }
     }
 

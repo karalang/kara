@@ -6,6 +6,6 @@ impl H {
 fn main() {
     let h = H { acc: 0 };
     let mut bm: Array[u8, 3] = [10u8, 20u8, 30u8];
-    println(h.bump(bm));
+    println(h.bump(mut bm));
     println(bm[0]);
 }

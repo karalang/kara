@@ -280,7 +280,7 @@ impl Resolver {
         let mut stack: Vec[String] = Vec.new();
         let mut order: Vec[String] = Vec.new();
         for root in roots {
-            self.visit(root.name.clone(), state, stack, order)?;
+            self.visit(root.name.clone(), mut state, mut stack, mut order)?;
         }
         Ok(order)
     }

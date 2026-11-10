@@ -227,7 +227,7 @@ fn main() {
     // A read timeout.
     let q = l.accept().unwrap();
     let _ = q.set_read_timeout(Some(100));
-    let qr = BufReader.new(q);
+    let mut qr = BufReader.new(q);
     let mut line = String.new();
     match qr.read_line(mut line) {
         Ok(n) => println(f"quiet read {n}"),

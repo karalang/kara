@@ -18,7 +18,7 @@ fn main() {
             match child.stdout() {
                 Some(out) => {
                     let mut s = String.new();
-                    match out.read_to_string(s) {
+                    match out.read_to_string(mut s) {
                         Ok(n) => println(f"read [{s}] {n}"),
                         Err(e) => println(show(e)),
                     }
@@ -47,7 +47,7 @@ fn main() {
             match child.stdout() {
                 Some(out) => {
                     let mut s = String.new();
-                    match out.read_to_string(s) {
+                    match out.read_to_string(mut s) {
                         Ok(_) => println(f"cat [{s}]"),
                         Err(e) => println(show(e)),
                     }

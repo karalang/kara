@@ -1975,8 +1975,10 @@ pub struct TypeCheckResult {
     /// Spans of method calls the strict check reads as writing their
     /// receiver (`w.push_back(x)` on any library or program type). The
     /// ownership pass counts each as a write of the receiver's root for
-    /// `unused_mut` (B-2026-11-09-55).
-    pub receiver_write_calls: FxHashSet<SpanKey>,
+    /// `unused_mut` (B-2026-11-09-55). The value is whether the method's
+    /// own signature says so, rather than only its name; the `let mut` rule
+    /// refuses the call on an immutable binding then (B-2026-11-09-101).
+    pub receiver_write_calls: FxHashMap<SpanKey, bool>,
     /// v2 core (strict commands only): method receivers that are borrowed
     /// places (a `ref` parameter or binding, a view, a place reached through
     /// one or through a `shared` handle). A method taking `self` by value
@@ -3042,7 +3044,7 @@ pub struct TypeChecker<'a> {
     /// See [`TypeCheckResult::mut_fn_local_calls`].
     pub(super) mut_fn_local_calls: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::receiver_write_calls`].
-    pub(super) receiver_write_calls: FxHashSet<SpanKey>,
+    pub(super) receiver_write_calls: FxHashMap<SpanKey, bool>,
     /// Set while a pattern binds a part that could move out of an owned
     /// scrutinee (a non-`Copy` value, or a bare type parameter's).
     pub(super) pattern_may_move: bool,
@@ -4318,7 +4320,7 @@ impl<'a> TypeChecker<'a> {
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
             mut_fn_local_calls: FxHashSet::default(),
-            receiver_write_calls: FxHashSet::default(),
+            receiver_write_calls: FxHashMap::default(),
             pattern_may_move: false,
             moving_scrutinees: FxHashSet::default(),
             core_borrowed_receivers: FxHashSet::default(),

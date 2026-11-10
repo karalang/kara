@@ -138,14 +138,14 @@ fn main() {
             }
         }
         drop(r);
-        let q = BufReader.new(TcpStream.connect("b:1").unwrap());
+        let mut q = BufReader.new(TcpStream.connect("b:1").unwrap());
         let mut s = String.new();
         match q.read_line(mut s) {
             Ok(n) => println(f"quiet read {n}"),
             Err(e) => println(f"quiet err {e}"),
         }
         drop(q);
-        let u = BufReader.new(TcpStream.connect("c:1").unwrap());
+        let mut u = BufReader.new(TcpStream.connect("c:1").unwrap());
         let mut s = String.new();
         match u.read_line(mut s) {
             Ok(n) => println(f"other read {n}"),
@@ -161,7 +161,7 @@ fn main() {
         drop(w);
         kept.push(TcpStream.connect("e:1").unwrap());
     });
-    let late = BufReader.new(kept.pop().unwrap());
+    let mut late = BufReader.new(kept.pop().unwrap());
     let mut s = String.new();
     match late.read_line(mut s) {
         Ok(n) => println(f"late read {n}"),

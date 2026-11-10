@@ -13,6 +13,6 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L332-L335 four fs.write, each to its own manifest file"
 bucket = "a"
 classified_with = "9913c6855"
-extracted_src = "3e4579a3"
+extracted_src = "6049fc85"
 model_rev = "3acf4472"
 model_src = "fc2c055e"

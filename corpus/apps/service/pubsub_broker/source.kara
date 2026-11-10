@@ -230,7 +230,7 @@ impl Broker {
         self.clients[idx].patterns.push(pattern.clone());
         for t in topics.iter() {
             let replay = self.retained[t].copy_as(true);
-            self.hand_to(idx, replay, log);
+            self.hand_to(idx, replay, mut log);
         }
         Ok(log)
     }
@@ -266,7 +266,7 @@ impl Broker {
         let kind = if retain { "pubr" } else { "pub" };
         let mut log: Vec[String] = [f"{kind} #{msg.id} {msg.topic} -> {targets.len()} subscriber(s)"];
         for i in targets.iter() {
-            self.hand_to(i, msg.copy_as(false), log);
+            self.hand_to(i, msg.copy_as(false), mut log);
         }
         if retain {
             self.retained.insert(msg.topic.clone(), msg);

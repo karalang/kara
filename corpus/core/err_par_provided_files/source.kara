@@ -16,7 +16,7 @@ impl FileSystemProvider for Counter {
 
 fn peek(f: ref File) -> i64 {
     let mut b = [0u8; 2];
-    match f.read(b[..]) {
+    match f.read(mut b[..]) {
         Ok(n) => n,
         Err(_) => -1,
     }

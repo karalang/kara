@@ -1080,7 +1080,7 @@ impl Session {
             }
         }
         let mut r = Reader { toks: lex(expr), pos: 0 };
-        match self.expr(r) {
+        match self.expr(mut r) {
             Ok(v) => match target {
                 Some(t) => {
                     self.assign(t, v);
