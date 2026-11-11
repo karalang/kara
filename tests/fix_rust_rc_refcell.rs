@@ -130,6 +130,13 @@ fn rc_refcell_tree_template_becomes_a_shared_struct() {
     for gone in ["Rc", "RefCell", "borrow"] {
         assert!(!text.contains(gone), "`{gone}` is left in:\n{text}");
     }
+    // `let n = n.borrow();` goes whole, its line with it, rather than
+    // leaving `let n = n;` (kata 1120).
+    assert!(
+        !text.contains("let n = n")
+            && text.contains("if let Some(n) = node {\n            if n.left.is_none()"),
+        "the rebinding is left in:\n{text}"
+    );
     assert!(clean, "the fixed template checks clean:\n{text}");
     // Writing through `again` writes the node `root` holds: one node, two handles.
     assert_eq!(out, "10 3\n", "fixed text:\n{text}");

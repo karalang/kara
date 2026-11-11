@@ -9,7 +9,8 @@
 //! line, rewrites the program around it in one envelope: each struct `T`
 //! named in an `Rc<RefCell<T>>` becomes `shared struct` with `mut` fields,
 //! the type becomes `T`, `Rc::new(RefCell::new(x))` / `RefCell::new(x)` /
-//! `Rc::clone(&x)` become `x`, and `.borrow()` / `.borrow_mut()` go. A shape
+//! `Rc::clone(&x)` become `x`, and `.borrow()` / `.borrow_mut()` go, with
+//! a `let n = n.borrow();` that would be left rebinding `n` to itself. A shape
 //! the rewrite does not know (`Rc<Vec<T>>`, `Weak`) is left alone, and the
 //! resolver's diagnostic for the name points at `shared struct`.
 //!
@@ -324,6 +325,45 @@ impl super::Parser {
                 text: self.rc_rewrite_text(lo, close, source, base)?,
                 next: close + 1,
             });
+        }
+        // `let n = n.borrow();`: with `.borrow()` gone the statement would
+        // rebind `n` to itself, so it goes, with its line when it stands
+        // alone on one.
+        if matches!(token(i), Some(Token::Let)) {
+            let k = if matches!(token(i + 1), Some(Token::Mut)) {
+                i + 2
+            } else {
+                i + 1
+            };
+            let rebinds = ident(k).is_some()
+                && ident(k) == ident(k + 2)
+                && matches!(token(k + 1), Some(Token::Equal))
+                && matches!(token(k + 3), Some(Token::Dot))
+                && matches!(ident(k + 4), Some("borrow" | "borrow_mut"))
+                && matches!(token(k + 5), Some(Token::LeftParen))
+                && matches!(token(k + 6), Some(Token::RightParen))
+                && matches!(token(k + 7), Some(Token::Semicolon));
+            if rebinds {
+                let semi = self.tokens[k + 7].span;
+                let (mut lo, mut hi) = (start, semi.offset + semi.length);
+                let before = source.get(..lo - base)?;
+                let line_start = before.rfind('\n').map_or(0, |p| p + 1);
+                let after = source.get(hi - base..)?;
+                if before[line_start..].trim().is_empty() {
+                    if let Some(nl) = after.find('\n') {
+                        if after[..nl].trim().is_empty() {
+                            lo = line_start + base;
+                            hi += nl + 1;
+                        }
+                    }
+                }
+                return Some(Piece {
+                    start: lo,
+                    end: hi,
+                    text: String::new(),
+                    next: k + 8,
+                });
+            }
         }
         // `.borrow()` / `.borrow_mut()`
         if matches!(token(i), Some(Token::Dot))
