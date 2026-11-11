@@ -962,6 +962,23 @@ pub(crate) struct StrLitLet {
     uses: Vec<usize>,
 }
 
+/// An unannotated `let` whose value is a list literal, so a `Vec`
+/// (design.md § Collection literals; see `TypeChecker::list_lit_lets`).
+#[derive(Debug, Clone)]
+pub(crate) struct ListLitLet {
+    /// The bound name; `: Array[T, N]` goes at its end.
+    name: Span,
+    /// How many elements the literal lists.
+    len: usize,
+    /// Whether nothing else is assigned to it, so declaring it an `Array`
+    /// is the whole fix.
+    literal_only: bool,
+    /// The errors reported where it is used as an `Array` of its length,
+    /// in order, and the `Array` type the first one wants.
+    uses: Vec<usize>,
+    want: Option<Type>,
+}
+
 /// Where a binding's integer type comes from an unsuffixed literal that
 /// may keep the default `i64` (see `TypeChecker::literal_lets`).
 #[derive(Debug, Clone)]
@@ -4108,6 +4125,12 @@ pub struct TypeChecker<'a> {
     /// `Str` names the binding, and `karac fix` writes `: Str` on it when
     /// it only ever holds literals (B-2026-10-24-33).
     pub(super) str_lit_lets: FxHashMap<String, StrLitLet>,
+    /// `let a = [127u8, 0, 0, 1]` with no annotation, by name: a `Vec`, so a
+    /// use as an `Array` of its length names the binding, and `karac fix`
+    /// writes `: Array[T, N]` on it (B-2026-11-10-47).
+    pub(super) list_lit_lets: FxHashMap<String, ListLitLet>,
+    /// The spans of identifiers that read a [`ListLitLet`] binding.
+    pub(super) list_lit_let_uses: FxHashMap<SpanKey, String>,
     /// `let x = 0` with no annotation, by name, and the literals a binding's
     /// type comes from in `let (a, b) = (0, 0)` and `let v = [0; n]` /
     /// `Vec.filled(n, 0)`. A narrowing or a `min`/`max` argument refused at
@@ -4583,6 +4606,8 @@ impl<'a> TypeChecker<'a> {
             array_element_hint: None,
             literal_collection_uses: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),
+            list_lit_lets: FxHashMap::default(),
+            list_lit_let_uses: FxHashMap::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
             retyped_int_literal: None,
@@ -7501,6 +7526,82 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Note `let name = [..]` with no annotation: a list literal makes it a
+    /// `Vec`, which a later use as an `Array` cannot see.
+    pub(super) fn note_list_lit_let(&mut self, name: &str, name_span: Span, value: &Expr) {
+        match &value.kind {
+            ExprKind::ArrayLiteral(items) if !items.is_empty() => {
+                self.list_lit_lets.insert(
+                    name.to_string(),
+                    ListLitLet {
+                        name: name_span,
+                        len: items.len(),
+                        literal_only: true,
+                        uses: Vec::new(),
+                        want: None,
+                    },
+                );
+            }
+            _ => {
+                self.list_lit_lets.remove(name);
+            }
+        }
+    }
+
+    /// `name = value`: another value may have another length, so `: Array`
+    /// alone no longer fixes the binding.
+    pub(super) fn note_list_lit_assign(&mut self, target: &Expr) {
+        if let ExprKind::Identifier(n) = &target.kind {
+            if let Some(rec) = self.list_lit_lets.get_mut(n.as_str()) {
+                rec.literal_only = false;
+            }
+        }
+    }
+
+    /// At the end of a function, say at each use of a list-literal binding
+    /// as an `Array` of its length why it is a `Vec`, and, when it only ever
+    /// holds that literal, offer `: Array[T, N]` on the `let` with the first
+    /// use (B-2026-11-10-47).
+    pub(super) fn explain_list_lit_lets(&mut self) {
+        let recs: Vec<(String, ListLitLet)> = self
+            .list_lit_lets
+            .drain()
+            .filter(|(_, r)| !r.uses.is_empty())
+            .collect();
+        for (name, rec) in recs {
+            let Some(want) = rec.want.as_ref().map(type_display) else {
+                continue;
+            };
+            let fix = rec.literal_only.then(|| FixIt {
+                span: Span {
+                    line: rec.name.line,
+                    column: rec.name.column + rec.name.length,
+                    offset: rec.name.offset + rec.name.length,
+                    length: 0,
+                },
+                replacement: format!(": {want}"),
+            });
+            let because = format!(
+                ": `{name}` (bound at {}:{}) is a `Vec`, because a list literal with no \
+                 expected type is one (design.md § Collection literals)",
+                rec.name.line, rec.name.column
+            );
+            for (i, at) in rec.uses.iter().enumerate() {
+                let Some(e) = self.errors.get_mut(*at) else {
+                    continue;
+                };
+                e.message.push_str(&because);
+                if rec.literal_only {
+                    e.message
+                        .push_str(&format!("; declare it `{name}: {want}`"));
+                    if i == 0 {
+                        e.fix_it = fix.clone();
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn offer_iter_let_fixes(&mut self) {
         let mut recs: Vec<(String, IterLet)> =
             self.iter_lets.drain().filter(|(_, r)| r.used).collect();
@@ -8761,6 +8862,57 @@ impl<'a> TypeChecker<'a> {
                             replacement: ".to_vec()".to_string(),
                         },
                     );
+                    return false;
+                }
+            }
+        }
+        if let Some(name) = self
+            .list_lit_let_uses
+            .get(&SpanKey::from_span(&span))
+            .cloned()
+        {
+            let want = match expected {
+                Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+                t => t,
+            };
+            let want = inference::resolve_type_var_top(want, &self.env.substitutions);
+            let found_now = inference::resolve_type_var_top(found, &self.env.substitutions);
+            let len = self.list_lit_lets.get(name.as_str()).map(|r| r.len);
+            if let (
+                Type::Array {
+                    element,
+                    size: ConstArg::Literal(n),
+                },
+                Type::Named { name: vec, args },
+                Some(len),
+            ) = (&want, &found_now, len)
+            {
+                let elem_now = args
+                    .first()
+                    .map(|a| inference::resolve_type_var_top(a, &self.env.substitutions));
+                if vec == "Vec"
+                    && args.len() == 1
+                    && usize::try_from(*n).is_ok_and(|n| n == len)
+                    && (elem_now.as_ref() == Some(element.as_ref())
+                        // A list of open literals (`[1, 2, 3]`).
+                        || matches!(elem_now, Some(Type::TypeVar(_))))
+                {
+                    self.type_error_with_types(
+                        format!(
+                            "expected '{}', found '{}'",
+                            type_display(&want),
+                            type_display(&found_now)
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                        expected,
+                        found,
+                    );
+                    let at = self.errors.len() - 1;
+                    if let Some(rec) = self.list_lit_lets.get_mut(name.as_str()) {
+                        rec.uses.push(at);
+                        rec.want.get_or_insert_with(|| want.clone());
+                    }
                     return false;
                 }
             }

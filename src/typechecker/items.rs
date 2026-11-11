@@ -2825,6 +2825,7 @@ impl<'a> super::TypeChecker<'a> {
         // (an impl method, a trait default body) does not inherit them.
         let saved_iter_lets = std::mem::take(&mut self.iter_lets);
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
+        let saved_list_lit_lets = std::mem::take(&mut self.list_lit_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
@@ -2934,6 +2935,8 @@ impl<'a> super::TypeChecker<'a> {
         self.iter_lets = saved_iter_lets;
         self.explain_str_lit_lets();
         self.str_lit_lets = saved_str_lit_lets;
+        self.explain_list_lit_lets();
+        self.list_lit_lets = saved_list_lit_lets;
         self.literal_lets = saved_literal_lets;
         self.read_only_slice_lets = saved_read_only_slice_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
@@ -11428,12 +11431,14 @@ impl<'a> super::TypeChecker<'a> {
                             .insert(SpanKey::from_span(&value.span), pattern.span);
                         self.note_iter_let(name, pattern.span, &value.span, &expected_ty);
                         self.note_str_lit_let(name, pattern.span, value, &expected_ty);
+                        self.note_list_lit_let(name, pattern.span, value);
                         self.note_literal_let(name, pattern.span, value, &expected_ty);
                         self.note_read_only_slice_let(name, value, &expected_ty);
                     } else {
                         self.read_only_slice_lets.remove(name.as_str());
                         self.iter_lets.remove(name.as_str());
                         self.str_lit_lets.remove(name.as_str());
+                        self.list_lit_lets.remove(name.as_str());
                         self.literal_lets.remove(name.as_str());
                     }
                 } else if let PatternKind::Tuple(pats) = &pattern.kind {
@@ -11890,6 +11895,7 @@ impl<'a> super::TypeChecker<'a> {
             StmtKind::Assign { target, value } => {
                 self.note_last_mut_write(target);
                 self.note_str_lit_assign(target, value);
+                self.note_list_lit_assign(target);
                 // design.md § "The index operator (`expr[i]`)" — the RHS of an
                 // assignment is a value position exactly as a `let` initializer
                 // is, so `v[i] = v[j]` falls to the same rule

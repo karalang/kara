@@ -12794,6 +12794,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.str_lit_let_uses
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
+                if self.list_lit_lets.contains_key(name.as_str()) {
+                    self.list_lit_let_uses
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                }
                 if self
                     .literal_lets
                     .get(name.as_str())

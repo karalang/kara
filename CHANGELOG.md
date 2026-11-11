@@ -335,6 +335,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   was followed by "a reference to a temporary outlives its statement" at
   the same span. A value already refused inside is not reported again for
   its temporaries (B-2026-11-10-48).
+- Rust's `let local = [127u8, 0, 0, 1];` passed to an `Array[u8, 4]`
+  parameter was refused at each use with no fix. Each refusal now says
+  the binding is a `Vec` because a list literal with no expected type is
+  one, and when it only ever holds that literal of the parameter's length
+  `karac fix` declares it `local: Array[u8, 4]` (B-2026-11-10-47).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket
