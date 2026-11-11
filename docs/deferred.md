@@ -6571,6 +6571,18 @@ fn abs_handles_negatives() {
 
 **Future direction:** the reactive query-based LSP (Salsa-style subscribe/notify model, sub-100ms live-edit re-computation) comes after self-hosting. The first LSP runs a batch query model over the existing `karac query` surface — sufficient for AI clients and editor integration at launch; the reactive layer becomes necessary at scale.
 
+### Pre-checked Standard Library and Package Interfaces
+
+**Decision:** After v1, the standard library is checked once, as a unit, and a program's check imports its checked interface instead of re-walking the library's items with the program's. The interface for each module holds its signatures, types, impls, effect summaries and ownership facts. The standard library is the first client of the same package-interface machinery that dependencies need, not a special case.
+
+**Why deferred.** v1 keeps the library in-process: its sources are parsed once per process at a fixed span band and pruned per program (the library-cache design, `review/library-cache-design.md`, Stages 0 and 1, approved 11-11). That gives the LSP most of the saving without new machinery. The pre-checked unit is what removes the remaining per-check cost (resolve, effects, ownership and borrow check over library items), and it needs definition ids qualified by module and package, which the package manager needs anyway ([design.md §4](design.md#packages-and-manifests)).
+
+**The semantic change it carries.** Today a program that defines a type with a library type's name (for example its own `Response`) silently retargets the sibling library signatures that name it. A pre-checked library cannot do that: with module-qualified ids, `std.http.Response` and the program's `Response` are different types, and the library keeps its own. That is the intended rule (a library's signatures mean what the library wrote), and it is a language change for the programs that rely on the retargeting today. The attribution pass (Stage 0) counts them; the count and the ruling go to the review before this work starts.
+
+**An on-disk cache for the CLI** (serializing the parsed and registered library to `$XDG_CACHE_HOME/karac/`) is deferred with it, not before it. It would add serde derives across the AST and the type environment, a binary format, and a stale-cache class of bug, for at most about 40 ms on a 60 to 80 ms check, and deserializing into owned nodes repeats most of the parse's allocation. Revisit it as the persistence layer of package interfaces. The mimalloc experiment waits for the same point, since only these stages change the CLI's allocation profile.
+
+**Why non-breaking later:** apart from the retargeting rule above, which is ruled on separately, it is a compiler-internal change: the same programs check with the same diagnostics, faster.
+
 ### Bidirectional Compiler Hints
 
 Compiler suggests code changes to the AI; AI suggests optimization strategies to the compiler. Waiting for real AI-assisted development usage to reveal whether this is valuable.
