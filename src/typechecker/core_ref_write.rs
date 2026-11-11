@@ -230,6 +230,11 @@ enum Origin {
     Param,
     /// The item of a bare `for` over a collection (§4.6).
     ForElem,
+    /// `let mut x = item;` over such an item: Rust's way to change a copy of
+    /// an element it owns, so its fix is `.clone()` on the initializer, not
+    /// the loop's `.iter_mut()`, which would change the collection
+    /// (kata 1125, B-2026-11-11-84).
+    ForElemCopy,
     /// The key of a `for (k, v) in m.iter_mut()` over a map: only the
     /// value is lent mutably (collections.md; B-2026-11-03-17).
     MapKey,
@@ -1057,6 +1062,19 @@ impl Walk<'_, '_> {
                             ..f
                         });
                         (Origin::Param, fix)
+                    }
+                    ExprKind::Identifier(n)
+                        if *is_mut && matches!(self.origin_of(n), Origin::ForElem) =>
+                    {
+                        let fix = FixIt {
+                            span: Span {
+                                offset: value.span.offset + value.span.length,
+                                length: 0,
+                                ..value.span
+                            },
+                            replacement: ".clone()".to_string(),
+                        };
+                        (Origin::ForElemCopy, Some(fix))
                     }
                     ExprKind::Identifier(n) => self
                         .lookup(n)
@@ -2379,6 +2397,12 @@ impl Walk<'_, '_> {
                 "`{name}` is a `ref` to an element of the collection the `for` iterates \
                  (§4.6), so {action} cannot modify it (core-semantics.md §5.9). Iterate \
                  with `.iter_mut()`"
+            ),
+            Origin::ForElemCopy => format!(
+                "`{name}` is bound from a `ref` to an element of the collection the `for` \
+                 iterates (§4.6), so it is that `ref` too, and {action} cannot modify it \
+                 (core-semantics.md §5.9). Write `.clone()` where it is bound to change a \
+                 copy of its own"
             ),
             Origin::MapKey => format!(
                 "`{name}` is a `ref` to a key of the map the `for` iterates: `iter_mut()` \

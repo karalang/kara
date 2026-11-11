@@ -3110,6 +3110,15 @@ pub struct TypeChecker<'a> {
     /// The depth is the loop's scope, so a shadowing binding of the same
     /// name is not mistaken for the element.
     pub(super) core_for_into_iter: FxHashMap<String, (Span, usize)>,
+    /// The `let` bindings in [`Self::core_for_into_iter`] that re-bind a
+    /// `for` element (`let mut next = team;`): views by `view_let_bindings`
+    /// rather than by the scope's own view marks.
+    pub(super) core_for_into_iter_aliases: FxHashSet<String>,
+    /// Each `let mut x = v;` in scope whose `v` is a view (a bare `for`
+    /// element, a `ref` binding), mapped to the end of `v` and the `let`'s
+    /// scope depth: a move of `x` takes its `.clone()` there, so the
+    /// writes to `x` the `mut` is for act on the copy.
+    pub(super) core_let_mut_views: FxHashMap<String, (Span, usize)>,
     /// Each loop an entry of [`Self::core_for_into_iter`] points into, by the
     /// offset of its `.into_iter()` site: the variable its iterable hangs
     /// off and the field of it the iterable starts with (`None` for a
@@ -4389,6 +4398,8 @@ impl<'a> TypeChecker<'a> {
             current_fn_core_key: None,
             core_let_ref_fix: false,
             core_for_into_iter: FxHashMap::default(),
+            core_for_into_iter_aliases: FxHashSet::default(),
+            core_let_mut_views: FxHashMap::default(),
             core_into_iter_loops: FxHashMap::default(),
             core_clone_or_into_iter: Vec::new(),
             core_call_sites: Vec::new(),
@@ -8022,6 +8033,22 @@ impl<'a> TypeChecker<'a> {
 
     /// The bare parameter (and where its `own ` goes) that the local named
     /// at `span` was bound out of, when `span` is such a local's use.
+    /// The end of the initializer of the `let mut` view the identifier at
+    /// `span` names ([`Self::core_let_mut_views`]): where its `.clone()`
+    /// goes, so the writes the `mut` is for act on the copy.
+    fn let_mut_view_init_at(&self, span: Span) -> Option<(String, Span)> {
+        let id = self
+            .resolve_result
+            .resolutions
+            .get(&SpanKey::from_span(&span))?;
+        let sym = self.resolve_result.symbol_table.get_symbol(*id);
+        if sym.span.offset == span.offset || sym.name.len() != span.length {
+            return None;
+        }
+        let (end, depth) = *self.core_let_mut_views.get(sym.name.as_str())?;
+        (self.local_scope.depth_of(&sym.name) == Some(depth)).then(|| (sym.name.clone(), end))
+    }
+
     fn d5_param_of_local_at(&self, span: Span) -> Option<(String, Span)> {
         let id = self
             .resolve_result
@@ -8784,22 +8811,40 @@ impl<'a> TypeChecker<'a> {
                         });
                         return false;
                     }
-                    self.errors.push(TypeError {
-                        message: format!(
-                            "expected '{shown}', found 'ref {shown}': a borrowed value \
-                             cannot be moved out of what it borrows. Take an owned copy \
-                             with `.clone()`"
+                    // `let mut next = team; next.push(p); out[k] = next;`
+                    // copies where `next` is bound (B-2026-11-11-84).
+                    let at_let = self.let_mut_view_init_at(span);
+                    let (message, at) = match at_let {
+                        Some((name, end)) => (
+                            format!(
+                                "expected '{shown}', found 'ref {shown}': `{name}` is bound \
+                                 from a borrowed value, which cannot be moved out of what it \
+                                 borrows. Take an owned copy with `.clone()` where `{name}` \
+                                 is bound"
+                            ),
+                            end,
                         ),
-                        span,
-                        kind: TypeErrorKind::TypeMismatch,
-                        lint_name: None,
-                        fix_it: Some(FixIt {
-                            span: Span {
+                        None => (
+                            format!(
+                                "expected '{shown}', found 'ref {shown}': a borrowed value \
+                                 cannot be moved out of what it borrows. Take an owned copy \
+                                 with `.clone()`"
+                            ),
+                            Span {
                                 line: span.line,
                                 column: span.column,
                                 offset: span.offset + span.length,
                                 length: 0,
                             },
+                        ),
+                    };
+                    self.errors.push(TypeError {
+                        message,
+                        span,
+                        kind: TypeErrorKind::TypeMismatch,
+                        lint_name: None,
+                        fix_it: Some(FixIt {
+                            span: at,
                             replacement: ".clone()".to_string(),
                         }),
                         class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),

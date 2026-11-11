@@ -9519,14 +9519,26 @@ impl<'a> super::TypeChecker<'a> {
                  `mem.replace` / `mem.swap` / `Option.take()`"
             };
         }
+        // `let mut next = team; next.push(p); out[k] = next;`: the copy is
+        // taken where `next` is bound, so the writes the `mut` is for act on
+        // it; a `.clone()` at the move would leave them writing through the
+        // view, an error nothing fixes (B-2026-11-11-84).
+        let let_mut_init = match &value.kind {
+            ExprKind::Identifier(n) if self.cli_lint_overrides.strict_core => self
+                .core_let_mut_views
+                .get(n.as_str())
+                .filter(|(_, depth)| self.local_scope.depth_of(n) == Some(*depth))
+                .map(|(end, _)| *end),
+            _ => None,
+        };
         let fix_it = if has_clone {
             Some(crate::typechecker::FixIt {
-                span: Span {
+                span: let_mut_init.unwrap_or(Span {
                     offset: value.span.offset + value.span.length,
                     length: 0,
                     line: value.span.line,
                     column: value.span.column,
-                },
+                }),
                 replacement: ".clone()".to_string(),
             })
         } else if let Some(at) = self.core_for_into_iter_fix(value) {
@@ -9574,7 +9586,9 @@ impl<'a> super::TypeChecker<'a> {
             return None;
         };
         let (at, depth) = *self.core_for_into_iter.get(n.as_str())?;
-        (self.local_scope.depth_of(n) == Some(depth) && self.local_scope.is_view(n)).then_some(at)
+        (self.local_scope.depth_of(n) == Some(depth)
+            && (self.local_scope.is_view(n) || self.core_for_into_iter_aliases.contains(n)))
+        .then_some(at)
     }
 
     /// B-2026-11-07-30: a move out of a bare `for` element over an owned
@@ -11661,6 +11675,42 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.view_let_bindings
                         .insert(SpanKey::from_span(&pattern.span));
+                }
+                // §4.6: `let mut next = team;` over a bare `for` element is a
+                // view of the same element, so a move of `next` is fixed by
+                // the loop's `.into_iter()` as a move of `team` is.
+                if self.cli_lint_overrides.strict_core {
+                    if let PatternKind::Binding(n) = &pattern.kind {
+                        let view = matches!(
+                            &value.kind,
+                            ExprKind::Identifier(v) if self.local_scope.is_view(v)
+                        ) || self
+                            .view_let_bindings
+                            .contains(&SpanKey::from_span(&pattern.span));
+                        let inherited = view.then(|| self.core_for_into_iter_fix(value)).flatten();
+                        if view && *is_mut {
+                            let end = Span {
+                                offset: value.span.offset + value.span.length,
+                                length: 0,
+                                ..value.span
+                            };
+                            let depth = self.local_scope.depth();
+                            self.core_let_mut_views.insert(n.clone(), (end, depth));
+                        } else {
+                            self.core_let_mut_views.remove(n);
+                        }
+                        self.core_for_into_iter_aliases.remove(n);
+                        match inherited {
+                            Some(at) => {
+                                let depth = self.local_scope.depth();
+                                self.core_for_into_iter.insert(n.clone(), (at, depth));
+                                self.core_for_into_iter_aliases.insert(n.clone());
+                            }
+                            None => {
+                                self.core_for_into_iter.remove(n);
+                            }
+                        }
+                    }
                 }
                 if borrowed_destructure {
                     for name in pattern.binding_names() {
