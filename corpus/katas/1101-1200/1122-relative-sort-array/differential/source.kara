@@ -1,0 +1,337 @@
+// LeetCode #1122: Relative Sort Array -- a differential over the six
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the
+// README.
+
+// ---- relative_sort_array.kara ----
+
+fn a0_relative_sort_array(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    let mut count: Vec[i64] = Vec.filled(1001, 0);
+    for x in arr1.iter() {
+        count[x as i64] += 1;
+    }
+    let mut out: Vec[i32] = Vec.with_capacity(arr1.len());
+    for x in arr2.iter() {
+        for _ in 0..count[x as i64] {
+            out.push(x);
+        }
+        count[x as i64] = 0;
+    }
+    for v in 0..1001 {
+        for _ in 0..count[v] {
+            out.push(v as i32);
+        }
+    }
+    out
+}
+
+// ---- relative_sort_array_key.kara ----
+
+fn a1_relative_sort_array(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    let mut place: Map[i32, i64] = Map.new();
+    for (i, x) in arr2.iter().enumerate() {
+        place[x] = i;
+    }
+    let mut out = arr1.clone();
+    out.sort_by_key(|x| match place.get(x) {
+        Some(i) => (0, i),
+        None => (1, x as i64),
+    });
+    out
+}
+
+// ---- relative_sort_array_compare.kara ----
+
+fn a2_relative_sort_array(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    let mut place: Vec[i64] = Vec.filled(1001, -1);
+    for (i, x) in arr2.iter().enumerate() {
+        place[x as i64] = i;
+    }
+    let mut out = arr1.clone();
+    out.sort_by(|a, b| {
+        let (pa, pb) = (place[a as i64], place[b as i64]);
+        if pa >= 0 and pb >= 0 {
+            pa.cmp(pb)
+        } else if pa >= 0 {
+            Ordering.Less
+        } else if pb >= 0 {
+            Ordering.Greater
+        } else {
+            a.cmp(b)
+        }
+    });
+    out
+}
+
+// ---- relative_sort_array_buckets.kara ----
+
+fn a3_relative_sort_array(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    let mut out: Vec[i32] = [];
+    for x in arr2.iter() {
+        for y in arr1.iter() {
+            if y == x {
+                out.push(y);
+            }
+        }
+    }
+    let mut rest: Vec[i32] = arr1.iter().filter(|y| not arr2.contains(y)).collect();
+    rest.sort();
+    out.extend(rest);
+    out
+}
+
+// ---- relative_sort_array_sorted.kara ----
+
+fn a4_relative_sort_array(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    let mut count: SortedMap[i32, i64] = SortedMap.new();
+    for x in arr1.iter() {
+        count[x] = count.get(x).unwrap_or(0) + 1;
+    }
+    let mut out: Vec[i32] = Vec.with_capacity(arr1.len());
+    for x in arr2.iter() {
+        if let Some(c) = count.remove(x) {
+            for _ in 0..c {
+                out.push(x);
+            }
+        }
+    }
+    for (x, c) in count.iter() {
+        for _ in 0..c {
+            out.push(x);
+        }
+    }
+    out
+}
+
+// ---- relative_sort_array_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_relative_sort_array(arr1: own Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+        let mut arr1 = arr1;
+        let pos: Map[i32, i64] = arr2.iter().enumerate().map(|(i, x)| (x, i)).collect();
+        arr1.sort_by_key(|x| match pos.get(x) {
+            Some(i) => (0, i as i32),
+            None => (1, x),
+        });
+        arr1
+    }
+}
+
+fn a5_relative_sort_array(arr1: own Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    A5Solution.a5_relative_sort_array(arr1, arr2)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    match which {
+        0 => a0_relative_sort_array(arr1, arr2),
+        1 => a1_relative_sort_array(arr1, arr2),
+        2 => a2_relative_sort_array(arr1, arr2),
+        3 => a3_relative_sort_array(arr1, arr2),
+        4 => a4_relative_sort_array(arr1, arr2),
+        _ => a5_relative_sort_array(arr1.clone(), arr2),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: the values of `arr2` in its order, every
+// copy of each, then the values left, the smallest of them taken each
+// time.
+fn literal(arr1: Vec[i32], arr2: Vec[i32]) -> Vec[i32] {
+    let mut out: Vec[i32] = [];
+    let mut left: Vec[i32] = [];
+    for x in arr1.iter() {
+        if not arr2.contains(x) {
+            left.push(x);
+        }
+    }
+    for x in arr2.iter() {
+        for y in arr1.iter() {
+            if y == x {
+                out.push(y);
+            }
+        }
+    }
+    while left.len() > 0 {
+        let mut at = 0;
+        for j in 1..left.len() {
+            if left[j] < left[at] {
+                at = j;
+            }
+        }
+        out.push(left.remove(at));
+    }
+    out
+}
+
+// Whether `a` may come before `b` by the statement: both in `arr2` in
+// its order, one in it before one not, or neither and in ascending order.
+fn may_precede(a: i32, b: i32, arr2: Vec[i32]) -> bool {
+    let pa = arr2.iter().position(|x| x == a);
+    let pb = arr2.iter().position(|x| x == b);
+    match (pa, pb) {
+        (Some(i), Some(j)) => i <= j,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => a <= b,
+    }
+}
+
+struct Problem {
+    arr1: Vec[i32],
+    arr2: Vec[i32],
+    shuffled: Vec[i32],
+    extra: i32,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let arr1 = p.arr1.clone();
+    let arr2 = p.arr2.clone();
+    let want = literal(arr1.clone(), arr2.clone());
+    let mut sorted1 = arr1.clone();
+    sorted1.sort();
+    let mut doubled: Vec[i32] = [];
+    for x in arr1.iter() {
+        doubled.push(x);
+        doubled.push(x);
+    }
+    let mut longer2 = arr2.clone();
+    if p.extra >= 0 {
+        longer2.push(p.extra);
+    }
+    for w in 0..6 {
+        let answer = arm(w, arr1.clone(), arr2.clone());
+        let what = f"arm {w}, {arr1}, {arr2} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: the answer holds the same values as `arr1`, as often
+        let mut sorted_answer = answer.clone();
+        sorted_answer.sort();
+        expect(mut t, 2, sorted_answer == sorted1, f"P2 {what}");
+        // P3: every value may come before the one after it
+        let mut in_order = true;
+        for j in 1..answer.len() {
+            if not may_precede(answer[j - 1], answer[j], arr2.clone()) {
+                in_order = false;
+            }
+        }
+        expect(mut t, 3, in_order, f"P3 {what}");
+        // P4: `arr1` in another order gives the same answer
+        let s = arm(w, p.shuffled.clone(), arr2.clone());
+        expect(mut t, 4, s == answer, f"P4 {what}, shuffled {p.shuffled} -> {s}");
+        // P5: a value left out of `arr2`, added to its end, moves that
+        // value's copies to just after the values `arr2` held
+        if p.extra >= 0 {
+            let held = answer.iter().filter(|x| arr2.contains(x)).count();
+            let mut moved: Vec[i32] = answer[0..held].to_vec();
+            for x in answer.iter() {
+                if x == p.extra {
+                    moved.push(x);
+                }
+            }
+            for x in answer[held..answer.len()].iter() {
+                if x != p.extra {
+                    moved.push(x);
+                }
+            }
+            let l = arm(w, arr1.clone(), longer2.clone());
+            expect(mut t, 5, l == moved, f"P5 {what}, with {p.extra} -> {l}");
+        }
+        // P6: every value of `arr1` twice gives every value of the answer
+        // twice
+        let d = arm(w, doubled.clone(), arr2.clone());
+        let mut twice: Vec[i32] = [];
+        for x in answer.iter() {
+            twice.push(x);
+            twice.push(x);
+        }
+        expect(mut t, 6, d == twice, f"P6 {what}, doubled -> {d}");
+    }
+    t.cases += 1;
+    for x in want.iter() {
+        t.check = (t.check * 31 + x) % 1000000007;
+    }
+    t.check = (t.check * 31 + arr2.len()) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 10 values from 0 to 3;
+    // up to 10 from 0 to 1000; up to 300 from 0 to a top of 0 to 300,
+    // `arr2` some of their distinct values in a random order; and up to
+    // 300 from 0 to a top of 0 to 1000 with `arr2` all of them or one.
+    // Every choice is drawn before any arm answers.
+    let mut seed = 11221;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let kind = i % 4;
+        let n = if kind >= 2 { next_random(mut seed) % 300 + 1 } else { next_random(mut seed) % 10 + 1 };
+        let top = match kind {
+            0 => 3,
+            1 => 1000,
+            2 => next_random(mut seed) % 301,
+            _ => next_random(mut seed) % 1001,
+        };
+        let mut arr1: Vec[i32] = [];
+        for _ in 0..n {
+            arr1.push((next_random(mut seed) % (top + 1)) as i32);
+        }
+        let mut distinct = arr1.clone();
+        distinct.sort();
+        distinct.dedup();
+        for j in (1..distinct.len()).rev() {
+            distinct.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let m = if kind == 3 {
+            if i % 8 == 3 { distinct.len() } else { 1 }
+        } else {
+            next_random(mut seed) % distinct.len() + 1
+        };
+        let arr2: Vec[i32] = distinct[0..m].to_vec();
+        // a value `arr2` left out, or -1 when it holds every one
+        let extra = if m < distinct.len() {
+            distinct[m + next_random(mut seed) % (distinct.len() - m)]
+        } else {
+            -1
+        };
+        let mut shuffled = arr1.clone();
+        for j in (1..shuffled.len()).rev() {
+            shuffled.swap(j, next_random(mut seed) % (j + 1));
+        }
+        problems.push(Problem { arr1, arr2, shuffled, extra });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

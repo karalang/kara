@@ -1,0 +1,426 @@
+// LeetCode #1120: Maximum Average Subtree -- a differential over the six
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- maximum_average_subtree.kara ----
+
+fn a0_walk(node: Option[TreeNode], best: mut ref f64) -> (i64, i64) {
+    let Some(n) = node else {
+        return (0, 0);
+    };
+    let (ls, lc) = a0_walk(n.left, mut best);
+    let (rs, rc) = a0_walk(n.right, mut best);
+    let sum = ls + rs + n.val;
+    let count = lc + rc + 1;
+    let average = sum as f64 / count as f64;
+    if average > *best {
+        *best = average;
+    }
+    (sum, count)
+}
+
+fn a0_maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    let mut best = 0.0;
+    let _ = a0_walk(root, mut best);
+    best
+}
+
+// ---- maximum_average_subtree_levels.kara ----
+
+fn a1_maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    let Some(r) = root else {
+        return 0.0;
+    };
+    let mut order: Vec[TreeNode] = [r];
+    let mut parent: Vec[i64] = [-1];
+    let mut head = 0;
+    while head < order.len() {
+        let n = order[head];
+        for child in [n.left, n.right] {
+            if let Some(c) = child {
+                order.push(c);
+                parent.push(head);
+            }
+        }
+        head += 1;
+    }
+    let mut sums: Vec[i64] = order.iter().map(|n| n.val as i64).collect();
+    let mut counts: Vec[i64] = Vec.filled(order.len(), 1);
+    let mut best = 0.0;
+    for i in (0..order.len()).rev() {
+        best = best.max(sums[i] as f64 / counts[i] as f64);
+        if parent[i] >= 0 {
+            sums[parent[i]] += sums[i];
+            counts[parent[i]] += counts[i];
+        }
+    }
+    best
+}
+
+// ---- maximum_average_subtree_stats.kara ----
+
+struct A2Stats {
+    sum: i64,
+    count: i64,
+    best: f64,
+}
+
+fn a2_stats(node: Option[TreeNode]) -> Option[A2Stats] {
+    let n = node?;
+    let mut sum = n.val as i64;
+    let mut count = 1;
+    let mut best = f64.NEG_INFINITY;
+    for child in [a2_stats(n.left), a2_stats(n.right)] {
+        if let Some(s) = child {
+            sum += s.sum;
+            count += s.count;
+            best = best.max(s.best);
+        }
+    }
+    Some(A2Stats { sum, count, best: best.max(sum as f64 / count as f64) })
+}
+
+fn a2_maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    a2_stats(root).map_or(0.0, |s| s.best)
+}
+
+// ---- maximum_average_subtree_fraction.kara ----
+
+fn a3_walk(node: Option[TreeNode], best: mut ref (i64, i64)) -> (i64, i64) {
+    match node {
+        None => (0, 0),
+        Some(n) => {
+            let (ls, lc) = a3_walk(n.left, mut best);
+            let (rs, rc) = a3_walk(n.right, mut best);
+            let (sum, count) = (ls + rs + n.val, lc + rc + 1);
+            if sum * best.1 > best.0 * count {
+                *best = (sum, count);
+            }
+            (sum, count)
+        }
+    }
+}
+
+fn a3_maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    let mut best = (0, 1);
+    let _ = a3_walk(root, mut best);
+    best.0 as f64 / best.1 as f64
+}
+
+// ---- maximum_average_subtree_stack.kara ----
+
+fn a4_maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    let mut best: f64 = 0.0;
+    let mut stack: Vec[(TreeNode, bool)] = Vec.new();
+    let mut results: Vec[(i64, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, false));
+    }
+    while let Some((node, closing)) = stack.pop() {
+        if closing {
+            let mut sum = node.val as i64;
+            let mut count = 1;
+            if node.right.is_some() {
+                let (s, c) = results.pop().unwrap();
+                sum += s;
+                count += c;
+            }
+            if node.left.is_some() {
+                let (s, c) = results.pop().unwrap();
+                sum += s;
+                count += c;
+            }
+            best = best.max(sum as f64 / count as f64);
+            results.push((sum, count));
+        } else {
+            stack.push((node.clone(), true));
+            if let Some(r) = node.right.clone() {
+                stack.push((r, false));
+            }
+            if let Some(l) = node.left.clone() {
+                stack.push((l, false));
+            }
+        }
+    }
+    best
+}
+
+// ---- maximum_average_subtree_solution.kara ----
+
+fn a5_dfs(node: Option[TreeNode], ans: mut ref f64) -> (i32, i32) {
+    match node {
+        None => (0, 0),
+        Some(n) => {
+            let (ls, lc) = a5_dfs(n.left, mut ans);
+            let (rs, rc) = a5_dfs(n.right, mut ans);
+            let s = ls + rs + n.val;
+            let c = lc + rc + 1;
+            *ans = ans.max(s as f64 / c as f64);
+            (s, c)
+        }
+    }
+}
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+        let mut ans = 0.0;
+        a5_dfs(root, mut ans);
+        ans
+    }
+}
+
+fn a5_maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    A5Solution.a5_maximum_average_subtree(root)
+}
+
+// ---- the tree ----
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, root: Option[TreeNode]) -> f64 {
+    match which {
+        0 => a0_maximum_average_subtree(root),
+        1 => a1_maximum_average_subtree(root),
+        2 => a2_maximum_average_subtree(root),
+        3 => a3_maximum_average_subtree(root),
+        4 => a4_maximum_average_subtree(root),
+        _ => a5_maximum_average_subtree(root),
+    }
+}
+
+// A fresh copy of a tree, each value through `f`, mirrored when asked.
+fn copy(node: Option[TreeNode], f: Fn(i32) -> i32, mirror: bool) -> Option[TreeNode] {
+    let n = node?;
+    let (l, r) = if mirror { (n.right, n.left) } else { (n.left, n.right) };
+    Some(TreeNode { val: f(n.val), left: copy(l, f, mirror), right: copy(r, f, mirror) })
+}
+
+fn values(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        out.push(n.val as i64);
+        values(n.left, mut out);
+        values(n.right, mut out);
+    }
+}
+
+fn all_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        all_nodes(n.left, mut out);
+        all_nodes(n.right, mut out);
+    }
+}
+
+// The statement read literally: every node's subtree, the node and every
+// node below it, its values listed and averaged, and the largest average
+// kept.
+fn literal(root: Option[TreeNode]) -> f64 {
+    let mut nodes: Vec[TreeNode] = [];
+    all_nodes(root, mut nodes);
+    let mut best = 0.0;
+    for n in nodes.iter() {
+        let mut vs: Vec[i64] = [];
+        values(Some(n), mut vs);
+        let total: i64 = vs.iter().sum();
+        let average = total as f64 / vs.len() as f64;
+        if average > best {
+            best = average;
+        }
+    }
+    best
+}
+
+// P2's second reading: some node's subtree, its sum and count found by
+// counting its nodes one at a time, has the answer for its average; the
+// answer is no smaller than any leaf or the whole tree's average, and no
+// larger than the largest value.
+fn reads_as_best(answer: f64, root: Option[TreeNode]) -> bool {
+    let mut nodes: Vec[TreeNode] = [];
+    all_nodes(root, mut nodes);
+    let mut met = false;
+    let mut largest = 0;
+    for n in nodes.iter() {
+        let mut inside: Vec[TreeNode] = [];
+        all_nodes(Some(n), mut inside);
+        let mut sum = 0;
+        for m in inside.iter() {
+            sum += m.val;
+        }
+        if sum as f64 / inside.len() as f64 == answer {
+            met = true;
+        }
+        if n.left.is_none() and n.right.is_none() and (n.val as f64) > answer {
+            return false;
+        }
+        largest = largest.max(n.val as i64);
+    }
+    let mut all: Vec[i64] = [];
+    values(root, mut all);
+    let whole = all.iter().sum() as f64 / all.len() as f64;
+    met and answer >= whole and answer <= largest as f64
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64, top: i64) -> i32 {
+    ((next_random(mut seed) * 32768 + next_random(mut seed)) % (top + 1)) as i32
+}
+
+// A random tree of `size` nodes, each hung at a random free place.
+fn hung_tree(seed: mut ref i64, size: i64, top: i64) -> TreeNode {
+    let root = leaf(random_value(mut seed, top));
+    let mut nodes: Vec[TreeNode] = [root];
+    for _ in 1..size {
+        let v = random_value(mut seed, top);
+        loop {
+            let at = nodes[next_random(mut seed) % nodes.len()];
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    let c = leaf(v);
+                    at.left = Some(c);
+                    nodes.push(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                let c = leaf(v);
+                at.right = Some(c);
+                nodes.push(c);
+                break;
+            }
+        }
+    }
+    root
+}
+
+// A chain of `size` nodes, each below the last on a random side.
+fn chain_tree(seed: mut ref i64, size: i64, top: i64) -> TreeNode {
+    let root = leaf(random_value(mut seed, top));
+    let mut at = root;
+    for _ in 1..size {
+        let c = leaf(random_value(mut seed, top));
+        if next_random(mut seed) % 2 == 0 {
+            at.left = Some(c);
+        } else {
+            at.right = Some(c);
+        }
+        at = c;
+    }
+    root
+}
+
+// A complete tree of `size` nodes, level by level.
+fn complete_tree(seed: mut ref i64, size: i64, top: i64) -> TreeNode {
+    let nodes: Vec[TreeNode] = (0..size).map(|_| leaf(random_value(mut seed, top))).collect();
+    for i in 1..size {
+        let parent = nodes[(i - 1) / 2];
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i]);
+        } else {
+            parent.right = Some(nodes[i]);
+        }
+    }
+    nodes[0]
+}
+
+struct Problem {
+    root: TreeNode,
+    shift: i32,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let root = Some(p.root);
+    let same = |v| v;
+    let want = literal(root);
+    let k = p.shift;
+    for w in 0..6 {
+        let answer = arm(w, copy(root, same, false));
+        let what = f"arm {w}, case {t.cases} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: by a second reading, a subtree's average no leaf beats
+        expect(mut t, 2, reads_as_best(answer, root), f"P2 {what}");
+        // P3: the tree mirrored gives the same answer
+        let m = arm(w, copy(root, same, true));
+        expect(mut t, 3, m == answer, f"P3 {what}, mirrored {m}");
+        // P4: every value raised by `k` raises the answer by `k`
+        let raised = arm(w, copy(root, |v| v + k, false));
+        expect(mut t, 4, (raised - answer - k as f64).abs() < 0.000001, f"P4 {what}, raised by {k}: {raised}");
+        // P5: every value doubled doubles the answer
+        let doubled = arm(w, copy(root, |v| v * 2, false));
+        expect(mut t, 5, doubled == answer * 2.0, f"P5 {what}, doubled {doubled}");
+        // P6: the tree hung below a new root of 0 gives the same answer
+        let hung = Some(TreeNode { val: 0, left: copy(root, same, false), right: None });
+        let h = arm(w, hung);
+        expect(mut t, 6, h == answer, f"P6 {what}, hung below 0: {h}");
+    }
+    t.cases += 1;
+    for b in f"{want:.5}".bytes() {
+        t.check = (t.check * 131 + b) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 12 nodes hung at
+    // random, values up to 1 or up to 10; one to three nodes, values up
+    // to 10^5; a chain of up to 20 to a random side each step, values up
+    // to 100; and a complete tree of up to 31, values up to 10^5. Every
+    // choice is drawn before any arm answers.
+    let mut seed = 11201;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let root = match i % 4 {
+            0 => {
+                let size = next_random(mut seed) % 12 + 1;
+                hung_tree(mut seed, size, if next_random(mut seed) % 2 == 0 { 1 } else { 10 })
+            }
+            1 => hung_tree(mut seed, next_random(mut seed) % 3 + 1, 100000),
+            2 => chain_tree(mut seed, next_random(mut seed) % 20 + 1, 100),
+            _ => complete_tree(mut seed, next_random(mut seed) % 31 + 1, 100000),
+        };
+        let shift = (next_random(mut seed) % 1000 + 1) as i32;
+        problems.push(Problem { root, shift });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

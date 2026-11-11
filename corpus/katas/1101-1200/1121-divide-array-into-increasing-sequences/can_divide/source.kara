@@ -1,0 +1,73 @@
+// LeetCode #1121: Divide Array Into Increasing Sequences -- the ★ arm,
+// the longest run of one value found in a single pass over the sorted
+// array. A value that appears `f` times needs `f` sequences, one for
+// each copy, and `f` sequences of at least `k` values need `f * k` of
+// them; dealing the values to `f` piles in turn meets that bound. O(n).
+
+fn can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+    let mut longest = 0;
+    let mut run = 0;
+    for i in 0..nums.len() {
+        if i > 0 and nums[i] == nums[i - 1] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        longest = longest.max(run);
+    }
+    longest * k <= nums.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A sorted array of `n` values from 1 to `top`.
+fn random_sorted(seed: mut ref i64, n: i64, top: i64) -> Vec[i32] {
+    let mut nums: Vec[i32] = Vec.with_capacity(n);
+    for _ in 0..n {
+        nums.push((next_random(mut seed) % top + 1) as i32);
+    }
+    nums.sort();
+    nums
+}
+
+fn main() {
+    // LeetCode's two examples and six more: one value, k as long as the
+    // array, a run as long as the array, a run one too long, every value
+    // once, and two runs that each just fit
+    let cases: Vec[(Vec[i32], i32)] = [
+        ([1, 2, 2, 3, 3, 4, 4], 3),
+        ([5, 6, 6, 7, 8], 3),
+        ([7], 1),
+        ([1, 2, 3, 4], 4),
+        ([3, 3, 3], 1),
+        ([1, 2, 2, 2, 3], 2),
+        ([1, 2, 3, 4, 5, 6], 6),
+        ([1, 1, 2, 2], 2),
+    ];
+    for (nums, k) in cases.iter() {
+        println(f"{nums}, k = {k} -> {can_divide_into_subsequences(nums, k)}");
+    }
+    // 2000 random arrays of up to 100000 values, LeetCode's longest, from 1
+    // to a top of 1 to 100000, and a k from 1 to the length: how many can
+    // be divided, and a checksum
+    let mut seed = 1121;
+    let mut yes = 0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let n = if i % 10 == 0 { next_random(mut seed) % 100000 + 1 } else { next_random(mut seed) % 1000 + 1 };
+        let top = next_random(mut seed) % (if i % 3 == 0 { n } else { 100000 }) + 1;
+        let nums = random_sorted(mut seed, n, top);
+        let k = (next_random(mut seed) % (if i % 2 == 0 { n } else { 20.min(n) }) + 1) as i32;
+        let r = can_divide_into_subsequences(nums, k);
+        if r {
+            yes += 1;
+        }
+        check = (check * 31 + (if r { 1 } else { 2 }) + n) % 1000000007;
+    }
+    println(f"2000 random arrays: {yes} can be divided, checksum {check}");
+}

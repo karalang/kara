@@ -1,0 +1,120 @@
+// LeetCode #1116: Print Zero Even Odd -- the numbers through channels:
+// `zero` prints its 0 and sends the number that comes next to `odd` or
+// `even`, which prints what it receives and says so on a channel back
+// to `zero`. The two printers never count; they print what they are
+// sent.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct ZeroEvenOdd {
+    n: i64,
+    evens: (Sender[i64], Receiver[i64]),
+    odds: (Sender[i64], Receiver[i64]),
+    printed: (Sender[()], Receiver[()]),
+}
+
+impl ZeroEvenOdd {
+    fn new(n: i64) -> ZeroEvenOdd {
+        ZeroEvenOdd { n, evens: channel(1), odds: channel(1), printed: channel(1) }
+    }
+
+    fn zero(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            print_number(0);
+            let to = if i % 2 == 0 { ref self.evens.0 } else { ref self.odds.0 };
+            let _ = to.send(i);
+            let _ = self.printed.1.recv();
+        }
+    }
+
+    fn even(self, print_number: Fn(i64)) {
+        for _ in 0..self.n / 2 {
+            if let Some(i) = self.evens.1.recv() {
+                print_number(i);
+            }
+            let _ = self.printed.0.send(());
+        }
+    }
+
+    fn odd(self, print_number: Fn(i64)) {
+        for _ in 0..(self.n + 1) / 2 {
+            if let Some(i) = self.odds.1.recv() {
+                print_number(i);
+            }
+            let _ = self.printed.0.send(());
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: one task each for `zero`, `even` and `odd`, started
+// in the order `order` gives (0, 1, 2 for zero, even, odd), each handed
+// a print function; the numbers go to one log, which the run returns.
+fn run(n: i64, order: Vec[i64]) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let zeo = ZeroEvenOdd.new(n);
+    {
+        let group = TaskGroup.new();
+        for k in order.iter() {
+            match k {
+                0 => {
+                    group.spawn(|| zeo.zero(|x| log.lock().value.push_str(x.to_string())));
+                }
+                1 => {
+                    group.spawn(|| zeo.even(|x| log.lock().value.push_str(x.to_string())));
+                }
+                _ => {
+                    group.spawn(|| zeo.odd(|x| log.lock().value.push_str(x.to_string())));
+                }
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+// What the run should print: `0` before each of 1 to n.
+fn expected(n: i64) -> String {
+    let mut s = String.new();
+    for i in 1..=n {
+        s.push_str(f"0{i}");
+    }
+    s
+}
+
+fn main() {
+    let orders: Vec[Vec[i64]] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    println(f"n = 2 -> {run(2, orders[0].clone())}");
+    println(f"n = 5 -> {run(5, orders[0].clone())}");
+    println(f"n = 1, odd started first -> {run(1, orders[4].clone())}");
+    println(f"n = 6, even started first -> {run(6, orders[3].clone())}");
+    // 2000 runs of up to 15 numbers, the tasks started in a random order
+    let mut seed = 1116;
+    let mut right = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 15 + 1;
+        let order = orders[next_random(mut seed) % 6].clone();
+        let out = run(n, order);
+        if out == expected(n) {
+            right += 1;
+        }
+        for b in out.bytes() {
+            check = (check * 131 + b) % 1000000007;
+        }
+    }
+    println(f"2000 runs of up to 15 numbers: {right} in order, checksum {check}");
+    // LeetCode's largest
+    let out = run(1000, orders[5].clone());
+    let mut check = 0;
+    for b in out.bytes() {
+        check = (check * 131 + b) % 1000000007;
+    }
+    println(f"n = 1000: {out.len()} characters, in order {out == expected(1000)}, checksum {check}");
+}

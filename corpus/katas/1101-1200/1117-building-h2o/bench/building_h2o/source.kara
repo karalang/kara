@@ -1,0 +1,92 @@
+// LeetCode #1117: Building H2O -- the bench: the ★ arm, 500 runs of
+// LeetCode's largest water, 20 molecules, the atoms in a shuffled order.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct H2o {
+    bonding: Mutex[()],
+    hydrogens: (Sender[Sender[Sender[()]]], Receiver[Sender[Sender[()]]]),
+}
+
+impl H2o {
+    fn new() -> H2o {
+        H2o { bonding: Mutex.new(()), hydrogens: channel(2) }
+    }
+
+    fn hydrogen(self, release_hydrogen: Fn()) {
+        let (go_tx, go_rx) = channel(1);
+        let _ = self.hydrogens.0.send(go_tx);
+        if let Some(out) = go_rx.recv() {
+            release_hydrogen();
+            let _ = out.send(());
+        }
+    }
+
+    fn oxygen(self, release_oxygen: Fn()) {
+        let _bond = self.bonding.lock();
+        let mut gos: Vec[Sender[Sender[()]]] = [];
+        for _ in 0..2 {
+            if let Some(go) = self.hydrogens.1.recv() {
+                gos.push(go);
+            }
+        }
+        release_oxygen();
+        let (out_tx, out_rx) = channel(2);
+        for go in gos.iter() {
+            let _ = go.send(out_tx.clone());
+        }
+        for _ in 0..2 {
+            let _ = out_rx.recv();
+        }
+    }
+}
+
+fn run(water: Vec[u8]) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let h2o = H2o.new();
+    {
+        let group = TaskGroup.new();
+        for c in water.iter() {
+            if c == b'H' {
+                group.spawn(|| h2o.hydrogen(|| log.lock().value.push_str("H")));
+            } else {
+                group.spawn(|| h2o.oxygen(|| log.lock().value.push_str("O")));
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn main() {
+    let mut seed = 1117;
+    let mut whole = 0;
+    let mut check = 0;
+    for r in 0..500 {
+        let mut water: Vec[u8] = [];
+        for _ in 0..20 {
+            water.push(b'O');
+            water.push(b'H');
+            water.push(b'H');
+        }
+        for j in 0..60 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let k = j + seed / 65536 % (60 - j);
+            water.swap(j, k);
+        }
+        let out = run(water);
+        let b = out.bytes();
+        let mut molecules = 0;
+        for i in 0..b.len() / 3 {
+            let hs = b[3 * i..3 * i + 3].iter().filter(|c| c == b'H').count();
+            if hs == 2 {
+                molecules += 1;
+            }
+        }
+        if molecules == 20 {
+            whole += 1;
+        }
+        check = (check * 31 + out.len() + r) % 1000000007;
+    }
+    println(f"500 runs of 20 molecules: {whole} with every molecule whole, checksum {check}");
+}

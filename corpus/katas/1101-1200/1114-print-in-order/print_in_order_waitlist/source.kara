@@ -1,0 +1,122 @@
+// LeetCode #1114: Print in Order -- a condition variable built from a
+// `Mutex` and channels: the stage reached and a list of waiters sit
+// under one lock; a method whose turn has not come puts a one-shot
+// channel on the list and waits on it, and each method that finishes
+// raises the stage and wakes every waiter whose turn it now is.
+
+import std.sync.{Mutex, TaskGroup};
+
+struct Turns {
+    stage: i64,
+    waiting: Vec[(i64, Sender[()])],
+}
+
+sync struct Foo {
+    turns: Mutex[Turns],
+}
+
+impl Foo {
+    fn new() -> Foo {
+        Foo { turns: Mutex.new(Turns { stage: 0, waiting: [] }) }
+    }
+
+    // Waits until `stage` methods have finished.
+    fn wait_for(self, stage: i64) {
+        let (tx, rx) = channel(1);
+        {
+            let g = self.turns.lock();
+            if g.value.stage >= stage {
+                return;
+            }
+            g.value.waiting.push((stage, tx));
+        }
+        let _ = rx.recv();
+    }
+
+    // Marks one more method finished and wakes whoever that lets go.
+    fn finish(self) {
+        let g = self.turns.lock();
+        g.value.stage += 1;
+        let stage = g.value.stage;
+        let mut still: Vec[(i64, Sender[()])] = [];
+        for (want, tx) in g.value.waiting.drain(0..g.value.waiting.len()) {
+            if want <= stage {
+                let _ = tx.send(());
+            } else {
+                still.push((want, tx));
+            }
+        }
+        g.value.waiting = still;
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        self.finish();
+    }
+
+    fn second(self, print_second: Fn()) {
+        self.wait_for(1);
+        print_second();
+        self.finish();
+    }
+
+    fn third(self, print_third: Fn()) {
+        self.wait_for(2);
+        print_third();
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: one task per method, started in the order `nums`
+// gives, each handing its method a print function; the prints go to one
+// log, which the run returns.
+fn run(nums: Vec[i64]) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let foo = Foo.new();
+    {
+        let group = TaskGroup.new();
+        for k in nums.iter() {
+            match k {
+                1 => {
+                    group.spawn(|| foo.first(|| log.lock().value.push_str("first")));
+                }
+                2 => {
+                    group.spawn(|| foo.second(|| log.lock().value.push_str("second")));
+                }
+                _ => {
+                    group.spawn(|| foo.third(|| log.lock().value.push_str("third")));
+                }
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn main() {
+    let orders: Vec[Vec[i64]] = [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]];
+    for nums in orders.iter() {
+        println(f"{nums} -> {run(nums.clone())}");
+    }
+    // 2000 runs, each in a random one of the six orders
+    let mut seed = 1114;
+    let mut in_order = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let nums = orders[next_random(mut seed) % 6].clone();
+        let out = run(nums);
+        if out == "firstsecondthird" {
+            in_order += 1;
+        }
+        for b in out.bytes() {
+            check = (check * 131 + b) % 1000000007;
+        }
+    }
+    println(f"2000 runs in random orders: {in_order} printed in order, checksum {check}");
+}

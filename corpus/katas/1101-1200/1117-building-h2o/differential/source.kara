@@ -1,0 +1,456 @@
+// LeetCode #1117: Building H2O -- a differential over the
+// four arms: every run's log checked against the statement and against
+// five properties of how the runs behave; see the README.
+
+import std.sync.{Atomic, Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+// ---- building_h2o.kara ----
+
+sync struct A0H2o {
+    bonding: Mutex[()],
+    hydrogens: (Sender[Sender[Sender[()]]], Receiver[Sender[Sender[()]]]),
+}
+
+impl A0H2o {
+    fn new() -> A0H2o {
+        A0H2o { bonding: Mutex.new(()), hydrogens: channel(2) }
+    }
+
+    fn hydrogen(self, release_hydrogen: Fn()) {
+        let (go_tx, go_rx) = channel(1);
+        let _ = self.hydrogens.0.send(go_tx);
+        if let Some(out) = go_rx.recv() {
+            release_hydrogen();
+            let _ = out.send(());
+        }
+    }
+
+    fn oxygen(self, release_oxygen: Fn()) {
+        let _bond = self.bonding.lock();
+        let mut gos: Vec[Sender[Sender[()]]] = [];
+        for _ in 0..2 {
+            if let Some(go) = self.hydrogens.1.recv() {
+                gos.push(go);
+            }
+        }
+        release_oxygen();
+        let (out_tx, out_rx) = channel(2);
+        for go in gos.iter() {
+            let _ = go.send(out_tx.clone());
+        }
+        for _ in 0..2 {
+            let _ = out_rx.recv();
+        }
+    }
+}
+
+// ---- building_h2o_semaphore.kara ----
+
+struct A1Waiting {
+    count: i64,
+    waiting: Vec[Sender[()]],
+}
+
+sync struct A1Barrier {
+    parties: i64,
+    state: Mutex[A1Waiting],
+}
+
+impl A1Barrier {
+    fn new(parties: i64) -> A1Barrier {
+        A1Barrier { parties, state: Mutex.new(A1Waiting { count: 0, waiting: [] }) }
+    }
+
+    // Waits until `parties` tasks are waiting, then lets them all go.
+    fn wait(self) {
+        let (tx, rx) = channel(1);
+        {
+            let g = self.state.lock();
+            g.value.count += 1;
+            if g.value.count < self.parties {
+                g.value.waiting.push(tx);
+            } else {
+                g.value.count = 0;
+                for w in g.value.waiting.drain(0..g.value.waiting.len()) {
+                    let _ = w.send(());
+                }
+                return;
+            }
+        }
+        let _ = rx.recv();
+    }
+}
+
+sync struct A1H2o {
+    hydrogens: Semaphore,
+    oxygens: Semaphore,
+    barrier: A1Barrier,
+}
+
+impl A1H2o {
+    fn new() -> A1H2o {
+        A1H2o { hydrogens: Semaphore.new(2), oxygens: Semaphore.new(1), barrier: A1Barrier.new(3) }
+    }
+
+    fn hydrogen(self, release_hydrogen: Fn()) {
+        let _ = self.hydrogens.acquire(60000);
+        self.barrier.wait();
+        release_hydrogen();
+        self.hydrogens.release();
+    }
+
+    fn oxygen(self, release_oxygen: Fn()) {
+        let _ = self.oxygens.acquire(60000);
+        self.barrier.wait();
+        release_oxygen();
+        self.oxygens.release();
+    }
+}
+
+// ---- building_h2o_waitlist.kara ----
+
+struct A2Molecule {
+    hydrogens: i64,
+    oxygens: i64,
+    out: i64,
+    waiting: Vec[Sender[()]],
+}
+
+sync struct A2H2o {
+    molecule: Mutex[A2Molecule],
+}
+
+impl A2H2o {
+    fn new() -> A2H2o {
+        A2H2o { molecule: Mutex.new(A2Molecule { hydrogens: 0, oxygens: 0, out: 0, waiting: [] }) }
+    }
+
+    // Waits until the molecule has room for one more of the element.
+    fn enter(self, hydrogen: bool) {
+        loop {
+            let (tx, rx) = channel(1);
+            {
+                let g = self.molecule.lock();
+                if hydrogen and g.value.hydrogens < 2 {
+                    g.value.hydrogens += 1;
+                    return;
+                }
+                if not hydrogen and g.value.oxygens < 1 {
+                    g.value.oxygens += 1;
+                    return;
+                }
+                g.value.waiting.push(tx);
+            }
+            let _ = rx.recv();
+        }
+    }
+
+    // One more atom out; the third empties the molecule.
+    fn leave(self) {
+        let g = self.molecule.lock();
+        g.value.out += 1;
+        if g.value.out == 3 {
+            g.value.hydrogens = 0;
+            g.value.oxygens = 0;
+            g.value.out = 0;
+            for w in g.value.waiting.drain(0..g.value.waiting.len()) {
+                let _ = w.send(());
+            }
+        }
+    }
+
+    fn hydrogen(self, release_hydrogen: Fn()) {
+        self.enter(true);
+        release_hydrogen();
+        self.leave();
+    }
+
+    fn oxygen(self, release_oxygen: Fn()) {
+        self.enter(false);
+        release_oxygen();
+        self.leave();
+    }
+}
+
+// ---- building_h2o_polling.kara ----
+
+struct A3Molecule {
+    hydrogens: i64,
+    oxygens: i64,
+    out: i64,
+}
+
+sync struct A3H2o {
+    molecule: Mutex[A3Molecule],
+}
+
+impl A3H2o {
+    fn new() -> A3H2o {
+        A3H2o { molecule: Mutex.new(A3Molecule { hydrogens: 0, oxygens: 0, out: 0 }) }
+    }
+
+    // Takes a place in the molecule for one more of the element, if it
+    // has room.
+    fn try_enter(self, hydrogen: bool) -> bool {
+        let g = self.molecule.lock();
+        if hydrogen and g.value.hydrogens < 2 {
+            g.value.hydrogens += 1;
+            true
+        } else if not hydrogen and g.value.oxygens < 1 {
+            g.value.oxygens += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    // One more atom out; the third empties the molecule.
+    fn leave(self) {
+        let g = self.molecule.lock();
+        g.value.out += 1;
+        if g.value.out == 3 {
+            *g.value = A3Molecule { hydrogens: 0, oxygens: 0, out: 0 };
+        }
+    }
+
+    fn hydrogen(self, release_hydrogen: Fn()) {
+        while not self.try_enter(true) {
+            sleep(Duration.ms(0));
+        }
+        release_hydrogen();
+        self.leave();
+    }
+
+    fn oxygen(self, release_oxygen: Fn()) {
+        while not self.try_enter(false) {
+            sleep(Duration.ms(0));
+        }
+        release_oxygen();
+        self.leave();
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+// One run of arm `which` over `water`: a task per atom, started in its
+// order, and with `two` a second water `water2` on its own `H2o` with
+// its own log, its tasks interleaved by `mix` (0 takes the next atom of
+// the first, 1 of the second). Each release does `work[k]` steps of busy
+// work for its `k`th atom, then checks that the molecule it joins in the
+// log has room for its element. Returns each log, and how many releases
+// found no room.
+fn run(which: i64, water: Vec[u8], water2: Vec[u8], mix: Vec[i64], work: Vec[i64], two: bool) -> (Vec[String], i64) {
+    let logs: Vec[Mutex[String]] = [Mutex.new(String.new()), Mutex.new(String.new())];
+    let counts: Vec[Atomic[i64]] = [Atomic.new(0), Atomic.new(0)];
+    let wrong: Atomic[i64] = Atomic.new(0);
+    let release = |log: i64, atom: Str| {
+        let k = counts[log].fetch_add(1);
+        let mut y = k;
+        for i in 0..work[k % work.len()] {
+            y = (y * 31 + i) % 1000003;
+        }
+        let g = logs[log].lock();
+        let b = g.value.bytes();
+        let start = b.len() / 3 * 3;
+        let same = b[start..b.len()].iter().filter(|c| c == atom.bytes()[0]).count();
+        let room = if atom == "H" { 2 } else { 1 };
+        if same >= room or y < 0 {
+            let _ = wrong.fetch_add(1);
+        }
+        g.value.push_str(atom);
+    };
+    let a0 = A0H2o.new();
+    let a1 = A1H2o.new();
+    let a2 = A2H2o.new();
+    let a3 = A3H2o.new();
+    let b0 = A0H2o.new();
+    let b1 = A1H2o.new();
+    let b2 = A2H2o.new();
+    let b3 = A3H2o.new();
+    // The atoms in the order their tasks start: (log, element).
+    let mut atoms: Vec[(i64, u8)] = [];
+    if two {
+        let mut (i, j) = (0, 0);
+        for m in mix.iter() {
+            if m == 0 {
+                atoms.push((0, water[i]));
+                i += 1;
+            } else {
+                atoms.push((1, water2[j]));
+                j += 1;
+            }
+        }
+    } else {
+        for c in water.iter() {
+            atoms.push((0, c));
+        }
+    }
+    {
+        let group = TaskGroup.new();
+        for (log, c) in atoms.iter() {
+            let hydrogen = c == b'H';
+            group.spawn(|| {
+                let f = || release(log, if hydrogen { "H" } else { "O" });
+                match (which, log, hydrogen) {
+                    (0, 0, true) => a0.hydrogen(f),
+                    (0, 0, false) => a0.oxygen(f),
+                    (0, _, true) => b0.hydrogen(f),
+                    (0, _, false) => b0.oxygen(f),
+                    (1, 0, true) => a1.hydrogen(f),
+                    (1, 0, false) => a1.oxygen(f),
+                    (1, _, true) => b1.hydrogen(f),
+                    (1, _, false) => b1.oxygen(f),
+                    (2, 0, true) => a2.hydrogen(f),
+                    (2, 0, false) => a2.oxygen(f),
+                    (2, _, true) => b2.hydrogen(f),
+                    (2, _, false) => b2.oxygen(f),
+                    (_, 0, true) => a3.hydrogen(f),
+                    (_, 0, false) => a3.oxygen(f),
+                    (_, _, true) => b3.hydrogen(f),
+                    (_, _, false) => b3.oxygen(f),
+                }
+            });
+        }
+    }
+    let out: Vec[String] = logs.iter().map(|m| m.lock().value.clone()).collect();
+    (out, wrong.load())
+}
+
+// Whether `out` is `n` whole molecules: three atoms each, two of them
+// hydrogens.
+fn whole(out: Str, n: i64) -> bool {
+    let b = out.bytes();
+    if b.len() != 3 * n {
+        return false;
+    }
+    for i in 0..n {
+        if b[3 * i..3 * i + 3].iter().filter(|c| c == b'H').count() != 2 {
+            return false;
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` molecules' atoms in a random order.
+fn shuffled(n: i64, seed: mut ref i64) -> Vec[u8] {
+    let mut atoms: Vec[u8] = [];
+    for _ in 0..n {
+        atoms.push(b'O');
+        atoms.push(b'H');
+        atoms.push(b'H');
+    }
+    for j in 0..atoms.len() {
+        let k = j + next_random(mut seed) % (atoms.len() - j);
+        atoms.swap(j, k);
+    }
+    atoms
+}
+
+struct Problem {
+    n: i64,
+    water: Vec[u8],
+    other: Vec[u8],
+    n2: i64,
+    water2: Vec[u8],
+    mix: Vec[i64],
+    work: Vec[i64],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let none: Vec[i64] = [0];
+    let empty: Vec[u8] = [];
+    let no_mix: Vec[i64] = [];
+    for w in 0..4 {
+        let shown = String.from_utf8(p.water.clone()).unwrap_or(String.new());
+        let what = f"arm {w}, water {shown}";
+        // P1: the statement read literally, every three atoms a molecule
+        let (logs, wrong) = run(w, p.water.clone(), empty.clone(), no_mix.clone(), none.clone(), false);
+        expect(mut t, 1, whole(logs[0], p.n), f"P1 {what} -> {logs[0]}");
+        t.check = (t.check * 131 + logs[0].len() + 7 * logs[0].bytes().iter().filter(|c| c == b'H').count()) % 1000000007;
+        // P2: each atom found room for its element in its molecule
+        expect(mut t, 2, wrong == 0, f"P2 {what}: {wrong} atoms found no room");
+        // P3: the same atoms started in another order
+        let (logs, _) = run(w, p.other.clone(), empty.clone(), no_mix.clone(), none.clone(), false);
+        expect(mut t, 3, whole(logs[0], p.n), f"P3 {what}, reordered -> {logs[0]}");
+        // P4: each release doing busy work first
+        let (logs, wrong) = run(w, p.water.clone(), empty.clone(), no_mix.clone(), p.work.clone(), false);
+        expect(mut t, 4, whole(logs[0], p.n) and wrong == 0, f"P4 {what}, work {p.work} -> {logs[0]}");
+        // P5: two waters at once on two `H2o`s, their atoms interleaved
+        let (logs, wrong) = run(w, p.water.clone(), p.water2.clone(), p.mix.clone(), none.clone(), true);
+        expect(mut t, 5, whole(logs[0], p.n) and whole(logs[1], p.n2) and wrong == 0, f"P5 {what} with {p.n2} more -> {logs}");
+        // P6: the water twice over on one `H2o` gives twice the molecules
+        let mut twice = p.water.clone();
+        twice.extend(p.other.clone());
+        let (logs, wrong) = run(w, twice, empty.clone(), no_mix.clone(), none.clone(), false);
+        expect(mut t, 6, whole(logs[0], 2 * p.n) and wrong == 0, f"P6 {what}, twice -> {logs[0]}");
+    }
+    t.cases += 1;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 600 problems of up to 8 molecules: the atoms shuffled, then
+    // reordered, a second water of up to 8 to interleave with, and busy
+    // work of up to 2000 steps for each of up to 5 releases in turn.
+    // Every choice is drawn before any arm answers.
+    let mut seed = 11171;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..600 {
+        let n = if i % 100 == 0 { 20 } else { next_random(mut seed) % 8 + 1 };
+        let water = shuffled(n, mut seed);
+        let mut other = water.clone();
+        for j in 0..other.len() {
+            let k = j + next_random(mut seed) % (other.len() - j);
+            other.swap(j, k);
+        }
+        let n2 = next_random(mut seed) % 8 + 1;
+        let water2 = shuffled(n2, mut seed);
+        let mut mix: Vec[i64] = [];
+        for _ in 0..3 * n {
+            mix.push(0);
+        }
+        for _ in 0..3 * n2 {
+            mix.push(1);
+        }
+        for j in 0..mix.len() {
+            let k = j + next_random(mut seed) % (mix.len() - j);
+            mix.swap(j, k);
+        }
+        let len = next_random(mut seed) % 5 + 1;
+        let work: Vec[i64] = (0..len).map(|_| next_random(mut seed) % 2000).collect();
+        problems.push(Problem { n, water, other, n2, water2, mix, work });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 4 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

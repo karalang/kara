@@ -1,0 +1,134 @@
+// LeetCode #1120: Maximum Average Subtree -- the ★ arm, one walk from the
+// root: each call returns its subtree's sum and count, after its
+// children's, and the best average seen so far is kept through a
+// `mut ref f64`. O(n).
+
+fn walk(node: Option[TreeNode], best: mut ref f64) -> (i64, i64) {
+    let Some(n) = node else {
+        return (0, 0);
+    };
+    let (ls, lc) = walk(n.left, mut best);
+    let (rs, rc) = walk(n.right, mut best);
+    let sum = ls + rs + n.val;
+    let count = lc + rc + 1;
+    let average = sum as f64 / count as f64;
+    if average > *best {
+        *best = average;
+    }
+    (sum, count)
+}
+
+fn maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    let mut best = 0.0;
+    let _ = walk(root, mut best);
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level-order form, "[1,2,null,4]": each node's two children
+// come next, in the order the nodes were met, "null" for none.
+fn parse(text: Str) -> Option[TreeNode] {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return None;
+    }
+    let items: Vec[Option[i32]] = inner.split(",").map(|s| if s == "null" { None } else { Some(i32.parse(s).unwrap()) }).collect();
+    let root = leaf(items[0].unwrap());
+    let mut queue: Vec[TreeNode] = [root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue[head];
+        head += 1;
+        if let Some(v) = items[i] {
+            let child = leaf(v);
+            node.left = Some(child);
+            queue.push(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = leaf(v);
+                node.right = Some(child);
+                queue.push(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A random tree of `size` nodes, each value up to `top`, each node hung
+// at a random free place below the ones before it.
+fn random_tree(seed: mut ref i64, size: i64, top: i64) -> TreeNode {
+    let root = leaf(((next_random(mut seed) * 32768 + next_random(mut seed)) % (top + 1)) as i32);
+    let mut nodes: Vec[TreeNode] = [root];
+    for _ in 1..size {
+        let v = ((next_random(mut seed) * 32768 + next_random(mut seed)) % (top + 1)) as i32;
+        loop {
+            let at = nodes[next_random(mut seed) % nodes.len()];
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    let c = leaf(v);
+                    at.left = Some(c);
+                    nodes.push(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                let c = leaf(v);
+                at.right = Some(c);
+                nodes.push(c);
+                break;
+            }
+        }
+    }
+    root
+}
+
+fn main() {
+    // LeetCode's two examples and six more: one node, a zero tree, a
+    // leaf beating its parent, the root beating every leaf, a chain, and
+    // the largest value deep in a full tree
+    let cases = ["[5,6,1]", "[0,null,1]", "[7]", "[0,0,0]", "[1,2,3,4,5,6,100000]", "[10,1,1]", "[1,null,2,null,3,null,4]", "[3,9,20,null,null,15,7]"];
+    for text in cases.iter() {
+        println(f"{text} -> {maximum_average_subtree(parse(text)):.5}");
+    }
+    // 2000 random trees of up to 40 nodes, values up to 10, 1000 or 10^5:
+    // the answers summed, and a checksum of each written to five places
+    let mut seed = 1120;
+    let mut total = 0.0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let size = next_random(mut seed) % 40 + 1;
+        let top = [10, 1000, 100000][i % 3];
+        let answer = maximum_average_subtree(Some(random_tree(mut seed, size, top)));
+        total += answer;
+        for b in f"{answer:.5}".bytes() {
+            check = (check * 131 + b) % 1000000007;
+        }
+    }
+    println(f"2000 random trees: answers total {total:.3}, checksum {check}");
+    // LeetCode's largest: 10^4 nodes, values up to 10^5, and a chain of
+    // 10^4 falling from 10^5
+    let big = random_tree(mut seed, 10000, 100000);
+    println(f"10^4 random nodes: {maximum_average_subtree(Some(big)):.5}");
+    let chain: Vec[String] = (0..10000).map(|i| if i == 0 { "100000" } else { f"null,{100000 - i * 10}" }).collect();
+    let text = f"[{chain.join(",")}]";
+    println(f"a chain of 10^4: {maximum_average_subtree(parse(text)):.5}");
+}

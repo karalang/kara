@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1115-print-foobar-alternately/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "post-m1:par"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "c57d79254"
+extracted_src = "6ee74729"

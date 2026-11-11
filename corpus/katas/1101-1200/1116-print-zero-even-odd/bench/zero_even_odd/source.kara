@@ -1,0 +1,89 @@
+// LeetCode #1116: Print Zero Even Odd -- the bench: the ★ arm, 1000 runs
+// over 1 to 200, the three tasks started in one of the six orders in
+// turn.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct ZeroEvenOdd {
+    n: i64,
+    zero_turn: (Sender[()], Receiver[()]),
+    even_turn: (Sender[()], Receiver[()]),
+    odd_turn: (Sender[()], Receiver[()]),
+}
+
+impl ZeroEvenOdd {
+    fn new(n: i64) -> ZeroEvenOdd {
+        let zero_turn = channel(1);
+        let _ = zero_turn.0.send(());
+        ZeroEvenOdd { n, zero_turn, even_turn: channel(1), odd_turn: channel(1) }
+    }
+
+    fn zero(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            let _ = self.zero_turn.1.recv();
+            print_number(0);
+            if i % 2 == 1 {
+                let _ = self.odd_turn.0.send(());
+            } else {
+                let _ = self.even_turn.0.send(());
+            }
+        }
+    }
+
+    fn even(self, print_number: Fn(i64)) {
+        for i in (2..=self.n).step_by(2) {
+            let _ = self.even_turn.1.recv();
+            print_number(i);
+            let _ = self.zero_turn.0.send(());
+        }
+    }
+
+    fn odd(self, print_number: Fn(i64)) {
+        for i in (1..=self.n).step_by(2) {
+            let _ = self.odd_turn.1.recv();
+            print_number(i);
+            let _ = self.zero_turn.0.send(());
+        }
+    }
+}
+
+fn run(n: i64, order: Vec[i64]) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let zeo = ZeroEvenOdd.new(n);
+    {
+        let group = TaskGroup.new();
+        for k in order.iter() {
+            match k {
+                0 => {
+                    group.spawn(|| zeo.zero(|x| log.lock().value.push_str(x.to_string())));
+                }
+                1 => {
+                    group.spawn(|| zeo.even(|x| log.lock().value.push_str(x.to_string())));
+                }
+                _ => {
+                    group.spawn(|| zeo.odd(|x| log.lock().value.push_str(x.to_string())));
+                }
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn main() {
+    let orders: Vec[Vec[i64]] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    let mut want = String.new();
+    for i in 1..=200 {
+        want.push_str(f"0{i}");
+    }
+    let mut right = 0;
+    let mut check = 0;
+    for r in 0..1000 {
+        let out = run(200, orders[r % 6].clone());
+        if out == want {
+            right += 1;
+        }
+        check = (check * 31 + out.len() + r) % 1000000007;
+    }
+    println(f"1000 runs over 1 to 200: {right} in order, checksum {check}");
+}

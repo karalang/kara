@@ -1,0 +1,87 @@
+// LeetCode #1111: Maximum Nesting Depth of Two Valid Parentheses Strings
+// -- a Rust solution as LeetCode's Rust users write it (`impl Solution`,
+// `String`, a `map` closure that keeps the depth in a captured `mut`),
+// carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn max_depth_after_split(seq: String) -> Vec[i32] {
+        let mut depth: i32 = 0;
+        seq.chars()
+            .map(|c| {
+                if c == '(' {
+                    depth += 1;
+                    (depth + 1) % 2
+                } else {
+                    depth -= 1;
+                    depth % 2
+                }
+            })
+            .collect()
+    }
+}
+
+fn max_depth_after_split(seq: Str) -> Vec[i32] {
+    Solution.max_depth_after_split(seq.to_string())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random valid parentheses string of `pairs` pairs: each step opens
+// when nothing is open or, while opens remain, one time in two.
+fn random_vps(seed: mut ref i64, pairs: i64) -> String {
+    let mut out = String.new();
+    let mut opens = 0;
+    let mut depth = 0;
+    while opens < pairs or depth > 0 {
+        if opens < pairs and (depth == 0 or next_random(mut seed) % 2 == 0) {
+            out.push('(');
+            opens += 1;
+            depth += 1;
+        } else {
+            out.push(')');
+            depth -= 1;
+        }
+    }
+    out
+}
+
+fn fold(h: i64, answer: Vec[i32]) -> i64 {
+    let mut h = h;
+    for g in answer.iter() {
+        h = (h * 3 + g + 1) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases: Vec[Str] = ["(()())", "()(())()", "()", "(())", "((()))", "()()()", "(()(()))", "((())())(())", "(((())))()", "()((()))(()())"];
+    for seq in cases.iter() {
+        println(f"{seq} -> {max_depth_after_split(seq)}");
+    }
+    // 2000 random strings of 1 to 50 pairs
+    let mut seed = 1111;
+    let mut ones = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let pairs = next_random(mut seed) % 50 + 1;
+        let seq = random_vps(mut seed, pairs);
+        let answer = max_depth_after_split(seq);
+        ones += answer.iter().sum();
+        check = fold(check, answer);
+    }
+    println(f"2000 random strings: {ones} in the second group, checksum {check}");
+    // LeetCode's longest: 10^4 characters, one nest and one at random
+    let nest = "(".repeat(5000) + ")".repeat(5000);
+    let answer = max_depth_after_split(nest);
+    println(f"5000 nested pairs: {answer.iter().sum()} in the second group, checksum {fold(0, answer)}");
+    let seq = random_vps(mut seed, 5000);
+    let answer = max_depth_after_split(seq);
+    println(f"5000 random pairs: {answer.iter().sum()} in the second group, checksum {fold(0, answer)}");
+}

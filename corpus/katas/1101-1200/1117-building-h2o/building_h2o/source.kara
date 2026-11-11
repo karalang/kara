@@ -1,0 +1,132 @@
+// LeetCode #1117: Building H2O -- the ★ arm, each oxygen building its
+// molecule: a hydrogen hands a one-shot channel to the oxygens and waits
+// on it; an oxygen takes the bonding lock, receives two hydrogens,
+// releases itself, sends each hydrogen a channel to say it is out on,
+// and waits for both before it gives the lock up. One molecule is built
+// at a time, so its three atoms come out together.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct H2o {
+    bonding: Mutex[()],
+    hydrogens: (Sender[Sender[Sender[()]]], Receiver[Sender[Sender[()]]]),
+}
+
+impl H2o {
+    fn new() -> H2o {
+        H2o { bonding: Mutex.new(()), hydrogens: channel(2) }
+    }
+
+    fn hydrogen(self, release_hydrogen: Fn()) {
+        let (go_tx, go_rx) = channel(1);
+        let _ = self.hydrogens.0.send(go_tx);
+        if let Some(out) = go_rx.recv() {
+            release_hydrogen();
+            let _ = out.send(());
+        }
+    }
+
+    fn oxygen(self, release_oxygen: Fn()) {
+        let _bond = self.bonding.lock();
+        let mut gos: Vec[Sender[Sender[()]]] = [];
+        for _ in 0..2 {
+            if let Some(go) = self.hydrogens.1.recv() {
+                gos.push(go);
+            }
+        }
+        release_oxygen();
+        let (out_tx, out_rx) = channel(2);
+        for go in gos.iter() {
+            let _ = go.send(out_tx.clone());
+        }
+        for _ in 0..2 {
+            let _ = out_rx.recv();
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: a task per atom of `water`, started in its order,
+// each calling `hydrogen` or `oxygen` with a release function; the atoms
+// go to one log, which the run returns.
+fn run(water: Str) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let h2o = H2o.new();
+    {
+        let group = TaskGroup.new();
+        for c in water.chars() {
+            if c == 'H' {
+                group.spawn(|| h2o.hydrogen(|| log.lock().value.push_str("H")));
+            } else {
+                group.spawn(|| h2o.oxygen(|| log.lock().value.push_str("O")));
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+// How many of `out`'s threes are each two hydrogens and an oxygen, all
+// of them for a right answer.
+fn molecules(out: Str) -> i64 {
+    let b = out.bytes();
+    let mut count = 0;
+    for i in 0..b.len() / 3 {
+        let hs = b[3 * i..3 * i + 3].iter().filter(|c| c == b'H').count();
+        if hs == 2 {
+            count += 1;
+        }
+    }
+    count
+}
+
+// A random water of `n` molecules: n oxygens and 2n hydrogens shuffled.
+fn water_of(n: i64, seed: mut ref i64) -> String {
+    let mut atoms: Vec[char] = [];
+    for _ in 0..n {
+        atoms.push('O');
+        atoms.push('H');
+        atoms.push('H');
+    }
+    for j in 0..atoms.len() {
+        let k = j + next_random(mut seed) % (atoms.len() - j);
+        atoms.swap(j, k);
+    }
+    String.from_iter(atoms.iter().cloned())
+}
+
+fn show(water: Str) -> String {
+    let out = run(water);
+    f"{water}: {out.len()} atoms, {molecules(out)} of {water.len() / 3} molecules whole"
+}
+
+fn main() {
+    println(show("HOH"));
+    println(show("OOHHHH"));
+    println(show("HHHHOO"));
+    println(show("OHHOHHOHH"));
+    // 2000 runs of up to 12 molecules, the atoms in a random order
+    let mut seed = 1117;
+    let mut right = 0;
+    let mut atoms = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let water = water_of(n, mut seed);
+        let out = run(water);
+        atoms += out.len();
+        if molecules(out) == n {
+            right += 1;
+        }
+    }
+    println(f"2000 random waters of up to 12 molecules: {atoms} atoms, {right} with every molecule whole");
+    // LeetCode's largest, 20 molecules, the oxygens first
+    let mut water = "O".repeat(20);
+    water.push_str("H".repeat(40));
+    println(show(water));
+}

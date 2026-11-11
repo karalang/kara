@@ -1,0 +1,68 @@
+// LeetCode #1114: Print in Order -- the bench: the ★ arm, 10^4 runs, each
+// starting its three tasks in one of the six orders in turn.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct Foo {
+    first_done: (Sender[()], Receiver[()]),
+    second_done: (Sender[()], Receiver[()]),
+}
+
+impl Foo {
+    fn new() -> Foo {
+        Foo { first_done: channel(1), second_done: channel(1) }
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        let _ = self.first_done.0.send(());
+    }
+
+    fn second(self, print_second: Fn()) {
+        let _ = self.first_done.1.recv();
+        print_second();
+        let _ = self.second_done.0.send(());
+    }
+
+    fn third(self, print_third: Fn()) {
+        let _ = self.second_done.1.recv();
+        print_third();
+    }
+}
+
+fn run(nums: Vec[i64]) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let foo = Foo.new();
+    {
+        let group = TaskGroup.new();
+        for k in nums.iter() {
+            match k {
+                1 => {
+                    group.spawn(|| foo.first(|| log.lock().value.push_str("first")));
+                }
+                2 => {
+                    group.spawn(|| foo.second(|| log.lock().value.push_str("second")));
+                }
+                _ => {
+                    group.spawn(|| foo.third(|| log.lock().value.push_str("third")));
+                }
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn main() {
+    let orders: Vec[Vec[i64]] = [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]];
+    let mut in_order = 0;
+    let mut check = 0;
+    for r in 0..10000 {
+        let out = run(orders[r * 7 % 6].clone());
+        if out == "firstsecondthird" {
+            in_order += 1;
+        }
+        check = (check * 31 + out.len()) % 1000000007;
+    }
+    println(f"10000 runs: {in_order} printed in order, checksum {check}");
+}

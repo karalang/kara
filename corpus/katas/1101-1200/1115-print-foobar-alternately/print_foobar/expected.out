@@ -1,0 +1,6 @@
+n = 1 -> foobar
+n = 2 -> foobarfoobar
+n = 2, bar started first -> foobarfoobar
+n = 3, bar started first -> foobarfoobarfoobar
+2000 runs of up to 12 rounds: 2000 alternating, checksum 509823911
+n = 1000: 6000 characters, alternating true, checksum 260721490

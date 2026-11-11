@@ -1,0 +1,6 @@
+n = 2 -> 0102
+n = 5 -> 0102030405
+n = 1, odd started first -> 01
+n = 6, even started first -> 010203040506
+2000 runs of up to 15 numbers: 2000 in order, checksum 227638611
+n = 1000: 3893 characters, in order true, checksum 252310152

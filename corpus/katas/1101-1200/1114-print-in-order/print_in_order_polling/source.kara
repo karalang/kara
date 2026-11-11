@@ -1,0 +1,95 @@
+// LeetCode #1114: Print in Order -- polling: an `Atomic` stage, and a
+// waiting method that checks it and sleeps between checks for no time at
+// all. The sleep is still a suspension point, so the method waiting lets
+// the others run; a loop that only re-reads the stage would not, and
+// core-semantics.md §11.1 does not promise it ever ends.
+
+import std.sync.{Atomic, Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+sync struct Foo {
+    stage: Atomic[i64],
+}
+
+impl Foo {
+    fn new() -> Foo {
+        Foo { stage: Atomic.new(0) }
+    }
+
+    fn wait_for(self, stage: i64) {
+        while self.stage.load() < stage {
+            sleep(Duration.ms(0));
+        }
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        self.stage.store(1);
+    }
+
+    fn second(self, print_second: Fn()) {
+        self.wait_for(1);
+        print_second();
+        self.stage.store(2);
+    }
+
+    fn third(self, print_third: Fn()) {
+        self.wait_for(2);
+        print_third();
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: one task per method, started in the order `nums`
+// gives, each handing its method a print function; the prints go to one
+// log, which the run returns.
+fn run(nums: Vec[i64]) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let foo = Foo.new();
+    {
+        let group = TaskGroup.new();
+        for k in nums.iter() {
+            match k {
+                1 => {
+                    group.spawn(|| foo.first(|| log.lock().value.push_str("first")));
+                }
+                2 => {
+                    group.spawn(|| foo.second(|| log.lock().value.push_str("second")));
+                }
+                _ => {
+                    group.spawn(|| foo.third(|| log.lock().value.push_str("third")));
+                }
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn main() {
+    let orders: Vec[Vec[i64]] = [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]];
+    for nums in orders.iter() {
+        println(f"{nums} -> {run(nums.clone())}");
+    }
+    // 2000 runs, each in a random one of the six orders
+    let mut seed = 1114;
+    let mut in_order = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let nums = orders[next_random(mut seed) % 6].clone();
+        let out = run(nums);
+        if out == "firstsecondthird" {
+            in_order += 1;
+        }
+        for b in out.bytes() {
+            check = (check * 131 + b) % 1000000007;
+        }
+    }
+    println(f"2000 runs in random orders: {in_order} printed in order, checksum {check}");
+}

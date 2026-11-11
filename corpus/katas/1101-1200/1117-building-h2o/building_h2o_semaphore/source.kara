@@ -1,0 +1,157 @@
+// LeetCode #1117: Building H2O -- semaphores and a barrier, as the
+// Python solutions on LeetCode write it with `threading.Semaphore(2)`,
+// `threading.Semaphore(1)` and `threading.Barrier(3)`: two hydrogens and
+// one oxygen get past the semaphores, meet at the barrier, release
+// themselves and only then give their permits back, so the next
+// molecule gathers after all three are out. The semaphores are the
+// standard library's; it has no barrier, so the barrier is a count under
+// a lock with the atoms waiting on it.
+
+import std.sync.{Mutex, TaskGroup};
+
+struct Waiting {
+    count: i64,
+    waiting: Vec[Sender[()]],
+}
+
+sync struct Barrier {
+    parties: i64,
+    state: Mutex[Waiting],
+}
+
+impl Barrier {
+    fn new(parties: i64) -> Barrier {
+        Barrier { parties, state: Mutex.new(Waiting { count: 0, waiting: [] }) }
+    }
+
+    // Waits until `parties` tasks are waiting, then lets them all go.
+    fn wait(self) {
+        let (tx, rx) = channel(1);
+        {
+            let g = self.state.lock();
+            g.value.count += 1;
+            if g.value.count < self.parties {
+                g.value.waiting.push(tx);
+            } else {
+                g.value.count = 0;
+                for w in g.value.waiting.drain(0..g.value.waiting.len()) {
+                    let _ = w.send(());
+                }
+                return;
+            }
+        }
+        let _ = rx.recv();
+    }
+}
+
+sync struct H2o {
+    hydrogens: Semaphore,
+    oxygens: Semaphore,
+    barrier: Barrier,
+}
+
+impl H2o {
+    fn new() -> H2o {
+        H2o { hydrogens: Semaphore.new(2), oxygens: Semaphore.new(1), barrier: Barrier.new(3) }
+    }
+
+    fn hydrogen(self, release_hydrogen: Fn()) {
+        let _ = self.hydrogens.acquire(60000);
+        self.barrier.wait();
+        release_hydrogen();
+        self.hydrogens.release();
+    }
+
+    fn oxygen(self, release_oxygen: Fn()) {
+        let _ = self.oxygens.acquire(60000);
+        self.barrier.wait();
+        release_oxygen();
+        self.oxygens.release();
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: a task per atom of `water`, started in its order,
+// each calling `hydrogen` or `oxygen` with a release function; the atoms
+// go to one log, which the run returns.
+fn run(water: Str) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let h2o = H2o.new();
+    {
+        let group = TaskGroup.new();
+        for c in water.chars() {
+            if c == 'H' {
+                group.spawn(|| h2o.hydrogen(|| log.lock().value.push_str("H")));
+            } else {
+                group.spawn(|| h2o.oxygen(|| log.lock().value.push_str("O")));
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+// How many of `out`'s threes are each two hydrogens and an oxygen, all
+// of them for a right answer.
+fn molecules(out: Str) -> i64 {
+    let b = out.bytes();
+    let mut count = 0;
+    for i in 0..b.len() / 3 {
+        let hs = b[3 * i..3 * i + 3].iter().filter(|c| c == b'H').count();
+        if hs == 2 {
+            count += 1;
+        }
+    }
+    count
+}
+
+// A random water of `n` molecules: n oxygens and 2n hydrogens shuffled.
+fn water_of(n: i64, seed: mut ref i64) -> String {
+    let mut atoms: Vec[char] = [];
+    for _ in 0..n {
+        atoms.push('O');
+        atoms.push('H');
+        atoms.push('H');
+    }
+    for j in 0..atoms.len() {
+        let k = j + next_random(mut seed) % (atoms.len() - j);
+        atoms.swap(j, k);
+    }
+    String.from_iter(atoms.iter().cloned())
+}
+
+fn show(water: Str) -> String {
+    let out = run(water);
+    f"{water}: {out.len()} atoms, {molecules(out)} of {water.len() / 3} molecules whole"
+}
+
+fn main() {
+    println(show("HOH"));
+    println(show("OOHHHH"));
+    println(show("HHHHOO"));
+    println(show("OHHOHHOHH"));
+    // 2000 runs of up to 12 molecules, the atoms in a random order
+    let mut seed = 1117;
+    let mut right = 0;
+    let mut atoms = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let water = water_of(n, mut seed);
+        let out = run(water);
+        atoms += out.len();
+        if molecules(out) == n {
+            right += 1;
+        }
+    }
+    println(f"2000 random waters of up to 12 molecules: {atoms} atoms, {right} with every molecule whole");
+    // LeetCode's largest, 20 molecules, the oxygens first
+    let mut water = "O".repeat(20);
+    water.push_str("H".repeat(40));
+    println(show(water));
+}

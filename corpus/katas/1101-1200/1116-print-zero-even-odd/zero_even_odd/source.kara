@@ -1,0 +1,125 @@
+// LeetCode #1116: Print Zero Even Odd -- the ★ arm, three channels
+// passed around: each holds the turn of one method. `zero` waits on its
+// own, prints and hands the turn to `odd` or `even` by the number that
+// comes next, and that one prints its number and hands the turn back.
+// The first turn is `zero`'s, put in its channel when the printer is
+// made. A `recv` is a suspension point, so a waiting task lets the
+// others run.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct ZeroEvenOdd {
+    n: i64,
+    zero_turn: (Sender[()], Receiver[()]),
+    even_turn: (Sender[()], Receiver[()]),
+    odd_turn: (Sender[()], Receiver[()]),
+}
+
+impl ZeroEvenOdd {
+    fn new(n: i64) -> ZeroEvenOdd {
+        let zero_turn = channel(1);
+        let _ = zero_turn.0.send(());
+        ZeroEvenOdd { n, zero_turn, even_turn: channel(1), odd_turn: channel(1) }
+    }
+
+    fn zero(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            let _ = self.zero_turn.1.recv();
+            print_number(0);
+            if i % 2 == 1 {
+                let _ = self.odd_turn.0.send(());
+            } else {
+                let _ = self.even_turn.0.send(());
+            }
+        }
+    }
+
+    fn even(self, print_number: Fn(i64)) {
+        for i in (2..=self.n).step_by(2) {
+            let _ = self.even_turn.1.recv();
+            print_number(i);
+            let _ = self.zero_turn.0.send(());
+        }
+    }
+
+    fn odd(self, print_number: Fn(i64)) {
+        for i in (1..=self.n).step_by(2) {
+            let _ = self.odd_turn.1.recv();
+            print_number(i);
+            let _ = self.zero_turn.0.send(());
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: one task each for `zero`, `even` and `odd`, started
+// in the order `order` gives (0, 1, 2 for zero, even, odd), each handed
+// a print function; the numbers go to one log, which the run returns.
+fn run(n: i64, order: Vec[i64]) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let zeo = ZeroEvenOdd.new(n);
+    {
+        let group = TaskGroup.new();
+        for k in order.iter() {
+            match k {
+                0 => {
+                    group.spawn(|| zeo.zero(|x| log.lock().value.push_str(x.to_string())));
+                }
+                1 => {
+                    group.spawn(|| zeo.even(|x| log.lock().value.push_str(x.to_string())));
+                }
+                _ => {
+                    group.spawn(|| zeo.odd(|x| log.lock().value.push_str(x.to_string())));
+                }
+            }
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+// What the run should print: `0` before each of 1 to n.
+fn expected(n: i64) -> String {
+    let mut s = String.new();
+    for i in 1..=n {
+        s.push_str(f"0{i}");
+    }
+    s
+}
+
+fn main() {
+    let orders: Vec[Vec[i64]] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    println(f"n = 2 -> {run(2, orders[0].clone())}");
+    println(f"n = 5 -> {run(5, orders[0].clone())}");
+    println(f"n = 1, odd started first -> {run(1, orders[4].clone())}");
+    println(f"n = 6, even started first -> {run(6, orders[3].clone())}");
+    // 2000 runs of up to 15 numbers, the tasks started in a random order
+    let mut seed = 1116;
+    let mut right = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 15 + 1;
+        let order = orders[next_random(mut seed) % 6].clone();
+        let out = run(n, order);
+        if out == expected(n) {
+            right += 1;
+        }
+        for b in out.bytes() {
+            check = (check * 131 + b) % 1000000007;
+        }
+    }
+    println(f"2000 runs of up to 15 numbers: {right} in order, checksum {check}");
+    // LeetCode's largest
+    let out = run(1000, orders[5].clone());
+    let mut check = 0;
+    for b in out.bytes() {
+        check = (check * 131 + b) % 1000000007;
+    }
+    println(f"n = 1000: {out.len()} characters, in order {out == expected(1000)}, checksum {check}");
+}

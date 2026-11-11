@@ -1,0 +1,327 @@
+// LeetCode #1115: Print FooBar Alternately -- a differential over the
+// four arms: every run's log checked against the statement and against
+// five properties of how the runs behave; see the README.
+
+import std.sync.{Atomic, Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+// ---- print_foobar.kara ----
+
+sync struct A0FooBar {
+    n: i64,
+    foo_turn: (Sender[()], Receiver[()]),
+    bar_turn: (Sender[()], Receiver[()]),
+}
+
+impl A0FooBar {
+    fn new(n: i64) -> A0FooBar {
+        let foo_turn = channel(1);
+        let _ = foo_turn.0.send(());
+        A0FooBar { n, foo_turn, bar_turn: channel(1) }
+    }
+
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.foo_turn.1.recv();
+            print_foo();
+            let _ = self.bar_turn.0.send(());
+        }
+    }
+
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.bar_turn.1.recv();
+            print_bar();
+            let _ = self.foo_turn.0.send(());
+        }
+    }
+}
+
+// ---- print_foobar_semaphore.kara ----
+
+sync struct A1FooBar {
+    n: i64,
+    foo_sem: Semaphore,
+    bar_sem: Semaphore,
+}
+
+impl A1FooBar {
+    fn new(n: i64) -> A1FooBar {
+        A1FooBar { n, foo_sem: Semaphore.new(1), bar_sem: Semaphore.new(0) }
+    }
+
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.foo_sem.acquire(60000);
+            print_foo();
+            self.bar_sem.release();
+        }
+    }
+
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.bar_sem.acquire(60000);
+            print_bar();
+            self.foo_sem.release();
+        }
+    }
+}
+
+// ---- print_foobar_waitlist.kara ----
+
+struct A2Turn {
+    foo_next: bool,
+    waiting: Option[Sender[()]],
+}
+
+sync struct A2FooBar {
+    n: i64,
+    turn: Mutex[A2Turn],
+}
+
+impl A2FooBar {
+    fn new(n: i64) -> A2FooBar {
+        A2FooBar { n, turn: Mutex.new(A2Turn { foo_next: true, waiting: None }) }
+    }
+
+    // Waits until it is `foo`'s turn when `foo` is true, else `bar`'s.
+    fn wait_for(self, foo: bool) {
+        let (tx, rx) = channel(1);
+        {
+            let g = self.turn.lock();
+            if g.value.foo_next == foo {
+                return;
+            }
+            g.value.waiting = Some(tx);
+        }
+        let _ = rx.recv();
+    }
+
+    // Passes the turn to the other method and wakes it if it waits.
+    fn pass(self) {
+        let g = self.turn.lock();
+        g.value.foo_next = not g.value.foo_next;
+        if let Some(tx) = g.value.waiting.take() {
+            let _ = tx.send(());
+        }
+    }
+
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            self.wait_for(true);
+            print_foo();
+            self.pass();
+        }
+    }
+
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            self.wait_for(false);
+            print_bar();
+            self.pass();
+        }
+    }
+}
+
+// ---- print_foobar_polling.kara ----
+
+sync struct A3FooBar {
+    n: i64,
+    foo_next: Atomic[bool],
+}
+
+impl A3FooBar {
+    fn new(n: i64) -> A3FooBar {
+        A3FooBar { n, foo_next: Atomic.new(true) }
+    }
+
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            while not self.foo_next.load() {
+                sleep(Duration.ms(0));
+            }
+            print_foo();
+            self.foo_next.store(false);
+        }
+    }
+
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            while self.foo_next.load() {
+                sleep(Duration.ms(0));
+            }
+            print_bar();
+            self.foo_next.store(true);
+        }
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+// One run of arm `which` over `n` rounds: a task for `foo` and one for
+// `bar`, `bar`'s started first when `bar_first` is set, and with `two`
+// a second pair with its own log, the four tasks started in the order
+// `order` gives. Each print does `work[k]` steps of busy work for its
+// `k`th word, then checks that its log holds exactly the words that
+// should come before it. Returns each pair's log, and how many prints
+// found otherwise.
+fn run(which: i64, n: i64, order: Vec[i64], work: Vec[i64], two: bool) -> (Vec[String], i64) {
+    let logs: Vec[Mutex[String]] = [Mutex.new(String.new()), Mutex.new(String.new())];
+    let counts: Vec[Atomic[i64]] = [Atomic.new(0), Atomic.new(0)];
+    let wrong: Atomic[i64] = Atomic.new(0);
+    // A print function: busy work, then its word, checking the log
+    // before it is `foobar` repeated, with `foo` after it for `bar`.
+    let print = |log: i64, word: Str| {
+        let k = counts[log].fetch_add(1);
+        let mut x = k;
+        for i in 0..work[k % work.len()] {
+            x = (x * 31 + i) % 1000003;
+        }
+        let g = logs[log].lock();
+        let mut before = "foobar".repeat(k / 2);
+        if k % 2 == 1 {
+            before.push_str("foo");
+        }
+        let want = if k % 2 == 0 { "foo" } else { "bar" };
+        if g.value.as_str() != before.as_str() or word != want or x < 0 {
+            let _ = wrong.fetch_add(1);
+        }
+        g.value.push_str(word);
+    };
+    let a0 = A0FooBar.new(n);
+    let a1 = A1FooBar.new(n);
+    let a2 = A2FooBar.new(n);
+    let a3 = A3FooBar.new(n);
+    let b0 = A0FooBar.new(n);
+    let b1 = A1FooBar.new(n);
+    let b2 = A2FooBar.new(n);
+    let b3 = A3FooBar.new(n);
+    {
+        let group = TaskGroup.new();
+        for slot in order.iter() {
+            let log = slot / 2;
+            let is_bar = slot % 2 == 1;
+            if log == 1 and not two {
+                continue;
+            }
+            group.spawn(|| {
+                let f = || print(log, if is_bar { "bar" } else { "foo" });
+                match (which, log, is_bar) {
+                    (0, 0, false) => a0.foo(f),
+                    (0, 0, true) => a0.bar(f),
+                    (0, _, false) => b0.foo(f),
+                    (0, _, true) => b0.bar(f),
+                    (1, 0, false) => a1.foo(f),
+                    (1, 0, true) => a1.bar(f),
+                    (1, _, false) => b1.foo(f),
+                    (1, _, true) => b1.bar(f),
+                    (2, 0, false) => a2.foo(f),
+                    (2, 0, true) => a2.bar(f),
+                    (2, _, false) => b2.foo(f),
+                    (2, _, true) => b2.bar(f),
+                    (_, 0, false) => a3.foo(f),
+                    (_, 0, true) => a3.bar(f),
+                    (_, _, false) => b3.foo(f),
+                    (_, _, true) => b3.bar(f),
+                }
+            });
+        }
+    }
+    let out: Vec[String] = logs.iter().map(|m| m.lock().value.clone()).collect();
+    (out, wrong.load())
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    n: i64,
+    bar_first: bool,
+    both: Vec[i64],
+    work: Vec[i64],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let none: Vec[i64] = [0];
+    let foo_first: Vec[i64] = [0, 1];
+    let bar_first: Vec[i64] = [1, 0];
+    let order = if p.bar_first { bar_first.clone() } else { foo_first.clone() };
+    let other = if p.bar_first { foo_first.clone() } else { bar_first.clone() };
+    let want = "foobar".repeat(p.n);
+    for w in 0..4 {
+        let what = f"arm {w}, n = {p.n}, bar first {p.bar_first}";
+        // P1: the statement read literally, `foobar` n times
+        let (logs, wrong) = run(w, p.n, order.clone(), none.clone(), false);
+        expect(mut t, 1, logs[0] == want, f"P1 {what} -> {logs[0]}");
+        for b in logs[0].bytes() {
+            t.check = (t.check * 131 + b) % 1000000007;
+        }
+        // P2: each print found the log as it should be before it
+        expect(mut t, 2, wrong == 0, f"P2 {what}: {wrong} prints found the log wrong");
+        // P3: the other task started first
+        let (logs, _) = run(w, p.n, other.clone(), none.clone(), false);
+        expect(mut t, 3, logs[0] == want, f"P3 {what}, the other first -> {logs[0]}");
+        // P4: each print doing busy work first
+        let (logs, wrong) = run(w, p.n, order.clone(), p.work.clone(), false);
+        expect(mut t, 4, logs[0] == want and wrong == 0, f"P4 {what}, work {p.work} -> {logs[0]}");
+        // P5: two pairs at once, their four tasks interleaved
+        let (logs, wrong) = run(w, p.n, p.both.clone(), none.clone(), true);
+        expect(mut t, 5, logs[0] == want and logs[1] == want and wrong == 0, f"P5 {what}, both {p.both} -> {logs}");
+        // P6: the run repeated gives the same log
+        let (again, _) = run(w, p.n, order.clone(), none.clone(), false);
+        let (first, _) = run(w, p.n, order.clone(), none.clone(), false);
+        expect(mut t, 6, again == first, f"P6 {what} -> {again} then {first}");
+    }
+    t.cases += 1;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 600 problems of up to 12 rounds, either task first, the four tasks
+    // of two pairs in a random order, and busy work of up to 2000 steps
+    // for each of up to 5 prints in turn. Every choice is drawn before
+    // any arm answers.
+    let mut seed = 11151;
+    let mut problems: Vec[Problem] = [];
+    for _ in 0..600 {
+        let n = next_random(mut seed) % 12 + 1;
+        let bar_first = next_random(mut seed) % 2 == 1;
+        let mut both: Vec[i64] = (0..4).collect();
+        for j in 0..4 {
+            let k = j + next_random(mut seed) % (4 - j);
+            both.swap(j, k);
+        }
+        let len = next_random(mut seed) % 5 + 1;
+        let work: Vec[i64] = (0..len).map(|_| next_random(mut seed) % 2000).collect();
+        problems.push(Problem { n, bar_first, both, work });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 4 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

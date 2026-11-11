@@ -1,0 +1,326 @@
+// LeetCode #1121: Divide Array Into Increasing Sequences -- a
+// differential over the six arms. Each answer is checked against the
+// statement read literally and against five properties that do not
+// compute the answer; see the README.
+
+// ---- can_divide.kara ----
+
+fn a0_can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+    let mut longest = 0;
+    let mut run = 0;
+    for i in 0..nums.len() {
+        if i > 0 and nums[i] == nums[i - 1] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        longest = longest.max(run);
+    }
+    longest * k <= nums.len()
+}
+
+// ---- can_divide_counts.kara ----
+
+fn a1_can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+    let mut counts: Map[i32, i64] = Map.new();
+    for x in nums.iter() {
+        *counts.entry(x).or_insert(0) += 1;
+    }
+    let most = counts.values().max().unwrap_or(0);
+    most * k <= nums.len()
+}
+
+// ---- can_divide_window.kara ----
+
+fn a2_can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+    let m = nums.len() / k;
+    if m == 0 {
+        return false;
+    }
+    for i in 0..nums.len() - m {
+        if nums[i] == nums[i + m] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- can_divide_piles.kara ----
+
+fn a3_can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+    let mut piles_needed = 1;
+    let mut run = 1;
+    for i in 1..nums.len() {
+        run = if nums[i] == nums[i - 1] { run + 1 } else { 1 };
+        piles_needed = piles_needed.max(run);
+    }
+    let mut piles: Vec[Vec[i32]] = Vec.new();
+    for _ in 0..piles_needed {
+        piles.push(Vec.new());
+    }
+    for (i, x) in nums.iter().enumerate() {
+        piles[i % piles_needed].push(x);
+    }
+    for pile in piles.iter() {
+        if pile.len() < k as i64 {
+            return false;
+        }
+        for j in 1..pile.len() {
+            if pile[j - 1] >= pile[j] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- can_divide_search.kara ----
+
+fn a4_can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+    let n = nums.len();
+    let mut longest = 0;
+    let mut start = 0;
+    while start < n {
+        let value = nums[start];
+        let mut lo = start + 1;
+        let mut hi = n;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if nums[mid] > value {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        longest = longest.max(lo - start);
+        start = lo;
+    }
+    longest * k <= n
+}
+
+// ---- can_divide_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+        let longest = nums.chunk_by(|a, b| a == b).iter().map(|run| run.len()).max().unwrap();
+        longest * k <= nums.len()
+    }
+}
+
+fn a5_can_divide_into_subsequences(nums: Vec[i32], k: i32) -> bool {
+    A5Solution.a5_can_divide_into_subsequences(nums, k)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, nums: Vec[i32], k: i32) -> bool {
+    match which {
+        0 => a0_can_divide_into_subsequences(nums, k),
+        1 => a1_can_divide_into_subsequences(nums, k),
+        2 => a2_can_divide_into_subsequences(nums, k),
+        3 => a3_can_divide_into_subsequences(nums, k),
+        4 => a4_can_divide_into_subsequences(nums, k),
+        _ => a5_can_divide_into_subsequences(nums, k),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: each value in turn joins one of the
+// sequences begun so far whose last value is smaller, or begins a new
+// one, every way tried; the array divides if some way leaves every
+// sequence with at least `k` values.
+fn literal(nums: Vec[i32], k: i32) -> bool {
+    let mut lasts: Vec[i32] = [];
+    let mut lens: Vec[i64] = [];
+    place(nums, k, 0, mut lasts, mut lens)
+}
+
+fn place(nums: Vec[i32], k: i64, i: i64, lasts: mut ref Vec[i32], lens: mut ref Vec[i64]) -> bool {
+    if i == nums.len() {
+        return lens.iter().all(|n| n >= k);
+    }
+    let x = nums[i];
+    for s in 0..lasts.len() {
+        if lasts[s] < x {
+            let before = lasts[s];
+            lasts[s] = x;
+            lens[s] += 1;
+            let ok = place(nums, k, i + 1, mut lasts, mut lens);
+            lasts[s] = before;
+            lens[s] -= 1;
+            if ok {
+                return true;
+            }
+        }
+    }
+    lasts.push(x);
+    lens.push(1);
+    let ok = place(nums, k, i + 1, mut lasts, mut lens);
+    lasts.pop();
+    lens.pop();
+    ok
+}
+
+// P2's second reading: no value is so common that its copies, one to a
+// sequence, leave too few values to give each of those sequences `k`.
+fn every_value_fits(nums: Vec[i32], k: i32) -> bool {
+    for x in nums.iter() {
+        let copies = nums.iter().filter(|y| y == x).count();
+        if copies * k > nums.len() {
+            return false;
+        }
+    }
+    true
+}
+
+struct Problem {
+    nums: Vec[i32],
+    k: i32,
+    renamed: Vec[i32],
+    extra: Vec[i32],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let nums = p.nums.clone();
+    let k = p.k;
+    let small = nums.len() <= 10;
+    let want = if small { literal(nums.clone(), k) } else { false };
+    let mut doubled: Vec[i32] = [];
+    for x in nums.iter() {
+        doubled.push(x);
+        doubled.push(x);
+    }
+    let mut longer = nums.clone();
+    for x in p.extra.iter() {
+        longer.push(x);
+    }
+    for w in 0..6 {
+        let answer = arm(w, nums.clone(), k);
+        let what = f"arm {w}, {nums}, k = {k} -> {answer}";
+        // P1: the statement read literally, on arrays of up to 10 values
+        if small {
+            expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        }
+        // P2: by a second reading, every value's copies fit
+        expect(mut t, 2, answer == every_value_fits(nums.clone(), k), f"P2 {what}");
+        // P3: every value doubled, the same `k`, gives the same answer
+        let d = arm(w, doubled.clone(), k);
+        expect(mut t, 3, d == answer, f"P3 {what}, doubled -> {d}");
+        // P4: the values renamed in order give the same answer
+        let r = arm(w, p.renamed.clone(), k);
+        expect(mut t, 4, r == answer, f"P4 {what}, renamed {p.renamed} -> {r}");
+        // P5: a yes stays a yes for a smaller `k`, a no stays a no for a
+        // larger one
+        let ok5 = if answer {
+            k == 1 or arm(w, nums.clone(), k - 1)
+        } else {
+            k == nums.len() or not arm(w, nums.clone(), k + 1)
+        };
+        expect(mut t, 5, ok5, f"P5 {what}");
+        // P6: new values above the largest keep a yes a yes
+        let l = arm(w, longer.clone(), k);
+        expect(mut t, 6, not answer or l, f"P6 {what}, with {p.extra} -> {l}");
+    }
+    t.cases += 1;
+    let bit = if every_value_fits(nums.clone(), k) { 1 } else { 2 };
+    t.check = (t.check * 31 + bit + nums.len()) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 10 values from 1 to 3
+    // and up to 10 from 1 to 10, each with a random `k`; up to 10 values
+    // with one value repeated over a random stretch; and up to 300 values
+    // from 1 to a top of 1 to 300. The last two take the largest `k` the
+    // longest run allows, or one more. Every choice is drawn before any
+    // arm answers.
+    let mut seed = 11211;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let kind = i % 4;
+        let n = if kind == 3 { next_random(mut seed) % 300 + 1 } else { next_random(mut seed) % 10 + 1 };
+        let top = match kind {
+            0 => 3,
+            1 => 10,
+            2 => n,
+            _ => next_random(mut seed) % n + 1,
+        };
+        let mut nums: Vec[i32] = [];
+        for _ in 0..n {
+            nums.push((next_random(mut seed) % top + 1) as i32);
+        }
+        if kind == 2 {
+            // one value repeated over a stretch as long as a random run
+            let run = next_random(mut seed) % n + 1;
+            let at = next_random(mut seed) % (n - run + 1);
+            let v = nums[at];
+            for j in at..at + run {
+                nums[j] = v;
+            }
+        }
+        nums.sort();
+        let mut longest = 1;
+        let mut run = 1;
+        for j in 1..nums.len() {
+            run = if nums[j] == nums[j - 1] { run + 1 } else { 1 };
+            longest = longest.max(run);
+        }
+        let k = if kind >= 2 {
+            // the largest `k` that fits, or one more
+            ((n / longest).max(1) + next_random(mut seed) % 2).min(n) as i32
+        } else {
+            (next_random(mut seed) % n + 1) as i32
+        };
+        // an increasing renaming: each distinct value moved up by a random
+        // step over the one before
+        let mut renamed: Vec[i32] = [];
+        let mut last_from = 0;
+        let mut last_to: i32 = 0;
+        for x in nums.iter() {
+            if x != last_from {
+                last_to += (next_random(mut seed) % 5 + 1) as i32;
+                last_from = x;
+            }
+            renamed.push(last_to);
+        }
+        let mut extra: Vec[i32] = [];
+        let biggest = nums[nums.len() - 1];
+        for j in 0..next_random(mut seed) % 4 + 1 {
+            extra.push(biggest + 1 + j as i32);
+        }
+        problems.push(Problem { nums, k, renamed, extra });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

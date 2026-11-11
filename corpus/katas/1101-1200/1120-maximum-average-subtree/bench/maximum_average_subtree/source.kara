@@ -1,0 +1,83 @@
+// LeetCode #1120: Maximum Average Subtree -- the bench: the ★ arm over 16
+// trees of 10^4 nodes, LeetCode's largest, built once, each round
+// changing one node's value in every tree and solving it again.
+
+fn walk(node: Option[TreeNode], best: mut ref f64) -> (i64, i64) {
+    let Some(n) = node else {
+        return (0, 0);
+    };
+    let (ls, lc) = walk(n.left, mut best);
+    let (rs, rc) = walk(n.right, mut best);
+    let sum = ls + rs + n.val;
+    let count = lc + rc + 1;
+    let average = sum as f64 / count as f64;
+    if average > *best {
+        *best = average;
+    }
+    (sum, count)
+}
+
+fn maximum_average_subtree(root: Option[TreeNode]) -> f64 {
+    let mut best = 0.0;
+    let _ = walk(root, mut best);
+    best
+}
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64) -> i32 {
+    ((next_random(mut seed) * 32768 + next_random(mut seed)) % 100001) as i32
+}
+
+// A tree of 10^4 nodes, each hung at a random free place below the ones
+// before it; its nodes in the order they were made.
+fn random_tree(seed: mut ref i64) -> Vec[TreeNode] {
+    let mut nodes: Vec[TreeNode] = [TreeNode { val: random_value(mut seed), left: None, right: None }];
+    for _ in 1..10000 {
+        let c = TreeNode { val: random_value(mut seed), left: None, right: None };
+        loop {
+            let at = nodes[next_random(mut seed) % nodes.len()];
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    at.left = Some(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                at.right = Some(c);
+                break;
+            }
+        }
+        nodes.push(c);
+    }
+    nodes
+}
+
+fn main() {
+    let mut seed = 1120;
+    let mut trees: Vec[Vec[TreeNode]] = [];
+    for _ in 0..16 {
+        trees.push(random_tree(mut seed));
+    }
+    let mut total = 0.0;
+    let mut check = 0;
+    for round in 0..200 {
+        for j in 0..trees.len() {
+            let at = (round * 7919 + j * 104729) % 10000;
+            let n = trees[j][at];
+            n.val = ((n.val as i64 * 7 + round) % 100001) as i32;
+            let answer = maximum_average_subtree(Some(trees[j][0]));
+            total += answer;
+            check = (check * 31 + (answer * 1000.0) as i64) % 1000000007;
+        }
+    }
+    println(f"200 rounds over 16 trees of 10^4 nodes: answers total {total:.3}, checksum {check}");
+}

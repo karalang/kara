@@ -1,0 +1,65 @@
+// LeetCode #1115: Print FooBar Alternately -- the bench: the ★ arm, 1000
+// runs of 200 rounds each, `bar`'s task started first in every other.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct FooBar {
+    n: i64,
+    foo_turn: (Sender[()], Receiver[()]),
+    bar_turn: (Sender[()], Receiver[()]),
+}
+
+impl FooBar {
+    fn new(n: i64) -> FooBar {
+        let foo_turn = channel(1);
+        let _ = foo_turn.0.send(());
+        FooBar { n, foo_turn, bar_turn: channel(1) }
+    }
+
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.foo_turn.1.recv();
+            print_foo();
+            let _ = self.bar_turn.0.send(());
+        }
+    }
+
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.bar_turn.1.recv();
+            print_bar();
+            let _ = self.foo_turn.0.send(());
+        }
+    }
+}
+
+fn run(n: i64, bar_first: bool) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let fb = FooBar.new(n);
+    {
+        let group = TaskGroup.new();
+        if bar_first {
+            group.spawn(|| fb.bar(|| log.lock().value.push_str("bar")));
+            group.spawn(|| fb.foo(|| log.lock().value.push_str("foo")));
+        } else {
+            group.spawn(|| fb.foo(|| log.lock().value.push_str("foo")));
+            group.spawn(|| fb.bar(|| log.lock().value.push_str("bar")));
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn main() {
+    let want = "foobar".repeat(200);
+    let mut alternating = 0;
+    let mut check = 0;
+    for r in 0..1000 {
+        let out = run(200, r % 2 == 1);
+        if out == want {
+            alternating += 1;
+        }
+        check = (check * 31 + out.len() + r) % 1000000007;
+    }
+    println(f"1000 runs of 200 rounds: {alternating} alternating, checksum {check}");
+}

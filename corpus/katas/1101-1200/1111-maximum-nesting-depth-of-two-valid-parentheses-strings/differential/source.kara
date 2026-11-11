@@ -1,0 +1,343 @@
+// LeetCode #1111: Maximum Nesting Depth of Two Valid Parentheses Strings
+// -- a differential over the six arms. Each answer is checked against the
+// statement read literally and against five properties that do not
+// compute the answer; see the README.
+
+// ---- max_depth_after_split.kara ----
+
+fn a0_max_depth_after_split(seq: Str) -> Vec[i32] {
+    let mut depth = 0;
+    let mut answer: Vec[i32] = Vec.with_capacity(seq.len());
+    for c in seq.chars() {
+        if c == '(' {
+            answer.push(depth % 2);
+            depth += 1;
+        } else {
+            depth -= 1;
+            answer.push(depth % 2);
+        }
+    }
+    answer
+}
+
+// ---- max_depth_after_split_bits.kara ----
+
+fn a1_max_depth_after_split(seq: Str) -> Vec[i32] {
+    seq.bytes().iter()
+        .enumerate()
+        .map(|(i, b)| (i as i32 & 1) ^ (b == b')') as i32)
+        .collect()
+}
+
+// ---- max_depth_after_split_stack.kara ----
+
+fn a2_max_depth_after_split(seq: Str) -> Vec[i32] {
+    let mut open: Vec[i32] = [];
+    let mut answer: Vec[i32] = [];
+    for c in seq.chars() {
+        if c == '(' {
+            let group = match open.last() {
+                Some(g) => 1 - g,
+                None => 0,
+            };
+            open.push(group);
+            answer.push(group);
+        } else {
+            answer.push(open.pop().unwrap());
+        }
+    }
+    answer
+}
+
+// ---- max_depth_after_split_scan.kara ----
+
+fn a3_max_depth_after_split(seq: Str) -> Vec[i32] {
+    seq.chars()
+        .scan(0i32, |depth, c| {
+            let mut depth = depth;
+            let group = if c == '(' {
+                depth += 1;
+                (depth - 1) % 2
+            } else {
+                depth -= 1;
+                depth % 2
+            };
+            Some((depth, group))
+        })
+        .collect()
+}
+
+// ---- max_depth_after_split_fold.kara ----
+
+fn a4_max_depth_after_split(seq: Str) -> Vec[i32] {
+    let (_, answer): (i32, Vec[i32]) = seq.chars().fold((0, Vec.new()), |(depth, answer), c| {
+        let mut answer = answer;
+        match c {
+            '(' => {
+                answer.push(depth % 2);
+                (depth + 1, answer)
+            }
+            _ => {
+                answer.push((depth - 1) % 2);
+                (depth - 1, answer)
+            }
+        }
+    });
+    answer
+}
+
+// ---- max_depth_after_split_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_max_depth_after_split(seq: String) -> Vec[i32] {
+        let mut depth: i32 = 0;
+        seq.chars()
+            .map(|c| {
+                if c == '(' {
+                    depth += 1;
+                    (depth + 1) % 2
+                } else {
+                    depth -= 1;
+                    depth % 2
+                }
+            })
+            .collect()
+    }
+}
+
+fn a5_max_depth_after_split(seq: Str) -> Vec[i32] {
+    A5Solution.a5_max_depth_after_split(seq.to_string())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, seq: Str) -> Vec[i32] {
+    match which {
+        0 => a0_max_depth_after_split(seq),
+        1 => a1_max_depth_after_split(seq),
+        2 => a2_max_depth_after_split(seq),
+        3 => a3_max_depth_after_split(seq),
+        4 => a4_max_depth_after_split(seq),
+        _ => a5_max_depth_after_split(seq),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_vps(seed: mut ref i64, pairs: i64) -> String {
+    let mut out = String.new();
+    let mut opens = 0;
+    let mut depth = 0;
+    while opens < pairs or depth > 0 {
+        if opens < pairs and (depth == 0 or next_random(mut seed) % 2 == 0) {
+            out.push('(');
+            opens += 1;
+            depth += 1;
+        } else {
+            out.push(')');
+            depth -= 1;
+        }
+    }
+    out
+}
+
+// The statement read literally: the least, over every way to give each
+// character to A or B with both valid, of the deeper part's depth. A
+// search over the characters in order, keeping for each depth A can be
+// at (B's is the rest of the whole depth) the least peak a split reaching
+// it has had.
+fn literal(seq: Str) -> i64 {
+    let none = 1000000;
+    let mut best: Vec[i64] = [0];
+    let mut depth = 0;
+    for c in seq.chars() {
+        let mut next: Vec[i64] = Vec.filled(if c == '(' { depth + 2 } else { depth }, none);
+        for a in 0..best.len() {
+            if best[a] == none {
+                continue;
+            }
+            let b = depth - a;
+            if c == '(' {
+                next[a + 1] = next[a + 1].min(best[a].max(a + 1));
+                next[a] = next[a].min(best[a].max(b + 1));
+            } else {
+                if a > 0 {
+                    next[a - 1] = next[a - 1].min(best[a]);
+                }
+                if b > 0 {
+                    next[a] = next[a].min(best[a]);
+                }
+            }
+        }
+        depth += if c == '(' { 1 } else { -1 };
+        best = next;
+    }
+    best[0]
+}
+
+// The depth of the part `group` picks out, or -1 when it is not valid or
+// the answer is not one group for each character.
+fn part_depth(seq: Str, answer: Vec[i32], group: i32) -> i64 {
+    if answer.len() != seq.len() {
+        return -1;
+    }
+    let mut depth = 0;
+    let mut deepest = 0;
+    for (i, c) in seq.chars().enumerate() {
+        if answer[i] != group {
+            continue;
+        }
+        depth += if c == '(' { 1 } else { -1 };
+        if depth < 0 {
+            return -1;
+        }
+        deepest = deepest.max(depth);
+    }
+    if depth == 0 { deepest } else { -1 }
+}
+
+// P2's second reading, by the pairs: each `)` is in the group of the `(`
+// it closes, a pair inside no other is in the first group, and a pair
+// directly inside another is in the other's other group.
+fn by_pairs(seq: Str, answer: Vec[i32]) -> bool {
+    if answer.len() != seq.len() {
+        return false;
+    }
+    let mut open: Vec[i32] = [];
+    for (i, c) in seq.chars().enumerate() {
+        let g = answer[i];
+        if c == '(' {
+            let want = match open.last() {
+                Some(outer) => 1 - outer,
+                None => 0,
+            };
+            if g != want {
+                return false;
+            }
+            open.push(g);
+        } else if open.pop() != Some(g) {
+            return false;
+        }
+    }
+    true
+}
+
+fn mirrored(seq: Str) -> String {
+    seq.chars().rev().map(|c| if c == '(' { ')' } else { '(' }).collect()
+}
+
+struct Problem {
+    seq: String,
+    tail: String,
+    at: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let seq = p.seq.clone();
+    let n = seq.len();
+    let least = literal(seq);
+    let joined = seq.clone() + p.tail;
+    let wrapped = f"({seq})";
+    let flipped = mirrored(seq);
+    let inserted = f"{seq[0..p.at]}(){seq[p.at..n]}";
+    for w in 0..6 {
+        let answer = arm(w, seq);
+        let what = f"arm {w}, {seq} -> {answer}";
+        // P1: both parts valid and the deeper no deeper than any split's
+        let a = part_depth(seq, answer.clone(), 0);
+        let b = part_depth(seq, answer.clone(), 1);
+        let only_groups = answer.len() == n and answer.iter().all(|g| g == 0 or g == 1);
+        expect(mut t, 1, only_groups and a >= 0 and b >= 0 and a.max(b) == least, f"P1 {what}, depths {a} and {b}, least {least}");
+        // P2: by the pairs
+        expect(mut t, 2, by_pairs(seq, answer.clone()), f"P2 {what}");
+        // P3: another valid string after it leaves its answer alone
+        let mut both = answer.clone();
+        both.extend(arm(w, p.tail));
+        let j = arm(w, joined);
+        expect(mut t, 3, j == both, f"P3 {what}, then {p.tail} -> {j}");
+        // P4: wrapped in one more pair, its answer flipped inside the new
+        // pair's first group
+        let mut around: Vec[i32] = [0];
+        around.extend(answer.iter().map(|g| 1 - g));
+        around.push(0);
+        let r = arm(w, wrapped);
+        expect(mut t, 4, r == around, f"P4 {what}, wrapped -> {r}");
+        // P5: mirrored, the answer reversed
+        let f = arm(w, flipped);
+        let back: Vec[i32] = answer.iter().rev().collect();
+        expect(mut t, 5, f == back, f"P5 {what}, mirrored -> {f}");
+        // P6: a `()` put in at `at` leaves the rest alone, the new pair in
+        // one group
+        let s = arm(w, inserted);
+        let ok = answer.len() == n and s.len() == n + 2 and s[p.at] == s[p.at + 1] and s[0..p.at] == answer[0..p.at] and s[p.at + 2..n + 2] == answer[p.at..n];
+        expect(mut t, 6, ok, f"P6 {what}, () at {p.at} -> {s}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + least) % 1000000007;
+    for c in seq.chars() {
+        t.check = (t.check * 3 + if c == '(' { 1 } else { 2 }) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 12 pairs at random; a
+    // nest of up to 15 pairs with a short random string inside it; up to
+    // 10 short random strings side by side; and up to 30 pairs at random.
+    // Every choice is drawn before any arm answers.
+    let mut seed = 11111;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let seq = match i % 4 {
+            0 => random_vps(mut seed, next_random(mut seed) % 12 + 1),
+            1 => {
+                let deep = next_random(mut seed) % 15 + 1;
+                let inner = random_vps(mut seed, next_random(mut seed) % 4);
+                "(".repeat(deep) + inner + ")".repeat(deep)
+            }
+            2 => {
+                let mut s = String.new();
+                for _ in 0..next_random(mut seed) % 10 + 1 {
+                    s += random_vps(mut seed, next_random(mut seed) % 3 + 1);
+                }
+                s
+            }
+            _ => random_vps(mut seed, next_random(mut seed) % 30 + 1),
+        };
+        let tail = random_vps(mut seed, next_random(mut seed) % 7);
+        let at = next_random(mut seed) % (seq.len() + 1);
+        problems.push(Problem { seq, tail, at });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

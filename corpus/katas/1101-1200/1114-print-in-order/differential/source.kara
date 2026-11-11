@@ -1,0 +1,372 @@
+// LeetCode #1114: Print in Order -- a differential over the five arms:
+// every run's log checked against the statement and against five
+// properties of how the runs behave; see the README.
+
+import std.sync.{Atomic, Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+// ---- print_in_order.kara ----
+
+sync struct A0Foo {
+    first_done: (Sender[()], Receiver[()]),
+    second_done: (Sender[()], Receiver[()]),
+}
+
+impl A0Foo {
+    fn new() -> A0Foo {
+        A0Foo { first_done: channel(1), second_done: channel(1) }
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        let _ = self.first_done.0.send(());
+    }
+
+    fn second(self, print_second: Fn()) {
+        let _ = self.first_done.1.recv();
+        print_second();
+        let _ = self.second_done.0.send(());
+    }
+
+    fn third(self, print_third: Fn()) {
+        let _ = self.second_done.1.recv();
+        print_third();
+    }
+}
+
+// ---- print_in_order_closed.kara ----
+
+sync struct A1Foo {
+    first_open: Mutex[Option[Sender[()]]],
+    first_closed: Receiver[()],
+    second_open: Mutex[Option[Sender[()]]],
+    second_closed: Receiver[()],
+}
+
+impl A1Foo {
+    fn new() -> A1Foo {
+        let (a, first_closed) = channel(1);
+        let (b, second_closed) = channel(1);
+        A1Foo { first_open: Mutex.new(Some(a)), first_closed, second_open: Mutex.new(Some(b)), second_closed }
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        let _ = self.first_open.lock().value.take();
+    }
+
+    fn second(self, print_second: Fn()) {
+        let _ = self.first_closed.recv();
+        print_second();
+        let _ = self.second_open.lock().value.take();
+    }
+
+    fn third(self, print_third: Fn()) {
+        let _ = self.second_closed.recv();
+        print_third();
+    }
+}
+
+// ---- print_in_order_waitlist.kara ----
+
+struct A2Turns {
+    stage: i64,
+    waiting: Vec[(i64, Sender[()])],
+}
+
+sync struct A2Foo {
+    turns: Mutex[A2Turns],
+}
+
+impl A2Foo {
+    fn new() -> A2Foo {
+        A2Foo { turns: Mutex.new(A2Turns { stage: 0, waiting: [] }) }
+    }
+
+    // Waits until `stage` methods have finished.
+    fn wait_for(self, stage: i64) {
+        let (tx, rx) = channel(1);
+        {
+            let g = self.turns.lock();
+            if g.value.stage >= stage {
+                return;
+            }
+            g.value.waiting.push((stage, tx));
+        }
+        let _ = rx.recv();
+    }
+
+    // Marks one more method finished and wakes whoever that lets go.
+    fn finish(self) {
+        let g = self.turns.lock();
+        g.value.stage += 1;
+        let stage = g.value.stage;
+        let mut still: Vec[(i64, Sender[()])] = [];
+        for (want, tx) in g.value.waiting.drain(0..g.value.waiting.len()) {
+            if want <= stage {
+                let _ = tx.send(());
+            } else {
+                still.push((want, tx));
+            }
+        }
+        g.value.waiting = still;
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        self.finish();
+    }
+
+    fn second(self, print_second: Fn()) {
+        self.wait_for(1);
+        print_second();
+        self.finish();
+    }
+
+    fn third(self, print_third: Fn()) {
+        self.wait_for(2);
+        print_third();
+    }
+}
+
+// ---- print_in_order_polling.kara ----
+
+sync struct A3Foo {
+    stage: Atomic[i64],
+}
+
+impl A3Foo {
+    fn new() -> A3Foo {
+        A3Foo { stage: Atomic.new(0) }
+    }
+
+    fn wait_for(self, stage: i64) {
+        while self.stage.load() < stage {
+            sleep(Duration.ms(0));
+        }
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        self.stage.store(1);
+    }
+
+    fn second(self, print_second: Fn()) {
+        self.wait_for(1);
+        print_second();
+        self.stage.store(2);
+    }
+
+    fn third(self, print_third: Fn()) {
+        self.wait_for(2);
+        print_third();
+    }
+}
+
+// ---- print_in_order_rust.kara ----
+
+struct A4Foo {
+    first_tx: Mutex[Sender[()]],
+    first_rx: Mutex[Receiver[()]],
+    second_tx: Mutex[Sender[()]],
+    second_rx: Mutex[Receiver[()]],
+}
+
+impl A4Foo {
+    fn new() -> Self {
+        let (first_tx, first_rx) = channel(1);
+        let (second_tx, second_rx) = channel(1);
+        A4Foo {
+            first_tx: Mutex.new(first_tx),
+            first_rx: Mutex.new(first_rx),
+            second_tx: Mutex.new(second_tx),
+            second_rx: Mutex.new(second_rx),
+        }
+    }
+
+    fn first(self, print_first: Fn()) {
+        print_first();
+        self.first_tx.lock().value.send(()).unwrap();
+    }
+
+    fn second(self, print_second: Fn()) {
+        self.first_rx.lock().value.recv().unwrap();
+        print_second();
+        self.second_tx.lock().value.send(()).unwrap();
+    }
+
+    fn third(self, print_third: Fn()) {
+        self.second_rx.lock().value.recv().unwrap();
+        print_third();
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+// One run of arm `which`: a task per method, started in the order
+// `nums` gives (positions 3 to 5 for a second `Foo` when `two` is set),
+// each print function doing `work[k]` steps of busy work first, and
+// checking as it prints that the log holds every word before its own.
+// Returns each `Foo`'s log, and how many prints found a word missing.
+fn run(which: i64, nums: Vec[i64], work: Vec[i64], two: bool) -> (Vec[String], i64) {
+    let logs: Vec[Mutex[String]] = [Mutex.new(String.new()), Mutex.new(String.new())];
+    let early: Atomic[i64] = Atomic.new(0);
+    let words = ["first", "second", "third"];
+    // A print function: busy work, then its word, if the words before it
+    // are already there.
+    let print = |log: i64, k: i64| {
+        let mut x = k;
+        for i in 0..work[k] {
+            x = (x * 31 + i) % 1000003;
+        }
+        let g = logs[log].lock();
+        let before: String = words[0..k].concat();
+        if g.value.as_str() != before.as_str() or x < 0 {
+            let _ = early.fetch_add(1);
+        }
+        g.value.push_str(words[k]);
+    };
+    let a0 = A0Foo.new();
+    let a1 = A1Foo.new();
+    let a2 = A2Foo.new();
+    let a3 = A3Foo.new();
+    let a4 = A4Foo.new();
+    let b0 = A0Foo.new();
+    let b1 = A1Foo.new();
+    let b2 = A2Foo.new();
+    let b3 = A3Foo.new();
+    let b4 = A4Foo.new();
+    {
+        let group = TaskGroup.new();
+        for slot in nums.iter() {
+            let log = if slot >= 3 { 1 } else { 0 };
+            let k = slot % 3;
+            if log == 1 and not two {
+                continue;
+            }
+            group.spawn(|| {
+                let f = || print(log, k);
+                match (which, log, k) {
+                    (0, 0, 0) => a0.first(f),
+                    (0, 0, 1) => a0.second(f),
+                    (0, 0, _) => a0.third(f),
+                    (0, _, 0) => b0.first(f),
+                    (0, _, 1) => b0.second(f),
+                    (0, _, _) => b0.third(f),
+                    (1, 0, 0) => a1.first(f),
+                    (1, 0, 1) => a1.second(f),
+                    (1, 0, _) => a1.third(f),
+                    (1, _, 0) => b1.first(f),
+                    (1, _, 1) => b1.second(f),
+                    (1, _, _) => b1.third(f),
+                    (2, 0, 0) => a2.first(f),
+                    (2, 0, 1) => a2.second(f),
+                    (2, 0, _) => a2.third(f),
+                    (2, _, 0) => b2.first(f),
+                    (2, _, 1) => b2.second(f),
+                    (2, _, _) => b2.third(f),
+                    (3, 0, 0) => a3.first(f),
+                    (3, 0, 1) => a3.second(f),
+                    (3, 0, _) => a3.third(f),
+                    (3, _, 0) => b3.first(f),
+                    (3, _, 1) => b3.second(f),
+                    (3, _, _) => b3.third(f),
+                    (_, 0, 0) => a4.first(f),
+                    (_, 0, 1) => a4.second(f),
+                    (_, 0, _) => a4.third(f),
+                    (_, _, 0) => b4.first(f),
+                    (_, _, 1) => b4.second(f),
+                    (_, _, _) => b4.third(f),
+                }
+            });
+        }
+    }
+    let out: Vec[String] = logs.iter().map(|m| m.lock().value.clone()).collect();
+    (out, early.load())
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    nums: Vec[i64],
+    shuffled: Vec[i64],
+    both: Vec[i64],
+    work: Vec[i64],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let none: Vec[i64] = [0, 0, 0];
+    for w in 0..5 {
+        let what = f"arm {w}, order {p.nums}";
+        // P1: the statement read literally, the log in order
+        let (logs, early) = run(w, p.nums.clone(), none.clone(), false);
+        expect(mut t, 1, logs[0] == "firstsecondthird", f"P1 {what} -> {logs[0]}");
+        // P2: each print found every word before its own already there
+        expect(mut t, 2, early == 0, f"P2 {what}: {early} printed early");
+        // P3: the same run started in another order
+        let (logs, _) = run(w, p.shuffled.clone(), none.clone(), false);
+        expect(mut t, 3, logs[0] == "firstsecondthird", f"P3 {what}, as {p.shuffled} -> {logs[0]}");
+        // P4: each print doing busy work first
+        let (logs, early) = run(w, p.nums.clone(), p.work.clone(), false);
+        expect(mut t, 4, logs[0] == "firstsecondthird" and early == 0, f"P4 {what}, work {p.work} -> {logs[0]}");
+        // P5: two `Foo`s at once, their six tasks interleaved
+        let (logs, early) = run(w, p.both.clone(), none.clone(), true);
+        expect(mut t, 5, logs[0] == "firstsecondthird" and logs[1] == "firstsecondthird" and early == 0, f"P5 {what}, both {p.both} -> {logs}");
+        // P6: the run repeated gives the same log
+        let (again, _) = run(w, p.nums.clone(), none.clone(), false);
+        let (first, _) = run(w, p.nums.clone(), none.clone(), false);
+        expect(mut t, 6, again == first, f"P6 {what} -> {again} then {first}");
+    }
+    t.cases += 1;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, by: Vec.filled(7, 0) };
+    // 600 problems, each of the six orders 100 times, with a second order
+    // at random, an interleaving of two runs at random, and busy work of
+    // up to 2000 steps for each print. Every choice is drawn before any
+    // arm answers.
+    let orders: Vec[Vec[i64]] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    let mut seed = 11141;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..600 {
+        let nums = orders[i % 6].clone();
+        let shuffled = orders[next_random(mut seed) % 6].clone();
+        let mut both: Vec[i64] = (0..6).collect();
+        for j in 0..6 {
+            let k = j + next_random(mut seed) % (6 - j);
+            both.swap(j, k);
+        }
+        let work: Vec[i64] = (0..3).map(|_| next_random(mut seed) % 2000).collect();
+        problems.push(Problem { nums, shuffled, both, work });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

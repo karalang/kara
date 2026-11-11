@@ -1,0 +1,7 @@
+[1, 2, 3] -> firstsecondthird
+[1, 3, 2] -> firstsecondthird
+[2, 1, 3] -> firstsecondthird
+[2, 3, 1] -> firstsecondthird
+[3, 1, 2] -> firstsecondthird
+[3, 2, 1] -> firstsecondthird
+2000 runs in random orders: 2000 printed in order, checksum 55319996

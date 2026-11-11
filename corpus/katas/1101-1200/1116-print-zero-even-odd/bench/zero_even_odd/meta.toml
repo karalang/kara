@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1116-print-zero-even-odd/bench/zero_even_odd.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:par", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1116 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "c57d79254"
+extracted_src = "d8e099df"

@@ -1,0 +1,119 @@
+// LeetCode #1115: Print FooBar Alternately -- a condition variable built
+// from a `Mutex` and channels, as the C++ and Java solutions use one:
+// whose turn it is sits under the lock with the one method waiting, if
+// any; a method whose turn has not come leaves a one-shot channel and
+// waits on it, and a method that prints passes the turn and wakes the
+// waiter.
+
+import std.sync.{Mutex, TaskGroup};
+
+struct Turn {
+    foo_next: bool,
+    waiting: Option[Sender[()]],
+}
+
+sync struct FooBar {
+    n: i64,
+    turn: Mutex[Turn],
+}
+
+impl FooBar {
+    fn new(n: i64) -> FooBar {
+        FooBar { n, turn: Mutex.new(Turn { foo_next: true, waiting: None }) }
+    }
+
+    // Waits until it is `foo`'s turn when `foo` is true, else `bar`'s.
+    fn wait_for(self, foo: bool) {
+        let (tx, rx) = channel(1);
+        {
+            let g = self.turn.lock();
+            if g.value.foo_next == foo {
+                return;
+            }
+            g.value.waiting = Some(tx);
+        }
+        let _ = rx.recv();
+    }
+
+    // Passes the turn to the other method and wakes it if it waits.
+    fn pass(self) {
+        let g = self.turn.lock();
+        g.value.foo_next = not g.value.foo_next;
+        if let Some(tx) = g.value.waiting.take() {
+            let _ = tx.send(());
+        }
+    }
+
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            self.wait_for(true);
+            print_foo();
+            self.pass();
+        }
+    }
+
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            self.wait_for(false);
+            print_bar();
+            self.pass();
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: one task calls `foo` and another `bar`, started in the
+// order given, each handing its method a print function; the prints go
+// to one log, which the run returns.
+fn run(n: i64, bar_first: bool) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let fb = FooBar.new(n);
+    {
+        let group = TaskGroup.new();
+        if bar_first {
+            group.spawn(|| fb.bar(|| log.lock().value.push_str("bar")));
+            group.spawn(|| fb.foo(|| log.lock().value.push_str("foo")));
+        } else {
+            group.spawn(|| fb.foo(|| log.lock().value.push_str("foo")));
+            group.spawn(|| fb.bar(|| log.lock().value.push_str("bar")));
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn main() {
+    println(f"n = 1 -> {run(1, false)}");
+    println(f"n = 2 -> {run(2, false)}");
+    println(f"n = 2, bar started first -> {run(2, true)}");
+    println(f"n = 3, bar started first -> {run(3, true)}");
+    // 2000 runs of up to 12 rounds, either task started first
+    let mut seed = 1115;
+    let mut alternating = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let bar_first = next_random(mut seed) % 2 == 1;
+        let out = run(n, bar_first);
+        if out == "foobar".repeat(n) {
+            alternating += 1;
+        }
+        for b in out.bytes() {
+            check = (check * 131 + b) % 1000000007;
+        }
+    }
+    println(f"2000 runs of up to 12 rounds: {alternating} alternating, checksum {check}");
+    // LeetCode's largest
+    let out = run(1000, true);
+    let mut check = 0;
+    for b in out.bytes() {
+        check = (check * 131 + b) % 1000000007;
+    }
+    println(f"n = 1000: {out.len()} characters, alternating {out == "foobar".repeat(1000)}, checksum {check}");
+}

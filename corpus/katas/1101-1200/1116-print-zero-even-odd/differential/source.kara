@@ -1,0 +1,389 @@
+// LeetCode #1116: Print Zero Even Odd -- a differential over the
+// four arms: every run's log checked against the statement and against
+// five properties of how the runs behave; see the README.
+
+import std.sync.{Atomic, Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+// ---- zero_even_odd.kara ----
+
+sync struct A0ZeroEvenOdd {
+    n: i64,
+    zero_turn: (Sender[()], Receiver[()]),
+    even_turn: (Sender[()], Receiver[()]),
+    odd_turn: (Sender[()], Receiver[()]),
+}
+
+impl A0ZeroEvenOdd {
+    fn new(n: i64) -> A0ZeroEvenOdd {
+        let zero_turn = channel(1);
+        let _ = zero_turn.0.send(());
+        A0ZeroEvenOdd { n, zero_turn, even_turn: channel(1), odd_turn: channel(1) }
+    }
+
+    fn zero(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            let _ = self.zero_turn.1.recv();
+            print_number(0);
+            if i % 2 == 1 {
+                let _ = self.odd_turn.0.send(());
+            } else {
+                let _ = self.even_turn.0.send(());
+            }
+        }
+    }
+
+    fn even(self, print_number: Fn(i64)) {
+        for i in (2..=self.n).step_by(2) {
+            let _ = self.even_turn.1.recv();
+            print_number(i);
+            let _ = self.zero_turn.0.send(());
+        }
+    }
+
+    fn odd(self, print_number: Fn(i64)) {
+        for i in (1..=self.n).step_by(2) {
+            let _ = self.odd_turn.1.recv();
+            print_number(i);
+            let _ = self.zero_turn.0.send(());
+        }
+    }
+}
+
+// ---- zero_even_odd_payload.kara ----
+
+sync struct A1ZeroEvenOdd {
+    n: i64,
+    evens: (Sender[i64], Receiver[i64]),
+    odds: (Sender[i64], Receiver[i64]),
+    printed: (Sender[()], Receiver[()]),
+}
+
+impl A1ZeroEvenOdd {
+    fn new(n: i64) -> A1ZeroEvenOdd {
+        A1ZeroEvenOdd { n, evens: channel(1), odds: channel(1), printed: channel(1) }
+    }
+
+    fn zero(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            print_number(0);
+            let to = if i % 2 == 0 { ref self.evens.0 } else { ref self.odds.0 };
+            let _ = to.send(i);
+            let _ = self.printed.1.recv();
+        }
+    }
+
+    fn even(self, print_number: Fn(i64)) {
+        for _ in 0..self.n / 2 {
+            if let Some(i) = self.evens.1.recv() {
+                print_number(i);
+            }
+            let _ = self.printed.0.send(());
+        }
+    }
+
+    fn odd(self, print_number: Fn(i64)) {
+        for _ in 0..(self.n + 1) / 2 {
+            if let Some(i) = self.odds.1.recv() {
+                print_number(i);
+            }
+            let _ = self.printed.0.send(());
+        }
+    }
+}
+
+// ---- zero_even_odd_waitlist.kara ----
+
+struct A2Count {
+    printed: i64,
+    waiting: Vec[Sender[()]],
+}
+
+sync struct A2ZeroEvenOdd {
+    n: i64,
+    count: Mutex[A2Count],
+}
+
+impl A2ZeroEvenOdd {
+    fn new(n: i64) -> A2ZeroEvenOdd {
+        A2ZeroEvenOdd { n, count: Mutex.new(A2Count { printed: 0, waiting: [] }) }
+    }
+
+    // Waits until exactly `printed` numbers have been printed.
+    fn wait_for(self, printed: i64) {
+        loop {
+            let (tx, rx) = channel(1);
+            {
+                let g = self.count.lock();
+                if g.value.printed == printed {
+                    return;
+                }
+                g.value.waiting.push(tx);
+            }
+            let _ = rx.recv();
+        }
+    }
+
+    // Counts one more number printed and wakes every waiter.
+    fn done(self) {
+        let g = self.count.lock();
+        g.value.printed += 1;
+        for tx in g.value.waiting.drain(0..g.value.waiting.len()) {
+            let _ = tx.send(());
+        }
+    }
+
+    // The zero before `i` is the (2i - 1)th print, and `i` the 2ith.
+    fn zero(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            self.wait_for(2 * i - 2);
+            print_number(0);
+            self.done();
+        }
+    }
+
+    fn even(self, print_number: Fn(i64)) {
+        for i in (2..=self.n).step_by(2) {
+            self.wait_for(2 * i - 1);
+            print_number(i);
+            self.done();
+        }
+    }
+
+    fn odd(self, print_number: Fn(i64)) {
+        for i in (1..=self.n).step_by(2) {
+            self.wait_for(2 * i - 1);
+            print_number(i);
+            self.done();
+        }
+    }
+}
+
+// ---- zero_even_odd_polling.kara ----
+
+sync struct A3ZeroEvenOdd {
+    n: i64,
+    printed: Atomic[i64],
+}
+
+impl A3ZeroEvenOdd {
+    fn new(n: i64) -> A3ZeroEvenOdd {
+        A3ZeroEvenOdd { n, printed: Atomic.new(0) }
+    }
+
+    fn wait_for(self, printed: i64) {
+        while self.printed.load() != printed {
+            sleep(Duration.ms(0));
+        }
+    }
+
+    fn zero(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            self.wait_for(2 * i - 2);
+            print_number(0);
+            let _ = self.printed.fetch_add(1);
+        }
+    }
+
+    fn even(self, print_number: Fn(i64)) {
+        for i in (2..=self.n).step_by(2) {
+            self.wait_for(2 * i - 1);
+            print_number(i);
+            let _ = self.printed.fetch_add(1);
+        }
+    }
+
+    fn odd(self, print_number: Fn(i64)) {
+        for i in (1..=self.n).step_by(2) {
+            self.wait_for(2 * i - 1);
+            print_number(i);
+            let _ = self.printed.fetch_add(1);
+        }
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+// What a run over `n` should print: `0` before each of 1 to n.
+fn expected(n: i64) -> String {
+    let mut s = String.new();
+    for i in 1..=n {
+        s.push_str(f"0{i}");
+    }
+    s
+}
+
+// One run of arm `which` over `n`: a task each for `zero`, `even` and
+// `odd`, started in the order `order` gives (0 to 2), and with `two` a
+// second printer with its own log, its tasks 3 to 5. Each print does
+// `work[k]` steps of busy work for its `k`th number, then checks that
+// its log holds exactly the numbers that should come before it and that
+// its own is the one that comes next. Returns each printer's log, and
+// how many prints found otherwise.
+fn run(which: i64, n: i64, order: Vec[i64], work: Vec[i64], two: bool) -> (Vec[String], i64) {
+    let logs: Vec[Mutex[String]] = [Mutex.new(String.new()), Mutex.new(String.new())];
+    let counts: Vec[Atomic[i64]] = [Atomic.new(0), Atomic.new(0)];
+    let wrong: Atomic[i64] = Atomic.new(0);
+    let print = |log: i64, x: i64| {
+        let k = counts[log].fetch_add(1);
+        let mut y = k;
+        for i in 0..work[k % work.len()] {
+            y = (y * 31 + i) % 1000003;
+        }
+        let g = logs[log].lock();
+        let before = expected(k / 2);
+        let mut want = before.clone();
+        if k % 2 == 1 {
+            want.push_str("0");
+        }
+        let next = if k % 2 == 0 { 0 } else { k / 2 + 1 };
+        if g.value.as_str() != want.as_str() or x != next or y < 0 {
+            let _ = wrong.fetch_add(1);
+        }
+        g.value.push_str(x.to_string());
+    };
+    let a0 = A0ZeroEvenOdd.new(n);
+    let a1 = A1ZeroEvenOdd.new(n);
+    let a2 = A2ZeroEvenOdd.new(n);
+    let a3 = A3ZeroEvenOdd.new(n);
+    let b0 = A0ZeroEvenOdd.new(n);
+    let b1 = A1ZeroEvenOdd.new(n);
+    let b2 = A2ZeroEvenOdd.new(n);
+    let b3 = A3ZeroEvenOdd.new(n);
+    {
+        let group = TaskGroup.new();
+        for slot in order.iter() {
+            let log = slot / 3;
+            let k = slot % 3;
+            if log == 1 and not two {
+                continue;
+            }
+            group.spawn(|| {
+                let f = |x| print(log, x);
+                match (which, log, k) {
+                    (0, 0, 0) => a0.zero(f),
+                    (0, 0, 1) => a0.even(f),
+                    (0, 0, _) => a0.odd(f),
+                    (0, _, 0) => b0.zero(f),
+                    (0, _, 1) => b0.even(f),
+                    (0, _, _) => b0.odd(f),
+                    (1, 0, 0) => a1.zero(f),
+                    (1, 0, 1) => a1.even(f),
+                    (1, 0, _) => a1.odd(f),
+                    (1, _, 0) => b1.zero(f),
+                    (1, _, 1) => b1.even(f),
+                    (1, _, _) => b1.odd(f),
+                    (2, 0, 0) => a2.zero(f),
+                    (2, 0, 1) => a2.even(f),
+                    (2, 0, _) => a2.odd(f),
+                    (2, _, 0) => b2.zero(f),
+                    (2, _, 1) => b2.even(f),
+                    (2, _, _) => b2.odd(f),
+                    (_, 0, 0) => a3.zero(f),
+                    (_, 0, 1) => a3.even(f),
+                    (_, 0, _) => a3.odd(f),
+                    (_, _, 0) => b3.zero(f),
+                    (_, _, 1) => b3.even(f),
+                    (_, _, _) => b3.odd(f),
+                }
+            });
+        }
+    }
+    let out: Vec[String] = logs.iter().map(|m| m.lock().value.clone()).collect();
+    (out, wrong.load())
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Problem {
+    n: i64,
+    order: Vec[i64],
+    other: Vec[i64],
+    both: Vec[i64],
+    work: Vec[i64],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let none: Vec[i64] = [0];
+    let want = expected(p.n);
+    for w in 0..4 {
+        let what = f"arm {w}, n = {p.n}, order {p.order}";
+        // P1: the statement read literally, `0` before each of 1 to n
+        let (logs, wrong) = run(w, p.n, p.order.clone(), none.clone(), false);
+        expect(mut t, 1, logs[0] == want, f"P1 {what} -> {logs[0]}");
+        for b in logs[0].bytes() {
+            t.check = (t.check * 131 + b) % 1000000007;
+        }
+        // P2: each print found the log as it should be, and printed the
+        // number that comes next
+        expect(mut t, 2, wrong == 0, f"P2 {what}: {wrong} prints found the log wrong");
+        // P3: the tasks started in another order
+        let (logs, _) = run(w, p.n, p.other.clone(), none.clone(), false);
+        expect(mut t, 3, logs[0] == want, f"P3 {what}, as {p.other} -> {logs[0]}");
+        // P4: each print doing busy work first
+        let (logs, wrong) = run(w, p.n, p.order.clone(), p.work.clone(), false);
+        expect(mut t, 4, logs[0] == want and wrong == 0, f"P4 {what}, work {p.work} -> {logs[0]}");
+        // P5: two printers at once, their six tasks interleaved
+        let (logs, wrong) = run(w, p.n, p.both.clone(), none.clone(), true);
+        expect(mut t, 5, logs[0] == want and logs[1] == want and wrong == 0, f"P5 {what}, both {p.both} -> {logs}");
+        // P6: the run repeated gives the same log
+        let (again, _) = run(w, p.n, p.order.clone(), none.clone(), false);
+        let (first, _) = run(w, p.n, p.order.clone(), none.clone(), false);
+        expect(mut t, 6, again == first, f"P6 {what} -> {again} then {first}");
+    }
+    t.cases += 1;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 600 problems of up to 15 numbers, each of the six orders 100 times,
+    // a second order at random, the six tasks of two printers in a random
+    // order, and busy work of up to 2000 steps for each of up to 5 prints
+    // in turn. Every choice is drawn before any arm answers.
+    let orders: Vec[Vec[i64]] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    let mut seed = 11161;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..600 {
+        let n = next_random(mut seed) % 15 + 1;
+        let order = orders[i % 6].clone();
+        let other = orders[next_random(mut seed) % 6].clone();
+        let mut both: Vec[i64] = (0..6).collect();
+        for j in 0..6 {
+            let k = j + next_random(mut seed) % (6 - j);
+            both.swap(j, k);
+        }
+        let len = next_random(mut seed) % 5 + 1;
+        let work: Vec[i64] = (0..len).map(|_| next_random(mut seed) % 2000).collect();
+        problems.push(Problem { n, order, other, both, work });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 4 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

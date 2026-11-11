@@ -1,0 +1,57 @@
+// LeetCode #1119: Remove Vowels from a String -- the five vowels as bits of
+// one number, a letter's bit read at its distance from `a`, and the bytes
+// that are not vowels kept and read back as text. O(n).
+
+const VOWELS: u32 = (1 << 0) | (1 << 4) | (1 << 8) | (1 << 14) | (1 << 20);
+
+fn remove_vowels(s: String) -> String {
+    let kept: Vec[u8] = s.bytes().iter().filter(|b| (VOWELS >> (b - b'a') as u32) & 1 == 0).collect();
+    String.from_utf8(kept).unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random lowercase text of `n` letters, a vowel one time in `odds`.
+fn random_text(seed: mut ref i64, n: i64, odds: i64) -> String {
+    let vowels: Vec[char] = "aeiou".chars().collect();
+    let others: Vec[char] = "bcdfghjklmnpqrstvwxyz".chars().collect();
+    let mut s = String.with_capacity(n);
+    for _ in 0..n {
+        if next_random(mut seed) % odds == 0 {
+            s.push(vowels[next_random(mut seed) % 5]);
+        } else {
+            s.push(others[next_random(mut seed) % 21]);
+        }
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's two examples and seven more: one consonant, one vowel,
+    // every letter once, a vowel at each end, vowels only between, a
+    // repeated vowel, and no vowel at all
+    let cases = ["leetcodeisacommunityforcoders", "aeiou", "b", "a", "abcdefghijklmnopqrstuvwxyz", "abba", "baaab", "uuuuuu", "rhythm"];
+    for s in cases.iter() {
+        println(f"{s} -> \"{remove_vowels(s)}\"");
+    }
+    // 2000 random texts of up to 1000 letters, LeetCode's longest, a vowel
+    // one time in two to one time in six: the letters kept, and a checksum
+    let mut seed = 1119;
+    let mut kept = 0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let n = next_random(mut seed) % 1000 + 1;
+        let s = random_text(mut seed, n, i % 5 + 2);
+        let r = remove_vowels(s);
+        kept += r.len();
+        for c in r.chars() {
+            check = (check * 31 + c as i64) % 1000000007;
+        }
+    }
+    println(f"2000 random texts: {kept} letters kept, checksum {check}");
+}
