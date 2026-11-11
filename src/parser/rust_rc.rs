@@ -120,6 +120,46 @@ impl super::Parser {
         true
     }
 
+    /// Whether the `&` at token `amp` starts a parameter's
+    /// `&Rc<RefCell<T>>` or `&Option<Rc<RefCell<T>>>`, whose `&` the fix
+    /// drops rather than spelling `ref`. Not when the file reads `*name`
+    /// for the parameter's name anywhere: a bare parameter has nothing to
+    /// dereference, and that error has no fix.
+    pub(crate) fn rust_rc_param_borrow(&self, amp: usize) -> bool {
+        let token = |k: usize| self.tokens.get(k).map(|t| &t.token);
+        let (Some(Token::Colon), Some(Token::Identifier { name, .. })) = (
+            amp.checked_sub(1).and_then(token),
+            amp.checked_sub(2).and_then(token),
+        ) else {
+            return false;
+        };
+        let Some((source, base)) = self.source.as_ref() else {
+            return false;
+        };
+        let (source, base): (&str, usize) = (source, *base);
+        let mut i = amp + 1;
+        let option = matches!(token(i), Some(Token::Identifier { name, .. }) if name == "Option");
+        if option {
+            if !matches!(token(i + 1), Some(Token::LessThan | Token::LeftBracket)) {
+                return false;
+            }
+            i += 2;
+        }
+        let Some((end, _)) = self.rc_type_at(i, source, base) else {
+            return false;
+        };
+        if option {
+            let rest = source.get(end.saturating_sub(base)..).unwrap_or("");
+            if !rest.trim_start().starts_with(['>', ']']) {
+                return false;
+            }
+        }
+        !self.tokens.windows(2).any(|w| {
+            matches!(w[0].token, Token::Star)
+                && matches!(&w[1].token, Token::Identifier { name: n, .. } if n == name)
+        })
+    }
+
     /// The envelope's edits, and the struct names it declares `shared`.
     fn rc_refcell_rewrite(&self) -> (Vec<TextEdit>, Vec<String>) {
         let Some((source, base)) = self.source.as_ref() else {

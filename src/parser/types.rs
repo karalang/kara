@@ -457,6 +457,7 @@ impl super::Parser {
             // sigil to the Kāra word and the type parses as that borrow, so
             // one diagnostic stands for it (B-2026-11-01-5).
             Token::Amp => {
+                let amp_at = self.pos;
                 self.advance();
                 let is_mut = self.eat(&Token::Mut);
                 let inner_at = self.current_span().offset;
@@ -468,6 +469,18 @@ impl super::Parser {
                     (
                         "`&mut T` is Rust syntax -- a borrow that writes is `mut ref T`",
                         "mut ref ",
+                    )
+                } else if self.rust_rc_param_borrow(amp_at) {
+                    // `&Rc<RefCell<T>>` / `&Option<Rc<RefCell<T>>>` on a
+                    // parameter: the type becomes the shared struct `T`, a
+                    // handle, and a bare parameter already borrows, so the
+                    // `&` goes. `ref` made each node matched out of it a
+                    // `ref T`, which `Some(n)` could not return as an
+                    // `Option[T]`, with no fix (kata 1123).
+                    (
+                        "`&T` is Rust syntax -- a bare parameter already borrows, and \
+                         `Rc<RefCell<T>>` is a shared struct's handle in Kāra: drop the `&`",
+                        "",
                     )
                 } else {
                     (
@@ -613,6 +626,9 @@ impl super::Parser {
                     },
                 );
                 let inner = self.parse_type()?;
+                if kara.is_empty() {
+                    return Some(inner);
+                }
                 let inner = Box::new(inner);
                 Some(TypeExpr {
                     kind: if is_mut {
