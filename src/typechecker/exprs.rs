@@ -5749,6 +5749,7 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 self.borrow_context = saved_borrow_ctx;
                 self.mut_through_param_arg = saved_mut_through;
+                let inferred = self.impl_self_with_args(inferred);
                 arg_tys.push(Some(inferred));
             }
         }
@@ -12784,6 +12785,22 @@ impl<'a> super::TypeChecker<'a> {
         match resolve_type_var_top(t, &self.env.substitutions) {
             Type::TypeVar(id) => inference::literal_var_kind(id).map(|k| (id, k)),
             _ => None,
+        }
+    }
+
+    /// `self` of a generic `impl[R] G[R]` is typed by the bare name `G`
+    /// (`check_impl_block_inner` erases a generic target's arguments). As
+    /// an argument of a generic call it is the impl's `G[R]`, so a
+    /// `fn helper[R](w: ref G[R])` solves its `R` from it (B-2026-11-11-62).
+    pub(super) fn impl_self_with_args(&self, t: Type) -> Type {
+        let Some(full @ Type::Named { name: target, .. }) = &self.current_impl_target else {
+            return t;
+        };
+        match t {
+            Type::Named { ref name, ref args } if name == target && args.is_empty() => full.clone(),
+            Type::Ref(inner) => Type::Ref(Box::new(self.impl_self_with_args(*inner))),
+            Type::MutRef(inner) => Type::MutRef(Box::new(self.impl_self_with_args(*inner))),
+            t => t,
         }
     }
 

@@ -434,6 +434,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   first (garbage compiled, an AddressSanitizer abort); it is refused now,
   with the `scan` state's `0i32` fix offered through the `chain`
   (B-2026-11-11-41).
+- `self` in a generic `impl[R] Wrap[R]` was typed `Wrap` without its
+  arguments, so `helper(self)` with `fn helper[R](w: ref Wrap[R])` was
+  refused "expected 'Wrap[R]', found 'Wrap'", and in a library `impl[R]
+  BufReader[R]` a call of the native `read` on `self` was refused by the MIR
+  builder as having no resolved callee. As a generic call's argument and as
+  a method's receiver, `self` is now the impl's `Wrap[R]`
+  (B-2026-11-11-62).
 - A `scan` whose state starts at an unsuffixed literal settled the state
   to `i64` at the closure's first read of it, so kata 1118's Rust shape
   `[0].into_iter().chain(lengths.iter().scan(0, |total, d| { let total =

@@ -537,6 +537,11 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `self` of a generic `impl[R] G[R]` is typed by the bare name `G`;
+        // its method calls take the impl's own arguments, so a callee's `R`
+        // is the caller's (`self.read(..)` in `impl[R] BufReader[R]`,
+        // B-2026-11-11-62).
+        let receiver_for_lookup = &self.impl_self_with_args(receiver_for_lookup.clone());
         let (type_name, type_args) = match receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             // B-2026-08-12-32 — a `String` receiver reaching here has already
