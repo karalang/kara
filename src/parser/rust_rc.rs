@@ -81,10 +81,7 @@ impl super::Parser {
             .source_at(path_start, path_end - path_start)
             .unwrap_or("std::rc::Rc")
             .to_string();
-        let mut edit_length = whole.length;
-        if self.source_at(whole.offset + whole.length, 1) == Some("\n") {
-            edit_length += 1;
-        }
+        let edit_length = self.rust_use_line_length(whole);
         let mut edits = vec![TextEdit {
             offset: whole.offset,
             length: edit_length,

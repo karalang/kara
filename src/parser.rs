@@ -3227,6 +3227,26 @@ impl Parser {
         source.get(at..at + length)
     }
 
+    /// How much of the source a fix deleting the Rust `use` line at `whole`
+    /// takes: the statement, its newline, and a blank line after it when a
+    /// blank line (or the top of the file) is before it too, so the two do
+    /// not become two blank lines in a row (katas 1120, 1122). Two `use`
+    /// lines in a row go in separate `karac fix` rounds, so each round sees
+    /// the lines the last one left.
+    pub(crate) fn rust_use_line_length(&self, whole: Span) -> usize {
+        let mut length = whole.length;
+        if self.source_at(whole.offset + whole.length, 1) != Some("\n") {
+            return length;
+        }
+        length += 1;
+        let blank_before = whole.offset == 0
+            || (whole.offset >= 2 && self.source_at(whole.offset - 2, 2) == Some("\n\n"));
+        if blank_before && self.source_at(whole.offset + length, 1) == Some("\n") {
+            length += 1;
+        }
+        length
+    }
+
     /// Rust's `use std::collections::HashMap;`, or the `import` `karac fix`
     /// makes of its `use`, at the `use` / `import` keyword. Rust's
     /// collections, `cmp` and `mem` are in Kāra's prelude (`Map`, `max`,
@@ -3401,19 +3421,11 @@ impl Parser {
             )
         };
         // The edit takes the line's newline too, so no blank line is left.
-        let mut edit_length = whole.length;
-        if !keep_reverse && self.source_at(whole.offset + whole.length, 1) == Some("\n") {
-            edit_length += 1;
-            // And a blank line after it when one is before it too, so the
-            // two do not become two blank lines in a row (kata 1122).
-            // At the top of the file there is nothing for it to separate.
-            if (whole.offset == 0
-                || (whole.offset >= 2 && self.source_at(whole.offset - 2, 2) == Some("\n\n")))
-                && self.source_at(whole.offset + edit_length, 1) == Some("\n")
-            {
-                edit_length += 1;
-            }
-        }
+        let edit_length = if keep_reverse {
+            whole.length
+        } else {
+            self.rust_use_line_length(whole)
+        };
         self.error_at(&message, whole);
         self.fix_diffs.insert(
             crate::resolver::SpanKey::from_span(&whole),
