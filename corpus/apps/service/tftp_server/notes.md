@@ -50,10 +50,8 @@ Fixed in kara while writing it:
   lends from the `Vec` that `split` returns and the statement drops, so the
   fixed program was refused with E0516; a call's result now gets
   `.into_iter()` (B-2026-11-11-46).
-
-By hand, around an open row:
-- `String::from_utf8_lossy(..)` in `show`: no such function
-  (B-2026-11-11-24); `String.from_utf8(..).unwrap_or(String.new())`.
+- `String::from_utf8_lossy(..)` in `show` had no such function; kara added
+  it (B-2026-11-11-24), and the port calls it as the Rust does.
 
 `Server` shadows a prelude type of the same name; check warns, and the
 program means its own. Check also warns at each discarded `Option` from

@@ -283,13 +283,13 @@ fn describe(table: Slice[u32], pkt: Slice[u8], txid: Slice[u8], own: Str) -> Str
             }
             ERROR_CODE => {
                 let code = v[2] as u16 * 100 + v[3];
-                parts.push(f"code {code} {String.from_utf8(v[4..].to_vec()).unwrap_or(String.new())}");
+                parts.push(f"code {code} {String.from_utf8_lossy(v[4..])}");
             }
             UNKNOWN_ATTRIBUTES => {
                 let kinds: Vec[String] = (0..v.len()).step_by(2).map(|i| f"0x{be16(v, i):04x}").collect();
                 parts.push(f"unknown [{kinds.join(", ")}]");
             }
-            SOFTWARE => parts.push(f"software \"{String.from_utf8(v.to_vec()).unwrap_or(String.new())}\""),
+            SOFTWARE => parts.push(f"software \"{String.from_utf8_lossy(v)}\""),
             FINGERPRINT => parts.push("fingerprint ok".to_string()),
             k => parts.push(f"attribute 0x{k:04x}"),
         }

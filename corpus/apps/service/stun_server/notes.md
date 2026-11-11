@@ -57,8 +57,9 @@ By hand, around open rows:
   bound, and on a `Vec[Vec[u8]]` it is the elements' `Display` text, a
   `String`, where Rust flattens (B-2026-11-11-51); a loop of
   `extend_from_slice`.
-- `String::from_utf8_lossy(..)` in `describe`: no such function
-  (B-2026-11-11-24); `String.from_utf8(..).unwrap_or(String.new())`.
+
+`String::from_utf8_lossy(..)` in `describe` had no such function; kara
+added it (B-2026-11-11-24), and the port calls it as the Rust does.
 
 `Server` shadows a prelude type of the same name; check warns, and the
 program means its own.

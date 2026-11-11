@@ -61,8 +61,5 @@ Fixed in kara while writing it:
 socket read converts into the `IoError` it declares (B-2026-11-11-25).
 Its `proto.as_deref() != Some("MQTT")` is the Rust's too: the method
 was in kara before B-2026-11-11-26 was filed against an older build.
-
-By hand, around open rows:
-- `String::from_utf8_lossy(..)`: no such function (B-2026-11-11-24);
-  `String.from_utf8(..).unwrap_or(String.new())`, right only because the
-  run's payloads are ASCII.
+Its `String::from_utf8_lossy(..)` calls are the Rust's too, since kara
+added the function (B-2026-11-11-24).

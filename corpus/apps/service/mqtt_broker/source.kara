@@ -128,7 +128,7 @@ impl Cursor {
         if self.at + n > self.body.len() {
             return None;
         }
-        let s = String.from_utf8(self.body[self.at..self.at + n]).unwrap_or(String.new());
+        let s = String.from_utf8_lossy(self.body[self.at..self.at + n]).to_string();
         self.at += n;
         Some(s)
     }
@@ -539,7 +539,7 @@ fn show(p: ref Packet) -> String {
             let text = if payload.len() > 40 {
                 f"<{payload.len()} bytes>"
             } else {
-                f"'{String.from_utf8(payload).unwrap_or(String.new())}'"
+                f"'{String.from_utf8_lossy(payload)}'"
             };
             f"{name} {topic} q{qos} r{retain}{pid} {text}"
         }
@@ -673,6 +673,6 @@ fn main() {
         println(f"{name} {n}");
     }
     for (topic, r) in g.value.retained.iter() {
-        println(f"retained {topic} q{r.qos} '{String.from_utf8(r.payload).unwrap_or(String.new())}'");
+        println(f"retained {topic} q{r.qos} '{String.from_utf8_lossy(r.payload)}'");
     }
 }
