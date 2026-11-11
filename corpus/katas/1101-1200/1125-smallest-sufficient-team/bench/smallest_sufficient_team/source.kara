@@ -1,0 +1,92 @@
+// LeetCode #1125: Smallest Sufficient Team -- the bench: the ★ arm over 8
+// problems of LeetCode's largest, 16 skills and 60 people, built once,
+// each of 8 rounds giving one person in every problem a skill or taking
+// one away, and solving the problem again.
+
+fn smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    let mut bit: Map[String, i64] = Map.new();
+    for (i, s) in req_skills.iter().enumerate() {
+        bit[s.clone()] = i;
+    }
+    let full = (1 << req_skills.len()) - 1;
+    let mut team: Vec[Option[Vec[i64]]] = Vec.filled(full + 1, None);
+    team[0] = Some([]);
+    for (p, skills) in people.iter().enumerate() {
+        let mut mask = 0;
+        for s in skills.iter() {
+            mask |= 1 << bit[s];
+        }
+        if mask == 0 {
+            continue;
+        }
+        for m in 0..full + 1 {
+            let grown = m | mask;
+            if grown == m {
+                continue;
+            }
+            if let Some(t) = team[m] {
+                let better = match team[grown] {
+                    Some(g) => t.len() + 1 < g.len(),
+                    None => true,
+                };
+                if better {
+                    let mut next = t.clone();
+                    next.push(p);
+                    team[grown] = Some(next);
+                }
+            }
+        }
+    }
+    team[full].take().unwrap()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1125;
+    let req: Vec[String] = (0..16).map(|i| f"s{i}").collect();
+    let mut problems: Vec[Vec[Vec[String]]] = [];
+    for _ in 0..8 {
+        let mut people: Vec[Vec[String]] = [];
+        for _ in 0..60 {
+            let mut skills: Vec[String] = [];
+            for s in req.iter() {
+                if next_random(mut seed) % 100 < 20 {
+                    skills.push(s.clone());
+                }
+            }
+            people.push(skills);
+        }
+        problems.push(people);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..8 {
+        for people in problems.iter_mut() {
+            // one person gains a skill they lack or loses one they have,
+            // and a skill nobody has is given to the next person on
+            let who = next_random(mut seed) % 60;
+            let skill = f"s{next_random(mut seed) % 16}";
+            if let Some(at) = people[who].iter().position(|s| s == skill) {
+                people[who].remove(at);
+            } else {
+                people[who].push(skill);
+            }
+            for s in req.iter() {
+                if not people.iter().any(|p| p.contains(s)) {
+                    people[(who + 1) % 60].push(s.clone());
+                }
+            }
+            let team = smallest_sufficient_team(req, people);
+            total += team.len();
+            for p in team.iter() {
+                check = (check * 61 + p + 1) % 1000000007;
+            }
+            check = (check * 17 + round) % 1000000007;
+        }
+    }
+    println(f"8 rounds over 8 problems of 16 skills and 60 people: team sizes total {total}, checksum {check}");
+}

@@ -1,0 +1,448 @@
+// LeetCode #1125: Smallest Sufficient Team -- a differential over the six
+// arms. Each team is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- smallest_sufficient_team.kara ----
+
+fn a0_smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    let mut bit: Map[String, i64] = Map.new();
+    for (i, s) in req_skills.iter().enumerate() {
+        bit[s.clone()] = i;
+    }
+    let full = (1 << req_skills.len()) - 1;
+    let mut team: Vec[Option[Vec[i64]]] = Vec.filled(full + 1, None);
+    team[0] = Some([]);
+    for (p, skills) in people.iter().enumerate() {
+        let mut mask = 0;
+        for s in skills.iter() {
+            mask |= 1 << bit[s];
+        }
+        if mask == 0 {
+            continue;
+        }
+        for m in 0..full + 1 {
+            let grown = m | mask;
+            if grown == m {
+                continue;
+            }
+            if let Some(t) = team[m] {
+                let better = match team[grown] {
+                    Some(g) => t.len() + 1 < g.len(),
+                    None => true,
+                };
+                if better {
+                    let mut next = t.clone();
+                    next.push(p);
+                    team[grown] = Some(next);
+                }
+            }
+        }
+    }
+    team[full].take().unwrap()
+}
+
+// ---- smallest_sufficient_team_parent.kara ----
+
+fn a1_smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    let full = (1 << req_skills.len()) - 1;
+    let masks: Vec[i64] = people
+        .iter()
+        .map(|skills| {
+            let mut mask = 0;
+            for (i, s) in req_skills.iter().enumerate() {
+                if skills.contains(s) {
+                    mask |= 1 << i;
+                }
+            }
+            mask
+        })
+        .collect();
+    let unreached = people.len() + 1;
+    let mut size: Vec[i64] = Vec.filled(full + 1, unreached);
+    let mut from: Vec[(i64, i64)] = Vec.filled(full + 1, (0, 0));
+    size[0] = 0;
+    for (p, mask) in masks.iter().enumerate() {
+        for m in 0..full + 1 {
+            let grown = m | mask;
+            if size[m] < unreached and size[m] + 1 < size[grown] {
+                size[grown] = size[m] + 1;
+                from[grown] = (m, p);
+            }
+        }
+    }
+    let mut team: Vec[i64] = [];
+    let mut m = full;
+    while m != 0 {
+        let (before, p) = from[m];
+        team.push(p);
+        m = before;
+    }
+    team
+}
+
+// ---- smallest_sufficient_team_bfs.kara ----
+
+fn a2_smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    let mut bit: Map[String, i64] = Map.new();
+    for (i, s) in req_skills.iter().enumerate() {
+        bit[s.clone()] = i;
+    }
+    let masks: Vec[i64] = people.iter().map(|skills| skills.iter().fold(0, |mask, s| mask | 1 << bit[s])).collect();
+    let full = (1 << req_skills.len()) - 1;
+    let mut seen: Vec[bool] = Vec.filled(full + 1, false);
+    let mut from: Vec[(i64, i64)] = Vec.filled(full + 1, (0, 0));
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    seen[0] = true;
+    queue.push_back(0);
+    while let Some(m) = queue.pop_front() {
+        if m == full {
+            break;
+        }
+        for (p, mask) in masks.iter().enumerate() {
+            let grown = m | mask;
+            if not seen[grown] {
+                seen[grown] = true;
+                from[grown] = (m, p);
+                queue.push_back(grown);
+            }
+        }
+    }
+    let mut team: Vec[i64] = [];
+    let mut m = full;
+    while m != 0 {
+        team.push(from[m].1);
+        m = from[m].0;
+    }
+    team
+}
+
+// ---- smallest_sufficient_team_search.kara ----
+
+struct A3Search {
+    masks: Vec[i64],
+    full: i64,
+    team: Vec[i64],
+    best: Vec[i64],
+}
+
+fn a3_search(s: mut ref A3Search, have: i64) {
+    if have == s.full {
+        s.best = s.team.clone();
+        return;
+    }
+    if s.team.len() + 1 >= s.best.len() {
+        return;
+    }
+    let mut lowest = 0;
+    while have >> lowest & 1 == 1 {
+        lowest += 1;
+    }
+    for p in 0..s.masks.len() {
+        if s.masks[p] >> lowest & 1 == 1 {
+            s.team.push(p);
+            a3_search(mut s, have | s.masks[p]);
+            s.team.pop();
+        }
+    }
+}
+
+fn a3_smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    let mut bit: Map[String, i64] = Map.new();
+    for (i, s) in req_skills.iter().enumerate() {
+        bit[s.clone()] = i;
+    }
+    let masks: Vec[i64] = people.iter().map(|skills| skills.iter().fold(0, |mask, s| mask | 1 << bit[s])).collect();
+    // a person is kept unless someone else has every skill they have, and
+    // more or, with the same skills, comes first
+    let mut kept: Vec[i64] = [];
+    for (p, mask) in masks.iter().enumerate() {
+        let covered = masks.iter().enumerate().any(|(q, other)| {
+            q != p and mask | other == other and (mask != other or q < p)
+        });
+        if not covered {
+            kept.push(p);
+        }
+    }
+    let mut s = A3Search {
+        masks: kept.iter().map(|p| masks[p]).collect(),
+        full: (1 << req_skills.len()) - 1,
+        team: [],
+        best: (0..kept.len() + 1).collect(),
+    };
+    a3_search(mut s, 0);
+    s.best.iter().map(|k| kept[k]).collect()
+}
+
+// ---- smallest_sufficient_team_sparse.kara ----
+
+fn a4_smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    let full = (1 << req_skills.len()) - 1;
+    let mut best: Map[i64, Vec[i64]] = Map.new();
+    best[0] = [];
+    for (p, skills) in people.iter().enumerate() {
+        let mut mask = 0;
+        for (i, s) in req_skills.iter().enumerate() {
+            if skills.contains(s) {
+                mask |= 1 << i;
+            }
+        }
+        for (m, team) in best.clone().into_iter() {
+            let grown = m | mask;
+            if grown != m and (not best.contains_key(grown) or team.len() + 1 < best[grown].len()) {
+                let mut next = team;
+                next.push(p);
+                best[grown] = next;
+            }
+        }
+    }
+    best[full].clone()
+}
+
+// ---- smallest_sufficient_team_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i32] {
+        let n = req_skills.len();
+        let mut idx: Map[Str, i64] = Map.new();
+        for (i, s) in req_skills.iter().enumerate() {
+            idx.insert(s.as_str(), i);
+        }
+        let full = (1 << n) - 1;
+        let mut dp: Vec[Option[Vec[i32]]] = Vec.filled(full + 1, None);
+        dp[0] = Some(Vec.new());
+        for (i, p) in people.iter().enumerate() {
+            let mut mask = 0;
+            for s in p {
+                mask |= 1 << idx[s.as_str()];
+            }
+            for m in 0..=full {
+                if let Some(team) = dp[m].clone() {
+                    let next = m | mask;
+                    if dp[next].as_ref().map_or(true, |t| t.len() > team.len() + 1) {
+                        let mut t = team;
+                        t.push(i as i32);
+                        dp[next] = Some(t);
+                    }
+                }
+            }
+        }
+        dp[full].take().unwrap()
+    }
+}
+
+fn a5_smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    A5Solution.a5_smallest_sufficient_team(req_skills, people).into_iter().map(|p| p as i64).collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    match which {
+        0 => a0_smallest_sufficient_team(req_skills, people),
+        1 => a1_smallest_sufficient_team(req_skills, people),
+        2 => a2_smallest_sufficient_team(req_skills, people),
+        3 => a3_smallest_sufficient_team(req_skills, people),
+        4 => a4_smallest_sufficient_team(req_skills, people),
+        _ => a5_smallest_sufficient_team(req_skills, people),
+    }
+}
+
+// The statement read literally: every set of people, taken as a list of
+// who is in it, and the size of the smallest whose skills, looked up by
+// name, include every required one.
+fn literal(req_skills: Vec[String], people: Vec[Vec[String]]) -> i64 {
+    let n = people.len();
+    let mut best = n + 1;
+    for set in 0..1 << n {
+        let members: Vec[i64] = (0..n).filter(|p| set >> p & 1 == 1).collect();
+        let sufficient = req_skills.iter().all(|s| members.iter().any(|p| people[p].contains(s)));
+        if sufficient and members.len() < best {
+            best = members.len();
+        }
+    }
+    best
+}
+
+// P2: the team names each person once, every one of them real, and
+// between them has every skill.
+fn sufficient(req_skills: Vec[String], people: Vec[Vec[String]], team: Vec[i64]) -> bool {
+    for (i, p) in team.iter().enumerate() {
+        if p < 0 or p >= people.len() or team[..i].contains(p) {
+            return false;
+        }
+    }
+    req_skills.iter().all(|s| team.iter().any(|p| people[p].contains(s)))
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` people over `m` skills named `s0`.., each skill held at chance
+// `percent` in 100, then any skill nobody has given to a random person.
+fn random_problem(seed: mut ref i64, m: i64, n: i64, percent: i64) -> (Vec[String], Vec[Vec[String]]) {
+    let req: Vec[String] = (0..m).map(|i| f"s{i}").collect();
+    let mut people: Vec[Vec[String]] = [];
+    for _ in 0..n {
+        let mut skills: Vec[String] = [];
+        for s in req.iter() {
+            if next_random(mut seed) % 100 < percent {
+                skills.push(s.clone());
+            }
+        }
+        people.push(skills);
+    }
+    for s in req.iter() {
+        if not people.iter().any(|p| p.contains(s)) {
+            let at = next_random(mut seed) % n;
+            people[at].push(s.clone());
+        }
+    }
+    (req, people)
+}
+
+// `n` people over 8 skills, each holding a run of skills next to each
+// other, so that teams cover the skills like intervals cover a line.
+fn runs_problem(seed: mut ref i64, n: i64) -> (Vec[String], Vec[Vec[String]]) {
+    let req: Vec[String] = (0..8).map(|i| f"s{i}").collect();
+    let mut people: Vec[Vec[String]] = [];
+    for _ in 0..n {
+        let from = next_random(mut seed) % 8;
+        let len = next_random(mut seed) % 4 + 1;
+        people.push((from..(from + len).min(8)).map(|i| f"s{i}").collect());
+    }
+    for s in req.iter() {
+        if not people.iter().any(|p| p.contains(s)) {
+            let at = next_random(mut seed) % n;
+            people[at].push(s.clone());
+        }
+    }
+    (req, people)
+}
+
+struct Problem {
+    req: Vec[String],
+    people: Vec[Vec[String]],
+    // a random choice for P5 and P6, drawn with the problem
+    pick: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, req: Vec[String], people: Vec[Vec[String]], pick: i64) {
+    let n = people.len();
+    let want = literal(req, people);
+    let reversed: Vec[Vec[String]] = people.iter().rev().cloned().collect();
+    // the skills renamed `t0`.. and listed last first
+    let rename = |s: String| f"t{s[1..]}";
+    let renamed_req: Vec[String] = req.iter().rev().map(|s| rename(s)).collect();
+    let renamed: Vec[Vec[String]] = people.iter().map(|p| p.iter().map(|s| rename(s)).collect()).collect();
+    for w in 0..6 {
+        let team = arm(w, req, people);
+        let size = team.len();
+        let what = f"arm {w}, case {t.cases} {req} {people} -> {team}";
+        // P1: the statement read literally
+        expect(mut t, 1, size == want, f"P1 {what}, literally {want}");
+        // P2: the team is real and has every skill
+        let real = sufficient(req, people, team);
+        expect(mut t, 2, real, f"P2 {what}");
+        // P3: the people listed last first give a team of the same size
+        let r = arm(w, req, reversed).len();
+        expect(mut t, 3, r == size, f"P3 {what}, reversed {r}");
+        // P4: the skills renamed and listed last first give the same size
+        let e = arm(w, renamed_req, renamed).len();
+        expect(mut t, 4, e == size, f"P4 {what}, renamed {e}");
+        if not real {
+            continue;
+        }
+        // P5: two of the team made one person, the others' places kept,
+        // give a team one smaller
+        if size >= 2 {
+            let a = team[pick % size];
+            let b = team[(pick % size + 1) % size];
+            let mut merged = people.clone();
+            for s in people[b].iter() {
+                if not merged[a].contains(s) {
+                    merged[a].push(s.clone());
+                }
+            }
+            merged[b] = [];
+            let g = arm(w, req, merged).len();
+            expect(mut t, 5, g == size - 1, f"P5 {what}, {a} and {b} merged {g}");
+        }
+        // P6: a person not on the team left out gives the same size
+        let outside: Vec[i64] = (0..n).filter(|p| not team.contains(p)).collect();
+        if not outside.is_empty() {
+            let gone = outside[pick % outside.len()];
+            let fewer: Vec[Vec[String]] = (0..n).filter(|p| p != gone).map(|p| people[p].clone()).collect();
+            let f = arm(w, req, fewer).len();
+            expect(mut t, 6, f == size, f"P6 {what}, without {gone} {f}");
+        }
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want * 7 + n) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 8 people over up to 6
+    // skills, each held at 30%; up to 8 people over up to 8 skills at 15%,
+    // so teams are large; one to three people over up to 6 skills at 50%;
+    // and up to 8 people each holding a run of up to 4 of 8 skills. Every
+    // choice is drawn before any arm answers.
+    let mut seed = 11251;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let (req, people) = match i % 4 {
+            0 => {
+                let m = next_random(mut seed) % 6 + 1;
+                let n = next_random(mut seed) % 8 + 1;
+                random_problem(mut seed, m, n, 30)
+            }
+            1 => {
+                let m = next_random(mut seed) % 8 + 1;
+                let n = next_random(mut seed) % 8 + 1;
+                random_problem(mut seed, m, n, 15)
+            }
+            2 => {
+                let m = next_random(mut seed) % 6 + 1;
+                let n = next_random(mut seed) % 3 + 1;
+                random_problem(mut seed, m, n, 50)
+            }
+            _ => {
+                let n = next_random(mut seed) % 7 + 2;
+                runs_problem(mut seed, n)
+            }
+        };
+        let pick = next_random(mut seed);
+        problems.push(Problem { req, people, pick });
+    }
+    for p in problems.iter() {
+        check_case(mut t, p.req, p.people, p.pick);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

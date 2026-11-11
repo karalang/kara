@@ -1,0 +1,127 @@
+// LeetCode #1125: Smallest Sufficient Team -- the ★ arm's growth over a
+// `Map` holding only the masks reached: for each person, every team found
+// so far, read from a copy of the map taken before the person joins any,
+// is tried with them added. The map's order changes nothing, since a
+// team replaces another only when strictly smaller. O(people * reached).
+
+fn smallest_sufficient_team(req_skills: Vec[String], people: Vec[Vec[String]]) -> Vec[i64] {
+    let full = (1 << req_skills.len()) - 1;
+    let mut best: Map[i64, Vec[i64]] = Map.new();
+    best[0] = [];
+    for (p, skills) in people.iter().enumerate() {
+        let mut mask = 0;
+        for (i, s) in req_skills.iter().enumerate() {
+            if skills.contains(s) {
+                mask |= 1 << i;
+            }
+        }
+        for (m, team) in best.clone().into_iter() {
+            let grown = m | mask;
+            if grown != m and (not best.contains_key(grown) or team.len() + 1 < best[grown].len()) {
+                let mut next = team;
+                next.push(p);
+                best[grown] = next;
+            }
+        }
+    }
+    best[full].clone()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether `team` names each person once, all of them real, and between
+// them has every skill.
+fn covers(req_skills: Vec[String], people: Vec[Vec[String]], team: Vec[i64]) -> bool {
+    for (i, p) in team.iter().enumerate() {
+        if p < 0 or p >= people.len() or team[..i].contains(p) {
+            return false;
+        }
+    }
+    req_skills.iter().all(|s| team.iter().any(|p| people[p].contains(s)))
+}
+
+// `m` skills named `s0`.. and `n` people, each with every skill at chance
+// `percent` in 100, then any skill nobody has given to a random person.
+fn random_problem(seed: mut ref i64, m: i64, n: i64, percent: i64) -> (Vec[String], Vec[Vec[String]]) {
+    let req: Vec[String] = (0..m).map(|i| f"s{i}").collect();
+    let mut people: Vec[Vec[String]] = [];
+    for _ in 0..n {
+        let mut skills: Vec[String] = [];
+        for s in req.iter() {
+            if next_random(mut seed) % 100 < percent {
+                skills.push(s.clone());
+            }
+        }
+        people.push(skills);
+    }
+    for s in req.iter() {
+        if not people.iter().any(|p| p.contains(s)) {
+            let at = next_random(mut seed) % n;
+            people[at].push(s.clone());
+        }
+    }
+    (req, people)
+}
+
+fn report(req_skills: Vec[String], people: Vec[Vec[String]]) -> String {
+    let team = smallest_sufficient_team(req_skills, people);
+    let verdict = if covers(req_skills, people, team) { "covering every skill" } else { "MISSING A SKILL" };
+    f"a team of {team.len()}, {verdict}"
+}
+
+fn main() {
+    // LeetCode's two examples and six more: one skill, people with none,
+    // one person with every skill, two who overlap, a pair that beats
+    // three, and many people alike
+    let cases: Vec[(Vec[String], Vec[Vec[String]])] = [
+        (["java", "nodejs", "reactjs"], [["java"], ["nodejs"], ["nodejs", "reactjs"]]),
+        (
+            ["algorithms", "math", "java", "reactjs", "csharp", "aws"],
+            [
+                ["algorithms", "math", "java"],
+                ["algorithms", "math", "reactjs"],
+                ["java", "csharp", "aws"],
+                ["reactjs", "csharp"],
+                ["csharp", "math"],
+                ["aws", "java"],
+            ],
+        ),
+        (["a"], [["a"]]),
+        (["a", "b", "c"], [[], ["a"], [], ["b"], ["c"], []]),
+        (["a", "b", "c", "d"], [["a", "b"], ["c", "d"], ["a", "b", "c", "d"]]),
+        (["a", "b", "c", "d"], [["a", "b", "c"], ["b", "c", "d"], ["a"], ["d"]]),
+        (
+            ["a", "b", "c", "d", "e", "f"],
+            [["a", "b", "c", "d"], ["a", "e"], ["b", "f"], ["c", "d", "e", "f"]],
+        ),
+        (["x", "y"], [["x"], ["x"], ["y"], ["y"], ["x", "y"]]),
+    ];
+    for (k, (req, people)) in cases.iter().enumerate() {
+        println(f"case {k + 1}, skills {req.len()}, people {people.len()}: {report(req, people)}");
+    }
+    // 500 random problems of up to 10 skills and 20 people, each skill
+    // held at chance 10% to 40%: the team sizes summed and a checksum
+    let mut seed = 1125;
+    let mut total = 0;
+    let mut check = 0;
+    for t in 0..500 {
+        let m = next_random(mut seed) % 10 + 1;
+        let n = next_random(mut seed) % 20 + 1;
+        let (req, people) = random_problem(mut seed, m, n, 10 + t % 4 * 10);
+        let team = smallest_sufficient_team(req, people);
+        let ok = if covers(req, people, team) { 1 } else { 0 };
+        total += team.len();
+        check = (check * 31 + team.len() * 2 + ok) % 1000000007;
+    }
+    println(f"500 random problems: team sizes total {total}, checksum {check}");
+    // two of LeetCode's largest: 16 skills and 60 people
+    for percent in [5, 20] {
+        let (req, people) = random_problem(mut seed, 16, 60, percent);
+        println(f"16 skills, 60 people at {percent}%: {report(req, people)}");
+    }
+}

@@ -1,0 +1,11 @@
+case 1, skills 3, people 3: a team of 2, covering every skill
+case 2, skills 6, people 6: a team of 2, covering every skill
+case 3, skills 1, people 1: a team of 1, covering every skill
+case 4, skills 3, people 6: a team of 3, covering every skill
+case 5, skills 4, people 3: a team of 1, covering every skill
+case 6, skills 4, people 4: a team of 2, covering every skill
+case 7, skills 6, people 4: a team of 2, covering every skill
+case 8, skills 2, people 5: a team of 1, covering every skill
+500 random problems: team sizes total 1297, checksum 341201469
+16 skills, 60 people at 5%: a team of 12, covering every skill
+16 skills, 60 people at 20%: a team of 4, covering every skill
