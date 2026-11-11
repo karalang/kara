@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 251 |
+| diagnostics | 253 |
 | false-positive | 183 |
 | perf | 154 |
 | missing-feature | 146 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 394 |
+| typecheck | 395 |
 | mir-llvm | 201 |
 | mir | 170 |
 | cli | 94 |
 | ownership | 73 |
-| parser | 67 |
+| parser | 68 |
 | interp | 51 |
 | runtime | 39 |
 | effect | 29 |
@@ -117,6 +117,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
 | B-2026-11-11-51 | 2026-11-11 | typecheck | medium | `concat` of a sequence of `Vec`s is not Rust's flatten: on a `Slice[Vec[u8]]` it is refused with a `T: Display` bound, and on a `Vec[Vec[u8]]` it is the elements' Display text, a `String` ("[1, 2][3]") | — |
 | B-2026-11-11-66 | 2026-11-11 | runtime | medium | A compiled Semaphore.acquire sometimes waits out its whole timeout although another task released a permit: kata 1115's differential, with its semaphore arm on the standard library's Semaphore and acquire(60000), takes 62 to 63 s instead of 3 s in 6 of 120 runs (3 of 40 built binaries, 2 of 40 __mir-llvm-run, 1 of 40 karac run), with the right output. | — |
+| B-2026-11-11-70 | 2026-11-11 | parser | medium | An argument's `&&` (Rust's borrow of a borrow, `MONTHS.contains(&&rest[..3])`) is a parse error with no fix, "Expected expression, found `&&`", which also turns the rest of the function into top-level statements | — |
+| B-2026-11-11-71 | 2026-11-11 | typecheck | low | Rust's `s.into_bytes()` on a String is a bare "no method 'into_bytes' on type 'String'", with no hint or fix toward `s.bytes().to_vec()` | — |
 
 ### Relocated
 

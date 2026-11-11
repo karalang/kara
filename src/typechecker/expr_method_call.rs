@@ -2888,10 +2888,16 @@ impl<'a> super::TypeChecker<'a> {
                     "no method '{method}' on type '{}': {twin} (library/strings.md)",
                     type_display(text)
                 );
-                // `to_owned()` and `to_string()` are the same owned copy, so
-                // that one is a rename, and so is `into_owned()`; the others
-                // change what is returned.
-                let rename = (matches!(method, "to_owned" | "into_owned") && args.is_empty())
+                // `to_owned()` and `to_string()` are the same owned copy, as
+                // is `into_owned()`, and `into_bytes()` and `bytes().to_vec()`
+                // the same `Vec[u8]`, so those are renames; the others change
+                // what is returned.
+                let to = match method {
+                    "to_owned" | "into_owned" => "to_string",
+                    "into_bytes" => "bytes().to_vec",
+                    _ => "",
+                };
+                let rename = (!to.is_empty() && args.is_empty())
                     .then(|| {
                         args_close_span
                             .offset
@@ -2910,7 +2916,7 @@ impl<'a> super::TypeChecker<'a> {
                                 length: method.len(),
                                 ..*args_close_span
                             },
-                            replacement: "to_string".to_string(),
+                            replacement: to.to_string(),
                         },
                     ),
                     None => self.type_error(message, *span, TypeErrorKind::NoMethodFound),
@@ -6640,6 +6646,11 @@ fn rust_string_method_twin(method: &str) -> Option<&'static str> {
         "into_owned" => {
             "the text is already owned (`String.from_utf8_lossy` returns a \
              `String`, not Rust's `Cow`), and an owned copy is `to_string()`"
+        }
+        // B-2026-11-11-71.
+        "into_bytes" => {
+            "a string's UTF-8 bytes are `.bytes()`, a `Slice[u8]`, and an owned \
+             `Vec[u8]` of them is `.bytes().to_vec()`"
         }
         _ => return None,
     })

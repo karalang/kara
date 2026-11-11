@@ -4683,7 +4683,10 @@ impl super::Parser {
             // An argument borrows with no sigil and a writing one is marked
             // `mut x`, so in both cases only the `&` goes; a `mut` after it
             // is then the call-site marker below (B-2026-11-03-27).
-            if !ctor && self.check(&Token::Amp) {
+            // `f(&&x)`, a borrow of a borrow (`MONTHS.contains(&&s[..3])`),
+            // lexes as one `&&` and goes the same way (B-2026-11-11-70).
+            let double = self.check(&Token::AmpAmp);
+            if !ctor && (self.check(&Token::Amp) || double) {
                 let amp = self.current_span();
                 let is_mut = matches!(self.peek_token_ref_at(1), Token::Mut);
                 let next = self
@@ -4695,7 +4698,10 @@ impl super::Parser {
                     ..amp
                 };
                 self.error_at(
-                    if is_mut {
+                    if double {
+                        "`&&` on an argument is Rust syntax -- an argument is borrowed \
+                         with no sigil, and Kāra has no borrow of a borrow: drop the `&&`"
+                    } else if is_mut {
                         "`&mut` on an argument is Rust syntax -- an argument the callee \
                          writes is marked `mut x`: drop the `&`"
                     } else {
