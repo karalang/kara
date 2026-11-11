@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 256 |
 | false-positive | 183 |
-| perf | 154 |
+| perf | 155 |
 | missing-feature | 147 |
 | soundness | 61 |
 | miscompile | 55 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 396 |
 | mir-llvm | 201 |
 | mir | 170 |
-| cli | 94 |
+| cli | 95 |
 | ownership | 73 |
 | parser | 71 |
 | interp | 51 |
@@ -97,7 +97,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
+| B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms (startup now waits on the non-PIE decision; the link step was measured to a standstill; the allocator experiment split to B-2026-11-11-82) | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Kata 1665 (a gated `sort_by` partition) still executes 1.17x legacy's instructions on the M5 at 3dc7786b7f; 314 and 318 are within the 1.15x bar, and 214, 247, 288 and 895's par lane wait on their first M5 figures since filing | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Kata 333 executes 1.28x legacy's instructions on the M5 at 3dc7786b7f (1.19x at eb17818b45): ce0cf3209b's `dereferenceable` on its `mut ref` parameter added 6.0% (x86 too); 321, 337, 338, 339 and 343 are within | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
@@ -127,6 +127,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-24 | 2026-11-07 | resolver+typecheck | low | std.secret exports only Secret: Zeroize and ConstantTimeEq cannot be imported or named (so the documented user `impl Zeroize` cannot be written), and `impl Debug for Secret[i64]` is accepted though secret.md makes it a compile error | docs/implementation_checklist/phase-11-stdlib-longtail.md |
 | B-2026-11-09-12 | 2026-11-09 | mir-llvm | low | `PriorityQueue`'s sifts swap elements a level at a time where Rust's `BinaryHeap` moves a hole, three element copies a level against one: kata 786 runs 1.34x and kata 778 1.22x checked Rust on x86 | B-2026-11-08-87 |
 | B-2026-11-09-28 | 2026-11-09 | typecheck | low | Every `karac check` (and every kara-lsp edit) re-parses, re-registers and re-checks the whole standard library: 305M instructions and ~66 ms for a 3-line program; cache the checked library | docs/deferred.md § Pre-checked Standard Library and Package Interfaces |
+| B-2026-11-11-82 | 2026-11-11 | cli | low | An allocator swap (mimalloc as karac's #[global_allocator]) speeds `karac check` by about a quarter at 20-70% more peak RSS; not landed, re-measure once the library cache changes the CLI's allocation profile | docs/deferred.md § Pre-checked Standard Library and Package Interfaces |
 
 </details>
 
