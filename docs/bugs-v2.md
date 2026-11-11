@@ -108,7 +108,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-21 | 2026-11-09 | typecheck | low | Tracker for the next minor release: `is_ok()`/`is_err()` on an `Option` become a compile error; in 0.8.x they are a `deprecated` warning with a `karac fix` to `is_some()`/`is_none()` (85675b25f1, core-types.md 49ba9850cd) | — |
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
-| B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 
 ### Relocated
@@ -1074,6 +1073,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-60 | mir | medium | A tuple, array, `Vec`, `Option` or derived-`Ord` struct holding a value with a hand-written `Ord` sorts and keys sorted tables by its parts' plain or… | 3d987fca00 |
 | B-2026-11-11-61 | typecheck | low | A `scan` whose state starts at an unsuffixed literal settles the state to `i64` before the `collect` that would fix it, so kata 1118's Rust shape `[0… | e036c0dfdd |
 | B-2026-11-11-62 | typecheck | medium | `self` in a generic impl (`impl[R] Wrap[R]`) is typed `Wrap` with no arguments, so handing it to `fn helper[R](w: ref Wrap[R])` is refused "expected… | d763f8b1fa |
+| B-2026-11-11-63 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader… | a267acdbe9 |
 | B-2026-11-11-50 | typecheck | medium | A method on a const (`NAME.as_bytes()`, `CODES.map(..).sum()`) gets no fix-it, or one in the wrong place: the path call it parses as becomes a method… | 4e2cef2b9b |
 | B-2026-11-11-51 | typecheck | medium | `concat` of a sequence of `Vec`s is not Rust's flatten: on a `Slice[Vec[u8]]` it is refused with a `T: Display` bound, and on a `Vec[Vec[u8]]` it is… | cbf2b8ae4b |
 | B-2026-11-11-64 | typecheck+mir | medium | Two tuple match arms, one holding a `ref` to a `Copy` value and the other the value, are refused: `match place.get(x) { Some(i) => (0, i), None => (1… | f6489288db |
