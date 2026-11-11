@@ -123,7 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-35 | 2026-11-11 | typecheck | low | LeetCode's `class H2O` as `struct H2O` is refused as a Const-class name with `consider renaming to H2o` and no fix, though the rename is mechanical: the declaration, its `impl`, and every use in the file | — |
 | B-2026-11-11-38 | 2026-11-11 | typecheck | medium | An `if` or `match` of unsuffixed literals as an element of a list or tuple literal is typed `i64` at once: `let v: Vec[i32] = [1, if b { 2 } else { 3 }];` and `let t: (i32, i32) = (1, if b { 2 } else { 3 });` are refused as a narrowing, with no fix | — |
 | B-2026-11-11-41 | 2026-11-11 | typecheck | medium | A `chain` of literal lists collected into a `Vec[i32]` is refused with no fix: `let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect();` says `C: FromIterator[i64]`, and a `scan` over literals chained after a literal head gets a fix for neither literal | — |
-| B-2026-11-11-46 | 2026-11-11 | typecheck | medium | `karac fix` turns Rust's `pkt[2..].split(|&b| b == 0).collect()` into `.split(..).iter().collect()`, which the next check refuses with E0516: the `.iter()` lends from the `Vec` that `split` returns, a temporary dropped at the end of the statement | — |
 
 ### Relocated
 
@@ -1068,6 +1067,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-40 | parser | low | Rust's `let n = n.borrow();` in an `Rc<RefCell<TreeNode>>` walk becomes `let n = n;` when the `RefCell` goes: a binding that only renames, left in th… | c80adee665 |
 | B-2026-11-11-42 | runtime | low | On Linux the runtime's per-thread small-chunk lists start only with the auto-par worker pool, and small_realloc bypasses them, so a sequential progra… | ba5b881217 |
 | B-2026-11-11-43 | typecheck+parser | low | The `lossless_cast` fix (W0291) deletes only ` as i64` from a cast written in parentheses of its own and leaves the parentheses: `longest * (k as i64… | 57c72847ab |
+| B-2026-11-11-46 | typecheck | medium | `karac fix` turns Rust's `pkt[2..].split(\|&b\| b == 0).collect()` into `.split(..).iter().collect()`, which the next check refuses with E0516: the `.i… | a193908f55 |
 
 </details>
 
