@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 249 |
 | false-positive | 181 |
 | perf | 154 |
-| missing-feature | 143 |
+| missing-feature | 144 |
 | soundness | 61 |
 | miscompile | 55 |
 | run-vs-build | 31 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 388 |
+| typecheck | 389 |
 | mir-llvm | 200 |
 | mir | 169 |
 | cli | 94 |
@@ -115,9 +115,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-24 | 2026-11-11 | typecheck | medium | `String.from_utf8_lossy(bytes)` does not exist ("no associated function 'from_utf8_lossy' on type 'String'"): text from a socket or a file with a bad byte can only be shown by `from_utf8(..).unwrap_or(..)`, which drops all of it | — |
 | B-2026-11-11-25 | 2026-11-11 | typecheck | low | `?` on a `TcpStream` read inside `fn read_packet(..) -> Result[Option[Packet], IoError]` is refused "cannot convert error 'NetError' to 'IoError': no `impl From[NetError] for IoError` in scope" with no fix, where the Rust author's `io::Result` meant the socket's error type | — |
 | B-2026-11-11-33 | 2026-11-11 | runtime | low | `Duration` has no unit below the millisecond: `Duration.ms(n)` and `Duration.secs(n)` build it and `as_ms()` reads it, so a pause or an elapsed time under 1 ms (Rust's `from_micros`, `as_micros`, `as_nanos`; Go's `time.Microsecond`) cannot be written or measured | — |
-| B-2026-11-11-35 | 2026-11-11 | typecheck | low | LeetCode's `class H2O` as `struct H2O` is refused as a Const-class name with `consider renaming to H2o` and no fix, though the rename is mechanical: the declaration, its `impl`, and every use in the file | — |
-| B-2026-11-11-38 | 2026-11-11 | typecheck | medium | An `if` or `match` of unsuffixed literals as an element of a list or tuple literal is typed `i64` at once: `let v: Vec[i32] = [1, if b { 2 } else { 3 }];` and `let t: (i32, i32) = (1, if b { 2 } else { 3 });` are refused as a narrowing, with no fix | — |
-| B-2026-11-11-41 | 2026-11-11 | typecheck | medium | A `chain` of literal lists collected into a `Vec[i32]` is refused with no fix: `let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect();` says `C: FromIterator[i64]`, and a `scan` over literals chained after a literal head gets a fix for neither literal | — |
+| B-2026-11-11-61 | 2026-11-11 | typecheck | low | A `scan` whose state starts at an unsuffixed literal settles the state to `i64` before the `collect` that would fix it, so kata 1118's Rust shape `[0].into_iter().chain(lengths.iter().scan(0, |total, d| { let total = total + d; Some((total, total)) })).collect()` into `Vec[i32]` (with `let lengths = [31, 28, ..]`) is refused, and its `0i32` fix moves the error to `total + d` (the remainder of B-2026-11-11-41) | — |
 
 ### Relocated
 
@@ -1060,10 +1058,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-31 | typecheck+parser | medium | Rust's `use std::sync::mpsc::{channel, Receiver, Sender};` with `Mutex<Sender<()>>` and `self.tx.lock().unwrap().send(())` leaves an import of a modu… | 3402c1954a |
 | B-2026-11-11-32 | interp+mir-llvm+runtime | medium | `sleep(Duration.ms(0))` never lets another task run: a task that waits on a flag with a zero sleep between reads spins forever on the MIR interpreter… | 1267e2aa72 |
 | B-2026-11-11-34 | interp+mir-llvm+runtime | medium | The prelude `Semaphore` does not wait under tasks: `acquire(timeout)` on an exhausted semaphore fails at once with `Timeout` though another task will… | c47fd80f23 |
+| B-2026-11-11-35 | typecheck | low | LeetCode's `class H2O` as `struct H2O` is refused as a Const-class name with `consider renaming to H2o` and no fix, though the rename is mechanical:… | cc0bc927f2 |
 | B-2026-11-11-36 | typecheck | low | `String.from_iter(atoms.iter())` over a `Vec[char]` says `.cloned()` but offers no fix: the assoc-eq bound's fix reached only a method whose bound na… | 3402c1954a |
 | B-2026-11-11-37 | typecheck | medium | `g.value = Molecule { . | 3402c1954a |
+| B-2026-11-11-38 | typecheck | medium | An `if` or `match` of unsuffixed literals as an element of a list or tuple literal is typed `i64` at once: `let v: Vec[i32] = [1, if b { 2 } else { 3… | 3b45dc0f0e |
 | B-2026-11-11-39 | runtime | medium | `String` has no `retain`: `s.retain(\|c\| c != ' ')`, Rust's `String::retain`, is refused as `no method 'retain' on type 'String'` though `Vec`, `VecDe… | 3c79788215 |
 | B-2026-11-11-40 | parser | low | Rust's `let n = n.borrow();` in an `Rc<RefCell<TreeNode>>` walk becomes `let n = n;` when the `RefCell` goes: a binding that only renames, left in th… | c80adee665 |
+| B-2026-11-11-41 | typecheck | medium | A `chain` of literal lists collected into a `Vec[i32]` is refused with no fix: `let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect()… | a65b4dc882 |
 | B-2026-11-11-42 | runtime | low | On Linux the runtime's per-thread small-chunk lists start only with the auto-par worker pool, and small_realloc bypasses them, so a sequential progra… | ba5b881217 |
 | B-2026-11-11-43 | typecheck+parser | low | The `lossless_cast` fix (W0291) deletes only ` as i64` from a cast written in parentheses of its own and leaves the parentheses: `longest * (k as i64… | 57c72847ab |
 | B-2026-11-11-46 | typecheck | medium | `karac fix` turns Rust's `pkt[2..].split(\|&b\| b == 0).collect()` into `.split(..).iter().collect()`, which the next check refuses with E0516: the `.i… | a193908f55 |
