@@ -117,8 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
 | B-2026-11-11-51 | 2026-11-11 | typecheck | medium | `concat` of a sequence of `Vec`s is not Rust's flatten: on a `Slice[Vec[u8]]` it is refused with a `T: Display` bound, and on a `Vec[Vec[u8]]` it is the elements' Display text, a `String` ("[1, 2][3]") | — |
 | B-2026-11-11-66 | 2026-11-11 | runtime | medium | A compiled Semaphore.acquire sometimes waits out its whole timeout although another task released a permit: kata 1115's differential, with its semaphore arm on the standard library's Semaphore and acquire(60000), takes 62 to 63 s instead of 3 s in 6 of 120 runs (3 of 40 built binaries, 2 of 40 __mir-llvm-run, 1 of 40 karac run), with the right output. | — |
-| B-2026-11-11-70 | 2026-11-11 | parser | medium | An argument's `&&` (Rust's borrow of a borrow, `MONTHS.contains(&&rest[..3])`) is a parse error with no fix, "Expected expression, found `&&`", which also turns the rest of the function into top-level statements | — |
-| B-2026-11-11-71 | 2026-11-11 | typecheck | low | Rust's `s.into_bytes()` on a String is a bare "no method 'into_bytes' on type 'String'", with no hint or fix toward `s.bytes().to_vec()` | — |
 
 ### Relocated
 
@@ -1079,6 +1077,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-50 | typecheck | medium | A method on a const (`NAME.as_bytes()`, `CODES.map(..).sum()`) gets no fix-it, or one in the wrong place: the path call it parses as becomes a method… | 4e2cef2b9b |
 | B-2026-11-11-64 | typecheck+mir | medium | Two tuple match arms, one holding a `ref` to a `Copy` value and the other the value, are refused: `match place.get(x) { Some(i) => (0, i), None => (1… | f6489288db |
 | B-2026-11-11-65 | parser | low | `karac fix` deleting a Rust `use std::collections::HashMap;` line between two blank lines leaves the two blank lines in a row. | 75af478a7c |
+| B-2026-11-11-70 | parser | medium | An argument's `&&` (Rust's borrow of a borrow, `MONTHS.contains(&&rest[..3])`) is a parse error with no fix, "Expected expression, found `&&`", which… | 37af642c5e |
+| B-2026-11-11-71 | typecheck | low | Rust's `s.into_bytes()` on a String is a bare "no method 'into_bytes' on type 'String'", with no hint or fix toward `s.bytes().to_vec()` | 37af642c5e |
 
 </details>
 
