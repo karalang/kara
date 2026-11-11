@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 239 |
-| false-positive | 180 |
+| diagnostics | 247 |
+| false-positive | 181 |
 | perf | 153 |
-| missing-feature | 138 |
+| missing-feature | 143 |
 | soundness | 61 |
-| miscompile | 53 |
+| miscompile | 54 |
 | run-vs-build | 31 |
 | other | 27 |
 | codegen-gap | 27 |
@@ -75,14 +75,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 376 |
-| mir-llvm | 197 |
+| typecheck | 386 |
+| mir-llvm | 199 |
 | mir | 168 |
 | cli | 94 |
 | ownership | 73 |
-| parser | 63 |
-| interp | 48 |
-| runtime | 32 |
+| parser | 65 |
+| interp | 50 |
+| runtime | 36 |
 | effect | 29 |
 | resolver | 23 |
 | codegen | 22 |
@@ -118,6 +118,21 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-24 | 2026-11-11 | typecheck | medium | `String.from_utf8_lossy(bytes)` does not exist ("no associated function 'from_utf8_lossy' on type 'String'"): text from a socket or a file with a bad byte can only be shown by `from_utf8(..).unwrap_or(..)`, which drops all of it | — |
 | B-2026-11-11-25 | 2026-11-11 | typecheck | low | `?` on a `TcpStream` read inside `fn read_packet(..) -> Result[Option[Packet], IoError]` is refused "cannot convert error 'NetError' to 'IoError': no `impl From[NetError] for IoError` in scope" with no fix, where the Rust author's `io::Result` meant the socket's error type | — |
 | B-2026-11-11-26 | 2026-11-11 | typecheck | low | `Option[String].as_deref()` does not exist ("no method 'as_deref' on type 'Option'"), so Rust's `proto.as_deref() != Some("MQTT")` has no Kāra spelling short of building a `String` to compare with | — |
+| B-2026-11-11-27 | 2026-11-11 | typecheck | medium | Rust's `.scan(0, |depth, c| { let g = if c == '(' { *depth += 1; .. } else { *depth -= 1; .. }; Some(g) })` gets no fix: the rewrite to Kāra's `Some((state, item))` is withheld when the state is written below the closure body's own statements | — |
+| B-2026-11-11-28 | 2026-11-11 | typecheck | low | `.scan(0, ..)` collected into a `Vec[i32]` has no fix: the state's literal `0` takes the default `i64`, its items are computed from it, and the collect is refused with no edit, where the fix is `0i32` | — |
+| B-2026-11-11-29 | 2026-11-11 | typecheck | medium | `match v.last() { Some(g) => 1 - g, None => 0 }` over a `Vec[i32]` is refused: the `None` arm's literal `0` takes `i64` against the `Some` arm's `ref i32`, though beside an owned `i32` the literal takes `i32` | — |
+| B-2026-11-11-30 | 2026-11-11 | typecheck | low | Rust's `Duration::from_millis(n)` / `from_secs(n)` get `no associated function` and no fix, where Kāra's are `Duration.ms(n)` / `Duration.secs(n)`; `from_micros` and the other sub-millisecond constructors are not told what Kāra has | — |
+| B-2026-11-11-31 | 2026-11-11 | typecheck+parser | medium | Rust's `use std::sync::mpsc::{channel, Receiver, Sender};` with `Mutex<Sender<()>>` and `self.tx.lock().unwrap().send(())` leaves an import of a module that does not exist and four errors with no fix; `channel()` with no capacity is told only `expected 1 argument(s), found 0` | — |
+| B-2026-11-11-32 | 2026-11-11 | interp+mir-llvm+runtime | medium | `sleep(Duration.ms(0))` never lets another task run: a task that waits on a flag with a zero sleep between reads spins forever on the MIR interpreter, on a one-worker native build, and on the pool once the spinners fill its workers, though core-semantics.md §11.1 names a sleep as a suspension point | — |
+| B-2026-11-11-33 | 2026-11-11 | runtime | low | `Duration` has no unit below the millisecond: `Duration.ms(n)` and `Duration.secs(n)` build it and `as_ms()` reads it, so a pause or an elapsed time under 1 ms (Rust's `from_micros`, `as_micros`, `as_nanos`; Go's `time.Microsecond`) cannot be written or measured | — |
+| B-2026-11-11-34 | 2026-11-11 | interp+mir-llvm+runtime | medium | The prelude `Semaphore` does not wait under tasks: `acquire(timeout)` on an exhausted semaphore fails at once with `Timeout` though another task will `release` it, and `release` caps the count at the starting permits, so `Semaphore.new(0)` can never be released and cannot signal between tasks | — |
+| B-2026-11-11-35 | 2026-11-11 | typecheck | low | LeetCode's `class H2O` as `struct H2O` is refused as a Const-class name with `consider renaming to H2o` and no fix, though the rename is mechanical: the declaration, its `impl`, and every use in the file | — |
+| B-2026-11-11-36 | 2026-11-11 | typecheck | low | `String.from_iter(atoms.iter())` over a `Vec[char]` says `.cloned()` but offers no fix: the assoc-eq bound's fix reached only a method whose bound names its receiver, and a path call never recorded its arguments' ends | — |
+| B-2026-11-11-37 | 2026-11-11 | typecheck | medium | `g.value = Molecule { .. }` on a `MutexGuard` is asked for `let mut g` and then writes through the guard, where plain `=` on a `mut ref` local is refused with the `*r = v` fix (design.md § Auto-deref) | — |
+| B-2026-11-11-38 | 2026-11-11 | typecheck | medium | An `if` or `match` of unsuffixed literals as an element of a list or tuple literal is typed `i64` at once: `let v: Vec[i32] = [1, if b { 2 } else { 3 }];` and `let t: (i32, i32) = (1, if b { 2 } else { 3 });` are refused as a narrowing, with no fix | — |
+| B-2026-11-11-39 | 2026-11-11 | runtime | medium | `String` has no `retain`: `s.retain(|c| c != ' ')`, Rust's `String::retain`, is refused as `no method 'retain' on type 'String'` though `Vec`, `VecDeque`, `Map` and `Set` have it | — |
+| B-2026-11-11-40 | 2026-11-11 | parser | low | Rust's `let n = n.borrow();` in an `Rc<RefCell<TreeNode>>` walk becomes `let n = n;` when the `RefCell` goes: a binding that only renames, left in the fixed text | — |
+| B-2026-11-11-41 | 2026-11-11 | typecheck | medium | A `chain` of literal lists collected into a `Vec[i32]` is refused with no fix: `let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect();` says `C: FromIterator[i64]`, and a `scan` over literals chained after a literal head gets a fix for neither literal | — |
 
 ### Relocated
 
