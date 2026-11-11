@@ -6,7 +6,7 @@
 //!   one-element form does, or `own` on the parameter it was bound out of.
 //! - B-2026-11-09-97: an `Option[String]` against the `Some` of a `Str`
 //!   (`opt != Some(TOKEN)`) takes `.as_deref()` on the owned side
-//!   (core-types.md, review ruling 2026-11-10; B-2026-11-10-ASDEREF).
+//!   (core-types.md, review ruling 2026-11-10; B-2026-11-11-2).
 //!
 //! And one false refusal: B-2026-11-09-98, a `Str` view of a parameter
 //! passed through a closure combinator (`s.split_once("=").map(|p|

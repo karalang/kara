@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 235 |
+| diagnostics | 236 |
 | false-positive | 180 |
 | perf | 152 |
-| missing-feature | 135 |
+| missing-feature | 136 |
 | soundness | 61 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 370 |
+| typecheck | 372 |
 | mir-llvm | 197 |
 | mir | 168 |
 | cli | 94 |
@@ -119,6 +119,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-47 | 2026-11-10 | typecheck | low | Rust's `let local = [127u8, 0, 0, 1];` (an array in Rust, a `Vec` by default in Kāra) passed to an `Array[u8, 4]` parameter gets "expected 'Array[u8, 4]', found 'Vec[u8]'" at each use, with no fix to annotate the `let` | — |
 | B-2026-11-10-48 | 2026-11-10 | typecheck | low | An unknown method in a `let` initializer (`text.trim_end_matches('\n').split("\n").collect()`) is followed by a spurious "a reference to a temporary outlives its statement (core-semantics.md §5.5)" at the same span | — |
 | B-2026-11-10-35 | 2026-11-10 | parser+typecheck | low | Rust's `use std::iter::Peekable; use std::str::Chars;` and `fn read(chars: &mut Peekable<Chars>)` reach `std.iter has no item Peekable` and `unknown module std.str` with no fix, though Kāra has `Peekable` and the type is `Peekable[StrChars, char]` | — |
+| B-2026-11-11-2 | 2026-11-11 | typecheck | low | B-2026-11-09-97's `karac fix` allocates: `opt != Some(TOKEN)` with `opt: Option[String]` and `TOKEN: Str` became `opt != Some(TOKEN.to_string())`; the review ruling (core-types.md, 8d86d26197) is `.as_deref()` on the owned side, which the library did not have | — |
+| B-2026-11-11-3 | 2026-11-11 | typecheck | low | `Option[Vec[T]].as_deref() -> Option[Slice[T]]` (library/core-types.md) is missing: 0.8 refuses a second specialized inherent impl that defines `as_deref` beside `Option[String]`'s, and the library has no trait that names a type's view | — |
 
 ### Relocated
 
