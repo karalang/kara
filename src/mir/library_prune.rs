@@ -265,11 +265,15 @@ fn dotted_words(text: &str, out: &mut FxHashSet<String>) {
 /// keeps its text, a string's included (an f-string's holes are code).
 /// `text` as it is when it does not lex cleanly.
 fn without_comments(text: &str) -> String {
+    code_text(text, &crate::tokenize(text))
+}
+
+/// [`without_comments`] from `text`'s tokens, already lexed
+/// ([`crate::parse_with_code_text`]).
+pub fn code_text(text: &str, tokens: &[crate::token::SpannedToken]) -> String {
     use crate::token::Token;
     let mut out = vec![b' '; text.len()];
-    let mut lexer = crate::lexer::Lexer::new(text);
-    loop {
-        let t = lexer.next_token();
+    for t in tokens {
         match t.token {
             Token::EOF => break,
             Token::DocComment(_) | Token::ModuleDocComment(_) => continue,
@@ -347,6 +351,13 @@ pub type Pruned = std::collections::HashMap<String, std::collections::HashSet<St
 
 /// Remove the library items and methods `src[..user_len]` cannot reach.
 pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
+    prune_code(program, &without_comments(src), user_len)
+}
+
+/// [`prune`], given `src` with its comments already blanked
+/// ([`code_text`]).
+pub fn prune_code(program: &mut Program, code: &str, user_len: usize) -> Pruned {
+    let src = code;
     let mut pruned = Pruned::new();
     // The library's items of the kinds judged here, in text order.
     let lib: Vec<usize> = (0..program.items.len())
@@ -498,11 +509,9 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
         });
     }
 
-    // A word in a comment reaches nothing. A file's header comment is the
+    // A word in a comment reaches nothing (`code` has them blanked). A file's header comment is the
     // tail of the item before it, so counting comments kept whole impls
     // only a comment names (B-2026-10-28-37).
-    let blanked = without_comments(src);
-    let src = blanked.as_str();
     // The names in `ANSWERED_WHEN_SPELLED` enter only when spelled; the
     // methods they keep anyway are judged below.
     let answered: FxHashSet<&str> = ANSWERED_WHEN_SPELLED.iter().copied().collect();

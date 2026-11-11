@@ -29238,14 +29238,14 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
     let mut t = std::time::Instant::now();
     let (src, user_len) = library_source(src);
     phase_time("library_source", &mut t);
-    let parsed = crate::parse(&src);
+    let (parsed, code) = crate::parse_with_code_text(&src);
     phase_time("parse", &mut t);
     if !parsed.errors.is_empty() {
         return Err(format!("parse: {:?}", parsed.errors[0]));
     }
     let mut program = parsed.program;
     let pruned = if super::library_prune::enabled() {
-        let p = super::library_prune::prune(&mut program, &src, user_len);
+        let p = super::library_prune::prune_code(&mut program, &code, user_len);
         phase_time("library_prune", &mut t);
         p
     } else {

@@ -1273,7 +1273,10 @@ impl Pipeline {
         }
         let (text, user_len) = crate::mir::lower::library_source(&src);
         self.user_source = Some(src.clone());
-        self.parsed = crate::parse(&text);
+        // The prune reads the program's words from the same tokens the parser
+        // takes, rather than lexing the library text a second time.
+        let (parsed, code) = crate::parse_with_code_text(&text);
+        self.parsed = parsed;
         // The library items the program cannot reach are dropped, as the
         // build drops them (`library_prune`), so they are not checked
         // (B-2026-10-19-21). `KARAC_CHECK_PRUNE=0` keeps them.
@@ -1281,9 +1284,9 @@ impl Pipeline {
             && std::env::var("KARAC_CHECK_PRUNE").as_deref() != Ok("0")
             && crate::mir::library_prune::enabled()
         {
-            self.library_pruned = Some(crate::mir::library_prune::prune(
+            self.library_pruned = Some(crate::mir::library_prune::prune_code(
                 &mut self.parsed.program,
-                &text,
+                &code,
                 user_len,
             ));
         }

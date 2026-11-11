@@ -228,6 +228,17 @@ pub fn parse(source: &str) -> ParseResult {
     Parser::new(tokens).with_source(source, 0).parse()
 }
 
+/// [`parse`], and `source` with every comment (doc comments included)
+/// overwritten with spaces, from the same tokens: what
+/// [`mir::library_prune::prune_code`] reads, so pruning does not lex the
+/// program and its library a second time. `source` as it is when a token
+/// does not lex cleanly.
+pub fn parse_with_code_text(source: &str) -> (ParseResult, String) {
+    let tokens = tokenize(source);
+    let code = crate::mir::library_prune::code_text(source, &tokens);
+    (Parser::new(tokens).with_source(source, 0).parse(), code)
+}
+
 /// Like [`parse`], with every span's offset moved up by `base`: text parsed
 /// apart from the program it joins (a gated library module) keeps offsets of
 /// its own, so a diagnostic in it can be told from one in the program

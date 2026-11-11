@@ -663,13 +663,13 @@ impl PackageLibrary {
         }
         let user_items = crate::parse(&src).program.items.len();
         let (text, start) = crate::mir::lower::library_source(&src);
-        let mut parsed = crate::parse(&text);
+        let (mut parsed, code) = crate::parse_with_code_text(&text);
         if !parsed.errors.is_empty() || parsed.program.items.len() < user_items {
             return None;
         }
         let program = &mut parsed.program;
         if crate::mir::library_prune::enabled() {
-            crate::mir::library_prune::prune(program, &text, start);
+            crate::mir::library_prune::prune_code(program, &code, start);
         }
         crate::mir::lower::mark_library_builtins(program, start);
         library_closures_take_their_callers_effects(program, start);
