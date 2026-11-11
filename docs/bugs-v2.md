@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 258 |
-| false-positive | 183 |
+| false-positive | 184 |
 | perf | 155 |
 | missing-feature | 147 |
 | soundness | 61 |
@@ -83,7 +83,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 72 |
 | interp | 51 |
 | runtime | 40 |
-| effect | 29 |
+| effect | 30 |
 | resolver | 23 |
 | codegen | 22 |
 | other | 7 |
@@ -1087,6 +1087,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-75 | parser | medium | `karac fix` writes a Rust parameter's `&Option<Rc<RefCell<T>>>` as `ref Option[T]`, so a node matched out of it is a `ref T` and `Some(n)` cannot be… | 628eb9974d |
 | B-2026-11-11-83 | parser | low | `karac fix` drops the `&` of a Rust argument `&(expr)` but leaves its parentheses: `seen.get(&(score - 1))` becomes `seen.get((score - 1))` (kata 112… | 46ef5d349a |
 | B-2026-11-11-84 | typecheck | medium | `karac fix` puts the `.clone()` for a moved `let mut next = team;` re-binding of a `for` element at the move, leaving `next.push(p)` writing through… | afb930a6c1 |
+| B-2026-11-11-85 | effect | medium | A call on an ambient module (`fs.write(...)`) in a program that also uses sockets is charged `TcpStream.write`'s `sends(Network) receives(Network)`,… | e92c63a596 |
 
 </details>
 
