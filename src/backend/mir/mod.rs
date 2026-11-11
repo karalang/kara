@@ -396,6 +396,10 @@ pub struct Cx<'ctx, 'p> {
     /// The locals of the body being lowered that hold a length
     /// ([`crate::mir::guard_bounds::length_locals`]).
     lengths: Vec<bool>,
+    /// For each local of the body being lowered that a char's
+    /// `to_string()` fills only to be lent, the frame's 4-byte buffer its
+    /// UTF-8 bytes go in ([`crate::mir::char_strs`], B-2026-11-10-25).
+    char_bufs: Vec<Option<PointerValue<'ctx>>>,
     /// The locals of the body being lowered that hold a checked result no
     /// one tests ([`crate::mir::range_bounds::untested_checks`]).
     untested: Vec<bool>,
@@ -456,6 +460,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             hot_swap_table: None,
             upper_proven: false,
             lengths: Vec::new(),
+            char_bufs: Vec::new(),
             untested: Vec::new(),
             unsigned_div: Vec::new(),
             hot_swap_calls: Vec::new(),
@@ -1749,6 +1754,25 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 }
             }
             self.locals.push(slot);
+        }
+        // `KARAC_MIR_CHAR_STR=0` allocates every char's `to_string()`. A
+        // coroutine's locals can live in its frame across a suspension,
+        // past this function's stack, so its bodies keep the heap.
+        self.char_bufs.clear();
+        if std::env::var("KARAC_MIR_CHAR_STR").as_deref() != Ok("0")
+            && !crate::mir::coroutine::is_resume(&body.instance.name)
+        {
+            for on in crate::mir::char_strs::borrowed_char_strings(body) {
+                let buf = match on {
+                    true => Some(
+                        self.builder
+                            .build_alloca(self.llcx.i8_type().array_type(4), "char.utf8")
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    false => None,
+                };
+                self.char_bufs.push(buf);
+            }
         }
         self.assume_ref_params(body)?;
         self.flag_slots()?;

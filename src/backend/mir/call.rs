@@ -821,6 +821,17 @@ impl<'ctx> Cx<'ctx, '_> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         let dty = self.place_type(dest)?;
+        // A char's `to_string()` that is only lent: its bytes in the
+        // frame, not on the heap (B-2026-11-10-25).
+        if let ("char.to_string", [c]) = (name, args) {
+            if let Some(Some(buf)) = dest
+                .projection
+                .is_empty()
+                .then(|| self.char_bufs.get(dest.local.index()).copied().flatten())
+            {
+                return self.char_string_in(buf, c, dest);
+            }
+        }
         // `a.ref_eq(b)` on a `shared` type, or the free `ref_eq(a, b)`: the
         // two handles are one pointer (B-2026-10-13-17).
         if (method == "ref_eq" && ty_name.starts_with("shared ")) || name == "ref_eq" {
@@ -2215,6 +2226,84 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.build_unreachable().map_err(e)?;
         self.builder.position_at_end(done);
         Ok(())
+    }
+
+    /// The `String` at `dest` holding char `c`'s UTF-8 bytes in `buf`, a
+    /// 4-byte slot of the frame, with no capacity: its drop frees nothing,
+    /// and a write to it would copy it to the heap first. ASCII stores one
+    /// byte; a wider char stores its bytes as one little-endian word.
+    fn char_string_in(&mut self, buf: PointerValue<'ctx>, c: &Operand, dest: &Place) -> R<()> {
+        let c = self.int_arg(c)?;
+        let i32t = self.llcx.i32_type();
+        let c = self
+            .builder
+            .build_int_cast_sign_flag(c, i32t, false, "")
+            .map_err(e)?;
+        let f = self.cur_fn()?;
+        let from = self
+            .builder
+            .get_insert_block()
+            .ok_or("the builder is not in a block")?;
+        let (wide, done) = (
+            self.llcx.append_basic_block(f, "char.wide"),
+            self.llcx.append_basic_block(f, "char.done"),
+        );
+        let k = |v: u64| i32t.const_int(v, false);
+        let ascii = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, c, k(0x80), "")
+            .map_err(e)?;
+        let byte = self
+            .builder
+            .build_int_truncate(c, self.llcx.i8_type(), "")
+            .map_err(e)?;
+        let st = self.builder.build_store(buf, byte).map_err(e)?;
+        let _ = st.set_alignment(1);
+        self.builder
+            .build_conditional_branch(ascii, done, wide)
+            .map_err(e)?;
+        self.builder.position_at_end(wide);
+        let b = &self.builder;
+        // Bits `at..at + 6` of `c` as a continuation byte, at byte `k`.
+        let cont = |at: u64, byte: u64| -> R<IntValue<'ctx>> {
+            let v = b.build_right_shift(c, k(at), false, "").map_err(e)?;
+            let v = b.build_and(v, k(0x3f), "").map_err(e)?;
+            let v = b.build_or(v, k(0x80), "").map_err(e)?;
+            b.build_left_shift(v, k(8 * byte), "").map_err(e)
+        };
+        let lead = |at: u64, tag: u64| -> R<IntValue<'ctx>> {
+            let v = b.build_right_shift(c, k(at), false, "").map_err(e)?;
+            b.build_or(v, k(tag), "").map_err(e)
+        };
+        let or = |x: IntValue<'ctx>, y: IntValue<'ctx>| b.build_or(x, y, "").map_err(e);
+        let w2 = or(lead(6, 0xc0)?, cont(0, 1)?)?;
+        let w3 = or(or(lead(12, 0xe0)?, cont(6, 1)?)?, cont(0, 2)?)?;
+        let w4 = or(
+            or(or(lead(18, 0xf0)?, cont(12, 1)?)?, cont(6, 2)?)?,
+            cont(0, 3)?,
+        )?;
+        let i64t = self.llcx.i64_type();
+        let (mut word, mut n) = (w4, i64t.const_int(4, false));
+        for (lim, w, len) in [(0x10000u64, w3, 3u64), (0x800, w2, 2)] {
+            let lt = b
+                .build_int_compare(IntPredicate::ULT, c, k(lim), "")
+                .map_err(e)?;
+            word = b.build_select(lt, w, word, "").map_err(e)?.into_int_value();
+            n = b
+                .build_select(lt, i64t.const_int(len, false), n, "")
+                .map_err(e)?
+                .into_int_value();
+        }
+        let st = b.build_store(buf, word).map_err(e)?;
+        let _ = st.set_alignment(1);
+        b.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let len = self.builder.build_phi(i64t, "char.len").map_err(e)?;
+        len.add_incoming(&[(&i64t.const_int(1, false), from), (&n, wide)]);
+        let d = self.place_ptr(dest)?;
+        self.store(d, buf.into())?;
+        self.store(self.offset(d, 8)?, len.as_basic_value())?;
+        self.store(self.offset(d, 16)?, self.i64(0).into())
     }
 
     /// Calls the runtime's `karac_mir_{name}`, which returns a `u8` flag,

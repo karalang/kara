@@ -10,6 +10,7 @@
 pub mod ascii_chars;
 pub mod borrowck;
 pub mod build;
+pub mod char_strs;
 pub mod concat;
 pub mod coroutine;
 pub mod counters;

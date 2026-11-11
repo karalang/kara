@@ -700,6 +700,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- **A char's `to_string()` that is only lent does not allocate.** When the
+  `String` is only borrowed, as in `"aeiou".contains(c.to_string())` (the
+  form the char-pattern fix-it writes), a compiled build keeps the char's
+  UTF-8 bytes in the function's frame. Kata 2062's bench went from 0.76 s
+  to 0.38 s and 2063's from 0.65 s to 0.20 s. A `String` that is returned
+  or stored still owns a heap buffer (B-2026-11-10-25).
 - **`karac run` of a large program compiles on every core, and no longer
   builds one enormous function.** A program the build splits into codegen
   units is compiled the same way for the JIT, one object per unit on its
