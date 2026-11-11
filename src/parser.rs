@@ -369,6 +369,8 @@ pub struct Parser {
     pub(crate) cast_operand_ends: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// See [`crate::ast::Program::paren_casts`].
     pub(crate) paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// See [`crate::ast::Program::whole_value_casts`].
+    pub(crate) whole_value_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
     /// See [`crate::ast::Program::mut_fn_types`].
     pub(crate) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::cross_task_fn_types`].
@@ -696,6 +698,7 @@ impl Parser {
             paren_return_types: rustc_hash::FxHashSet::default(),
             cast_operand_ends: rustc_hash::FxHashMap::default(),
             paren_casts: rustc_hash::FxHashMap::default(),
+            whole_value_casts: rustc_hash::FxHashMap::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
             fn_type_marker_points: rustc_hash::FxHashMap::default(),
@@ -1143,6 +1146,7 @@ impl Parser {
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
             paren_casts: std::mem::take(&mut self.paren_casts),
+            whole_value_casts: std::mem::take(&mut self.whole_value_casts),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
             fn_type_marker_points: std::mem::take(&mut self.fn_type_marker_points),
@@ -3248,6 +3252,32 @@ impl Parser {
             length: 0,
             replacement: replacement.to_string(),
         })
+    }
+
+    /// A `let`'s value `(e) as T` starting at `start`, its operand
+    /// parenthesized: see [`crate::ast::Program::whole_value_casts`].
+    pub(crate) fn note_whole_value_cast(&mut self, start: &Span, value: &Expr) {
+        let ExprKind::Cast { expr: operand, .. } = &value.kind else {
+            return;
+        };
+        let key = crate::resolver::SpanKey::from_span(&value.span);
+        if !self.cast_operand_ends.contains_key(&key)
+            || self.source_at(start.offset, 1) != Some("(")
+            || start.offset >= operand.span.offset
+        {
+            return;
+        }
+        let end = value.span.offset + value.span.length;
+        let Some(text) = self.source_at(operand.span.offset, operand.span.length) else {
+            return;
+        };
+        let text = text.to_string();
+        let whole = Span {
+            offset: start.offset,
+            length: end - start.offset,
+            ..*start
+        };
+        self.whole_value_casts.insert(key, (whole, text));
     }
 
     fn source_at(&self, offset: usize, length: usize) -> Option<&str> {

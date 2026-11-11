@@ -79,7 +79,9 @@ fn kata_1061_parenthesized_lossless_cast_is_dropped() {
     let (first, text, clean, last, out) = mend(&scratch("cast"), src);
     assert!(first.contains("widens to 'i64' implicitly"), "{first}");
     assert!(text.contains("index((c - b'a'));"), "{text}");
-    assert!(text.contains("let b: i64 = (( c - b'b' ));"), "{text}");
+    // A `let`'s whole value needs no parentheses once the `as` is gone
+    // (B-2026-11-11-87); this pinned `(( c - b'b' ))` before.
+    assert!(text.contains("let b: i64 = c - b'b';"), "{text}");
     assert!(clean && !last.contains("warning"), "{text}\n{last}");
     assert_eq!(out, "6 2\n");
 }

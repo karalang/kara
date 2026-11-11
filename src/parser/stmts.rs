@@ -1037,7 +1037,9 @@ impl super::Parser {
         }
         let turbofishes = self.turbofishes.len();
         let closures = self.closure_returns.len();
+        let value_start = self.current_span();
         let value = self.parse_expression()?;
+        self.note_whole_value_cast(&value_start, &value);
         if ty.is_none() {
             self.move_turbofish_to_binding(turbofishes, &pattern, &value);
             self.move_closure_return_to_binding(closures, &pattern, &value);

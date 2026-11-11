@@ -7,6 +7,11 @@
 //! closure gives, or a list or tuple of them, is now open as a `let`'s
 //! value is, and the `collect`'s target fixes it before the body's
 //! literals take their defaults (B-2026-11-11-86).
+//!
+//! Its sort arm, written as Rust measures a run, `let run = (j - i) as
+//! i64;`. `karac fix` deleted the redundant `as i64` and left `let run =
+//! (j - i);`, parentheses that group nothing. Around a `let`'s whole value
+//! nothing binds, so they now go with the `as` (B-2026-11-11-87).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -36,6 +41,44 @@ fn run(name: &str, src: &str) -> (bool, String, String) {
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// The text `karac fix` leaves once it has nothing left to apply.
+fn mend(name: &str, src: &str) -> String {
+    let dir = scratch(name);
+    let file = dir.join("m.kara");
+    std::fs::write(&file, src).unwrap();
+    for _ in 0..6 {
+        Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args(["fix", "m.kara"])
+            .current_dir(&dir)
+            .stdin(Stdio::null())
+            .output()
+            .expect("karac");
+    }
+    let text = std::fs::read_to_string(&file).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    text
+}
+
+#[test]
+fn a_whole_let_value_cast_takes_its_parentheses_with_it() {
+    let src = "fn main() {
+    let i = 2;
+    let j = 7;
+    let run = (j - i) as i64;
+    let twice = (j - i) as i64 * 2;
+    let w: i64 = (j + i) as i64;
+    println(f\"{run} {twice} {w}\");
+}
+";
+    let text = mend("cast", src);
+    assert!(text.contains("let run = j - i;"), "{text}");
+    assert!(text.contains("let twice = (j - i) * 2;"), "{text}");
+    assert!(text.contains("let w: i64 = j + i;"), "{text}");
+    let (ok, out, err) = run("cast_run", &text);
+    assert!(ok, "{err}");
+    assert_eq!(out, "5 10 9\n");
 }
 
 #[test]

@@ -11044,6 +11044,15 @@ impl<'a> super::TypeChecker<'a> {
                             .get(&SpanKey::from_span(&expr.span))
                     })
                     .flatten();
+                // A `let`'s whole value, `let run = (j - i) as i64;`, needs
+                // no parentheses once the `as` is gone (kata 1128).
+                let parens = parens.or_else(|| {
+                    closed.and(
+                        self.program
+                            .whole_value_casts
+                            .get(&SpanKey::from_span(&expr.span)),
+                    )
+                });
                 match parens {
                     Some((whole, text)) => FixIt {
                         span: *whole,

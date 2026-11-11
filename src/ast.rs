@@ -988,6 +988,13 @@ pub struct Program {
     /// them with the `as T` and leaves `x * k` (kata 1121), where only the
     /// operand is a single term that needs none.
     pub paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// A `let`'s whole value that is a cast of a parenthesized operand,
+    /// `let run = (j - i) as i64;`, keyed by the cast's span: the span from
+    /// the operand's `(` to the end of the type, and the operand's text.
+    /// Nothing binds around a whole value, so the fix that deletes the
+    /// `as T` takes the parentheses too and leaves `let run = j - i;`
+    /// (kata 1128, B-2026-11-11-87).
+    pub whole_value_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
     /// `MutFn(...)` types (`docs/core-semantics.md` §9.6), keyed by the
     /// function type's span. Kept beside the tree like
     /// [`Self::escaping_fn_types`]: the type is an ordinary non-once `FnType`
