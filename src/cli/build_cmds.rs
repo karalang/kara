@@ -343,6 +343,7 @@ pub(super) fn run_multi_file_late_phases(
         renames: Vec::new(),
         gated_imports: Vec::new(),
         user_source: None,
+        library_text: None,
         mir_program: None,
         library_pruned: None,
         prune_library: true,

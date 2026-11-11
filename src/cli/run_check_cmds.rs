@@ -1618,6 +1618,7 @@ pub(super) fn cmd_check(
             if pipeline.total_errors() > 0 {
                 process::exit(1);
             }
+            std::mem::forget(pipeline);
         }
         _ => {
             let mut pipeline = Pipeline::new(filename, &source)
@@ -1662,6 +1663,10 @@ pub(super) fn cmd_check(
                 }
                 OutputMode::Jsonl => unreachable!(),
             }
+            // The process ends here: freeing the checked program and the
+            // library's AST node by node cost about 4% of a small check
+            // (B-2026-11-09-28).
+            std::mem::forget(pipeline);
         }
     }
 }

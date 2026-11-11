@@ -1036,7 +1036,9 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             HashMap::new()
         };
-        let baked: Vec<Item> = crate::prelude::STDLIB_PROGRAMS
+        // Borrowed from the static parse, not cloned: copying every baked
+        // item cost about 17M instructions per check (B-2026-11-09-28).
+        let baked: Vec<&'static Item> = crate::prelude::STDLIB_PROGRAMS
             .iter()
             .filter(|(name, _)| Some(*name) != self_module)
             .flat_map(|(_, p)| p.items.iter())
@@ -1062,9 +1064,8 @@ impl<'a> super::TypeChecker<'a> {
                     _ => true,
                 }
             })
-            .cloned()
             .collect();
-        for item in &baked {
+        for &item in &baked {
             match item {
                 Item::Function(f) => self.env_add_function(f),
                 Item::StructDef(s) => self.env_add_struct(s),

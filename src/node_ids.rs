@@ -9,8 +9,6 @@
 //! use. So ids survive a pass that moves nodes around, and the pass can run as
 //! often as needed.
 
-use std::collections::HashSet;
-
 use crate::ast::{Item, Program};
 use crate::ids::NodeId;
 use crate::span_visitor::{walk_item_mut_with, MutVisitor};
@@ -27,8 +25,28 @@ impl MutVisitor for MaxId {
     }
 }
 
+/// The ids a walk has met. Ids are dense from 0 (every one was handed out
+/// by a numbering pass), so a bit per id beats a hash set: hashing every
+/// node of the program-with-library was about 5% of a small check
+/// (B-2026-11-09-28).
+#[derive(Default)]
+struct IdSet(Vec<u64>);
+
+impl IdSet {
+    /// Add `id`; whether it was not already there.
+    fn insert(&mut self, id: NodeId) -> bool {
+        let (word, bit) = ((id.0 / 64) as usize, 1u64 << (id.0 % 64));
+        if word >= self.0.len() {
+            self.0.resize(word + 1, 0);
+        }
+        let fresh = self.0[word] & bit == 0;
+        self.0[word] |= bit;
+        fresh
+    }
+}
+
 struct Assign {
-    seen: HashSet<NodeId>,
+    seen: IdSet,
     next: u32,
 }
 
@@ -51,7 +69,7 @@ pub fn assign_item_node_ids(items: &mut [Item]) {
         walk_item_mut_with(item, &mut max);
     }
     let mut assign = Assign {
-        seen: HashSet::new(),
+        seen: IdSet::default(),
         next: max.0.map_or(0, |m| m + 1),
     };
     for item in items.iter_mut() {
@@ -98,7 +116,7 @@ pub fn assign_node_ids(program: &mut Program) {
 /// `program`. Both are zero straight after [`assign_node_ids`].
 pub fn node_id_defects(program: &mut Program) -> (usize, usize) {
     struct Count {
-        seen: HashSet<NodeId>,
+        seen: IdSet,
         dummies: usize,
         dups: usize,
     }
@@ -113,7 +131,7 @@ pub fn node_id_defects(program: &mut Program) -> (usize, usize) {
         }
     }
     let mut c = Count {
-        seen: HashSet::new(),
+        seen: IdSet::default(),
         dummies: 0,
         dups: 0,
     };

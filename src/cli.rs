@@ -1181,6 +1181,10 @@ struct Pipeline {
     /// The program's own text, before [`Self::with_library`] appends the
     /// library, for the MIR borrow check ([`Self::mir_borrow_errors`]).
     user_source: Option<String>,
+    /// What `library_source` made of [`Self::user_source`], the text the
+    /// library prune and the parse saw, so the MIR borrow check reuses it
+    /// rather than building it again (B-2026-11-09-28).
+    library_text: Option<(String, usize)>,
     /// The program as type-checked, before [`Self::lower`] rewrites its
     /// operators, for the MIR checks ([`Self::mir_borrow_errors`]).
     mir_program: Option<crate::ast::Program>,
@@ -1236,6 +1240,7 @@ impl Pipeline {
             renames: Vec::new(),
             gated_imports: Vec::new(),
             user_source: None,
+            library_text: None,
             mir_program: None,
             library_pruned: None,
             prune_library: true,
@@ -1311,6 +1316,7 @@ impl Pipeline {
         // The program's own text is what its diagnostics quote: a type the
         // library source renamed apart (`Field` as `Fiel_`) keeps its length,
         // so every span still lands where it did (B-2026-10-19-35).
+        self.library_text = Some((text.clone(), user_len));
         let text = match text.get(user_len..) {
             Some(lib) if src.len() == user_len => format!("{src}{lib}"),
             _ => text,
@@ -2776,6 +2782,7 @@ impl Pipeline {
         let found = match (&self.resolved, &self.ownership, &self.mir_program) {
             (Some(r), Some(own), Some(program)) => crate::mir::lower::checked_borrow_errors(
                 &src,
+                self.library_text.as_ref().map(|(t, n)| (t.as_str(), *n)),
                 program,
                 r,
                 typed,

@@ -28850,6 +28850,7 @@ pub fn source_borrow_errors(src: &str) -> Vec<SourceBorrowError> {
 /// `KARAC_CHECK_SHARED_FRONT=0` checks it again from its text instead.
 pub fn checked_borrow_errors(
     src: &str,
+    library_text: Option<(&str, usize)>,
     program: &ast::Program,
     r: &ResolveResult,
     tc: &TypeCheckResult,
@@ -28858,7 +28859,15 @@ pub fn checked_borrow_errors(
     if std::env::var("KARAC_CHECK_SHARED_FRONT").as_deref() == Ok("0") {
         return source_borrow_errors(src);
     }
-    let (text, user_len) = library_source(src);
+    // `library_source(src)`, unless the caller already has it.
+    let built;
+    let (text, user_len) = match library_text {
+        Some(lib) => lib,
+        None => {
+            built = library_source(src);
+            (built.0.as_str(), built.1)
+        }
+    };
     // A program the builder refuses is refused by check too, at the
     // position the build names, and a forbidden move leaves every other
     // body to the MIR checks (B-2026-11-01-2). An error with no position
@@ -28868,7 +28877,7 @@ pub fn checked_borrow_errors(
     let in_program = |text: &str| text_position(text).filter(|&(l, _)| l > 0 && l <= user_lines);
     let (lowered, moves) = match lower_typed_parts(
         program,
-        &text,
+        text,
         user_len,
         tc,
         r,
