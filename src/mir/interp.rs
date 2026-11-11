@@ -18514,6 +18514,7 @@ fn net_failure(fields: &[Value]) -> Fail {
         }
         9 => Error::other("WebSocket protocol error"),
         10 => return Fail::Unavailable,
+        12 => ErrorKind::UnexpectedEof.into(),
         _ => ErrorKind::Unsupported.into(),
     };
     Fail::Os(e)

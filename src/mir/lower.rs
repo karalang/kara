@@ -12401,14 +12401,23 @@ impl<'l, 'a> Bx<'l, 'a> {
             let Some(d) = self.lcx.defs.table.lookup(&DefPath::new(path)) else {
                 break;
             };
-            let item = self.lcx.fns.get(&d)?;
+            // A baked impl (`From[VarError] for IoError`) is in the table
+            // but not lowered; a library source's after it still counts
+            // (`From[NetError] for IoError`, B-2026-11-11-25).
+            let Some(item) = self.lcx.fns.get(&d) else {
+                continue;
+            };
             let args = match item.impl_params {
                 0 => Vec::new(),
                 1 if blanket.is_none() => vec![source],
                 _ => continue,
             };
-            let p = item.f.params.first()?;
-            let t = *self.lcx.node_types.get(&p.pattern.id)?;
+            let Some(p) = item.f.params.first() else {
+                continue;
+            };
+            let Some(&t) = self.lcx.node_types.get(&p.pattern.id) else {
+                continue;
+            };
             // A `from` that borrows its source (`i: ref Inches`, or a bare
             // `i: Inches`, which D5 reads as that borrow) converts an
             // `Inches` too: an impl may be weaker than its trait (core
@@ -27676,6 +27685,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // the library's.
         include_str!("../../runtime/stdlib/source/file_write_all.kara"),
         &["write_all"],
+        &["File"],
+    ),
+    (
+        // `File.read_exact` (B-2026-11-10-44); a program's own `File` is not
+        // the library's.
+        include_str!("../../runtime/stdlib/source/read_exact.kara"),
+        &["read_exact"],
         &["File"],
     ),
     (

@@ -139,6 +139,7 @@ struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64, is_sy
 | `append` | `fn append(path: Str) -> Result[File, IoError] with writes(FileSystem) blocks` | Opens for writing at the end |
 | `options` | `fn options() -> OpenOptions` | Options for `open`, with nothing set; see below |
 | `read` | `fn read(self, buf: mut Slice[u8]) -> Result[i64, IoError] with reads(self) blocks` | Reads into `buf`; returns the byte count |
+| `read_exact` | `fn read_exact(self, buf: mut Slice[u8]) -> Result[(), IoError] with reads(self) blocks` | Fills `buf`, reading again after a short read; an early end is `UnexpectedEof` ([Reading an exact count](#networking)) |
 | `write` | `fn write(self, buf: Slice[u8]) -> Result[i64, IoError] with writes(self) blocks` | Returns the byte count written |
 | `write_all` | `fn write_all(self, buf: Slice[u8]) -> Result[(), IoError] with writes(self) blocks` | Writes every byte, calling `write` again after a short write or `Interrupted`; a write that takes nothing is `Other("failed to write whole buffer")` |
 | `flush` | `fn flush(self) -> Result[(), IoError] with writes(self) blocks` | Pushes buffered bytes to the OS |
@@ -179,7 +180,7 @@ The equivalence is in behaviour, not effects: `File.open` has `reads(FileSystem)
 
 A file updated in place opens with `File.options().read(true).write(true).open(p)`, so a mistyped path is `NotFound` rather than a new empty file; add `.create(true)` to create it when it is absent. A lock file is `File.options().write(true).create_new(true).open(p)`: only one opener can create it. Reads and writes at an offset that leave the cursor alone (`pread` / `pwrite`) and advisory locks are deferred ([deferred.md](../deferred.md#positional-file-io-and-advisory-locking)).
 
-**Buffered I/O** (in `std.io`). `BufReader[R]` and `BufWriter[W]` wrap an open `File`, a child process's pipe (`ChildStdout` or `ChildStderr` for a `BufReader`, `ChildStdin` for a `BufWriter`; [Processes](#processes)), or a connected `TcpStream` or `TlsStream` ([Networking](#networking)), with an in-memory buffer, so that many small reads or writes cost few system calls. Construction touches no file, so the constructors have no effect. Over a socket, a `BufReader`'s reads have the socket's effects and suspend inside a task as the socket's own do, and dropping either wrapper drops the stream, closing the connection (a `BufWriter` flushes first). Any other `R` or `W` is refused at check, E0297 (review-thread ruling 2026-11-10, B-2026-11-10-14). A generic function that buffers its type parameter is judged at each call that instantiates it: the call that makes it buffer anything else is refused there, E0297, naming the parameter and the line that buffers it (B-2026-11-10-28). A buffer's errors are `IoError`s: over a socket, a read timeout is `Other("timed out")` and a reset is `Other` with the system's message; over a `TlsStream`, a TLS failure is `Other("TLS: " + what failed)`, `handshake failed` for a peer that speaks no TLS and `connection closed unexpectedly` for one gone without its `close_notify`, whose `read_line` and `lines()` report it after the last whole line. A socket a `Network` provider opened is buffered too: the buffer's reads and writes call the fake's `read_stream` and `write_stream`, run to completion as the socket's own do, and its drop calls `close`. A fake's `NetError` comes back as the matching `IoError` (`TimedOut` as `Other("timed out")`, `ProviderUnavailable` as `ProviderUnavailable`, `Unsupported` as `Unsupported`, `Other(code)` as `Other` with the system's message for that code).
+**Buffered I/O** (in `std.io`). `BufReader[R]` and `BufWriter[W]` wrap an open `File`, a child process's pipe (`ChildStdout` or `ChildStderr` for a `BufReader`, `ChildStdin` for a `BufWriter`; [Processes](#processes)), or a connected `TcpStream` or `TlsStream` ([Networking](#networking)), with an in-memory buffer, so that many small reads or writes cost few system calls. Construction touches no file, so the constructors have no effect. Over a socket, a `BufReader`'s reads have the socket's effects and suspend inside a task as the socket's own do, and dropping either wrapper drops the stream, closing the connection (a `BufWriter` flushes first). Any other `R` or `W` is refused at check, E0297 (review-thread ruling 2026-11-10, B-2026-11-10-14). A generic function that buffers its type parameter is judged at each call that instantiates it: the call that makes it buffer anything else is refused there, E0297, naming the parameter and the line that buffers it (B-2026-11-10-28). A buffer's errors are `IoError`s: over a socket, a read timeout is `Other("timed out")` and a reset is `Other` with the system's message; over a `TlsStream`, a TLS failure is `Other("TLS: " + what failed)`, `handshake failed` for a peer that speaks no TLS and `connection closed unexpectedly` for one gone without its `close_notify`, whose `read_line` and `lines()` report it after the last whole line. A socket a `Network` provider opened is buffered too: the buffer's reads and writes call the fake's `read_stream` and `write_stream`, run to completion as the socket's own do, and its drop calls `close`. A fake's `NetError` comes back as the matching `IoError` (`TimedOut` as `Other("timed out")`, `ProviderUnavailable` as `ProviderUnavailable`, `Unsupported` as `Unsupported`, `UnexpectedEof` as `UnexpectedEof`, `Other(code)` as `Other` with the system's message for that code).
 
 | Method | Signature |
 |---|---|
@@ -263,6 +264,8 @@ enum VarError {
 
 Both are prelude types. `IoError` covers the standard streams and files; `VarError` covers environment-variable lookup ([time-random-env.md](time-random-env.md#env)). They are kept separate so that each has a tight set of variants: a handler for `env.var` does not have to consider `NotFound` or `PermissionDenied`. The two overlap on one point (`IoError.InvalidUtf8` and `VarError.NotUnicode` describe the same condition from different sources), and the library provides `impl From[VarError] for IoError` (`NotPresent` becomes `NotFound`, `NotUnicode` becomes `InvalidUtf8`), so a function that uses `?` on both can return `IoError` alone.
 
+The library also provides `impl From[NetError] for IoError` (B-2026-11-11-25), so a function that uses `?` on file and socket operations alike can return `IoError` alone, as a Rust program's `io::Result` does. `Interrupted`, `PermissionDenied`, `InvalidInput`, `UnexpectedEof`, `ProviderUnavailable` and `Unsupported` become the `IoError` variant of the same name, and every other `NetError` becomes `Other` with the `NetError`'s display (`timed out`, `connection refused`, `TLS: handshake failed`, `os error 104`). There is no conversion the other way: a socket's error type has no place for a file's failure, so a function that does both returns `IoError` (or `AnyError`).
+
 ## Networking
 
 `std.net` has TCP and UDP sockets, a TLS server and a WebSocket server (below). There is an HTTP server, which also serves HTTPS and upgrades to WebSocket, and an HTTP client, which speaks HTTPS.
@@ -277,6 +280,7 @@ impl TcpListener {
 impl TcpStream {
     fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks suspends
     fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
+    fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) blocks suspends
     fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn try_clone(self) -> Result[TcpStream, NetError]
@@ -308,6 +312,7 @@ enum NetError {
     Protocol,
     ProviderUnavailable,
     Unsupported,
+    UnexpectedEof,
     Other(i32),
 }
 
@@ -325,11 +330,13 @@ type TcpError = NetError;
 
 **TCP.** `read` returns the number of bytes read, and 0 at the end of the stream. `write` may write fewer bytes than given; `write_all` keeps writing, retrying on `Interrupted`, until every byte is sent or an error occurs.
 
+**Reading an exact count.** `read_exact` (on `TcpStream`, `TlsStream`, `File`, `ChildStdout` and `ChildStderr`) reads until `buf` is full: it calls `read` again after a short read and retries a read that fails with `Interrupted`. A read that returns 0 before `buf` is full ends it with `UnexpectedEof` (`NetError.UnexpectedEof` on a socket, `IoError.UnexpectedEof` on a file or pipe), and any other error ends it with that error. After an error `buf` holds the bytes read so far at its start; how many is not reported, so a program that needs the count calls `read` itself. An empty `buf` returns `Ok(())` without reading. On a `TlsStream`, a peer that closes with `close_notify` before `buf` is full is `UnexpectedEof`, and one gone without it is `Tls(UnexpectedClose)`, as for `read`. Under a `FileSystem` or `Network` override `read_exact` calls the fake's `read_handle` or `read_stream` until `buf` is full, and a 0 from the fake is the end. A `UdpSocket` has none (a datagram is one `recv`), and neither does `stdin`, whose byte-level read is deferred. It is how a binary protocol's fixed-size header is read: `let mut head = [0u8; 2]; conn.read_exact(mut head)?;`.
+
 **UDP.** A `UdpSocket` sends and receives datagrams, each one `send_to` or `send` call. UDP does not guarantee delivery or order: a datagram may be lost, duplicated or overtaken by a later one. `recv_from` waits for one datagram, stores it in `buf` and returns the number of bytes stored and the sender's address. A datagram longer than `buf` is cut to fit and the rest is lost, which is not an error, so the count is the bytes stored, not the datagram's size. `connect` sets the peer that `send` sends to, and after it `recv` takes datagrams from that peer only.
 
 **Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `InvalidInput`. Inside a task, a read that waits suspends its task, and the timeout still ends it, so the program's other tasks run until the data or the deadline arrives ([core semantics §11.10](../core-semantics.md)).
 
-**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, a timeout below 1 ms, or a certificate or key that does not parse. `Tls` is a TLS failure on a `TlsStream`, and `Protocol` a WebSocket peer that broke the protocol, or a send after the close. `ProviderUnavailable` is an operation on a socket opened under a `Network` override after that override has ended, and `Unsupported` one a fake's socket does not have (below). `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
+**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, a timeout below 1 ms, or a certificate or key that does not parse. `Tls` is a TLS failure on a `TlsStream`, and `Protocol` a WebSocket peer that broke the protocol, or a send after the close. `ProviderUnavailable` is an operation on a socket opened under a `Network` override after that override has ended, and `Unsupported` one a fake's socket does not have (below). `UnexpectedEof` is a stream that ended before `read_exact` filled its buffer; no other operation returns it. `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
 
 **Sockets under an override** ([core semantics §14.12](../core-semantics.md)). `Network`'s bound is `NetworkProvider`, whose methods name a socket by an `i64` id of the fake's choosing, each with a default that panics, so a fake states only the ones it uses:
 
@@ -359,6 +366,7 @@ impl TlsListener {
 
 impl TlsStream {
     fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
+    fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) blocks suspends
     fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
@@ -586,6 +594,7 @@ Dropping a `Child` neither kills nor waits for it: the process keeps running, an
 ```kara
 impl ChildStdout {        // ChildStderr has the same methods
     fn read(self, buf: mut Slice[u8]) -> Result[i64, IoError] with receives(self) blocks suspends
+    fn read_exact(self, buf: mut Slice[u8]) -> Result[(), IoError] with receives(self) blocks suspends
     fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, IoError] with receives(self) blocks suspends
     fn read_to_string(self, buf: mut ref String) -> Result[i64, IoError] with receives(self) blocks suspends
 }

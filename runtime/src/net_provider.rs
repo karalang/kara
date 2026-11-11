@@ -304,6 +304,8 @@ fn failure_io(code: i32, v: i64) -> std::io::Error {
             code: crate::fs_provider::PROVIDER_UNAVAILABLE,
             text: String::new(),
         }),
+        // `NetError.UnexpectedEof`, last in net.kara (B-2026-11-10-44).
+        12 => ErrorKind::UnexpectedEof.into(),
         _ => ErrorKind::Unsupported.into(),
     }
 }

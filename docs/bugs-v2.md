@@ -59,9 +59,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 249 |
-| false-positive | 181 |
+| false-positive | 182 |
 | perf | 154 |
-| missing-feature | 144 |
+| missing-feature | 145 |
 | soundness | 61 |
 | miscompile | 55 |
 | run-vs-build | 31 |
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 389 |
-| mir-llvm | 200 |
+| typecheck | 391 |
+| mir-llvm | 201 |
 | mir | 169 |
 | cli | 94 |
 | ownership | 73 |
 | parser | 66 |
-| interp | 50 |
+| interp | 51 |
 | runtime | 38 |
 | effect | 29 |
 | resolver | 23 |
@@ -116,6 +116,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-25 | 2026-11-11 | typecheck | low | `?` on a `TcpStream` read inside `fn read_packet(..) -> Result[Option[Packet], IoError]` is refused "cannot convert error 'NetError' to 'IoError': no `impl From[NetError] for IoError` in scope" with no fix, where the Rust author's `io::Result` meant the socket's error type | — |
 | B-2026-11-11-33 | 2026-11-11 | runtime | low | `Duration` has no unit below the millisecond: `Duration.ms(n)` and `Duration.secs(n)` build it and `as_ms()` reads it, so a pause or an elapsed time under 1 ms (Rust's `from_micros`, `as_micros`, `as_nanos`; Go's `time.Microsecond`) cannot be written or measured | — |
 | B-2026-11-11-61 | 2026-11-11 | typecheck | low | A `scan` whose state starts at an unsuffixed literal settles the state to `i64` before the `collect` that would fix it, so kata 1118's Rust shape `[0].into_iter().chain(lengths.iter().scan(0, |total, d| { let total = total + d; Some((total, total)) })).collect()` into `Vec[i32]` (with `let lengths = [31, 28, ..]`) is refused, and its `0i32` fix moves the error to `total + d` (the remainder of B-2026-11-11-41) | — |
+| B-2026-11-11-62 | 2026-11-11 | typecheck | medium | `self` in a generic impl (`impl[R] Wrap[R]`) is typed `Wrap` with no arguments, so handing it to `fn helper[R](w: ref Wrap[R])` is refused "expected 'Wrap[R]', found 'Wrap'", and inside a library generic impl over a baked type (`impl[R] BufReader[R]`) a call of the type's native method on `self` gets no callee | — |
+| B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
 
 ### Relocated
 

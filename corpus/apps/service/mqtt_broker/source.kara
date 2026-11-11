@@ -72,21 +72,7 @@ struct Packet {
 }
 
 // The next packet, or `None` at the end of the stream.
-// No reader has `read_exact` yet (B-2026-11-10-44): fill `buf` with
-// `read`, failing on an early end of stream.
-fn read_exact(conn: ref TcpStream, buf: mut Slice[u8]) -> Result[(), NetError] {
-    let mut at = 0;
-    while at < buf.len() {
-        let n = conn.read(mut buf[at..])?;
-        if n == 0 {
-            return Err(NetError.Protocol);
-        }
-        at += n;
-    }
-    Ok(())
-}
-
-fn read_packet(conn: ref TcpStream) -> Result[Option[Packet], NetError] {
+fn read_packet(conn: ref TcpStream) -> Result[Option[Packet], IoError] {
     let mut head = [0u8; 1];
     if conn.read(mut head)? == 0 {
         return Ok(None);
@@ -105,7 +91,7 @@ fn read_packet(conn: ref TcpStream) -> Result[Option[Packet], NetError] {
         }
     }
     let mut body = Vec.filled(n, 0u8);
-    read_exact(conn, mut body)?;
+    conn.read_exact(mut body)?;
     Ok(Some(Packet { first: head[0], body }))
 }
 
@@ -303,7 +289,7 @@ fn handle(st: mut ref State, cid: i64, p: ref Packet) -> Option[String] {
             let level = c.u8();
             let flags = c.u8().unwrap_or(0);
             let _keep = c.u16();
-            if proto != Some("MQTT".to_string()) or level != Some(4) {
+            if proto.as_deref() != Some("MQTT") or level != Some(4) {
                 send(s, packet(0x20, [0, 1]));
                 return Some("refused: protocol level".to_string());
             }

@@ -146,6 +146,7 @@ trait NetworkProvider {
             NetError.Protocol => 9,
             NetError.ProviderUnavailable => 10,
             NetError.Unsupported => 11,
+            NetError.UnexpectedEof => 12,
         };
         -1 - code
     }

@@ -1,0 +1,24 @@
+//! `File.read_exact` (io.md, B-2026-11-10-44). Appended to a program that
+//! calls a `read_exact` (`BAKED_SOURCES` in src/mir/lower.rs), as
+//! `file_write_all.kara` is; the rest of `File` is native
+//! (runtime/stdlib/io.kara). The sockets' and the child pipes' own are in
+//! net.kara and process.kara.
+
+impl File {
+    // `buf` filled by `read` until it is full: a short read goes round
+    // again, and so does `Interrupted`; a read of 0 before then is
+    // `UnexpectedEof`. After an error `buf` starts with the bytes read so
+    // far.
+    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), IoError] with reads(FileSystem) blocks {
+        let mut done = 0;
+        while done < buf.len() {
+            match self.read(mut buf[done..]) {
+                Ok(0) => return Err(IoError.UnexpectedEof),
+                Ok(n) => done = done + n,
+                Err(IoError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+}

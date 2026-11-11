@@ -43,12 +43,12 @@ where a string is wanted.
 `u16::from_be_bytes(pb)` and `port.to_be_bytes()` were refused, with a
 suggestion of `to_ne_bytes`, the wrong order; kara 6fe383ed8a added the
 `le`/`be` forms and their inverses (B-2026-11-10-45), and the `.kara` uses
-them.
+them. `conn.read_exact(&mut head)?` at each step of the handshake and in
+the clients had no Kāra form until kara added `read_exact` to the sockets,
+`File` and the child pipes (B-2026-11-10-44); the `.kara` calls it as the
+Rust does.
 
 By hand, around open rows:
-- `conn.read_exact(&mut head)?` at each step of the handshake and in the
-  clients: no reader has `read_exact` (B-2026-11-10-44). The `.kara` has a
-  `read_exact(conn, mut buf)` helper that loops over `read`.
 - `String::from_utf8(..).unwrap_or_default()`: `Result` has no
   `unwrap_or_default` (B-2026-11-10-46); `.unwrap_or(String.new())`.
 - `let local = [127u8, 0, 0, 1];` is a `Vec` in Kāra, refused where the

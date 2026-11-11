@@ -56,15 +56,13 @@ Fixed in kara while writing it:
 - `u16::from_be_bytes([a, b])` refused its list literal as a `Vec`
   (B-2026-11-11-23).
 
+`read_packet` is the Rust's: kara added `read_exact` to the sockets
+(B-2026-11-10-44), and `From[NetError] for IoError`, so its `?` on a
+socket read converts into the `IoError` it declares (B-2026-11-11-25).
+Its `proto.as_deref() != Some("MQTT")` is the Rust's too: the method
+was in kara before B-2026-11-11-26 was filed against an older build.
+
 By hand, around open rows:
-- `conn.read_exact(&mut body)?` in `read_packet`: no reader has
-  `read_exact` (B-2026-11-10-44); the `.kara` has a helper that loops over
-  `read`.
-- `read_packet` declared Rust's `io::Result`; a socket fails with
-  `NetError`, and every `?` is refused with no fix (B-2026-11-11-25). The
-  `.kara` declares `NetError`.
 - `String::from_utf8_lossy(..)`: no such function (B-2026-11-11-24);
   `String.from_utf8(..).unwrap_or(String.new())`, right only because the
   run's payloads are ASCII.
-- `proto.as_deref() != Some("MQTT")`: no `as_deref` (B-2026-11-11-26);
-  `proto != Some("MQTT".to_string())`.

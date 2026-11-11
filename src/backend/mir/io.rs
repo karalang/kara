@@ -35,7 +35,7 @@ pub(super) const IO_ERRORS: [&str; 10] = [
 ];
 
 /// The `NetError` variants by the runtime's code for them.
-const NET_ERRORS: [&str; 12] = [
+const NET_ERRORS: [&str; 13] = [
     "Interrupted",
     "Other",
     "AddrInUse",
@@ -48,6 +48,7 @@ const NET_ERRORS: [&str; 12] = [
     "Protocol",
     "ProviderUnavailable",
     "Unsupported",
+    "UnexpectedEof",
 ];
 
 /// `TlsFailure`'s variants, in the order `src/tls_conn.rs` numbers them.

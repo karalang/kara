@@ -43,6 +43,10 @@ enum NetError {
     // An operation a `Network` provider's socket does not have:
     // `try_clone`, `local_addr` or an option setter (core-semantics §14.12).
     Unsupported,
+    // A stream that ended before `read_exact` filled its buffer
+    // (B-2026-11-10-44). Last, so the runtime's codes for the variants
+    // before it stay as they are.
+    UnexpectedEof,
 }
 
 // How a TLS connection failed (`NetError.Tls`).
@@ -75,11 +79,30 @@ impl Display for NetError {
             NetError.Protocol => "WebSocket protocol error",
             NetError.ProviderUnavailable => "provider unavailable",
             NetError.Unsupported => "unsupported",
+            NetError.UnexpectedEof => "unexpected end of stream",
         }
     }
 }
 
 impl Error for NetError { }
+
+// io.md § Errors (B-2026-11-11-25): a function that uses `?` on file and
+// socket operations alike returns `IoError` alone. The variants both enums
+// have keep their name; every other `NetError` is `Other` of its display.
+// There is no conversion the other way.
+impl From[NetError] for IoError {
+    fn from(e: NetError) -> IoError {
+        match e {
+            NetError.Interrupted => IoError.Interrupted,
+            NetError.PermissionDenied => IoError.PermissionDenied,
+            NetError.InvalidInput => IoError.InvalidInput,
+            NetError.UnexpectedEof => IoError.UnexpectedEof,
+            NetError.ProviderUnavailable => IoError.ProviderUnavailable,
+            NetError.Unsupported => IoError.Unsupported,
+            other => IoError.Other(other.to_string()),
+        }
+    }
+}
 
 impl Display for TlsFailure {
     fn to_string(ref self) -> String {
@@ -178,6 +201,23 @@ impl TcpStream {
             }
         }
         Ok(done)
+    }
+
+    // `buf` filled by `read` until it is full: a short read goes round
+    // again, and so does `Interrupted`; a read of 0 before then is
+    // `UnexpectedEof` (io.md, B-2026-11-10-44). After an error `buf` starts
+    // with the bytes read so far.
+    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) blocks suspends {
+        let mut done = 0;
+        while done < buf.len() {
+            match self.read(mut buf[done..]) {
+                Ok(0) => return Err(NetError.UnexpectedEof),
+                Ok(n) => done = done + n,
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     // How long a `read` waits before failing with `TimedOut`, in
@@ -300,6 +340,22 @@ impl TlsStream {
             }
         }
         Ok(done)
+    }
+
+    // As `TcpStream.read_exact`. A peer that sends `close_notify` before
+    // `buf` is full is `UnexpectedEof`; one gone without it is
+    // `Tls(UnexpectedClose)`, as for `read`.
+    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) blocks suspends {
+        let mut done = 0;
+        while done < buf.len() {
+            match self.read(mut buf[done..]) {
+                Ok(0) => return Err(NetError.UnexpectedEof),
+                Ok(n) => done = done + n,
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     #[compiler_builtin]

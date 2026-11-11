@@ -263,6 +263,7 @@ impl Server {
             NetError.Protocol => "protocol error".to_string(),
             NetError.ProviderUnavailable => "provider unavailable".to_string(),
             NetError.Unsupported => "unsupported".to_string(),
+            NetError.UnexpectedEof => "unexpected end of stream".to_string(),
         };
         HttpError { message: f"{what}: {why}" }
     }

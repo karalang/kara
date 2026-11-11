@@ -48,29 +48,15 @@ fn reply(code: u8) -> Vec[u8] {
     [5, code, 0, 1, 0, 0, 0, 0, 0, 0]
 }
 
-// Rust's `Read::read_exact`, which a Kāra `TcpStream` does not have
-// (B-2026-11-10-44).
-fn read_exact(conn: TcpStream, buf: mut Slice[u8]) -> Result[(), String] {
-    let mut off = 0;
-    while off < buf.len() {
-        match conn.read(mut buf[off..]) {
-            Ok(0) => return Err("closed"),
-            Ok(n) => off += n,
-            Err(e) => return Err(f"{e}"),
-        }
-    }
-    Ok(())
-}
-
 fn read_byte(conn: TcpStream) -> Result[u8, String] {
     let mut b = [0u8; 1];
-    read_exact(conn, mut b)?;
+    conn.read_exact(mut b).map_err(|_| "closed".to_string())?;
     Ok(b[0])
 }
 
 fn read_n(conn: TcpStream, n: i64) -> Result[Vec[u8], String] {
     let mut buf = Vec.filled(n, 0u8);
-    read_exact(conn, mut buf)?;
+    conn.read_exact(mut buf).map_err(|_| "closed".to_string())?;
     Ok(buf)
 }
 
@@ -78,7 +64,7 @@ fn read_n(conn: TcpStream, n: i64) -> Result[Vec[u8], String] {
 // connection has been answered with a refusal.
 fn handshake(conn: TcpStream, log: mut ref Vec[String]) -> Result[Option[Target], String] {
     let mut head = [0u8; 2];
-    read_exact(conn, mut head)?;
+    conn.read_exact(mut head).map_err(|_| "closed".to_string())?;
     if head[0] != 5 {
         log.push(f"version {head[0]}: closed");
         return Ok(None);
@@ -102,7 +88,7 @@ fn handshake(conn: TcpStream, log: mut ref Vec[String]) -> Result[Option[Target]
     }
     let _ = conn.write_all([1, 0]);
     let mut req = [0u8; 4];
-    read_exact(conn, mut req)?;
+    conn.read_exact(mut req).map_err(|_| "closed".to_string())?;
     let cmd = req[1];
     let atyp = req[3];
     let host = match atyp {
@@ -127,7 +113,7 @@ fn handshake(conn: TcpStream, log: mut ref Vec[String]) -> Result[Option[Target]
         }
     };
     let mut pb = [0u8; 2];
-    read_exact(conn, mut pb)?;
+    conn.read_exact(mut pb).map_err(|_| "closed".to_string())?;
     let port = u16.from_be_bytes(pb);
     if cmd != 1 {
         let _ = conn.write_all(reply(BAD_COMMAND));
@@ -292,17 +278,17 @@ fn client(tag: Str, greeting: Slice[u8], auth: Slice[u8], request: Slice[u8], pa
         return;
     }
     let mut choice = [0u8; 2];
-    read_exact(s, mut choice).unwrap();
+    s.read_exact(mut choice).unwrap();
     parts.push(f"method {hexs(choice)}");
     if choice[1] == 2 {
         let _ = s.write_all(auth);
         let mut status = [0u8; 2];
-        read_exact(s, mut status).unwrap();
+        s.read_exact(mut status).unwrap();
         parts.push(f"login {hexs(status)}");
         if status[1] == 0 {
             let _ = s.write_all(request);
             let mut rep = [0u8; 10];
-            read_exact(s, mut rep).unwrap();
+            s.read_exact(mut rep).unwrap();
             parts.push(f"reply {hexs(rep)}");
             if rep[1] == 0 {
                 let _ = s.write_all(payload);

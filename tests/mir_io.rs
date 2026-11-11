@@ -374,6 +374,7 @@ fn show(e: TcpError) -> String {
         TcpError.Protocol => "protocol".to_string(),
         TcpError.ProviderUnavailable => "provider unavailable".to_string(),
         TcpError.Unsupported => "unsupported".to_string(),
+        TcpError.UnexpectedEof => "unexpected eof".to_string(),
     }
 }
 
@@ -491,6 +492,7 @@ fn show(e: NetError) -> String {
         NetError.Protocol => "protocol".to_string(),
         NetError.ProviderUnavailable => "provider unavailable".to_string(),
         NetError.Unsupported => "unsupported".to_string(),
+        NetError.UnexpectedEof => "unexpected eof".to_string(),
     }
 }
 
