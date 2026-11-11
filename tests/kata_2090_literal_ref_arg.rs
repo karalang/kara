@@ -7,9 +7,7 @@
 //! the borrowed literal as it would the value. `Vec.filled(2, k)` over the
 //! same loop was a vector of borrows of the element, which the compiled
 //! backends read as a pointer and crashed on; a borrowed `Copy` value now
-//! fills it with its value, as `[k, k]` and `v.push(k)` take it. A list of
-//! float literals, `let fs = [1.0, 3.0];`, is left open as one of integer
-//! literals is, so its elements reach an `f32` parameter.
+//! fills it with its value, as `[k, k]` and `v.push(k)` take it.
 
 use std::process::{Command, Stdio};
 

@@ -2647,17 +2647,42 @@ impl<'a> Interp<'a> {
                 while let Value::Ref(a) = &x {
                     x = self.slot(a)?;
                 }
-                let mut vals = Vec::with_capacity(len as usize + 1);
-                for i in 0..len {
-                    vals.push(self.slot(&base.child(lo + i))?);
-                }
-                vals.push(x);
-                let mut keys = self.order_forms(&vals, el)?;
-                let want = keys.pop().unwrap_or(Value::Unit);
-                let found = keys
-                    .binary_search_by(|k| key_order(k, &want))
+                // Only the probed elements are read and compared, each with
+                // the value directly: reading every element and ranking
+                // them all made each search linear (kata 2097). The probes
+                // are std's, as the compiled `karac_mir_bsearch` makes them,
+                // so a run of equal elements answers with the same index.
+                let cmp = self.user_cmp(el);
+                let want = match cmp {
+                    Some(_) => None,
+                    None => Some(self.order_form(&x, el)?),
+                };
+                let probes = vec![0u8; len as usize];
+                let mut failed = None;
+                let found = probes
+                    .binary_search_by(|b| {
+                        if failed.is_some() {
+                            return std::cmp::Ordering::Equal;
+                        }
+                        let i = (b as *const u8 as usize) - (probes.as_ptr() as usize);
+                        let ord = (|| -> R<std::cmp::Ordering> {
+                            let v = self.slot(&base.child(lo + i as u64))?;
+                            match (&cmp, &want) {
+                                (Some(c), _) => self.call_cmp(c, &v, &x),
+                                (None, Some(w)) => Ok(key_order(&self.order_form(&v, el)?, w)),
+                                (None, None) => Ok(std::cmp::Ordering::Equal),
+                            }
+                        })();
+                        ord.unwrap_or_else(|e| {
+                            failed = Some(e);
+                            std::cmp::Ordering::Equal
+                        })
+                    })
                     .ok()
                     .map(|i| Value::Int(i as i128));
+                if let Some(e) = failed {
+                    return Err(e);
+                }
                 self.option(ret, found)
             }
             // `String.presize` is `mir::presize`'s capacity hint.

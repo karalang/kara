@@ -3175,25 +3175,43 @@ impl<'a> super::TypeChecker<'a> {
         // B-2026-10-24-26: `.copied()` is the Rust spelling of
         // `Option[ref T]`'s `.cloned()` (library/core-types.md), which no
         // edit distance reaches from `copied`.
-        if method == "copied"
-            && args.is_empty()
+        // An iterator's `.copied()` (`v.iter().copied()`) is its `.cloned()`
+        // too, which reads a `Copy` item out as `copied` does (kata 2108).
+        let wants_copied = method == "copied" && args.is_empty();
+        let option_copied = wants_copied
             && matches!(&receiver_for_lookup, Type::Named { name, .. } if name == "Option")
             && self
                 .env
                 .find_methods_with_args("Option", &[], "copied")
-                .is_empty()
-        {
+                .is_empty();
+        let iterator_copied = wants_copied
+            && !option_copied
+            && match &receiver_for_lookup {
+                Type::Named { name, args } => self.env.has_impl("Iterator", name, args),
+                _ => false,
+            };
+        if option_copied || iterator_copied {
             // `copied()`: the name ends at the `(` before the `)`.
             if let Some(offset) = args_close_span
                 .offset
                 .checked_sub(1 + method.len())
                 .filter(|&o| o > object.span.offset)
             {
-                self.type_error_with_fix_it(
+                let message = if option_copied {
                     "no method 'copied' on type 'Option': an `Option[ref T]` copies its \
                      item out with `.cloned()` (library/core-types.md), and for a `Copy` \
                      item `opt ?? d` reads it or a default"
-                        .to_string(),
+                        .to_string()
+                } else {
+                    format!(
+                        "no method 'copied' on type '{}': an iterator copies its items out \
+                         with `.cloned()`, which is Rust's `copied()` for `Copy` items \
+                         (library/iterators.md)",
+                        type_display(&receiver_for_lookup)
+                    )
+                };
+                self.type_error_with_fix_it(
+                    message,
                     *span,
                     TypeErrorKind::NoMethodFound,
                     super::FixIt {

@@ -4194,6 +4194,46 @@ impl super::Parser {
             self.turbofishes.push((start, method, self.pos, ty));
             return;
         }
+        // `it.collect::<String>() == w`: `==` takes its own right-hand type
+        // (`PartialEq[Rhs]`), so a comparison fixes nothing about what
+        // `collect` builds and deleting the list leaves it unsolved
+        // (B-2026-10-29-36). The type the list names is the receiver of the
+        // collection's own `from_iter`, which `collect` calls: the fix
+        // writes `String.from_iter(it) == w` (kata 2108).
+        if let (true, Some(t), Some(dot)) = (method == "collect", &ty, dot) {
+            if self.check(&Token::LeftParen)
+                && matches!(self.peek_token_ref_at(1), Token::RightParen)
+                && self.call_is_an_equality_operand(receiver)
+            {
+                let close = self.tokens[self.pos + 1].span;
+                self.error_at(
+                    &format!(
+                        "`::<..>` after a method name is Rust's turbofish; Kāra has no \
+                         call-site type arguments, and a comparison does not fix what \
+                         `collect` builds -- name the collection before the call, as the \
+                         receiver of its `from_iter`: `{t}.from_iter(it)`"
+                    ),
+                    start,
+                );
+                self.fix_diffs.insert(
+                    crate::resolver::SpanKey::from_span(&start),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: receiver.offset,
+                            length: 0,
+                            replacement: format!("{t}.from_iter("),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: dot,
+                            length: close.offset + close.length - dot,
+                            replacement: ")".to_string(),
+                        },
+                    ],
+                );
+                self.turbofishes.push((start, method, self.pos, None));
+                return;
+            }
+        }
         // `s.parse::<i64>()`: the type argument names what is parsed to, and
         // Kāra names it as the receiver of an associated call, so the fix
         // writes `i64.parse(s)` (B-2026-10-29-39).
@@ -4270,6 +4310,21 @@ impl super::Parser {
             }
         }
         false
+    }
+
+    /// Whether the call about to be parsed, `()` at the cursor, is an
+    /// operand of `==` or `!=`: the token after its `)` is one, or the token
+    /// before its receiver, which starts at `receiver`, is.
+    fn call_is_an_equality_operand(&self, receiver: Span) -> bool {
+        let eq = |t: Option<&Token>| matches!(t, Some(Token::EqualEqual | Token::BangEqual));
+        if eq(self.tokens.get(self.pos + 2).map(|t| &t.token)) {
+            return true;
+        }
+        self.tokens[..self.pos]
+            .iter()
+            .position(|t| t.span.offset == receiver.offset)
+            .and_then(|i| i.checked_sub(1))
+            .is_some_and(|i| eq(Some(&self.tokens[i].token)))
     }
 
     /// The Kāra spelling of the turbofish list whose tokens run from `open`

@@ -3918,6 +3918,14 @@ fn held_borrow_copy_fix(
     // line's `let .. =` when it has one, else at the borrow.
     let let_head =
         regex::Regex::new(r"^\s*let\s+(mut\s+)?[A-Za-z_]\w*(\s*:[^=;]*)?\s*=\s*").unwrap();
+    // Or the scrutinee of a `while let` / `if let` (`while let Some(top) =
+    // stack.last() {`), whose pattern holds the borrow until the body ends.
+    let cond_head =
+        regex::Regex::new(r"^\s*(\}\s*else\s+)?(while|if)\s+let\s+[^=;{]*?=\s*").unwrap();
+    let conditional = src
+        .get(line_start..loan)
+        .is_some_and(|h| !let_head.is_match(h) && cond_head.is_match(h));
+    let let_head = if conditional { cond_head } else { let_head };
     let offset = src
         .get(line_start..loan)
         .and_then(|h| let_head.find(h))
@@ -3932,22 +3940,27 @@ fn held_borrow_copy_fix(
         .max_by_key(|(k, _)| k.1)
         .map(|(k, t)| (k.1, t))?;
     let end = offset + len;
-    if !src.get(end..)?.trim_start().starts_with(';') {
+    if conditional && !src.get(end..)?.trim_start().starts_with('{') {
         return None;
     }
-    // ... bound by `let [mut] holder [: T] =`, alone on the line before it.
-    let head = src.get(line_start..offset)?.trim_end().strip_suffix('=')?;
-    if head.ends_with(['=', '!', '<', '>']) {
-        return None;
-    }
-    let head = head.trim().strip_prefix("let ")?.trim_start();
-    let head = head.strip_prefix("mut ").unwrap_or(head);
-    // The holder may be the binding itself or one taken out of it later
-    // (`Some(node) => ..` over `let found = m.get(k);`): either way the
-    // borrow is this initializer, and an owned value ends it.
-    let name = head.split(':').next()?.trim();
-    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        return None;
+    if !conditional {
+        if !src.get(end..)?.trim_start().starts_with(';') {
+            return None;
+        }
+        // ... bound by `let [mut] holder [: T] =`, alone on the line before it.
+        let head = src.get(line_start..offset)?.trim_end().strip_suffix('=')?;
+        if head.ends_with(['=', '!', '<', '>']) {
+            return None;
+        }
+        let head = head.trim().strip_prefix("let ")?.trim_start();
+        let head = head.strip_prefix("mut ").unwrap_or(head);
+        // The holder may be the binding itself or one taken out of it later
+        // (`Some(node) => ..` over `let found = m.get(k);`): either way the
+        // borrow is this initializer, and an owned value ends it.
+        let name = head.split(':').next()?.trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return None;
+        }
     }
     let copyable = |t: &Type| -> Option<bool> {
         let shared = match t {
@@ -3978,6 +3991,17 @@ fn held_borrow_copy_fix(
         span: at(offset),
         replacement: text.to_string(),
     };
+    if conditional {
+        // The scrutinee runs to the body's `{`; only an `Option[ref T]` is
+        // copied there, so the pattern binds an owned value.
+        return match ty {
+            Type::Named { name, args } if name == "Option" && args.len() == 1 => match &args[0] {
+                Type::Ref(inner) if copyable(inner).is_some() => Some(fix(end, ".cloned()")),
+                _ => None,
+            },
+            _ => None,
+        };
+    }
     match ty {
         Type::Ref(inner) => match copyable(inner)? {
             true => Some(fix(end, ".clone()")),

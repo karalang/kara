@@ -460,6 +460,18 @@ impl[I: Iterator] Iterator for IterSkip[I] {
         }
         self.it.next()
     }
+
+    // Advancing a `skip` advances what it wraps past the items it has
+    // still to skip as well, in one call, so `skip(r).step_by(k)` over a
+    // `Vec` jumps instead of walking (kata 2111).
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        let all = self.left + n;
+        self.left = 0;
+        self.it.advance_by(all)
+    }
 }
 
 struct IterEnumerate[I] {

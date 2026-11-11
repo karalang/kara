@@ -5121,6 +5121,43 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// Whether a bound of `method`'s `where` clause on a projection of
+    /// `Self` (`where Self.Item: Ord`) fails for `self_type`. A projection
+    /// that does not resolve to a concrete type counts as met.
+    fn copied_default_bound_unmet(&mut self, method: &Function, self_type: &Type) -> bool {
+        let Some(wc) = &method.where_clause else {
+            return false;
+        };
+        let scope = vec!["Self".to_string()];
+        let subs: HashMap<String, SubstValue> =
+            std::iter::once(("Self".to_string(), SubstValue::Type(self_type.clone()))).collect();
+        for constraint in &wc.constraints {
+            let WhereConstraint::ProjectionBound {
+                projection, bounds, ..
+            } = constraint
+            else {
+                continue;
+            };
+            let lowered = self.lower_type_expr(projection, &scope);
+            let resolved = self.resolve_assoc_projections(&substitute_type_params(&lowered, &subs));
+            if matches!(
+                resolved,
+                Type::AssocProjection { .. } | Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
+            ) || super::types::contains_type_param(&resolved)
+            {
+                continue;
+            }
+            for bound in bounds {
+                if let Some(name) = bound.path.last() {
+                    if !self.type_satisfies_bound(&resolved, name) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     fn check_impl_block(&mut self, imp: &ImplBlock) {
         let saved_impl_span = self
             .current_impl_span
@@ -5809,6 +5846,16 @@ impl<'a> super::TypeChecker<'a> {
                         method.span.offset < imp.span.offset
                             || method.span.offset >= imp.span.offset + imp.span.length
                     });
+                    // A copied default whose `where Self.Item: Ord` this impl
+                    // does not meet (`min` and `max` on an iterator of
+                    // structs) cannot be called on it, and its body is
+                    // written against that bound, so it is not checked
+                    // (kata 2095).
+                    if copied_default.is_some()
+                        && self.copied_default_bound_unmet(method, &self_type)
+                    {
+                        continue;
+                    }
                     let saved = std::mem::replace(
                         &mut self.current_default_trait,
                         copied_default.and_then(|t| t.segments.last().cloned()),

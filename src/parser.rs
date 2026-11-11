@@ -2851,7 +2851,15 @@ impl Parser {
             ..first
         };
         let written = names.join("::");
-        let kara = names[dropped..].join(".");
+        // Rust's `str::from_utf8` (`std::str::from_utf8(&bytes)`) is Kāra's
+        // `String.from_utf8`: Kāra has no `str` to call it on (kata 2096).
+        let mut kara_names = names[dropped..].to_vec();
+        let to_string =
+            kara_names.len() == 2 && kara_names[0] == "str" && kara_names[1] == "from_utf8";
+        if to_string {
+            kara_names[0] = "String".to_string();
+        }
+        let kara = kara_names.join(".");
         let mut edits = Vec::new();
         if dropped > 0 {
             let keep = self.tokens[segments[dropped]].span.offset;
@@ -2868,6 +2876,19 @@ impl Parser {
                 length: colons.length,
                 replacement: ".".to_string(),
             });
+        }
+        if to_string {
+            let str_at = segments[dropped];
+            let span = self.tokens[str_at].span;
+            edits.push(crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: "String".to_string(),
+            });
+            self.tokens[str_at].token = Token::Identifier {
+                name: "String".to_string(),
+                raw: false,
+            };
         }
         // `std::thread::spawn` / `thread::spawn` / `tokio::spawn`: deleting
         // the module path would leave a free `spawn`, which Kāra does not
@@ -2893,7 +2914,7 @@ impl Parser {
             format!(
                 "`{written}` is a Rust path -- Kāra's `{}` needs no module path, and a path \
                  is written with `.`: write `{kara}`",
-                names[dropped]
+                kara_names[0]
             )
         } else {
             format!("`{written}` is Rust's `::` path -- Kāra writes a path with `.`: `{kara}`")
@@ -3086,10 +3107,20 @@ impl Parser {
             Some(Token::Identifier { name, .. }) => Some(name.as_str()),
             _ => None,
         };
+        // The path's separators are Rust's `::`, or, after Rust's `use`, the
+        // dots of `use std.collections.VecDeque;` (kata 2101), whose `import`
+        // would name a module that does not exist. An `import` keeps its dots
+        // to itself: `import std.collections.*` is the spelling syntax.md
+        // gives, and `karac fmt` must still parse it.
+        let after_use = matches!(token(at), Some(Token::Identifier { name, .. }) if name == "use");
+        let sep = |i: usize| {
+            matches!(token(i), Some(Token::ColonColon))
+                || (after_use && matches!(token(i), Some(Token::Dot)))
+        };
         if !matches!(ident(at + 1), Some("std" | "core" | "alloc"))
-            || !matches!(token(at + 2), Some(Token::ColonColon))
+            || !sep(at + 2)
             || !matches!(ident(at + 3), Some("collections" | "cmp" | "mem"))
-            || !matches!(token(at + 4), Some(Token::ColonColon | Token::Semicolon))
+            || !(sep(at + 4) || matches!(token(at + 4), Some(Token::Semicolon)))
         {
             return false;
         }
@@ -3107,10 +3138,11 @@ impl Parser {
             match token(semi) {
                 Some(Token::Semicolon) => break,
                 Some(Token::Identifier { name, .. }) => {
-                    if !matches!(token(semi + 1), Some(Token::ColonColon)) {
+                    if !sep(semi + 1) {
                         leaves.push(name.clone());
                     }
                 }
+                Some(Token::Dot) if after_use => {}
                 Some(
                     Token::ColonColon
                     | Token::LeftBrace

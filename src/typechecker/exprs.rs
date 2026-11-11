@@ -1381,7 +1381,76 @@ impl<'a> super::TypeChecker<'a> {
                 return ty;
             }
         }
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        {
+            if method == "partition" && args.len() == 1 {
+                let errors_before = self.errors.len();
+                let ty = self.check_expr_unexplained(expr, expected);
+                self.fix_partition_of_views(expr, object, &ty, expected, errors_before);
+                return ty;
+            }
+        }
         self.check_expr_unexplained(expr, expected)
+    }
+
+    /// `let (odd, even): (Vec[i64], Vec[i64]) = nums.iter().partition(..)`:
+    /// `partition` keeps its items as they come, `ref i64` from `iter()`
+    /// (library/iterators.md, "Items read through a reference"), so the
+    /// halves are `Vec[ref i64]`. When the declared halves hold the items'
+    /// own type, the repair is `.cloned()` before the `partition`, which
+    /// copies each item (kata 2098).
+    fn fix_partition_of_views(
+        &mut self,
+        expr: &Expr,
+        object: &Expr,
+        found: &Type,
+        expected: &Type,
+        errors_before: usize,
+    ) {
+        if !self.errors[errors_before..]
+            .iter()
+            .any(|e| e.span == expr.span)
+        {
+            return;
+        }
+        let vec_elem = |t: &Type| match t {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => Some(args[0].clone()),
+            _ => None,
+        };
+        let found = resolve_type_var_top(found, &self.env.substitutions);
+        let want = resolve_type_var_top(expected, &self.env.substitutions);
+        let (Type::Tuple(have), Type::Tuple(want)) = (&found, &want) else {
+            return;
+        };
+        if have.len() != 2 || want.len() != 2 {
+            return;
+        }
+        let views = have
+            .iter()
+            .zip(want.iter())
+            .all(|(h, w)| match (vec_elem(h), vec_elem(w)) {
+                (Some(Type::Ref(inner)), Some(w)) => {
+                    resolve_type_var_top(&inner, &self.env.substitutions)
+                        == resolve_type_var_top(&w, &self.env.substitutions)
+                }
+                _ => false,
+            });
+        if !views {
+            return;
+        }
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(&expr.span),
+            vec![crate::resolver::TextEdit {
+                offset: object.span.offset + object.span.length,
+                length: 0,
+                replacement: ".cloned()".to_string(),
+            }],
+        );
     }
 
     /// `let d: Wide = Default.default();`: the fix names the expected type,
@@ -1595,7 +1664,8 @@ impl<'a> super::TypeChecker<'a> {
         self.warn_vec_macro(expr);
         self.note_loose_expr(expr);
         if matches!(expr.kind, ExprKind::Cast { .. }) {
-            self.pending_cast_expected = Some((SpanKey::from_span(&expr.span), expected.clone()));
+            self.pending_cast_expected
+                .push((SpanKey::from_span(&expr.span), expected.clone()));
         }
         self.note_view_lent_into_ref(expr, expected, false);
         if let Some(ty) = self.lend_borrowed_receiver(expr, expected) {
@@ -1808,9 +1878,34 @@ impl<'a> super::TypeChecker<'a> {
             let Some((t, frame)) = self.node_types.get(&id) else {
                 continue;
             };
+            // The parameters this node's type names, before it is refined.
+            let named: Vec<String> = bound
+                .keys()
+                .filter(|n| {
+                    let probe: HashMap<String, SubstValue> =
+                        [((*n).clone(), SubstValue::Type(Type::Unit))].into();
+                    substitute_type_params(t, &probe) != *t
+                })
+                .cloned()
+                .collect();
             if self.mentions_foreign_param(t) {
                 let refined = (substitute_type_params(t, &subs), *frame);
                 self.node_types.insert(id, refined);
+            }
+            // A method call under the receiver whose own type argument only
+            // this context names, `collect`'s `C` in `[a.collect(),
+            // b.collect()].to_vec()` checked against a `Vec[Vec[i64]]`, takes
+            // it too, so the call has a callee to lower (kata 2102).
+            if self.node_method_callees.contains_key(&id) {
+                let call = self.node_call_subs.entry(id).or_default();
+                for t in call.values_mut() {
+                    *t = substitute_type_params(t, &subs);
+                }
+                for n in named {
+                    if let Some(t) = bound.get(&n) {
+                        call.entry(n).or_insert_with(|| t.clone());
+                    }
+                }
             }
         }
     }
@@ -15123,10 +15218,12 @@ impl<'a> super::TypeChecker<'a> {
                         self.check_cast_pair(&from_ty, &to_ty, &inner.span, fix_end)
                     }
                 }
+                let key = SpanKey::from_span(&expr.span);
                 let expected = self
                     .pending_cast_expected
-                    .take_if(|(key, _)| *key == SpanKey::from_span(&expr.span))
-                    .map(|(_, t)| t);
+                    .iter()
+                    .rposition(|(k, _)| *k == key)
+                    .map(|at| self.pending_cast_expected.remove(at).1);
                 if expected.is_none() {
                     self.operand_casts
                         .insert(expr.id, (from_ty.clone(), to_ty.clone()));
@@ -15215,7 +15312,7 @@ impl<'a> super::TypeChecker<'a> {
                 // A bound that borrows an integer reads it, as an operator's
                 // operand does: `other..other + len` with `other` an
                 // iterator's `ref i64` is a range of `i64` (kata 1062).
-                let (start_ty, end_ty) = match (start_ty, end_ty) {
+                let (mut start_ty, end_ty) = match (start_ty, end_ty) {
                     (Some(s), Some(e)) if s != e => {
                         let (ds, de) = (
                             super::expr_ops::deref_integer_scalar(s.clone()),
@@ -15230,6 +15327,34 @@ impl<'a> super::TypeChecker<'a> {
                     other => other,
                 };
                 // When both bounds are present, verify they share a type.
+                // Bounds of opposite signedness are not one type even where
+                // the projection check lets them meet: Rust's
+                // `let k = k as usize; for i in k..v.len()` is a `usize`
+                // start against Kāra's `i64` length (kata 2107).
+                if let (Some(s), Some(e)) = (&start_ty, &end_ty) {
+                    let (ds, de) = (
+                        super::expr_ops::deref_integer_scalar(s.clone()),
+                        super::expr_ops::deref_integer_scalar(e.clone()),
+                    );
+                    if matches!(
+                        (&ds, &de),
+                        (Type::Int(_), Type::UInt(_)) | (Type::UInt(_), Type::Int(_))
+                    ) {
+                        self.note_pointer_int_mix(&ds, &de);
+                        self.type_error(
+                            format!(
+                                "range bounds must have same type: '{}' and '{}' mix signed \
+                                 and unsigned integers -- cast one bound with `as` so both \
+                                 have the same signedness",
+                                type_display(s),
+                                type_display(e)
+                            ),
+                            expr.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        start_ty = Some(Type::Error);
+                    }
+                }
                 if let (Some(ref s), Some(ref e)) = (&start_ty, &end_ty) {
                     if !self.types_compatible_with_projections(s, e)
                         && *s != Type::Error
@@ -15544,6 +15669,26 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     for e in elements {
                         self.check_expr(e, &elem);
+                    }
+                    self.record_collection_literal(expr, "Vec", elements);
+                    Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![elem],
+                    }
+                } else if let Some(lead) = elements
+                    .iter()
+                    .position(|e| !tail_waits_for_sibling(e))
+                    .filter(|_| elements.iter().any(tail_waits_for_sibling))
+                {
+                    // An element that names no type of its own, a bare
+                    // `collect()` or an empty `[]`, takes a sibling's, as a
+                    // branch of an `if` does: `[(0..n).map(f).collect(),
+                    // Vec.filled(n, 0)]` is a `Vec[Vec[i64]]` (kata 2099).
+                    let elem = self.infer_expr(&elements[lead]);
+                    for (i, e) in elements.iter().enumerate() {
+                        if i != lead {
+                            self.check_expr(e, &elem);
+                        }
                     }
                     self.record_collection_literal(expr, "Vec", elements);
                     Type::Named {

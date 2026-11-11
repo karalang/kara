@@ -3478,9 +3478,12 @@ pub struct TypeChecker<'a> {
     /// Casts `redundant_cast` / `lossless_cast` already reported, for the
     /// same reason.
     pub(super) cast_lints_reported: FxHashSet<SpanKey>,
-    /// The type `check_expr` wants of the `as` cast at this span, so the cast
-    /// can tell a lossless widening that happens implicitly there.
-    pub(super) pending_cast_expected: Option<(SpanKey, Type)>,
+    /// The type `check_expr` wants of each `as` cast being checked, by span,
+    /// so the cast can tell a lossless widening that happens implicitly
+    /// there. A stack: a cast inside the operand of another (`f(c as i32)
+    /// as i64`, kata 2105's adapter) is checked while the outer one waits,
+    /// and a single slot lost the outer one's.
+    pub(super) pending_cast_expected: Vec<(SpanKey, Type)>,
     /// Each `as` cast checked with no expected type, by node: its source and
     /// target types, for the `lossless_cast` lint on an operator operand
     /// (B-2026-11-03-12).
@@ -4420,7 +4423,7 @@ impl<'a> TypeChecker<'a> {
             vec_macro_reported: rustc_hash::FxHashSet::default(),
             option_result_predicates_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
-            pending_cast_expected: None,
+            pending_cast_expected: Vec::new(),
             operand_casts: FxHashMap::default(),
             assoc_binding_typos_reported: rustc_hash::FxHashSet::default(),
             question_conversions: FxHashMap::default(),
@@ -8997,6 +9000,21 @@ impl<'a> TypeChecker<'a> {
             }
             _ => type_display(expected),
         };
+        // A parameter of the library signature the slot came from, which
+        // nothing at this call has bound (`scan`'s `OutV` when the closure
+        // returned no pair), means nothing where the user stands: it reads
+        // as `_` (kata 2104).
+        let expected_display = if self.mentions_foreign_param(expected) {
+            let blank = self.blank_foreign_params(expected);
+            match (&blank, expected) {
+                (Type::Ref(inner), Type::Ref(_)) if expected_display != type_display(expected) => {
+                    type_display(inner)
+                }
+                _ => type_display(&blank),
+            }
+        } else {
+            expected_display
+        };
         self.type_error_with_types(
             format!(
                 "expected '{}', found '{}'{}",
@@ -9273,6 +9291,48 @@ impl<'a> TypeChecker<'a> {
                     ..
                 } => params.iter().any(|t| walk(t, scope)) || walk(return_type, scope),
                 _ => false,
+            }
+        }
+        let scope = self
+            .node_generic_frames
+            .get(self.current_generic_frame as usize)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        walk(ty, scope)
+    }
+
+    /// `ty` with every generic parameter not in scope here (see
+    /// `mentions_foreign_param`) written `_`, for a message.
+    pub(super) fn blank_foreign_params(&self, ty: &Type) -> Type {
+        fn walk(ty: &Type, scope: &[String]) -> Type {
+            let w = |t: &Type| walk(t, scope);
+            match ty {
+                Type::TypeParam(n) if !scope.iter().any(|s| s == n) => Type::TypeParam("_".into()),
+                Type::Tuple(ts) => Type::Tuple(ts.iter().map(w).collect()),
+                Type::Named { name, args } => Type::Named {
+                    name: name.clone(),
+                    args: args.iter().map(w).collect(),
+                },
+                Type::Ref(t) => Type::Ref(Box::new(w(t))),
+                Type::MutRef(t) => Type::MutRef(Box::new(w(t))),
+                Type::Function {
+                    params,
+                    return_type,
+                    ..
+                } => {
+                    let mut f = ty.clone();
+                    if let Type::Function {
+                        params: p,
+                        return_type: r,
+                        ..
+                    } = &mut f
+                    {
+                        *p = params.iter().map(w).collect();
+                        **r = w(return_type);
+                    }
+                    f
+                }
+                _ => ty.clone(),
             }
         }
         let scope = self

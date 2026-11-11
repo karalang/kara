@@ -1888,6 +1888,27 @@ impl<'a> super::TypeChecker<'a> {
                             return Type::Error;
                         }
                     }
+                    // `.clone()` on a library iterator (kata 2111's
+                    // `places.clone().count()`): no iterator is `Clone`, and
+                    // the edit-distance neighbour `cloned` maps the items,
+                    // so it is not offered. A second walk builds the
+                    // iterator again or walks a collected `Vec`.
+                    if method == "clone"
+                        && args.is_empty()
+                        && self.library_iter_item_type(receiver_for_lookup).is_some()
+                    {
+                        self.type_error(
+                            format!(
+                                "no method 'clone' on type '{type_name}', an iterator: \
+                                 the library's iterators are not `Clone` -- for a second \
+                                 walk, build the iterator again from its source, or \
+                                 `collect` it once into a `Vec` and walk that"
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                        );
+                        return Type::Error;
+                    }
                     // `chunks` / `windows` are slice methods, not iterator
                     // adaptors (B-2026-10-22-22): `v.iter().chunks(n)` drops
                     // the `.iter()` hop, any other iterator collects first.

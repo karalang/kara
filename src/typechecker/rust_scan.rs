@@ -38,21 +38,53 @@ fn is_deref_of(e: &Expr, name: &str) -> bool {
 }
 
 /// How `name` is used in `e`: (dereferenced at least once, used bare).
+/// A field or tuple-index read, `m.0`, is not a bare use: Rust reaches
+/// the lent state's fields through the reference, and after the rewrite
+/// it reads the state's newest binding just as it read the state's
+/// newest value (kata 2104's `Some(bounds.1 - bounds.0)`).
 fn uses(e: &Expr, name: &str) -> (bool, bool) {
     let mut deref = false;
-    let mut derefs: Vec<Span> = Vec::new();
+    let mut reads: Vec<Span> = Vec::new();
     let mut bare: Vec<Span> = Vec::new();
     crate::span_visitor::for_each_expr(e, &mut |x| {
         if is_deref_of(x, name) {
             deref = true;
             if let ExprKind::Unary { operand, .. } = &x.kind {
-                derefs.push(operand.span);
+                reads.push(operand.span);
+            }
+        } else if let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+            &x.kind
+        {
+            if matches!(&object.kind, ExprKind::Identifier(n) if n == name) {
+                reads.push(object.span);
             }
         } else if matches!(&x.kind, ExprKind::Identifier(n) if n == name) {
             bare.push(x.span);
         }
     });
-    (deref, bare.iter().any(|s| !derefs.contains(s)))
+    (deref, bare.iter().any(|s| !reads.contains(s)))
+}
+
+/// Whether a statement of `body` writes a field of `name`, `m.0 = e`:
+/// a write through the lent state that a `let` cannot carry.
+fn writes_field_of(body: &Expr, name: &str) -> bool {
+    let ExprKind::Block(b) = &body.kind else {
+        return false;
+    };
+    let mut found = false;
+    crate::span_visitor::for_each_stmt_in_block(b, &mut |s| {
+        if let StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } = &s.kind {
+            let mut t = target;
+            while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+                &t.kind
+            {
+                t = object;
+            }
+            found |=
+                !std::ptr::eq(t, target) && matches!(&t.kind, ExprKind::Identifier(n) if n == name);
+        }
+    });
+    found
 }
 
 /// `Some(item)` with `item` not already a pair.
@@ -121,7 +153,7 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         return None;
     };
     let (deref, bare) = uses(body, name);
-    if !deref || bare {
+    if !deref || bare || writes_field_of(body, name) {
         return None;
     }
     let tail = match &body.kind {

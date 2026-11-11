@@ -2766,11 +2766,12 @@ fn test_module_binding_missing_equals_recovers() {
 
 /// `use` is gone (design review 2026-10-07 § 3): it is diagnosed with a
 /// machine-applicable rewrite to `import`, and parsed as that import so the
-/// rest of the file still checks.
+/// rest of the file still checks. (A `std.` path after `use` is deleted
+/// instead, `tests/kata_2101_dotted_std_use_fix.rs`.)
 #[test]
 fn test_use_decl_is_rejected_and_parsed_as_import() {
     for (src, is_pub) in [
-        ("use std.collections.HashMap;", false),
+        ("use db.models.User;", false),
         ("pub use db.connection.Connection;", true),
     ] {
         let result = karac::parse(src);

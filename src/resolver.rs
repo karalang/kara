@@ -1992,9 +1992,16 @@ impl<'a> Resolver<'a> {
             .collect();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
-        let suggestion = Self::renamed_stdlib_type(name)
-            .map(str::to_string)
-            .or_else(|| suggest_similar(name, &visible));
+        // `str.from_utf8(b)`, Rust's `str::from_utf8` with its `::` made a
+        // `.`, is `String.from_utf8`; the nearest name, `ptr`, is no answer
+        // (kata 2096).
+        let suggestion = if name == "str" {
+            Some("String".to_string())
+        } else {
+            Self::renamed_stdlib_type(name)
+                .map(str::to_string)
+                .or_else(|| suggest_similar(name, &visible))
+        };
         let mut message = format!("undefined name '{}'", name);
         if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean '{}'?", s));
@@ -2118,9 +2125,16 @@ impl<'a> Resolver<'a> {
             .collect();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
-        let suggestion = Self::renamed_stdlib_type(name)
-            .map(str::to_string)
-            .or_else(|| suggest_similar(name, &visible));
+        // `str.from_utf8(b)`, Rust's `str::from_utf8` with its `::` made a
+        // `.`, is `String.from_utf8`; the nearest name, `ptr`, is no answer
+        // (kata 2096).
+        let suggestion = if name == "str" {
+            Some("String".to_string())
+        } else {
+            Self::renamed_stdlib_type(name)
+                .map(str::to_string)
+                .or_else(|| suggest_similar(name, &visible))
+        };
         let mut message = format!("undefined name '{}'", name);
         if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean '{}'?", s));
