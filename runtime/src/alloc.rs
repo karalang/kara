@@ -185,6 +185,14 @@ pub(crate) mod small {
         ON.store(true, Ordering::Relaxed);
     }
 
+    /// Turns the lists on whatever the environment says, for the tests that
+    /// measure them: a shell with `KARAC_ALLOC_CACHE=0` exported leaves
+    /// [`start`] a no-op, and those tests then read glibc's behaviour.
+    #[cfg(test)]
+    pub(crate) fn start_for_tests() {
+        ON.store(true, Ordering::Relaxed);
+    }
+
     /// A kept chunk for an `n`-byte request, or null.
     #[inline]
     pub(crate) fn take(n: usize) -> *mut u8 {
@@ -1188,7 +1196,7 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn small_lists_hand_a_freed_chunk_back_for_its_size() {
-        small::start();
+        small::start_for_tests();
         let p = karac_malloc(40);
         karac_free(p);
         // glibc's chunk for 40 bytes serves 33..=40.
@@ -1209,7 +1217,7 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn a_small_resize_keeps_the_old_chunk_on_the_lists() {
-        small::start();
+        small::start_for_tests();
         let p = karac_malloc(100);
         unsafe { *p = 7 };
         let q = karac_realloc_or_panic(p, 200);
@@ -1228,7 +1236,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn small_lists_key_a_chunk_by_its_usable_size_on_macos() {
-        small::start();
+        small::start_for_tests();
         let p = karac_malloc(40);
         // The list it goes on serves this many bytes.
         let fits = unsafe { buf_cache::usable_size(p) } & !15;
