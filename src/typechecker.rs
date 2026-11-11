@@ -3454,6 +3454,9 @@ pub struct TypeChecker<'a> {
     /// The `match` being inferred joins its arms' literals into one open
     /// variable (`TypeChecker::open_literal_join`, B-2026-11-10-49).
     pub(super) open_match_arms: bool,
+    /// The target of the compound assignment being checked: an open literal
+    /// operand takes its type when it is fixed (design.md §8, kata 2103).
+    pub(super) compound_assign_target: Option<crate::ids::NodeId>,
     /// The spans of [`Self::wide_int_literals`] an integer context has
     /// already range-checked.
     pub(super) wide_int_literals_judged: FxHashSet<SpanKey>,
@@ -4410,6 +4413,7 @@ impl<'a> TypeChecker<'a> {
             open_literal_expr: None,
             open_tuple_literal: None,
             open_match_arms: false,
+            compound_assign_target: None,
             wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             binding_class_reported: rustc_hash::FxHashSet::default(),

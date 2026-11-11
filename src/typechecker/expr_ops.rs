@@ -4450,13 +4450,27 @@ impl<'a> super::TypeChecker<'a> {
                     // `let k = 2;` and `i: u64` (design.md §8 Literals,
                     // B-2026-11-08-18).
                     let lit_kind = if ll.is_some() { ll } else { rl }.map(|(_, k)| k);
-                    let takes_other = lit_kind == Some(LiteralKind::Int)
-                        && is_integer(&other)
-                        && !super::types::int_coercion_is_widening(
-                            &other,
-                            &Type::Int(super::types::IntSize::I64),
-                        )
-                        && other != Type::Int(super::types::IntSize::I64);
+                    // A compound assignment into a target whose type is
+                    // fixed is an assignment to it, so the value's literal
+                    // takes the target's type: `rods[i] |= bit` with
+                    // `let bit = 4;` and `rods: [u8; 10]` (design.md §8
+                    // Literals, kata 2103 ruling).
+                    let into_fixed_target = ll.is_none()
+                        && !left.id.is_dummy()
+                        && self.compound_assign_target == Some(left.id)
+                        && match lit_kind {
+                            Some(LiteralKind::Int) => is_integer(&other),
+                            Some(LiteralKind::Float) => matches!(other, Type::Float(_)),
+                            None => false,
+                        };
+                    let takes_other = into_fixed_target
+                        || (lit_kind == Some(LiteralKind::Int)
+                            && is_integer(&other)
+                            && !super::types::int_coercion_is_widening(
+                                &other,
+                                &Type::Int(super::types::IntSize::I64),
+                            )
+                            && other != Type::Int(super::types::IntSize::I64));
                     if !is_literal_tree(lit_side) && takes_other {
                         super::inference::unify_types(
                             &Type::TypeVar(l),

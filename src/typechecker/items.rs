@@ -11978,7 +11978,9 @@ impl<'a> super::TypeChecker<'a> {
                 // parameter — so every shape the plain form accepts stays
                 // accepted, including a `mut ref` operand on either side.
                 let binop = Self::compound_op_binop(op);
+                let saved_target = self.compound_assign_target.replace(target.id);
                 let result = self.infer_binary(&binop, target, value, &stmt.span);
+                self.compound_assign_target = saved_target;
                 // B-2026-10-14-30 — `a += b` on a user type is `a = a + b`, so
                 // the impl's result must be the type of `a` (design.md
                 // § Operator traits, compound assignment). So must a bounded

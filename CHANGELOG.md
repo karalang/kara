@@ -324,6 +324,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   default (`rods[i] |= bit` over `[u8; 10]`) it keeps `i64`, as a bare
   literal does, and the refusal now names the binding and offers its
   annotation (B-2026-11-10-49).
+- `let bit = 4; rods[i] |= bit` over a `u8` array was refused as narrowing
+  an `i64`, and `karac fix` declared `bit: u8`. A compound assignment
+  into a target whose type is fixed is an assignment to it, so an open
+  literal operand takes the target's type, as `rods[i] = bit` does (kata
+  2103). `let mut b = 0; b += y` is unchanged: there the target is the
+  open binding.
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

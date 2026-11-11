@@ -84,8 +84,18 @@ fn kata_2024_tuple_literal_under_max_gets_its_suffix() {
 
 #[test]
 fn kata_2024_array_fill_literal_narrowed_gets_its_suffix() {
+    // `ans += cnt[x]` into an `i32` is an assignment to `ans`, so it fixes
+    // the fill's open literal as `i32` (design.md §8 Literals, the kata 2103
+    // ruling) and the kata checks as written. Through an operator, `ans =
+    // ans + cnt[x]`, the literal keeps its default and gets its suffix.
     let src = "fn pairs(nums: Vec[i32]) -> i32 {\n    let mut cnt = [0; 4];\n    let mut ans: i32 = 0;\n    for x in nums {\n        ans += cnt[x as i64];\n        cnt[x as i64] += 1;\n    }\n    ans\n}\n\nfn main() {\n    println(pairs([1, 2, 1, 1]));\n}";
-    let (first, text, clean, out) = mend(&scratch("array_fill"), src);
+    let (first, text, clean, out) = mend(&scratch("array_fill_compound"), src);
+    assert!(first.is_empty() || !first.contains("error"), "{first}");
+    assert!(text.contains("let mut cnt = [0; 4];"), "{text}");
+    assert!(clean, "{text}");
+    assert_eq!(out, "3\n");
+    let src = src.replace("ans += cnt[x as i64];", "ans = ans + cnt[x as i64];");
+    let (first, text, clean, out) = mend(&scratch("array_fill"), &src);
     assert!(
         first.contains("the elements of `cnt` are 'i64' because the literal it is filled with took the default"),
         "{first}"

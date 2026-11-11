@@ -81,12 +81,15 @@ fn a_join_an_earlier_use_fixed_as_i64_stays_refused() {
          println(s);\n    println(take(x));\n}\n",
         "from 'i64' to 'i32' would narrow",
     );
-    // Beside a `u8` the join keeps its default (design.md §8 Literals), as
-    // `let bit = 4` does, and the refusal says so with the binding's fix.
+    // Beside a `u8` in an operator the join keeps its default (design.md §8
+    // Literals), as `let bit = 4` does, and the refusal says so with the
+    // binding's fix. The compound form, `rods[0] |= bit`, is an assignment
+    // into the `u8` and runs (tests/compound_assign_fixes_literal.rs).
     refused(
         "or-into-u8",
         "fn main() {\n    let c = true;\n    let mut rods = [0u8; 3];\n    \
-         let bit = match c { true => 1, false => 4 };\n    rods[0] |= bit;\n    println(rods[0]);\n}\n",
+         let bit = match c { true => 1, false => 4 };\n    rods[0] = rods[0] | bit;\n    \
+         println(rods[0]);\n}\n",
         "`bit` is an 'i64' because its literal kept the default",
     );
 }
