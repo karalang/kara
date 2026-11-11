@@ -392,6 +392,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   first (garbage compiled, an AddressSanitizer abort); it is refused now,
   with the `scan` state's `0i32` fix offered through the `chain`
   (B-2026-11-11-41).
+- LeetCode's `class H2O` written `struct H2O` is Const class (CN-1, CN-4)
+  and was refused with only "consider renaming to `H2o`". A private
+  `struct` or `enum` with such a name now gets that rename as one fix over
+  every use of the name in the file, withheld when an f-string's hole
+  names it (B-2026-11-11-35).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

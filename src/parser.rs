@@ -3576,6 +3576,49 @@ impl Parser {
         });
     }
 
+    /// The fix for a private `struct` or `enum` whose name is not Type
+    /// class (LeetCode's `class H2O`, which is Const class here): the
+    /// CN-4 rename, `H2o`, at every use of the name in the file, which a
+    /// type name's uses all are, since a private type is named nowhere
+    /// else (B-2026-11-11-35). Withheld when an f-string's hole names it,
+    /// whose text the token edits cannot reach.
+    fn offer_type_rename(&mut self, name: &str, error_span: Span) {
+        if classify_ident(name) == IdentClass::Type {
+            return;
+        }
+        let Some(new_name) = crate::lexer::suggest_name_for_class(name, IdentClass::Type) else {
+            return;
+        };
+        let mut edits = Vec::new();
+        for t in &self.tokens {
+            match &t.token {
+                Token::Identifier {
+                    name: n,
+                    raw: false,
+                } if n == name => {
+                    edits.push(crate::resolver::TextEdit {
+                        offset: t.span.offset,
+                        length: t.span.length,
+                        replacement: new_name.clone(),
+                    });
+                }
+                Token::InterpolatedStringLiteral(parts)
+                    if parts.iter().any(|p| {
+                        matches!(p, crate::token::InterpolationPart::Expr { raw, .. }
+                            if raw.contains(name))
+                    }) =>
+                {
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if !edits.is_empty() {
+            self.fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&error_span), edits);
+        }
+    }
+
     fn synchronize_to_item(&mut self) {
         while !self.is_at_end() {
             match self.peek_token_ref() {

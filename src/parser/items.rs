@@ -2627,6 +2627,9 @@ impl super::Parser {
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Type, "struct", name_span);
+        if !is_pub {
+            self.offer_type_rename(&name, name_span);
+        }
         // Take the item-level doc *before* descending into the body —
         // field-level doc collection inside `parse_struct_body` would
         // otherwise overwrite it.
@@ -2926,6 +2929,9 @@ impl super::Parser {
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Type, "enum", name_span);
+        if !is_pub {
+            self.offer_type_rename(&name, name_span);
+        }
         // Take the item-level doc *before* descending into the variant list
         // — variant-level doc collection inside `parse_variant` would
         // otherwise overwrite it.
