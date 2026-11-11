@@ -34,7 +34,7 @@ fn temp(tag: &str, src: &str) -> std::path::PathBuf {
 fn a_chain_of_literal_lists_collects_into_the_annotated_width() {
     let src = "fn main() {\n    let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect();\n    \
                println(v);\n    let w: Vec[i32] = [0].into_iter().chain([1i32].into_iter()).collect();\n    \
-               println(w);\n    let x: Vec[u8] = [7].iter().chain([250].iter()).cloned().collect();\n    \
+               println(w);\n    let x: Vec[u8] = [7].into_iter().chain([250].into_iter()).collect();\n    \
                println(x);\n    let y: Vec[i32] = [5].into_iter().collect();\n    println(y);\n}\n";
     let path = temp("lists", src);
     for lane in [&["run"][..], &["run", "--interp"][..]] {

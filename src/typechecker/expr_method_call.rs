@@ -2167,9 +2167,10 @@ impl<'a> super::TypeChecker<'a> {
             // keeps its number literals open, as `let v = [0];` does, for
             // the chain's end to fix (`.collect()` into a `Vec[i32]`;
             // design.md §8 Literals, B-2026-11-11-41).
-            None if matches!(object.kind, ExprKind::ArrayLiteral(_))
-                && matches!(method, "into_iter" | "iter") =>
-            {
+            // Only `into_iter`: `iter`'s `ref` items of an open literal are
+            // not read as values where a by-value `i64` is wanted
+            // (`m.insert(k, ..)` over `[50, 10].iter()`).
+            None if matches!(object.kind, ExprKind::ArrayLiteral(_)) && method == "into_iter" => {
                 let saved = self.open_collection_let.replace(object.id);
                 let t = self.infer_expr(object);
                 self.open_collection_let = saved;
