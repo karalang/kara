@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 247 |
 | false-positive | 181 |
-| perf | 153 |
+| perf | 154 |
 | missing-feature | 143 |
 | soundness | 61 |
 | miscompile | 54 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 73 |
 | parser | 65 |
 | interp | 50 |
-| runtime | 36 |
+| runtime | 37 |
 | effect | 29 |
 | resolver | 23 |
 | codegen | 22 |
@@ -1065,6 +1065,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-37 | typecheck | medium | `g.value = Molecule { . | 3402c1954a |
 | B-2026-11-11-39 | runtime | medium | `String` has no `retain`: `s.retain(\|c\| c != ' ')`, Rust's `String::retain`, is refused as `no method 'retain' on type 'String'` though `Vec`, `VecDe… | 3c79788215 |
 | B-2026-11-11-40 | parser | low | Rust's `let n = n.borrow();` in an `Rc<RefCell<TreeNode>>` walk becomes `let n = n;` when the `RefCell` goes: a binding that only renames, left in th… | c80adee665 |
+| B-2026-11-11-42 | runtime | low | On Linux the runtime's per-thread small-chunk lists start only with the auto-par worker pool, and small_realloc bypasses them, so a sequential progra… | ba5b881217 |
 
 </details>
 
