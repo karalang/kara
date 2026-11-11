@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 236 |
+| diagnostics | 239 |
 | false-positive | 180 |
 | perf | 153 |
-| missing-feature | 136 |
+| missing-feature | 138 |
 | soundness | 61 |
 | miscompile | 53 |
 | run-vs-build | 31 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 372 |
+| typecheck | 376 |
 | mir-llvm | 197 |
 | mir | 168 |
 | cli | 94 |
 | ownership | 73 |
-| parser | 62 |
+| parser | 63 |
 | interp | 48 |
 | runtime | 32 |
 | effect | 29 |
@@ -118,6 +118,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-35 | 2026-11-10 | parser+typecheck | low | Rust's `use std::iter::Peekable; use std::str::Chars;` and `fn read(chars: &mut Peekable<Chars>)` reach `std.iter has no item Peekable` and `unknown module std.str` with no fix, though Kāra has `Peekable` and the type is `Peekable[StrChars, char]` | — |
 | B-2026-11-11-3 | 2026-11-11 | typecheck | low | `Option[Vec[T]].as_deref() -> Option[Slice[T]]` (library/core-types.md) is missing: 0.8 refuses a second specialized inherent impl that defines `as_deref` beside `Option[String]`'s, and the library has no trait that names a type's view | — |
 | B-2026-11-11-4 | 2026-11-11 | interp | low | The MIR interpreter keeps a `SortedMap` / `SortedSet` as one sorted vector of values, so 100000 inserts of falling keys take 12.7 s under `__mir-run` against 0.32 s rising; the compiled backend moved to a B+-tree at c5303d91b3 | — |
+| B-2026-11-11-21 | 2026-11-11 | parser | low | `format!("'{}'", String::from_utf8_lossy(&payload))` (and `println!`) gets no f-string fix when an argument holds a `::` path: the refusal names the f-string, but `karac fix` leaves the call, so every Rust `format!` over `Type::func(..)` is hand-converted | — |
+| B-2026-11-11-23 | 2026-11-11 | typecheck | low | `u16.from_be_bytes([a, b])` refuses its list-literal argument as a `Vec[u8]` ("expects an `Array[u8, 2]`, got `Vec[u8]`"), where Rust's `u16::from_be_bytes([a, b])` is the common form: the argument is not checked against the `Array[u8, N]` it must be | — |
+| B-2026-11-11-24 | 2026-11-11 | typecheck | medium | `String.from_utf8_lossy(bytes)` does not exist ("no associated function 'from_utf8_lossy' on type 'String'"): text from a socket or a file with a bad byte can only be shown by `from_utf8(..).unwrap_or(..)`, which drops all of it | — |
+| B-2026-11-11-25 | 2026-11-11 | typecheck | low | `?` on a `TcpStream` read inside `fn read_packet(..) -> Result[Option[Packet], IoError]` is refused "cannot convert error 'NetError' to 'IoError': no `impl From[NetError] for IoError` in scope" with no fix, where the Rust author's `io::Result` meant the socket's error type | — |
+| B-2026-11-11-26 | 2026-11-11 | typecheck | low | `Option[String].as_deref()` does not exist ("no method 'as_deref' on type 'Option'"), so Rust's `proto.as_deref() != Some("MQTT")` has no Kāra spelling short of building a `String` to compare with | — |
 
 ### Relocated
 

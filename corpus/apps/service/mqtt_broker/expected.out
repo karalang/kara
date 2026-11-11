@@ -1,0 +1,74 @@
+== lengths
+0 -> 00
+127 -> 7f
+128 -> 80 01
+16383 -> ff 7f
+16384 -> 80 80 01
+2097151 -> ff ff 7f
+268435455 -> ff ff ff 7f
+== filters
+"a/b" ok
+"a/+/c" ok
+"#" ok
+"a/#" ok
+"a/#/b" bad
+"a+" bad
+"+" ok
+"" bad
+"/x" ok
+== matches
+a/+/c a/b/c yes
+a/+/c a/b/d no
+a/# a yes
+a/# a/b/c yes
++/+ a/b yes
++ a/b no
+# x yes
+a/b a/b yes
++/b /b yes
+== live
+old <- CONNACK sp=0 rc=1
+old <- (closed)
+anon <- CONNACK sp=0 rc=2
+anon <- (closed)
+sensor <- CONNACK sp=0 rc=0
+sensor <- PUBACK id=7
+dash <- CONNACK sp=0 rc=0
+dash <- SUBACK id=1 [01 00 80]
+dash <- PUBLISH home/hall/light q0 r1 'on'
+dash <- PUBLISH home/kitchen/temp q0 r1 '21.5'
+logger <- CONNACK sp=0 rc=0
+logger <- SUBACK id=1 [01]
+logger <- PUBLISH home/hall/light q1 r1 id=1 'on'
+logger <- PUBLISH home/kitchen/temp q0 r1 '21.5'
+sensor <- PUBACK id=8
+dash <- PUBLISH home/kitchen/temp q1 r0 id=1 '22.0'
+logger <- PUBLISH home/kitchen/temp q1 r0 id=2 '22.0'
+dash <- PUBLISH home/log q0 r0 <200 bytes>
+logger <- PUBLISH home/log q0 r0 <200 bytes>
+dash <- UNSUBACK id=2
+dash <- PUBLISH home/kitchen/temp q0 r0 '22.5'
+logger <- PUBLISH home/kitchen/temp q0 r0 '22.5'
+dash <- PINGRESP
+probe <- CONNACK sp=0 rc=0
+logger <- PUBLISH status/probe q1 r0 id=3 'lost'
+sensor <- (closed)
+dash <- (closed)
+logger <- (closed)
+== broker
+conn 1 -: refused: protocol level after 1 packets
+conn 2 -: refused: identifier after 1 packets
+conn 3 sensor: protocol error: topic home/+/temp after 7 packets
+conn 4 dash: disconnect after 6 packets
+conn 5 auto-5: disconnect after 6 packets
+conn 6 probe: dropped after 1 packets
+CONNECT 6
+DISCONNECT 2
+PINGREQ 1
+PUBACK 4
+PUBLISH 6
+SUBSCRIBE 2
+UNSUBSCRIBE 1
+retained home/hall/light q1 'on'
+retained home/kitchen/temp q0 '21.5'
+retained status/probe q1 'lost'

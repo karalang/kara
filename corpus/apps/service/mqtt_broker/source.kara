@@ -1,0 +1,692 @@
+// mqtt_broker: an MQTT 3.1.1 broker subset on loopback. Each connection is
+// a task reading packets (a type byte, a variable-length remaining length,
+// a body); the broker state (sessions, subscriptions, retained messages,
+// packet counts) is one Mutex, and every packet a command produces is
+// written to its recipients' sockets under that lock, so each client sees
+// messages in the order they were routed.
+//
+// CONNECT (refused for a protocol level other than 4, or an empty client
+// id without a clean session), SUBSCRIBE with `+` and `#` filters (an
+// invalid filter gets 0x80) and the retained messages that match,
+// UNSUBSCRIBE, PUBLISH at QoS 0 and 1 (PUBACK to the sender, a packet id
+// per receiver), retained messages (an empty payload clears one), the will
+// of a connection that drops, PINGREQ, DISCONNECT. A topic with a wildcard
+// in a PUBLISH closes the connection.
+
+import std.sync.{TaskGroup, Mutex};
+
+const ADDR: Str = "127.0.0.1:47764";
+const CONNECTIONS: i64 = 6;
+
+fn packet_name(kind: u8) -> String {
+    match kind {
+        1 => "CONNECT".to_string(),
+        2 => "CONNACK".to_string(),
+        3 => "PUBLISH".to_string(),
+        4 => "PUBACK".to_string(),
+        8 => "SUBSCRIBE".to_string(),
+        9 => "SUBACK".to_string(),
+        10 => "UNSUBSCRIBE".to_string(),
+        11 => "UNSUBACK".to_string(),
+        12 => "PINGREQ".to_string(),
+        13 => "PINGRESP".to_string(),
+        14 => "DISCONNECT".to_string(),
+        k => f"type {k}",
+    }
+}
+
+// ------------------------------------------------------------ wire format
+
+fn encode_len(n: i64) -> Vec[u8] {
+    let mut out = Vec.new();
+    let mut n = n;
+    loop {
+        let mut b = (n % 128) as u8;
+        n /= 128;
+        if n > 0 {
+            b |= 0x80;
+        }
+        out.push(b);
+        if n == 0 {
+            return out;
+        }
+    }
+}
+
+fn packet(first: u8, body: Slice[u8]) -> Vec[u8] {
+    let mut out = [first];
+    out.extend_from_slice(encode_len(body.len()));
+    out.extend_from_slice(body);
+    out
+}
+
+fn mqtt_str(s: Str) -> Vec[u8] {
+    let mut out = (s.len() as u16).to_be_bytes().to_vec();
+    out.extend_from_slice(s.bytes());
+    out
+}
+
+struct Packet {
+    first: u8,
+    body: Vec[u8],
+}
+
+// The next packet, or `None` at the end of the stream.
+// No reader has `read_exact` yet (B-2026-11-10-44): fill `buf` with
+// `read`, failing on an early end of stream.
+fn read_exact(conn: ref TcpStream, buf: mut Slice[u8]) -> Result[(), NetError] {
+    let mut at = 0;
+    while at < buf.len() {
+        let n = conn.read(mut buf[at..])?;
+        if n == 0 {
+            return Err(NetError.Protocol);
+        }
+        at += n;
+    }
+    Ok(())
+}
+
+fn read_packet(conn: ref TcpStream) -> Result[Option[Packet], NetError] {
+    let mut head = [0u8; 1];
+    if conn.read(mut head)? == 0 {
+        return Ok(None);
+    }
+    let mut n: i64 = 0;
+    let mut shift = 0;
+    for _ in 0..4 {
+        let mut b = [0u8; 1];
+        if conn.read(mut b)? == 0 {
+            return Ok(None);
+        }
+        n |= ((b[0] & 0x7F) as i64) << shift;
+        shift += 7;
+        if b[0] & 0x80 == 0 {
+            break;
+        }
+    }
+    let mut body = Vec.filled(n, 0u8);
+    read_exact(conn, mut body)?;
+    Ok(Some(Packet { first: head[0], body }))
+}
+
+struct Cursor {
+    body: Vec[u8],
+    at: i64,
+}
+
+impl Cursor {
+    fn new(body: Slice[u8]) -> Cursor {
+        Cursor { body: body.to_vec(), at: 0 }
+    }
+
+    fn u8(mut ref self) -> Option[u8] {
+        if self.at >= self.body.len() {
+            return None;
+        }
+        let v = self.body[self.at];
+        self.at += 1;
+        Some(v)
+    }
+
+    fn u16(mut ref self) -> Option[u16] {
+        if self.at + 2 > self.body.len() {
+            return None;
+        }
+        let v = u16.from_be_bytes([self.body[self.at], self.body[self.at + 1]]);
+        self.at += 2;
+        Some(v)
+    }
+
+    fn text(mut ref self) -> Option[String] {
+        let n = self.u16()? as i64;
+        if self.at + n > self.body.len() {
+            return None;
+        }
+        let s = String.from_utf8(self.body[self.at..self.at + n]).unwrap_or(String.new());
+        self.at += n;
+        Some(s)
+    }
+
+    fn take(mut ref self, n: i64) -> Vec[u8] {
+        let end = (self.at + n).min(self.body.len());
+        let r = self.body[self.at..end].to_vec();
+        self.at = end;
+        r
+    }
+
+    fn rest(mut ref self) -> Vec[u8] {
+        let n = self.body.len() - self.at;
+        self.take(n)
+    }
+
+    fn done(self) -> bool {
+        self.at >= self.body.len()
+    }
+}
+
+// ------------------------------------------------------------ topics
+
+fn valid_filter(f: Str) -> bool {
+    if f.is_empty() {
+        return false;
+    }
+    let levels: Vec[Str] = f.split("/").collect();
+    for (i, lv) in levels.iter().enumerate() {
+        if lv.contains("#") and (*lv != "#" or i != levels.len() - 1) {
+            return false;
+        }
+        if lv.contains("+") and *lv != "+" {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_topic(t: Str) -> bool {
+    not t.is_empty() and not t.contains("+") and not t.contains("#")
+}
+
+fn matches(f: Str, t: Str) -> bool {
+    let fl: Vec[Str] = f.split("/").collect();
+    let tl: Vec[Str] = t.split("/").collect();
+    for (i, lv) in fl.iter().enumerate() {
+        if *lv == "#" {
+            return true;
+        }
+        if i >= tl.len() {
+            return false;
+        }
+        if *lv != "+" and *lv != tl[i] {
+            return false;
+        }
+    }
+    fl.len() == tl.len()
+}
+
+// ------------------------------------------------------------ the broker
+
+struct Will {
+    topic: String,
+    payload: Vec[u8],
+    qos: u8,
+    retain: bool,
+}
+
+struct Session {
+    out: TcpStream,
+    client_id: Option[String],
+    subs: Vec[(String, u8)],
+    next_id: u16,
+    will: Option[Will],
+    packets: i64,
+}
+
+struct Retained {
+    payload: Vec[u8],
+    qos: u8,
+}
+
+struct State {
+    sessions: SortedMap[i64, Session],
+    retained: SortedMap[String, Retained],
+    counts: SortedMap[String, i64],
+    log: SortedMap[i64, String],
+}
+
+sync struct Broker {
+    state: Mutex[State],
+}
+
+fn send(s: ref Session, data: Slice[u8]) {
+    let _ = s.out.write_all(data);
+}
+
+fn publish_packet(topic: Str, payload: Slice[u8], qos: u8, retain: bool, pid: u16) -> Vec[u8] {
+    let first = 0x30 | (qos << 1) | if retain { 1 } else { 0 };
+    let mut body = mqtt_str(topic);
+    if qos > 0 {
+        body.extend_from_slice(pid.to_be_bytes());
+    }
+    body.extend_from_slice(payload);
+    packet(first, body)
+}
+
+fn deliver(s: mut ref Session, topic: Str, payload: Slice[u8], qos: u8, retain: bool) {
+    let mut pid = 0;
+    if qos > 0 {
+        pid = s.next_id;
+        s.next_id += 1;
+    }
+    send(s, publish_packet(topic, payload, qos, retain, pid));
+}
+
+// Hands a message to every subscriber, in connection order, once each at
+// the highest QoS among its matching filters; a retained one is kept.
+fn route(st: mut ref State, topic: Str, payload: Slice[u8], qos: u8, retain: bool) {
+    if retain {
+        if payload.is_empty() {
+            st.retained.remove(topic);
+        } else {
+            st.retained.insert(topic.to_string(), Retained { payload: payload.to_vec(), qos });
+        }
+    }
+    for (_, s) in st.sessions.iter_mut() {
+        let mut best: i64 = -1;
+        for (f, q) in s.subs.iter() {
+            if matches(f, topic) {
+                best = best.max(q as i64);
+            }
+        }
+        if best >= 0 {
+            deliver(mut s, topic, payload, qos.min(best as u8), false);
+        }
+    }
+}
+
+// How the connection ends, or `None` to keep reading.
+fn handle(st: mut ref State, cid: i64, p: ref Packet) -> Option[String] {
+    let kind = p.first >> 4;
+    let name = packet_name(kind);
+    *st.counts.entry(name.clone()).or_insert(0) += 1;
+    let mut c = Cursor.new(p.body);
+    let s = st.sessions.get_mut(cid).unwrap();
+    s.packets += 1;
+    if s.client_id.is_none() and kind != 1 {
+        return Some("protocol error: no CONNECT".to_string());
+    }
+    match kind {
+        1 => {
+            if s.client_id.is_some() {
+                return Some("protocol error: second CONNECT".to_string());
+            }
+            let proto = c.text();
+            let level = c.u8();
+            let flags = c.u8().unwrap_or(0);
+            let _keep = c.u16();
+            if proto != Some("MQTT".to_string()) or level != Some(4) {
+                send(s, packet(0x20, [0, 1]));
+                return Some("refused: protocol level".to_string());
+            }
+            let mut client = c.text().unwrap_or_default();
+            let mut will = None;
+            if flags & 0x04 != 0 {
+                let topic = c.text().unwrap_or_default();
+                let n = c.u16().unwrap_or(0) as i64;
+                let payload = c.take(n);
+                will = Some(Will { topic, payload, qos: (flags >> 3) & 3, retain: flags & 0x20 != 0 });
+            }
+            let clean = flags & 0x02 != 0;
+            if client.is_empty() and not clean {
+                send(s, packet(0x20, [0, 2]));
+                return Some("refused: identifier".to_string());
+            }
+            if client.is_empty() {
+                client = f"auto-{cid}";
+            }
+            s.client_id = Some(client);
+            s.will = will;
+            send(s, packet(0x20, [0, 0]));
+            None
+        }
+        3 => {
+            let qos = (p.first >> 1) & 3;
+            let retain = p.first & 1 == 1;
+            let topic = c.text().unwrap_or_default();
+            let pid = if qos > 0 { c.u16().unwrap_or(0) } else { 0 };
+            let payload = c.rest();
+            if not valid_topic(topic) {
+                return Some(f"protocol error: topic {topic}");
+            }
+            if qos == 1 {
+                route(mut st, topic, payload, 1, retain);
+                let s = st.sessions.get(cid).unwrap();
+                send(s, packet(0x40, pid.to_be_bytes()));
+            } else {
+                route(mut st, topic, payload, 0, retain);
+            }
+            None
+        }
+        4 => None,
+        8 => {
+            let pid = c.u16().unwrap_or(0);
+            let mut granted = Vec.new();
+            let mut added: Vec[(String, u8)] = Vec.new();
+            while not c.done() {
+                let f = c.text();
+                let q = c.u8();
+                match (f, q) {
+                    (Some(f), Some(q)) if valid_filter(f) => {
+                        let q = q.min(1);
+                        s.subs.retain(|x| x.0 != f);
+                        s.subs.push((f.clone(), q));
+                        granted.push(q);
+                        added.push((f, q));
+                    }
+                    _ => granted.push(0x80),
+                }
+            }
+            let mut body = pid.to_be_bytes().to_vec();
+            body.extend_from_slice(granted);
+            send(s, packet(0x90, body));
+            for (topic, r) in st.retained.iter() {
+                let mut best: i64 = -1;
+                for (f, q) in added.iter() {
+                    if matches(f, topic) {
+                        best = best.max(q as i64);
+                    }
+                }
+                if best >= 0 {
+                    let s = st.sessions.get_mut(cid).unwrap();
+                    deliver(mut s, topic, r.payload, r.qos.min(best as u8), true);
+                }
+            }
+            None
+        }
+        10 => {
+            let pid = c.u16().unwrap_or(0);
+            while not c.done() {
+                if let Some(f) = c.text() {
+                    s.subs.retain(|x| x.0 != f);
+                }
+            }
+            send(s, packet(0xB0, pid.to_be_bytes()));
+            None
+        }
+        12 => {
+            send(s, packet(0xD0, []));
+            None
+        }
+        14 => {
+            s.will = None;
+            Some("disconnect".to_string())
+        }
+        _ => Some(f"protocol error: {name}"),
+    }
+}
+
+fn serve(broker: ref Broker, cid: i64, conn: TcpStream) {
+    let how = loop {
+        let p = match read_packet(conn) {
+            Ok(Some(p)) => p,
+            _ => break "dropped".to_string(),
+        };
+        let mut g = broker.state.lock();
+        if let Some(how) = handle(mut g.value, cid, p) {
+            break how;
+        }
+    };
+    let mut g = broker.state.lock();
+    let st = mut ref g.value;
+    let s = st.sessions.remove(cid).unwrap();
+    let client = s.client_id.clone().unwrap_or("-".to_string());
+    st.log.insert(cid, f"{client}: {how} after {s.packets} packets");
+    if how != "disconnect" {
+        if let Some(w) = s.will {
+            route(mut st, w.topic, w.payload, w.qos.min(1), w.retain);
+        }
+    }
+    let _ = conn.shutdown_write();
+}
+
+fn run_server(broker: ref Broker, listener: ref TcpListener) {
+    let tasks = TaskGroup.new();
+    for cid in 1..=CONNECTIONS {
+        let conn = listener.accept().unwrap();
+        let out = conn.try_clone().unwrap();
+        {
+            let mut g = broker.state.lock();
+            g.value.sessions.insert(cid, Session {
+                out,
+                client_id: None,
+                subs: Vec.new(),
+                next_id: 1,
+                will: None,
+                packets: 0,
+            });
+        }
+        tasks.spawn(|| serve(broker, cid, conn));
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+struct Client {
+    name: String,
+    sock: TcpStream,
+}
+
+impl Client {
+    fn new(name: Str) -> Client {
+        let sock = TcpStream.connect(ADDR).unwrap();
+        let _ = sock.set_read_timeout(Some(2000));
+        Client { name: name.to_string(), sock }
+    }
+
+    fn send(self, data: Slice[u8]) {
+        let _ = self.sock.write_all(data);
+    }
+
+    fn connect(self, client_id: Str, clean: bool, level: u8, will: Option[Will]) {
+        let mut flags: u8 = if clean { 0x02 } else { 0 };
+        let mut tail = Vec.new();
+        if let Some(w) = will {
+            flags |= 0x04 | (w.qos << 3) | if w.retain { 0x20 } else { 0 };
+            tail.extend_from_slice(mqtt_str(w.topic));
+            tail.extend_from_slice((w.payload.len() as u16).to_be_bytes());
+            tail.extend_from_slice(w.payload);
+        }
+        let mut body = mqtt_str("MQTT");
+        body.push(level);
+        body.push(flags);
+        body.extend_from_slice(60u16.to_be_bytes());
+        body.extend_from_slice(mqtt_str(client_id));
+        body.extend_from_slice(tail);
+        self.send(packet(0x10, body));
+    }
+
+    fn publish(self, topic: Str, payload: Slice[u8], qos: u8, retain: bool, pid: u16) {
+        self.send(publish_packet(topic, payload, qos, retain, pid));
+    }
+
+    fn subscribe(self, pid: u16, filters: Slice[(Str, u8)]) {
+        let mut body = pid.to_be_bytes().to_vec();
+        for (f, q) in filters {
+            body.extend_from_slice(mqtt_str(f));
+            body.push(q);
+        }
+        self.send(packet(0x82, body));
+    }
+
+    fn unsubscribe(self, pid: u16, filters: Slice[Str]) {
+        let mut body = pid.to_be_bytes().to_vec();
+        for f in filters {
+            body.extend_from_slice(mqtt_str(f));
+        }
+        self.send(packet(0xA2, body));
+    }
+
+    fn puback(self, pid: u16) {
+        self.send(packet(0x40, pid.to_be_bytes()));
+    }
+
+    fn expect(self, n: i64) {
+        for _ in 0..n {
+            match read_packet(self.sock) {
+                Ok(Some(p)) => println(f"{self.name} <- {show(p)}"),
+                Ok(None) => {
+                    println(f"{self.name} <- (closed)");
+                    return;
+                }
+                Err(e) => {
+                    println(f"{self.name} <- error {e}");
+                    return;
+                }
+            }
+        }
+    }
+
+    fn expect_close(self) {
+        match read_packet(self.sock) {
+            Ok(None) => println(f"{self.name} <- (closed)"),
+            Ok(Some(p)) => println(f"{self.name} <- unexpected {show(p)}"),
+            Err(e) => println(f"{self.name} <- error {e}"),
+        }
+    }
+}
+
+fn hex(bytes: Slice[u8]) -> String {
+    Vec[String].from_iter(bytes.iter().map(|b| f"{b:02x}")).join(" ")
+}
+
+fn show(p: ref Packet) -> String {
+    let kind = p.first >> 4;
+    let name = packet_name(kind);
+    let mut c = Cursor.new(p.body);
+    match kind {
+        2 => f"{name} sp={c.u8().unwrap_or(0)} rc={c.u8().unwrap_or(0)}",
+        3 => {
+            let qos = (p.first >> 1) & 3;
+            let retain = p.first & 1;
+            let topic = c.text().unwrap_or_default();
+            let pid = if qos > 0 { f" id={c.u16().unwrap_or(0)}" } else { String.new() };
+            let payload = c.rest();
+            let text = if payload.len() > 40 {
+                f"<{payload.len()} bytes>"
+            } else {
+                f"'{String.from_utf8(payload).unwrap_or(String.new())}'"
+            };
+            f"{name} {topic} q{qos} r{retain}{pid} {text}"
+        }
+        4 | 11 => f"{name} id={c.u16().unwrap_or(0)}",
+        9 => {
+            let pid = c.u16().unwrap_or(0);
+            f"{name} id={pid} [{hex(c.rest())}]"
+        }
+        _ => name,
+    }
+}
+
+fn self_test() {
+    println("== lengths");
+    for n in [0, 127, 128, 16383, 16384, 2097151, 268435455] {
+        println(f"{n} -> {hex(encode_len(n))}");
+    }
+    println("== filters");
+    for f in ["a/b", "a/+/c", "#", "a/#", "a/#/b", "a+", "+", "", "/x"] {
+        println(f"\"{f}\" {if valid_filter(f) { "ok" } else { "bad" }}");
+    }
+    println("== matches");
+    let pairs = [
+        ("a/+/c", "a/b/c"),
+        ("a/+/c", "a/b/d"),
+        ("a/#", "a"),
+        ("a/#", "a/b/c"),
+        ("+/+", "a/b"),
+        ("+", "a/b"),
+        ("#", "x"),
+        ("a/b", "a/b"),
+        ("+/b", "/b"),
+    ];
+    for (f, t) in pairs {
+        println(f"{f} {t} {if matches(f, t) { "yes" } else { "no" }}");
+    }
+}
+
+fn main() {
+    self_test();
+    let listener = TcpListener.bind(ADDR).unwrap();
+    let broker = Broker {
+        state: Mutex.new(State {
+            sessions: SortedMap.new(),
+            retained: SortedMap.new(),
+            counts: SortedMap.new(),
+            log: SortedMap.new(),
+        }),
+    };
+    let group = TaskGroup.new();
+    let server = group.spawn(|| run_server(broker, listener));
+
+    println("== live");
+    let old = Client.new("old");
+    old.connect("old", true, 3, None);
+    old.expect(1);
+    old.expect_close();
+    drop(old);
+
+    let anon = Client.new("anon");
+    anon.connect("", false, 4, None);
+    anon.expect(1);
+    anon.expect_close();
+    drop(anon);
+
+    let sensor = Client.new("sensor");
+    sensor.connect("sensor", true, 4, None);
+    sensor.expect(1);
+    sensor.publish("home/kitchen/temp", b"21.5", 0, true, 0);
+    sensor.publish("home/hall/light", b"on", 1, true, 7);
+    sensor.expect(1);
+
+    let dash = Client.new("dash");
+    dash.connect("dash", true, 4, None);
+    dash.expect(1);
+    dash.subscribe(1, [("home/+/temp", 1), ("home/#", 0), ("bad/#/x", 0)]);
+    dash.expect(3);
+
+    let logger = Client.new("logger");
+    logger.connect("", true, 4, None);
+    logger.expect(1);
+    logger.subscribe(1, [("#", 1)]);
+    logger.expect(3);
+    logger.puback(1);
+
+    sensor.publish("home/kitchen/temp", b"22.0", 1, false, 8);
+    sensor.expect(1);
+    dash.expect(1);
+    dash.puback(1);
+    logger.expect(1);
+    logger.puback(2);
+
+    sensor.publish("home/log", "x".repeat(200).bytes(), 0, false, 0);
+    dash.expect(1);
+    logger.expect(1);
+
+    dash.unsubscribe(2, ["home/+/temp"]);
+    dash.expect(1);
+    sensor.publish("home/kitchen/temp", b"22.5", 0, false, 0);
+    dash.expect(1);
+    logger.expect(1);
+    dash.send(packet(0xC0, []));
+    dash.expect(1);
+
+    let probe = Client.new("probe");
+    let will = Will { topic: "status/probe".to_string(), payload: b"lost".to_vec(), qos: 1, retain: true };
+    probe.connect("probe", true, 4, Some(will));
+    probe.expect(1);
+    drop(probe);
+    logger.expect(1);
+    logger.puback(3);
+
+    sensor.publish("home/+/temp", b"?", 0, false, 0);
+    sensor.expect_close();
+    drop(sensor);
+
+    dash.send(packet(0xE0, []));
+    dash.expect_close();
+    drop(dash);
+    logger.send(packet(0xE0, []));
+    logger.expect_close();
+    drop(logger);
+
+    server.join();
+    println("== broker");
+    let g = broker.state.lock();
+    for (cid, line) in g.value.log.iter() {
+        println(f"conn {cid} {line}");
+    }
+    for (name, n) in g.value.counts.iter() {
+        println(f"{name} {n}");
+    }
+    for (topic, r) in g.value.retained.iter() {
+        println(f"retained {topic} q{r.qos} '{String.from_utf8(r.payload).unwrap_or(String.new())}'");
+    }
+}
