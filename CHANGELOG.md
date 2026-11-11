@@ -254,6 +254,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A program that calls the HTTP client (`Client`, `http.get`, `http.post`)
+  from more than one task no longer races on the client's event loop. One
+  runtime was shared by every calling thread, and ThreadSanitizer reported
+  races in its socket bookkeeping; each thread now has its own, and each
+  request closes its connection before it returns (B-2026-11-11-1).
 - A `Str` view of a parameter passed through a closure combinator and
   returned (`s.split_once("=").map(|p| p.0).unwrap_or(s)`,
   `.and_then(|t| t.strip_suffix(q))`) is accepted: the borrow check

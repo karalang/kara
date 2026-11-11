@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 180 |
 | perf | 152 |
 | missing-feature | 135 |
-| soundness | 60 |
+| soundness | 61 |
 | miscompile | 53 |
 | run-vs-build | 31 |
 | other | 27 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 370 |
-| mir-llvm | 196 |
+| mir-llvm | 197 |
 | mir | 168 |
 | cli | 94 |
 | ownership | 73 |
@@ -91,7 +91,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -1041,6 +1041,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-51 | typecheck | low | `let top = frames.last_mut().unwrap();` followed by `top.seen_true = true;` gets advice alone: the `last_mut` rewrite (B-2026-11-08-46) covers only `… | 79dc9537fd |
 | B-2026-11-10-42 | parser | low | `address.split('.').collect::<Vec<&str>>().join("[.]")` gets advice alone (bind a typed `let` first), though `Vec[Str].from_iter(address.split(".")).… | 33ef2a7ad2 |
 | B-2026-11-10-43 | mir | low | `String.from_iter(s.chars().rev())` passes the type checker and stops in the MIR builder: "a call with no resolved callee is not lowered yet" | 33ef2a7ad2 |
+| B-2026-11-11-1 | mir-llvm | medium | The sync HTTP client shared one current-thread tokio runtime across threads: a program calling it from more than one thread raced on tokio's IO drive… | b92145453b |
 
 </details>
 
