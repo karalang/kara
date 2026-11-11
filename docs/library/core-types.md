@@ -92,13 +92,7 @@ Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).
 
 ### `Reverse`
 
-`std.cmp.Reverse[T]` reverses the order of one key inside a larger one, where a comparator cannot reach: a heap's item, or a `sort_by_key` / `max_by_key` key.
-
-```kara
-import std.cmp.Reverse;
-
-struct Reverse[T] { pub value: T }
-```
+`std.cmp.Reverse[T]` reverses the order of one key inside a larger one, where a comparator cannot reach: a heap's item, or a `sort_by_key` / `max_by_key` key. It is declared `struct Reverse[T] { pub value: T }` and imported with `import std.cmp.Reverse;`.
 
 `Reverse[T]` implements `PartialEq`, `Eq`, `PartialOrd` and `Ord` when `T` does, by `T`'s order reversed, and `Hash`, `Clone`, `Copy`, `Debug` and `Display` when `T` does. It is built and matched as a struct: `pq.push((Reverse { value: score }, name))`, `let (Reverse { value: s }, n) = pq.pop().unwrap();`, `v.sort_by_key(|p| (Reverse { value: p.score }, p.name.clone()))`. There is no other constructor. Kāra has no tuple structs, so Rust's `Reverse(x)` is written `Reverse { value: x }` and its `r.0` is `r.value`. `karac fix` makes those three rewrites, and `Reverse<T>` to `Reverse[T]`, keeping Rust's `use std::cmp::Reverse` as the import (review-thread ruling 2026-11-11, B-2026-11-10-41).
 
