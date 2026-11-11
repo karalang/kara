@@ -222,6 +222,31 @@ pub fn tokenize(source: &str) -> Vec<SpannedToken> {
     tokens
 }
 
+thread_local! {
+    static SHARED_PARSE: std::cell::RefCell<Option<(String, std::rc::Rc<ParseResult>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`parse`] of `source`, shared with every other caller on this thread that
+/// asks for the same text. The checks that only read the program's own AST
+/// (the import, lint and target scans) take it from here rather than each
+/// parsing the program again: five parses of the program were 15% of a
+/// 4.9k-line check (B-2026-11-09-28). One entry, keyed by the whole text, so
+/// an editor that checks buffer after buffer keeps only the latest.
+pub fn parse_shared(source: &str) -> std::rc::Rc<ParseResult> {
+    if let Some(hit) = SHARED_PARSE.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(text, _)| text == source)
+            .map(|(_, p)| p.clone())
+    }) {
+        return hit;
+    }
+    let parsed = std::rc::Rc::new(parse(source));
+    SHARED_PARSE.with(|c| *c.borrow_mut() = Some((source.to_string(), parsed.clone())));
+    parsed
+}
+
 /// Parse source code into an AST with error reporting.
 pub fn parse(source: &str) -> ParseResult {
     let tokens = tokenize(source);

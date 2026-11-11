@@ -3437,7 +3437,7 @@ pub(super) fn lint_entries_for_compile_path(
         .program
         .library_start
         .unwrap_or(source.len());
-    let operators = crate::parse(source.get(..user_end).unwrap_or(source));
+    let operators = crate::parse_shared(source.get(..user_end).unwrap_or(source));
     for d in crate::logical_lint::check_ambiguous_not_comparison(
         &operators.program,
         &pipeline.lint_overrides,

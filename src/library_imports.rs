@@ -52,7 +52,7 @@ pub fn is_import_required(name: &str) -> bool {
 /// nor a bare use of such a variant's name (a pattern `Match(n)`), and
 /// neither is a field or method of that name.
 pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
-    let parsed = crate::parse(src);
+    let parsed = crate::parse_shared(src);
     let mut declared: HashSet<String> = HashSet::new();
     let mut imported: HashSet<(String, String)> = HashSet::new();
     // A variant named like an item (`enum Format { Json }`) is not a use.

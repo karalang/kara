@@ -1845,7 +1845,7 @@ fn package_gated_check_targets(dir: &std::path::Path) -> Vec<&'static str> {
 }
 
 pub(super) fn gated_check_targets(source: &str) -> Vec<&'static str> {
-    let parsed = crate::parse(source);
+    let parsed = crate::parse_shared(source);
     if !parsed.errors.is_empty() {
         return Vec::new();
     }

@@ -27817,13 +27817,14 @@ const NET_WORDS: &[&str] = &[
 pub fn uses_v2_library_module(src: &str) -> bool {
     let ours = declared_names(src);
     let toks = token_texts(src);
+    let tok_set: FxHashSet<&str> = toks.iter().map(String::as_str).collect();
     BAKED_SOURCES
         .iter()
         .filter(|(text, _, _)| {
             [PROCESS_SOURCE, NET_SOURCE, REGEX_SOURCE, JSON_SOURCE].contains(text)
         })
         .any(|(text, words, owners)| {
-            names_baked(&toks, &ours, words) && !defines_a_baked_type(&ours, text, owners)
+            names_baked(&toks, &tok_set, &ours, words) && !defines_a_baked_type(&ours, text, owners)
         })
 }
 
@@ -27935,11 +27936,20 @@ fn declared_names(text: &str) -> Vec<String> {
 /// of `Parser` (B-2026-10-21-57). A word of several tokens (`Env.`,
 /// `Serialize for`) matches them in a row, and the holes of an `f"..."`
 /// string count as program text.
-fn names_baked(toks: &[String], ours: &[String], words: &[&str]) -> bool {
+fn names_baked(
+    toks: &[String],
+    tok_set: &FxHashSet<&str>,
+    ours: &[String],
+    words: &[&str],
+) -> bool {
     words.iter().any(|w| {
         let want = token_texts(w);
+        // Each part must be a token of the program before a run of them is
+        // looked for: a scan of every window per word was 52M instructions
+        // on a 4.9k-line program (B-2026-11-09-28).
         !want.is_empty()
-            && toks.windows(want.len()).any(|run| run == want.as_slice())
+            && want.iter().all(|p| tok_set.contains(p.as_str()))
+            && (want.len() == 1 || toks.windows(want.len()).any(|run| run == want.as_slice()))
             && !ours.iter().any(|o| o == w)
     })
 }
@@ -28086,13 +28096,14 @@ pub fn library_source(src: &str) -> (String, usize) {
     let user_len = src.len();
     let ours = declared_names(src);
     let toks = token_texts(src);
+    let tok_set: FxHashSet<&str> = toks.iter().map(String::as_str).collect();
     // Baked modules whose bodies are Kāra, for a program that names them
     // (`#[derive(Message)]`'s `encode` / `decode` call `std.protobuf`), as
     // `PriorityQueue`'s is appended. Most programs do not, and they are long.
     let baked: Vec<&str> = BAKED_SOURCES
         .iter()
         .filter(|(text, words, owners)| {
-            names_baked(&toks, &ours, words) && !defines_a_baked_type(&ours, text, owners)
+            names_baked(&toks, &tok_set, &ours, words) && !defines_a_baked_type(&ours, text, owners)
         })
         .map(|(text, _, _)| *text)
         .collect();
@@ -28120,7 +28131,7 @@ pub fn library_source(src: &str) -> (String, usize) {
              location: __karac_panic_location() }});\n}}\n"
         ));
     }
-    let lib = rename_clashing_library_items(src, lib);
+    let lib = rename_clashing_library_items(src, &tok_set, lib);
     (format!("{src}{lib}"), user_len)
 }
 
@@ -28490,23 +28501,23 @@ fn library_top_level_names(lib: &str) -> Vec<String> {
 /// variants among them (the resolver defines a variant there too).
 fn program_top_level_names(src: &str) -> FxHashSet<String> {
     let mut names = FxHashSet::default();
-    for item in crate::parse(src).program.items {
+    for item in &crate::parse_shared(src).program.items {
         let name = match item {
-            Item::Function(f) => f.name,
-            Item::StructDef(s) => s.name,
-            Item::UnionDef(u) => u.name,
+            Item::Function(f) => &f.name,
+            Item::StructDef(s) => &s.name,
+            Item::UnionDef(u) => &u.name,
             Item::EnumDef(e) => {
-                names.extend(e.variants.into_iter().map(|v| v.name));
-                e.name
+                names.extend(e.variants.iter().map(|v| v.name.clone()));
+                &e.name
             }
-            Item::TraitDef(t) => t.name,
-            Item::TraitAlias(t) => t.name,
-            Item::MarkerTrait(t) => t.name,
-            Item::TypeAlias(t) => t.name,
-            Item::ConstDecl(c) => c.name,
+            Item::TraitDef(t) => &t.name,
+            Item::TraitAlias(t) => &t.name,
+            Item::MarkerTrait(t) => &t.name,
+            Item::TypeAlias(t) => &t.name,
+            Item::ConstDecl(c) => &c.name,
             _ => continue,
         };
-        names.insert(name);
+        names.insert(name.clone());
     }
     names
 }
@@ -28517,18 +28528,16 @@ fn program_top_level_names(src: &str) -> FxHashSet<String> {
 /// program's scope: the program's `struct Peekable` or variant `Peekable`
 /// means its own, and the library's keeps working under the new name
 /// (B-2026-10-12-21). Most programs clash with nothing and parse no extra.
-fn rename_clashing_library_items(src: &str, lib: String) -> String {
+fn rename_clashing_library_items(src: &str, tok_set: &FxHashSet<&str>, lib: String) -> String {
     let declared = library_top_level_names(&lib);
-    // Only a word the program has at all can be a name it declares.
+    // Only a token the program has at all can be a name it declares
+    // (`tok_set`: the program's tokens outside literals and comments, a raw
+    // identifier as `r#name`). A search of the text per library name was 33M
+    // instructions on a 4.9k-line program (B-2026-11-09-28).
     let candidates: Vec<&String> = declared
         .iter()
         .filter(|n| !LIBRARY_NAMES_THE_COMPILER_USES.contains(&n.as_str()))
-        .filter(|n| {
-            src.match_indices(n.as_str()).any(|(i, _)| {
-                let word = |c: char| c.is_alphanumeric() || c == '_';
-                !src[..i].ends_with(word) && !src[i + n.len()..].starts_with(word)
-            })
-        })
+        .filter(|n| tok_set.contains(n.as_str()) || tok_set.contains(format!("r#{n}").as_str()))
         .collect();
     if candidates.is_empty() {
         return lib;
