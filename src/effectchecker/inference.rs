@@ -1419,7 +1419,16 @@ impl<'a> super::EffectChecker<'a> {
                 // one store's method was an edge to every `remove` in the
                 // program, which also made unrelated impls a "mutual
                 // recursion group".
+                // An ambient module's method (`fs.write(...)`) that the
+                // typechecker left unresolved is routed to its own key by the
+                // alias map below, so neither name-keyed fallback applies to
+                // it: matching `write` by name charged it `TcpStream.write`'s
+                // network effects whenever the program used a socket.
+                let ambient_routed = precise.is_none()
+                    && matches!(&object.kind, ExprKind::Identifier(n)
+                        if matches!(n.as_str(), "env" | "clock" | "rand" | "stdin" | "stdout" | "stderr" | "fs"));
                 let deferred = through_dyn
+                    || ambient_routed
                     || method_sym.is_some_and(|m| self.defer_bound_method_call(object, m, bounds));
                 if let Some(m) = method_sym {
                     for key in self.bound_ceiling_charges(object, m, bounds) {
@@ -1532,8 +1541,11 @@ impl<'a> super::EffectChecker<'a> {
                                 .is_some_and(|(o, _)| self.trait_names.contains(o))
                     })
                 };
+                //
+                // Skipped as well for an ambient module's method (`fs.write`),
+                // which the alias map above routed to its own key.
                 if let Some(quals) = method_sym
-                    .filter(|_| !resolved_to_body && !through_dyn)
+                    .filter(|_| !resolved_to_body && !through_dyn && !ambient_routed)
                     .and_then(|m| self.stdlib_method_seeds.get(&m))
                     .filter(|q| !resolved_elsewhere(q))
                 {
