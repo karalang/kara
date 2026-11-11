@@ -218,7 +218,8 @@ fn format_arg_fits_hole(arg: &str) -> bool {
     // starts a word, so `"f"`, a literal ending in `f`, is no f-string
     // (B-2026-11-10-50).
     let mut before = ' ';
-    for c in arg.chars() {
+    let chars: Vec<char> = arg.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
         match quote {
             Some(q) => match c {
                 '{' | '}' | ':' | '\\' => return false,
@@ -230,6 +231,11 @@ fn format_arg_fits_hole(arg: &str) -> bool {
                     return false;
                 }
                 '"' | '\'' => quote = Some(c),
+                // A Rust path's `::` (`String::from_utf8_lossy(&p)`), which
+                // the hole writes as Kāra's `.` (B-2026-11-11-21); a single
+                // `:` would start a format spec, and a turbofish `::<` has
+                // no hole form.
+                ':' if is_path_colons(&chars, i) => {}
                 ':' | '\\' => return false,
                 '/' if prev == '/' => return false,
                 '*' if prev == '/' => return false,
@@ -245,6 +251,45 @@ fn format_arg_fits_hole(arg: &str) -> bool {
         prev = c;
     }
     depth == 0 && quote.is_none()
+}
+
+/// Whether the `:` at `at` is half of a path's `::`: a `::` between an
+/// identifier and the start of another.
+fn is_path_colons(chars: &[char], at: usize) -> bool {
+    let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+    let start = |c: Option<&char>| c.is_some_and(|c| c.is_alphabetic() || *c == '_');
+    if chars.get(at + 1) == Some(&':') {
+        at > 0 && word(chars.get(at - 1)) && start(chars.get(at + 2))
+    } else if at > 0 && chars[at - 1] == ':' {
+        at > 1 && word(chars.get(at - 2)) && start(chars.get(at + 1))
+    } else {
+        false
+    }
+}
+
+/// `arg` with each path `::` outside a quote written as Kāra's `.`.
+fn path_colons_as_dots(arg: &str) -> String {
+    let chars: Vec<char> = arg.chars().collect();
+    let mut out = String::with_capacity(arg.len());
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == ':' && is_path_colons(&chars, i) => {
+                out.push('.');
+                i += 2;
+                continue;
+            }
+            None => {}
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 // ── Parser ───────────────────────────────────────────────────────
@@ -2116,7 +2161,7 @@ impl Parser {
         let mut args = args.into_iter().map(|(f, l)| {
             let start = f.offset.checked_sub(*base)?;
             let arg = source.get(start..l.offset - base + l.length)?;
-            format_arg_fits_hole(arg).then_some(arg)
+            format_arg_fits_hole(arg).then(|| path_colons_as_dots(arg))
         });
         let mut out = String::from("f\"");
         let mut chars = body.chars().peekable();
