@@ -1708,8 +1708,14 @@ impl<'a> super::TypeChecker<'a> {
         if !matches!(slot, Type::Ref(_) | Type::MutRef(_)) && !literal_into_known {
             self.open_literal_expr = Some(expr.id);
         }
+        let saved_collection = self.open_collection_let;
+        if self.open_closure_values.contains(&expr.id) {
+            self.open_literal_expr = Some(expr.id);
+            self.open_collection_let = Some(expr.id);
+        }
         let mut ty = self.check_expr_inner(expr, expected);
         self.open_literal_expr = saved_open;
+        self.open_collection_let = saved_collection;
         self.collect_fixes_literal_items(expr, expected);
         if deferred {
             self.variant_lint_deferred.remove(&expr.id);
@@ -4237,7 +4243,24 @@ impl<'a> super::TypeChecker<'a> {
                 // type, so `Some(x)` reads a scalar `x: ref i64` as its value
                 // as it does against a declared `Option[i64]`.
                 let ret_now = resolve_type_var_top(expected_ret, &self.env.substitutions);
+                // A return type the callee leaves open (`map`'s `OutV`) is
+                // no type for a number the closure gives: an unsuffixed
+                // literal, or a list of them, is open as a `let`'s value is,
+                // for a later use to fix (`(0..n).map(|i| 5).collect()` into
+                // a `Vec[i32]`, kata 1128), and takes its default when the
+                // body ends (B-2026-11-11-86).
+                let opened_values = if matches!(ret_now, Type::TypeParam(_) | Type::TypeVar(_)) {
+                    let mut ids = Vec::new();
+                    Self::closure_value_ids(body, &mut ids);
+                    ids.retain(|id| self.open_closure_values.insert(*id));
+                    ids
+                } else {
+                    Vec::new()
+                };
                 let mut body_ty = self.check_expr(body, &ret_now);
+                for id in opened_values {
+                    self.open_closure_values.remove(&id);
+                }
                 let body_ty_opened = self.open_unsolved_closure_tail(expected_ret, body_ty, body);
                 body_ty = body_ty_opened;
                 // An expression body is the closure's tail: `|p: S| p.t` moves
@@ -7363,6 +7386,140 @@ impl<'a> super::TypeChecker<'a> {
                 &mut self.env.substitutions,
                 &mut self.env.const_substitutions,
             );
+        }
+    }
+
+    /// The expressions whose value a closure body gives: the body itself,
+    /// a block's tail, and each branch of an `if` or arm of a `match` among
+    /// them ([`super::TypeChecker::open_closure_values`]).
+    fn closure_value_ids(e: &Expr, out: &mut Vec<crate::ids::NodeId>) {
+        if e.id.is_dummy() {
+            return;
+        }
+        out.push(e.id);
+        match &e.kind {
+            ExprKind::Block(b) => {
+                if let Some(t) = &b.final_expr {
+                    Self::closure_value_ids(t, out);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch: Some(else_expr),
+                ..
+            } => {
+                if let Some(t) = &then_block.final_expr {
+                    Self::closure_value_ids(t, out);
+                }
+                Self::closure_value_ids(else_expr, out);
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    Self::closure_value_ids(&arm.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Before a body's literals take their defaults: a `collect` whose
+    /// target the body fixed (`let v: Vec[i32] = (0..4).map(|i| 5)
+    /// .collect()`) gives the literal variables in its items the target's
+    /// item type, as [`Self::discharge_deferred_call_bounds`] solves the
+    /// other item variables once the program is checked; by then the
+    /// default has made the `5` an `i64` (B-2026-11-11-86). The bounds
+    /// are the ones the body's calls deferred, from `from` on.
+    pub(super) fn solve_collect_items_before_defaults(&mut self, from: usize) {
+        #[allow(clippy::type_complexity)]
+        let mut work: Vec<(
+            Type,
+            Vec<TypeExpr>,
+            Vec<String>,
+            HashMap<String, SubstValue>,
+        )> = Vec::new();
+        for d in self.deferred_call_bounds.iter().skip(from) {
+            let mut all: HashMap<String, SubstValue> = HashMap::new();
+            for (n, sv) in &d.receiver_subs {
+                all.insert(n.clone(), sv.clone());
+            }
+            for (n, &id) in &d.name_to_id {
+                let t = resolve_type_vars(
+                    &Type::TypeVar(id),
+                    &self.env.substitutions,
+                    &d.id_to_name,
+                    &self.env.const_substitutions,
+                    &d.const_id_to_name,
+                );
+                // The context's answer for a parameter only the result
+                // names, the `C` of `collect`, is recorded at the call.
+                let t = match d
+                    .node
+                    .and_then(|node| self.node_call_subs.get(&node)?.get(n))
+                {
+                    Some(c) if contains_type_param(&t) || !type_is_fully_concrete(&t) => {
+                        self.resolved_now(c)
+                    }
+                    _ => t,
+                };
+                if !contains_type_param(&t) {
+                    all.insert(n.clone(), SubstValue::Type(t));
+                }
+            }
+            let names: Vec<String> = d
+                .name_to_id
+                .keys()
+                .chain(d.receiver_subs.keys())
+                .cloned()
+                .collect();
+            for c in &d.constraints {
+                let WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } = c
+                else {
+                    continue;
+                };
+                let Some(SubstValue::Type(concrete)) = all.get(type_name) else {
+                    continue;
+                };
+                if !type_is_fully_concrete(concrete) {
+                    continue;
+                }
+                for bound in bounds {
+                    if bound.path.last().map(String::as_str) != Some("FromIterator") {
+                        continue;
+                    }
+                    let Some(arg_asts) = &bound.generic_args else {
+                        continue;
+                    };
+                    let args: Vec<TypeExpr> = arg_asts
+                        .iter()
+                        .filter_map(|a| match a {
+                            GenericArg::Type(te) => Some(te.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    work.push((concrete.clone(), args, names.clone(), all.clone()));
+                }
+            }
+        }
+        for (concrete, args, names, all) in work {
+            let want: Vec<Type> = args
+                .iter()
+                .map(|te| {
+                    let t = self.lower_type_expr(te, &names);
+                    substitute_type_params(&t, &all)
+                })
+                .collect();
+            let mut ids = Vec::new();
+            for t in &want {
+                type_var_ids(&self.resolved_now(t), &mut ids);
+            }
+            if ids
+                .iter()
+                .any(|id| super::inference::literal_var_kind(*id).is_some())
+            {
+                self.solve_collected_item_vars(&concrete, &want);
+            }
         }
     }
 
@@ -10940,6 +11097,20 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
+        // A value a closure gives its callee's open return type is open, as
+        // a `let`'s is (`TypeChecker::open_closure_values`).
+        if self.open_closure_values.contains(&expr.id) {
+            let saved = (self.open_literal_expr, self.open_collection_let);
+            self.open_literal_expr = Some(expr.id);
+            self.open_collection_let = Some(expr.id);
+            let ty = self.infer_expr_explained(expr);
+            (self.open_literal_expr, self.open_collection_let) = saved;
+            return ty;
+        }
+        self.infer_expr_explained(expr)
+    }
+
+    fn infer_expr_explained(&mut self, expr: &Expr) -> Type {
         // A Rust `Ok`/`Err` match over a `binary_search` that fails to check
         // gives way to Kāra's shape (`rust_binary_search`, B-2026-11-09-14).
         if matches!(expr.kind, ExprKind::Match { .. } | ExprKind::IfLet { .. }) {

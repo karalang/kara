@@ -3483,6 +3483,11 @@ pub struct TypeChecker<'a> {
     pub(super) held_open_literals: Vec<TypeVarId>,
     /// The tuple literal whose numbers [`Self::infer_element_open`] opens.
     pub(super) open_tuple_literal: Option<crate::ids::NodeId>,
+    /// The values a closure checked against a return type its callee
+    /// leaves open gives (its tail, each branch of a tail `if` or `match`):
+    /// a number among them, or a list of numbers, is open as a `let`'s
+    /// value is (`TypeChecker::open_closure_values`, B-2026-11-11-86).
+    pub(super) open_closure_values: FxHashSet<crate::ids::NodeId>,
     /// The `match` being inferred joins its arms' literals into one open
     /// variable (`TypeChecker::open_literal_join`, B-2026-11-10-49).
     pub(super) open_match_arms: bool,
@@ -4459,6 +4464,7 @@ impl<'a> TypeChecker<'a> {
             open_literal_expr: None,
             held_open_literals: Vec::new(),
             open_tuple_literal: None,
+            open_closure_values: FxHashSet::default(),
             open_match_arms: false,
             compound_assign_target: None,
             wide_int_literals_judged: FxHashSet::default(),

@@ -2875,6 +2875,7 @@ impl<'a> super::TypeChecker<'a> {
         );
         let errors_before_body = self.errors.len();
         let literal_mark = self.body_literal_vars.len();
+        let bounds_mark = self.deferred_call_bounds.len();
         if f.body.final_expr.is_some() {
             if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
                 self.check_core_fresh_ref_return(f);
@@ -2924,6 +2925,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        self.solve_collect_items_before_defaults(bounds_mark);
         self.default_literal_vars(literal_mark);
         if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
             self.check_unsolved_call_results(&f.body, &gp, errors_before_body);

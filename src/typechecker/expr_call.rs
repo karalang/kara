@@ -1492,7 +1492,13 @@ impl<'a> super::TypeChecker<'a> {
                 if let Type::Function { return_type, .. } | Type::OnceFunction { return_type, .. } =
                     &clo_ty
                 {
+                    // A number the closure gives, or one a binding it
+                    // returns left open (`let x = Some(7); .. || x`), takes
+                    // its default here: the call's type is committed now,
+                    // and an open one typed the call `Error`
+                    // (B-2026-11-11-86).
                     let ret = resolve_type_var_top(return_type, &self.env.substitutions);
+                    let ret = self.settle_literals(&ret);
                     // Only commit to the closure's return type when it is
                     // fully concrete. A bare `Ok(v)` tail leaves the Err
                     // side an unbound param (`Result[i64, E]`); committing
