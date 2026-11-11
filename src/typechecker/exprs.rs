@@ -6630,6 +6630,21 @@ impl<'a> super::TypeChecker<'a> {
     /// value, or a block holding only that) ends with, when the sibling
     /// branch's concrete numeric type `peer` can hold it: a float literal
     /// never becomes an integer.
+    /// The number a branch's `ref` to a `Copy` number reads as, on the MIR
+    /// pipeline (core semantics §5.10): `i32` for `ref i32`. A literal in
+    /// a sibling branch takes it, as beside an owned `i32`.
+    pub(super) fn ref_number(&self, t: &Type) -> Option<Type> {
+        match t {
+            Type::Ref(inner) | Type::MutRef(inner)
+                if self.library_methods_from_source
+                    && matches!(**inner, Type::Int(_) | Type::UInt(_) | Type::Float(_)) =>
+            {
+                Some((**inner).clone())
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn literal_taking_branch_type<'e>(e: &'e Expr, peer: &Type) -> Option<&'e Expr> {
         let e = match &e.kind {
             ExprKind::Block(b) if b.stmts.is_empty() => b.final_expr.as_deref()?,
@@ -8676,6 +8691,14 @@ impl<'a> super::TypeChecker<'a> {
                         None
                     }
                 }
+                // A function's own bound on its one argument
+                // (`String.from_iter(v.iter())` over `ref char` items): the
+                // argument takes the `.cloned()` (kata 1117).
+                Some((_, args))
+                    if !names_receiver && args.len() == 1 && views(&found, &required) =>
+                {
+                    args[0]
+                }
                 _ => None,
             }
             .map(|offset| FixIt {
@@ -9564,6 +9587,37 @@ impl<'a> super::TypeChecker<'a> {
         let ExprKind::MethodCall { method, args, .. } = &object.kind else {
             return;
         };
+        // `.scan(0, |depth, c| { .. Some((depth, depth % 2)) })` into a
+        // `Vec[i32]`: the items are computed from the state, whose literal
+        // starting value took the default, so the fix is that literal's
+        // type (kata 1111's Rust arm).
+        if method == "scan" && args.len() == 2 {
+            let start = &args[0].value;
+            let Some(v) = Self::unsuffixed_int_literal_value(start) else {
+                return;
+            };
+            if !matches!(start.kind, ExprKind::Integer(_, None))
+                || Self::int_literal_range(&elem).is_some_and(|(lo, hi)| v < lo || v > hi)
+            {
+                return;
+            }
+            let t = type_display(&elem);
+            self.collect_literal_fixes.insert(
+                SpanKey::from_span(&expr.span),
+                (
+                    FixIt {
+                        span: start.span,
+                        replacement: format!("{v}{t}"),
+                    },
+                    format!(
+                        "the `scan`'s state is an 'i64' because its starting value `{v}` took \
+                         the literal default (design.md §8 Literals), and its items are \
+                         computed from it; write `{v}{t}`"
+                    ),
+                ),
+            );
+            return;
+        }
         if method != "map" || args.len() != 1 {
             return;
         }
@@ -14154,7 +14208,23 @@ impl<'a> super::TypeChecker<'a> {
                     let [then_ty, else_ty] = tys;
                     // B-2026-10-15-52: an unsuffixed literal tail takes the
                     // other branch's numeric type, whichever branch it is in:
-                    // `if c { 0 } else { y }` with `y: u128` is a `u128`.
+                    // `if c { 0 } else { y }` with `y: u128` is a `u128`. A
+                    // `ref` to a number gives the number.
+                    let then_ty = match self.ref_number(&then_ty) {
+                        Some(n) if Self::is_literal_tree(else_expr, &n) => n,
+                        _ => then_ty,
+                    };
+                    let else_ty = match self.ref_number(&else_ty) {
+                        Some(n)
+                            if then_block
+                                .final_expr
+                                .as_deref()
+                                .is_some_and(|t| Self::is_literal_tree(t, &n)) =>
+                        {
+                            n
+                        }
+                        _ => else_ty,
+                    };
                     if then_ty != else_ty {
                         let then_lit = then_block.stmts.is_empty().then_some(()).and_then(|_| {
                             Self::literal_taking_branch_type(
@@ -14279,6 +14349,23 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     if else_ty == Type::Never {
                         return then_ty;
+                    }
+                    // `if let Some(g) = v.last() { g } else { 0 }`: the
+                    // literal takes the number the `ref` reads as (§5.10).
+                    if let Some(n) = self.ref_number(&then_ty) {
+                        if Self::is_literal_tree(else_expr, &n) {
+                            self.promote_literal_tree(else_expr, &n);
+                            return n;
+                        }
+                    }
+                    if let Some(n) = self.ref_number(&else_ty) {
+                        if let Some(t) = then_block.final_expr.as_deref() {
+                            if Self::is_literal_tree(t, &n) {
+                                self.promote_literal_tree(t, &n);
+                                self.record_expr_type(&then_block.span, &n);
+                                return n;
+                            }
+                        }
                     }
                     if let Some(joined) = self.unify_literal_branches(&then_ty, &else_ty) {
                         return joined;

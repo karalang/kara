@@ -788,10 +788,14 @@ impl<'a> super::TypeChecker<'a> {
         // B-2026-10-15-52: an arm that is an unsuffixed literal takes the
         // numeric type of the first arm that is not one, whichever comes
         // first: `match k { 0 => 0, _ => y }` with `y: u128` is a `u128`.
+        // An arm that is a `ref` to a number (`Some(g) => g` over
+        // `v.last()`) joins at the number (core semantics §5.10), so the
+        // literals take that (kata 1111).
         let peer = arms.iter().zip(&arm_types).find_map(|(arm, t)| {
+            let t = self.ref_number(t).unwrap_or_else(|| t.clone());
             (matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
-                && !Self::is_literal_tree(&arm.body, t))
-            .then(|| t.clone())
+                && !Self::is_literal_tree(&arm.body, &t))
+            .then_some(t)
         });
         if let Some(peer) = peer {
             for (arm, t) in arms.iter().zip(arm_types.iter_mut()) {

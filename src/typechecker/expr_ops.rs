@@ -1693,6 +1693,58 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Error;
                 }
             }
+            // Rust's `Duration::from_millis` / `from_secs` are Kāra's
+            // `Duration.ms` / `Duration.secs` (kata 1114). The rest of
+            // Rust's constructors have no Kāra twin.
+            if type_name == "Duration" && self.local_scope.lookup(type_name).is_none() {
+                let kara = match member.as_str() {
+                    "from_millis" => Some("ms"),
+                    "from_secs" => Some("secs"),
+                    _ => None,
+                };
+                let has = |m: &str| {
+                    self.env
+                        .impls
+                        .iter()
+                        .any(|imp| imp.target_type == "Duration" && imp.methods.contains_key(m))
+                };
+                if let Some(k) = kara.filter(|k| has(k)) {
+                    // The path's span runs to the call's `)`, so the fix
+                    // covers `Duration.from_millis` alone and keeps `(n)`.
+                    let path = Span {
+                        length: span.length.min(type_name.len() + 1 + member.len()),
+                        ..*span
+                    };
+                    self.type_error_with_fix_it(
+                        format!(
+                            "no associated function '{member}' on type 'Duration'; Rust's \
+                             `Duration::{member}` is Kāra's `Duration.{k}`"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span: path,
+                            replacement: format!("Duration.{k}"),
+                        },
+                    );
+                    return Type::Error;
+                }
+                if matches!(
+                    member.as_str(),
+                    "from_micros" | "from_nanos" | "from_secs_f64" | "from_secs_f32"
+                ) && has("ms")
+                {
+                    self.type_error(
+                        format!(
+                            "no associated function '{member}' on type 'Duration': Kāra's \
+                             `Duration` is built by `Duration.ms(n)` or `Duration.secs(n)`"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    return Type::Error;
+                }
+            }
             // B-2026-10-14-55: the library declares every method an ambient
             // resource has, so any other name is a typo, as it is through the
             // lowercase module (`clock.bogus()`).

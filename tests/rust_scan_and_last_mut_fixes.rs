@@ -93,20 +93,23 @@ fn a_rust_scan_closure_names_karas_shape_once_and_is_rewritten() {
     assert_eq!(out, "[3, 3, 4, 4, 5] [6, 8, 16, 18, 28]\n");
 }
 
+// The write under a branch was explained with no fix until kata 1111's
+// scan arm; it now copies the state and writes the copy.
 #[test]
-fn a_rust_scan_writing_its_state_under_a_branch_is_explained_without_a_fix() {
+fn a_rust_scan_writing_its_state_under_a_branch_is_rewritten() {
     let src = "fn main() {
     let v: Vec[i64] = [3, 1, 4];
     let a: Vec[i64] = v.iter().scan(0, |m, x| { if x > 2 { *m = x; } Some(*m) }).collect();
     println(f\"{a}\");
 }
 ";
-    let err = check_errors("branch", src);
-    assert_eq!(err.matches("error[").count(), 1, "{err}");
+    let (text, check, out) = fixed("branch", src);
+    assert!(text.contains("let mut m = m;"), "{text}");
     assert!(
-        err.contains("bind each new state with `let m = ..` and return `Some((m, item))`"),
-        "{err}"
+        check.contains("All checks passed") || check.is_empty(),
+        "{check}\n{text}"
     );
+    assert_eq!(out, "[3, 3, 4]\n");
     // A `scan` written Kāra's way is untouched.
     let ok = "fn main() {
     let v: Vec[i64] = [3, 1, 4];

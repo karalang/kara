@@ -10,14 +10,17 @@
 //! When a failed `scan` call's closure has Rust's shape (its state named
 //! by a plain parameter that the body only ever dereferences, and a tail
 //! `Some(item)`), its errors are replaced by one that says what Kāra's
-//! `scan` takes, and, when every write of the state is a statement of the
-//! body's own block, carries the rewrite: each `*m = e` becomes `let m =
-//! e`, each `*m op= e` `let m = m op e`, every other `*m` reads `m`, and
-//! the tail returns `Some((m, item))`. A `return None` stays as it is:
-//! it ends the iteration in either shape (kata 1103).
+//! `scan` takes, with the rewrite. When every write of the state is a
+//! statement of the body's own block, each `*m = e` becomes `let m = e`
+//! and each `*m op= e` `let m = m op e`; when one is deeper (inside an
+//! `if`), the body opens with `let mut m = m;` and writes `m` in place
+//! (kata 1111). Either way every other `*m` reads `m`, and the tail
+//! returns `Some((m, item))`. A `return None` stays as it is: it ends the
+//! iteration in either shape (kata 1103).
 
 use crate::ast::{
-    BinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Pattern, PatternKind, StmtKind, UnaryOp,
+    BinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Pattern, PatternKind, Stmt, StmtKind,
+    UnaryOp,
 };
 use crate::resolver::SpanKey;
 use crate::span_visitor::MutVisitor;
@@ -167,10 +170,11 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         state: name.clone(),
         rewrite: None,
     };
-    // A `return` or a write of the state below the block's own statements
-    // has no mechanical rewrite. `return None` is the exception: it ends
-    // the iteration and carries no state, so it reads the same in Kāra's
-    // shape (kata 1103's guard, `if *left <= 0 { return None; }`).
+    // A `return` has no mechanical rewrite. `return None` is the
+    // exception: it ends the iteration and carries no state, so it reads
+    // the same in Kāra's shape (kata 1103's guard, `if *left <= 0 {
+    // return None; }`). A write of the state below the block's own
+    // statements makes the state a `let mut` copy (kata 1111).
     let mut nested_write = false;
     let top: Vec<Span> = match &body.kind {
         ExprKind::Block(b) => b.stmts.iter().map(|s| s.span).collect(),
@@ -197,7 +201,7 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
             }
         });
     }
-    if returns || nested_write {
+    if returns {
         return Some(found);
     }
     let mut new = closure.clone();
@@ -212,7 +216,29 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
             span: new_body.span,
         },
     };
-    for s in &mut block.stmts {
+    if nested_write {
+        // `let mut depth = depth;`: every `*depth` below then reads and
+        // writes the copy, which the tail hands back.
+        let at = block.stmts.first().map_or(block.span, |s| s.span);
+        block.stmts.insert(
+            0,
+            Stmt {
+                kind: StmtKind::Let {
+                    is_mut: true,
+                    pattern: binding(name, at),
+                    ty: None,
+                    value: Expr {
+                        kind: ExprKind::Identifier(name.clone()),
+                        span: at,
+                        id: crate::ids::NodeId::DUMMY,
+                    },
+                },
+                span: at,
+                id: crate::ids::NodeId::DUMMY,
+            },
+        );
+    }
+    for s in block.stmts.iter_mut().filter(|_| !nested_write) {
         let rewritten = match &s.kind {
             StmtKind::Assign { target, value } if is_deref_of(target, name) => Some(value.clone()),
             StmtKind::CompoundAssign { target, op, value } if is_deref_of(target, name) => {
@@ -337,6 +363,15 @@ impl TypeChecker<'_> {
                         replacement: text.clone(),
                     }],
                 );
+                let copied = format!("let mut {name} = {name};");
+                let how = if text.contains(&copied) {
+                    format!(
+                        "copy the state with `{copied}`, write the copy, and return \
+                         `Some(({name}, item))`"
+                    )
+                } else {
+                    how
+                };
                 let write = if text.contains('\n') {
                     format!("{how}, as `karac fix` writes it")
                 } else {

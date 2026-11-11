@@ -166,6 +166,22 @@ impl<'a> super::TypeChecker<'a> {
                 min, param_count, found, defaults
             );
         }
+        // Rust's `mpsc::channel()` (kata 1114): the prelude's `channel`
+        // returns a `Sender` and `Receiver` and takes its capacity.
+        let prelude_channel = fn_name == Some("channel")
+            && found == 0
+            && param_count == 1
+            && self.env.functions.get("channel").is_some_and(|sig| {
+                matches!(&sig.return_type, Type::Tuple(parts)
+                    if matches!(parts.first(), Some(Type::Named { name, .. }) if name == "Sender"))
+            });
+        if prelude_channel {
+            return "expected 1 argument(s), found 0: `channel` takes its capacity, \
+                    `channel(n)`, n the most messages that may wait unreceived. Kāra's \
+                    channels are bounded (docs/library/concurrency.md), where Rust's \
+                    `mpsc::channel()` is not"
+                .to_string();
+        }
         format!("expected {} argument(s), found {}", param_count, found)
     }
 
@@ -1064,6 +1080,22 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // A call's own bound reads its arguments' ends from here, as a
+        // method call's does: `String.from_iter(v.iter())` takes its
+        // `.cloned()` after `v.iter()` (kata 1117). No receiver.
+        let ends = (
+            None,
+            args.iter()
+                .map(|a| super::expr_ops::appended_cast_end_offset(&a.value))
+                .collect(),
+        );
+        self.method_call_ends.push(ends);
+        let ty = self.infer_call_inner(callee, args, span);
+        self.method_call_ends.pop();
+        ty
+    }
+
+    fn infer_call_inner(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
         // `old(e)` in an `ensures` clause is `e` as it was at entry, of
         // `e`'s type: `old(b) - amount` is an `i64` (B-2026-10-31-30).
         if let (true, ExprKind::Identifier(n), [a]) = (self.in_ensures, &callee.kind, args) {

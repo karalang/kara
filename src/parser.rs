@@ -3162,9 +3162,14 @@ impl Parser {
             matches!(token(i), Some(Token::ColonColon))
                 || (after_use && matches!(token(i), Some(Token::Dot)))
         };
+        // `use std::sync::mpsc::{channel, Receiver, Sender}`: Kāra's
+        // channels are in its prelude too (kata 1114).
+        let mpsc = matches!(ident(at + 3), Some("sync"))
+            && sep(at + 4)
+            && matches!(ident(at + 5), Some("mpsc"));
         if !matches!(ident(at + 1), Some("std" | "core" | "alloc"))
             || !sep(at + 2)
-            || !matches!(ident(at + 3), Some("collections" | "cmp" | "mem"))
+            || !(mpsc || matches!(ident(at + 3), Some("collections" | "cmp" | "mem")))
             || !(sep(at + 4) || matches!(token(at + 4), Some(Token::Semicolon)))
         {
             return false;
@@ -3199,6 +3204,16 @@ impl Parser {
                 _ => return false,
             }
             semi += 1;
+        }
+        // Only the names the prelude has: `mpsc` itself, `SyncSender` or
+        // `sync_channel` stay for the import's own error.
+        if mpsc
+            && (leaves.is_empty()
+                || leaves
+                    .iter()
+                    .any(|n| !matches!(n.as_str(), "channel" | "Sender" | "Receiver")))
+        {
+            return false;
         }
         let first = self.tokens[at].span;
         let end = self.tokens[semi].span;

@@ -1909,6 +1909,61 @@ impl<'a> super::TypeChecker<'a> {
                         );
                         return Type::Error;
                     }
+                    // Rust's `m.lock().unwrap()`: Kāra's `lock` cannot fail
+                    // (no poisoning, docs/library/concurrency.md), so its
+                    // guard has no `unwrap`; drop it (kata 1114).
+                    if type_name == "MutexGuard" && method == "unwrap" && args.is_empty() {
+                        let to = span.offset + span.length;
+                        let from = no_arg_call_start(object, method, to);
+                        if to > from {
+                            self.type_error_with_fix_it(
+                                "no method 'unwrap' on type 'MutexGuard': Kāra's `lock` \
+                                 returns the guard itself, as a lock is never poisoned; \
+                                 drop `.unwrap()`"
+                                    .to_string(),
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                                FixIt {
+                                    span: Span {
+                                        line: object.span.line,
+                                        column: object.span.column,
+                                        offset: from,
+                                        length: to - from,
+                                    },
+                                    replacement: String::new(),
+                                },
+                            );
+                            return Type::Error;
+                        }
+                    }
+                    // A method of the guarded value called on the guard
+                    // (`m.lock().send(x)`): method lookup does not pass
+                    // through the guard, so it is reached as `.value`.
+                    if type_name == "MutexGuard" {
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        let end = object.span.offset + object.span.length;
+                        self.type_error_with_fix_it(
+                            format!(
+                                "no method '{method}' on type 'MutexGuard': a guard's value \
+                                 is its `value` field, so call `.value.{method}(..)` \
+                                 (docs/library/concurrency.md § `Mutex[T]`)"
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                            FixIt {
+                                span: Span {
+                                    line: object.span.line,
+                                    column: object.span.column,
+                                    offset: end,
+                                    length: 0,
+                                },
+                                replacement: ".value".to_string(),
+                            },
+                        );
+                        return Type::Error;
+                    }
                     // `chunks` / `windows` are slice methods, not iterator
                     // adaptors (B-2026-10-22-22): `v.iter().chunks(n)` drops
                     // the `.iter()` hop, any other iterator collects first.

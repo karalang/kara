@@ -12263,11 +12263,47 @@ impl<'a> super::TypeChecker<'a> {
         if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
             return;
         }
-        let ExprKind::Identifier(name) = &target.kind else {
-            return;
-        };
-        let Some(Type::MutRef(inner)) = self.local_scope.lookup(name.as_str()).cloned() else {
-            return;
+        // A `mut ref` field of a local (`g.value = v` on a `MutexGuard`,
+        // kata 1117) is the same: `*g.value = v` writes through it.
+        let (name, inner) = match &target.kind {
+            ExprKind::Identifier(name) => {
+                let Some(Type::MutRef(inner)) = self.local_scope.lookup(name.as_str()).cloned()
+                else {
+                    return;
+                };
+                (name.clone(), inner)
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Identifier(local) = &object.kind else {
+                    return;
+                };
+                let Some(Type::Named { name: ty, .. }) =
+                    self.local_scope.lookup(local.as_str()).map(|t| match t {
+                        Type::Ref(t) | Type::MutRef(t) => (**t).clone(),
+                        t => t.clone(),
+                    })
+                else {
+                    return;
+                };
+                let Some(Type::MutRef(inner)) = self.env.structs.get(&ty).and_then(|info| {
+                    info.fields
+                        .iter()
+                        .find(|(f, _, _)| f == field)
+                        .map(|(_, t, _)| t.clone())
+                }) else {
+                    return;
+                };
+                // `MutexGuard[T]`'s field is a `mut ref T`: name the value's
+                // own type.
+                let inner = match *inner {
+                    Type::TypeParam(_) => {
+                        Box::new(resolve_type_var_top(rhs_ty, &self.env.substitutions))
+                    }
+                    _ => inner,
+                };
+                (format!("{local}.{field}"), inner)
+            }
+            _ => return,
         };
         let rhs = resolve_type_var_top(rhs_ty, &self.env.substitutions);
         if matches!(

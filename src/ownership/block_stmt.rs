@@ -562,7 +562,12 @@ impl<'a> super::OwnershipChecker<'a> {
                         // mutates that binding's value just as surely as a
                         // rebind does — unless the path crosses a `shared`
                         // handle, which writes the pointee, not the binding.
-                        if !self.place_writes_through_shared(target) {
+                        // A `mut ref` field (`g.value = v` on a guard) is
+                        // the typechecker's: `*g.value = v` writes through
+                        // it and needs no `mut` (kata 1117).
+                        if !self.place_writes_through_shared(target)
+                            && !self.expr_is_mut_ref_field(target)
+                        {
                             self.report_write_to_immutable_binding(
                                 &root,
                                 &target.span,
