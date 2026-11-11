@@ -81,6 +81,7 @@ mod items;
 mod lowering;
 mod method_column_analytics;
 mod method_column_elementwise;
+mod method_concat;
 mod method_identifier_receiver;
 mod method_iterator_agg;
 mod method_mapset;

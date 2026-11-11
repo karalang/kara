@@ -88,10 +88,7 @@ fn header(method: u16, class: u16, length: i64, txid: Slice[u8]) -> Vec[u8] {
 
 // A message of `attrs`, ending with a FINGERPRINT when asked.
 fn message(table: Slice[u32], method: u16, class: u16, txid: Slice[u8], attrs: Slice[Vec[u8]], fingerprint: bool) -> Vec[u8] {
-    let mut body: Vec[u8] = Vec.new();
-    for a in attrs {
-        body.extend_from_slice(a);
-    }
+    let mut body: Vec[u8] = attrs.concat();
     if fingerprint {
         let mut signed = header(method, class, body.len() + 8, txid);
         signed.extend_from_slice(body);

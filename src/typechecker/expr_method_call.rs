@@ -2198,6 +2198,15 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(ty) = self.try_dyn_receiver_method(&obj_ty, method, args, span) {
             return ty;
         }
+        // `concat()` over `Vec`s flattens; over `Display` elements it is
+        // deprecated for `join("")` (B-2026-11-11-51). Before the library's
+        // `impl[T: Display] Slice[T]` is consulted, whose bound a `Vec`
+        // element fails.
+        if let Some(t) =
+            self.try_concat_of_sequences(object, method, args, span, args_close_span, &obj_ty)
+        {
+            return t;
+        }
         // A function value has no methods: it is called. It fell through
         // every arm below to an `Error` with no diagnostic, which MIR then
         // reported as "a type that failed to check is not lowered yet"

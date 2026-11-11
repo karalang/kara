@@ -21920,6 +21920,67 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// `xs.concat()` on a `Vec[Vec[T]]` or `Slice[Vec[T]]`, which the
+    /// checker typed as the flattened `Vec[T]` without a callee: the
+    /// library's `vec_concat_vecs` or `slice_concat_vecs` (design.md § Vec,
+    /// B-2026-11-11-51). False for any other receiver.
+    fn concat_of_vecs(&mut self, e: &'a Expr, object: &'a Expr, dest: Place) -> R<bool> {
+        let rt = self.expr_ty(object)?;
+        let (_, base) = self.strip_ty_full(rt);
+        let tcx = self.tys().tcx();
+        let (slice, elem) = match tcx.kind(base) {
+            HK::Slice { elem, .. } => (true, elem),
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => (false, tcx.list(args)[0]),
+            _ => return Ok(false),
+        };
+        let (_, elem) = self.strip_ty_full(elem);
+        let item = match self.tys().tcx().kind(elem) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => self.tys().tcx().list(args)[0],
+            _ => return Ok(false),
+        };
+        let helper = if slice {
+            "slice_concat_vecs"
+        } else {
+            "vec_concat_vecs"
+        };
+        let Some(d) = self.lcx.defs.lookup(0, helper) else {
+            return self
+                .unsupported(e.span, "`concat` of a sequence of `Vec`s")
+                .map(|()| true);
+        };
+        let inst_args = vec![item];
+        let ops = if slice {
+            let f = self.lcx.fns[&d].f;
+            let pt = self.callee_param_ty(&f.params[0], &inst_args)?;
+            let pending = self.arg_pending(object, pt)?;
+            self.finish_args(vec![pending])?
+        } else {
+            let recv = self.recv_place(object, false)?;
+            let mut rest = Vec::new();
+            vec![self.recv_borrow_after(recv, &mut rest)?]
+        };
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(true)
+    }
+
     fn method_call(
         &mut self,
         e: &'a Expr,
@@ -21932,6 +21993,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(());
         }
         if self.dyn_method_call(object, method, args, dest.clone())? {
+            return Ok(());
+        }
+        // `xs.concat()` over `Vec`s (B-2026-11-11-51).
+        if method == "concat"
+            && args.is_empty()
+            && !self.lcx.calls.contains_key(&e.id)
+            && self.concat_of_vecs(e, object, dest.clone())?
+        {
             return Ok(());
         }
         // `slot.upgrade()` on a `weak` slot: the checker typed it as the
@@ -28455,6 +28524,8 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "parse_result_float",
     "vec_contains_str",
     "vec_contains_slice",
+    "vec_concat_vecs",
+    "slice_concat_vecs",
     "deque_contains_str",
     "deque_contains_slice",
     "map_eq",

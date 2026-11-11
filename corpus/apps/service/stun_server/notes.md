@@ -51,12 +51,10 @@ Fixed in kara while writing it:
   const `Array` got its `.iter()` after the call: a method on a const parses
   as a path call, and the receiver and `)` took the whole call's span
   (B-2026-11-11-50).
-
-By hand, around open rows:
-- `attrs.concat()` on a `Slice[Vec[u8]]` is refused with a `T: Display`
-  bound, and on a `Vec[Vec[u8]]` it is the elements' `Display` text, a
-  `String`, where Rust flattens (B-2026-11-11-51); a loop of
-  `extend_from_slice`.
+- `attrs.concat()` on a `Slice[Vec[u8]]` was refused with a `T: Display`
+  bound, and on a `Vec[Vec[u8]]` it was the elements' `Display` text, a
+  `String`, where Rust flattens; kara's `concat()` now flattens a sequence
+  of `Vec`s (B-2026-11-11-51), and the port calls it as the Rust does.
 
 `String::from_utf8_lossy(..)` in `describe` had no such function; kara
 added it (B-2026-11-11-24), and the port calls it as the Rust does.

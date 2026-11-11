@@ -2039,6 +2039,29 @@ fn vec_contains_str(v: ref Vec[String], x: Str) -> bool {
     false
 }
 
+// `concat()` of a sequence of `Vec`s: every element's items, in order, as
+// Rust's flattens (design.md § Vec, B-2026-11-11-51). The checker types
+// the call as `Vec[T]` and lowering calls one of these by name.
+fn vec_concat_vecs[T: Clone](v: ref Vec[Vec[T]]) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    for e in v.iter() {
+        for x in e.iter() {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+fn slice_concat_vecs[T: Clone](v: Slice[Vec[T]]) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    for e in v.iter() {
+        for x in e.iter() {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
 fn vec_contains_slice[T: PartialEq](v: ref Vec[Vec[T]], x: Slice[T]) -> bool {
     for e in v.iter() {
         if e.as_slice() == x {

@@ -59,6 +59,7 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `chunk_by` | `fn chunk_by(self, same: own MutFn(T, T) -> bool) -> Vec[Slice[T]]` | Consecutive runs in which `same` accepts each adjacent pair: `[1, 1, 2, 3, 3].chunk_by(\|a, b\| a == b)` is `[[1, 1], [2], [3, 3]]`. An empty slice gives no runs (review-thread ruling 2026-11-09, B-2026-11-09-37) |
 | `to_vec` | `fn to_vec(self) -> Vec[T] where T: Clone` | Owned copy |
 | `join` | `fn join(self, sep: Str) -> String where T: Display` | Displays each element, separated by `sep` |
+| `concat` | `fn concat(self) -> Vec[U]` for `T = Vec[U]`; `-> String` for `T = String` or `Str` | A sequence of `Vec`s flattens into one `Vec` of every element's items in order, as Rust's does; a sequence of text joins into one `String`. On other elements it joins their `Display` forms, which is deprecated in 0.8.x (`karac fix` writes `join("")`) and an error at the next minor release (design.md § Vec, B-2026-11-11-51) |
 | `[]` | `v[i]` and `v[a..b]` | Index operator through `Index` ([design.md §9](../design.md#9-traits)). `v[i]` is `ref T` and panics if out of bounds; `v[a..b]` is a `Slice[T]` |
 
 **Changing in place.** On a `Slice[T]` these need a `mut Slice[T]`.

@@ -96,6 +96,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `#[allow(deprecated)]` on the enclosing item silences it. The corpus and
   the katas were migrated with `karac fix`, outputs unchanged. The next
   minor release refuses the unmarked form (B-2026-11-09-100).
+- `concat()` on a `Vec` or `Slice` whose elements are neither sequences
+  nor text, which joined their `Display` forms, warns `deprecated`;
+  `karac fix` writes `join("")`, which prints the same. `#[allow(deprecated)]`
+  on the enclosing item silences it. The next minor release refuses it
+  (design.md § Vec; B-2026-11-11-51, tracker B-2026-11-11-81).
 
 ### Added
 
@@ -108,6 +113,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `Duration` adds, subtracts and scales: `a + b`, `a - b`, `d * n`, `d / n`
   and their compound assignments (library/time-random-env.md;
   B-2026-11-11-72).
+- `concat()` on a `Vec[Vec[T]]` or `Slice[Vec[T]]` flattens it, as Rust's
+  does: the `Vec[T]` of every element's items in order, so
+  `[a, b].concat()` builds one buffer from two (design.md § Vec,
+  library/collections.md; B-2026-11-11-51). It was refused, since a `Vec`
+  has no `Display` to join. A sequence of `String` or `Str` still gives one
+  `String`.
 - `String.from_utf8_lossy(bytes)` decodes bytes that may not be UTF-8,
   replacing each invalid sequence with U+FFFD, as Rust's does
   (library/strings.md; B-2026-11-11-24). Bytes read off a socket or a

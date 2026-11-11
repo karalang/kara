@@ -3492,11 +3492,10 @@ impl<'a> super::TypeChecker<'a> {
     ///     without it was previously unmentioned.
     ///
     /// NOTE ON `concat`: design.md's sentence offers "`vec.concat(other)` or
-    /// `vec.extend(other)`", but `Vec.concat()` in this implementation is the
-    /// OTHER operation — zero-argument, `Vec[String]` only, joining a Vec's own
-    /// elements into one String. Naming it here would send a reader with a
-    /// `Vec[i64]` to "Vec.concat() requires String elements". Only `extend` is
-    /// named, and the spec/implementation divergence is filed separately.
+    /// `vec.extend(other)`", but `Vec.concat()` is zero-argument: it
+    /// flattens a sequence of sequences or joins a sequence of text
+    /// (design.md § Vec, B-2026-11-11-51), and takes no second `Vec`. Only
+    /// `extend` is named.
     ///
     /// An operator with no entry in the table above keeps the old operator-
     /// language wording rather than inventing a trait name for it.
