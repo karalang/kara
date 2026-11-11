@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 254 |
+| diagnostics | 255 |
 | false-positive | 183 |
 | perf | 154 |
 | missing-feature | 147 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 170 |
 | cli | 94 |
 | ownership | 73 |
-| parser | 69 |
+| parser | 70 |
 | interp | 51 |
 | runtime | 40 |
 | effect | 29 |
@@ -118,6 +118,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-66 | 2026-11-11 | runtime | medium | A compiled Semaphore.acquire sometimes waits out its whole timeout although another task released a permit: kata 1115's differential, with its semaphore arm on the standard library's Semaphore and acquire(60000), takes 62 to 63 s instead of 3 s in 6 of 120 runs (3 of 40 built binaries, 2 of 40 __mir-llvm-run, 1 of 40 karac run), with the right output. | — |
 | B-2026-11-11-72 | 2026-11-11 | runtime | low | `Duration` has no arithmetic: `a + b`, `a - b` and `d * n` are refused ("type 'Duration' does not implement trait Add"), where Rust's, Go's and Java's spans add, subtract and scale; `Instant + Duration` works | — |
 | B-2026-11-11-73 | 2026-11-11 | parser | low | Rust's `thread::sleep(d)` does not mend: `use std::thread;` becomes `import std.thread;` ("unknown module `std.thread`") and `std::thread::sleep(d)` becomes a bare `sleep(d)` with no `import std.time.sleep;` ("undefined name 'sleep'"), where Kāra's is `std.time.sleep` | — |
+| B-2026-11-11-74 | 2026-11-11 | parser | low | `karac fix` deleting a Rust `use std::rc::Rc;` / `use std::cell::RefCell;` line between two blank lines leaves the two blank lines in a row (the remainder of B-2026-11-11-65). | — |
 
 ### Relocated
 
