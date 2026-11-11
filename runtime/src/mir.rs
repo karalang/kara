@@ -1532,6 +1532,9 @@ pub unsafe extern "C" fn karac_mir_str_replacen(
 #[no_mangle]
 pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
     crate::fatal::ignore_sigpipe();
+    // The small-chunk lists from the start (B-2026-11-11-42).
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    crate::alloc::small::start();
     #[cfg(all(
         unix,
         feature = "net",

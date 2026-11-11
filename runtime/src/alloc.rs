@@ -93,7 +93,15 @@ pub extern "C" fn karac_alloc_fallible(size: usize) -> *mut u8 {
 }
 
 /// Per-thread free lists of small chunks, in front of `malloc` and `free`
-/// once the program runs more than one thread (B-2026-10-28-15).
+/// (B-2026-10-28-15): on Linux from the start of `main`, on macOS once the
+/// program runs more than one thread.
+///
+/// On Linux they started with the worker pool until B-2026-11-11-42: a
+/// sequential program frees in the same bursts, and the seven-deep tcache
+/// sends the rest of a burst to the fast bins, where a later free that
+/// merges into the top chunk runs `malloc_consolidate` over them. Over 120
+/// random benches (callgrind) the lists from the start cost 0.993x the
+/// instructions in geomean, 0.795x the best (kata 57) and 1.022x the worst.
 ///
 /// Once a second thread exists, glibc's `free` takes its arena's lock (an
 /// atomic, for a fast bin) for every chunk its seven-deep per-thread cache
@@ -148,7 +156,14 @@ pub(crate) mod small {
     /// Turns the lists on, when no sanitizer watches the heap: a chunk kept
     /// here is one it would see freed.
     pub(crate) fn start() {
-        if std::env::var_os("KARAC_ALLOC_CACHE").is_some_and(|v| v == "0") {
+        extern "C" {
+            fn getenv(name: *const u8) -> *const u8;
+        }
+        // libc `getenv`, not `std::env`: this runs in every program on
+        // Linux, before `main`, and links no panic path.
+        // SAFETY: a NUL-terminated name; a non-null result is a C string.
+        let v = unsafe { getenv(c"KARAC_ALLOC_CACHE".as_ptr().cast()) };
+        if !v.is_null() && unsafe { *v == b'0' && *v.add(1) == 0 } {
             return;
         }
         for name in [
@@ -533,19 +548,17 @@ const SMALL_REALLOC_MAX: usize = 1024;
 /// never fed the cache's small-churn bookkeeping either, so this keeps the
 /// `malloc_trim` compensation decision exactly where it was.
 ///
-/// On macOS both halves go through the per-thread lists ([`small`]) when
-/// they are on: there xzone malloc contends at two and three threads, and
-/// a Vec grown from empty passes through here several times a build
-/// (B-2026-11-01-17). glibc's tcache already serves both on Linux.
+/// Both halves go through the per-thread lists ([`small`]) when they are
+/// on. On macOS xzone malloc contends at two and three threads, and a Vec
+/// grown from empty passes through here several times a build
+/// (B-2026-11-01-17); on Linux a list is deeper than glibc's seven-chunk
+/// tcache (B-2026-11-11-42).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
     extern "C" {
         fn free(ptr: *mut core::ffi::c_void);
     }
-    #[cfg(target_os = "macos")]
     let kept = small::take(new);
-    #[cfg(not(target_os = "macos"))]
-    let kept: *mut u8 = std::ptr::null_mut();
     let fresh = if kept.is_null() {
         unsafe { malloc(new) }
     } else {
@@ -560,7 +573,6 @@ fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
     // and `copy <= new` bytes by `fresh`; the two blocks are distinct.
     unsafe {
         std::ptr::copy_nonoverlapping(ptr, fresh, copy);
-        #[cfg(target_os = "macos")]
         if small::put_sized(ptr, old) {
             return fresh;
         }
@@ -1183,6 +1195,24 @@ mod tests {
         let big = karac_malloc(small::MAX + 1);
         karac_free(big);
         assert!(small::take(small::MAX + 1).is_null());
+        karac_free(p);
+        karac_free(q);
+    }
+
+    /// A small resize keeps the old chunk on the lists for the next request
+    /// its size fits, on Linux as on macOS (B-2026-11-11-42).
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn a_small_resize_keeps_the_old_chunk_on_the_lists() {
+        small::start();
+        let p = karac_malloc(100);
+        unsafe { *p = 7 };
+        let q = karac_realloc_or_panic(p, 200);
+        assert_ne!(q, p);
+        assert_eq!(unsafe { *q }, 7);
+        // From the list itself, not from glibc's tcache, which would hand
+        // `p` back to a `malloc` as well.
+        assert_eq!(small::take(100), p);
         karac_free(p);
         karac_free(q);
     }
