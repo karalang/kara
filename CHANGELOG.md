@@ -321,6 +321,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   count, so `Semaphore.new(0)` signals between tasks. Outside a task an
   exhausted `acquire` waits its whole timeout, as `Pool.acquire` does
   (B-2026-11-11-34).
+- A compiled program whose tasks wait with a timeout (`Semaphore.acquire`,
+  `Pool.acquire`) no longer sometimes waits that whole timeout at a group's
+  end after its tasks have finished. The main thread, which alone resumes the
+  code after the group, could sleep to the timeout while another worker ran
+  the remaining tasks: kata 1115's differential took 62 s instead of 3 s in
+  about one run in twenty (B-2026-11-11-66).
 - A program that calls the HTTP client (`Client`, `http.get`, `http.post`)
   from more than one task no longer races on the client's event loop. One
   runtime was shared by every calling thread, and ThreadSanitizer reported

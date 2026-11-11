@@ -2202,15 +2202,27 @@ fn idle_wait(by: Option<Instant>) -> bool {
     // every timer is in the heap already, and with some running the wait
     // is short. Read apart, a sleeper another worker settled in between
     // was missed until the wait's old deadline (B-2026-10-27-5).
-    let (next, group, parked, others) = EXEC.with(|e| {
+    let (next, group, parked, others, worth_polling) = EXEC.with(|e| {
         let mut e = e.borrow_mut();
+        let progress = e.progress;
+        let mut now = None;
         (
             e.next_deadline(),
             e.next_group_deadline(),
             !e.parked.is_empty(),
             pooled() && e.running > 0,
+            e.queue.iter().any(|t| worth(t, progress, &mut now)),
         )
     });
+    // A task another worker's progress made worth polling is queued: that
+    // worker settled its own task (no longer running) and is about to take
+    // this one, or this worker will. With none running, waiting here for a
+    // deadline slept through the whole of it while that worker ran the
+    // program on, the root task included, which only this one polls
+    // (B-2026-11-11-66).
+    if worth_polling {
+        return true;
+    }
     // A group's deadline cancels its tasks (§11.10).
     let until = [next, by, group].into_iter().flatten().min();
     if until.is_none() && !parked {
@@ -2220,7 +2232,7 @@ fn idle_wait(by: Option<Instant>) -> bool {
     if others {
         // Other workers put tasks to sleep or park them meanwhile, and only
         // this one wakes sleepers: wait a little at a time. With none
-        // running and the queue empty, nothing else can change.
+        // running and no task worth polling, nothing else can change.
         timeout = Some(timeout.map_or(POOL_NAP, |d| d.min(POOL_NAP)));
     }
     if parked {
