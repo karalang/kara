@@ -7425,8 +7425,22 @@ impl<'a> super::TypeChecker<'a> {
                                 .collect();
                             self.solve_collected_item_vars(&concrete, &want);
                         }
-                        continue;
+                        // An item variable a default already settled (a
+                        // `scan` state's literal) is checked as written: the
+                        // solve above cannot move it, and `Vec[i32]` built
+                        // from `i64` items wrote eight bytes into each
+                        // four-byte slot (B-2026-11-11-41).
+                        let settled: Vec<Type> =
+                            want.iter().map(|t| self.resolved_now(t)).collect();
+                        if trait_name != "FromIterator"
+                            || settled
+                                .iter()
+                                .any(|t| contains_type_param(t) || !type_is_fully_concrete(t))
+                        {
+                            continue;
+                        }
                     }
+                    let want: Vec<Type> = want.iter().map(|t| self.resolved_now(t)).collect();
                     // An item is read as a value (`ItemValues`): a `ref` to a
                     // `Copy` part is the part (`(x, x * 2)` over `v.iter()`).
                     let want: Vec<Type> = want.iter().map(|t| self.read_as_value(t)).collect();
@@ -9551,7 +9565,12 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         let item_now = resolve_type_var_top(&item, &self.env.substitutions);
-        if item_now == Type::Int(IntSize::I64) {
+        // A `chain` is recorded whatever its items read as now: a `scan` on
+        // either side settles its state's literal later, and the fix is used
+        // only if the bound is then refused (B-2026-11-11-41).
+        let chain =
+            matches!(&object.kind, ExprKind::MethodCall { method, .. } if method == "chain");
+        if item_now == Type::Int(IntSize::I64) || chain {
             self.collect_literal_fix(expr, object, &elem);
         }
         let Type::TypeVar(id) = item_now else {
@@ -9587,9 +9606,23 @@ impl<'a> super::TypeChecker<'a> {
         if !matches!(elem, Type::Int(_) | Type::UInt(_)) || elem == Type::Int(IntSize::I64) {
             return;
         }
-        let ExprKind::MethodCall { method, args, .. } = &object.kind else {
+        let ExprKind::MethodCall {
+            object: receiver,
+            method,
+            args,
+            ..
+        } = &object.kind
+        else {
             return;
         };
+        // `[0].into_iter().chain(v.iter().scan(0, ..))`: the `scan` on
+        // either side of a `chain` gives the items their type (kata 1118).
+        if method == "chain" && args.len() == 1 {
+            for side in [&args[0].value, receiver.as_ref()] {
+                self.collect_literal_fix(expr, side, &elem);
+            }
+            return;
+        }
         // `.scan(0, |depth, c| { .. Some((depth, depth % 2)) })` into a
         // `Vec[i32]`: the items are computed from the state, whose literal
         // starting value took the default, so the fix is that literal's

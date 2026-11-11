@@ -384,6 +384,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   { 2 } else { 3 }];` and `let t: (i32, i32) = (1, if b { 2 } else { 3 });`
   were refused as narrowing. Such an element is a literal now, typed by its
   slot, with every branch range-checked (B-2026-11-11-38).
+- `let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect();`
+  was refused as `C: FromIterator[i64]`. A list literal iterated where it
+  is written keeps its number literals open, as a `let` of one does, for
+  the chain's end to fix. The same chain with a `scan` on one side built a
+  `Vec[i32]` from `i64` items when the `scan`'s state literal had settled
+  first (garbage compiled, an AddressSanitizer abort); it is refused now,
+  with the `scan` state's `0i32` fix offered through the `chain`
+  (B-2026-11-11-41).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

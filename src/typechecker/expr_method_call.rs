@@ -2163,6 +2163,18 @@ impl<'a> super::TypeChecker<'a> {
         }
         let mut obj_ty = match &pinned_receiver {
             Some(wrapped) => self.check_expr(object, wrapped),
+            // A list literal iterated where it is written, `[0].into_iter()`,
+            // keeps its number literals open, as `let v = [0];` does, for
+            // the chain's end to fix (`.collect()` into a `Vec[i32]`;
+            // design.md §8 Literals, B-2026-11-11-41).
+            None if matches!(object.kind, ExprKind::ArrayLiteral(_))
+                && matches!(method, "into_iter" | "iter") =>
+            {
+                let saved = self.open_collection_let.replace(object.id);
+                let t = self.infer_expr(object);
+                self.open_collection_let = saved;
+                t
+            }
             None => self.infer_expr(object),
         };
         self.mut_through_param_arg = saved_mut_through;
