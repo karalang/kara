@@ -6782,6 +6782,27 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
             }
+            // So do the elements of two tuples, one by one: `(0, i)` with
+            // `i: ref i64` beside `(1, x)` with `x: i64` is an `(i64, i64)`
+            // (kata 1122). Lowering builds each tuple literal at the
+            // joined element types, reading the reference.
+            if let (Type::Tuple(xs), Type::Tuple(ys)) = (a, b) {
+                if xs.len() == ys.len()
+                    && xs.iter().zip(ys).any(|(x, y)| {
+                        matches!(x, Type::Ref(_) | Type::MutRef(_))
+                            != matches!(y, Type::Ref(_) | Type::MutRef(_))
+                    })
+                {
+                    let joined: Option<Vec<Type>> = xs
+                        .iter()
+                        .zip(ys)
+                        .map(|(x, y)| self.join_branch_types(x, y))
+                        .collect();
+                    if let Some(joined) = joined {
+                        return Some(Type::Tuple(joined));
+                    }
+                }
+            }
         }
         // LUB rule 4 (design.md § Least upper bound): two different numeric
         // types have no join. Widening is an operator's and a binding's rule,

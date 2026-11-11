@@ -8965,6 +8965,51 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.assign(dest, Rvalue::Use(Operand::Const(c)));
             return Ok(());
         }
+        // A tuple holding a `ref` to a `Copy` value, stored into a slot of
+        // the values (a match arm's `t` with `t: (i64, ref i64)` where the
+        // arms joined at `(i64, i64)`, core semantics §5.10): made at its
+        // own type, then each referenced element read into the slot. A
+        // tuple literal builds at the slot's types itself, below.
+        if !matches!(e.kind, ExprKind::Tuple(_)) {
+            let dt = self.place_type(&dest);
+            // Only a tuple slot asks the expression's type: a `par` or
+            // `spawn` block has none recorded.
+            let et = match self.tys().tcx().kind(dt) {
+                HK::Tuple(_) => self.expr_ty(e).unwrap_or(dt),
+                _ => dt,
+            };
+            let tcx = self.tys().tcx();
+            if let (HK::Tuple(dl), HK::Tuple(el)) = (tcx.kind(dt), tcx.kind(et)) {
+                let (dts, ets) = (tcx.list(dl), tcx.list(el));
+                let reads = |s: &Self, d: Ty, t: Ty| match s.tys().tcx().kind(t) {
+                    HK::Ref(inner) | HK::MutRef(inner) => {
+                        inner == d && s.is_copy(d) && !s.is_handle(d)
+                    }
+                    _ => false,
+                };
+                if dt != et
+                    && dts.len() == ets.len()
+                    && dts
+                        .iter()
+                        .zip(&ets)
+                        .all(|(&d, &t)| d == t || reads(self, d, t))
+                {
+                    let l = self.temp(et);
+                    self.expr_into(e, Place::local(l))?;
+                    let mut ops = Vec::with_capacity(dts.len());
+                    for (i, (&d, &t)) in dts.iter().zip(&ets).enumerate() {
+                        let f = Place::local(l).field(i as u32, t);
+                        ops.push(if d == t {
+                            self.use_place(f, t)
+                        } else {
+                            Operand::Copy(f.project(ProjElem::Deref))
+                        });
+                    }
+                    self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
+                    return Ok(());
+                }
+            }
+        }
         match &e.kind {
             // A literal the checker typed `Str` (a `Str` was expected) is the
             // view of its static data (design.md § String literals).
