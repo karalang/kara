@@ -1,0 +1,410 @@
+// stun_server: a STUN server (RFC 5389, the Binding method) on loopback
+// UDP. One reader takes datagrams off the server's socket and hands each to
+// a task of its own, which checks the message (magic cookie, length,
+// attribute bounds, FINGERPRINT) and answers on the shared socket: a
+// Binding request gets the sender's address as XOR-MAPPED-ADDRESS, an
+// unknown comprehension-required attribute 420, another method 400, and an
+// indication, a response or a broken message nothing. Scripted clients send
+// each kind and print what comes back, then the server prints its log.
+
+import std.sync.{TaskGroup, Mutex};
+
+const ADDR: Str = "127.0.0.1:47766";
+const DATAGRAMS: i64 = 13;
+const COOKIE: u32 = 0x2112A442;
+const SOFTWARE_NAME: Str = "kara-stun 1.0";
+const QUIET_MS: i64 = 300;
+
+const BINDING: u16 = 0x001;
+const REQUEST: u16 = 0;
+const INDICATION: u16 = 1;
+const SUCCESS: u16 = 2;
+const FAILURE: u16 = 3;
+
+const XOR_MAPPED_ADDRESS: u16 = 0x0020;
+const ERROR_CODE: u16 = 0x0009;
+const UNKNOWN_ATTRIBUTES: u16 = 0x000A;
+const SOFTWARE: u16 = 0x8022;
+const FINGERPRINT: u16 = 0x8028;
+const FINGERPRINT_XOR: u32 = 0x5354554E;
+
+fn be16(b: Slice[u8], at: i64) -> u16 {
+    u16.from_be_bytes([b[at], b[at + 1]])
+}
+
+fn be32(b: Slice[u8], at: i64) -> u32 {
+    u32.from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
+}
+
+// The 14-bit type: the class's two bits sit at bits 4 and 8.
+fn msg_type(method: u16, class: u16) -> u16 {
+    ((method & 0xF80) << 2) | ((method & 0x070) << 1) | (method & 0x00F)
+        | ((class & 2) << 7) | ((class & 1) << 4)
+}
+
+fn split_type(t: u16) -> (u16, u16) {
+    let class = ((t >> 7) & 2) | ((t >> 4) & 1);
+    let method = ((t >> 2) & 0xF80) | ((t >> 1) & 0x070) | (t & 0x00F);
+    (method, class)
+}
+
+fn crc_table() -> Vec[u32] {
+    let mut table = Vec.with_capacity(256);
+    for n in 0..256u32 {
+        let mut c = n;
+        for _ in 0..8 {
+            c = if c & 1 == 1 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+        }
+        table.push(c);
+    }
+    table
+}
+
+fn crc32(table: Slice[u32], data: Slice[u8]) -> u32 {
+    let mut c: u32 = 0xFFFFFFFF;
+    for b in data.iter() {
+        c = table[((c ^ b as u32) & 0xFF) as i64] ^ (c >> 8);
+    }
+    c ^ 0xFFFFFFFF
+}
+
+fn attribute(kind: u16, value: Slice[u8]) -> Vec[u8] {
+    let mut a = kind.to_be_bytes().to_vec();
+    a.extend_from_slice((value.len() as u16).to_be_bytes());
+    a.extend_from_slice(value);
+    while a.len() % 4 != 0 {
+        a.push(0);
+    }
+    a
+}
+
+fn header(method: u16, class: u16, length: i64, txid: Slice[u8]) -> Vec[u8] {
+    let mut h = msg_type(method, class).to_be_bytes().to_vec();
+    h.extend_from_slice((length as u16).to_be_bytes());
+    h.extend_from_slice(COOKIE.to_be_bytes());
+    h.extend_from_slice(txid);
+    h
+}
+
+// A message of `attrs`, ending with a FINGERPRINT when asked.
+fn message(table: Slice[u32], method: u16, class: u16, txid: Slice[u8], attrs: Slice[Vec[u8]], fingerprint: bool) -> Vec[u8] {
+    let mut body: Vec[u8] = Vec.new();
+    for a in attrs {
+        body.extend_from_slice(a);
+    }
+    if fingerprint {
+        let mut signed = header(method, class, body.len() + 8, txid);
+        signed.extend_from_slice(body);
+        let crc = crc32(table, signed) ^ FINGERPRINT_XOR;
+        body.extend_from_slice(attribute(FINGERPRINT, crc.to_be_bytes()));
+    }
+    let mut m = header(method, class, body.len(), txid);
+    m.extend_from_slice(body);
+    m
+}
+
+struct Attr {
+    kind: u16,
+    value: Vec[u8],
+    offset: i64,
+}
+
+struct Msg {
+    method: u16,
+    class: u16,
+    txid: Vec[u8],
+    attrs: Vec[Attr],
+}
+
+// The message, or the reason it is dropped.
+fn parse(table: Slice[u32], pkt: Slice[u8]) -> Result[Msg, String] {
+    if pkt.len() < 20 {
+        return Err("short".to_string());
+    }
+    if pkt[0] & 0xC0 != 0 {
+        return Err("not stun".to_string());
+    }
+    if be32(pkt, 4) != COOKIE {
+        return Err("bad cookie".to_string());
+    }
+    let length = be16(pkt, 2) as i64;
+    if length != pkt.len() - 20 or length % 4 != 0 {
+        return Err("bad length".to_string());
+    }
+    let mut attrs = Vec.new();
+    let mut at: i64 = 20;
+    while at < pkt.len() {
+        if at + 4 > pkt.len() {
+            return Err("bad attribute".to_string());
+        }
+        let kind = be16(pkt, at);
+        let n = be16(pkt, at + 2) as i64;
+        if at + 4 + n > pkt.len() {
+            return Err("bad attribute".to_string());
+        }
+        attrs.push(Attr { kind, value: pkt[at + 4..at + 4 + n].to_vec(), offset: at });
+        at += 4 + n + (4 - n % 4) % 4;
+    }
+    for (i, a) in attrs.iter().enumerate() {
+        if a.kind == FINGERPRINT {
+            if i != attrs.len() - 1 or a.value.len() != 4 {
+                return Err("bad fingerprint".to_string());
+            }
+            if be32(a.value, 0) != crc32(table, pkt[..a.offset]) ^ FINGERPRINT_XOR {
+                return Err("bad fingerprint".to_string());
+            }
+        }
+    }
+    let (method, class) = split_type(be16(pkt, 0));
+    Ok(Msg { method, class, txid: pkt[8..20].to_vec(), attrs })
+}
+
+fn host_port(addr: Str) -> (Vec[u8], u16) {
+    let (host, port) = addr.rsplit_once(":").unwrap();
+    let octets: Vec[u8] = host.split(".").map(|p| u8.parse(p).unwrap()).collect();
+    (octets, u16.parse(port).unwrap())
+}
+
+fn xor_address(addr: Str) -> Vec[u8] {
+    let (octets, port) = host_port(addr);
+    let mut v = [0u8, 1];
+    v.extend_from_slice((port ^ (COOKIE >> 16) as u16).to_be_bytes());
+    for (b, c) in octets.iter().zip(COOKIE.to_be_bytes().iter()) {
+        v.push(b ^ c);
+    }
+    v
+}
+
+fn error_attr(code: u16, reason: Str) -> Vec[u8] {
+    let mut v = [0u8, 0, (code / 100) as u8, (code % 100) as u8];
+    v.extend_from_slice(reason.bytes());
+    attribute(ERROR_CODE, v)
+}
+
+struct Book {
+    log: SortedMap[i64, String],
+    counts: SortedMap[String, i64],
+}
+
+sync struct Server {
+    table: Vec[u32],
+    book: Mutex[Book],
+}
+
+impl Server {
+    fn note(self, n: i64, outcome: Str, line: own String) {
+        let mut g = self.book.lock();
+        g.value.log.insert(n, line);
+        *g.value.counts.entry(outcome.to_string()).or_insert(0) += 1;
+    }
+}
+
+fn handle(srv: ref Server, sock: ref UdpSocket, n: i64, pkt: Vec[u8], peer: String) {
+    let m = match parse(srv.table, pkt) {
+        Ok(m) => m,
+        Err(why) => {
+            srv.note(n, "dropped", f"dropped: {why}");
+            return;
+        }
+    };
+    if m.class == SUCCESS or m.class == FAILURE {
+        srv.note(n, "dropped", "dropped: a response".to_string());
+        return;
+    }
+    if m.class == INDICATION {
+        srv.note(n, "indications", f"indication, method {m.method}");
+        return;
+    }
+    let unknown: Vec[u16] = m.attrs.iter().filter(|a| a.kind < 0x8000).map(|a| a.kind).collect();
+    let soft = attribute(SOFTWARE, SOFTWARE_NAME.bytes());
+    if m.method != BINDING {
+        let reply = message(srv.table, m.method, FAILURE, m.txid, [error_attr(400, "Bad Request"), soft], true);
+        let _ = sock.send_to(reply, peer);
+        srv.note(n, "errors", f"request, method {m.method}: 400");
+        return;
+    }
+    if not unknown.is_empty() {
+        let mut listed = Vec.new();
+        for k in ref unknown {
+            listed.extend_from_slice(k.to_be_bytes());
+        }
+        let attrs = [error_attr(420, "Unknown Attribute"), attribute(UNKNOWN_ATTRIBUTES, listed), soft];
+        let reply = message(srv.table, m.method, FAILURE, m.txid, attrs, true);
+        let _ = sock.send_to(reply, peer);
+        srv.note(n, "errors", f"binding request: 420, {unknown.len()} unknown");
+        return;
+    }
+    let ignored = m.attrs.iter().filter(|a| a.kind != SOFTWARE and a.kind != FINGERPRINT).count();
+    let mapped = attribute(XOR_MAPPED_ADDRESS, xor_address(peer));
+    let reply = message(srv.table, m.method, SUCCESS, m.txid, [mapped, soft], true);
+    let _ = sock.send_to(reply, peer);
+    srv.note(n, "answered", f"binding request: success, {m.attrs.len()} attributes, {ignored} ignored");
+}
+
+fn run_server(srv: ref Server, sock: ref UdpSocket) {
+    let tasks = TaskGroup.new();
+    let mut buf = [0u8; 2048];
+    for n in 1..=DATAGRAMS {
+        let (len, peer) = sock.recv_from(mut buf).unwrap();
+        let pkt = buf[..len].to_vec();
+        tasks.spawn(|| handle(srv, sock, n, pkt, peer));
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+fn txid_of(seed: i64) -> Vec[u8] {
+    (0..12).map(|i| ((seed * 17 + i * 5) % 256) as u8).collect()
+}
+
+fn describe(table: Slice[u32], pkt: Slice[u8], txid: Slice[u8], own: Str) -> String {
+    let m = match parse(table, pkt) {
+        Ok(m) => m,
+        Err(why) => return f"unreadable reply: {why}",
+    };
+    let mut parts: Vec[String] = Vec.new();
+    parts.push(match m.class {
+        SUCCESS => "success".to_string(),
+        FAILURE => "error".to_string(),
+        c => f"class {c}",
+    });
+    if m.txid.as_slice() != txid {
+        parts.push("WRONG transaction".to_string());
+    }
+    let (own_host, own_port) = host_port(own);
+    for a in ref m.attrs {
+        let v = ref a.value;
+        match a.kind {
+            XOR_MAPPED_ADDRESS => {
+                let port = be16(v, 2) ^ (COOKIE >> 16) as u16;
+                let host: Vec[u8] = v[4..8].iter().zip(COOKIE.to_be_bytes().iter()).map(|(b, c)| b ^ c).collect();
+                let same = if host == own_host and port == own_port { "yes" } else { "no" };
+                parts.push(f"mapped is own address: {same}");
+            }
+            ERROR_CODE => {
+                let code = v[2] as u16 * 100 + v[3];
+                parts.push(f"code {code} {String.from_utf8(v[4..].to_vec()).unwrap_or(String.new())}");
+            }
+            UNKNOWN_ATTRIBUTES => {
+                let kinds: Vec[String] = (0..v.len()).step_by(2).map(|i| f"0x{be16(v, i):04x}").collect();
+                parts.push(f"unknown [{kinds.join(", ")}]");
+            }
+            SOFTWARE => parts.push(f"software \"{String.from_utf8(v.to_vec()).unwrap_or(String.new())}\""),
+            FINGERPRINT => parts.push("fingerprint ok".to_string()),
+            k => parts.push(f"attribute 0x{k:04x}"),
+        }
+    }
+    parts.join(", ")
+}
+
+struct Client {
+    name: String,
+    txid: Vec[u8],
+    sock: UdpSocket,
+}
+
+impl Client {
+    fn new(name: Str, seed: i64) -> Client {
+        let sock = UdpSocket.bind("127.0.0.1:0").unwrap();
+        Client { name: name.to_string(), txid: txid_of(seed), sock }
+    }
+
+    fn send(self, pkt: Slice[u8]) {
+        let _ = self.sock.send_to(pkt, ADDR);
+    }
+
+    // Prints the reply, or that none came within `wait_ms`.
+    fn recv(self, table: Slice[u32], wait_ms: i64) {
+        let _ = self.sock.set_read_timeout(Some(wait_ms));
+        let mut buf = [0u8; 2048];
+        match self.sock.recv_from(mut buf) {
+            Ok((n, _)) => {
+                let own = self.sock.local_addr().unwrap();
+                println(f"{self.name}: {describe(table, buf[..n], self.txid, own)}");
+            }
+            Err(_) => println(f"{self.name}: no reply"),
+        }
+    }
+}
+
+fn main() {
+    let table = crc_table();
+    let srv = Server { table: crc_table(), book: Mutex.new(Book { log: SortedMap.new(), counts: SortedMap.new() }) };
+    let sock = UdpSocket.bind(ADDR).unwrap();
+    let group = TaskGroup.new();
+    let server = group.spawn(|| run_server(srv, sock));
+    let none: Vec[Vec[u8]] = Vec.new();
+
+    let c = Client.new("plain", 1);
+    c.send(message(table, BINDING, REQUEST, c.txid, none, false));
+    c.recv(table, 2000);
+
+    let c = Client.new("fingerprinted", 2);
+    c.send(message(table, BINDING, REQUEST, c.txid, none, true));
+    c.recv(table, 2000);
+
+    let c = Client.new("padded", 3);
+    let attrs = [attribute(SOFTWARE, b"probe"), attribute(0x8030, [7u8])];
+    c.send(message(table, BINDING, REQUEST, c.txid, attrs, true));
+    c.recv(table, 2000);
+
+    let c = Client.new("bad-fingerprint", 4);
+    let mut pkt = message(table, BINDING, REQUEST, c.txid, none, true);
+    let last = pkt.len() - 1;
+    pkt[last] ^= 0xFF;
+    c.send(pkt);
+    c.recv(table, QUIET_MS);
+
+    let c = Client.new("unknown-attrs", 5);
+    let attrs = [attribute(0x7001, b"abcd"), attribute(0x8030, []), attribute(0x0003, [0u8; 4])];
+    c.send(message(table, BINDING, REQUEST, c.txid, attrs, true));
+    c.recv(table, 2000);
+
+    let c = Client.new("indication", 6);
+    c.send(message(table, BINDING, INDICATION, c.txid, none, true));
+    c.recv(table, QUIET_MS);
+
+    let c = Client.new("bad-cookie", 7);
+    let mut pkt = message(table, BINDING, REQUEST, c.txid, none, false);
+    pkt[4] = 0x99;
+    c.send(pkt);
+    c.recv(table, QUIET_MS);
+
+    let c = Client.new("short", 8);
+    let mut pkt = header(BINDING, REQUEST, 0, []);
+    pkt.extend_from_slice([0u8, 0]);
+    c.send(pkt);
+    c.recv(table, QUIET_MS);
+
+    let c = Client.new("allocate", 9);
+    c.send(message(table, 0x003, REQUEST, c.txid, none, true));
+    c.recv(table, 2000);
+
+    let c = Client.new("response", 10);
+    c.send(message(table, BINDING, SUCCESS, c.txid, none, true));
+    c.recv(table, QUIET_MS);
+
+    let c = Client.new("bad-length", 11);
+    let mut pkt = message(table, BINDING, REQUEST, c.txid, none, false);
+    pkt[3] = 8;
+    c.send(pkt);
+    c.recv(table, QUIET_MS);
+
+    let a = Client.new("pair-a", 12);
+    let b = Client.new("pair-b", 13);
+    a.send(message(table, BINDING, REQUEST, a.txid, none, true));
+    let attrs = [attribute(SOFTWARE, b"pair")];
+    b.send(message(table, BINDING, REQUEST, b.txid, attrs, true));
+    a.recv(table, 2000);
+    b.recv(table, 2000);
+
+    let _ = server.join();
+    println("== server");
+    let g = srv.book.lock();
+    for (n, line) in g.value.log.iter() {
+        println(f"#{n} {line}");
+    }
+    for (k, v) in g.value.counts.iter() {
+        println(f"{k}: {v}");
+    }
+}

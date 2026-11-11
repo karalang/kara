@@ -1,0 +1,31 @@
+plain: success, mapped is own address: yes, software "kara-stun 1.0", fingerprint ok
+fingerprinted: success, mapped is own address: yes, software "kara-stun 1.0", fingerprint ok
+padded: success, mapped is own address: yes, software "kara-stun 1.0", fingerprint ok
+bad-fingerprint: no reply
+unknown-attrs: error, code 420 Unknown Attribute, unknown [0x7001, 0x0003], software "kara-stun 1.0", fingerprint ok
+indication: no reply
+bad-cookie: no reply
+short: no reply
+allocate: error, code 400 Bad Request, software "kara-stun 1.0", fingerprint ok
+response: no reply
+bad-length: no reply
+pair-a: success, mapped is own address: yes, software "kara-stun 1.0", fingerprint ok
+pair-b: success, mapped is own address: yes, software "kara-stun 1.0", fingerprint ok
+== server
+#1 binding request: success, 0 attributes, 0 ignored
+#2 binding request: success, 1 attributes, 0 ignored
+#3 binding request: success, 3 attributes, 1 ignored
+#4 dropped: bad fingerprint
+#5 binding request: 420, 2 unknown
+#6 indication, method 1
+#7 dropped: bad cookie
+#8 dropped: short
+#9 request, method 3: 400
+#10 dropped: a response
+#11 dropped: bad length
+#12 binding request: success, 1 attributes, 0 ignored
+#13 binding request: success, 2 attributes, 0 ignored
+answered: 5
+dropped: 5
+errors: 2
+indications: 1
