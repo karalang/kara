@@ -74,6 +74,7 @@ Everything else is imported from a `std.*` module:
 | `std.io` | `File`, `OpenOptions`, `SeekFrom`, `BufReader`, `BufWriter` |
 | `std.net` | `TcpListener`, `TcpStream`, `UdpSocket`, `NetError` (and its alias `TcpError`) |
 | `std.hash` | `Hasher`, `BuildHasher`, `SipHash13BuildHasher`, `FxBuildHasher`, `StableHash` |
+| `std.cmp` | `Reverse` ([core-types.md](core-types.md#reverse)) |
 | `std.iter` | `DoubleEndedIterator`, `ExactSizeIterator`, `Extend`, the adapter structs |
 | `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |
 | `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
