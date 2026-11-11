@@ -21,11 +21,26 @@ fn package(tag: &str) -> std::path::PathBuf {
         "import util;\nfn main() { println(util.f()); }\n",
     )
     .unwrap();
-    std::fs::canonicalize(dir).unwrap()
+    plain(std::fs::canonicalize(dir).unwrap())
 }
 
+/// `path` without the `\\?\` prefix Windows' `canonicalize` puts on it.
+fn plain(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) => std::path::PathBuf::from(rest),
+        None => path,
+    }
+}
+
+/// The `file:` URI of `path`: `file:///tmp/x` on Unix, `file:///C:/x` for
+/// Windows' `C:\x`, with a space percent-encoded.
 fn uri_of(path: &std::path::Path) -> Uri {
-    Uri::from_str(&format!("file://{}", path.display())).unwrap()
+    let mut s = path.display().to_string().replace('\\', "/");
+    if !s.starts_with('/') {
+        s.insert(0, '/');
+    }
+    let s = s.replace(' ', "%20");
+    Uri::from_str(&format!("file://{s}")).unwrap()
 }
 
 #[test]

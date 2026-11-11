@@ -169,9 +169,21 @@ fn main() {
 }
 "#;
 
+/// The reset's errno is the platform's (104 on Linux, 54 on macOS), so it
+/// is left out of the comparison.
 const EDGES_OUT: &str = "main first err timed out\nmain line partial\n\
-main line err Connection reset by peer (os error 104)\ntask first err timed out\n\
-task line partial\ntask line err Connection reset by peer (os error 104)\n";
+main line err Connection reset by peer\ntask first err timed out\n\
+task line partial\ntask line err Connection reset by peer\n";
+
+/// `out` without its ` (os error N)` suffixes.
+fn without_errno(out: &str) -> String {
+    let mut s = out.to_string();
+    while let Some(at) = s.find(" (os error ") {
+        let end = s[at..].find(')').map_or(s.len(), |e| at + e + 1);
+        s.replace_range(at..end, "");
+    }
+    s
+}
 
 /// `fill_buf` over a connection views the reader's buffer, waiting inside
 /// its task for the first bytes; `consume` steps through them. A `fill_buf`
@@ -238,7 +250,7 @@ fn interp_buffered_socket_echo() {
 
 #[test]
 fn interp_buffered_socket_timeout_and_reset() {
-    assert_eq!(run(EDGES), EDGES_OUT);
+    assert_eq!(without_errno(&run(EDGES)), EDGES_OUT);
 }
 
 #[cfg(feature = "llvm")]
@@ -256,7 +268,7 @@ fn compiled_buffered_socket_echo() {
 fn compiled_buffered_socket_timeout_and_reset() {
     for threads in ["1", "4"] {
         if let Some(out) = compiled(EDGES, threads) {
-            assert_eq!(out, EDGES_OUT, "KARAC_THREADS={threads}");
+            assert_eq!(without_errno(&out), EDGES_OUT, "KARAC_THREADS={threads}");
         }
     }
 }
