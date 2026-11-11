@@ -277,7 +277,8 @@ impl<'ctx> Cx<'ctx, '_> {
         self.mrt_i8("pool_count", &[h.into(), self.i64(u64::MAX).into()])?;
         self.builder.build_unconditional_branch(idle).map_err(e)?;
 
-        // None idle: a fresh one, below the bound.
+        // None idle: a fresh one, below the bound, which `pool_count(0)`
+        // counts when it answers yes (B-2026-11-11-47).
         self.builder.position_at_end(mint);
         let room = self.rt_flag("pool_count", &[h.into(), self.i64(0).into()])?;
         let make = self.llcx.append_basic_block(f, "pool.make");
@@ -328,6 +329,7 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         self.store_tag(q, et, cf)?;
         self.store_tag(d, dty, errv)?;
+        self.mrt_i8("pool_count", &[h.into(), self.i64(u64::MAX).into()])?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(minted);
         let vfrom = self.offset(r, self.field_offset(made, Some(mok), 0)?)?;
@@ -337,7 +339,6 @@ impl<'ctx> Cx<'ctx, '_> {
                 .build_memcpy(val, 1, vfrom, 1, self.i64(vsize))
                 .map_err(e)?;
         }
-        self.mrt_i8("pool_count", &[h.into(), self.i64(1).into()])?;
         self.builder.build_unconditional_branch(out).map_err(e)?;
 
         self.builder.position_at_end(out);

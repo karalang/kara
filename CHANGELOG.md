@@ -286,6 +286,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   builds alike (B-2026-11-11-60).
 - A generic `a.cmp(b)` under `T: Ord` instantiated at `String` compiles; it
   was refused as "not lowered yet" (B-2026-11-10-41).
+- A compiled `Pool.acquire` no longer stalls for its whole timeout when a
+  value is free. On a multi-worker executor, another task could take the
+  value between the call's readiness check and the call itself, and the
+  losing call then slept its worker thread for the timeout (about one run in
+  ten of two tasks trading one value); it now waits again. Two tasks that
+  each find room no longer both create a value past `max_connections`
+  (B-2026-11-11-47).
+- `Semaphore.acquire` on an exhausted semaphore waits in its task for
+  another task's `release`, up to its timeout, instead of failing with
+  `Timeout` at once, and `release` is no longer capped at the starting
+  count, so `Semaphore.new(0)` signals between tasks. Outside a task an
+  exhausted `acquire` waits its whole timeout, as `Pool.acquire` does
+  (B-2026-11-11-34).
 - A program that calls the HTTP client (`Client`, `http.get`, `http.post`)
   from more than one task no longer races on the client's event loop. One
   runtime was shared by every calling thread, and ThreadSanitizer reported

@@ -4580,6 +4580,13 @@ pub unsafe extern "C" fn karac_mir_pool_full(h: *mut MirPool, ns: i64) -> u8 {
     if let Some(v) = POOL_VERDICT.with(|v| v.take()) {
         return v;
     }
+    // In a task with no verdict, `__ready` saw a value or room that
+    // another worker took before this call: the readiness loop asks again
+    // rather than this worker sleep the timeout out (B-2026-11-11-47).
+    if crate::mir_task::in_task() {
+        crate::mir_task::set_again();
+        return 0;
+    }
     // SAFETY: the caller's contract.
     if unsafe { with_pool(h, |p| p.waiting >= p.max_waiters) } {
         return 1;
@@ -4645,6 +4652,8 @@ pub unsafe extern "C" fn karac_mir_pool_close(h: *mut MirPool) {
             unsafe { d(b.as_mut_ptr()) };
         }
     }
+    // A waiting `acquire` now fails `PoolClosed`.
+    crate::mir_task::peer_progressed();
 }
 
 /// 1 when `close` was called on pool `h`, else 0.
@@ -4716,23 +4725,32 @@ pub unsafe extern "C" fn karac_mir_pool_pop(h: *mut MirPool, out: *mut u8) -> u8
     }
 }
 
-/// Counts the pool's live values: `delta` -1 for an evicted one, +1 for
-/// one minted; 0 answers whether another may be minted (1) or not (0).
+/// Counts the pool's live values: `delta` -1 for an evicted one or one
+/// whose factory failed; 0 answers whether another may be minted (1) or
+/// not (0), and when it may, counts it at once, so two workers minting
+/// together cannot pass `max` (B-2026-11-11-47).
 ///
 /// # Safety
 /// `h` is a live pool.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_count(h: *mut MirPool, delta: i64) -> u8 {
     // SAFETY: the caller's contract.
-    unsafe {
+    let r = unsafe {
         with_pool(h, |p| {
             if delta == 0 {
-                return u8::from(p.active < p.max);
+                let room = p.active < p.max;
+                p.active += i64::from(room);
+                return u8::from(room);
             }
             p.active = (p.active + delta).max(0);
             1
         })
+    };
+    if delta < 0 {
+        // Room for a waiting `acquire`.
+        crate::mir_task::peer_progressed();
     }
+    r
 }
 
 /// A new connection id, recorded as checked out; the connection holds a
@@ -4783,6 +4801,9 @@ pub unsafe extern "C" fn karac_mir_pool_return(
     };
     // SAFETY: the connection's reference.
     unsafe { karac_mir_pool_drop(h) };
+    // A value, or room, for a waiting `acquire`: the executor polls it
+    // again rather than nap to its deadline (B-2026-11-11-47).
+    crate::mir_task::peer_progressed();
     took
 }
 

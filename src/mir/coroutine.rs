@@ -728,6 +728,8 @@ fn may_be_not_ready(name: &str) -> bool {
             | ("Child", "wait")
             | ("Sender" | "Channel", "send")
             | ("Receiver" | "Channel", "recv" | "recv_blocking")
+            // Another worker took the value `__ready` saw (B-2026-11-11-47).
+            | ("Pool", "acquire")
     )
 }
 
