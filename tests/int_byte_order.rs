@@ -76,6 +76,9 @@ fn main() {
     println(f"{i64.from_be_bytes(bb)} {i64.from_le_bytes(bb)}");
     let u: u8 = 200;
     println(f"{u.to_be_bytes()[0]} {i8.from_ne_bytes(u.to_ne_bytes())}");
+    // A list literal is checked against the array (B-2026-11-11-23).
+    let v: Array[u8, 3] = [1, 2, 3];
+    println(f"{u16.from_be_bytes([v[0], v[1]])} {u32.from_le_bytes([1, 0, 0, 0])}");
 }
 "#;
 
@@ -84,7 +87,8 @@ const ORDER_OUT: &str = "186 146 146 186\n\
 1 4 16909060 67305985 16909060\n\
 -2 -2 -257\n\
 -1234567890123 3889707714871230463\n\
-200 -56\n";
+200 -56\n\
+258 1\n";
 
 #[test]
 fn interp_int_byte_order() {

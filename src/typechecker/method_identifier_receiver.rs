@@ -379,6 +379,17 @@ impl<'a> super::TypeChecker<'a> {
                             );
                             return Some(Type::Error);
                         }
+                        let want = Type::Array {
+                            element: Box::new(Type::UInt(UIntSize::U8)),
+                            size: ConstArg::Literal(width),
+                        };
+                        // Rust's `u16::from_be_bytes([hi, lo])`: a list
+                        // literal is checked against the array it must be,
+                        // as an annotated `let` checks it (B-2026-11-11-23).
+                        if matches!(args[0].value.kind, ExprKind::ArrayLiteral(_)) {
+                            self.check_expr(&args[0].value, &want);
+                            return self.primitive_type(type_name.as_str());
+                        }
                         let arg_ty = match self.infer_expr(&args[0].value) {
                             Type::Ref(inner) => *inner,
                             t => t,
