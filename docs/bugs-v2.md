@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 253 |
+| diagnostics | 254 |
 | false-positive | 183 |
 | perf | 154 |
-| missing-feature | 146 |
+| missing-feature | 147 |
 | soundness | 61 |
 | miscompile | 55 |
 | run-vs-build | 31 |
@@ -80,9 +80,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 170 |
 | cli | 94 |
 | ownership | 73 |
-| parser | 68 |
+| parser | 69 |
 | interp | 51 |
-| runtime | 39 |
+| runtime | 40 |
 | effect | 29 |
 | resolver | 23 |
 | codegen | 22 |
@@ -111,12 +111,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-4 | 2026-11-11 | interp | low | The MIR interpreter keeps a `SortedMap` / `SortedSet` as one sorted vector of values, so 100000 inserts of falling keys take 12.7 s under `__mir-run` against 0.32 s rising; the compiled backend moved to a B+-tree at c5303d91b3 | — |
-| B-2026-11-11-33 | 2026-11-11 | runtime | low | `Duration` has no unit below the millisecond: `Duration.ms(n)` and `Duration.secs(n)` build it and `as_ms()` reads it, so a pause or an elapsed time under 1 ms (Rust's `from_micros`, `as_micros`, `as_nanos`; Go's `time.Microsecond`) cannot be written or measured | — |
 | B-2026-11-11-61 | 2026-11-11 | typecheck | low | A `scan` whose state starts at an unsuffixed literal settles the state to `i64` before the `collect` that would fix it, so kata 1118's Rust shape `[0].into_iter().chain(lengths.iter().scan(0, |total, d| { let total = total + d; Some((total, total)) })).collect()` into `Vec[i32]` (with `let lengths = [31, 28, ..]`) is refused, and its `0i32` fix moves the error to `total + d` (the remainder of B-2026-11-11-41) | — |
 | B-2026-11-11-62 | 2026-11-11 | typecheck | medium | `self` in a generic impl (`impl[R] Wrap[R]`) is typed `Wrap` with no arguments, so handing it to `fn helper[R](w: ref Wrap[R])` is refused "expected 'Wrap[R]', found 'Wrap'", and inside a library generic impl over a baked type (`impl[R] BufReader[R]`) a call of the type's native method on `self` gets no callee | — |
 | B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
 | B-2026-11-11-51 | 2026-11-11 | typecheck | medium | `concat` of a sequence of `Vec`s is not Rust's flatten: on a `Slice[Vec[u8]]` it is refused with a `T: Display` bound, and on a `Vec[Vec[u8]]` it is the elements' Display text, a `String` ("[1, 2][3]") | — |
 | B-2026-11-11-66 | 2026-11-11 | runtime | medium | A compiled Semaphore.acquire sometimes waits out its whole timeout although another task released a permit: kata 1115's differential, with its semaphore arm on the standard library's Semaphore and acquire(60000), takes 62 to 63 s instead of 3 s in 6 of 120 runs (3 of 40 built binaries, 2 of 40 __mir-llvm-run, 1 of 40 karac run), with the right output. | — |
+| B-2026-11-11-72 | 2026-11-11 | runtime | low | `Duration` has no arithmetic: `a + b`, `a - b` and `d * n` are refused ("type 'Duration' does not implement trait Add"), where Rust's, Go's and Java's spans add, subtract and scale; `Instant + Duration` works | — |
+| B-2026-11-11-73 | 2026-11-11 | parser | low | Rust's `thread::sleep(d)` does not mend: `use std::thread;` becomes `import std.thread;` ("unknown module `std.thread`") and `std::thread::sleep(d)` becomes a bare `sleep(d)` with no `import std.time.sleep;` ("undefined name 'sleep'"), where Kāra's is `std.time.sleep` | — |
 
 ### Relocated
 
@@ -1061,6 +1062,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-30 | typecheck | low | Rust's `Duration::from_millis(n)` / `from_secs(n)` get `no associated function` and no fix, where Kāra's are `Duration.ms(n)` / `Duration.secs(n)`; `… | 3402c1954a |
 | B-2026-11-11-31 | typecheck+parser | medium | Rust's `use std::sync::mpsc::{channel, Receiver, Sender};` with `Mutex<Sender<()>>` and `self.tx.lock().unwrap().send(())` leaves an import of a modu… | 3402c1954a |
 | B-2026-11-11-32 | interp+mir-llvm+runtime | medium | `sleep(Duration.ms(0))` never lets another task run: a task that waits on a flag with a zero sleep between reads spins forever on the MIR interpreter… | 1267e2aa72 |
+| B-2026-11-11-33 | runtime | low | `Duration` has no unit below the millisecond: `Duration.ms(n)` and `Duration.secs(n)` build it and `as_ms()` reads it, so a pause or an elapsed time… | 86a48f366b |
 | B-2026-11-11-34 | interp+mir-llvm+runtime | medium | The prelude `Semaphore` does not wait under tasks: `acquire(timeout)` on an exhausted semaphore fails at once with `Timeout` though another task will… | c47fd80f23 |
 | B-2026-11-11-35 | typecheck | low | LeetCode's `class H2O` as `struct H2O` is refused as a Const-class name with `consider renaming to H2o` and no fix, though the rename is mechanical:… | cc0bc927f2 |
 | B-2026-11-11-36 | typecheck | low | `String.from_iter(atoms.iter())` over a `Vec[char]` says `.cloned()` but offers no fix: the assoc-eq bound's fix reached only a method whose bound na… | 3402c1954a |
