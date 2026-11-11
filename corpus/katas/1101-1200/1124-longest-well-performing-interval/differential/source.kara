@@ -1,0 +1,303 @@
+// LeetCode #1124: Longest Well-Performing Interval -- a differential over
+// the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- longest_wpi.kara ----
+
+fn a0_longest_wpi(hours: Vec[i32]) -> i64 {
+    let mut first: Map[i64, i64] = Map.new();
+    let mut score = 0;
+    let mut best = 0;
+    for (i, h) in hours.iter().enumerate() {
+        score += if h > 8 { 1 } else { -1 };
+        if score > 0 {
+            best = i + 1;
+        } else {
+            if let Some(j) = first.get(score - 1) {
+                best = best.max(i - j);
+            }
+            if not first.contains_key(score) {
+                first[score] = i;
+            }
+        }
+    }
+    best
+}
+
+// ---- longest_wpi_stack.kara ----
+
+fn a1_longest_wpi(hours: Vec[i32]) -> i64 {
+    let n = hours.len();
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + if hours[i] > 8 { 1 } else { -1 };
+    }
+    let mut lows: Vec[i64] = [];
+    for i in 0..n + 1 {
+        if lows.is_empty() or prefix[i] < prefix[lows[lows.len() - 1]] {
+            lows.push(i);
+        }
+    }
+    let mut best = 0;
+    for j in (0..n + 1).rev() {
+        while not lows.is_empty() and prefix[lows[lows.len() - 1]] < prefix[j] {
+            best = best.max(j - lows.pop().unwrap());
+        }
+    }
+    best
+}
+
+// ---- longest_wpi_table.kara ----
+
+fn a2_longest_wpi(hours: Vec[i32]) -> i64 {
+    let n = hours.len();
+    let base = n + 1;
+    let mut first: Vec[i64] = Vec.filled(2 * n + 2, -1);
+    let mut score = 0;
+    let mut best = 0;
+    for i in 0..n {
+        score += if hours[i] > 8 { 1 } else { -1 };
+        if score > 0 {
+            best = i + 1;
+        } else {
+            let before = first[score - 1 + base];
+            if before >= 0 {
+                best = best.max(i - before);
+            }
+            if first[score + base] < 0 {
+                first[score + base] = i;
+            }
+        }
+    }
+    best
+}
+
+// ---- longest_wpi_lows.kara ----
+
+fn a3_longest_wpi(hours: Vec[i32]) -> i64 {
+    let mut lows: Vec[i64] = [];
+    let mut score = 0;
+    let mut best = 0;
+    for (i, h) in hours.iter().enumerate() {
+        score += if h > 8 { 1 } else { -1 };
+        if score > 0 {
+            best = i + 1;
+        } else {
+            if score < -lows.len() {
+                lows.push(i);
+            }
+            let k = -score;
+            if k < lows.len() {
+                best = best.max(i - lows[k]);
+            }
+        }
+    }
+    best
+}
+
+// ---- longest_wpi_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_longest_wpi(hours: Vec[i32]) -> i32 {
+        let mut seen: Map[i32, i64] = Map.new();
+        let mut score = 0;
+        let mut res = 0;
+        for (i, h) in hours.iter().enumerate() {
+            score += if h > 8 { 1 } else { -1 };
+            if score > 0 {
+                res = i + 1;
+            } else {
+                seen.entry(score).or_insert(i);
+                if let Some(j) = seen.get(score - 1).cloned() {
+                    res = res.max(i - j);
+                }
+            }
+        }
+        res as i32
+    }
+}
+
+fn a4_longest_wpi(hours: Vec[i32]) -> i64 {
+    A4Solution.a4_longest_wpi(hours)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, hours: Vec[i32]) -> i64 {
+    match which {
+        0 => a0_longest_wpi(hours),
+        1 => a1_longest_wpi(hours),
+        2 => a2_longest_wpi(hours),
+        3 => a3_longest_wpi(hours),
+        _ => a4_longest_wpi(hours),
+    }
+}
+
+// The statement read literally: every interval, its tiring and other
+// days counted one by one, and the longest with more tiring days kept.
+fn literal(hours: Vec[i32]) -> i64 {
+    let n = hours.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut tiring = 0;
+            let mut other = 0;
+            for k in i..j + 1 {
+                if hours[k] > 8 {
+                    tiring += 1;
+                } else {
+                    other += 1;
+                }
+            }
+            if tiring > other and j - i + 1 > best {
+                best = j - i + 1;
+            }
+        }
+    }
+    best
+}
+
+// P2's second reading, from a running count of tiring days: some
+// interval of the answer's length has more than half its days tiring,
+// and no longer one does.
+fn reads_as_longest(answer: i64, hours: Vec[i32]) -> bool {
+    let n = hours.len();
+    let mut count: Vec[i64] = [0];
+    for h in hours.iter() {
+        count.push(count[count.len() - 1] + if h > 8 { 1 } else { 0 });
+    }
+    let well = |len: i64| (0..n - len + 1).any(|i| 2 * (count[i + len] - count[i]) > len);
+    if answer > n or answer < 0 {
+        return false;
+    }
+    (answer == 0 or well(answer)) and (answer + 1..n + 1).all(|len| not well(len))
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` days, each tiring with chance `percent` in 100, its hours drawn
+// from `low_tiring..17` when tiring and `0..9` otherwise.
+fn days(seed: mut ref i64, n: i64, percent: i64, low_tiring: i64) -> Vec[i32] {
+    let mut hours: Vec[i32] = [];
+    for _ in 0..n {
+        let h = if next_random(mut seed) % 100 < percent {
+            low_tiring + next_random(mut seed) % (17 - low_tiring)
+        } else {
+            next_random(mut seed) % 9
+        };
+        hours.push(h as i32);
+    }
+    hours
+}
+
+// Runs of tiring and other days, each run 1 to 6 long, 8 and 9 hours.
+fn runs(seed: mut ref i64, n: i64) -> Vec[i32] {
+    let mut hours: Vec[i32] = [];
+    let mut tiring = next_random(mut seed) % 2 == 0;
+    while hours.len() < n {
+        let len = next_random(mut seed) % 6 + 1;
+        for _ in 0..len {
+            if hours.len() < n {
+                hours.push(if tiring { 9 } else { 8 });
+            }
+        }
+        tiring = not tiring;
+    }
+    hours
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, hours: Vec[i32]) {
+    let n = hours.len();
+    let want = literal(hours);
+    let reversed: Vec[i32] = hours.iter().rev().collect();
+    let extremes: Vec[i32] = hours.iter().map(|h| if h > 8 { 16 } else { 0 }).collect();
+    let mut grown = hours.clone();
+    for _ in 0..n + 1 {
+        grown.push(9);
+    }
+    let mut padded: Vec[i32] = Vec.filled(n + 1, 0);
+    padded.extend(hours.iter());
+    // whether some first days hold more tiring days than other ones
+    let mut score = 0;
+    let mut leads = false;
+    for h in hours.iter() {
+        score += if h > 8 { 1 } else { -1 };
+        leads = leads or score > 0;
+    }
+    for w in 0..5 {
+        let answer = arm(w, hours);
+        let what = f"arm {w}, case {t.cases} {hours} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: by a second reading, from a running count of tiring days
+        expect(mut t, 2, reads_as_longest(answer, hours), f"P2 {what}");
+        // P3: the days reversed give the same answer
+        let r = arm(w, reversed);
+        expect(mut t, 3, r == answer, f"P3 {what}, reversed {r}");
+        // P4: each tiring day made 16 hours and each other 0 gives the same
+        let e = arm(w, extremes);
+        expect(mut t, 4, e == answer, f"P4 {what}, at the extremes {e}");
+        // P5: n + 1 tiring days appended make the whole span well-performing
+        let g = arm(w, grown);
+        expect(mut t, 5, g == 2 * n + 1, f"P5 {what}, grown {g}");
+        // P6: other days put in front never shorten the answer, and
+        // lengthen it only when some first days are well-performing
+        let p = arm(w, padded);
+        expect(mut t, 6, p >= answer and (p == answer or leads), f"P6 {what}, padded {p}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 30 days of any hours,
+    // tiring two days in five; up to 30 days of 8 and 9 hours alone, half
+    // tiring; up to 40 days tiring three in five; and up to 40 days in
+    // runs of one to six alike. Every choice is drawn before any arm
+    // answers.
+    let mut seed = 11241;
+    let mut problems: Vec[Vec[i32]] = [];
+    for i in 0..2000 {
+        let hours = match i % 4 {
+            0 => days(mut seed, next_random(mut seed) % 30 + 1, 40, 9),
+            1 => days(mut seed, next_random(mut seed) % 30 + 1, 50, 16).iter().map(|h| if h > 8 { 9 } else { 8 }).collect(),
+            2 => days(mut seed, next_random(mut seed) % 40 + 1, 60, 9),
+            _ => runs(mut seed, next_random(mut seed) % 40 + 1),
+        };
+        problems.push(hours);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

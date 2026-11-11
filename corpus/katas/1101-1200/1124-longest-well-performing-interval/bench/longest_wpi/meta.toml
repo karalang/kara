@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1124-longest-well-performing-interval/bench/longest_wpi.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1124 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "118728d11"
+extracted_src = "9430d7e4"

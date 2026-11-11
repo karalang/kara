@@ -1,0 +1,83 @@
+// LeetCode #1124: Longest Well-Performing Interval -- the ★ arm's pass
+// with the map from score to first index as a `Vec`: the score runs from
+// -n to n and is looked up one lower, so each score's first index sits at
+// `score + n + 1`, -1 until it is met. O(n).
+
+fn longest_wpi(hours: Vec[i32]) -> i64 {
+    let n = hours.len();
+    let base = n + 1;
+    let mut first: Vec[i64] = Vec.filled(2 * n + 2, -1);
+    let mut score = 0;
+    let mut best = 0;
+    for i in 0..n {
+        score += if hours[i] > 8 { 1 } else { -1 };
+        if score > 0 {
+            best = i + 1;
+        } else {
+            let before = first[score - 1 + base];
+            if before >= 0 {
+                best = best.max(i - before);
+            }
+            if first[score + base] < 0 {
+                first[score + base] = i;
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` days of hours from 0 to 16; with `tilt`, a day is tiring a little
+// more often than not, so long intervals have to be found.
+fn random_hours(seed: mut ref i64, n: i64, tilt: bool) -> Vec[i32] {
+    let mut hours: Vec[i32] = [];
+    for _ in 0..n {
+        let r = next_random(mut seed) % 100;
+        let h = if tilt and r < 52 or not tilt and r < 40 {
+            9 + next_random(mut seed) % 8
+        } else {
+            next_random(mut seed) % 9
+        };
+        hours.push(h as i32);
+    }
+    hours
+}
+
+fn main() {
+    // LeetCode's two examples and six more: every day tiring, none, one
+    // tiring day alone, the whole span when tiring days lead by one, a
+    // well-performing run at the end, and 8 hours, which is not tiring
+    let cases: Vec[Vec[i32]] = [
+        [9, 9, 6, 0, 6, 6, 9],
+        [6, 6, 6],
+        [9, 10, 12],
+        [0, 1, 2, 3],
+        [6],
+        [9],
+        [9, 6, 9, 6, 9],
+        [6, 6, 6, 6, 9, 9, 9],
+        [8, 9, 8, 9, 8],
+    ];
+    for c in cases.iter() {
+        println(f"{c} -> {longest_wpi(c)}");
+    }
+    // 2000 random weeks of up to 10^4 days, LeetCode's limit, every other
+    // one tilted towards tiring days: the answers summed and a checksum
+    let mut seed = 1124;
+    let mut total = 0;
+    let mut check = 0;
+    for t in 0..2000 {
+        let n = next_random(mut seed) % 10000 + 1;
+        let hours = random_hours(mut seed, n, t % 2 == 1);
+        let answer = longest_wpi(hours);
+        total += answer;
+        check = (check * 31 + answer + n) % 1000000007;
+    }
+    println(f"2000 random schedules: answers total {total}, checksum {check}");
+}
