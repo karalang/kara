@@ -226,7 +226,7 @@ fn main() {
             Err(e) => println(f"{e}"),
             Ok(()) => println("full"),
         }
-        let r = BufReader.new(TcpStream.connect("fake:2").unwrap());
+        let mut r = BufReader.new(TcpStream.connect("fake:2").unwrap());
         let mut line = String.new();
         match r.read_line(mut line) {
             Err(e) => println(f"buffered: {e}"),
