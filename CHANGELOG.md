@@ -379,6 +379,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Peekable[StrChars, char]`, as the fix. docs/library/iterators.md now
   gives `peekable`'s result as `Peekable[Self, Self.Item]`
   (B-2026-11-10-35).
+- An `if` or `match` of literals as an element of a list or tuple literal
+  was typed `i64` where it was written, so `let v: Vec[i32] = [1, if b
+  { 2 } else { 3 }];` and `let t: (i32, i32) = (1, if b { 2 } else { 3 });`
+  were refused as narrowing. Such an element is a literal now, typed by its
+  slot, with every branch range-checked (B-2026-11-11-38).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

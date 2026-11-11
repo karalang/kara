@@ -4868,6 +4868,9 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     let mut all_fit = true;
                     for e in elem_exprs {
+                        if self.check_literal_join_element(e, elem) {
+                            continue;
+                        }
                         if let Some(v) = Self::unsuffixed_int_literal_value(e) {
                             all_fit &= self.check_int_literal_fits(v, elem, &e.span, None);
                         }
@@ -11069,6 +11072,9 @@ impl<'a> super::TypeChecker<'a> {
     /// walked, and any other element meets the widening and narrowing gates
     /// (B-2026-08-14-1).
     pub(super) fn check_tuple_literal_element(&mut self, e: &Expr, slot: &Type, got: &Type) {
+        if self.check_literal_join_element(e, slot) {
+            return;
+        }
         let ctx = match slot {
             Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
             other => other,
@@ -12503,6 +12509,31 @@ impl<'a> super::TypeChecker<'a> {
     /// `e` is a block, `if` or `match` whose every value is an unsuffixed
     /// literal of one kind, inferred where a later use may fix a literal
     /// (a `let`'s value): its literals join into one open variable.
+    /// An element of a list or tuple literal that is a join of literals
+    /// (`[31, if leap { 29 } else { 28 }]`) is a literal too (design.md §8,
+    /// "A join of literals is a literal"), so a numeric slot types it: it is
+    /// checked against the slot, which range-checks every branch, in place of
+    /// the narrowing check its synthesized `i64` would meet. Returns whether
+    /// it was (B-2026-11-11-38).
+    pub(super) fn check_literal_join_element(&mut self, e: &Expr, slot: &Type) -> bool {
+        let slot = match slot {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        if !matches!(slot, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+            || !matches!(
+                e.kind,
+                ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::Match { .. }
+            )
+            || !Self::is_literal_tree(e, slot)
+        {
+            return false;
+        }
+        let slot = slot.clone();
+        self.check_expr(e, &slot);
+        true
+    }
+
     pub(super) fn open_literal_join(&self, e: &Expr) -> bool {
         self.open_literal_expr == Some(e.id)
             && !e.id.is_dummy()
