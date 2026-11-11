@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 250 |
-| false-positive | 182 |
+| diagnostics | 251 |
+| false-positive | 183 |
 | perf | 154 |
 | missing-feature | 146 |
 | soundness | 61 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 393 |
+| typecheck | 394 |
 | mir-llvm | 201 |
-| mir | 169 |
+| mir | 170 |
 | cli | 94 |
 | ownership | 73 |
-| parser | 66 |
+| parser | 67 |
 | interp | 51 |
 | runtime | 38 |
 | effect | 29 |
@@ -117,6 +117,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-62 | 2026-11-11 | typecheck | medium | `self` in a generic impl (`impl[R] Wrap[R]`) is typed `Wrap` with no arguments, so handing it to `fn helper[R](w: ref Wrap[R])` is refused "expected 'Wrap[R]', found 'Wrap'", and inside a library generic impl over a baked type (`impl[R] BufReader[R]`) a call of the type's native method on `self` gets no callee | — |
 | B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
 | B-2026-11-11-51 | 2026-11-11 | typecheck | medium | `concat` of a sequence of `Vec`s is not Rust's flatten: on a `Slice[Vec[u8]]` it is refused with a `T: Display` bound, and on a `Vec[Vec[u8]]` it is the elements' Display text, a `String` ("[1, 2][3]") | — |
+| B-2026-11-11-64 | 2026-11-11 | typecheck+mir | medium | Two tuple match arms, one holding a `ref` to a `Copy` value and the other the value, are refused: `match place.get(x) { Some(i) => (0, i), None => (1, x as i64) }`, with `i: ref i64`, reports "match arms have incompatible types: '(i64, ref i64)' and '(i64, i64)'", though a bare `ref i64` arm beside an `i64` joins at the value (core semantics §5.10). | — |
+| B-2026-11-11-65 | 2026-11-11 | parser | low | `karac fix` deleting a Rust `use std::collections::HashMap;` line between two blank lines leaves the two blank lines in a row. | — |
 
 ### Relocated
 
