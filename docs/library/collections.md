@@ -190,7 +190,9 @@ self.table.entry(key).or_insert_with(Vec.new).push(row);
 
 ## `SortedMap[K, V]`
 
-A B-tree map, `K: Ord`. Iteration is in ascending key order.
+A B-tree map, `K: Ord`. Every operation is O(log n), and iteration is in ascending key order.
+
+**Complexity under the MIR interpreter.** The O(log n) bounds for `SortedMap` and `SortedSet` are those of compiled code (`karac build`, and `karac run` and `karac test` through the JIT). `karac repl`, comptime evaluation and the `--interp` flags run on the MIR interpreter, which keeps a sorted table as one sorted array: a lookup is O(log n), but an insert or removal is O(n), so a table built by inserting tens of thousands of keys in falling or random order is markedly slower there. The interpreter is the reference for semantics, not for speed ([design.md § Compilation model](../design.md#compilation-model), principle 4).
 
 | Method | Signature | Notes |
 |---|---|---|
