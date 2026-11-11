@@ -444,7 +444,7 @@ impl super::Parser {
     }
 
     /// The `)` that closes the `(` at token `open`.
-    fn matching_paren(&self, open: usize) -> Option<usize> {
+    pub(crate) fn matching_paren(&self, open: usize) -> Option<usize> {
         let mut depth = 0usize;
         for k in open..self.tokens.len() {
             match self.tokens[k].token {

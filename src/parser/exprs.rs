@@ -4666,6 +4666,36 @@ impl super::Parser {
             && (name.chars().count() == 1 || name.chars().any(|c| c.is_ascii_lowercase()))
     }
 
+    /// For a `(` at token `open` that starts an argument: the index of its
+    /// `)` when the parentheses hold the whole argument (a `,` or the list's
+    /// `)` follows) around one expression, not a tuple or `()`.
+    fn whole_arg_parens(&self, open: usize) -> Option<usize> {
+        if !matches!(self.tokens.get(open)?.token, Token::LeftParen) {
+            return None;
+        }
+        let close = self.matching_paren(open)?;
+        if close == open + 1
+            || !matches!(
+                self.tokens.get(close + 1)?.token,
+                Token::Comma | Token::RightParen
+            )
+        {
+            return None;
+        }
+        let mut depth = 0usize;
+        for t in &self.tokens[open + 1..close] {
+            match t.token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.saturating_sub(1)
+                }
+                Token::Comma if depth == 0 => return None,
+                _ => {}
+            }
+        }
+        Some(close)
+    }
+
     fn parse_arg_list_inner(&mut self, ctor: bool) -> Option<Vec<CallArg>> {
         let mut args = Vec::new();
         while !self.check(&Token::RightParen) && !self.is_at_end() {
@@ -4711,14 +4741,29 @@ impl super::Parser {
                     },
                     sigil,
                 );
-                self.fix_edits.insert(
-                    crate::resolver::SpanKey::from_span(&sigil),
-                    crate::resolver::TextEdit {
-                        offset: sigil.offset,
-                        length: sigil.length,
-                        replacement: String::new(),
-                    },
-                );
+                // `f(&(a - 1))`: with the `&` gone the parentheses only
+                // group the whole argument, so they go too (kata 1124). A
+                // tuple, `f(&(a, b))`, keeps them.
+                let close = (!is_mut && !double)
+                    .then(|| self.whole_arg_parens(self.pos + 1))
+                    .flatten();
+                let mut edits = vec![crate::resolver::TextEdit {
+                    offset: sigil.offset,
+                    length: sigil.length,
+                    replacement: String::new(),
+                }];
+                if let Some(close) = close {
+                    for k in [self.pos + 1, close] {
+                        let paren = self.tokens[k].span;
+                        edits.push(crate::resolver::TextEdit {
+                            offset: paren.offset,
+                            length: paren.length,
+                            replacement: String::new(),
+                        });
+                    }
+                }
+                self.fix_diffs
+                    .insert(crate::resolver::SpanKey::from_span(&sigil), edits);
                 self.advance();
             }
 
