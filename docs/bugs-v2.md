@@ -116,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-61 | 2026-11-11 | typecheck | low | A `scan` whose state starts at an unsuffixed literal settles the state to `i64` before the `collect` that would fix it, so kata 1118's Rust shape `[0].into_iter().chain(lengths.iter().scan(0, |total, d| { let total = total + d; Some((total, total)) })).collect()` into `Vec[i32]` (with `let lengths = [31, 28, ..]`) is refused, and its `0i32` fix moves the error to `total + d` (the remainder of B-2026-11-11-41) | — |
 | B-2026-11-11-62 | 2026-11-11 | typecheck | medium | `self` in a generic impl (`impl[R] Wrap[R]`) is typed `Wrap` with no arguments, so handing it to `fn helper[R](w: ref Wrap[R])` is refused "expected 'Wrap[R]', found 'Wrap'", and inside a library generic impl over a baked type (`impl[R] BufReader[R]`) a call of the type's native method on `self` gets no callee | — |
 | B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
-| B-2026-11-11-50 | 2026-11-11 | typecheck | medium | A method on a const (`NAME.as_bytes()`, `CODES.map(..).sum()`) gets no fix-it, or one in the wrong place: the path call it parses as becomes a method call whose receiver and `)` both carry the whole call's span | — |
 | B-2026-11-11-51 | 2026-11-11 | typecheck | medium | `concat` of a sequence of `Vec`s is not Rust's flatten: on a `Slice[Vec[u8]]` it is refused with a `T: Display` bound, and on a `Vec[Vec[u8]]` it is the elements' Display text, a `String` ("[1, 2][3]") | — |
 
 ### Relocated
@@ -1074,6 +1073,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-46 | typecheck | medium | `karac fix` turns Rust's `pkt[2..].split(\|&b\| b == 0).collect()` into `.split(..).iter().collect()`, which the next check refuses with E0516: the `.i… | a193908f55 |
 | B-2026-11-11-47 | mir-llvm+runtime | medium | A compiled `Pool.acquire` can stall for its whole timeout though a value is free: its `__ready` (karac_mir_ready_pool) sees the pool free and lets th… | 30b8a505a3 |
 | B-2026-11-11-60 | mir | medium | A tuple, array, `Vec`, `Option` or derived-`Ord` struct holding a value with a hand-written `Ord` sorts and keys sorted tables by its parts' plain or… | 3d987fca00 |
+| B-2026-11-11-50 | typecheck | medium | A method on a const (`NAME.as_bytes()`, `CODES.map(..).sum()`) gets no fix-it, or one in the wrong place: the path call it parses as becomes a method… | 4e2cef2b9b |
 
 </details>
 
