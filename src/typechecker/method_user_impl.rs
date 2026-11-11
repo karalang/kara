@@ -279,7 +279,7 @@ impl<'a> super::TypeChecker<'a> {
             })
     }
 
-    pub(super) fn iter_hint_fix(object: &Expr) -> Option<FixIt> {
+    pub(super) fn iter_hint_fix(object: &Expr, hop: &str) -> Option<FixIt> {
         let end = Self::receiver_end(object)?;
         Some(FixIt {
             span: Span {
@@ -288,13 +288,39 @@ impl<'a> super::TypeChecker<'a> {
                 line: object.span.line,
                 column: object.span.column,
             },
-            replacement: ".iter()".to_string(),
+            replacement: format!(".{hop}()"),
         })
+    }
+
+    /// The iterator a `Vec` receiver is walked with: `iter` for a place,
+    /// `into_iter` for a call's result. `pkt.split(p).iter().collect()`
+    /// would lend from a temporary dropped at the end of the statement
+    /// (E0516), where `into_iter` hands its items over (B-2026-11-11-46).
+    pub(super) fn iter_hop(object: &Expr) -> &'static str {
+        if matches!(
+            object.kind,
+            ExprKind::MethodCall { .. } | ExprKind::Call { .. }
+        ) {
+            "into_iter"
+        } else {
+            "iter"
+        }
     }
 
     /// `type_error` carrying [`Self::iter_hint_fix`] when there is one.
     pub(super) fn iter_hint_error(&mut self, object: &Expr, message: String, span: Span) {
-        match Self::iter_hint_fix(object) {
+        self.iter_hint_error_by(object, message, span, "iter");
+    }
+
+    /// [`Self::iter_hint_error`] inserting `.{hop}()`.
+    pub(super) fn iter_hint_error_by(
+        &mut self,
+        object: &Expr,
+        message: String,
+        span: Span,
+        hop: &str,
+    ) {
+        match Self::iter_hint_fix(object, hop) {
             Some(fix) => {
                 self.type_error_with_fix_it(message, span, TypeErrorKind::NoMethodFound, fix)
             }
@@ -2040,11 +2066,12 @@ impl<'a> super::TypeChecker<'a> {
                         && Self::is_iterator_surface_method(method)
                     {
                         let recv = Self::iter_hint_receiver(object);
+                        let hop = Self::iter_hop(object);
                         msg.push_str(&format!(
-                            ": iterator adaptors/terminals require an explicit `.iter()` — write `{}.iter().{}(...)`",
+                            ": iterator adaptors/terminals require an explicit `.{hop}()` — write `{}.{hop}().{}(...)`",
                             recv, method
                         ));
-                        self.iter_hint_error(object, msg, *span);
+                        self.iter_hint_error_by(object, msg, *span, hop);
                         return Type::Error;
                     } else {
                         let candidates = self.env.collect_method_names(&type_name, &[]);

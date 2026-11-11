@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 248 |
+| diagnostics | 249 |
 | false-positive | 181 |
 | perf | 154 |
 | missing-feature | 143 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 387 |
+| typecheck | 388 |
 | mir-llvm | 199 |
 | mir | 168 |
 | cli | 94 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-35 | 2026-11-11 | typecheck | low | LeetCode's `class H2O` as `struct H2O` is refused as a Const-class name with `consider renaming to H2o` and no fix, though the rename is mechanical: the declaration, its `impl`, and every use in the file | — |
 | B-2026-11-11-38 | 2026-11-11 | typecheck | medium | An `if` or `match` of unsuffixed literals as an element of a list or tuple literal is typed `i64` at once: `let v: Vec[i32] = [1, if b { 2 } else { 3 }];` and `let t: (i32, i32) = (1, if b { 2 } else { 3 });` are refused as a narrowing, with no fix | — |
 | B-2026-11-11-41 | 2026-11-11 | typecheck | medium | A `chain` of literal lists collected into a `Vec[i32]` is refused with no fix: `let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect();` says `C: FromIterator[i64]`, and a `scan` over literals chained after a literal head gets a fix for neither literal | — |
+| B-2026-11-11-46 | 2026-11-11 | typecheck | medium | `karac fix` turns Rust's `pkt[2..].split(|&b| b == 0).collect()` into `.split(..).iter().collect()`, which the next check refuses with E0516: the `.iter()` lends from the `Vec` that `split` returns, a temporary dropped at the end of the statement | — |
 
 ### Relocated
 

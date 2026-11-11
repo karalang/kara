@@ -96,7 +96,8 @@ fn mend(dir: &Path, src: &str) -> (String, Result<String, String>) {
             Err(format!("still refused:\n{err}\nfixed text:\n{text}")),
         );
     }
-    if !text.contains(".iter().") && !text.contains(".flat_map(") {
+    if !text.contains(".iter().") && !text.contains(".into_iter().") && !text.contains(".flat_map(")
+    {
         return (first, Err(format!("no fix applied:\n{text}")));
     }
     let (_, stdout, stderr) = karac(dir, &["__mir-run", "cell.kara"]);
@@ -130,10 +131,11 @@ fn an_iterator_method_on_a_sequence_mends_to_an_iter_hop() {
     assert_eq!(results.len(), CELLS.len());
     let mut bad = Vec::new();
     for (name, want, first, got) in results {
-        let hint = if name == "into_iter_flatten" {
-            "in place of `.flatten()`"
-        } else {
-            "require an explicit `.iter()`"
+        // A call's result is walked with `into_iter` (B-2026-11-11-46).
+        let hint = match name {
+            "into_iter_flatten" => "in place of `.flatten()`",
+            "windows_find" => "require an explicit `.into_iter()`",
+            _ => "require an explicit `.iter()`",
         };
         if !first.contains(hint) {
             bad.push(format!(

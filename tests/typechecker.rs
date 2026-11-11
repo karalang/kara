@@ -13891,10 +13891,11 @@ fn iterator_methods_on_a_slice_name_the_iter_hop() {
             "fn main() { let v: Vec[i64] = [1, 2]; let d: Vec[i64] = v.as_slice().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }",
             "write `v.as_slice().iter().map(...)`",
         ),
-        // A `Vec` receiver that is a call used to print the placeholder `xs`.
+        // A `Vec` receiver that is a call used to print the placeholder `xs`;
+        // a call's result is walked with `into_iter` (B-2026-11-11-46).
         (
             "fn mk() -> Vec[i64] { return [1, 2]; }\nfn main() { let d: Vec[i64] = mk().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }",
-            "write `mk().iter().map(...)`",
+            "write `mk().into_iter().map(...)`",
         ),
     ] {
         let errors = typecheck_errors(prog);
@@ -13910,6 +13911,7 @@ fn iterator_methods_on_a_slice_name_the_iter_hop() {
     typecheck_ok("fn main() { let s = \"hi\"; let bs: Vec[u8] = s.bytes().iter().collect(); println(f\"{bs.len()}\"); }");
     typecheck_ok("fn main() { let v: Vec[i64] = [1, 2]; let d: Vec[i64] = v.as_slice().iter().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }");
     typecheck_ok("fn mk() -> Vec[i64] { return [1, 2]; }\nfn main() { let d: Vec[i64] = mk().iter().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }");
+    typecheck_ok("fn mk() -> Vec[i64] { return [1, 2]; }\nfn main() { let d: Vec[i64] = mk().into_iter().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }");
 }
 
 // ── Method resolution: stdlib typo suggestions ──────────────────
