@@ -110,7 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-63 | 2026-11-11 | typecheck+interp+mir-llvm | low | `BufReader` has no `read_exact` (the remainder of B-2026-11-10-44): the sockets, `File` and the child pipes have it, but a library `impl[R] BufReader[R]` cannot call the native `read` on `self` (B-2026-11-11-62) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
-| B-2026-11-11-84 | 2026-11-11 | typecheck | medium | `karac fix` puts the `.clone()` for a moved `let mut next = team;` re-binding of a `for` element at the move, leaving `next.push(p)` writing through the element's `ref`: an error nothing fixes (kata 1125's sparse arm). | — |
 
 ### Relocated
 
@@ -1087,6 +1086,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-74 | parser | low | `karac fix` deleting a Rust `use std::rc::Rc;` / `use std::cell::RefCell;` line between two blank lines leaves the two blank lines in a row (the rema… | e70aabada4 |
 | B-2026-11-11-75 | parser | medium | `karac fix` writes a Rust parameter's `&Option<Rc<RefCell<T>>>` as `ref Option[T]`, so a node matched out of it is a `ref T` and `Some(n)` cannot be… | 628eb9974d |
 | B-2026-11-11-83 | parser | low | `karac fix` drops the `&` of a Rust argument `&(expr)` but leaves its parentheses: `seen.get(&(score - 1))` becomes `seen.get((score - 1))` (kata 112… | 46ef5d349a |
+| B-2026-11-11-84 | typecheck | medium | `karac fix` puts the `.clone()` for a moved `let mut next = team;` re-binding of a `for` element at the move, leaving `next.push(p)` writing through… | afb930a6c1 |
 
 </details>
 
