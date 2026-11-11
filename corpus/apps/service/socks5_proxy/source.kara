@@ -128,7 +128,7 @@ fn handshake(conn: TcpStream, log: mut ref Vec[String]) -> Result[Option[Target]
     };
     let mut pb = [0u8; 2];
     read_exact(conn, mut pb)?;
-    let port = ((pb[0] as u16) << 8) | pb[1];
+    let port = u16.from_be_bytes(pb);
     if cmd != 1 {
         let _ = conn.write_all(reply(BAD_COMMAND));
         log.push(f"{user}: command {cmd} not supported");
@@ -261,14 +261,14 @@ fn recv_all(s: TcpStream) -> Vec[u8] {
 fn ipv4_request(cmd: u8, addr: Array[u8, 4], port: u16) -> Vec[u8] {
     let mut v = [5, cmd, 0, 1];
     v.extend_from_slice(addr);
-    v.extend_from_slice([(port >> 8) as u8, (port & 0xFF) as u8]);
+    v.extend_from_slice(port.to_be_bytes());
     v
 }
 
 fn name_request(name: Str, port: u16) -> Vec[u8] {
     let mut v = [5, 1, 0, 3, name.len() as u8];
     v.extend_from_slice(name.bytes());
-    v.extend_from_slice([(port >> 8) as u8, (port & 0xFF) as u8]);
+    v.extend_from_slice(port.to_be_bytes());
     v
 }
 
@@ -339,7 +339,7 @@ fn main() {
     let mut v6 = [5u8, 1, 0, 4];
     v6.extend_from_slice([0u8; 15]);
     v6.push(1);
-    v6.extend_from_slice([(ECHO_PORT >> 8) as u8, (ECHO_PORT & 0xFF) as u8]);
+    v6.extend_from_slice(ECHO_PORT.to_be_bytes());
     client("5 ipv6", pw, good, v6, []);
     client("6 by name", pw, login("bob", "builder"), name_request("localhost", ECHO_PORT), b"via name\n");
     client("7 unknown name", pw, good, name_request("example.invalid", ECHO_PORT), []);
