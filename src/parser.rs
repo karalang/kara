@@ -363,6 +363,8 @@ pub struct Parser {
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::cast_operand_ends`].
     pub(crate) cast_operand_ends: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
+    /// See [`crate::ast::Program::paren_casts`].
+    pub(crate) paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
     /// See [`crate::ast::Program::mut_fn_types`].
     pub(crate) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::cross_task_fn_types`].
@@ -689,6 +691,7 @@ impl Parser {
             range_arg_edits: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             cast_operand_ends: rustc_hash::FxHashMap::default(),
+            paren_casts: rustc_hash::FxHashMap::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
             fn_type_marker_points: rustc_hash::FxHashMap::default(),
@@ -1129,6 +1132,7 @@ impl Parser {
             range_arg_edits: std::mem::take(&mut self.range_arg_edits),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
+            paren_casts: std::mem::take(&mut self.paren_casts),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
             fn_type_marker_points: std::mem::take(&mut self.fn_type_marker_points),

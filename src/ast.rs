@@ -976,6 +976,12 @@ pub struct Program {
     /// that deletes the `as T` starts (`lossless_cast` on `(a - b) as i64`,
     /// kata 1061).
     pub cast_operand_ends: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
+    /// A cast written in parentheses of its own, `x * (k as i64)`, keyed by
+    /// the cast's span: the parentheses' span and the operand's text. The
+    /// parentheses leave no node, so this is how `lossless_cast`'s fix takes
+    /// them with the `as T` and leaves `x * k` (kata 1121), where only the
+    /// operand is a single term that needs none.
+    pub paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
     /// `MutFn(...)` types (`docs/core-semantics.md` §9.6), keyed by the
     /// function type's span. Kept beside the tree like
     /// [`Self::escaping_fn_types`]: the type is an ordinary non-once `FnType`

@@ -3194,6 +3194,17 @@ impl super::Parser {
         } else {
             // Parenthesized expression
             self.expect(&Token::RightParen)?;
+            // `(k as i64)`: see `Program::paren_casts`.
+            if let ExprKind::Cast { expr: operand, .. } = &first.kind {
+                let whole = self.span_from(&start);
+                if let Some(text) = self.source_at(operand.span.offset, operand.span.length) {
+                    let text = text.to_string();
+                    self.paren_casts.insert(
+                        crate::resolver::SpanKey::from_span(&first.span),
+                        (whole, text),
+                    );
+                }
+            }
             Some(first)
         }
     }

@@ -10788,13 +10788,33 @@ impl<'a> super::TypeChecker<'a> {
                     }
             ))
             && end > start)
-            .then(|| FixIt {
-                span: Span {
-                    offset: start,
-                    length: end - start,
-                    ..ty.span
-                },
-                replacement: String::new(),
+            .then(|| {
+                // A cast in parentheses of its own goes with them, `x * (k as
+                // i64)` to `x * k`: the operand is a single term here (a
+                // parenthesized operand, `closed`, keeps its own), so it
+                // needs none (kata 1121).
+                let parens = closed
+                    .is_none()
+                    .then(|| {
+                        self.program
+                            .paren_casts
+                            .get(&SpanKey::from_span(&expr.span))
+                    })
+                    .flatten();
+                match parens {
+                    Some((whole, text)) => FixIt {
+                        span: *whole,
+                        replacement: text.clone(),
+                    },
+                    None => FixIt {
+                        span: Span {
+                            offset: start,
+                            length: end - start,
+                            ..ty.span
+                        },
+                        replacement: String::new(),
+                    },
+                }
             });
         self.type_lint_warning_with_fix(
             message,
