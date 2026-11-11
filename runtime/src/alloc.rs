@@ -558,7 +558,11 @@ fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
     extern "C" {
         fn free(ptr: *mut core::ffi::c_void);
     }
+    // The lists exist on glibc and macOS only; musl takes `malloc`.
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
     let kept = small::take(new);
+    #[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
+    let kept: *mut u8 = std::ptr::null_mut();
     let fresh = if kept.is_null() {
         unsafe { malloc(new) }
     } else {
@@ -573,6 +577,7 @@ fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
     // and `copy <= new` bytes by `fresh`; the two blocks are distinct.
     unsafe {
         std::ptr::copy_nonoverlapping(ptr, fresh, copy);
+        #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
         if small::put_sized(ptr, old) {
             return fresh;
         }
