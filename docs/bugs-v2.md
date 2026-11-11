@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 236 |
 | false-positive | 180 |
-| perf | 152 |
+| perf | 153 |
 | missing-feature | 136 |
 | soundness | 61 |
 | miscompile | 53 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 94 |
 | ownership | 73 |
 | parser | 62 |
-| interp | 47 |
+| interp | 48 |
 | runtime | 32 |
 | effect | 29 |
 | resolver | 23 |
@@ -111,13 +111,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-51 | 2026-11-09 | mir-llvm | low | Kata 1087's bench (20 million short words cloned into vectors and freed) runs 26% behind `rustc -O -C overflow-checks=on -C target-cpu=x86-64-v3` with the same allocations: 13.65G instructions against 10.45G, the extra in glibc's malloc slow path (14.8M `_int_malloc` calls against 2.7M) and in `malloc_consolidate` (0.72G, none in Rust) | — |
 | B-2026-11-10-25 | 2026-11-10 | mir-llvm | low | The char-pattern fix-it's `c.to_string()` allocates a String on every call: kata 2062's `"aeiou".contains(c.to_string())` vowel test makes its compiled bench 2.4x slower than the same program with a `match` (0.95 s against 0.40 s), and 2.2x Rust's `"aeiou".contains(c)`; kata 2063's bench, with the same test, is 5.8x slower | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
-| B-2026-11-10-39 | 2026-11-10 | mir-llvm | medium | `SortedMap.insert` of a key smaller than every key present is O(n): the map is one sorted array, so 100000 inserts of falling keys take 1.8 s compiled against 0.018 s for rising ones, where collections.md promises a B-tree with O(log n) operations | — |
 | B-2026-11-10-41 | 2026-11-10 | resolver | low | Rust's `Reverse` on one part of a heap's tuple item has no Kāra spelling and no fix: `BinaryHeap<(Reverse<i32>, String)>` and `BinaryHeap<(i32, Reverse<String>)>` are refused at every `Reverse`, and the remaining repair is a hand-written `Ord` or a negated number, impossible for a `String` | — |
 | B-2026-11-10-44 | 2026-11-10 | typecheck+interp+mir-llvm | medium | No `read_exact` on any reader (`TcpStream`, `TlsStream`, `File`, `BufReader`, child pipes): Rust's `conn.read_exact(&mut hdr)?`, the usual way to read a binary protocol's fixed-size header (SOCKS5, DNS over TCP, Postgres, length-prefixed frames), fails "no method 'read_exact' on type 'TcpStream'" with no help | — |
 | B-2026-11-10-47 | 2026-11-10 | typecheck | low | Rust's `let local = [127u8, 0, 0, 1];` (an array in Rust, a `Vec` by default in Kāra) passed to an `Array[u8, 4]` parameter gets "expected 'Array[u8, 4]', found 'Vec[u8]'" at each use, with no fix to annotate the `let` | — |
 | B-2026-11-10-48 | 2026-11-10 | typecheck | low | An unknown method in a `let` initializer (`text.trim_end_matches('\n').split("\n").collect()`) is followed by a spurious "a reference to a temporary outlives its statement (core-semantics.md §5.5)" at the same span | — |
 | B-2026-11-10-35 | 2026-11-10 | parser+typecheck | low | Rust's `use std::iter::Peekable; use std::str::Chars;` and `fn read(chars: &mut Peekable<Chars>)` reach `std.iter has no item Peekable` and `unknown module std.str` with no fix, though Kāra has `Peekable` and the type is `Peekable[StrChars, char]` | — |
 | B-2026-11-11-3 | 2026-11-11 | typecheck | low | `Option[Vec[T]].as_deref() -> Option[Slice[T]]` (library/core-types.md) is missing: 0.8 refuses a second specialized inherent impl that defines `as_deref` beside `Option[String]`'s, and the library has no trait that names a type's view | — |
+| B-2026-11-11-4 | 2026-11-11 | interp | low | The MIR interpreter keeps a `SortedMap` / `SortedSet` as one sorted vector of values, so 100000 inserts of falling keys take 12.7 s under `__mir-run` against 0.32 s rising; the compiled backend moved to a B+-tree at c5303d91b3 | — |
 
 ### Relocated
 
@@ -1029,6 +1029,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-37 | mir-llvm | low | LLVM 22 keeps hsearch's (275) bounds check on `citations[mid]` in a binary search: instcombine rewrites karac's `assume(mid >= lo)` into `assume(hi -… | 5a072c1314 |
 | B-2026-11-10-38 | mir-llvm | low | A program that names no library method still kept and checked Iterator's min/max/sum/count/last/find/collect/cloned/take/enumerate and ExactSizeItera… | 5244494204 |
 | B-2026-11-10-26 | mir | low | Rust's `Iterator::eq` is missing: `a.iter().eq(b.iter().rev())` is refused with "`VecIter` does not implement `PartialEq`", and adding `eq` to the li… | 36c8731fe3 |
+| B-2026-11-10-39 | mir-llvm | medium | `SortedMap.insert` of a key smaller than every key present is O(n): the map is one sorted array, so 100000 inserts of falling keys take 1.8 s compile… | c5303d91b3 |
 | B-2026-11-10-40 | typecheck | low | A tuple of literals was typed `(i64, i64)` where it was written, not left open as design.md §8 leaves a bare literal -- filed as a diagnostics gap (t… | d70ec4a181 |
 | B-2026-11-10-33 | typecheck | medium | A bare handle parameter handed to `BufReader.new` / `BufWriter.new` (`fn serve(conn: TcpStream) { BufReader.new(conn) }`, a Rust port's owned paramet… | 0e5453a321 |
 | B-2026-11-10-34 | typecheck | low | `let s: String = pieces.map(\|x\| f"[{x}]").collect()`, Rust's `FromIterator<String> for String`, is refused with only "`String` implements `FromIterat… | 0e5453a321 |
