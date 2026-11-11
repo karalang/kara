@@ -3404,6 +3404,15 @@ impl Parser {
         let mut edit_length = whole.length;
         if !keep_reverse && self.source_at(whole.offset + whole.length, 1) == Some("\n") {
             edit_length += 1;
+            // And a blank line after it when one is before it too, so the
+            // two do not become two blank lines in a row (kata 1122).
+            // At the top of the file there is nothing for it to separate.
+            if (whole.offset == 0
+                || (whole.offset >= 2 && self.source_at(whole.offset - 2, 2) == Some("\n\n")))
+                && self.source_at(whole.offset + edit_length, 1) == Some("\n")
+            {
+                edit_length += 1;
+            }
         }
         self.error_at(&message, whole);
         self.fix_diffs.insert(
