@@ -1235,11 +1235,21 @@ jobs:
     name: Toolchain drift canary (floating stable)
     runs-on: ubuntu-latest
     continue-on-error: true
+    # The same disk shape as the test job's (see its env): full debuginfo
+    # filled the runner while linking karac's lib test.
     env:
       RUSTUP_TOOLCHAIN: stable
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
