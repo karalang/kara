@@ -130,8 +130,46 @@ fn main() {
 
 const ECHO_OUT: &str = "FOUR FIVE []\nONE TWO THREE []\n";
 
+/// A buffered read reports the socket's read timeout as an `IoError` and
+/// reads on once the bytes come, on the main task and inside a spawned one.
+/// `TimedOut` prints the same on every platform.
+const TIMEOUT: &str = r#"import std.io.{BufReader};
+import std.sync.{TaskGroup};
+
+fn probe(tag: Str, l: TcpListener) {
+    let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
+    let _ = c.set_read_timeout(Some(200));
+    let s = l.accept().unwrap();
+    let mut r = BufReader.new(c);
+    let mut line = String.new();
+    match r.read_line(mut line) {
+        Ok(n) => println(f"{tag} first ok {n}"),
+        Err(e) => println(f"{tag} first err {e}"),
+    }
+    let _ = s.write_all("late\n".bytes());
+    match r.read_line(mut line) {
+        Ok(n) => println(f"{tag} then ok {n} {line.trim_end()}"),
+        Err(e) => println(f"{tag} then err {e}"),
+    }
+}
+
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    probe("main", l);
+    let l2 = TcpListener.bind("127.0.0.1:0").unwrap();
+    let g = TaskGroup.new();
+    let h = g.spawn(|| probe("task", l2));
+    let _ = h.join();
+}
+"#;
+
+const TIMEOUT_OUT: &str = "main first err timed out\nmain then ok 5 late\n\
+task first err timed out\ntask then ok 5 late\n";
+
 /// A buffered read reports the socket's read timeout and its reset as
-/// `IoError`s, on the main task and inside a spawned one.
+/// `IoError`s, on the main task and inside a spawned one. Unix only: Windows
+/// words the reset its own way and drops the unread `partial` with it.
+#[cfg(unix)]
 const EDGES: &str = r#"import std.io.{BufReader};
 import std.sync.{TaskGroup};
 
@@ -171,11 +209,13 @@ fn main() {
 
 /// The reset's errno is the platform's (104 on Linux, 54 on macOS), so it
 /// is left out of the comparison.
+#[cfg(unix)]
 const EDGES_OUT: &str = "main first err timed out\nmain line partial\n\
 main line err Connection reset by peer\ntask first err timed out\n\
 task line partial\ntask line err Connection reset by peer\n";
 
 /// `out` without its ` (os error N)` suffixes.
+#[cfg(unix)]
 fn without_errno(out: &str) -> String {
     let mut s = out.to_string();
     while let Some(at) = s.find(" (os error ") {
@@ -249,6 +289,22 @@ fn interp_buffered_socket_echo() {
 }
 
 #[test]
+fn interp_buffered_socket_read_timeout() {
+    assert_eq!(run(TIMEOUT), TIMEOUT_OUT);
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn compiled_buffered_socket_read_timeout() {
+    for threads in ["1", "4"] {
+        if let Some(out) = compiled(TIMEOUT, threads) {
+            assert_eq!(out, TIMEOUT_OUT, "KARAC_THREADS={threads}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn interp_buffered_socket_timeout_and_reset() {
     assert_eq!(without_errno(&run(EDGES)), EDGES_OUT);
 }
@@ -263,7 +319,7 @@ fn compiled_buffered_socket_echo() {
     }
 }
 
-#[cfg(feature = "llvm")]
+#[cfg(all(unix, feature = "llvm"))]
 #[test]
 fn compiled_buffered_socket_timeout_and_reset() {
     for threads in ["1", "4"] {
