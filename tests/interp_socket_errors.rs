@@ -90,7 +90,24 @@ const RESET: &str = r#"fn main() {
 }
 "#;
 
-const RESET_OUT: &str = "got 4\nerr os error 104\n";
+/// The reset's errno is the platform's (104 on Linux, 54 on macOS), so it
+/// is compared without its number.
+const RESET_OUT: &str = "got 4\nerr os error N\n";
+
+/// `out` with each `os error <digits>` written `os error N`.
+fn any_errno(out: &str) -> String {
+    let mut s = String::new();
+    let mut rest = out;
+    while let Some(at) = rest.find("os error ") {
+        let (head, tail) = rest.split_at(at + "os error ".len());
+        s.push_str(head);
+        let digits = tail.len() - tail.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        s.push_str(if digits > 0 { "N" } else { "" });
+        rest = &tail[digits..];
+    }
+    s.push_str(rest);
+    s
+}
 
 /// A datagram to a port nobody holds comes back refused, which a
 /// connected socket's next `recv` reports.
@@ -114,7 +131,7 @@ const REFUSED_OUT: &str = "err connection refused\n";
 
 #[test]
 fn interp_reads_a_reset_the_readiness_peek_took() {
-    assert_eq!(run(RESET), RESET_OUT);
+    assert_eq!(any_errno(&run(RESET)), RESET_OUT);
 }
 
 #[test]
@@ -126,7 +143,7 @@ fn interp_recv_reports_a_refusal_the_readiness_peek_took() {
 #[test]
 fn compiled_reads_a_reset_as_the_interp_does() {
     if let Some(out) = compiled(RESET) {
-        assert_eq!(out, RESET_OUT);
+        assert_eq!(any_errno(&out), RESET_OUT);
     }
 }
 

@@ -29889,6 +29889,11 @@ pub(crate) mod tests {
     /// A listed pin must still fail, so the list only shrinks.
     pub(crate) const NOT_YET: &[&str] = &[];
 
+    /// Pins the interpreter runs on Unix only: an `extern "C"` call reaches
+    /// the C library through `dlsym`, which it has nowhere else, so off Unix
+    /// the call is refused (`foreign_call`; the compiled build runs it).
+    pub(crate) const UNIX_INTERP_ONLY: &[&str] = &["ok_par_pure_extern"];
+
     /// Every runnable core pin, built from source, elaborated and run, prints
     /// its expected output and exits with its expected code.
     #[test]
@@ -29904,6 +29909,11 @@ pub(crate) mod tests {
             let pin = dir.file_name().unwrap().to_str().unwrap().to_string();
             // The `err_` pins are programs the checker must reject.
             if pin.starts_with("err_") {
+                continue;
+            }
+            if cfg!(not(all(unix, not(target_arch = "wasm32"))))
+                && UNIX_INTERP_ONLY.contains(&pin.as_str())
+            {
                 continue;
             }
             let expected = std::fs::read_to_string(dir.join("expected.out")).unwrap();
