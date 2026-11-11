@@ -1555,6 +1555,23 @@ impl<'a> super::TypeChecker<'a> {
         self.env
             .functions
             .insert("String.from_utf8".to_string(), from_utf8_sig);
+        // `String.from_utf8_lossy(bytes: Slice[u8]) -> String` (strings.md,
+        // B-2026-11-11-24): Rust's, each invalid sequence replaced with
+        // U+FFFD, so bytes off a socket or a file decode without a
+        // `Result` to unwrap. Borrows its argument like `from_utf8`.
+        self.env.functions.insert(
+            "String.from_utf8_lossy".to_string(),
+            FunctionSig {
+                generic_params: vec![],
+                param_names: vec![Some("bytes".to_string())],
+                params: vec![Type::Slice {
+                    element: Box::new(Type::UInt(UIntSize::U8)),
+                    mutable: false,
+                }],
+                return_type: Type::Str,
+                where_clause: None,
+            },
+        );
         // `CString.from_bytes(bytes: Slice[u8]) -> Result[CString, NulError]`
         // (strings.md, C strings): `to_cstring` over bytes that need not be
         // UTF-8, refused at an interior NUL (B-2026-11-06-32).

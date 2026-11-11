@@ -99,6 +99,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `String.from_utf8_lossy(bytes)` decodes bytes that may not be UTF-8,
+  replacing each invalid sequence with U+FFFD, as Rust's does
+  (library/strings.md; B-2026-11-11-24). Bytes read off a socket or a
+  file now decode without a `Result` to unwrap.
 - `std.cmp.Reverse[T]` orders a value the other way round
   (library/core-types.md § Reverse): `import std.cmp.Reverse;`, then
   `Reverse { value: score }` on one part of a heap's item or a sort key

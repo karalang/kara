@@ -1381,6 +1381,20 @@ pub unsafe extern "C" fn karac_mir_str_from_utf8(out: *mut RawVec, p: *const u8,
     }
 }
 
+/// `String.from_utf8_lossy`: the bytes as a new `String` at `out`, each
+/// invalid sequence replaced with U+FFFD (B-2026-11-11-24).
+///
+/// # Safety
+/// `out` is writable for a `String`; `p` readable for `n` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_from_utf8_lossy(out: *mut RawVec, p: *const u8, n: u64) {
+    // SAFETY: the caller's contract.
+    let b = unsafe { bytes(p, n as usize) };
+    let text = String::from_utf8_lossy(b);
+    // SAFETY: as above.
+    unsafe { string_of(out, text.as_bytes()) };
+}
+
 /// `s.replace(a, b)` as a new `String` at `out`.
 ///
 /// # Safety

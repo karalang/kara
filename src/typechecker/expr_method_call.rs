@@ -2880,8 +2880,9 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(text)
                 );
                 // `to_owned()` and `to_string()` are the same owned copy, so
-                // that one is a rename; the others change what is returned.
-                let rename = (method == "to_owned" && args.is_empty())
+                // that one is a rename, and so is `into_owned()`; the others
+                // change what is returned.
+                let rename = (matches!(method, "to_owned" | "into_owned") && args.is_empty())
                     .then(|| {
                         args_close_span
                             .offset
@@ -6625,6 +6626,12 @@ fn rust_string_method_twin(method: &str) -> Option<&'static str> {
              and whitespace with `trim()`"
         }
         "to_owned" => "an owned copy of the text is `to_string()`",
+        // Rust's `String::from_utf8_lossy(&b).into_owned()` turns a `Cow`
+        // into a `String`; Kāra's returns the `String` (B-2026-11-11-24).
+        "into_owned" => {
+            "the text is already owned (`String.from_utf8_lossy` returns a \
+             `String`, not Rust's `Cow`), and an owned copy is `to_string()`"
+        }
         _ => return None,
     })
 }

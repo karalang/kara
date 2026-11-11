@@ -21808,6 +21808,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // bytes (strings.md; B-2026-11-03-13): a `Vec[u8]` is
                     // lent, and stays its holder's to use and drop.
                     if (owner, m) == ("String", "from_utf8")
+                        || (owner, m) == ("String", "from_utf8_lossy")
                         || (owner, m) == ("CString", "from_bytes")
                     {
                         let t = self.expr_ty(&a.value)?;

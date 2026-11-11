@@ -4512,6 +4512,10 @@ pub(crate) fn collect_callee_param_modes(
     // fell to the consume default and a second call on one `Vec[u8]` was
     // refused (B-2026-11-03-13). Parameters borrow by default.
     map.insert("String.from_utf8".to_string(), vec![OwnershipMode::Ref]);
+    map.insert(
+        "String.from_utf8_lossy".to_string(),
+        vec![OwnershipMode::Ref],
+    );
     // `CString.from_bytes` likewise (B-2026-11-06-32).
     map.insert("CString.from_bytes".to_string(), vec![OwnershipMode::Ref]);
     // `with_provider[R](p, f)` moves `p` into the call, which owns it

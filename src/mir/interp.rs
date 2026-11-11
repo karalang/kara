@@ -2957,7 +2957,7 @@ impl<'a> Interp<'a> {
                 };
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
-            ("String", "from_utf8") => {
+            ("String", "from_utf8" | "from_utf8_lossy") => {
                 // The bytes by value (a `Vec[u8]`, freed here) or a view.
                 let [v] = args.as_slice() else {
                     return err(format!("{name} takes one argument"));
@@ -2986,6 +2986,12 @@ impl<'a> Interp<'a> {
                         return err(format!("{name} of a non-byte {b:?}"));
                     };
                     bytes.push(b as u8);
+                }
+                // Rust's rule (B-2026-11-11-24): each maximal invalid
+                // sequence becomes one U+FFFD.
+                if method == "from_utf8_lossy" {
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    return Ok(self.alloc_box("String", Value::Str(text)));
                 }
                 match String::from_utf8(bytes) {
                     Ok(text) => {

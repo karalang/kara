@@ -1136,6 +1136,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, p.into())?;
                 self.store(self.offset(d, 8)?, n.into())?;
             }
+            ("from_utf8_lossy", [b]) => {
+                // Each invalid sequence as U+FFFD (B-2026-11-11-24).
+                let (p, n, _) = self.view_parts(b)?;
+                let d = self.place_ptr(dest)?;
+                self.rt("str_from_utf8_lossy", &[d.into(), p.into(), n.into()])?;
+            }
             ("from_utf8", [b]) => {
                 let (p, n, _) = self.view_parts(b)?;
                 let ok = self.variant_of(dty, "Ok")?;
