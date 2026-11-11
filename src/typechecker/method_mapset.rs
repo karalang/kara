@@ -39,7 +39,8 @@ impl<'a> super::TypeChecker<'a> {
     /// the call where `.name()` sits right after the receiver (kata 1061:
     /// `class.first()`). A user impl's method of the name keeps it. And
     /// `count()` on a `Set` / `SortedSet` is `len()`: Rust's set operations
-    /// give an iterator (kata 2077).
+    /// give an iterator (kata 2077). Rust's `Duration` readers `as_millis` /
+    /// `as_micros` / `as_nanos` are `as_ms` / `as_us` / `as_ns`.
     pub(super) fn rename_sorted_twin(
         &mut self,
         object: &Expr,
@@ -64,7 +65,26 @@ impl<'a> super::TypeChecker<'a> {
             // give an iterator, Kāra's a set, which holds its size (kata
             // 2077).
             ("Set" | "SortedSet", "count") => "len",
+            // Rust's `Duration` readers (B-2026-11-11-33); Kāra's give an
+            // `i64`, where Rust's sub-second ones give a `u128`.
+            ("Duration", "as_millis") => "as_ms",
+            ("Duration", "as_micros") => "as_us",
+            ("Duration", "as_nanos") => "as_ns",
             _ => return None,
+        };
+        // A program's own `Duration` without the twin keeps its "no method".
+        if name == "Duration"
+            && self
+                .env
+                .find_methods_with_args(name, type_args, twin)
+                .is_empty()
+        {
+            return None;
+        }
+        let doc = if name == "Duration" {
+            "library/time-random-env.md"
+        } else {
+            "library/collections.md"
         };
         if !args.is_empty()
             || !self
@@ -82,10 +102,7 @@ impl<'a> super::TypeChecker<'a> {
                  `a.intersection(b).len()` (library/collections.md)"
             )
         } else {
-            format!(
-                "no method '{method}' on type '{name}': Kāra's is `{twin}()` \
-                 (library/collections.md)"
-            )
+            format!("no method '{method}' on type '{name}': Kāra's is `{twin}()` ({doc})")
         };
         let object_end = object.span.offset + object.span.length;
         let to = span.offset + span.length;

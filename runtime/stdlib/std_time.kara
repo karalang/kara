@@ -19,9 +19,34 @@ impl Duration {
         Duration { ns: secs * 1000000000 }
     }
 
+    /// `us` microseconds (B-2026-11-11-33).
+    pub fn us(us: i64) -> Duration {
+        Duration { ns: us * 1000 }
+    }
+
+    /// `ns` nanoseconds.
+    pub fn ns(ns: i64) -> Duration {
+        Duration { ns: ns }
+    }
+
+    /// The whole seconds in this span.
+    pub fn as_secs(self) -> i64 {
+        self.ns / 1000000000
+    }
+
     /// The whole milliseconds in this span.
     pub fn as_ms(self) -> i64 {
         self.ns / 1000000
+    }
+
+    /// The whole microseconds in this span.
+    pub fn as_us(self) -> i64 {
+        self.ns / 1000
+    }
+
+    /// The nanoseconds in this span.
+    pub fn as_ns(self) -> i64 {
+        self.ns
     }
 
     // When a `select`'s `after(self)` arm entered now fires, on the
@@ -115,7 +140,7 @@ pub fn timeout[T: CrossTask](d: Duration, f: own OnceFn() -> T + CrossTask) -> R
     }
 }
 
-/// Parks the calling task for `d`.
+/// Parks the calling task for `d`, to the nanosecond (B-2026-11-11-33).
 pub fn sleep(d: Duration) with reads(Clock) blocks suspends {
-    sleep_ms(d.as_ms());
+    __sleep_ns(d.ns);
 }

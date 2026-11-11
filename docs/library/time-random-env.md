@@ -33,11 +33,18 @@ All time sources are one resource, `Clock`: wall and monotonic time differ in th
 
 ```kara
 impl Duration {
-    fn ms(ms: i64) -> Duration
     fn secs(secs: i64) -> Duration
+    fn ms(ms: i64) -> Duration
+    fn us(us: i64) -> Duration
+    fn ns(ns: i64) -> Duration
+    fn as_secs(self) -> i64
     fn as_ms(self) -> i64
+    fn as_us(self) -> i64
+    fn as_ns(self) -> i64
 }
 ```
+
+A `Duration` holds nanoseconds. Each `as_` reader gives the whole units in the span, rounded toward zero, so `Duration.us(1500).as_ms()` is `1`. `sleep(d)` pauses for `d`, to the nanosecond.
 
 ```kara
 import std.time.{Duration, Instant, sleep};

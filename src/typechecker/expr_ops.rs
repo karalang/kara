@@ -1693,13 +1693,16 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Error;
                 }
             }
-            // Rust's `Duration::from_millis` / `from_secs` are Kāra's
-            // `Duration.ms` / `Duration.secs` (kata 1114). The rest of
-            // Rust's constructors have no Kāra twin.
+            // Rust's `Duration::from_millis` / `from_secs` / `from_micros` /
+            // `from_nanos` are Kāra's `Duration.ms` / `secs` / `us` / `ns`
+            // (kata 1114, B-2026-11-11-33). The float constructors have no
+            // Kāra twin.
             if type_name == "Duration" && self.local_scope.lookup(type_name).is_none() {
                 let kara = match member.as_str() {
                     "from_millis" => Some("ms"),
                     "from_secs" => Some("secs"),
+                    "from_micros" => Some("us"),
+                    "from_nanos" => Some("ns"),
                     _ => None,
                 };
                 let has = |m: &str| {
@@ -1729,15 +1732,12 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
-                if matches!(
-                    member.as_str(),
-                    "from_micros" | "from_nanos" | "from_secs_f64" | "from_secs_f32"
-                ) && has("ms")
-                {
+                if matches!(member.as_str(), "from_secs_f64" | "from_secs_f32") && has("ms") {
                     self.type_error(
                         format!(
                             "no associated function '{member}' on type 'Duration': Kāra's \
-                             `Duration` is built by `Duration.ms(n)` or `Duration.secs(n)`"
+                             `Duration` is built from whole units, `Duration.secs(n)`, \
+                             `Duration.ms(n)`, `Duration.us(n)` or `Duration.ns(n)`"
                         ),
                         *span,
                         TypeErrorKind::NoMethodFound,

@@ -112,7 +112,8 @@ fn main() {
 }
 
 #[test]
-fn kata_1114_a_sub_millisecond_duration_says_what_kara_has() {
+fn kata_1114_a_sub_millisecond_duration_mends_to_us() {
+    // B-2026-11-11-33 flipped this pin: `Duration` has microseconds now.
     let src = "import std.time.{Duration, sleep};
 
 fn main() {
@@ -120,9 +121,6 @@ fn main() {
 }
 ";
     let (text, check) = fixed("micros", src);
-    assert_eq!(text, src);
-    assert!(
-        check.contains("`Duration.ms(n)` or `Duration.secs(n)`"),
-        "{check}"
-    );
+    assert!(text.contains("sleep(Duration.us(10));"), "{text}");
+    assert!(clean(&check), "{check}\n{text}");
 }

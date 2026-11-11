@@ -99,6 +99,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `Duration` has units below a millisecond: `Duration.us(n)` and
+  `Duration.ns(n)` build one, and `as_us()`, `as_ns()` and `as_secs()`
+  read one (library/time-random-env.md; B-2026-11-11-33). `sleep` of
+  part of a millisecond now pauses that long; it used to round down to
+  no pause. `karac fix` rewrites Rust's `from_micros`,
+  `from_nanos`, `as_millis`, `as_micros` and `as_nanos` to them.
 - `String.from_utf8_lossy(bytes)` decodes bytes that may not be UTF-8,
   replacing each invalid sequence with U+FFFD, as Rust's does
   (library/strings.md; B-2026-11-11-24). Bytes read off a socket or a
