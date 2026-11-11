@@ -118,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-35 | 2026-11-11 | typecheck | low | LeetCode's `class H2O` as `struct H2O` is refused as a Const-class name with `consider renaming to H2o` and no fix, though the rename is mechanical: the declaration, its `impl`, and every use in the file | — |
 | B-2026-11-11-38 | 2026-11-11 | typecheck | medium | An `if` or `match` of unsuffixed literals as an element of a list or tuple literal is typed `i64` at once: `let v: Vec[i32] = [1, if b { 2 } else { 3 }];` and `let t: (i32, i32) = (1, if b { 2 } else { 3 });` are refused as a narrowing, with no fix | — |
 | B-2026-11-11-41 | 2026-11-11 | typecheck | medium | A `chain` of literal lists collected into a `Vec[i32]` is refused with no fix: `let v: Vec[i32] = [0].into_iter().chain([1, 2].into_iter()).collect();` says `C: FromIterator[i64]`, and a `scan` over literals chained after a literal head gets a fix for neither literal | — |
-| B-2026-11-11-47 | 2026-11-11 | mir-llvm+runtime | medium | A compiled `Pool.acquire` can stall for its whole timeout though a value is free: its `__ready` (karac_mir_ready_pool) sees the pool free and lets the task through, another worker takes the value before the `acquire` runs, and `karac_mir_pool_full`, finding no verdict, sleeps the worker thread for the timeout (2 of 20 runs of two tasks trading one value with a 60 s timeout) | — |
 
 ### Relocated
 
@@ -1068,6 +1067,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-42 | runtime | low | On Linux the runtime's per-thread small-chunk lists start only with the auto-par worker pool, and small_realloc bypasses them, so a sequential progra… | ba5b881217 |
 | B-2026-11-11-43 | typecheck+parser | low | The `lossless_cast` fix (W0291) deletes only ` as i64` from a cast written in parentheses of its own and leaves the parentheses: `longest * (k as i64… | 57c72847ab |
 | B-2026-11-11-46 | typecheck | medium | `karac fix` turns Rust's `pkt[2..].split(\|&b\| b == 0).collect()` into `.split(..).iter().collect()`, which the next check refuses with E0516: the `.i… | a193908f55 |
+| B-2026-11-11-47 | mir-llvm+runtime | medium | A compiled `Pool.acquire` can stall for its whole timeout though a value is free: its `__ready` (karac_mir_ready_pool) sees the pool free and lets th… | 30b8a505a3 |
 | B-2026-11-11-60 | mir | medium | A tuple, array, `Vec`, `Option` or derived-`Ord` struct holding a value with a hand-written `Ord` sorts and keys sorted tables by its parts' plain or… | 3d987fca00 |
 
 </details>
