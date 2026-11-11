@@ -1,0 +1,12 @@
+source = "B-2026-11-10-39"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "library", "lib:sortedmap", "lib:sortedset"]
+class = "e"
+expected_from = "mirror"
+backends = []
+env = {}
+note = "docs/library/collections.md: SortedMap and SortedSet are B-trees (every operation O(log n)), ascending iteration, key-order drops. Tables of 25k to 34k entries, past the bytes a sorted table keeps as one array, filled with falling, rising and scattered keys, read by key, forwards, backwards, range, floor, ceiling, first and last, then emptied from the middle and both ends back to one array. expected.out is the same-stem Python mirror's output (source.py). e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "3661d63d8"

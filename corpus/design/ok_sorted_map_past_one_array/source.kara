@@ -1,0 +1,169 @@
+// docs/library/collections.md: `SortedMap` and `SortedSet` are B-trees,
+// every operation O(log n), iterating in ascending key order and dropping
+// in key order (B-2026-11-10-39). Each table here grows well past the few
+// thousand bytes a sorted table keeps as one array, with falling keys
+// (each the new smallest), rising ones and a scattered middle, then is
+// read every way: by key, forwards and backwards, by range, floor and
+// ceiling, first and last; entries leave from both ends and the middle
+// until it is one array again. String values exercise moves and drops in
+// the tree.
+
+fn digest(acc: i64, x: i64) -> i64 {
+    (acc * 1000003 + x) % 998244353
+}
+
+fn main() {
+    let mut m: SortedMap[i64, String] = SortedMap.new();
+    let mut i = 0;
+    while i < 20000 {
+        m.insert(100000 - 3 * i, f"v{i}");
+        i = i + 1;
+    }
+    i = 0;
+    while i < 5000 {
+        m.insert(100001 + 2 * i, f"r{i}");
+        i = i + 1;
+    }
+    let mut state = 2092;
+    i = 0;
+    while i < 8000 {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let k = 40000 + (state / 256) % 60000;
+        m.insert(k, f"s{k}");
+        i = i + 1;
+    }
+    println(f"len {m.len()}");
+    match m.first() {
+        Some((k, v)) => println(f"first {k} {v}"),
+        None => println("none"),
+    }
+    match m.last() {
+        Some((k, v)) => println(f"last {k} {v}"),
+        None => println("none"),
+    }
+    let mut d = 0;
+    let mut n = 0;
+    for (k, v) in m.iter() {
+        d = digest(d, *k + v.len());
+        n = n + 1;
+    }
+    println(f"forward {n} {d}");
+    d = 0;
+    n = 0;
+    for (k, v) in m.iter().rev() {
+        if n < 50000 {
+            d = digest(d, *k * 7 + v.len());
+        }
+        n = n + 1;
+    }
+    println(f"backward {n} {d}");
+    let mut hits = 0;
+    let mut q = 0;
+    while q < 3000 {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let k = 30000 + (state / 256) % 80000;
+        match m.get(k) {
+            Some(v) => hits = hits + v.len(),
+            None => hits = hits + 1000,
+        }
+        match m.floor(k) {
+            Some((fk, _)) => hits = hits + fk % 97,
+            None => hits = hits + 5,
+        }
+        match m.ceiling(k) {
+            Some((ck, _)) => hits = hits + ck % 89,
+            None => hits = hits + 7,
+        }
+        q = q + 1;
+    }
+    println(f"probes {hits}");
+    d = 0;
+    n = 0;
+    for (k, v) in m.range(41000, 77777) {
+        d = digest(d, *k + v.len());
+        n = n + 1;
+    }
+    println(f"range {n} {d}");
+    n = 0;
+    for (k, _) in m.range_inclusive(99997, 100003) {
+        n = n * 10 + *k % 10;
+    }
+    println(f"range_inclusive {n}");
+    // Out of the middle, by key.
+    let mut gone = 0;
+    let mut k = 30000;
+    while k < 90000 {
+        match m.remove(k) {
+            Some(v) => gone = gone + v.len(),
+            None => gone = gone + 1,
+        }
+        k = k + 5;
+    }
+    println(f"removed {gone} len {m.len()}");
+    let mut c = m.clone();
+    c.retain(|k, v| {
+        v.push_str("!");
+        *k % 4 != 0
+    });
+    let mut cd = 0;
+    for (k, v) in c.iter() {
+        cd = digest(cd, *k + v.len());
+    }
+    println(f"retained {c.len()} {cd}");
+    // From both ends until it is small.
+    let mut ends = 0;
+    while m.len() > 40 {
+        match m.pop_first() {
+            Some((k, v)) => ends = digest(ends, k + v.len()),
+            None => ends = ends + 1,
+        }
+        match m.pop_last() {
+            Some((k, v)) => ends = digest(ends, k * 3 + v.len()),
+            None => ends = ends + 1,
+        }
+    }
+    println(f"ends {ends} len {m.len()}");
+    let keys: Vec[i64] = m.keys().map(|k| *k).collect();
+    println(f"keys {keys.len()} {keys[0]} {keys[19]} {keys[keys.len() - 1]}");
+    m.insert(-1, "neg".to_string());
+    match m.first() {
+        Some((k, v)) => println(f"first {k} {v}"),
+        None => println("none"),
+    }
+
+    let mut s: SortedSet[i64] = SortedSet.new();
+    i = 0;
+    while i < 30000 {
+        s.insert(90000 - 2 * i);
+        i = i + 1;
+    }
+    let mut t: SortedSet[i64] = SortedSet.new();
+    i = 0;
+    while i < 9000 {
+        t.insert(30000 + 3 * i);
+        i = i + 1;
+    }
+    let u = s.union(t);
+    let x = s.intersection(t);
+    let y = s.difference(t);
+    println(f"sets {s.len()} {t.len()} {u.len()} {x.len()} {y.len()}");
+    let mut sd = 0;
+    for e in x.iter() {
+        sd = digest(sd, *e);
+    }
+    let mut back = 0;
+    for e in y.iter().rev() {
+        back = digest(back, *e);
+    }
+    println(f"set digests {sd} {back}");
+    let mut in_range = 0;
+    for e in u.range(40000, 50000) {
+        in_range = in_range + *e % 7;
+    }
+    println(f"set range {in_range}");
+    let mut drained = 0;
+    while let Some(e) = s.pop_first() {
+        drained = digest(drained, e);
+    }
+    println(f"drained {drained} {s.len()} {s.min().is_none()}");
+}

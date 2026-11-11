@@ -9,10 +9,13 @@
 //! Compiled code supplies the key glue on each call: `hash` and `eq` for
 //! the hashed kinds, `cmp` for the sorted ones, which are searched by
 //! bisection. A handle is a pointer to a [`MirMap`], null while the table
-//! has never held an entry.
+//! has never held an entry. A sorted table past a few thousand bytes of
+//! entries keeps them in a B+-tree instead ([`tree`], B-2026-11-10-39).
 
 use crate::alloc::{karac_free, karac_realloc_or_panic};
 use crate::lean_vec::LeanVec;
+
+mod tree;
 
 /// `n` rounded up to a multiple of 8.
 const fn round8(n: usize) -> usize {
@@ -108,6 +111,11 @@ pub struct MirMap {
     /// user `BuildHasher`): it walks in an order no process key moves
     /// ([`karac_mir_map_unkeyed`], B-2026-10-24-29).
     unkeyed: bool,
+    /// A sorted table's B+-tree, once it outgrew one array
+    /// ([`tree::dense_max`], B-2026-11-10-39); null otherwise. While it has
+    /// one, `buf` is null (compiled code's sign to index through
+    /// [`karac_mir_map_at`]), `cap` 0, and `slots` its length.
+    tree: *mut tree::Tree,
 }
 
 const NO_PAIR: u64 = u64::MAX;
@@ -422,7 +430,69 @@ impl MirMap {
 
     /// The entry at index `i < len`.
     fn at(&self, i: usize) -> *mut u8 {
+        if let Some(t) = self.tree() {
+            return t.at(i);
+        }
         self.slot_ptr(self.slot_of(i))
+    }
+
+    /// The sorted table's tree, if it has one.
+    fn tree(&self) -> Option<&tree::Tree> {
+        // SAFETY: non-null, a live tree this table owns.
+        unsafe { self.tree.as_ref() }
+    }
+
+    /// The room the header's allocation has for entries, if any: where a
+    /// table starts and where `clear` or leaving a tree puts it back.
+    fn header_room(&mut self) {
+        let es = self.entry_size;
+        if round8(INLINE_SLOTS * es) <= INLINE_DATA_MAX {
+            // SAFETY: `empty` allocated that room after the header.
+            self.buf = unsafe { (self as *mut MirMap).cast::<u8>().add(INLINE_AT) };
+            self.cap = INLINE_SLOTS;
+            self.data_inline = true;
+        } else {
+            self.buf = std::ptr::null_mut();
+            self.cap = 0;
+            self.data_inline = false;
+        }
+    }
+
+    /// Moves a sorted array's entries into a tree.
+    fn make_tree(&mut self, cmp: CmpFn) {
+        // SAFETY: `buf` holds `slots` entries in key order (no holes).
+        self.tree = unsafe { tree::Tree::build(self.buf, self.slots, self.entry_size, cmp) };
+        if self.cap != 0 && !self.data_inline {
+            // SAFETY: `buf` came from `karac_realloc_or_panic`.
+            unsafe { free(self.buf.cast()) };
+        }
+        self.buf = std::ptr::null_mut();
+        self.cap = 0;
+        self.data_inline = false;
+    }
+
+    /// Moves a tree whose root is a leaf back into one array.
+    fn leave_tree(&mut self) {
+        let Some(t) = self.tree() else { return };
+        if !t.is_one_leaf() {
+            return;
+        }
+        let (src, n) = t.one_leaf();
+        let es = self.entry_size;
+        self.header_room();
+        if n > self.cap {
+            let cap = n.next_power_of_two();
+            self.buf = karac_realloc_or_panic(std::ptr::null_mut(), round8(cap * es).max(1));
+            self.cap = cap;
+            self.data_inline = false;
+        }
+        // SAFETY: the leaf holds `n` entries; `buf` has room for `cap >= n`.
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, self.buf, n * es);
+            tree::Tree::free(self.tree);
+        }
+        self.tree = std::ptr::null_mut();
+        self.slots = n;
     }
 
     /// The slot of the live entry at index `i`.
@@ -689,7 +759,11 @@ pub unsafe extern "C" fn karac_mir_map_lookup(
     // SAFETY: the caller's contract.
     let m = unsafe { &*h };
     if let Some(cmp) = cmp {
-        // SAFETY: as above; a sorted table's indices are its slots.
+        if let Some(t) = m.tree() {
+            // SAFETY: as above.
+            return unsafe { t.lookup(key) };
+        }
+        // SAFETY: as above; a sorted array's indices are its slots.
         return match unsafe { search(m, key, cmp) } {
             Ok(i) => m.slot_ptr(i),
             Err(_) => std::ptr::null_mut(),
@@ -729,11 +803,16 @@ pub unsafe extern "C" fn karac_mir_map_lookup_hv(
 /// # Safety
 /// `m` is live; `key` a key of its type; `cmp` its order.
 unsafe fn search(m: &MirMap, key: *const u8, cmp: CmpFn) -> Result<usize, usize> {
+    if let Some(t) = m.tree() {
+        // SAFETY: the caller's contract.
+        return unsafe { t.find(key) }.0;
+    }
     let (mut lo, mut hi) = (0, m.len());
     while lo < hi {
         let mid = (lo + hi) / 2;
-        // SAFETY: the caller's contract.
-        match unsafe { cmp(m.at(mid), key) } {
+        // SAFETY: the caller's contract; a sorted array has no holes, so
+        // its indices are its slots.
+        match unsafe { cmp(m.slot_ptr(mid), key) } {
             0 => return Ok(mid),
             o if o < 0 => lo = mid + 1,
             _ => hi = mid,
@@ -759,6 +838,25 @@ pub unsafe extern "C" fn karac_mir_map_insert(
     cmp: Option<CmpFn>,
 ) -> i64 {
     let entry_size = entry_size as usize;
+    if let Some(cmp) = cmp {
+        // SAFETY: the caller's contract.
+        let m = unsafe {
+            if (*hp).is_null() {
+                *hp = empty(entry_size);
+            }
+            &mut **hp
+        };
+        // `dense_max` is at least 16 (two leaves of 8), so a small table
+        // skips its divisions.
+        if m.tree.is_null() && m.slots >= 16 && m.slots >= tree::dense_max(m.entry_size) {
+            m.make_tree(cmp);
+        }
+        if !m.tree.is_null() {
+            m.slots += 1;
+            // SAFETY: the tree is live; `entry` an entry of its type.
+            return unsafe { (*m.tree).insert(entry) } as i64;
+        }
+    }
     // SAFETY: the caller's contract.
     let hv = hash.map(|hash| unsafe { hash(entry) });
     // SAFETY: as above.
@@ -832,6 +930,7 @@ fn empty(entry_size: usize) -> *mut MirMap {
             live_state: std::sync::atomic::AtomicU8::new(LIVE_STALE),
             pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
             unkeyed: false,
+            tree: std::ptr::null_mut(),
         })
     };
     h
@@ -1076,9 +1175,26 @@ pub unsafe extern "C" fn karac_mir_map_pick(
 pub unsafe extern "C" fn karac_mir_map_remove(h: *mut MirMap, i: i64, out: *mut u8) {
     // SAFETY: the caller's contract.
     let m = unsafe { &mut *h };
+    if !m.tree.is_null() {
+        // SAFETY: as above.
+        unsafe { tree_remove(m, i as usize, out) };
+        return;
+    }
     let s = m.slot_of(i as usize);
     // SAFETY: as above.
     unsafe { remove_slot(m, s, out) }
+}
+
+/// Moves the entry at index `i` of a table in a tree to `out`, and the
+/// table back into one array once its tree is down to a leaf.
+///
+/// # Safety
+/// As [`karac_mir_map_remove`], with `m` in a tree.
+unsafe fn tree_remove(m: &mut MirMap, i: usize, out: *mut u8) {
+    // SAFETY: the caller's contract.
+    unsafe { (*m.tree).remove_at(i, out) };
+    m.slots -= 1;
+    m.leave_tree();
 }
 
 /// [`karac_mir_map_remove`] of the entry at `at`, which a lookup handed
@@ -1091,6 +1207,15 @@ pub unsafe extern "C" fn karac_mir_map_remove(h: *mut MirMap, i: i64, out: *mut 
 pub unsafe extern "C" fn karac_mir_map_remove_entry(h: *mut MirMap, at: *const u8, out: *mut u8) {
     // SAFETY: the caller's contract.
     let m = unsafe { &mut *h };
+    if let Some(t) = m.tree() {
+        // A lookup handed `at` back, so its key is the table's.
+        // SAFETY: as above.
+        if let (Ok(i), _, _) = unsafe { t.find(at) } {
+            // SAFETY: as above.
+            unsafe { tree_remove(m, i, out) };
+        }
+        return;
+    }
     let s = (at as usize - m.buf as usize) / m.entry_size.max(1);
     // SAFETY: as above.
     unsafe { remove_slot(m, s, out) }
@@ -1149,6 +1274,12 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
     }
     // SAFETY: the caller's contract.
     let m = unsafe { &mut *h };
+    if !m.tree.is_null() {
+        // SAFETY: a live tree this table owns, not named after.
+        unsafe { tree::Tree::free(m.tree) };
+        m.tree = std::ptr::null_mut();
+        m.header_room();
+    }
     m.slots = 0;
     m.free_cells();
     m.index_used = 0;
@@ -1173,6 +1304,9 @@ pub unsafe extern "C" fn karac_mir_map_free(h: *mut MirMap) {
         if (*h).cap != 0 && !(*h).data_inline {
             // `buf` came from `karac_realloc_or_panic`.
             free((*h).buf.cast());
+        }
+        if !(*h).tree.is_null() {
+            tree::Tree::free((*h).tree);
         }
         (*h).free_cells();
         std::ptr::drop_in_place(h);

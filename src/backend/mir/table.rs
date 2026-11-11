@@ -444,7 +444,9 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The entry at index `i` of the table `h`, which has more than `i`:
-    /// slot `i` while the table has no holes, else the runtime's count.
+    /// slot `i` while the table is one array with no holes, else the
+    /// runtime's count, or its tree's for a sorted table whose `buf` is
+    /// null (`runtime/src/mir_map/tree.rs`, B-2026-11-10-39).
     pub(super) fn entry_at(
         &self,
         h: PointerValue<'ctx>,
@@ -458,11 +460,13 @@ impl<'ctx> Cx<'ctx, '_> {
         );
         let holes = self.map_word(h, 3)?;
         let none = self.is_zero(holes)?;
+        let buf = self.map_ptr_word(h, 0)?;
+        let array = self.builder.build_is_not_null(buf, "").map_err(e)?;
+        let none = self.builder.build_and(none, array, "").map_err(e)?;
         self.builder
             .build_conditional_branch(none, dense, holed)
             .map_err(e)?;
         self.builder.position_at_end(dense);
-        let buf = self.map_ptr_word(h, 0)?;
         let es = self.map_word(h, 1)?;
         let off = self.builder.build_int_mul(i, es, "").map_err(e)?;
         // SAFETY of the pointer: `i` is a live slot of `buf`.
