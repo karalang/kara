@@ -1,0 +1,23 @@
+== 9 records
+daemon.info v1 host=cache01 app=redis pid=5 msgid=BG time=2026-11-11T22:16:02Z sd=- msg="last line, no newline"
+user.info v1 host=cache01 app=redis pid=5 msgid=SAVE time=2026-11-11T22:16:00Z sd=- msg="saved"
+local7.info v1 host=db01 app=app pid=9 msgid=M9 time=2026-11-11T22:15:01Z sd=[x@1 k=v w] msg="split frame"
+authpriv.debug v1 host=db01 app=cron pid=- msgid=- time=- sd=- msg="tick"
+user.err v0 host=db01 app=kernel pid=- msgid=- time=Nov  1 03:04:05 sd=- msg="oops"
+authpriv.info v1 host=db01 app=sshd pid=77 msgid=LOGIN time=2026-11-11T22:15:00Z sd=- msg="accepted key"
+daemon.debug v1 host=edge01 app=proxy pid=- msgid=- time=- sd=- msg="ok"
+auth.crit v0 host=mymachine app=su pid=219 msgid=- time=Nov 11 22:14:15 sd=- msg="'su root' failed for lonvick"
+local4.notice v1 host=web01 app=nginx pid=2042 msgid=ID47 time=2026-11-11T22:14:15.003Z sd=[exampleSDID@32473 iut=3 eventSource=App"lic]ation eventID=1011][meta seq=7] msg="request served"
+== 4 rejected
+tcp: bad structured data
+tcp: frame too large
+udp: bad pri
+udp: truncated
+== by severity
+crit: 1
+debug: 2
+err: 1
+info: 4
+notice: 1
+tcp frames kept: 7
+udp frames kept: 2

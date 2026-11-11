@@ -1,0 +1,409 @@
+// syslog_collector: a syslog collector on loopback. Datagrams arrive on UDP
+// and connections on TCP, framed as RFC 6587 has it (a decimal length and a
+// space before each message, or a newline after it). Each message is parsed
+// as RFC 5424 (priority, version, timestamp, host, app, process ID, message
+// ID, structured data with its escapes, and a message that may start with
+// a byte-order mark) or, without the version, as the BSD format of RFC
+// 3164. One task reads the UDP socket and each TCP connection gets a task of
+// its own; records and rejects go behind one Mutex. Scripted senders, then
+// the collector prints what it kept, sorted.
+
+import std::sync::{TaskGroup, Mutex};
+
+const UDP_ADDR: &str = "127.0.0.1:47767";
+const TCP_ADDR: &str = "127.0.0.1:47768";
+const DATAGRAMS: i64 = 4;
+const CONNECTIONS: i64 = 3;
+const MAX_FRAME: usize = 8192;
+
+const FACILITIES: [&str; 24] = [
+    "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news", "uucp", "cron",
+    "authpriv", "ftp", "ntp", "audit", "alert", "clock", "local0", "local1", "local2",
+    "local3", "local4", "local5", "local6", "local7",
+];
+const SEVERITIES: [&str; 8] = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"];
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+#[derive(Clone)]
+struct Param {
+    name: String,
+    value: String,
+}
+
+#[derive(Clone)]
+struct Element {
+    id: String,
+    params: Vec<Param>,
+}
+
+#[derive(Clone)]
+struct Record {
+    pri: usize,
+    version: i64,
+    stamp: String,
+    host: String,
+    app: String,
+    pid: String,
+    msgid: String,
+    sd: Vec<Element>,
+    msg: String,
+}
+
+// The text up to the next space, and what follows the space.
+fn take_field(rest: &str) -> Result<(String, String), String> {
+    match rest.find(' ') {
+        None => Err("truncated".to_string()),
+        Some(0) => Err("empty field".to_string()),
+        Some(at) => Ok((rest[..at].to_string(), rest[at + 1..].to_string())),
+    }
+}
+
+fn parse_pri(text: &str) -> Result<(usize, String), String> {
+    if !text.starts_with('<') {
+        return Err("no pri".to_string());
+    }
+    let end = match text.find('>') {
+        Some(e) if e >= 2 && e <= 4 => e,
+        _ => return Err("bad pri".to_string()),
+    };
+    let digits = &text[1..end];
+    if !digits.chars().all(|c| c.is_ascii_digit()) || (digits.len() > 1 && digits.starts_with('0')) {
+        return Err("bad pri".to_string());
+    }
+    let pri: usize = digits.parse().unwrap();
+    if pri > 191 {
+        return Err("bad pri".to_string());
+    }
+    Ok((pri, text[end + 1..].to_string()))
+}
+
+fn bad_sd() -> String {
+    "bad structured data".to_string()
+}
+
+// The structured data's elements, and what follows them.
+fn parse_sd(rest: &str) -> Result<(Vec<Element>, String), String> {
+    if rest.starts_with('-') {
+        return Ok((Vec::new(), rest[1..].to_string()));
+    }
+    if !rest.starts_with('[') {
+        return Err(bad_sd());
+    }
+    let b = rest.as_bytes();
+    let mut elements = Vec::new();
+    let mut at = 0;
+    while at < b.len() && b[at] == b'[' {
+        let mut i = at + 1;
+        while i < b.len() && b[i] != b' ' && b[i] != b']' {
+            i += 1;
+        }
+        if i == at + 1 || i == b.len() {
+            return Err(bad_sd());
+        }
+        let id = rest[at + 1..i].to_string();
+        let mut params = Vec::new();
+        while b[i] == b' ' {
+            let mut j = i + 1;
+            while j < b.len() && b[j] != b'=' {
+                j += 1;
+            }
+            if j == i + 1 || j + 1 >= b.len() || b[j + 1] != b'"' {
+                return Err(bad_sd());
+            }
+            let name = rest[i + 1..j].to_string();
+            let mut k = j + 2;
+            let mut value: Vec<u8> = Vec::new();
+            loop {
+                if k >= b.len() {
+                    return Err(bad_sd());
+                }
+                let c = b[k];
+                if c == b'\\' && k + 1 < b.len() && (b[k + 1] == b'"' || b[k + 1] == b'\\' || b[k + 1] == b']') {
+                    value.push(b[k + 1]);
+                    k += 2;
+                } else if c == b'"' {
+                    k += 1;
+                    break;
+                } else {
+                    value.push(c);
+                    k += 1;
+                }
+            }
+            params.push(Param { name, value: String::from_utf8(value).unwrap() });
+            i = k;
+            if i >= b.len() {
+                return Err(bad_sd());
+            }
+        }
+        if b[i] != b']' {
+            return Err(bad_sd());
+        }
+        elements.push(Element { id, params });
+        at = i + 1;
+    }
+    Ok((elements, rest[at..].to_string()))
+}
+
+fn parse_5424(pri: usize, rest: &str) -> Result<Record, String> {
+    let (stamp, rest) = take_field(&rest[2..])?;
+    if stamp != "-" && (stamp.len() < 20 || stamp.as_bytes()[10] != b'T') {
+        return Err("bad timestamp".to_string());
+    }
+    let (host, rest) = take_field(&rest)?;
+    let (app, rest) = take_field(&rest)?;
+    let (pid, rest) = take_field(&rest)?;
+    let (msgid, rest) = take_field(&rest)?;
+    let (sd, rest) = parse_sd(&rest)?;
+    let msg = if rest.is_empty() {
+        String::new()
+    } else if rest.starts_with(' ') {
+        rest[1..].to_string()
+    } else {
+        return Err(bad_sd());
+    };
+    let msg = match msg.strip_prefix('\u{feff}') {
+        Some(m) => m.to_string(),
+        None => msg,
+    };
+    Ok(Record { pri, version: 1, stamp, host, app, pid, msgid, sd, msg })
+}
+
+fn parse_3164(pri: usize, rest: &str) -> Result<Record, String> {
+    if rest.len() < 16 || !MONTHS.contains(&&rest[..3]) || rest.as_bytes()[15] != b' ' {
+        return Err("bad timestamp".to_string());
+    }
+    let stamp = rest[..15].to_string();
+    let (host, rest) = take_field(&rest[16..])?;
+    let colon = match rest.find(':') {
+        Some(c) if c > 0 => c,
+        _ => return Err("bad tag".to_string()),
+    };
+    let mut tag = rest[..colon].to_string();
+    let mut pid = "-".to_string();
+    if tag.ends_with(']') {
+        if let Some(at) = tag.find('[') {
+            pid = tag[at + 1..tag.len() - 1].to_string();
+            tag = tag[..at].to_string();
+        }
+    }
+    let mut msg = rest[colon + 1..].to_string();
+    if msg.starts_with(' ') {
+        msg = msg[1..].to_string();
+    }
+    Ok(Record { pri, version: 0, stamp, host, app: tag, pid, msgid: "-".to_string(), sd: Vec::new(), msg })
+}
+
+fn parse(frame: &[u8]) -> Result<Record, String> {
+    let text = match String::from_utf8(frame.to_vec()) {
+        Ok(t) => t,
+        Err(_) => return Err("bad utf-8".to_string()),
+    };
+    let (pri, rest) = parse_pri(&text)?;
+    if rest.starts_with("1 ") {
+        parse_5424(pri, &rest)
+    } else {
+        parse_3164(pri, &rest)
+    }
+}
+
+fn show_sd(sd: &[Element]) -> String {
+    if sd.is_empty() {
+        return "-".to_string();
+    }
+    let mut out = String::new();
+    for e in sd {
+        out.push('[');
+        out.push_str(&e.id);
+        for p in &e.params {
+            out.push_str(&format!(" {}={}", p.name, p.value));
+        }
+        out.push(']');
+    }
+    out
+}
+
+struct Store {
+    records: Vec<Record>,
+    rejects: Vec<String>,
+    frames: SortedMap<String, i64>,
+}
+
+sync struct Collector {
+    store: Mutex<Store>,
+}
+
+impl Collector {
+    fn take(&self, transport: &str, frame: &[u8]) {
+        match parse(frame) {
+            Ok(rec) => {
+                let mut g = self.store.lock();
+                g.value.records.push(rec);
+                *g.value.frames.entry(transport.to_string()).or_insert(0) += 1;
+            }
+            Err(why) => self.reject(transport, &why),
+        }
+    }
+
+    fn reject(&self, transport: &str, why: &str) {
+        self.store.lock().value.rejects.push(format!("{}: {}", transport, why));
+    }
+}
+
+// The next whole frame and the bytes after it, `None` while `pending`
+// holds no whole frame yet, or why the frame can never be whole.
+fn next_frame(pending: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>, String> {
+    if !pending.is_empty() && pending[0].is_ascii_digit() {
+        let sp = match pending.iter().take(9).position(|&b| b == b' ') {
+            Some(sp) => sp,
+            None if pending.len() >= 9 => return Err("bad frame length".to_string()),
+            None => return Ok(None),
+        };
+        if !pending[..sp].iter().all(|b| b.is_ascii_digit()) {
+            return Err("bad frame length".to_string());
+        }
+        let n: usize = String::from_utf8(pending[..sp].to_vec()).unwrap().parse().unwrap();
+        if n > MAX_FRAME {
+            return Err("frame too large".to_string());
+        }
+        if pending.len() < sp + 1 + n {
+            return Ok(None);
+        }
+        return Ok(Some((pending[sp + 1..sp + 1 + n].to_vec(), pending[sp + 1 + n..].to_vec())));
+    }
+    match pending.iter().position(|&b| b == b'\n') {
+        Some(nl) => Ok(Some((pending[..nl].to_vec(), pending[nl + 1..].to_vec()))),
+        None => Ok(None),
+    }
+}
+
+fn drain(col: &Collector, conn: &mut TcpStream) -> Result<(), String> {
+    let mut pending: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 64];
+    loop {
+        let n = conn.read(&mut buf).unwrap_or(0);
+        pending.extend_from_slice(&buf[..n]);
+        while !pending.is_empty() {
+            match next_frame(&pending)? {
+                Some((frame, rest)) => {
+                    col.take("tcp", &frame);
+                    pending = rest;
+                }
+                None => break,
+            }
+        }
+        if n == 0 {
+            break;
+        }
+    }
+    if !pending.is_empty() {
+        if pending[0].is_ascii_digit() {
+            col.reject("tcp", "truncated frame");
+        } else {
+            col.take("tcp", &pending);
+        }
+    }
+    Ok(())
+}
+
+fn serve_conn(col: &Collector, mut conn: TcpStream) {
+    if let Err(why) = drain(col, &mut conn) {
+        col.reject("tcp", &why);
+    }
+}
+
+fn serve_udp(col: &Collector, sock: &UdpSocket) {
+    let mut buf = [0u8; 4096];
+    for _ in 0..DATAGRAMS {
+        let (n, _) = sock.recv_from(&mut buf).unwrap();
+        col.take("udp", &buf[..n]);
+    }
+}
+
+fn serve_tcp(col: &Collector, listener: &TcpListener) {
+    let tasks = TaskGroup::new();
+    for _ in 0..CONNECTIONS {
+        let conn = listener.accept().unwrap();
+        tasks.spawn(move || serve_conn(col, conn));
+    }
+}
+
+fn octets(msg: &str) -> Vec<u8> {
+    let mut v = format!("{} ", msg.len()).into_bytes();
+    v.extend_from_slice(msg.as_bytes());
+    v
+}
+
+fn record_key(r: &Record) -> String {
+    format!("{} {} {} {} {}", r.host, r.app, r.msgid, r.pid, r.msg)
+}
+
+fn main() {
+    let col = Collector { store: Mutex::new(Store { records: Vec::new(), rejects: Vec::new(), frames: SortedMap::new() }) };
+    let udp = UdpSocket::bind(UDP_ADDR).unwrap();
+    let listener = TcpListener::bind(TCP_ADDR).unwrap();
+    let group = TaskGroup::new();
+    let tu = group.spawn(|| serve_udp(&col, &udp));
+    let tt = group.spawn(|| serve_tcp(&col, &listener));
+
+    let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let datagrams = vec![
+        "<165>1 2026-11-11T22:14:15.003Z web01 nginx 2042 ID47 [exampleSDID@32473 iut=\"3\" eventSource=\"App\\\"lic\\]ation\" eventID=\"1011\"][meta seq=\"7\"] \u{feff}request served",
+        "<34>Nov 11 22:14:15 mymachine su[219]: 'su root' failed for lonvick",
+        "<192>1 2026-11-11T22:14:16Z web01 app - - - out of range",
+        "<13>1 2026-11-11T22:14:17Z web01",
+    ];
+    for msg in &datagrams {
+        let _ = sender.send_to(msg.as_bytes(), UDP_ADDR);
+    }
+
+    let mut c = TcpStream::connect(TCP_ADDR).unwrap();
+    let mut first = octets("<86>1 2026-11-11T22:15:00Z db01 sshd 77 LOGIN - accepted key");
+    first.extend_from_slice(&octets("<87>1 - db01 cron - - - tick"));
+    first.extend_from_slice(&octets("<11>Nov  1 03:04:05 db01 kernel: oops"));
+    let _ = c.write_all(&first);
+    let split = octets("<190>1 2026-11-11T22:15:01Z db01 app 9 M9 [x@1 k=\"v w\"] split frame");
+    let _ = c.write_all(&split[..20]);
+    let _ = c.write_all(&split[20..]);
+    drop(c);
+
+    let mut c = TcpStream::connect(TCP_ADDR).unwrap();
+    let _ = c.write_all(b"<14>1 2026-11-11T22:16:00Z cache01 redis 5 SAVE - saved\n<15>1 2026-11-11T22:16:01Z cache01 redis 5 - [bad no-quote=x] oops\n<30>1 2026-11-11T22:16:02Z cache01 redis 5 BG - last line, no newline");
+    drop(c);
+
+    let mut c = TcpStream::connect(TCP_ADDR).unwrap();
+    let mut last = octets("<31>1 - edge01 proxy - - - ok");
+    last.extend_from_slice(b"99999999 <31>1 too big");
+    let _ = c.write_all(&last);
+    drop(c);
+
+    let _ = tu.join();
+    let _ = tt.join();
+
+    let g = col.store.lock();
+    let mut records = g.value.records.clone();
+    records.sort_by_key(|r| record_key(r));
+    println!("== {} records", records.len());
+    for r in &records {
+        println!(
+            "{}.{} v{} host={} app={} pid={} msgid={} time={} sd={} msg=\"{}\"",
+            FACILITIES[r.pri / 8], SEVERITIES[r.pri % 8], r.version, r.host, r.app, r.pid, r.msgid, r.stamp, show_sd(&r.sd), r.msg
+        );
+    }
+    let mut rejects = g.value.rejects.clone();
+    rejects.sort();
+    println!("== {} rejected", rejects.len());
+    for line in &rejects {
+        println!("{}", line);
+    }
+    println!("== by severity");
+    let mut counts: SortedMap<String, i64> = SortedMap::new();
+    for r in &records {
+        *counts.entry(SEVERITIES[r.pri % 8].to_string()).or_insert(0) += 1;
+    }
+    for (name, n) in counts.iter() {
+        println!("{}: {}", name, n);
+    }
+    for (t, n) in g.value.frames.iter() {
+        println!("{} frames kept: {}", t, n);
+    }
+}
