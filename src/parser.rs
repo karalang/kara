@@ -1109,6 +1109,7 @@ impl Parser {
                 }));
             }
         }
+        let std_cmp_reverse_import = self.std_cmp_reverse_import(&items);
         Program {
             script_main,
             items,
@@ -1128,8 +1129,13 @@ impl Parser {
             expr_stmt_semis: std::mem::take(&mut self.expr_stmt_semis),
             rust_heap_ctor_sides: self.rust_heap_ctor_sides(),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
-            rust_reverse_wraps: self.rust_reverse_wraps(),
+            rust_reverse_wraps: if self.rust_reverse_stays() {
+                rustc_hash::FxHashMap::default()
+            } else {
+                self.rust_reverse_wraps()
+            },
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
+            std_cmp_reverse_import,
             rust_std_paths: self.rust_std_paths(),
             parse_target_edits: std::mem::take(&mut self.parse_target_edits),
             range_arg_edits: std::mem::take(&mut self.range_arg_edits),
@@ -1163,7 +1169,9 @@ impl Parser {
     /// `Reverse` in the program gets a fix (the resolver holds them back).
     fn rust_heap_ctor_sides(&self) -> crate::ast::RustHeapSides {
         let mut sides = crate::ast::RustHeapSides::default();
-        if self.rust_heap_ctor.is_empty() {
+        // Where a `Reverse` stays, every one does, as `std.cmp.Reverse`, so
+        // every heap keeps Rust's largest-first order (B-2026-11-10-41).
+        if self.rust_heap_ctor.is_empty() || self.rust_reverse_stays() {
             return sides;
         }
         let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
@@ -3137,6 +3145,82 @@ impl Parser {
         })
     }
 
+    /// Whether a `Reverse` of Rust's `use std::cmp::Reverse` stays one once
+    /// `karac fix` is done: it is not one the resolver's fix drops, around a
+    /// heap's item (`.push(Reverse(x))`, `Some(Reverse(x))`, `let
+    /// Reverse(x) =`, `BinaryHeap<Reverse<T>>`; [`Self::rust_reverse_wraps`])
+    /// or as a whole sort key ([`Self::rust_reverse_sort_keys`]). When one
+    /// stays, every `Reverse` does, as `std.cmp.Reverse` (B-2026-11-10-41):
+    /// none is dropped, so a heap of them stays largest-first.
+    fn rust_reverse_stays(&self) -> bool {
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let ident = |i: usize, want: &str| matches!(tok(i), Some(Token::Identifier { name, .. }) if name == want);
+        let opens = |i: usize| matches!(tok(i), Some(Token::LeftBracket | Token::LessThan));
+        let sort_keys = self.rust_reverse_sort_keys();
+        let mut in_import = false;
+        for i in 0..self.tokens.len() {
+            match tok(i) {
+                Some(Token::Import) => in_import = true,
+                Some(Token::Identifier { name, .. }) if name == "use" => in_import = true,
+                Some(Token::Semicolon) => in_import = false,
+                _ => {}
+            }
+            if in_import || !ident(i, "Reverse") || i < 2 {
+                continue;
+            }
+            let call = matches!(tok(i + 1), Some(Token::LeftParen));
+            let wrapped = call
+                && matches!(tok(i - 1), Some(Token::LeftParen))
+                && ((ident(i - 2, "push") && i >= 3 && matches!(tok(i - 3), Some(Token::Dot)))
+                    || ident(i - 2, "Some"));
+            let let_bound = call && matches!(tok(i - 1), Some(Token::Let));
+            // `|Reverse(s)| s` over such a heap's items (kata 1086).
+            let param = call && matches!(tok(i - 1), Some(Token::Pipe));
+            let heap_item = opens(i + 1) && opens(i - 1) && ident(i - 2, "BinaryHeap");
+            let sort_key = sort_keys.contains_key(&self.tokens[i].span.offset);
+            if !(wrapped || let_bound || param || heap_item || sort_key) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The edit that imports `std.cmp.Reverse`: a line after the program's
+    /// last import, or above its first item. See
+    /// [`crate::ast::Program::std_cmp_reverse_import`].
+    fn std_cmp_reverse_import(&self, items: &[Item]) -> Option<crate::resolver::TextEdit> {
+        let uses = self
+            .tokens
+            .iter()
+            .any(|t| matches!(&t.token, Token::Identifier { name, .. } if name == "Reverse"));
+        if !uses {
+            return None;
+        }
+        let (source, base) = self.source.as_ref()?;
+        let last_import = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Import(imp) => Some(imp.span.offset + imp.span.length),
+                _ => None,
+            })
+            .max();
+        let (at, replacement) = match last_import {
+            Some(end) => (
+                crate::library_imports::line_end(source, end.checked_sub(*base)?),
+                "import std.cmp.Reverse;\n",
+            ),
+            None => (
+                crate::library_imports::above_first_item(source),
+                "import std.cmp.Reverse;\n\n",
+            ),
+        };
+        Some(crate::resolver::TextEdit {
+            offset: at + base,
+            length: 0,
+            replacement: replacement.to_string(),
+        })
+    }
+
     fn source_at(&self, offset: usize, length: usize) -> Option<&str> {
         let (source, base) = self.source.as_ref()?;
         let at = offset.checked_sub(*base)?;
@@ -3273,9 +3357,12 @@ impl Parser {
                     ident(at + 3).unwrap_or_default()
                 )
             });
-        // `Reverse` is not in the prelude: Kāra has no such wrapper, and the
-        // resolver's fix drops it around a heap's items (kata 1057).
+        // `Reverse` is not in the prelude. It is `std.cmp.Reverse`, the line's
+        // one import, when a use of it stays; the resolver's fix drops it
+        // around a heap's items (kata 1057) and a whole sort key (kata 1058),
+        // and a program with no other use loses the line (B-2026-11-10-41).
         let reverse = leaves.iter().any(|n| n == "Reverse");
+        let keep_reverse = reverse && self.rust_reverse_stays();
         let kara: Vec<String> = leaves
             .iter()
             .filter(|n| n.as_str() != "self" && n.as_str() != "Reverse")
@@ -3286,9 +3373,19 @@ impl Parser {
         } else {
             kara.join(", ")
         };
-        let no_reverse = "no `Reverse`, since its `PriorityQueue` pops the smallest first \
-                          (each `Reverse(..)` is reported where it is used)";
-        let message = if reverse && kara.is_empty() {
+        let no_reverse = "no need of `Reverse` here, since its `PriorityQueue` pops the \
+                          smallest first (each `Reverse(..)` is reported where it is used)";
+        let message = if keep_reverse {
+            let prelude = if kara.is_empty() {
+                String::new()
+            } else {
+                format!(", and {named} are in its prelude with no import")
+            };
+            format!(
+                "`{written}` is Rust's standard library -- Kāra's `Reverse` is `std.cmp.Reverse`\
+                 {prelude}: `import std.cmp.Reverse;`"
+            )
+        } else if reverse && kara.is_empty() {
             format!(
                 "`{written}` is Rust's standard library -- Kāra has {no_reverse}: delete the line"
             )
@@ -3305,7 +3402,7 @@ impl Parser {
         };
         // The edit takes the line's newline too, so no blank line is left.
         let mut edit_length = whole.length;
-        if self.source_at(whole.offset + whole.length, 1) == Some("\n") {
+        if !keep_reverse && self.source_at(whole.offset + whole.length, 1) == Some("\n") {
             edit_length += 1;
         }
         self.error_at(&message, whole);
@@ -3314,7 +3411,11 @@ impl Parser {
             vec![crate::resolver::TextEdit {
                 offset: whole.offset,
                 length: edit_length,
-                replacement: String::new(),
+                replacement: if keep_reverse {
+                    "import std.cmp.Reverse;".to_string()
+                } else {
+                    String::new()
+                },
             }],
         );
         self.pos = semi + 1;

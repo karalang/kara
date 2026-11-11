@@ -1035,6 +1035,19 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// The fields of struct `name` when `Name(a, b)`, `let Name(a, b) = ..`
+    /// and `x.0` may be read as Rust's tuple-struct spellings of it, which
+    /// `karac fix` rewrites to its fields: a program struct, or the
+    /// library's `Reverse`, whose literal is its only constructor
+    /// (docs/library/core-types.md § Reverse, B-2026-11-10-41).
+    pub(super) fn tuple_spelled_struct(&self, name: &str) -> Option<Vec<String>> {
+        let info = self.env.structs.get(name)?;
+        if info.defining_stdlib_origin && name != "Reverse" {
+            return None;
+        }
+        Some(info.fields.iter().map(|f| f.0.clone()).collect())
+    }
+
     /// `Name(a, b)` naming a program struct of two fields is Rust's tuple
     /// struct construction: keep the struct literal that builds it, in its
     /// fields' order, for the "a type, not a function" refusal the callee
@@ -1051,13 +1064,12 @@ impl<'a> super::TypeChecker<'a> {
         {
             return;
         }
-        let Some(info) = self.env.structs.get(name) else {
+        let Some(names) = self.tuple_spelled_struct(name) else {
             return;
         };
-        if info.defining_stdlib_origin || info.fields.len() != args.len() {
+        if names.len() != args.len() {
             return;
         }
-        let names: Vec<String> = info.fields.iter().map(|f| f.0.clone()).collect();
         let call_end = span.offset + span.length;
         let mut from = callee.span.offset + callee.span.length;
         let mut edits = Vec::new();

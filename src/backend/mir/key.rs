@@ -184,6 +184,15 @@ impl<'ctx> Cx<'ctx, '_> {
         if self.is_scalar_key(ty) {
             return self.cmp_value(op, a, b, ty);
         }
+        // A part with its own `cmp` body orders by it, as the derived `cmp`
+        // of what holds it does: a `(Reverse[i64], String)` sort key, whose
+        // structural order would compare `Reverse`'s field the plain way
+        // (B-2026-11-11-60).
+        let op = if op == KeyOp::Cmp && self.user_cmp_body(ty).is_some() {
+            KeyOp::User
+        } else {
+            op
+        };
         let f = self.key_fn(op, ty);
         let v = self
             .builder

@@ -11614,7 +11614,10 @@ impl<'a> super::TypeChecker<'a> {
                 // mismatch, reported as one; it is not also refutable.
                 let tuple_mismatch = matches!(pattern.kind, PatternKind::Tuple(_))
                     && !matches!(expected_ty, Type::Tuple(_) | Type::Error | Type::TypeVar(_));
-                if !tuple_mismatch && !self.is_irrefutable_pattern(pattern, &expected_ty) {
+                if !tuple_mismatch
+                    && !self.holds_struct_spelled_as_tuple(pattern)
+                    && !self.is_irrefutable_pattern(pattern, &expected_ty)
+                {
                     self.type_error(
                         "refutable pattern in `let` binding; use `let ... else { ... }`, \
                          `if let`, or `match` for patterns that may not match"

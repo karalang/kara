@@ -2652,10 +2652,12 @@ impl<'a> Interp<'a> {
                 // them all made each search linear (kata 2097). The probes
                 // are std's, as the compiled `karac_mir_bsearch` makes them,
                 // so a run of equal elements answers with the same index.
-                let cmp = self.user_cmp(el);
+                // By `ord_of` where the element orders by a user `cmp`, its
+                // own or a part's (B-2026-11-10-41).
+                let cmp = self.has_user_cmp(el);
                 let want = match cmp {
-                    Some(_) => None,
-                    None => Some(self.order_form(&x, el)?),
+                    true => None,
+                    false => Some(self.order_form(&x, el)?),
                 };
                 let probes = vec![0u8; len as usize];
                 let mut failed = None;
@@ -2667,10 +2669,10 @@ impl<'a> Interp<'a> {
                         let i = (b as *const u8 as usize) - (probes.as_ptr() as usize);
                         let ord = (|| -> R<std::cmp::Ordering> {
                             let v = self.slot(&base.child(lo + i as u64))?;
-                            match (&cmp, &want) {
-                                (Some(c), _) => self.call_cmp(c, &v, &x),
-                                (None, Some(w)) => Ok(key_order(&self.order_form(&v, el)?, w)),
-                                (None, None) => Ok(std::cmp::Ordering::Equal),
+                            match (cmp, &want) {
+                                (true, _) => self.ord_of(el, &v, &x),
+                                (false, Some(w)) => Ok(key_order(&self.order_form(&v, el)?, w)),
+                                (false, None) => Ok(std::cmp::Ordering::Equal),
                             }
                         })();
                         ord.unwrap_or_else(|e| {
@@ -2880,7 +2882,7 @@ impl<'a> Interp<'a> {
             ("Vec" | "Slice" | "Array", "is_sorted")
                 if self
                     .vec_elem_ty(arg_tys, name)
-                    .is_ok_and(|el| self.user_cmp(el).is_some()) =>
+                    .is_ok_and(|el| self.has_user_cmp(el)) =>
             {
                 // In the order of the elements' own `cmp` (B-2026-10-06-109).
                 let el = self.vec_elem_ty(arg_tys, name)?;
@@ -3694,10 +3696,10 @@ impl<'a> Interp<'a> {
         match (method, &args[1..]) {
             ("sort" | "sort_unstable", []) => {
                 let et = self.vec_elem_ty(arg_tys, &name)?;
-                if let Some(cmp) = self.user_cmp(et) {
+                if self.has_user_cmp(et) {
                     let n = self.vec_elems(id)?.len();
                     let order = self.merge_order(n, &mut |me, a, b| {
-                        me.call_cmp(&cmp, &Value::Ref(elem(a)), &Value::Ref(elem(b)))
+                        me.ord_of(et, &Value::Ref(elem(a)), &Value::Ref(elem(b)))
                     })?;
                     self.permute(id, &order)?;
                     return Ok(Value::Unit);
@@ -3769,11 +3771,10 @@ impl<'a> Interp<'a> {
                     return Err(s);
                 }
                 // A key type with a user `Ord` is ordered by its `cmp`.
-                let order = match self.user_cmp(key_ty) {
-                    Some(cmp) => {
-                        self.sort_order(n, &mut |me, a, b| me.call_cmp(&cmp, &owned[a], &owned[b]))?
-                    }
-                    None => self.sort_order(n, &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?,
+                let order = if self.has_user_cmp(key_ty) {
+                    self.sort_order(n, &mut |me, a, b| me.ord_of(key_ty, &owned[a], &owned[b]))?
+                } else {
+                    self.sort_order(n, &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?
                 };
                 self.permute(id, &order)?;
                 for k in owned {
@@ -9746,13 +9747,14 @@ impl<'a> Interp<'a> {
         if !sorted {
             return Ok(n);
         }
-        if let Some(cmp) = self.user_cmp(key_ty) {
-            // By the key type's own `cmp` (B-2026-10-06-109).
+        if self.has_user_cmp(key_ty) {
+            // By the key type's own `cmp` (B-2026-10-06-109), or a tuple's
+            // parts' (B-2026-11-10-41).
             let (mut lo, mut hi) = (0, n);
             while lo < hi {
                 let mid = (lo + hi) / 2;
                 let k = self.entry_key(id, mid, is_map)?;
-                if self.call_cmp(&cmp, &k, key)? == std::cmp::Ordering::Greater {
+                if self.ord_of(key_ty, &k, key)? == std::cmp::Ordering::Greater {
                     hi = mid;
                 } else {
                     lo = mid + 1;
@@ -9788,18 +9790,18 @@ impl<'a> Interp<'a> {
         strict: bool,
     ) -> R<usize> {
         use std::cmp::Ordering::*;
-        let cmp = self.user_cmp(key_ty);
+        let cmp = self.has_user_cmp(key_ty);
         let want = match cmp {
-            Some(_) => Value::Unit,
-            None => self.order_form(k, key_ty)?,
+            true => Value::Unit,
+            false => self.order_form(k, key_ty)?,
         };
         let (mut lo, mut hi) = (0, self.vec_elems(id)?.len());
         while lo < hi {
             let mid = (lo + hi) / 2;
             let e = self.entry_key(id, mid, is_map)?;
-            let o = match &cmp {
-                Some(c) => self.call_cmp(c, &e, k)?,
-                None => key_order(&self.order_form(&e, key_ty)?, &want),
+            let o = match cmp {
+                true => self.ord_of(key_ty, &e, k)?,
+                false => key_order(&self.order_form(&e, key_ty)?, &want),
             };
             let past = match o {
                 Greater => true,
@@ -10340,11 +10342,8 @@ impl<'a> Interp<'a> {
         key_ty: Ty,
         is_map: bool,
     ) -> R<Option<usize>> {
-        let cmp = self.user_cmp(key_ty);
-        if !sorted
-            || self.total_float_key(key_ty)
-            || (cmp.is_none() && self.user_eq(key_ty).is_some())
-        {
+        let cmp = self.has_user_cmp(key_ty);
+        if !sorted || self.total_float_key(key_ty) || (!cmp && self.user_eq(key_ty).is_some()) {
             return self.find_key(id, key, key_ty, is_map);
         }
         let i = self.sorted_bound(id, is_map, key_ty, key, false)?;
@@ -10352,9 +10351,9 @@ impl<'a> Interp<'a> {
             return Ok(None);
         }
         let e = self.entry_key(id, i, is_map)?;
-        let equal = match &cmp {
-            Some(c) => self.call_cmp(c, &e, key)? == std::cmp::Ordering::Equal,
-            None => {
+        let equal = match cmp {
+            true => self.ord_of(key_ty, &e, key)? == std::cmp::Ordering::Equal,
+            false => {
                 key_order(
                     &self.order_form(&e, key_ty)?,
                     &self.order_form(key, key_ty)?,
@@ -10794,6 +10793,144 @@ impl<'a> Interp<'a> {
         self.program.bodies.contains_key(&name).then_some(name)
     }
 
+    /// Whether `ty` orders through a user `cmp`: it has one, or a part of
+    /// it does (a tuple, array, `Vec` or slice element, or a field of a
+    /// type whose `cmp` is derived).
+    fn has_user_cmp(&self, ty: Ty) -> bool {
+        self.user_cmp_within(ty, &mut Vec::new())
+    }
+
+    fn user_cmp_within(&self, ty: Ty, seen: &mut Vec<Ty>) -> bool {
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        match self.tys.kind(ty) {
+            TyKind::Ref(t) | TyKind::MutRef(t) => self.user_cmp_within(t, seen),
+            TyKind::Tuple(ts) => ts.iter().copied().any(|t| self.user_cmp_within(t, seen)),
+            TyKind::Array(e, _) | TyKind::Slice(e) | TyKind::Intrinsic(IntrinsicTy::Vec(e)) => {
+                self.user_cmp_within(e, seen)
+            }
+            TyKind::Adt(_) => {
+                if self.user_cmp(ty).is_some() {
+                    return true;
+                }
+                let Some((adt, _)) = self.tys.tcx().adt_of(ty) else {
+                    return false;
+                };
+                let variants: Vec<(Option<u32>, u32)> = adt
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(k, v)| (adt.is_enum.then_some(k as u32), v.fields.len() as u32))
+                    .collect();
+                variants.into_iter().any(|(k, n)| {
+                    (0..n).any(|i| {
+                        self.tys
+                            .field_ty(ty, k, i)
+                            .is_some_and(|t| self.user_cmp_within(t, seen))
+                    })
+                })
+            }
+            _ => self.user_cmp(ty).is_some(),
+        }
+    }
+
+    /// `a.cmp(b)` at `ty`: by its user `cmp`; part by part, as the derived
+    /// `cmp` does, where a part has one (a `(Reverse[i64], String)` sort
+    /// key, whose key form would compare `Reverse`'s field the plain way,
+    /// B-2026-11-11-60); else by key forms.
+    fn ord_of(&mut self, ty: Ty, a: &Value, b: &Value) -> R<std::cmp::Ordering> {
+        use std::cmp::Ordering::Equal;
+        if let Some(cmp) = self.user_cmp(ty) {
+            return self.call_cmp(&cmp, a, b);
+        }
+        if !self.has_user_cmp(ty) {
+            return Ok(cmp_key(&self.order_form(a, ty)?, &self.order_form(b, ty)?));
+        }
+        let (mut a, mut b) = (a.clone(), b.clone());
+        while let Value::Ref(at) = &a {
+            a = self.slot(at)?;
+        }
+        while let Value::Ref(at) = &b {
+            b = self.slot(at)?;
+        }
+        // The parts in order, each with its type; the first unequal decides.
+        let parts: Vec<(Ty, Value, Value)> = match (self.tys.kind(ty), &a, &b) {
+            (TyKind::Ref(t) | TyKind::MutRef(t), _, _) => return self.ord_of(t, &a, &b),
+            (TyKind::Tuple(ts), Value::Agg(x), Value::Agg(y)) => {
+                let ts = ts.to_vec();
+                (0..ts.len().min(x.len()).min(y.len()))
+                    .map(|i| (ts[i], x[i].clone(), y[i].clone()))
+                    .collect()
+            }
+            (
+                TyKind::Array(e, _) | TyKind::Slice(e) | TyKind::Intrinsic(IntrinsicTy::Vec(e)),
+                _,
+                _,
+            ) => {
+                let mut sides = Vec::with_capacity(2);
+                for v in [&a, &b] {
+                    let elems = match v {
+                        Value::Agg(fs) => fs.clone(),
+                        v => {
+                            let (base, lo, len) = self.view_of(v)?;
+                            let mut out = Vec::with_capacity(len as usize);
+                            for i in 0..len {
+                                out.push(self.slot(&base.child(lo + i))?);
+                            }
+                            out
+                        }
+                    };
+                    sides.push(elems);
+                }
+                let (x, y) = (&sides[0], &sides[1]);
+                for i in 0..x.len().min(y.len()) {
+                    let o = self.ord_of(e, &x[i], &y[i])?;
+                    if o != Equal {
+                        return Ok(o);
+                    }
+                }
+                return Ok(x.len().cmp(&y.len()));
+            }
+            (TyKind::Adt(_), Value::Agg(x), Value::Agg(y)) => (0..x.len().min(y.len()))
+                .filter_map(|i| {
+                    let t = self.tys.field_ty(ty, None, i as u32)?;
+                    Some((t, x[i].clone(), y[i].clone()))
+                })
+                .collect(),
+            (TyKind::Adt(_), Value::Variant(j, x), Value::Variant(k, y)) => {
+                if j != k {
+                    // `Option` orders `None` first (B-2026-11-08-24), as
+                    // `unsigned_order` swaps its two variants.
+                    let option = self.tys.tcx().adt_of(ty).is_some_and(|(adt, _)| {
+                        adt.library_name() == Some("Option") && adt.variants.len() == 2
+                    });
+                    return Ok(if option { k.cmp(j) } else { j.cmp(k) });
+                }
+                (0..x.len().min(y.len()))
+                    .filter_map(|i| {
+                        let t = self.tys.field_ty(ty, Some(*j), i as u32)?;
+                        Some((t, x[i].clone(), y[i].clone()))
+                    })
+                    .collect()
+            }
+            _ => {
+                return Ok(cmp_key(
+                    &self.order_form(&a, ty)?,
+                    &self.order_form(&b, ty)?,
+                ))
+            }
+        };
+        for (t, x, y) in parts {
+            let o = self.ord_of(t, &x, &y)?;
+            if o != Equal {
+                return Ok(o);
+            }
+        }
+        Ok(Equal)
+    }
+
     /// `a.cmp(b)` by the user `cmp` body `name`, which takes both by
     /// reference (a value that is itself a reference is passed as is).
     fn call_cmp(&mut self, name: &str, a: &Value, b: &Value) -> R<std::cmp::Ordering> {
@@ -10810,17 +10947,17 @@ impl<'a> Interp<'a> {
     /// forms, or, when `ty` has a user `Ord.cmp`, their ranks under it
     /// (B-2026-10-06-109). Equal values share a rank.
     fn order_forms(&mut self, vals: &[Value], ty: Ty) -> R<Vec<Value>> {
-        let Some(cmp) = self.user_cmp(ty) else {
+        if !self.has_user_cmp(ty) {
             return vals.iter().map(|v| self.order_form(v, ty)).collect();
-        };
+        }
         let order = self.merge_order(vals.len(), &mut |me, a, b| {
-            me.call_cmp(&cmp, &vals[a], &vals[b])
+            me.ord_of(ty, &vals[a], &vals[b])
         })?;
         let mut forms = vec![Value::Int(0); vals.len()];
         let mut rank = 0;
         for w in 0..order.len() {
             if w > 0
-                && self.call_cmp(&cmp, &vals[order[w - 1]], &vals[order[w]])?
+                && self.ord_of(ty, &vals[order[w - 1]], &vals[order[w]])?
                     != std::cmp::Ordering::Equal
             {
                 rank += 1;

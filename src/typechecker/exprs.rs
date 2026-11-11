@@ -13338,9 +13338,9 @@ impl<'a> super::TypeChecker<'a> {
                     // Rust's tuple-struct `.0` on a struct, whose fix names
                     // its fields: the field in that place.
                     Type::Named { name, .. }
-                        if self.env.structs.get(name).is_some_and(|i| {
-                            !i.defining_stdlib_origin && (*index as usize) < i.fields.len()
-                        }) =>
+                        if self
+                            .tuple_spelled_struct(name)
+                            .is_some_and(|fs| (*index as usize) < fs.len()) =>
                     {
                         let field = self.env.structs[name].fields[*index as usize].0.clone();
                         let from = object.span.offset + object.span.length;

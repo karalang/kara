@@ -1,0 +1,31 @@
+// `std.cmp`: `Reverse`, which reverses the order of one key inside a
+// larger one (library/core-types.md § Reverse; review-thread ruling
+// 2026-11-11, B-2026-11-10-41). `Ordering`, `min` and `max` are the
+// prelude's.
+
+/// A value ordered the other way round: `Reverse { value: 2 } <
+/// Reverse { value: 1 }`. One part of a heap's item or a sort key:
+/// `pq.push((Reverse { value: score }, name))` pops the lowest score first
+/// and, among equal scores, the greatest name.
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct Reverse[+T] {
+    pub value: T,
+}
+
+impl[T: PartialOrd] PartialOrd for Reverse[T] {
+    fn partial_cmp(ref self, other: ref Reverse[T]) -> Option[Ordering] {
+        other.value.partial_cmp(self.value)
+    }
+}
+
+impl[T: Ord] Ord for Reverse[T] {
+    fn cmp(ref self, other: ref Reverse[T]) -> Ordering {
+        other.value.cmp(self.value)
+    }
+}
+
+impl[T: Display] Display for Reverse[T] {
+    fn to_string(ref self) -> String {
+        self.value.to_string()
+    }
+}

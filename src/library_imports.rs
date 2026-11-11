@@ -199,7 +199,7 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
 
 /// The offset just past the newline that ends the line holding `at`, or the
 /// end of `src`.
-fn line_end(src: &str, at: usize) -> usize {
+pub(crate) fn line_end(src: &str, at: usize) -> usize {
     match src.get(at..).and_then(|rest| rest.find('\n')) {
         Some(i) => at + i + 1,
         None => src.len(),
@@ -208,7 +208,7 @@ fn line_end(src: &str, at: usize) -> usize {
 
 /// The start of the first line that is neither blank nor a `//` comment: a
 /// program's opening comment stays above the imports a fix adds.
-fn above_first_item(src: &str) -> usize {
+pub(crate) fn above_first_item(src: &str) -> usize {
     let mut at = 0;
     for line in src.split_inclusive('\n') {
         let t = line.trim_start();

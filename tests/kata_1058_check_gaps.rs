@@ -149,12 +149,20 @@ fn kata_1058_reverse_sort_key_becomes_a_descending_sort_by() {
 }
 
 #[test]
-fn kata_1058_reverse_inside_a_larger_key_has_no_fix() {
+fn kata_1058_reverse_inside_a_larger_key_takes_std_cmp_reverse() {
+    // Was `kata_1058_reverse_inside_a_larger_key_has_no_fix`: the library's
+    // `std.cmp.Reverse` (B-2026-11-10-41) keeps the key as written.
     let src = "use std::cmp::Reverse;\nfn main() {\n    let mut v = [(1, 3), (1, 2), (0, 5)];\n    v.sort_by_key(|p| (p.0, Reverse(p.1)));\n    println(f\"{v}\");\n}";
-    let (first, text, clean, _) = mend(&scratch("sort-key-inner"), src);
+    let (first, text, clean, out) = mend(&scratch("sort-key-inner"), src);
     assert!(
-        first.contains("a descending sort is `sort_by(|a, b| b.cmp(a))`"),
+        first.contains("Kāra's `Reverse` is `std.cmp.Reverse`"),
         "{first}"
     );
-    assert!(!clean && text.contains("Reverse("), "{text}");
+    assert!(clean, "still refused after fix:\n{text}");
+    assert!(
+        text.starts_with("import std.cmp.Reverse;\n")
+            && text.contains("v.sort_by_key(|p| (p.0, Reverse { value: p.1 }));"),
+        "{text}"
+    );
+    assert_eq!(out.trim_end(), "[(0, 5), (1, 3), (1, 2)]", "{text}");
 }

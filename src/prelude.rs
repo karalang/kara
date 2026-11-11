@@ -1368,6 +1368,12 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "process"],
         include_str!("../runtime/stdlib/std_process.kara"),
     ),
+    // `std.cmp`: `Reverse` (library/core-types.md § Reverse; B-2026-11-10-41).
+    // `Ordering`, `min` and `max` are the prelude's.
+    (
+        &["std", "cmp"],
+        include_str!("../runtime/stdlib/std_cmp.kara"),
+    ),
     // `std.log` (docs/library/log.md; B-2026-10-27-20).
     (
         &["std", "log"],

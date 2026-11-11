@@ -11872,11 +11872,40 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
-    /// Queue `t`'s user `Ord.cmp`, which the interpreter sorts by.
+    /// Queue `t`'s user `Ord.cmp`, which the interpreter sorts by, and
+    /// those of its parts: a `(Reverse[i64], String)` sort key orders by
+    /// `Reverse`'s `cmp`, which nothing else may call (B-2026-11-11-60).
+    /// A part with its own `cmp` is not looked into: that body orders it.
     fn queue_user_cmp(&mut self, t: Ty) {
-        let (_, t) = self.strip_ty_full(t);
-        if let Some((d, args)) = self.user_impl_method(t, "Ord", "cmp") {
-            self.lcx.instance(d, args);
+        let mut seen = FxHashSet::default();
+        let mut work = vec![t];
+        while let Some(t) = work.pop() {
+            let (_, t) = self.strip_ty_full(t);
+            if !seen.insert(t) {
+                continue;
+            }
+            let tcx = self.tys().tcx();
+            match tcx.kind(t) {
+                HK::Tuple(l) => work.extend(tcx.list(l)),
+                HK::Array { elem, .. } | HK::Slice { elem, .. } => work.push(elem),
+                HK::Intrinsic { args, .. } => work.extend(tcx.list(args)),
+                HK::Adt { .. } | HK::Shared { .. } => {
+                    if let Some((d, args)) = self.user_impl_method(t, "Ord", "cmp") {
+                        self.lcx.instance(d, args);
+                        continue;
+                    }
+                    let tcx = self.tys().tcx();
+                    if let Some((adt, _)) = tcx.adt_of(t) {
+                        for (k, v) in adt.variants.iter().enumerate() {
+                            let variant = adt.is_enum.then_some(k as u32);
+                            for i in 0..v.fields.len() {
+                                work.extend(tcx.field_ty(t, variant, i as u32));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -22379,7 +22408,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             // `a.eq(b)` under `T: PartialEq` and `a.partial_cmp(b)` under
             // `T: PartialOrd` at a type that derives them: what `==` and `<`
             // compare by, as on the type itself (B-2026-10-31-24). A
-            // hand-written impl was found through the bound above.
+            // hand-written impl was found through the bound above. And
+            // `a.cmp(b)` under `T: Ord` at a `String`, whose `cmp` is
+            // builtin: `f[String]` over `fn f[T: Ord](a: T, b: T)` was
+            // refused as not lowered (B-2026-11-10-41, from `Reverse[String]`).
+            if let ("cmp", [_]) = (method, args) {
+                if matches!(self.strip_ty(rt), HK::Str) {
+                    return self.builtin_method(e, "String.cmp", object, method, args, dest);
+                }
+            }
             if let ("eq" | "partial_cmp" | "hash", [_]) = (method, args) {
                 let (_, base) = self.strip_ty_full(rt);
                 let key = format!("{}.{method}", self.tys().display(base));

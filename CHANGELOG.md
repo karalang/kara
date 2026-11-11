@@ -99,6 +99,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `std.cmp.Reverse[T]` orders a value the other way round
+  (library/core-types.md § Reverse): `import std.cmp.Reverse;`, then
+  `Reverse { value: score }` on one part of a heap's item or a sort key
+  orders that part descending and the rest ascending, as
+  `(Reverse { value: p.score }, p.name.clone())`. It is a struct with one
+  field, `value`, and implements `Ord` by `T`'s order reversed, and `Eq`,
+  `Hash`, `Clone`, `Copy`, `Debug` and `Display` when `T` does
+  (B-2026-11-10-41).
 - `Iterator.eq(other)` compares two iterators item by item, as Rust's
   does: `digits.iter().eq(digits.iter().rev())`. Both must yield one item
   type. It was refused with "`VecIter` does not implement `PartialEq`"
@@ -269,6 +277,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A tuple, array, `Vec`, `Option` or derived-`Ord` struct holding a value
+  with a hand-written `Ord` sorts, searches and keys a sorted table by that
+  `Ord`, as its derived `cmp` does. `sort`, `sort_by_key`, `binary_search`,
+  `is_sorted`, `SortedMap` and `SortedSet` compared the holder's fields
+  directly instead, so `v.sort_by_key(|x| (Down { v: x }, 0))` sorted
+  ascending under a descending `Down`, on `karac run` and in compiled
+  builds alike (B-2026-11-11-60).
+- A generic `a.cmp(b)` under `T: Ord` instantiated at `String` compiles; it
+  was refused as "not lowered yet" (B-2026-11-10-41).
 - A program that calls the HTTP client (`Client`, `http.get`, `http.post`)
   from more than one task no longer races on the client's event loop. One
   runtime was shared by every calling thread, and ThreadSanitizer reported
@@ -674,6 +691,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `karac fix` carries Rust's `std::cmp::Reverse` over to `std.cmp.Reverse`:
+  `use std::cmp::Reverse;` becomes `import std.cmp.Reverse;` (an unimported
+  `Reverse` gets the import), `Reverse(x)` becomes `Reverse { value: x }`
+  in expressions, `let` and `match` patterns and closure parameters, and
+  `r.0` becomes `r.value`. A `Reverse` around a whole heap item is still
+  dropped for a smallest-first `PriorityQueue.new()` when every `Reverse`
+  in the program can go; when one stays, all do and each heap is
+  `PriorityQueue.max_first()` (B-2026-11-10-41, kata 2102).
+- A program struct written as Rust's tuple-struct pattern (`let P(x, y) =
+  p`, `P(u, _) =>`) gets the struct pattern `P { a: x, b: y }` as its fix,
+  in place of "refutable pattern" or "an enum-variant pattern" errors
+  (B-2026-11-10-41).
 - A bare `File`, child pipe or `TcpStream` parameter handed to
   `BufReader.new` / `BufWriter.new` (`fn serve(conn: TcpStream)`, a Rust
   port's owned parameter) gets the refusal any `own` parameter does, with

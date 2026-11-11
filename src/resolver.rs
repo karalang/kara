@@ -2376,16 +2376,18 @@ impl<'a> Resolver<'a> {
         true
     }
 
-    /// `Reverse`, Rust's `std::cmp::Reverse`, which makes a `BinaryHeap` pop
-    /// the smallest first. Kāra's `PriorityQueue` does that already, so
-    /// around a heap's item (`heap.push(Reverse(x))`, `Some(Reverse(p))`) in
-    /// a program that builds a Rust heap the fix drops the name, and the
-    /// heap's constructor fix becomes the smallest-first `PriorityQueue.new()`
-    /// ([`Self::rust_heaps_pop_smallest`]). As the whole body of a sort key,
-    /// the fix writes the descending `sort_by` (kata 1058,
-    /// [`crate::ast::Program::rust_reverse_sort_keys`]). Anywhere else there
-    /// is no fix: dropping it would reverse the order. Never the did-you-mean
-    /// `Release` (kata 1057).
+    /// `Reverse` unimported, Rust's `std::cmp::Reverse`, which makes a
+    /// `BinaryHeap` pop the smallest first. Kāra's `PriorityQueue` does that
+    /// already, so around a heap's item (`heap.push(Reverse(x))`,
+    /// `Some(Reverse(p))`) in a program that builds a Rust heap the fix drops
+    /// the name, and the heap's constructor fix becomes the smallest-first
+    /// `PriorityQueue.new()` ([`Self::rust_heaps_pop_smallest`]). As the
+    /// whole body of a sort key, the fix writes the descending `sort_by`
+    /// (kata 1058, [`crate::ast::Program::rust_reverse_sort_keys`]).
+    /// Anywhere else it is `std.cmp.Reverse` (B-2026-11-10-41), and the fix
+    /// imports it ([`crate::ast::Program::std_cmp_reverse_import`]); the
+    /// typechecker's then writes Rust's `Reverse(x)` as its literal. Never
+    /// the did-you-mean `Release` (kata 1057).
     fn report_rust_reverse(&mut self, name: &str, span: Span) -> bool {
         if name != "Reverse" {
             return false;
@@ -2418,11 +2420,14 @@ impl<'a> Resolver<'a> {
              smallest first; Kāra's `PriorityQueue` pops the smallest first already, so \
              drop `Reverse` and build the queue with `PriorityQueue.new()`"
         } else {
-            "`Reverse` is Rust's `std::cmp::Reverse`; Kāra has no such wrapper: a \
-             `PriorityQueue` pops the smallest first unless built with \
-             `PriorityQueue.max_first()`, and a descending sort is `sort_by(|a, b| \
-             b.cmp(a))`"
+            "`Reverse` is `std.cmp.Reverse`, which a program imports before it uses it: \
+             `import std.cmp.Reverse;` (a struct: Rust's `Reverse(x)` is `Reverse { value: \
+             x }`, and `r.0` is `r.value`)"
         };
+        // Every other use: the import, the same edit at each, applied once
+        // (B-2026-11-10-41).
+        let replacement =
+            replacement.or_else(|| self.program.std_cmp_reverse_import.clone().map(Box::new));
         self.errors.push(ResolveError {
             message: message.to_string(),
             span,

@@ -937,6 +937,12 @@ pub struct Program {
     /// the PARSER from the tokens; the resolver attaches it when nothing
     /// declares `Reverse` (kata 1058).
     pub rust_reverse_sort_keys: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// The edit that imports `std.cmp.Reverse` (a line after the last
+    /// import, or above the first item), for a program that writes
+    /// `Reverse` and does not import it: the resolver's fix for each such
+    /// `Reverse` it does not drop (B-2026-11-10-41). `None` when no
+    /// `Reverse` is written.
+    pub std_cmp_reverse_import: Option<crate::resolver::TextEdit>,
     /// Rust's `std::mem::take` written with dots, `std.mem.take(..)`, and
     /// the like (`core.cmp.max`, `cmp.max`), keyed by the offset of the
     /// root segment, with the message and the edit that deletes the module

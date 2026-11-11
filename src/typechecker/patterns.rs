@@ -1625,6 +1625,17 @@ impl<'a> super::TypeChecker<'a> {
                 while let Type::Ref(inner) | Type::MutRef(inner) = peeled {
                     peeled = inner;
                 }
+                if self.report_struct_spelled_as_tuple_pattern(
+                    path,
+                    patterns,
+                    peeled,
+                    &pattern.span,
+                ) {
+                    for pat in patterns {
+                        self.check_pattern_against(pat, &Type::Error, mode);
+                    }
+                    return;
+                }
                 if let (Type::Named { name, .. }, Some(v)) = (peeled, path.last()) {
                     if self.env.enums.contains_key(name) {
                         let (n, v) = (name.clone(), v.clone());
@@ -2483,6 +2494,92 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::TypeMismatch,
             );
             return;
+        }
+    }
+
+    /// `Name(a, b)` as the pattern of a struct `Name` of two named fields,
+    /// Rust's tuple-struct spelling: the refusal carries the struct pattern
+    /// `Name { f: a, g: b }`, in the fields' order, as its fix
+    /// ([`Self::tuple_spelled_struct`]). Whether it reported.
+    fn report_struct_spelled_as_tuple_pattern(
+        &mut self,
+        path: &[String],
+        patterns: &[Pattern],
+        scrutinee: &Type,
+        span: &Span,
+    ) -> bool {
+        let [name] = path else {
+            return false;
+        };
+        if !matches!(scrutinee, Type::Named { name: n, .. } if n == name) {
+            return false;
+        }
+        let Some(fields) = self.tuple_spelled_struct(name) else {
+            return false;
+        };
+        if fields.len() != patterns.len() || patterns.is_empty() {
+            return false;
+        }
+        let first = fields[0].clone();
+        let mut edits = Vec::new();
+        let mut from = span.offset + name.len();
+        for (i, (p, f)) in patterns.iter().zip(&fields).enumerate() {
+            let lead = if i == 0 { " { " } else { ", " };
+            edits.push(crate::resolver::TextEdit {
+                offset: from,
+                length: p.span.offset.saturating_sub(from),
+                replacement: format!("{lead}{f}: "),
+            });
+            from = p.span.offset + p.span.length;
+        }
+        edits.push(crate::resolver::TextEdit {
+            offset: from,
+            length: (span.offset + span.length).saturating_sub(from),
+            replacement: " }".to_string(),
+        });
+        self.type_error(
+            format!(
+                "`{name}` is a struct, not a tuple: its fields have names, so its pattern is \
+                 `{name} {{ {first}: … }}`"
+            ),
+            *span,
+            TypeErrorKind::PatternScrutineeMismatch,
+        );
+        self.error_fix_diffs.insert(SpanKey::from_span(span), edits);
+        true
+    }
+
+    /// Whether `pat` holds a [`Self::report_struct_spelled_as_tuple_pattern`]
+    /// pattern: refused with its fix, it is not also a refutable `let`.
+    pub(super) fn holds_struct_spelled_as_tuple(&self, pat: &Pattern) -> bool {
+        match &pat.kind {
+            PatternKind::TupleVariant { path, patterns } => {
+                let spelled = match path.as_slice() {
+                    [n] => {
+                        !self
+                            .env
+                            .enums
+                            .values()
+                            .any(|e| e.variants.iter().any(|(v, _)| v == n))
+                            && self
+                                .tuple_spelled_struct(n)
+                                .is_some_and(|fs| fs.len() == patterns.len())
+                    }
+                    _ => false,
+                };
+                spelled
+                    || patterns
+                        .iter()
+                        .any(|p| self.holds_struct_spelled_as_tuple(p))
+            }
+            PatternKind::Tuple(ps) => ps.iter().any(|p| self.holds_struct_spelled_as_tuple(p)),
+            PatternKind::AtBinding { pattern, .. } => self.holds_struct_spelled_as_tuple(pattern),
+            PatternKind::Struct { fields, .. } => fields.iter().any(|f| {
+                f.pattern
+                    .as_ref()
+                    .is_some_and(|p| self.holds_struct_spelled_as_tuple(p))
+            }),
+            _ => false,
         }
     }
 
@@ -4161,7 +4258,15 @@ impl<'a> super::TypeChecker<'a> {
                     self.core_no_move_out.pop();
                 }
             }
-            PatternKind::TupleVariant { patterns, .. } => {
+            PatternKind::TupleVariant { path, patterns } => {
+                // `let Reverse(x) = r`: Rust's tuple-struct pattern of a
+                // struct, refused with its struct pattern as the fix.
+                let mut peeled = ty;
+                while let Type::Ref(inner) | Type::MutRef(inner) = peeled {
+                    peeled = inner;
+                }
+                let peeled = peeled.clone();
+                self.report_struct_spelled_as_tuple_pattern(path, patterns, &peeled, &pattern.span);
                 for pat in patterns {
                     self.bind_pattern_types(pat, &Type::Error);
                 }

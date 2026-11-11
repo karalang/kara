@@ -9,8 +9,8 @@
 //!   the heap pop the smallest first, is dropped, and the heap is built as
 //!   `PriorityQueue.new()`, which pops the smallest first already. As a
 //!   sort key's whole body it becomes the descending `sort_by` (kata 1058);
-//!   anywhere else there is no fix, and never the did-you-mean `Release`
-//!   (kata 1057).
+//!   anywhere else it is `std.cmp.Reverse` (tests/std_cmp_reverse.rs), and
+//!   never the did-you-mean `Release` (kata 1057).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -92,7 +92,7 @@ fn kata_1057_reverse_around_heap_items_is_dropped() {
     );
     assert!(!first.contains("Release"), "{first}");
     assert!(
-        first.contains("Kāra has no `Reverse`") && !first.contains("`Reverse` in its prelude"),
+        first.contains("no need of `Reverse` here") && !first.contains("`Reverse` in its prelude"),
         "{first}"
     );
     assert!(clean, "still refused after fix:\n{text}");

@@ -2391,7 +2391,10 @@ impl super::Parser {
                     // Rust's `|Reverse(s)| s` over a `BinaryHeap<Reverse<T>>`'s
                     // items, in a program that uses `std::cmp::Reverse`:
                     // Kāra's heap holds the value itself, so the parameter is
-                    // the inner pattern (kata 1086, B-2026-11-09-42).
+                    // the inner pattern (kata 1086, B-2026-11-09-42). Where a
+                    // `Reverse` stays, every one does, as `std.cmp.Reverse`,
+                    // and the parameter is its struct pattern
+                    // (B-2026-11-10-41).
                     let unwrapped = match patterns.as_slice() {
                         [inner] if name == "Reverse" && self.uses_rust_reverse() => self
                             .source_at(inner.span.offset, inner.span.length)
@@ -2400,20 +2403,32 @@ impl super::Parser {
                     };
                     match unwrapped {
                         Some(inner) => {
-                            self.error_at(
-                                &format!(
-                                    "`Reverse({inner})` is Rust's `std::cmp::Reverse`, which Kāra \
-                                     has no use for: its `PriorityQueue` holds the value itself, so \
-                                     the parameter is `{inner}`"
-                                ),
-                                span,
-                            );
+                            let stays = self.rust_reverse_stays();
+                            let (message, replacement) = if stays {
+                                (
+                                    format!(
+                                        "`Reverse` is a struct, not a tuple: its fields have \
+                                         names, so its pattern is `Reverse {{ value: {inner} }}`"
+                                    ),
+                                    format!("Reverse {{ value: {inner} }}"),
+                                )
+                            } else {
+                                (
+                                    format!(
+                                        "`Reverse({inner})` is Rust's `std::cmp::Reverse`, which \
+                                         Kāra has no use for: its `PriorityQueue` holds the value \
+                                         itself, so the parameter is `{inner}`"
+                                    ),
+                                    inner,
+                                )
+                            };
+                            self.error_at(&message, span);
                             self.fix_edits.insert(
                                 crate::resolver::SpanKey::from_span(&span),
                                 crate::resolver::TextEdit {
                                     offset: span.offset,
                                     length: span.length,
-                                    replacement: inner,
+                                    replacement,
                                 },
                             );
                         }
