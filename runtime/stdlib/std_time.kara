@@ -56,6 +56,42 @@ impl Duration {
     }
 }
 
+impl Add for Duration {
+    type Output = Duration;
+
+    /// The two spans end to end (B-2026-11-11-72).
+    fn add(own self, rhs: own Duration) -> Duration {
+        Duration { ns: self.ns + rhs.ns }
+    }
+}
+
+impl Sub for Duration {
+    type Output = Duration;
+
+    /// This span less `rhs`, negative when `rhs` is longer.
+    fn sub(own self, rhs: own Duration) -> Duration {
+        Duration { ns: self.ns - rhs.ns }
+    }
+}
+
+impl Mul[i64] for Duration {
+    type Output = Duration;
+
+    /// This span `rhs` times over.
+    fn mul(own self, rhs: own i64) -> Duration {
+        Duration { ns: self.ns * rhs }
+    }
+}
+
+impl Div[i64] for Duration {
+    type Output = Duration;
+
+    /// This span cut into `rhs` equal parts, rounded toward zero.
+    fn div(own self, rhs: own i64) -> Duration {
+        Duration { ns: self.ns / rhs }
+    }
+}
+
 /// Wall-clock time, which can jump when the system clock is set. Use an
 /// `Instant` to measure how long something takes.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]

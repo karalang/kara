@@ -18,6 +18,7 @@ mod items_extern;
 mod items_trait;
 mod patterns;
 mod rust_rc;
+mod rust_thread;
 mod stmts;
 mod types;
 
@@ -2904,6 +2905,18 @@ impl Parser {
                 dropped += 1;
             }
         }
+        // Rust's `thread::sleep(d)` / `std::thread::sleep(d)` is Kāra's
+        // `std.time.sleep(d)`: the path goes, and the program imports
+        // `sleep` unless a `use std::thread;` line does it for the path
+        // (B-2026-11-11-73).
+        let n = names.len();
+        let thread_sleep = n >= 2
+            && names[n - 1] == "sleep"
+            && names[n - 2] == "thread"
+            && (n == 2 || (n == 3 && matches!(names[0].as_str(), "std" | "core")));
+        if thread_sleep {
+            dropped = n - 1;
+        }
         let first = self.tokens[at].span;
         let last = self.tokens[segments[segments.len() - 1]].span;
         let whole = Span {
@@ -2970,7 +2983,22 @@ impl Parser {
             }
             return;
         }
-        let message = if dropped > 0 {
+        let sleep_import = if thread_sleep {
+            self.std_time_sleep_import()
+        } else {
+            None
+        };
+        let message = if thread_sleep {
+            let import = if sleep_import.is_some() {
+                ", imported with `import std.time.sleep;`"
+            } else {
+                ""
+            };
+            format!(
+                "`{written}` is Rust's -- Kāra's `sleep` is `std.time.sleep`, which takes the \
+                 same `Duration`: write `sleep`{import}"
+            )
+        } else if dropped > 0 {
             format!(
                 "`{written}` is a Rust path -- Kāra's `{}` needs no module path, and a path \
                  is written with `.`: write `{kara}`",
@@ -2979,6 +3007,7 @@ impl Parser {
         } else {
             format!("`{written}` is Rust's `::` path -- Kāra writes a path with `.`: `{kara}`")
         };
+        edits.extend(sleep_import);
         self.error_at(&message, whole);
         self.fix_diffs
             .insert(crate::resolver::SpanKey::from_span(&whole), edits);

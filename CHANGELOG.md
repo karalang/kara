@@ -105,6 +105,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   part of a millisecond now pauses that long; it used to round down to
   no pause. `karac fix` rewrites Rust's `from_micros`,
   `from_nanos`, `as_millis`, `as_micros` and `as_nanos` to them.
+- `Duration` adds, subtracts and scales: `a + b`, `a - b`, `d * n`, `d / n`
+  and their compound assignments (library/time-random-env.md;
+  B-2026-11-11-72).
 - `String.from_utf8_lossy(bytes)` decodes bytes that may not be UTF-8,
   replacing each invalid sequence with U+FFFD, as Rust's does
   (library/strings.md; B-2026-11-11-24). Bytes read off a socket or a
@@ -761,6 +764,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `karac fix` mends Rust's pause to `std.time.sleep` (B-2026-11-11-73):
+  `use std::thread;` and `use std::thread::sleep;` become
+  `import std.time.sleep;`, and `thread::sleep(d)` and
+  `std::thread::sleep(d)` become `sleep(d)`. A program that calls the
+  full path without an import line gets the import once. A
+  `use std::thread;` that a `thread::spawn` also goes through stays, for
+  the spawn's own diagnostic.
 - `karac fix` carries Rust's `std::cmp::Reverse` over to `std.cmp.Reverse`:
   `use std::cmp::Reverse;` becomes `import std.cmp.Reverse;` (an unimported
   `Reverse` gets the import), `Reverse(x)` becomes `Reverse { value: x }`

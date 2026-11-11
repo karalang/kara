@@ -210,3 +210,104 @@ fn a_programs_own_duration_gets_no_reader_rename() {
     );
     assert!(!said.contains("as_ms()"), "{said}");
 }
+
+/// `Duration` adds, subtracts and scales (B-2026-11-11-72): a backoff
+/// that doubles, a total of phases, a span less another.
+#[test]
+fn a_duration_adds_subtracts_and_scales() {
+    let src = r#"import std.time.{Duration, Instant, sleep};
+
+fn main() {
+    println((Duration.ms(1) + Duration.us(5)).as_us());
+    println((Duration.ms(3) - Duration.ms(5)).as_us());
+    println((Duration.ms(2) * 3).as_ms());
+    println((Duration.secs(1) / 3).as_ns());
+    let mut delay = Duration.us(100);
+    let mut total = Duration.ns(0);
+    for _ in 0..4 {
+        total += delay;
+        delay = delay * 2;
+    }
+    println(total.as_us());
+    total -= Duration.us(500);
+    println(total.as_us());
+    let start = Instant.now();
+    sleep(Duration.us(20) * 2);
+    println(start.elapsed() >= Duration.us(40));
+}
+"#;
+    every_lane(
+        "arith",
+        src,
+        "1005\n-2000\n6\n333333333\n1500\n1000\ntrue\n",
+    );
+}
+
+/// `src` after `karac fix` until nothing changes, and whether it checks.
+fn mended(tag: &str, src: &str) -> (String, bool) {
+    let dir = Scratch::new(tag);
+    let file = dir.path().join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let f = file.to_str().unwrap();
+    let mut text = src.to_string();
+    for _ in 0..6 {
+        let _ = Command::new(karac).args(["fix", f]).output().unwrap();
+        let now = std::fs::read_to_string(&file).unwrap();
+        if now == text {
+            break;
+        }
+        text = now;
+    }
+    let check = Command::new(karac).args(["check", f]).output().unwrap();
+    (text, check.status.success())
+}
+
+/// Rust's pause, `thread::sleep(d)` under `use std::thread;`, mends to
+/// `std.time.sleep` (B-2026-11-11-73): the import line becomes
+/// `import std.time.sleep;` and the call loses its module.
+#[test]
+fn rusts_thread_sleep_under_use_std_thread_mends_to_std_time_sleep() {
+    let src = "use std::thread;\nuse std::time::Duration;\n\nfn main() {\n    \
+               thread::sleep(Duration::from_millis(1));\n    \
+               thread::sleep(Duration::from_micros(5));\n    println!(\"ok\");\n}\n";
+    let (text, ok) = mended("use-thread", src);
+    assert!(ok, "{text}");
+    assert!(text.contains("import std.time.sleep;\n"), "{text}");
+    assert!(!text.contains("thread"), "{text}");
+    assert_eq!(text.matches("    sleep(Duration.").count(), 2, "{text}");
+    every_lane("use-thread-run", &text, "ok\n");
+}
+
+/// A bare `std::thread::sleep(d)` gets the import once, however many
+/// calls there are, and `use std::thread::sleep;` becomes the import.
+#[test]
+fn rusts_std_thread_sleep_paths_get_one_import() {
+    let src = "use std::time::{Duration, Instant};\n\nfn main() {\n    \
+               let s = Instant::now();\n    std::thread::sleep(Duration::from_micros(30));\n    \
+               std::thread::sleep(Duration::from_micros(30));\n    \
+               println!(\"{}\", s.elapsed().as_micros() >= 60);\n}\n";
+    let (text, ok) = mended("std-thread", src);
+    assert!(ok, "{text}");
+    assert_eq!(text.matches("import std.time.sleep;").count(), 1, "{text}");
+    assert!(!text.contains("thread"), "{text}");
+    every_lane("std-thread-run", &text, "true\n");
+
+    let src = "use std::thread::sleep;\nuse std::time::Duration;\n\nfn main() {\n    \
+               sleep(Duration::from_millis(1));\n    println!(\"ok\");\n}\n";
+    let (text, ok) = mended("use-sleep", src);
+    assert!(ok, "{text}");
+    assert!(text.starts_with("import std.time.sleep;\n"), "{text}");
+}
+
+/// `use std::thread;` stays while the program spawns through it: the
+/// spawn has its own diagnostic, and the line is not the pause's alone.
+#[test]
+fn use_std_thread_with_a_spawn_is_left_to_the_spawns_diagnostic() {
+    let src = "use std::thread;\n\nfn main() {\n    let h = thread::spawn(|| 1);\n    \
+               thread::sleep(std::time::Duration::from_millis(1));\n}\n";
+    let (text, ok) = mended("spawn", src);
+    assert!(!ok, "{text}");
+    assert!(text.contains("import std.thread;"), "{text}");
+    assert!(!text.contains("std.time.sleep"), "{text}");
+}
