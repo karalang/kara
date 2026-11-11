@@ -3206,6 +3206,9 @@ impl<'a> Interp<'a> {
                 self.parse_number(t, method, &args, ret)
             }
             (t, "checked_from") if int_width(t).is_some() => self.checked_from(t, &args, ret),
+            (t, "from_ne_bytes" | "from_le_bytes" | "from_be_bytes") if int_width(t).is_some() => {
+                self.int_from_bytes(t, method, &args)
+            }
             ("VecDeque", _) => self.deque_method(ty_name, method, args, arg_tys, ret),
             ("Map" | "Set" | "SortedMap" | "SortedSet", "clone") => {
                 let [v] = args.as_slice() else {
@@ -10210,6 +10213,43 @@ impl<'a> Interp<'a> {
 
     /// `i32.checked_from(f)`: `Some` of `f` truncated toward zero when it
     /// is a number in the type's range, else `None` (B-2026-10-21-65).
+    /// `<int>.from_ne_bytes(b)` and its `le` / `be` forms: the integer
+    /// whose bytes, in that order, are `b` (B-2026-11-10-45). Native order
+    /// is little-endian here, as `to_ne_bytes` takes it.
+    fn int_from_bytes(&mut self, ty: &str, method: &str, args: &[Value]) -> R<Value> {
+        let v = match args {
+            [Value::Ref(a)] => self.slot(a)?,
+            [v] => v.clone(),
+            _ => return err(format!("{ty}.{method}: wrong arguments")),
+        };
+        let Value::Agg(items) = v else {
+            return err(format!("{ty}.{method} of {v:?}"));
+        };
+        let (bits, signed) = int_width(ty).expect("checked by the caller");
+        let mut bytes = Vec::with_capacity(items.len());
+        for item in &items {
+            match item {
+                Value::Int(n) => bytes.push(*n as u8),
+                v => return err(format!("{ty}.{method}: a byte of {v:?}")),
+            }
+        }
+        if bytes.len() != (bits / 8) as usize {
+            return err(format!("{ty}.{method}: {} bytes", bytes.len()));
+        }
+        if method == "from_be_bytes" {
+            bytes.reverse();
+        }
+        let mut le = [0u8; 16];
+        le[..bytes.len()].copy_from_slice(&bytes);
+        let raw = u128::from_le_bytes(le);
+        let n = if signed && bits < 128 && (raw >> (bits - 1)) & 1 == 1 {
+            raw as i128 - (1i128 << bits)
+        } else {
+            raw as i128
+        };
+        Ok(Value::Int(n))
+    }
+
     fn checked_from(&mut self, ty: &str, args: &[Value], ret: Ty) -> R<Value> {
         let f = match args {
             [Value::Float(f)] => *f,

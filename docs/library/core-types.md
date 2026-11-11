@@ -102,6 +102,8 @@ Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).
 
 **Bit counts.** `count_ones()`, `count_zeros()`, `leading_zeros()` and `trailing_zeros()` exist on every integer type and return `i64`, as every count does in Kāra ([design.md §5](../design.md#5-types)), not Rust's `u32`. So `x.count_ones() == k` and `total += x.count_ones()` need no cast with `k` and `total` of type `i64`. A shift amount or a `pow` exponent stays `u32` (above). (Review-thread ruling 2026-10-30, B-2026-10-29-19.)
 
+**Byte order.** As Rust's: `x.to_ne_bytes()`, `x.to_le_bytes()` and `x.to_be_bytes()` give an integer's bytes as an `Array[u8, N]`, `N` its byte width, in native, little-endian or big-endian order, and `<int>.from_ne_bytes(b)`, `from_le_bytes(b)` and `from_be_bytes(b)` read one back from an `Array[u8, N]` of that width. A wire format names its order: a SOCKS5 or IP port is `port.to_be_bytes()` and `u16.from_be_bytes([hi, lo])`. (B-2026-11-10-45.)
+
 What the plain operators do on overflow, and the other numeric rules, are in [design.md §5](../design.md#numeric-semantics).
 
 **Char digits.** As Rust's: `c.to_digit(radix) -> Option[u32]` is the digit `c` stands for below the radix, `c.is_digit(radix) -> bool` whether it stands for one, and `char.from_digit(num: u32, radix: u32) -> Option[char]` the inverse, `0`..`9` then `a`..`z` for a `num` below the radix and `None` from the radix up. A radix outside 2..=36 panics in all three.

@@ -167,6 +167,11 @@ impl<'ctx> Cx<'ctx, '_> {
             (t, "checked_from") if crate::numeric_conv::is_int_target(t) => {
                 return self.checked_from(t, args, dest)
             }
+            (t, "from_ne_bytes" | "from_le_bytes" | "from_be_bytes")
+                if crate::numeric_conv::is_int_target(t) =>
+            {
+                return self.int_from_bytes(method, args, dest)
+            }
             _ => {}
         }
         let Some(first) = args.first() else {
@@ -1084,6 +1089,36 @@ impl<'ctx> Cx<'ctx, '_> {
             };
             cx.store(q, v)
         })?;
+        Ok(Some(()))
+    }
+
+    /// `<int>.from_ne_bytes(b)` and its `le` / `be` forms: the array's
+    /// bytes read as the integer, little-endian in memory, so `from_be`
+    /// swaps them after (B-2026-11-10-45).
+    fn int_from_bytes(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let [a] = args else {
+            return Ok(None);
+        };
+        let at = self.operand_type(a)?;
+        let mut p = self.operand_ptr(a)?;
+        if let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(at) {
+            if !matches!(self.tys.kind(inner), TyKind::Array(..)) {
+                return Ok(None);
+            }
+            p = self.load(p, at)?.into_pointer_value();
+        } else if !matches!(self.tys.kind(at), TyKind::Array(..)) {
+            return Ok(None);
+        }
+        let dty = self.place_type(dest)?;
+        let xt = self.llvm_ty(dty)?.into_int_type();
+        let x = self.load(p, dty)?.into_int_value();
+        let v = if method == "from_be_bytes" && xt.get_bit_width() > 8 {
+            self.int_intrinsic("bswap", &[x.into()], xt)?
+        } else {
+            x
+        };
+        let d = self.place_ptr(dest)?;
+        self.store(d, v.into())?;
         Ok(Some(()))
     }
 

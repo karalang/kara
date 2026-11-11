@@ -34,7 +34,7 @@ use crate::token::Span;
 
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::substitute_type_params;
-use super::types::{type_display, FloatSize, IntSize, SubstValue, Type, UIntSize};
+use super::types::{type_display, ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize};
 use super::{FixIt, TypeErrorKind};
 use std::collections::HashMap;
 
@@ -351,6 +351,58 @@ impl<'a> super::TypeChecker<'a> {
                             name: "Option".to_string(),
                             args: vec![int_ty],
                         });
+                    }
+                }
+                // `<int>.from_ne_bytes(b)` and its `le` / `be` forms: the
+                // integer whose bytes, in that order, are `b`, an
+                // `Array[u8, N]` of the type's byte width, as Rust's. The
+                // inverses of `x.to_ne_bytes()` and its forms
+                // (B-2026-11-10-45).
+                if matches!(method, "from_ne_bytes" | "from_le_bytes" | "from_be_bytes") {
+                    let width = match type_name.as_str() {
+                        "i8" | "u8" => Some(1),
+                        "i16" | "u16" => Some(2),
+                        "i32" | "u32" => Some(4),
+                        "i64" | "u64" | "isize" | "usize" => Some(8),
+                        "i128" | "u128" => Some(16),
+                        _ => None,
+                    };
+                    if let Some(width) = width {
+                        if args.len() != 1 {
+                            self.type_error(
+                                format!(
+                                    "{type_name}.{method} expects 1 argument, an `Array[u8, {width}]`, got {}",
+                                    args.len()
+                                ),
+                                *span,
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                            return Some(Type::Error);
+                        }
+                        let arg_ty = match self.infer_expr(&args[0].value) {
+                            Type::Ref(inner) => *inner,
+                            t => t,
+                        };
+                        let fits = match &arg_ty {
+                            Type::Error => true,
+                            Type::Array { element, size } => {
+                                matches!(**element, Type::UInt(UIntSize::U8))
+                                    && matches!(size, ConstArg::Literal(n) if *n == width)
+                            }
+                            _ => false,
+                        };
+                        if !fits {
+                            self.type_error(
+                                format!(
+                                    "{type_name}.{method} expects an `Array[u8, {width}]`, got `{}`",
+                                    type_display(&arg_ty)
+                                ),
+                                args[0].value.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Some(Type::Error);
+                        }
+                        return self.primitive_type(type_name.as_str());
                     }
                 }
                 // `<int>.checked_from(f: f64) -> Option[<int>]`: `None` for NaN

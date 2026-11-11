@@ -119,8 +119,10 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "saturating_pow",
     "saturating_sub",
     "swap_bytes",
+    "to_be_bytes",
     "to_f32",
     "to_f64",
+    "to_le_bytes",
     "to_ne_bytes",
     "to_string",
     "trailing_zeros",
@@ -970,12 +972,13 @@ impl<'a> super::TypeChecker<'a> {
         // non-aliased `args_close_span` leaf for the interpreter's width
         // recovery — the same channel the bit intrinsics use.
         //
-        // NATIVE order only. `to_le_bytes` / `to_be_bytes` are NOT here:
-        // design.md names only the `ne` form, and native order is the one
-        // shape both backends can produce as a pure reinterpretation of the
-        // value's bytes with no endianness assumption baked into the compiler.
+        // `to_le_bytes` / `to_be_bytes` give the same array in a fixed
+        // order, the form a wire format or a file header needs (a SOCKS5
+        // port is big-endian; B-2026-11-10-45). Both backends already
+        // lowered all three. The inverses are `<int>.from_ne_bytes(b)` and
+        // its `le` / `be` forms (method_identifier_receiver.rs).
         if args.is_empty()
-            && method == "to_ne_bytes"
+            && matches!(method, "to_ne_bytes" | "to_le_bytes" | "to_be_bytes")
             && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
         {
             let bytes = match receiver_for_lookup {
