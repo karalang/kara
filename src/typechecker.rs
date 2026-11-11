@@ -4131,6 +4131,9 @@ pub struct TypeChecker<'a> {
     pub(super) list_lit_lets: FxHashMap<String, ListLitLet>,
     /// The spans of identifiers that read a [`ListLitLet`] binding.
     pub(super) list_lit_let_uses: FxHashMap<SpanKey, String>,
+    /// The `Peekable[I]` writes already refused (a signature is lowered
+    /// more than once).
+    pub(super) peekable_arity_reported: FxHashSet<SpanKey>,
     /// `let x = 0` with no annotation, by name, and the literals a binding's
     /// type comes from in `let (a, b) = (0, 0)` and `let v = [0; n]` /
     /// `Vec.filled(n, 0)`. A narrowing or a `min`/`max` argument refused at
@@ -4608,6 +4611,7 @@ impl<'a> TypeChecker<'a> {
             str_lit_let_uses: FxHashMap::default(),
             list_lit_lets: FxHashMap::default(),
             list_lit_let_uses: FxHashMap::default(),
+            peekable_arity_reported: FxHashSet::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
             retyped_int_literal: None,
@@ -7301,7 +7305,7 @@ impl<'a> TypeChecker<'a> {
 
     /// The `Item` of `found` when it is a library iterator (one the
     /// library's Kāra source declares), resolved.
-    fn library_iter_item_type(&self, found: &Type) -> Option<Type> {
+    pub(super) fn library_iter_item_type(&self, found: &Type) -> Option<Type> {
         if !self.library_methods_from_source {
             return None;
         }

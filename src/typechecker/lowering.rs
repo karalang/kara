@@ -491,6 +491,69 @@ impl<'a> super::TypeChecker<'a> {
     /// arguments are inferred from (`P.new()`), and a write that omits an
     /// argument with no default keeps its arity for the check that reports
     /// it.
+    /// `Peekable[StrChars]`, the one-argument form Rust's `Peekable<Chars>`
+    /// becomes: the library's `Peekable[I, T]` also names its item, so the
+    /// write is refused with the item filled in as its fix, and lowered with
+    /// it so its uses check (B-2026-11-10-35, kata 1106).
+    fn complete_peekable_args(
+        &mut self,
+        name: &str,
+        args: Vec<Type>,
+        path: &PathExpr,
+    ) -> Vec<Type> {
+        if name != "Peekable"
+            || args.len() != 1
+            || self
+                .env
+                .structs
+                .get(name)
+                .is_none_or(|s| s.generic_params.len() != 2)
+        {
+            return args;
+        }
+        let Some(item) = self.library_iter_item_type(&args[0]) else {
+            // Lowered before the iterator's `Item` can be read (a signature
+            // collected early): its projection, which resolves later.
+            let mut args = args;
+            if let Type::Named { name, args: inner } = &args[0] {
+                let projection = Type::AssocProjection {
+                    param: name.clone(),
+                    assoc: "Item".to_string(),
+                    args: Vec::new(),
+                    receiver_args: inner.clone(),
+                    trait_name: None,
+                };
+                args.push(projection);
+            }
+            return args;
+        };
+        let written = format!(
+            "Peekable[{}, {}]",
+            type_display(&args[0]),
+            type_display(&item)
+        );
+        if self
+            .peekable_arity_reported
+            .insert(crate::resolver::SpanKey::from_span(&path.span))
+        {
+            self.type_error_with_fix_it(
+                format!(
+                    "`Peekable` takes two type arguments, the iterator and its item: write \
+                     `{written}`"
+                ),
+                path.span,
+                TypeErrorKind::WrongNumberOfArgs,
+                FixIt {
+                    span: path.span,
+                    replacement: written,
+                },
+            );
+        }
+        let mut args = args;
+        args.push(item);
+        args
+    }
+
     pub(super) fn fill_default_generic_args(
         &mut self,
         name: &str,
@@ -839,6 +902,7 @@ impl<'a> super::TypeChecker<'a> {
             // selector and STRIP it, so every downstream consumer keeps seeing
             // the two-ary `Map` / one-ary `Set` it always has (B-2026-08-21-6).
             args = self.take_hasher_type_arg(name, args, path, generic_scope);
+            args = self.complete_peekable_args(name, args, path);
             self.check_table_key_at(name, &args, path.span);
             self.check_adt_bounds_at(name, &args, path.span);
             // Intercept stdlib Rc[T] / Arc[T] wrappers — sub-item 2 of the

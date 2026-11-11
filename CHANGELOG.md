@@ -340,6 +340,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   the binding is a `Vec` because a list literal with no expected type is
   one, and when it only ever holds that literal of the parameter's length
   `karac fix` declares it `local: Array[u8, 4]` (B-2026-11-10-47).
+- Rust's `use std::iter::Peekable; use std::str::Chars;` with a parameter
+  `&mut Peekable<Chars>` stopped `karac fix` at `std.iter has no item
+  Peekable` and `unknown module std.str`. An import of `std::iter`'s or
+  `std::str`'s prelude types is deleted like a collections one, `Chars`
+  and `CharIndices` are renamed `StrChars` and `StrCharIndices`, and
+  `Peekable[StrChars]` is refused with its item filled in,
+  `Peekable[StrChars, char]`, as the fix. docs/library/iterators.md now
+  gives `peekable`'s result as `Peekable[Self, Self.Item]`
+  (B-2026-11-10-35).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

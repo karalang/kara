@@ -170,6 +170,9 @@ pub(crate) fn rust_collection_rename(name: &str) -> Option<&'static str> {
         "BTreeMap" => Some("SortedMap"),
         "BTreeSet" => Some("SortedSet"),
         "BinaryHeap" => Some("PriorityQueue"),
+        // Rust's string iterators (B-2026-11-10-35).
+        "Chars" => Some("StrChars"),
+        "CharIndices" => Some("StrCharIndices"),
         _ => None,
     }
 }
@@ -3173,11 +3176,35 @@ impl Parser {
             && matches!(ident(at + 5), Some("mpsc"));
         if !matches!(ident(at + 1), Some("std" | "core" | "alloc"))
             || !sep(at + 2)
-            || !(mpsc || matches!(ident(at + 3), Some("collections" | "cmp" | "mem")))
+            || !(mpsc
+                || matches!(
+                    ident(at + 3),
+                    Some("collections" | "cmp" | "mem" | "iter" | "str")
+                ))
             || !(sep(at + 4) || matches!(token(at + 4), Some(Token::Semicolon)))
         {
             return false;
         }
+        // `std::iter` and `std::str` hold items Kāra has elsewhere too
+        // (`std.iter.repeat` is a real import), so only their prelude
+        // types go: `Peekable`, the iterator traits, and `Chars` /
+        // `CharIndices`, which are Kāra's `StrChars` / `StrCharIndices`
+        // (B-2026-11-10-35, kata 1106).
+        let prelude_leaf: fn(&str) -> bool = match ident(at + 3) {
+            Some("iter") => |n| {
+                matches!(
+                    n,
+                    "Peekable"
+                        | "Iterator"
+                        | "IntoIterator"
+                        | "FromIterator"
+                        | "DoubleEndedIterator"
+                        | "ExactSizeIterator"
+                )
+            },
+            Some("str") => |n| matches!(n, "Chars" | "CharIndices"),
+            _ => |_| true,
+        };
         // The leaves (`HashMap`, or each name of a `{..}` group) up to the
         // statement's `;`.
         let mut leaves: Vec<String> = Vec::new();
@@ -3216,6 +3243,12 @@ impl Parser {
                 || leaves
                     .iter()
                     .any(|n| !matches!(n.as_str(), "channel" | "Sender" | "Receiver")))
+        {
+            return false;
+        }
+        if !mpsc
+            && (leaves.is_empty() || !leaves.iter().all(|n| prelude_leaf(n)))
+            && !matches!(ident(at + 3), Some("collections" | "cmp" | "mem"))
         {
             return false;
         }

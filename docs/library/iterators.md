@@ -42,7 +42,7 @@ A program's own function named `repeat`, `once` or `successors` takes the name, 
 | `skip_while` | `fn skip_while[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> impl Iterator[Item = Self.Item]` | Skips items while `pred` holds, then yields the rest |
 | `step_by` | `fn step_by(own self, step: i64) -> impl Iterator[Item = Self.Item]` | The first item, then every `step`-th |
 | `rev` | `fn rev(own self) -> impl Iterator[Item = Self.Item] where Self: DoubleEndedIterator` | Back to front |
-| `peekable` | `fn peekable(own self) -> Peekable[Self]` | Adds `peek(mut ref self) -> Option[ref Self.Item]`, which looks at the next item without consuming it, and `next_if(mut ref self, pred: own MutFn(Self.Item) -> bool) -> Option[Self.Item]`, which takes the next item only when `pred` holds for it |
+| `peekable` | `fn peekable(own self) -> Peekable[Self, Self.Item]` | Adds `peek(mut ref self) -> Option[ref Self.Item]`, which looks at the next item without consuming it, and `next_if(mut ref self, pred: own MutFn(Self.Item) -> bool) -> Option[Self.Item]`, which takes the next item only when `pred` holds for it |
 | `inspect` | `fn inspect[F: MutFn(Self.Item)](own self, f: own F) -> impl Iterator[Item = Self.Item]` | Calls `f` on each item as it passes |
 | `scan` | `fn scan[A, U, F: MutFn(own A, own Self.Item) -> Option[(A, U)]](own self, init: own A, f: own F) -> impl Iterator[Item = U]` | Threads a state: `f` returns the next state and the item to yield. Stops at the first `None` |
 | `by_ref` | `fn by_ref(mut ref self) -> impl Iterator[Item = Self.Item]` | Borrows the iterator instead of consuming it; see below |
