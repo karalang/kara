@@ -2289,9 +2289,12 @@ impl<'a> Lowerer<'a> {
         // object the typechecker routed through `infer_method_call`. Only
         // spans the typechecker flagged reach here, so Type-rooted paths
         // (`Dir.North.code()`, `Vec.new()`) are never rewritten.
+        // The receiver and `)` spans the typechecker gave the call
+        // (`Span::path_call_parts`).
+        let (first, close) = Span::path_call_parts(span, &segments[0]);
         let mut object = Expr {
             id: crate::ids::NodeId::DUMMY,
-            span: callee.span,
+            span: first,
             kind: ExprKind::Identifier(segments[0].clone()),
         };
         for field in &segments[1..segments.len() - 1] {
@@ -2312,11 +2315,7 @@ impl<'a> Lowerer<'a> {
             method: segments[segments.len() - 1].clone(),
             turbofish: None,
             args: args.to_vec(),
-            // Synthetic lowering — no real `)` to point at. Placeholder
-            // span; consumers that care about the call's source extent
-            // (L205 lock-block edit emission) only fire on user-source
-            // method-call receivers, never on synthetic lowerings.
-            args_close_span: *span,
+            args_close_span: close,
         })
     }
 

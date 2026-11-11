@@ -16,6 +16,25 @@ pub struct Span {
     pub length: usize,
 }
 
+impl Span {
+    /// The receiver and the `)` of a call the parser read as a path,
+    /// `NAME.method(..)`, whose call span runs from `NAME` to `)`: the first
+    /// segment `first` starts the call, and the `)` ends it. A fix-it placed
+    /// from them lands where it does on a postfix call (B-2026-11-11-50).
+    pub fn path_call_parts(call: &Span, first: &str) -> (Span, Span) {
+        let receiver = Span {
+            length: first.len().min(call.length),
+            ..*call
+        };
+        let close = Span {
+            offset: call.offset + call.length.saturating_sub(1),
+            length: usize::from(call.length > 0),
+            ..*call
+        };
+        (receiver, close)
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum IntSuffix {
     I8,

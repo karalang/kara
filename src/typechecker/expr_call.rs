@@ -1657,9 +1657,14 @@ impl<'a> super::TypeChecker<'a> {
         } = &callee.kind
         {
             if segments.len() >= 2 && self.path_first_segment_is_value_binding(&segments[0]) {
+                // The receiver is the first segment and the `)` ends the
+                // call, so a fix-it lands as on a postfix call. A field
+                // segment's extent is not known (`A .b` may hold spaces), so
+                // a field receiver keeps the call's span.
+                let (first, close) = crate::token::Span::path_call_parts(span, &segments[0]);
                 let mut synth_object = Expr {
                     id: crate::ids::NodeId::DUMMY,
-                    span: callee.span,
+                    span: first,
                     kind: ExprKind::Identifier(segments[0].clone()),
                 };
                 for field in &segments[1..segments.len() - 1] {
@@ -1677,14 +1682,11 @@ impl<'a> super::TypeChecker<'a> {
                 // `CODES.find(s)` on a `const CODES: Str` borrows `s` as a
                 // `Str` receiver's `find` does (B-2026-10-24-40).
                 synth_object.id = callee.id;
-                // No distinct close-paren leaf is reconstructed on this
-                // synthesized-`MethodCall` route (`local.method()` where `local`
-                // shadows a type name); `span` stands in for `args_close_span`.
-                // Integer receivers reach `pow` / the bit intrinsics through the
-                // postfix `MethodCall` path (with a real close-paren span), not
-                // this Path route, so the width stash is unaffected.
+                // The close-paren leaf is the call span's last byte, as
+                // lowering's rewrite of this call takes it, so a stash keyed
+                // on it (`pow` / the bit intrinsics' width) is found there.
                 let method = &segments[segments.len() - 1];
-                let result = self.infer_method_call(&synth_object, method, args, span, span);
+                let result = self.infer_method_call(&synth_object, method, args, span, &close);
                 self.path_call_method_dispatch
                     .insert(SpanKey::from_span(span));
                 return result;
