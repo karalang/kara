@@ -330,6 +330,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   literal operand takes the target's type, as `rods[i] = bit` does (kata
   2103). `let mut b = 0; b += y` is unchanged: there the target is the
   open binding.
+- An unknown method in a `let` initializer,
+  `let lines: Vec[Str] = text.trim_end_matches('\n').split("\n").collect();`,
+  was followed by "a reference to a temporary outlives its statement" at
+  the same span. A value already refused inside is not reported again for
+  its temporaries (B-2026-11-10-48).
 - `karac run` read a reset TCP connection as an end of stream (`Ok(0)`),
   and a connected `UdpSocket`'s `recv` after its datagram was refused
   waited out its read timeout (`TimedOut`). The interpreter peeks a socket

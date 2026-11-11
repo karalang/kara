@@ -11478,7 +11478,15 @@ impl<'a> super::TypeChecker<'a> {
                     } else {
                         self.core_view_temp_origin(value)
                     };
-                    if let Some(temp) = temp {
+                    // A value already refused inside (an unknown method in
+                    // its chain) has no known type to borrow from, so it is
+                    // not reported again (B-2026-11-10-48).
+                    let refused_inside = self.errors.iter().any(|e| {
+                        e.span.offset >= value.span.offset
+                            && e.span.offset + e.span.length
+                                <= value.span.offset + value.span.length
+                    });
+                    if let Some(temp) = temp.filter(|_| !refused_inside) {
                         let message = "a reference to a temporary outlives its statement \
                              (core-semantics.md §5.5): the value this `let` keeps \
                              borrows from a temporary that is dropped at the `;`. Bind \
