@@ -203,6 +203,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (cell, _) = self.cell_arg(m)?;
                 self.rt_flag("mutex_ready", &[cell.into()])?
             }
+            // A free permit, which it takes, or the timeout
+            // (B-2026-11-11-34).
+            ("Semaphore", "acquire", [s, ms, ..]) => {
+                let (cell, _) = self.cell_arg(s)?;
+                let id = self.load_i64(cell)?;
+                let ms = self.int_arg(ms)?;
+                self.rt_flag("ready_sem", &[id.into(), ms.into()])?
+            }
             // A channel to change, or the deadline (core-semantics §11.11).
             ("__select_park", "", [epoch, until, ..]) => {
                 let epoch = self.int_arg(epoch)?;

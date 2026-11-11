@@ -1964,8 +1964,8 @@ pub unsafe extern "C" fn karac_mir_cstr_to_string(out: *mut RawVec, p: *const u8
 }
 
 crate::mir_task::program_state! {
-    /// Each `Semaphore`'s `(available, initial)` permits, by id - 1.
-    static SEMAPHORES: Vec<(i64, i64)> = Vec::new();
+    /// Each `Semaphore`'s free permits, by id - 1.
+    static SEMAPHORES: Vec<i64> = Vec::new();
 }
 crate::mir_task::program_state! {
     /// Each `RateLimiter`'s rate, capacity and per-key `(tokens, last)`.
@@ -1978,42 +1978,92 @@ struct Limiter {
     buckets: std::collections::HashMap<Vec<u8>, (f64, std::time::Instant)>,
 }
 
-/// `Semaphore.new(n)`: its id. One task runs at a time, as in the
-/// interpreter, so an `acquire` with no permit left times out at once.
+thread_local! {
+    /// A permit the running task's `__ready` took for the `acquire` that
+    /// follows it (B-2026-11-11-34).
+    static SEM_TAKEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `Semaphore.new(n)`: its id.
 #[no_mangle]
 pub extern "C" fn karac_mir_sem_new(n: i64) -> i64 {
-    let n = n.max(0);
     SEMAPHORES.with(|s| {
-        s.push((n, n));
+        s.push(n.max(0));
         s.len() as i64
     })
 }
 
-/// `Semaphore.acquire`: 1 when a permit was taken, 0 (a timeout) when
-/// none is left or the id names no semaphore.
-#[no_mangle]
-pub extern "C" fn karac_mir_sem_acquire(id: i64) -> u8 {
-    SEMAPHORES.with(
-        |s| match usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
-            Some((avail, _)) if *avail > 0 => {
-                *avail -= 1;
-                1
-            }
-            _ => 0,
-        },
-    )
+/// A free permit of the semaphore `id` taken: `Some(true)` when one was,
+/// `Some(false)` when none is free, `None` when `id` names no semaphore.
+fn sem_take(id: i64) -> Option<bool> {
+    SEMAPHORES.with(|s| {
+        let free = usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i))?;
+        Some(
+            *free > 0 && {
+                *free -= 1;
+                true
+            },
+        )
+    })
 }
 
-/// `Semaphore.release`: a permit back, never above the initial count.
+/// `__ready` of `Semaphore.acquire(timeout_ms)` (B-2026-11-11-34): ready
+/// when a permit is free, which it takes for the `acquire` after it (on a
+/// multi-worker executor another task could take it in between), or once
+/// the timeout has passed; until then the task waits for another task's
+/// `release`. A handle that names no semaphore is ready, and fails.
+#[no_mangle]
+pub extern "C" fn karac_mir_ready_sem(id: i64, ms: i64) -> u8 {
+    if crate::mir_task::deadline_set().is_none() {
+        return 1;
+    }
+    let free = match sem_take(id) {
+        Some(true) => {
+            SEM_TAKEN.with(|t| t.set(true));
+            true
+        }
+        Some(false) => false,
+        None => true,
+    };
+    crate::mir_task::ready_by(free, ms.max(0).saturating_mul(1_000_000)).0
+}
+
+/// `Semaphore.acquire(timeout_ms)`: 1 when a permit was taken, 0 (a
+/// timeout) when none is free. In a task its `__ready` waited for one;
+/// outside the executor no task can release one, so an exhausted
+/// semaphore waits the whole timeout. A handle that names no semaphore
+/// fails at once.
+#[no_mangle]
+pub extern "C" fn karac_mir_sem_acquire(id: i64, ms: i64) -> u8 {
+    if SEM_TAKEN.with(|t| t.replace(false)) {
+        return 1;
+    }
+    match sem_take(id) {
+        Some(true) => 1,
+        Some(false) => {
+            if crate::mir_task::deadline_set().is_none() {
+                #[cfg(not(target_arch = "wasm32"))]
+                std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
+                #[cfg(target_arch = "wasm32")]
+                let _ = ms;
+            }
+            0
+        }
+        None => 0,
+    }
+}
+
+/// `Semaphore.release`: a permit back, which a waiting `acquire` may take.
+/// Uncapped, as a counting semaphore's signal (`Semaphore.new(0)` and a
+/// release) is (B-2026-11-11-34).
 #[no_mangle]
 pub extern "C" fn karac_mir_sem_release(id: i64) {
     SEMAPHORES.with(|s| {
-        if let Some((avail, max)) = usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
-            if *avail < *max {
-                *avail += 1;
-            }
+        if let Some(free) = usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
+            *free = free.saturating_add(1);
         }
     });
+    crate::mir_task::peer_progressed();
 }
 
 /// `RateLimiter.new_token_bucket(rate, capacity)`: its id.

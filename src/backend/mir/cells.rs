@@ -55,11 +55,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, id.into())?;
             }
             ("Semaphore" | "RateLimiter", "drop", _) => {}
-            ("Semaphore", "acquire", [recv, ..]) => {
+            ("Semaphore", "acquire", [recv, ms]) => {
                 let (cell, _) = self.cell_arg(recv)?;
                 let id = self.load_i64(cell)?;
+                let ms = self.int_arg(ms)?;
                 let d = self.place_ptr(dest)?;
-                let ok = self.rt_flag("sem_acquire", &[id.into()])?;
+                let ok = self.rt_flag("sem_acquire", &[id.into(), ms.into()])?;
                 self.store_result_flag(d, dty, ok, Some("Timeout"))?;
             }
             ("Semaphore", "release", [recv]) => {

@@ -63,6 +63,7 @@ pub fn suspends_native(name: &str) -> bool {
             | ("Client", "get" | "post")
             | ("RequestBuilder", "send")
             | ("Pool", "acquire")
+            | ("Semaphore", "acquire")
     )
 }
 

@@ -1,0 +1,7 @@
+n = 1 -> foobar
+n = 2 -> foobarfoobar
+n = 3, bar started first -> foobarfoobarfoobar
+200 runs of up to 12 rounds: 200 alternating
+a waiter: released
+no releaser: timed out
+one permit and two releases: 3 acquired

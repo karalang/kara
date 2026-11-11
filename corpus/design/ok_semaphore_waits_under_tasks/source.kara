@@ -1,0 +1,121 @@
+// A `Semaphore.acquire` on an exhausted semaphore waits in its task for
+// another task's `release`, up to its timeout, and `release` past the
+// starting count is a signal, as a counting semaphore's is (Python's
+// `threading.Semaphore`, POSIX `sem_post`): kata 1115's FooBar, with
+// `Semaphore.new(1)` for foo's turn and `Semaphore.new(0)` for bar's.
+// Python mirror: source.py.
+
+import std.sync.{Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+sync struct FooBar {
+    n: i64,
+    foo_sem: Semaphore,
+    bar_sem: Semaphore,
+}
+
+impl FooBar {
+    fn new(n: i64) -> FooBar {
+        FooBar { n, foo_sem: Semaphore.new(1), bar_sem: Semaphore.new(0) }
+    }
+
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.foo_sem.acquire(60000);
+            print_foo();
+            self.bar_sem.release();
+        }
+    }
+
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.bar_sem.acquire(60000);
+            print_bar();
+            self.foo_sem.release();
+        }
+    }
+}
+
+fn run(n: i64, bar_first: bool) -> String {
+    let log: Mutex[String] = Mutex.new(String.new());
+    let fb = FooBar.new(n);
+    {
+        let group = TaskGroup.new();
+        if bar_first {
+            group.spawn(|| fb.bar(|| log.lock().value.push_str("bar")));
+            group.spawn(|| fb.foo(|| log.lock().value.push_str("foo")));
+        } else {
+            group.spawn(|| fb.foo(|| log.lock().value.push_str("foo")));
+            group.spawn(|| fb.bar(|| log.lock().value.push_str("bar")));
+        }
+    }
+    let g = log.lock();
+    g.value.clone()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"n = 1 -> {run(1, false)}");
+    println(f"n = 2 -> {run(2, false)}");
+    println(f"n = 3, bar started first -> {run(3, true)}");
+    let mut seed = 1115;
+    let mut alternating = 0;
+    for _ in 0..200 {
+        let n = next_random(mut seed) % 12 + 1;
+        let bar_first = next_random(mut seed) % 2 == 1;
+        if run(n, bar_first) == "foobar".repeat(n) {
+            alternating += 1;
+        }
+    }
+    println(f"200 runs of up to 12 rounds: {alternating} alternating");
+
+    // A waiting acquire gets the permit another task releases later.
+    let gate = Semaphore.new(0);
+    let got: Mutex[String] = Mutex.new(String.new());
+    {
+        let group = TaskGroup.new();
+        group.spawn(|| {
+            let r = match gate.acquire(60000) {
+                Ok(_) => "released",
+                Err(SemaphoreError.Timeout) => "timed out",
+            };
+            got.lock().value.push_str(r);
+        });
+        group.spawn(|| {
+            sleep(Duration.ms(20));
+            gate.release();
+        });
+    }
+    println(f"a waiter: {got.lock().value}");
+
+    // With no releaser, a task's acquire times out.
+    let none = Semaphore.new(0);
+    let late: Mutex[String] = Mutex.new(String.new());
+    {
+        let group = TaskGroup.new();
+        group.spawn(|| {
+            let r = match none.acquire(30) {
+                Ok(_) => "released",
+                Err(SemaphoreError.Timeout) => "timed out",
+            };
+            late.lock().value.push_str(r);
+        });
+    }
+    println(f"no releaser: {late.lock().value}");
+
+    // Releases past the starting count are permits.
+    let s = Semaphore.new(1);
+    s.release();
+    s.release();
+    let mut taken = 0;
+    for _ in 0..4 {
+        if s.acquire(0).is_ok() {
+            taken += 1;
+        }
+    }
+    println(f"one permit and two releases: {taken} acquired");
+}

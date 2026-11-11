@@ -6,18 +6,18 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 11320 / 11464 = 98.7%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8999 / 9108 = 98.8%.
-- Every classified non-deferred program (context): 17973 / 19155 = 93.8%.
+- Every classified non-deferred program (context): 17974 / 19156 = 93.8%.
 - Bench variants (outside the gate): 340 / 1135 = 30.0%; timeouts 710.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
-- Deferred (class d): 751; outside the slice (`post-m1:*`): 1145.
+- Deferred (class d): 751; outside the slice (`post-m1:*`): 1146.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
 
 ## Denominator by bucket (slice)
 
 | bucket | programs |
 |---|---|
-| a | 5918 |
-| e-spec | 4676 |
+| a | 5917 |
+| e-spec | 4677 |
 | a:refused | 391 |
 | b->a | 238 |
 | check-refuses | 68 |
@@ -50,7 +50,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 | tag | programs |
 |---|---|
-| post-m1:par | 296 |
+| post-m1:par | 297 |
 | post-m1:escaping | 209 |
 | post-m1:simd | 199 |
 | post-m1:net | 136 |
@@ -64,7 +64,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:url | 4 |
 | post-m1:dyn | 2 |
 
-## Auto-resolved e-spec (5620): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (5622): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -419,6 +419,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `core/panic_runs_no_drops`
 - `core/panic_shared_field_alias`
 - `core/par_error_runs_siblings`
+- `design/ok_semaphore_waits_under_tasks`
 - `design/ok_sorted_map_past_one_array`
 - `drop-matrix/dropbody__by_value_arg`
 - `drop-matrix/dropbody__cond_move_false`
@@ -1643,6 +1644,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/concurrency/test_bounded_channel_block_collapses_to_fail_fast_in_v1`
 - `fixtures/interpreter/concurrency/test_bounded_channel_hand_rolled_zero_handle_fails_closed`
 - `fixtures/interpreter/concurrency/test_bounded_channel_send_bounds_then_recv_is_fifo`
+- `fixtures/interpreter/concurrency/test_semaphore_release_saturates_at_initial_budget`
 - `fixtures/interpreter/concurrency/test_tail_error_exit_is_syntactic_and_function_scoped`
 - `fixtures/interpreter/concurrency/test_tail_error_exit_is_syntactic_and_function_scoped_2`
 - `fixtures/interpreter/control/test_bare_statement_container_removal_discard_fires`

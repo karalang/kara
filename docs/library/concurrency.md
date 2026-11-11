@@ -234,6 +234,40 @@ impl Stats {
 
 A `sync` type holds its mutable state in `Mutex[T]` and `Atomic[T]` fields. Their methods take a borrowed `self`, so those fields are never written `mut` ([design.md §11](../design.md#sync-types)). A `Mutex` can also be used on its own.
 
+## `Semaphore`
+
+```kara
+impl Semaphore {
+    fn new(permits: i64) -> Semaphore
+    fn acquire(ref self, timeout: i64) -> Result[(), SemaphoreError]
+    fn release(ref self)
+}
+
+enum SemaphoreError { Timeout }
+```
+
+A counting semaphore: `new` starts it with `permits` free (a negative count is 0). `acquire` takes a free permit. With none free, the task waits until another task's `release` frees one, or until `timeout` milliseconds have passed, when it returns `Err(SemaphoreError.Timeout)`. Outside a task no other task can release a permit, so an `acquire` on an exhausted semaphore there waits its whole timeout and fails. `release` frees a permit and wakes a waiting `acquire`. It is not capped at the starting count, so a semaphore made with `Semaphore.new(0)` signals between tasks, as Python's `threading.Semaphore` and POSIX `sem_post` do (B-2026-11-11-34):
+
+```kara
+sync struct FooBar {
+    n: i64,
+    foo_sem: Semaphore,   // Semaphore.new(1): foo goes first
+    bar_sem: Semaphore,   // Semaphore.new(0): bar waits for foo's release
+}
+
+impl FooBar {
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.foo_sem.acquire(60000);
+            print_foo();
+            self.bar_sem.release();
+        }
+    }
+}
+```
+
+The canonical bounded use is gating a fan-out: acquire before starting a piece of work and release when it ends, so no more than `permits` run at once.
+
 ## Atomics
 
 `Atomic[T]` exists for `T` = `bool`, `i32`, `i64`, `u32` and `u64`:

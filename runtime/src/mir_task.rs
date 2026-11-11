@@ -2707,6 +2707,17 @@ pub(crate) fn ready_by(ready: bool, ns: i64) -> (u8, bool) {
     }
 }
 
+/// A task changed what another may wait on by a deadline (a semaphore's
+/// `release`, B-2026-11-11-34): the executor polls the waiting tasks again
+/// before it concludes they all wait, rather than nap to the deadline.
+pub(crate) fn peer_progressed() {
+    EXEC.with(|e| {
+        if let Ok(mut e) = e.try_borrow_mut() {
+            e.progressed();
+        }
+    });
+}
+
 /// Moves on whenever a channel changes (a value sent or received, an end
 /// dropped): what a `select` with no arm ready waits on.
 static CHAN_EPOCH: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);

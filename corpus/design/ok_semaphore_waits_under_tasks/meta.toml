@@ -1,0 +1,12 @@
+source = "B-2026-11-11-34"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "concurrency", "library", "tasks", "post-m1:par"]
+class = "e"
+expected_from = "mirror"
+backends = []
+env = {}
+note = "A Semaphore.acquire on an exhausted semaphore waits in its task for another task's release, up to its timeout, and release past the starting count is a permit (a counting semaphore's signal): kata 1115's FooBar with Semaphore.new(1) and Semaphore.new(0), alternating in 200 random runs; a waiter released by a later task; a waiter with no releaser timing out; one permit and two releases. expected.out is the same-stem Python mirror's output (source.py, threading.Semaphore). e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "af8a45713"

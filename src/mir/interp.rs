@@ -1317,7 +1317,7 @@ struct Interp<'a> {
     /// the functions, and the entry stays as a dead handle.
     pools: Vec<PoolEntry>,
     /// The `Semaphore`s, by handle - 1: permits available and the budget.
-    semaphores: Vec<(i128, i128)>,
+    semaphores: Vec<i128>,
     /// The `RateLimiter`s, by handle - 1.
     limiters: Vec<Limiter>,
     /// The values of the program's statics, in declaration order: each
@@ -4793,10 +4793,12 @@ impl<'a> Interp<'a> {
     /// `Arena[T]`: the struct holds the arena's id, then its items in push
     /// order (`Agg([id, item0, item1, ...])`). A handle is the arena's id
     /// and the item's index; a checkpoint the id and the length.
-    /// `Semaphore` (std backpressure). One task runs at a time here, so an
-    /// exhausted semaphore times out at once, as in legacy's interpreter;
-    /// `release` gives a permit back, never past the budget. A hand-built
-    /// handle that names no semaphore fails closed.
+    /// `Semaphore` (std backpressure). Under the executor an `acquire` on
+    /// an exhausted semaphore waited in its `__ready` for another task's
+    /// `release` or its timeout (B-2026-11-11-34); outside it no task can
+    /// release one, so the call waits its whole timeout. `release` gives a
+    /// permit back, uncapped. A hand-built handle that names no semaphore
+    /// fails closed, at once.
     fn semaphore_method(
         &mut self,
         name: &str,
@@ -4809,7 +4811,7 @@ impl<'a> Interp<'a> {
                 return err(format!("{name} takes a permit count"));
             };
             let n = (*n).max(0);
-            self.semaphores.push((n, n));
+            self.semaphores.push(n);
             return Ok(Value::Agg(vec![Value::Int(self.semaphores.len() as i128)]));
         }
         if method == "drop" {
@@ -4821,20 +4823,28 @@ impl<'a> Interp<'a> {
             .and_then(|i| self.semaphores.get_mut(i));
         match method {
             "acquire" => match entry {
-                Some((avail, _)) if *avail > 0 => {
-                    *avail -= 1;
+                Some(free) if *free > 0 => {
+                    *free -= 1;
                     self.variant_named(ret, None, "Ok", vec![Value::Unit])
                 }
-                _ => {
+                found => {
+                    if found.is_some() && self.tasks.is_empty() {
+                        if let Some(Value::Int(ms)) = args.get(1) {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                (*ms).clamp(0, i128::from(u64::MAX)) as u64,
+                            ));
+                            #[cfg(target_arch = "wasm32")]
+                            let _ = ms;
+                        }
+                    }
                     let e = self.variant_named(ret, Some("Err"), "Timeout", vec![])?;
                     self.variant_named(ret, None, "Err", vec![e])
                 }
             },
             "release" => {
-                if let Some((avail, max)) = entry {
-                    if *avail < *max {
-                        *avail += 1;
-                    }
+                if let Some(free) = entry {
+                    *free = free.saturating_add(1);
                 }
                 Ok(Value::Unit)
             }
@@ -15604,7 +15614,7 @@ impl<'a> Interp<'a> {
             self.groups.iter().filter_map(|g| g.deadline).min();
         for (_, w) in parked {
             match w {
-                Wait::Until(at) | Wait::Pool(_, at) => {
+                Wait::Until(at) | Wait::Pool(_, at) | Wait::Sem(_, at) => {
                     nearest = Some(nearest.map_or(*at, |n| n.min(*at)))
                 }
                 Wait::Select(_, until) if *until >= 0 => {
@@ -15776,6 +15786,9 @@ impl<'a> Interp<'a> {
             }
             ("Mutex", "acquire", [m, ..]) => Some(Wait::Lock(self.atomic_cell(m, &callee)?)),
             ("Pool", "acquire", [p, d, ..]) => self.ready_pool(p, d, &callee)?,
+            ("Semaphore", "acquire", [sem, Value::Int(ms), ..]) => {
+                self.ready_sem(sem, *ms, &callee)?
+            }
             ("__select_park", "", [Value::Int(epoch), Value::Int(until), ..]) => {
                 Some(Wait::Select(*epoch as i64, *until as i64))
             }
@@ -15798,7 +15811,11 @@ impl<'a> Interp<'a> {
             t.deadline = None;
             t.slept = true;
         } else if let Some(
-            Wait::Read(..) | Wait::Datagram(..) | Wait::Tls(..) | Wait::Buffered(..),
+            Wait::Read(..)
+            | Wait::Datagram(..)
+            | Wait::Tls(..)
+            | Wait::Buffered(..)
+            | Wait::Sem(..),
         ) = wait
         {
             self.tasks[self.cur_task].deadline = None;
@@ -15979,6 +15996,36 @@ impl<'a> Interp<'a> {
         Ok(Some(Wait::Pool(id, at)))
     }
 
+    /// `__ready` of a `Semaphore.acquire(ms)` (B-2026-11-11-34): ready
+    /// when a permit is free, or the handle names no semaphore (the
+    /// `acquire` fails closed); otherwise the task waits for a `release` by
+    /// the deadline its first ask sets, and is ready once it passes.
+    fn ready_sem(&mut self, sem: &Value, ms: i128, name: &str) -> R<Option<Wait>> {
+        let id = self.handle_field(Some(sem), name)?;
+        let cur = self.cur_task;
+        if self.sem_free(id) {
+            self.tasks[cur].deadline = None;
+            return Ok(None);
+        }
+        let now = std::time::Instant::now();
+        let at = *self.tasks[cur].deadline.get_or_insert_with(|| {
+            now + std::time::Duration::from_millis(ms.clamp(0, i128::from(u64::MAX)) as u64)
+        });
+        if now >= at {
+            self.tasks[cur].deadline = None;
+            return Ok(None);
+        }
+        Ok(Some(Wait::Sem(id, at)))
+    }
+
+    /// Whether the semaphore `id` has a free permit, or is no semaphore.
+    fn sem_free(&self, id: i128) -> bool {
+        usize::try_from(id - 1)
+            .ok()
+            .and_then(|i| self.semaphores.get(i))
+            .is_none_or(|free| *free > 0)
+    }
+
     /// The nanoseconds of a `Duration` value, or of one behind a reference.
     fn duration_ns(&mut self, d: &Value, name: &str) -> R<i64> {
         match self.struct_value(d, name)?.as_slice() {
@@ -16110,6 +16157,7 @@ impl<'a> Interp<'a> {
             Wait::Pool(id, at) => {
                 std::time::Instant::now() >= *at || self.pool(*id).is_none_or(|p| pool_free(p))
             }
+            Wait::Sem(id, at) => std::time::Instant::now() >= *at || self.sem_free(*id),
             Wait::Http(t) => t.done(),
             Wait::Pipe(id, drain) => self.procs.pipe_ready(*id, *drain),
             Wait::Buffered(id, need, at) => self.buffered_holds(*id, *need, *at),
@@ -18188,6 +18236,9 @@ enum Wait {
     Pipe(i128, bool),
     /// A pool, by id, to have a value to lend, or the deadline to pass.
     Pool(i128, std::time::Instant),
+    /// A semaphore, by id, to have a free permit, or the deadline to pass
+    /// (B-2026-11-11-34).
+    Sem(i128, std::time::Instant),
     /// A buffered reader over a connection, by id, to hold some bytes (0),
     /// a line (1) or the end (2), or its read timeout's deadline to pass
     /// (B-2026-11-10-14).
