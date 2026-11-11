@@ -2469,7 +2469,7 @@ impl<'a> Interp<'a> {
                 ));
                 Ok(Value::Unit)
             }
-            ("sleep_ms", "") => {
+            ("sleep_ms" | "__sleep_ns", "") => {
                 // `std.time::sleep_ms`, bodyless: a real pause, as legacy's
                 // sequential interpreter does; a negative count is a no-op.
                 // Under the executor, a task whose `__ready` waited the
@@ -2480,10 +2480,10 @@ impl<'a> Interp<'a> {
                         return Ok(Value::Unit);
                     }
                 }
-                if let [Value::Int(ms)] = args.as_slice() {
-                    if *ms > 0 {
+                if let [Value::Int(n)] = args.as_slice() {
+                    if *n > 0 {
                         #[cfg(not(target_arch = "wasm32"))]
-                        std::thread::sleep(std::time::Duration::from_millis(*ms as u64));
+                        std::thread::sleep(pause_of(base, *n));
                     }
                 }
                 Ok(Value::Unit)
@@ -15845,17 +15845,17 @@ impl<'a> Interp<'a> {
             ("Sender" | "Channel", "send", [r, ..]) => {
                 Some(Wait::Send(self.chan_id(Some(r), &callee)?))
             }
-            ("sleep_ms", "", [Value::Int(ms), ..]) => {
+            ("sleep_ms" | "__sleep_ns", "", [Value::Int(n), ..]) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let ms = (*ms).max(0) as u64;
+                    let pause = pause_of(base, *n);
                     let t = &mut self.tasks[self.cur_task];
                     // A sleep is a suspension point (core semantics
                     // §11.1): asked the first time, it parks even when its
                     // pause is already over, so a zero sleep lets the other
                     // tasks run.
                     if t.deadline.is_none() {
-                        let at = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+                        let at = std::time::Instant::now() + pause;
                         t.deadline = Some(at);
                         self.wait = Some(Wait::Until(at));
                         return Ok(Value::Bool(false));
@@ -15865,7 +15865,7 @@ impl<'a> Interp<'a> {
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let _ = ms;
+                    let _ = n;
                     None
                 }
             }
@@ -19546,6 +19546,16 @@ fn console_written(res: std::io::Result<()>) {
             }
         }
         std::process::exit(141);
+    }
+}
+
+/// The pause a `sleep_ms(n)` or `__sleep_ns(n)` asks for; none below zero.
+fn pause_of(name: &str, n: i128) -> std::time::Duration {
+    let n = n.clamp(0, i128::from(u64::MAX)) as u64;
+    if name == "__sleep_ns" {
+        std::time::Duration::from_nanos(n)
+    } else {
+        std::time::Duration::from_millis(n)
     }
 }
 

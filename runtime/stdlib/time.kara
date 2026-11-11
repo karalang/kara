@@ -23,3 +23,8 @@
 
 #[compiler_builtin]
 pub fn sleep_ms(ms: i64) with suspends {}
+
+// `sleep_ms` by the nanosecond: what `std.time.sleep(d)` parks for, so a
+// `Duration` under a millisecond is a real pause (B-2026-11-11-33).
+#[compiler_builtin]
+pub fn __sleep_ns(ns: i64) with suspends {}

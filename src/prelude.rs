@@ -2794,6 +2794,7 @@ pub const PRELUDE_FN_ARITY: &[(&str, usize)] = &[
     ("take", 1),
     ("drop", 1),
     ("sleep_ms", 1),
+    ("__sleep_ns", 1),
     ("spawn", 1),
     ("collect_all_vec", 1),
     ("with_span", 2),
@@ -2900,6 +2901,8 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // call (`compile_call`) and emits the park-on-timer state machine;
     // the prelude entry makes the resolver accept the bare identifier.
     "sleep_ms",
+    // `sleep_ms` by the nanosecond, which `std.time.sleep` calls.
+    "__sleep_ns",
     // Phase 6 line 186 slice 1 — free-fn `spawn[T](f: Fn() -> T) ->
     // TaskHandle[T]`. Counterpart to `TaskGroup.spawn`; uses an
     // ambient process-wide scope rather than a user-controlled

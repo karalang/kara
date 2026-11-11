@@ -87,6 +87,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ms = self.int_arg(ms)?;
                 self.rt_flag("ready_sleep", &[ms.into()])?
             }
+            ("__sleep_ns", "", [ns, ..]) => {
+                let ns = self.int_arg(ns)?;
+                self.rt_flag("ready_sleep_ns", &[ns.into()])?
+            }
             // Returned, or torn down.
             ("TaskHandle", "join" | "try_join", [h, ..]) => {
                 let (cell, _) = self.cell_arg(h)?;

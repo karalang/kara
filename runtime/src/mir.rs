@@ -2127,14 +2127,21 @@ pub unsafe extern "C" fn karac_mir_limiter_try(id: i64, p: *const u8, n: u64) ->
 /// no-op.
 #[no_mangle]
 pub extern "C" fn karac_mir_sleep_ms(ms: i64) {
+    karac_mir_sleep_ns(ms.max(0).saturating_mul(1_000_000));
+}
+
+/// `std.time::sleep(d)` by the nanosecond, so a `Duration` under a
+/// millisecond is a real pause (B-2026-11-11-33); zero or less is a no-op.
+#[no_mangle]
+pub extern "C" fn karac_mir_sleep_ns(ns: i64) {
     // Under the task executor, the readiness loop before it already waited
     // the pause out.
     if crate::mir_task::take_slept() {
         return;
     }
-    if ms > 0 {
+    if ns > 0 {
         #[cfg(not(target_arch = "wasm32"))]
-        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+        std::thread::sleep(std::time::Duration::from_nanos(ns as u64));
     }
 }
 

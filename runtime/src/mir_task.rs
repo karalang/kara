@@ -2648,6 +2648,13 @@ pub extern "C" fn karac_mir_ready_join(block: *mut u8, ready: u8) -> u8 {
 /// follows returns at once.
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
+    karac_mir_ready_sleep_ns(ms.max(0).saturating_mul(1_000_000))
+}
+
+/// `__ready("__sleep_ns", ns)`: [`karac_mir_ready_sleep`] by the
+/// nanosecond (B-2026-11-11-33).
+#[no_mangle]
+pub extern "C" fn karac_mir_ready_sleep_ns(ns: i64) -> u8 {
     // A sleep is a suspension point (core semantics §11.1): asked the first
     // time, it parks even when its pause is already over, so a zero sleep
     // lets the other tasks run.
@@ -2656,7 +2663,7 @@ pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
         let cur = e.cur_mut().as_mut()?;
         let now = Instant::now();
         let Some(at) = cur.deadline else {
-            let at = now + Duration::from_millis(ms.max(0) as u64);
+            let at = now + Duration::from_nanos(ns.max(0) as u64);
             cur.deadline = Some(at);
             return Some((at, false));
         };

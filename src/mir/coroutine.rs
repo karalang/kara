@@ -24,7 +24,7 @@ pub const YIELD_NOW: &str = "__yield_now";
 /// under the executor a suspending native other than `__yield_now` yields
 /// once and then makes its call when resumed.
 pub fn suspends_native(name: &str) -> bool {
-    if name == YIELD_NOW || name == "sleep_ms" || name == "__select_park" {
+    if name == YIELD_NOW || name == "sleep_ms" || name == "__sleep_ns" || name == "__select_park" {
         return true;
     }
     let Some((ty, method)) = name.rsplit_once('.') else {

@@ -1580,7 +1580,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
             vec![(Writes, "RandomSource", Some(0))]
         }
         ("Atomic" | "Mutex", "new") => vec![HEAP],
-        ("sleep_ms", "") => vec![(Blocks, "", None)],
+        ("sleep_ms" | "__sleep_ns", "") => vec![(Blocks, "", None)],
         // A `select` (core-semantics §11.11): the count of channel changes
         // touches nothing, and the wait with no arm ready blocks.
         ("__select_epoch", "") => vec![],

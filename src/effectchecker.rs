@@ -1866,7 +1866,9 @@ impl<'a> EffectChecker<'a> {
             let mut set = EffectSet::new();
             set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects
-                .insert(self.interner.intern("sleep_ms"), set);
+                .insert(self.interner.intern("sleep_ms"), set.clone());
+            self.inferred_effects
+                .insert(self.interner.intern("__sleep_ns"), set);
         }
         // `volatile_read` / `volatile_write` MMIO intrinsics — like the
         // `sleep_ms` seed above, the baked `with reads(Hardware)` /

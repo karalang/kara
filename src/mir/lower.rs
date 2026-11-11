@@ -993,7 +993,7 @@ fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 12] = [
+const BUILDER_NATIVES: [&str; 13] = [
     "format",
     "format_spec",
     "panic_message",
@@ -1006,8 +1006,9 @@ const BUILDER_NATIVES: [&str; 12] = [
     "table_unkeyed",
     "dbg",
     "debug_string",
-    // `std.time.sleep`'s (B-2026-10-27-29).
+    // `std.time.sleep`'s (B-2026-10-27-29, B-2026-11-11-33).
     "sleep_ms",
+    "__sleep_ns",
 ];
 
 struct FnItem<'a> {

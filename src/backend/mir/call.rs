@@ -1117,6 +1117,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ms = self.int_arg(&args[0])?;
                 self.rt("sleep_ms", &[ms.into()])
             }
+            ("__sleep_ns", "") if args.len() == 1 => {
+                let ns = self.int_arg(&args[0])?;
+                self.rt("sleep_ns", &[ns.into()])
+            }
             // The bracket around a `requires` / `ensures` predicate, which
             // an abort inside it reads (B-2026-10-25-23).
             ("contract_enter" | "contract_exit", "") => {
