@@ -1,0 +1,436 @@
+// tftp_server: a TFTP server (RFC 1350) on loopback UDP. The server reads
+// requests on its well-known port; each read (RRQ) or write (WRQ) runs in a
+// task with a socket of its own, the transfer ID, and moves the file in
+// 512-byte blocks, each acknowledged before the next. A short block ends
+// the transfer. A read resends a block whose ACK does not arrive in time;
+// a write acknowledges a duplicate block again without keeping it. A
+// datagram from any other port gets ERROR 5. `netascii` sends each line
+// end as CR LF. The files live in memory behind one Mutex. Scripted
+// clients exercise each path, then the server prints its log.
+
+import std.sync.{TaskGroup, Mutex};
+
+const ADDR: &str = "127.0.0.1:47765";
+const REQUESTS: i64 = 10;
+const BLOCK: usize = 512;
+const RESEND_MS: i64 = 500;
+const WAIT_MS: i64 = 2000;
+const TRIES: i64 = 3;
+
+const RRQ: u16 = 1;
+const WRQ: u16 = 2;
+const DATA: u16 = 3;
+const ACK: u16 = 4;
+const ERROR: u16 = 5;
+
+fn opcode(pkt: &[u8]) -> u16 {
+    if pkt.len() < 2 {
+        return 0;
+    }
+    u16::from_be_bytes([pkt[0], pkt[1]])
+}
+
+fn block_of(pkt: &[u8]) -> u16 {
+    u16::from_be_bytes([pkt[2], pkt[3]])
+}
+
+fn error_packet(code: u16, msg: &str) -> Vec<u8> {
+    let mut p = ERROR.to_be_bytes().to_vec();
+    p.extend_from_slice(&code.to_be_bytes());
+    p.extend_from_slice(msg.as_bytes());
+    p.push(0);
+    p
+}
+
+fn data_packet(block: u16, chunk: &[u8]) -> Vec<u8> {
+    let mut p = DATA.to_be_bytes().to_vec();
+    p.extend_from_slice(&block.to_be_bytes());
+    p.extend_from_slice(chunk);
+    p
+}
+
+fn ack_packet(block: u16) -> Vec<u8> {
+    let mut p = ACK.to_be_bytes().to_vec();
+    p.extend_from_slice(&block.to_be_bytes());
+    p
+}
+
+fn to_netascii(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    for &b in data {
+        if b == b'\n' {
+            out.push(b'\r');
+        }
+        out.push(b);
+    }
+    out
+}
+
+fn from_netascii(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == b'\r' && i + 1 < data.len() && data[i + 1] == b'\n' {
+            i += 1;
+            continue;
+        }
+        out.push(data[i]);
+        i += 1;
+    }
+    out
+}
+
+fn checksum(data: &[u8]) -> i64 {
+    let mut total: i64 = 0;
+    for (i, &b) in data.iter().enumerate() {
+        total = (total * 31 + b as i64 + i as i64) % 1000003;
+    }
+    total
+}
+
+// The file name and mode of a request, or `None` when it is malformed.
+fn parse_request(pkt: &[u8]) -> Option<(String, String)> {
+    let parts: Vec<&[u8]> = pkt[2..].split(|&b| b == 0).collect();
+    if parts.len() < 3 || parts[0].is_empty() || parts[1].is_empty() {
+        return None;
+    }
+    let name = String::from_utf8(parts[0].to_vec()).ok()?;
+    let mode = String::from_utf8(parts[1].to_vec()).ok()?.to_lowercase();
+    Some((name, mode))
+}
+
+struct Files {
+    files: SortedMap<String, Vec<u8>>,
+    log: SortedMap<i64, String>,
+}
+
+sync struct Server {
+    state: Mutex<Files>,
+}
+
+// Waits for the ACK of `block` from `peer`: true, or false on a timeout. A
+// datagram from anyone else gets ERROR 5, and an older ACK is ignored.
+fn recv_ack(sock: &UdpSocket, peer: &str, block: u16) -> bool {
+    let mut buf = [0u8; 1024];
+    loop {
+        let (n, addr) = match sock.recv_from(&mut buf) {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+        if addr != peer {
+            let _ = sock.send_to(&error_packet(5, "Unknown transfer ID"), &addr);
+            continue;
+        }
+        if n >= 4 && opcode(&buf[..n]) == ACK && block_of(&buf[..n]) == block {
+            return true;
+        }
+    }
+}
+
+fn serve_read(srv: &Server, sock: &UdpSocket, peer: &str, name: &str, mode: &str) -> String {
+    let found = {
+        let g = srv.state.lock();
+        g.value.files.get(name).cloned()
+    };
+    let mut data = match found {
+        Some(d) => d,
+        None => {
+            let _ = sock.send_to(&error_packet(1, "File not found"), peer);
+            return format!("rrq {} {}: file not found", name, mode);
+        }
+    };
+    if mode == "netascii" {
+        data = to_netascii(&data);
+    }
+    let mut block: u16 = 1;
+    let mut at = 0;
+    let mut resends = 0;
+    loop {
+        let end = (at + BLOCK).min(data.len());
+        let chunk = &data[at..end];
+        let pkt = data_packet(block, chunk);
+        let mut tries = 0;
+        let _ = sock.send_to(&pkt, peer);
+        while !recv_ack(sock, peer, block) {
+            tries += 1;
+            if tries == TRIES {
+                return format!("rrq {} {}: timed out at block {}", name, mode, block);
+            }
+            resends += 1;
+            let _ = sock.send_to(&pkt, peer);
+        }
+        at = end;
+        if chunk.len() < BLOCK {
+            return format!("rrq {} {}: {} blocks, {} bytes, {} resends", name, mode, block, data.len(), resends);
+        }
+        block += 1;
+    }
+}
+
+fn serve_write(srv: &Server, sock: &UdpSocket, peer: &str, name: &str, mode: &str) -> String {
+    let exists = srv.state.lock().value.files.contains_key(name);
+    if exists {
+        let _ = sock.send_to(&error_packet(6, "File already exists"), peer);
+        return format!("wrq {} {}: file already exists", name, mode);
+    }
+    let _ = sock.set_read_timeout(Some(WAIT_MS));
+    let _ = sock.send_to(&ack_packet(0), peer);
+    let mut got: Vec<u8> = Vec::new();
+    let mut expect: u16 = 1;
+    let mut dups = 0;
+    let mut buf = [0u8; 1024];
+    loop {
+        let (n, addr) = match sock.recv_from(&mut buf) {
+            Ok(r) => r,
+            Err(_) => return format!("wrq {} {}: timed out at block {}", name, mode, expect),
+        };
+        if addr != peer {
+            let _ = sock.send_to(&error_packet(5, "Unknown transfer ID"), &addr);
+            continue;
+        }
+        let pkt = &buf[..n];
+        if n < 4 || opcode(pkt) != DATA {
+            let _ = sock.send_to(&error_packet(4, "Illegal TFTP operation"), peer);
+            return format!("wrq {} {}: illegal operation", name, mode);
+        }
+        let block = block_of(pkt);
+        let chunk = &pkt[4..];
+        if block == expect - 1 {
+            dups += 1;
+            let _ = sock.send_to(&ack_packet(block), peer);
+            continue;
+        }
+        if block != expect {
+            continue;
+        }
+        got.extend_from_slice(chunk);
+        let _ = sock.send_to(&ack_packet(block), peer);
+        if chunk.len() < BLOCK {
+            if mode == "netascii" {
+                got = from_netascii(&got);
+            }
+            let size = got.len();
+            srv.state.lock().value.files.insert(name.to_string(), got);
+            return format!("wrq {} {}: {} blocks, {} bytes, {} duplicates", name, mode, block, size, dups);
+        }
+        expect += 1;
+    }
+}
+
+fn transfer(srv: &Server, n: i64, op: u16, peer: String, name: String, mode: String) {
+    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let _ = sock.set_read_timeout(Some(RESEND_MS));
+    let line = if op == RRQ {
+        serve_read(srv, &sock, &peer, &name, &mode)
+    } else {
+        serve_write(srv, &sock, &peer, &name, &mode)
+    };
+    srv.state.lock().value.log.insert(n, line);
+}
+
+fn note(srv: &Server, n: i64, line: String) {
+    srv.state.lock().value.log.insert(n, line);
+}
+
+fn run_server(srv: &Server, sock: &UdpSocket) {
+    let tasks = TaskGroup::new();
+    let mut buf = [0u8; 1024];
+    for n in 1..=REQUESTS {
+        let (len, peer) = sock.recv_from(&mut buf).unwrap();
+        let pkt = buf[..len].to_vec();
+        let op = opcode(&pkt);
+        if op != RRQ && op != WRQ {
+            let _ = sock.send_to(&error_packet(4, "Illegal TFTP operation"), &peer);
+            note(srv, n, format!("opcode {}: illegal operation", op));
+            continue;
+        }
+        let (name, mode) = match parse_request(&pkt) {
+            Some(r) => r,
+            None => {
+                let _ = sock.send_to(&error_packet(4, "Malformed request"), &peer);
+                note(srv, n, "malformed request".to_string());
+                continue;
+            }
+        };
+        if mode != "octet" && mode != "netascii" {
+            let _ = sock.send_to(&error_packet(0, &format!("Unsupported mode {}", mode)), &peer);
+            let kind = if op == RRQ { "rrq" } else { "wrq" };
+            note(srv, n, format!("{} {} {}: unsupported mode", kind, name, mode));
+            continue;
+        }
+        tasks.spawn(move || transfer(srv, n, op, peer, name, mode));
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+fn show(pkt: &[u8]) -> String {
+    if pkt.len() < 4 {
+        return format!("short packet ({} bytes)", pkt.len());
+    }
+    let op = opcode(pkt);
+    let n = block_of(pkt);
+    match op {
+        DATA => format!("DATA {} ({} bytes)", n, pkt.len() - 4),
+        ACK => format!("ACK {}", n),
+        ERROR => {
+            let end = pkt[4..].iter().position(|&b| b == 0).map(|p| p + 4).unwrap_or(pkt.len());
+            format!("ERROR {} {}", n, String::from_utf8_lossy(&pkt[4..end]))
+        }
+        _ => format!("opcode {}", op),
+    }
+}
+
+struct Client {
+    name: String,
+    sock: UdpSocket,
+    tid: String,
+}
+
+impl Client {
+    fn new(name: &str) -> Client {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let _ = sock.set_read_timeout(Some(2000));
+        Client { name: name.to_string(), sock, tid: String::new() }
+    }
+
+    fn request(&self, op: u16, filename: &str, mode: &str) {
+        let mut p = op.to_be_bytes().to_vec();
+        p.extend_from_slice(filename.as_bytes());
+        p.push(0);
+        p.extend_from_slice(mode.as_bytes());
+        p.push(0);
+        let _ = self.sock.send_to(&p, ADDR);
+    }
+
+    // The next datagram, printed; `None` on a timeout.
+    fn recv(&mut self) -> Option<Vec<u8>> {
+        let mut buf = [0u8; 1024];
+        match self.sock.recv_from(&mut buf) {
+            Ok((n, addr)) => {
+                self.tid = addr;
+                println!("{} <- {}", self.name, show(&buf[..n]));
+                Some(buf[..n].to_vec())
+            }
+            Err(_) => {
+                println!("{} <- timed out", self.name);
+                None
+            }
+        }
+    }
+
+    fn send(&self, pkt: &[u8]) {
+        let _ = self.sock.send_to(pkt, &self.tid);
+    }
+
+    // Reads a file, not acknowledging block `lose` the first time.
+    fn get(&mut self, filename: &str, mode: &str, lose: u16) -> Option<Vec<u8>> {
+        self.request(RRQ, filename, mode);
+        let mut data = Vec::new();
+        let mut lost = false;
+        loop {
+            let pkt = self.recv()?;
+            if opcode(&pkt) != DATA {
+                return None;
+            }
+            let block = block_of(&pkt);
+            if block == lose && !lost {
+                lost = true;
+                continue;
+            }
+            data.extend_from_slice(&pkt[4..]);
+            self.send(&ack_packet(block));
+            if pkt.len() - 4 < BLOCK {
+                return Some(data);
+            }
+        }
+    }
+}
+
+fn describe(data: &[u8]) -> String {
+    let mut head = String::new();
+    for &b in data.iter().take(12) {
+        match b {
+            b'\n' => head.push_str("\\n"),
+            b'\r' => head.push_str("\\r"),
+            32..=126 => head.push(b as char),
+            _ => head.push('.'),
+        }
+    }
+    format!("{} bytes, sum {}, starts \"{}\"", data.len(), checksum(data), head)
+}
+
+fn main() {
+    let mut files = SortedMap::new();
+    files.insert("hello.txt".to_string(), b"hello, tftp\nbye\n".to_vec());
+    files.insert("big.bin".to_string(), (0..1300).map(|i| ((i * 7 + 3) % 256) as u8).collect());
+    files.insert("exact.bin".to_string(), (0..1024).map(|i| (i % 251) as u8).collect());
+    let srv = Server { state: Mutex::new(Files { files, log: SortedMap::new() }) };
+    let sock = UdpSocket::bind(ADDR).unwrap();
+    let group = TaskGroup::new();
+    let server = group.spawn(move || run_server(&srv, &sock));
+
+    let mut c = Client::new("get-hello");
+    let data = c.get("hello.txt", "octet", 0).unwrap_or_default();
+    println!("get-hello: {}", describe(&data));
+
+    let mut c = Client::new("get-big");
+    let data = c.get("big.bin", "OCTET", 2).unwrap_or_default();
+    println!("get-big: {}", describe(&data));
+
+    let mut c = Client::new("get-exact");
+    let data = c.get("exact.bin", "octet", 0).unwrap_or_default();
+    println!("get-exact: {}", describe(&data));
+
+    let mut c = Client::new("get-missing");
+    let _ = c.get("missing.txt", "octet", 0);
+
+    let mut c = Client::new("get-ascii");
+    let data = c.get("hello.txt", "netascii", 0).unwrap_or_default();
+    println!("get-ascii: {}", describe(&data));
+
+    let mut notes = Vec::new();
+    for i in 0..100 {
+        notes.extend_from_slice(format!("note {}\n", i).as_bytes());
+    }
+    notes.truncate(700);
+    let mut c = Client::new("put-notes");
+    c.request(WRQ, "notes.txt", "octet");
+    c.recv();
+    let mut stranger = Client::new("stranger");
+    stranger.tid = c.tid.clone();
+    stranger.send(&data_packet(1, b"intrude"));
+    stranger.recv();
+    c.send(&data_packet(1, &notes[..512]));
+    c.recv();
+    c.send(&data_packet(1, &notes[..512]));
+    c.recv();
+    c.send(&data_packet(2, &notes[512..]));
+    c.recv();
+
+    let mut c = Client::new("put-hello");
+    c.request(WRQ, "hello.txt", "octet");
+    c.recv();
+
+    let mut c = Client::new("mail-mode");
+    c.request(RRQ, "hello.txt", "mail");
+    c.recv();
+
+    let mut c = Client::new("bad-opcode");
+    let _ = c.sock.send_to(&ack_packet(1), ADDR);
+    c.recv();
+
+    let mut c = Client::new("get-notes");
+    let data = c.get("notes.txt", "octet", 0).unwrap_or_default();
+    println!("get-notes: {}, same as put: {}", describe(&data), if data == notes { "yes" } else { "no" });
+
+    server.join();
+    println!("== server");
+    let g = srv.state.lock();
+    for (n, line) in g.value.log.iter() {
+        println!("#{} {}", n, line);
+    }
+    for (name, data) in g.value.files.iter() {
+        println!("file {} {}", name, describe(data));
+    }
+}

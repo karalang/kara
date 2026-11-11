@@ -1,0 +1,40 @@
+get-hello <- DATA 1 (16 bytes)
+get-hello: 16 bytes, sum 708196, starts "hello, tftp\n"
+get-big <- DATA 1 (512 bytes)
+get-big <- DATA 2 (512 bytes)
+get-big <- DATA 2 (512 bytes)
+get-big <- DATA 3 (276 bytes)
+get-big: 1300 bytes, sum 402624, starts ".\n...&-4;BIP"
+get-exact <- DATA 1 (512 bytes)
+get-exact <- DATA 2 (512 bytes)
+get-exact <- DATA 3 (0 bytes)
+get-exact: 1024 bytes, sum 787325, starts "..........\n."
+get-missing <- ERROR 1 File not found
+get-ascii <- DATA 1 (18 bytes)
+get-ascii: 18 bytes, sum 162916, starts "hello, tftp\r"
+put-notes <- ACK 0
+stranger <- ERROR 5 Unknown transfer ID
+put-notes <- ACK 1
+put-notes <- ACK 1
+put-notes <- ACK 2
+put-hello <- ERROR 6 File already exists
+mail-mode <- ERROR 0 Unsupported mode mail
+bad-opcode <- ERROR 4 Illegal TFTP operation
+get-notes <- DATA 1 (512 bytes)
+get-notes <- DATA 2 (188 bytes)
+get-notes: 700 bytes, sum 777611, starts "note 0\nnote ", same as put: yes
+== server
+#1 rrq hello.txt octet: 1 blocks, 16 bytes, 0 resends
+#2 rrq big.bin octet: 3 blocks, 1300 bytes, 1 resends
+#3 rrq exact.bin octet: 3 blocks, 1024 bytes, 0 resends
+#4 rrq missing.txt octet: file not found
+#5 rrq hello.txt netascii: 1 blocks, 18 bytes, 0 resends
+#6 wrq notes.txt octet: 2 blocks, 700 bytes, 1 duplicates
+#7 wrq hello.txt octet: file already exists
+#8 rrq hello.txt mail: unsupported mode
+#9 opcode 4: illegal operation
+#10 rrq notes.txt octet: 2 blocks, 700 bytes, 0 resends
+file big.bin 1300 bytes, sum 402624, starts ".\n...&-4;BIP"
+file exact.bin 1024 bytes, sum 787325, starts "..........\n."
+file hello.txt 16 bytes, sum 708196, starts "hello, tftp\n"
+file notes.txt 700 bytes, sum 777611, starts "note 0\nnote "
