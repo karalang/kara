@@ -2178,6 +2178,15 @@ impl<'a> super::TypeChecker<'a> {
             }
             None => self.infer_expr(object),
         };
+        // A literal a generic call holds open (a `scan` state) is decided
+        // where a method is called on it, as any other literal's read is:
+        // the method is looked up on its type (`m.max(x)`, B-2026-11-11-61).
+        if self
+            .unbound_literal_var(Self::peel_borrow(&obj_ty))
+            .is_some_and(|(id, _)| self.literal_held_open(id))
+        {
+            obj_ty = self.settle_literals(&obj_ty);
+        }
         self.mut_through_param_arg = saved_mut_through;
         if obj_ty == Type::Error {
             for arg in args {

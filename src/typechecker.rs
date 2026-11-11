@@ -3466,6 +3466,11 @@ pub struct TypeChecker<'a> {
     /// The expression whose literal variable [`Self::infer_expr`] leaves
     /// open ([`Self::infer_expr_open`]).
     pub(super) open_literal_expr: Option<crate::ids::NodeId>,
+    /// Literal variables a generic call left open at a parameter its result
+    /// carries (a `scan` state): while the call's other arguments (its
+    /// closure) are checked, a read of one does not settle it, so the
+    /// result's use fixes it (design.md §8 Literals, B-2026-11-11-61).
+    pub(super) held_open_literals: Vec<TypeVarId>,
     /// The tuple literal whose numbers [`Self::infer_element_open`] opens.
     pub(super) open_tuple_literal: Option<crate::ids::NodeId>,
     /// The `match` being inferred joins its arms' literals into one open
@@ -4440,6 +4445,7 @@ impl<'a> TypeChecker<'a> {
             body_literal_vars: Vec::new(),
             literal_typed_spans: Vec::new(),
             open_literal_expr: None,
+            held_open_literals: Vec::new(),
             open_tuple_literal: None,
             open_match_arms: false,
             compound_assign_target: None,
@@ -8169,6 +8175,16 @@ impl<'a> TypeChecker<'a> {
         // `spawn`'s `OnceFn() -> T`).
         let mut ids = Vec::new();
         exprs::type_var_ids(&self.resolved_now(found), &mut ids);
+        // So is a literal a generic call holds open (a `scan` state), in a
+        // slot that still names the callee's other parameters (the
+        // closure's `Option[(StateV, OutV)]`): read through what is solved,
+        // the two agree (B-2026-11-11-61).
+        if types::contains_type_param(expected)
+            && ids.iter().any(|id| self.literal_held_open(*id))
+            && types::types_compatible(&self.resolved_now(expected), &self.resolved_now(found))
+        {
+            return true;
+        }
         if !types::contains_type_param(expected)
             && ids
                 .iter()

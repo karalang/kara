@@ -5169,6 +5169,21 @@ impl<'a> super::TypeChecker<'a> {
     // the where clause (or write `None` deliberately, where it is visible in
     // the diff) and cannot silently re-open the hole.
 
+    /// Whether a call's result carries the generic parameter `p`: it
+    /// returns `p` itself (`id(5)`, a `fold` seed) or a type with `p` among
+    /// its arguments (a `scan` state, held in the `IterScan[I, S, F, OutV]`
+    /// it returns). A literal argument at such a parameter stays open until
+    /// the result's use fixes it (design.md §8 Literals, B-2026-11-11-61).
+    fn result_carries_param(return_type: &Type, p: &str) -> bool {
+        match return_type {
+            Type::TypeParam(r) => r == p,
+            Type::Named { args, .. } => args
+                .iter()
+                .any(|a| matches!(a, Type::TypeParam(r) if r == p)),
+            _ => false,
+        }
+    }
+
     /// Type-check call arguments against `(params, return_type)` with the
     /// round-10.1 closure-pushdown logic, returning the (possibly-substituted)
     /// return type. Shared by `infer_call` and the user-defined-method branch
@@ -5202,6 +5217,35 @@ impl<'a> super::TypeChecker<'a> {
     /// diagnostic at `discharge_span`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn check_call_args_with_substitution_full(
+        &mut self,
+        args: &[CallArg],
+        params: &[Type],
+        return_type: &Type,
+        record_subs_for_span: &Span,
+        apply_call_site_marker: bool,
+        explicit_generic_args: Option<&[GenericArg]>,
+        formal_generic_params: Option<&[String]>,
+        where_clause: Option<&WhereClause>,
+        discharge_span: &Span,
+    ) -> Type {
+        let held = self.held_open_literals.len();
+        let t = self.check_call_args_with_substitution_held(
+            args,
+            params,
+            return_type,
+            record_subs_for_span,
+            apply_call_site_marker,
+            explicit_generic_args,
+            formal_generic_params,
+            where_clause,
+            discharge_span,
+        );
+        self.held_open_literals.truncate(held);
+        t
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_call_args_with_substitution_held(
         &mut self,
         args: &[CallArg],
         params: &[Type],
@@ -5688,13 +5732,18 @@ impl<'a> super::TypeChecker<'a> {
                     None if match formal_param_ty {
                         Type::TypeParam(p) => {
                             matches!(arg.value.kind, ExprKind::Identifier(_))
-                                || (literal_arg
-                                    && matches!(return_type, Type::TypeParam(r) if r == p))
+                                || (literal_arg && Self::result_carries_param(return_type, p))
                         }
                         _ => false,
                     } =>
                     {
-                        self.infer_expr_open(&arg.value)
+                        let t = self.infer_expr_open(&arg.value);
+                        if literal_arg {
+                            if let Some((id, _)) = self.unbound_literal_var(&t) {
+                                self.held_open_literals.push(id);
+                            }
+                        }
+                        t
                     }
                     None => self.infer_expr(&arg.value),
                 };
@@ -10999,7 +11048,11 @@ impl<'a> super::TypeChecker<'a> {
         // A literal's variable stays open only where a later use can fix it
         // (`infer_expr_open`); anywhere else the number's type is decided
         // now, as it was before literals were variables (B-2026-11-07-3).
-        if !open && self.unbound_literal_var(Self::peel_borrow(&ty)).is_some() {
+        if !open
+            && self
+                .unbound_literal_var(Self::peel_borrow(&ty))
+                .is_some_and(|(id, _)| !self.literal_held_open(id))
+        {
             ty = self.settle_literals(&ty);
         } else if let Type::TypeVar(id) = Self::peel_borrow(&ty) {
             // A literal's variable an earlier use fixed reads as that type.
@@ -12732,6 +12785,15 @@ impl<'a> super::TypeChecker<'a> {
             Type::TypeVar(id) => inference::literal_var_kind(id).map(|k| (id, k)),
             _ => None,
         }
+    }
+
+    /// Whether `id` is, or has been unified with, a literal variable a
+    /// generic call holds open ([`Self::held_open_literals`]).
+    pub(super) fn literal_held_open(&self, id: TypeVarId) -> bool {
+        self.held_open_literals.iter().any(|h| {
+            matches!(resolve_type_var_top(&Type::TypeVar(*h), &self.env.substitutions),
+                Type::TypeVar(r) if r == id)
+        })
     }
 
     /// `t` with the literal variables inside it settled ([`Self::settle_literals`]),

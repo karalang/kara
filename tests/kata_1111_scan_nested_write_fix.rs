@@ -8,8 +8,9 @@
 //!   rewrite to Kāra's `Some((state, item))`; it now copies the state
 //!   with `let mut depth = depth;` and writes the copy;
 //! - the state's literal `0` took the default `i64`, so the items did
-//!   too, and collecting them into a `Vec[i32]` had no fix; the fix is
-//!   `0i32`;
+//!   too, and collecting them into a `Vec[i32]` had no fix; the fix was
+//!   `0i32`, and since B-2026-11-11-61 the literal stays open until the
+//!   `collect` fixes it (design.md §8 Literals), so none is needed;
 //! - `match v.last() { Some(g) => g, None => 0 }` over a `Vec[i32]`
 //!   was refused as `ref i32` against `i64`; the literal now takes the
 //!   number the `ref` reads as, as it does beside an owned `i32`.
@@ -68,7 +69,7 @@ fn main() {
 }
 ";
     let (text, check) = fixed("nested", src);
-    assert!(text.contains(".scan(0i32, |depth, c| {"), "{text}");
+    assert!(text.contains(".scan(0, |depth, c| {"), "{text}");
     assert!(text.contains("let mut depth = depth;"), "{text}");
     assert!(text.contains("depth += 1;"), "{text}");
     assert!(text.contains("Some((depth, group))"), "{text}");
@@ -81,26 +82,15 @@ fn main() {
 }
 
 #[test]
-fn kata_1111_a_scan_whose_literal_state_feeds_narrow_items_gets_the_suffix() {
+fn kata_1111_a_scan_whose_literal_state_feeds_narrow_items_checks_as_written() {
     let src = "fn main() {
     let v = [1, 2, 3];
     let sums: Vec[i32] = v.iter().scan(0, |s, x| Some((s + 1, s))).collect();
     println(f\"{sums}\");
 }
 ";
-    let path =
-        std::env::temp_dir().join(format!("karac-kata1111-suffix-{}.kara", std::process::id()));
-    std::fs::write(&path, src).unwrap();
-    let check = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .args(["check", path.to_str().unwrap()])
-        .stdin(Stdio::null())
-        .output()
-        .expect("karac");
-    let _ = std::fs::remove_file(&path);
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(stderr.contains("write `0i32`"), "{stderr}");
     let (text, check) = fixed("suffix", src);
-    assert!(text.contains(".scan(0i32, "), "{text}");
+    assert_eq!(text, src);
     assert!(clean(&check), "{check}\n{text}");
     let out = karac::mir::lower::run_source(&text)
         .unwrap_or_else(|e| panic!("{e}\n{text}"))

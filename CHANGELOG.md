@@ -408,6 +408,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   first (garbage compiled, an AddressSanitizer abort); it is refused now,
   with the `scan` state's `0i32` fix offered through the `chain`
   (B-2026-11-11-41).
+- A `scan` whose state starts at an unsuffixed literal settled the state
+  to `i64` at the closure's first read of it, so kata 1118's Rust shape
+  `[0].into_iter().chain(lengths.iter().scan(0, |total, d| { let total =
+  total + d; Some((total, total)) })).collect()` into a `Vec[i32]`, with
+  `lengths` a literal list, was refused. A literal at a generic parameter
+  now stays open when the call's result carries that parameter as a type
+  argument (the `IterScan` a `scan` returns), through the closure and any
+  further adapters, until the `collect` fixes the state, the items and
+  `lengths` together (design.md §8 Literals, B-2026-11-11-61). Beside items
+  of an already fixed type, the state keeps the default as before, with
+  its `0i32` fix.
 - LeetCode's `class H2O` written `struct H2O` is Const class (CN-1, CN-4)
   and was refused with only "consider renaming to `H2o`". A private
   `struct` or `enum` with such a name now gets that rename as one fix over

@@ -7,8 +7,9 @@
 //! by `let`, the `scan`'s state literal settled to `i64` before the
 //! `FromIterator` bound was discharged, the bound was then skipped, and a
 //! `Vec[i32]` was built from `i64` items (eight bytes written into each
-//! four-byte slot: garbage compiled, an AddressSanitizer abort). It is
-//! refused now, with the `scan` state's fix.
+//! four-byte slot: garbage compiled, an AddressSanitizer abort). It was
+//! refused next, and since B-2026-11-11-61 the state literal stays open
+//! until the `collect` fixes it, so the chain builds `i32` items.
 
 use std::process::{Command, Output, Stdio};
 
@@ -50,23 +51,24 @@ fn a_chain_of_literal_lists_collects_into_the_annotated_width() {
 }
 
 #[test]
-fn a_scan_whose_state_settled_wide_in_a_chain_is_refused_not_miscompiled() {
+fn a_scan_whose_state_is_a_literal_in_a_chain_collects_i32_items() {
     for (tag, head) in [("let-head", "head"), ("literal-head", "[0]")] {
         let src = format!(
             "fn main() {{\n    let lengths = [31, 28, 31];\n    let head = [0];\n    \
              let starts: Vec[i32] = {head}.into_iter().chain(lengths.iter().scan(0, |total, d| {{\n        \
              let total = total + d;\n        Some((total, total))\n    }})).collect();\n    \
-             println(starts);\n    println(head.len());\n}}\n"
+             println(starts);\n}}\n"
         );
         let path = temp(tag, &src);
-        let out = karac(&["check"], &path);
+        for lane in [&["run"][..], &["run", "--interp"][..]] {
+            let out = karac(lane, &path);
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                "[0, 31, 59, 90]\n",
+                "{tag} {lane:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
         let _ = std::fs::remove_file(&path);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(!out.status.success(), "{tag} checked clean");
-        assert!(
-            stderr.contains("trait bound `C: FromIterator[i64]` is not satisfied")
-                && stderr.contains("the `scan`'s state is an 'i64'"),
-            "{tag}: {stderr}"
-        );
     }
 }
