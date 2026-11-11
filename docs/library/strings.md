@@ -89,6 +89,7 @@ Parsing text into a number is `T.parse(s)` on the target type, which returns `Re
 | `push_str` | `fn push_str(mut ref self, s: Str)` | Appends text |
 | `extend` | `fn extend[I: IntoIterator[Item = char]](mut ref self, items: own I)`, and the same over `String` items | Appends every `char`, or every `String`, in order: `s.extend(t.chars())`. `String` implements both `Extend[char]` and `Extend[String]`, and a call picks the one its argument's items are |
 | `clear` | `fn clear(mut ref self)` | Empties the string |
+| `retain` | `fn retain(mut ref self, pred: own MutFn(char) -> bool)` | Keeps the scalar values `pred` accepts, in order, as Rust's `String::retain` |
 | `pop` | `fn pop(mut ref self) -> Option[char]` | Removes and returns the last scalar value; `None` when empty |
 | `truncate` | `fn truncate(mut ref self, len: i64)` | Keeps the first `len` bytes. A `len` at or past the end does nothing and a negative one empties the string, as `Vec.truncate`; a `len` inside a char panics |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` more bytes. A hint: `additional <= 0` does nothing, and there is no `capacity()` |

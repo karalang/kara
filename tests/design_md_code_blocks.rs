@@ -771,6 +771,8 @@ const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[
     ),
     // Kata 2086: in the Kāra library the v2 check and MIR read.
     ("matches", "every non-overlapping match"),
+    // Kata 1119: in the Kāra library the v2 check and MIR read.
+    ("retain", "the chars a predicate accepts, kept in place"),
 ];
 
 #[test]

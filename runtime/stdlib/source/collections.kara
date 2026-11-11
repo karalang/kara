@@ -1379,6 +1379,19 @@ impl String {
         String.new()
     }
 
+    /// Keeps the chars `pred` accepts, in order, as Rust's
+    /// `String::retain`: `s.retain(|c| c != ' ')`.
+    fn retain(mut ref self, pred: own MutFn(char) -> bool) {
+        let mut f = pred;
+        let mut kept = String.with_capacity(self.len());
+        for c in self.chars() {
+            if f(c) {
+                kept.push(c);
+            }
+        }
+        *self = kept;
+    }
+
     /// `split` of the text as a `Str`: each piece is a view into `self`.
     fn split(ref self, sep: Str) -> StrSplit {
         self.as_str().split(sep)
