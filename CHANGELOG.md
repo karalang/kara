@@ -110,10 +110,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `Result.unwrap_or_default()` gives the value, or `T`'s default on `Err`,
   as `Option.unwrap_or_default` does on `None`:
   `String.from_utf8(bytes).unwrap_or_default()` (B-2026-11-10-46).
-- `Option[String].as_deref()` views the string as an `Option[Str]`,
-  without moving or allocating (library/core-types.md):
-  `req.header("X-Token").as_deref() == Some(TOKEN)`. The
-  `Option[Vec[T]]` form is not in yet (B-2026-11-11-3).
+- `Option.as_deref()` views an `Option[String]` as an `Option[Str]` and an
+  `Option[Vec[T]]` as an `Option[Slice[T]]`, without moving or allocating
+  (library/core-types.md): `req.header("X-Token").as_deref() == Some(TOKEN)`.
+  The view borrows the option, so it cannot outlive it (B-2026-11-11-3).
 - `BufReader` and `BufWriter` wrap a `TlsStream` and a socket a `Network`
   provider opened, on `karac run` and compiled builds alike: a buffered read
   over TLS waits inside its task, the handshake included, and a TLS failure
@@ -691,7 +691,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   explains that comparison looks through each operand but not inside type
   arguments, and `karac fix` inserts `.as_deref()` on the owned side
   (`opt.as_deref() != Some(TOKEN)`), which neither moves nor allocates; it
-  wrote `Some(TOKEN.to_string())` (B-2026-11-09-97, B-2026-11-11-2).
+  wrote `Some(TOKEN.to_string())` (B-2026-11-09-97, B-2026-11-11-2). An
+  `Option[Vec[T]]` against an `Option[Slice[T]]` takes the same fix
+  (B-2026-11-11-3).
 - A Rust path through a module Kāra's expressions name keeps that module
   in its fix: `std.fs.read_to_string(p)` and `std::fs::read_to_string(p)`
   become `fs.read_to_string(p)`, `std::env::args()` `env.args()` and

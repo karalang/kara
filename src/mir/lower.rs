@@ -712,6 +712,7 @@ fn lower_program_inner<'a>(
                     .into_iter()
                     .chain(declared)
                     .any(|t| view_result(t, &params))
+                    && !receiver_view(&name, &i.f.name)
             });
             lcx.lower_instance(def, &args, &name);
             // A receiver the body borrows, written or (D5) a bare `self`.
@@ -814,6 +815,22 @@ const HASHER_METHODS: [&str; 12] = [
 /// what the receiver's value borrows (§5.4). A `ref` written in the type,
 /// or a named type that may hold one, keeps the receiver's place.
 /// Whether `t` writes a `ref` or `mut ref` anywhere in it.
+/// The library's views of a receiver through an associated type: the
+/// internal `DerefView` trait's `__view` (`String.View = Str`, `Vec[T].View
+/// = Slice[T]`) and `Option[T].as_deref`, which returns `Option[T.View]`.
+/// Their results borrow the receiver place, as a `ref` in the signature
+/// would, where a result spelled through an associated type is otherwise
+/// an item that borrows only what the receiver's value holds (core
+/// semantics §5.4, which states this exception; B-2026-11-11-3). Reading
+/// them as items would let the view outlive the string or vector it views.
+fn receiver_view(instance: &str, method: &str) -> bool {
+    match method {
+        "__view" => true,
+        "as_deref" => instance.starts_with("Option["),
+        _ => false,
+    }
+}
+
 fn writes_ref(t: &ast::TypeExpr) -> bool {
     match &t.kind {
         ast::TypeKind::Ref(_) | ast::TypeKind::MutRef(_) => true,
@@ -3016,6 +3033,9 @@ impl<'a> Lcx<'a> {
         let (name, args) = match tcx.kind(base) {
             HK::Adt { def, args } | HK::Shared { def, args } => (self.def_name(def), args),
             HK::Intrinsic { kind, args } => (kind.name().to_string(), args),
+            // `String` is primitive here, and its library trait impls are
+            // keyed `String` (`String.View` of `DerefView`, B-2026-11-11-3).
+            HK::Str => ("String".to_string(), tcx.empty_list()),
             // B-2026-10-15-76 — every operator impl of a number or `bool` has
             // `Output = Self` (design.md § Operator traits), the typechecker's
             // `resolve_assoc_projections` twin.

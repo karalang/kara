@@ -172,6 +172,12 @@ const ALWAYS_KEPT: &[&str] = &[
     // `msg` in the error return trace (B-2026-10-25-44). It calls nothing,
     // and a program that writes `.context(` keeps it anyway.
     "context",
+    // The borrow rules read `as_deref` and the `DerefView.__view` it calls
+    // as views of their receiver, by name (core semantics §5.4,
+    // B-2026-11-11-3). They call nothing, and a program reaches `__view`
+    // only through `as_deref`.
+    "as_deref",
+    "__view",
 ];
 
 /// Names in [`ALWAYS_KEPT`] the compiler answers, natively or by

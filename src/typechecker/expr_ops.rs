@@ -3582,15 +3582,23 @@ impl<'a> super::TypeChecker<'a> {
             None
         } else {
             self.option_str_as_deref_fix(right_ty, (left, left_ty))
-                .or_else(|| self.option_str_as_deref_fix(left_ty, (right, right_ty)))
+                .map(|f| (f, left_ty, right_ty))
+                .or_else(|| {
+                    self.option_str_as_deref_fix(left_ty, (right, right_ty))
+                        .map(|f| (f, right_ty, left_ty))
+                })
         };
-        if let Some(fix) = to_string {
+        if let Some((fix, owned, view)) = to_string {
+            let (owned, view) = (
+                type_display(strip_refs_for_compare(owned)),
+                type_display(strip_refs_for_compare(view)),
+            );
             self.type_error_with_fix_it(
                 format!(
                     "{message}: comparison looks through each operand but not inside type \
-                     arguments (design.md), so an `Option[String]` never meets an \
-                     `Option[Str]`; `.as_deref()` views the owned side as an `Option[Str]`, \
-                     without moving or allocating (library/core-types.md)"
+                     arguments (design.md), so an `{owned}` never meets an `{view}`; \
+                     `.as_deref()` views the owned side as an `{view}`, without moving or \
+                     allocating (library/core-types.md)"
                 ),
                 span,
                 TypeErrorKind::InvalidBinaryOp,
@@ -3740,7 +3748,8 @@ impl<'a> super::TypeChecker<'a> {
     /// not inside type arguments, so the edit views the owned side,
     /// `opt.as_deref() != Some(TOKEN)` (core-types.md § `as_deref`, review
     /// ruling 2026-11-10). `view_ty` is the `Option[Str]` side's type,
-    /// `owned` the `Option[String]` operand.
+    /// `owned` the `Option[String]` operand; an `Option[Vec[T]]` against an
+    /// `Option[Slice[T]]` takes the same edit (B-2026-11-11-3).
     fn option_str_as_deref_fix(
         &self,
         view_ty: &Type,
@@ -3755,13 +3764,27 @@ impl<'a> super::TypeChecker<'a> {
             }
         };
         let view_item = item(strip_refs_for_compare(view_ty))?;
-        let is_view = matches!(
-            view_item,
-            Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
-        );
         // The owned side by value: `.as_deref()` reads a place or a call's
         // result, and a reference to an `Option` auto-derefs the same way.
-        if !is_view || item(strip_refs_for_compare(owned_ty))? != Type::Str {
+        let owned_item = item(strip_refs_for_compare(owned_ty))?;
+        // `String` views as `Str`, `Vec[T]` as `Slice[T]` (B-2026-11-11-3).
+        let views = match (&view_item, &owned_item) {
+            (Type::Named { name, args }, Type::Str) => name == "StringSlice" && args.is_empty(),
+            (
+                Type::Slice {
+                    element,
+                    mutable: false,
+                },
+                Type::Named { name, args },
+            ) => {
+                name == "Vec"
+                    && args.len() == 1
+                    && resolve_type_var_top(&args[0], &self.env.substitutions)
+                        == resolve_type_var_top(element, &self.env.substitutions)
+            }
+            _ => false,
+        };
+        if !views {
             return None;
         }
         let postfix = matches!(

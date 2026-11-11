@@ -199,13 +199,40 @@ impl[T: Clone] Option[ref T] {
     }
 }
 
-impl Option[String] {
-    /// A view of the string, without moving or allocating:
-    /// `req.header("X-Token").as_deref() == Some(TOKEN)` with `TOKEN: Str`
-    /// (core-types.md; B-2026-11-09-97).
-    fn as_deref(ref self) -> Option[Str] {
+// What `Option.as_deref` views an owned value as: a `String` as a `Str`, a
+// `Vec[T]` as a `Slice[T]`. Library-internal (review ruling on
+// B-2026-11-11-3): users never name or implement it, so there is still no
+// user-facing `Borrow`-like trait (collections.md). Completion offers no
+// library trait by name, and the `__` keeps the method out of member
+// completion; no doc comment, so `karac doc` lists none of it. A trait
+// name cannot begin with `_` (design.md §3 CN-5).
+trait DerefView {
+    type View;
+    fn __view(ref self) -> Self.View;
+}
+
+impl DerefView for String {
+    type View = Str;
+    fn __view(ref self) -> Str {
+        self.as_str()
+    }
+}
+
+impl[T] DerefView for Vec[T] {
+    type View = Slice[T];
+    fn __view(ref self) -> Slice[T] {
+        self.as_slice()
+    }
+}
+
+impl[T: DerefView] Option[T] {
+    /// A view of the owned value, without moving or allocating: an
+    /// `Option[String]` as an `Option[Str]`, an `Option[Vec[T]]` as an
+    /// `Option[Slice[T]]`. `req.header("X-Token").as_deref() == Some(TOKEN)`
+    /// with `TOKEN: Str` (core-types.md; B-2026-11-09-97, B-2026-11-11-3).
+    fn as_deref(ref self) -> Option[T.View] {
         match self {
-            Some(s) => Some(s.as_str()),
+            Some(x) => Some(x.__view()),
             None => None,
         }
     }
