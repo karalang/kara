@@ -247,3 +247,109 @@ fn read_exact_over_a_fake_socket() {
         "97 101\nunexpected end of stream\nbuffered: unexpected end of file\n",
     );
 }
+
+/// `BufReader.read_exact` (B-2026-11-11-63) over a `File` (a 4-byte buffer,
+/// so the reads take the buffered bytes first and then refill), over a
+/// socket on the main task and inside a spawned one, and over a child's
+/// stdout; an early end is `IoError.UnexpectedEof`.
+const BUFFERED: &str = r#"import std.io.{BufReader};
+import std.sync.{TaskGroup};
+
+fn file_part() {
+    fs.write("data.bin", "abcdefghij").unwrap();
+    let r = BufReader.with_capacity(File.open("data.bin").unwrap(), 4);
+    let mut a = [0u8; 3];
+    r.read_exact(mut a).unwrap();
+    println(f"{a[0]} {a[2]}");
+    let mut b = [0u8; 5];
+    r.read_exact(mut b).unwrap();
+    println(f"{b[0]} {b[4]}");
+    let mut c = [0u8; 4];
+    match r.read_exact(mut c) {
+        Err(e) => println(f"{e}: {c[0]} {c[1]}"),
+        Ok(()) => println("full"),
+    }
+    let mut empty = [0u8; 0];
+    println(f"{r.read_exact(mut empty).is_ok()}");
+}
+
+fn read_head(r: mut ref BufReader[TcpStream]) -> Result[i64, IoError] {
+    let mut head = [0u8; 2];
+    r.read_exact(mut head)?;
+    Ok((head[0] as i64) * 256 + (head[1] as i64))
+}
+
+fn sock(tag: Str, l: TcpListener) {
+    let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
+    let s = l.accept().unwrap();
+    let mut r = BufReader.new(c);
+    s.write_all([1u8, 2, 3].to_vec().as_slice()).unwrap();
+    println(f"{tag} head {read_head(mut r).unwrap()}");
+    s.shutdown_write().unwrap();
+    match read_head(mut r) {
+        Ok(n) => println(f"{tag} second {n}"),
+        Err(e) => println(f"{tag} second: {e}"),
+    }
+}
+
+fn main() {
+    file_part();
+    sock("main", TcpListener.bind("127.0.0.1:0").unwrap());
+    let l2 = TcpListener.bind("127.0.0.1:0").unwrap();
+    let g = TaskGroup.new();
+    let h = g.spawn(|| sock("task", l2));
+    let _ = h.join();
+    let child = Command.new("printf").arg("xyz").stdout(Stdio.piped()).spawn().unwrap();
+    let mut p = BufReader.new(child.stdout().unwrap());
+    let mut two = [0u8; 2];
+    p.read_exact(mut two).unwrap();
+    println(f"pipe {two[0]} {two[1]}");
+    let mut more = [0u8; 2];
+    match p.read_exact(mut more) {
+        Err(e) => println(f"pipe: {e} {more[0]}"),
+        Ok(()) => println("pipe full"),
+    }
+    let _ = child.wait();
+}
+"#;
+
+#[test]
+fn bufreader_read_exact_over_a_file_a_socket_and_a_pipe() {
+    assert_both(
+        "buffered",
+        BUFFERED,
+        "97 99\n100 104\nunexpected end of file: 105 106\ntrue\nmain head 258\n\
+         main second: unexpected end of file\ntask head 258\ntask second: unexpected end of file\n\
+         pipe 120 121\npipe: unexpected end of file 122\n",
+    );
+}
+
+/// A buffered socket's `read_exact` has the network effects its `read`
+/// has, so a function that calls it is seen to receive from the network.
+#[test]
+fn bufreader_read_exact_over_a_socket_has_the_socket_effects() {
+    let dir = Scratch::new("effects");
+    let file = dir.path().join("main.kara");
+    std::fs::write(
+        &file,
+        "import std.io.{BufReader};\n\
+         fn head(r: ref BufReader[TcpStream]) -> u8 {\n\
+         \x20   let mut b = [0u8; 2];\n\
+         \x20   r.read_exact(mut b).unwrap();\n\
+         \x20   b[0]\n\
+         }\n\
+         fn main() {}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["query", "effects", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let text = stdout_of(out, "query effects");
+    for want in [
+        r#"{"verb":"receives","resource":"Network"}"#,
+        r#"{"verb":"blocks","resource":""}"#,
+    ] {
+        assert!(text.contains(want), "{want} missing from {text}");
+    }
+}

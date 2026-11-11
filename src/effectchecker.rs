@@ -1979,6 +1979,7 @@ impl<'a> EffectChecker<'a> {
                 "BufReader[TcpStream].read_line",
                 "BufReader[TcpStream].read_to_string",
                 "BufReader[TcpStream].read",
+                "BufReader[TcpStream].read_exact",
                 "BufReader[TcpStream].lines",
                 "BufReader[TcpStream].fill_buf",
                 "BufWriter[TcpStream].write",

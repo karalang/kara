@@ -1,0 +1,23 @@
+//! `BufReader.read_exact` (io.md, B-2026-11-11-63). Appended to a program
+//! that calls a `read_exact` (`BAKED_SOURCES` in src/mir/lower.rs), apart
+//! from `File`'s in read_exact.kara, so that a program's own `BufReader`
+//! leaves `File.read_exact` in place. The rest of `BufReader` is native
+//! (runtime/stdlib/bufreader.kara).
+
+impl[R] BufReader[R] {
+    // The loop `File.read_exact` runs, over the buffer's own `read`: the
+    // bytes the buffer holds come first, then reads of `R`, whatever `R`
+    // is. A read of 0 before `buf` is full is `UnexpectedEof`.
+    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), IoError] with reads(FileSystem) blocks {
+        let mut done = 0;
+        while done < buf.len() {
+            match self.read(mut buf[done..]) {
+                Ok(0) => return Err(IoError.UnexpectedEof),
+                Ok(n) => done = done + n,
+                Err(IoError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+}

@@ -131,13 +131,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   field, `value`, and implements `Ord` by `T`'s order reversed, and `Eq`,
   `Hash`, `Clone`, `Copy`, `Debug` and `Display` when `T` does
   (B-2026-11-10-41).
-- `read_exact(mut buf)` on `TcpStream`, `TlsStream`, `File`, `ChildStdout`
-  and `ChildStderr` reads until `buf` is full, as Rust's does: the usual
-  way to read a binary protocol's fixed-size header
+- `read_exact(mut buf)` on `TcpStream`, `TlsStream`, `File`, `ChildStdout`,
+  `ChildStderr` and `BufReader` reads until `buf` is full, as Rust's does:
+  the usual way to read a binary protocol's fixed-size header
   (`conn.read_exact(mut head)?`). An early end is `UnexpectedEof`, which
   `NetError` gains for it (B-2026-11-10-44). A program that matches every
-  `NetError` variant needs the new arm. `BufReader` does not have it yet
-  (B-2026-11-11-63).
+  `NetError` variant needs the new arm. A `BufReader`'s takes the bytes
+  it holds first (B-2026-11-11-63).
 - `impl From[NetError] for IoError`: a function that uses `?` on file and
   socket operations alike can return `IoError` alone, as Rust's
   `io::Result` does; it was refused "cannot convert error 'NetError' to

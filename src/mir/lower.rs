@@ -27811,6 +27811,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &["File"],
     ),
     (
+        // `BufReader.read_exact` (B-2026-11-11-63); a program's own
+        // `BufReader` is not the library's.
+        include_str!("../../runtime/stdlib/source/bufreader_read_exact.kara"),
+        &["read_exact"],
+        &["BufReader"],
+    ),
+    (
         // `TaskGroup.with_deadline` (§11.10), for the same reason.
         include_str!("../../runtime/stdlib/source/group_deadline.kara"),
         &["with_deadline"],
