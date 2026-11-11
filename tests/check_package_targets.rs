@@ -92,8 +92,11 @@ fn a_finding_on_every_target_is_reported_once_with_its_snippet() {
         1,
         "{out}"
     );
+    // karac prints the host's separator (`src\main.kara` on Windows), as
+    // the other package tests' `slash_paths` allow for.
     assert!(
-        out.contains("error[typecheck]: src/main.kara:4:18"),
+        out.replace('\\', "/")
+            .contains("error[typecheck]: src/main.kara:4:18"),
         "{out}"
     );
     assert!(out.contains("4 |     let x: i64 = \"no\";"), "{out}");
