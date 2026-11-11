@@ -336,16 +336,25 @@ fn exported(attrs: &[Attribute]) -> bool {
 }
 
 /// `copy` plus the type parameters these generics bound by `Copy`.
-fn with_bounds(
-    copy: &FxHashSet<String>,
+/// `copy` with the generics `gps` / `wcs` bound `Copy` added; `copy`
+/// itself, uncloned, when they bound none (most functions: cloning the set
+/// per function was about 1% of a small check, B-2026-11-09-28).
+fn with_bounds<'a>(
+    copy: &'a FxHashSet<String>,
     gps: &[Option<&GenericParams>],
     wcs: &[Option<&WhereClause>],
-) -> FxHashSet<String> {
-    let mut out = copy.clone();
-    for (gp, wc) in gps.iter().zip(wcs) {
-        out.extend(copy_bounded(*gp, *wc));
+) -> std::borrow::Cow<'a, FxHashSet<String>> {
+    let extra: Vec<String> = gps
+        .iter()
+        .zip(wcs)
+        .flat_map(|(gp, wc)| copy_bounded(*gp, *wc))
+        .collect();
+    if extra.is_empty() {
+        return std::borrow::Cow::Borrowed(copy);
     }
-    out
+    let mut out = copy.clone();
+    out.extend(extra);
+    std::borrow::Cow::Owned(out)
 }
 
 fn copy_bounded(gp: Option<&GenericParams>, wc: Option<&WhereClause>) -> Vec<String> {

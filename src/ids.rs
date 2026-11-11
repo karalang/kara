@@ -12,7 +12,7 @@
 //! [`DefTable`] the resolver produces, so it is `Copy` and compares in
 //! one instruction; the [`DefPath`] it stands for is one lookup away.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::def_path::DefPath;
 
@@ -84,7 +84,8 @@ pub struct DefData {
 #[derive(Debug, Clone, Default)]
 pub struct DefTable {
     defs: Vec<DefData>,
-    by_path: HashMap<DefPath, DefId>,
+    /// Looked up, never walked, so the hasher cannot reach any output.
+    by_path: FxHashMap<DefPath, DefId>,
 }
 
 impl DefTable {
