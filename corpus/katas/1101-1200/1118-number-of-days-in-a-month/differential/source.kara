@@ -1,0 +1,232 @@
+// LeetCode #1118: Number of Days in a Month -- a differential over the
+// six arms. Each answer is checked against the statement read literally
+// and against five properties that do not compute the answer; see the
+// README.
+
+// ---- number_of_days.kara ----
+
+fn a0_is_leap(year: i32) -> bool {
+    year % 4 == 0 and year % 100 != 0 or year % 400 == 0
+}
+
+fn a0_number_of_days(year: i32, month: i32) -> i32 {
+    match month {
+        2 => if a0_is_leap(year) { 29 } else { 28 },
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+// ---- number_of_days_table.kara ----
+
+const A1DAYS: Array[i32, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+fn a1_number_of_days(year: i32, month: i32) -> i32 {
+    let leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0);
+    A1DAYS[(month - 1) as i64] + if month == 2 and leap { 1 } else { 0 }
+}
+
+// ---- number_of_days_civil.kara ----
+
+fn a2_days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let m = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe
+}
+
+fn a2_number_of_days(year: i32, month: i32) -> i32 {
+    let (y, m) = (year as i64, month as i64);
+    let (next_y, next_m) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+    (a2_days_from_civil(next_y, next_m, 1) - a2_days_from_civil(y, m, 1)) as i32
+}
+
+// ---- number_of_days_bits.kara ----
+
+fn a3_number_of_days(year: i32, month: i32) -> i32 {
+    // months 1 to 12 at bits 2 to 25: 3 0 3 2 3 2 3 3 2 3 2 3
+    let packed = 0b11_10_11_10_11_11_10_11_10_11_00_11_00;
+    let extra = (packed >> (2 * month)) & 3;
+    let leap_day = if month == 2 and (year % 400 == 0 or year % 4 == 0 and year % 100 != 0) { 1 } else { 0 };
+    28 + extra + leap_day
+}
+
+// ---- number_of_days_scan.kara ----
+
+fn a4_number_of_days(year: i32, month: i32) -> i32 {
+    let leap = (year % 4 == 0 and year % 100 != 0) or year % 400 == 0;
+    let lengths = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let starts: Vec[i32] = [0].into_iter()
+        .chain(lengths.iter().scan(0, |total, d| {
+            let total = total + d;
+            Some((total, total))
+        }))
+        .collect();
+    starts[month as i64] - starts[(month - 1) as i64]
+}
+
+// ---- number_of_days_solution.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_number_of_days(year: i32, month: i32) -> i32 {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            _ => {
+                if (year % 4 == 0 and year % 100 != 0) or year % 400 == 0 {
+                    29
+                } else {
+                    28
+                }
+            }
+        }
+    }
+}
+
+fn a5_number_of_days(year: i32, month: i32) -> i32 {
+    A5Solution.a5_number_of_days(year, month)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, year: i32, month: i32) -> i32 {
+    match which {
+        0 => a0_number_of_days(year, month),
+        1 => a1_number_of_days(year, month),
+        2 => a2_number_of_days(year, month),
+        3 => a3_number_of_days(year, month),
+        4 => a4_number_of_days(year, month),
+        _ => a5_number_of_days(year, month),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The weekday of a date by Zeller's congruence for the Gregorian
+// calendar, 0 for Saturday: January and February count as the 13th and
+// 14th months of the year before.
+fn weekday(year: i64, month: i64, day: i64) -> i64 {
+    let (y, m) = if month < 3 { (year - 1, month + 12) } else { (year, month) };
+    let k = y % 100;
+    let j = y / 100;
+    (day + 13 * (m + 1) / 5 + k + k / 4 + j / 4 + 5 * j) % 7
+}
+
+// The statement read literally: a month runs from its first day to the
+// day before the next month's first, so it has 28 days and as many more
+// as the weekday moves on from one first to the next, a month being 28
+// to 31 days long.
+fn literal(year: i32, month: i32) -> i32 {
+    let (y, m) = (year as i64, month as i64);
+    let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+    (28 + (weekday(ny, nm, 1) - weekday(y, m, 1) + 7) % 7) as i32
+}
+
+// P6: no century year that 400 does not divide lies from `year` up to
+// `year + 28`, so the leap years repeat; `year` itself counts, since 1800
+// is not a leap year where 1828 is.
+fn cycle_clean(year: i32) -> bool {
+    for y in year..=year + 28 {
+        if y % 100 == 0 and y % 400 != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+struct Problem {
+    year: i32,
+    month: i32,
+    other: i32,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let (y, m) = (p.year, p.month);
+    let want = literal(y, m);
+    for w in 0..6 {
+        let answer = arm(w, y, m);
+        let what = f"arm {w}, {y} {m} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: by a second reading, the year: 28 to 31 days, 30 only in
+        // April, June, September and November, and the twelve months
+        // making 366 days in a year 4 divides, unless 100 does and 400
+        // does not, and 365 in any other
+        let year_days: i32 = (1..13).map(|mm| arm(w, y, mm)).sum();
+        let leap = y % 4 == 0 and (y % 100 != 0 or y % 400 == 0);
+        let thirty = m == 4 or m == 6 or m == 9 or m == 11;
+        let shape = answer >= 28 and answer <= 31 and (answer == 30) == thirty;
+        expect(mut t, 2, shape and year_days == if leap { 366 } else { 365 }, f"P2 {what}, the year {year_days} days");
+        // P3: 400 years on, the calendar repeats
+        let later = arm(w, y + 400, m);
+        expect(mut t, 3, later == answer, f"P3 {what}, {y + 400} {m} -> {later}");
+        // P4: a month other than February is as long in any year
+        if m != 2 {
+            let o = arm(w, p.other, m);
+            expect(mut t, 4, o == answer, f"P4 {what}, {p.other} {m} -> {o}");
+        }
+        // P5: March to December mirror about the turn of July and August
+        if m >= 3 {
+            let mirrored = arm(w, y, 15 - m);
+            expect(mut t, 5, mirrored == answer, f"P5 {what}, {y} {15 - m} -> {mirrored}");
+        }
+        // P6: 28 years on, with no century year from now to then that is
+        // not a leap year, the calendar repeats
+        if cycle_clean(y) {
+            let on = arm(w, y + 28, m);
+            expect(mut t, 6, on == answer, f"P6 {what}, {y + 28} {m} -> {on}");
+        }
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // Every month of every year LeetCode allows, 1583 to 2100, each with
+    // a second year drawn at random from the same span for P4. Every
+    // choice is drawn before any arm answers.
+    let mut seed = 11181;
+    let mut problems: Vec[Problem] = [];
+    for year in 1583..2101 {
+        for month in 1..13 {
+            let other = (1583 + next_random(mut seed) % 518) as i32;
+            problems.push(Problem { year, month, other });
+        }
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

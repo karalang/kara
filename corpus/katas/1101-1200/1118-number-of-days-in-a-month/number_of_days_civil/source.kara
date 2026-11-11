@@ -1,0 +1,52 @@
+// LeetCode #1118: Number of Days in a Month -- the days between the first
+// of the month and the first of the next, each counted from 1 March of
+// year 0 as Howard Hinnant's `days_from_civil` counts them: the year is
+// taken to start in March, so February's leap day falls last, and a
+// month's start is `(153 * m + 2) / 5` days in. O(1).
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let m = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe
+}
+
+fn number_of_days(year: i32, month: i32) -> i32 {
+    let (y, m) = (year as i64, month as i64);
+    let (next_y, next_m) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+    (days_from_civil(next_y, next_m, 1) - days_from_civil(y, m, 1)) as i32
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's three examples
+    println(f"1992 7 -> {number_of_days(1992, 7)}");
+    println(f"2000 2 -> {number_of_days(2000, 2)}");
+    println(f"1900 2 -> {number_of_days(1900, 2)}");
+    // every month of a few years: a common year, a leap year, a century
+    // that is not a leap year, the first and last years LeetCode allows
+    for year in [2023i32, 2024, 2100, 1583, 1600] {
+        let days: Vec[String] = (1..13).map(|m| f"{number_of_days(year, m)}").collect();
+        println(f"{year}: {days.join(" ")}");
+    }
+    // every month of every year LeetCode allows, 1583 to 2100: the days
+    // summed, the leap Februaries counted, and a checksum in order
+    let mut total = 0;
+    let mut leap = 0;
+    let mut check = 0;
+    for year in 1583..2101 {
+        for month in 1..13 {
+            let d = number_of_days(year, month);
+            total += d;
+            if month == 2 and d == 29 {
+                leap += 1;
+            }
+            check = (check * 31 + d) % 1000000007;
+        }
+    }
+    println(f"1583 to 2100: {total} days, {leap} leap years, checksum {check}");
+}

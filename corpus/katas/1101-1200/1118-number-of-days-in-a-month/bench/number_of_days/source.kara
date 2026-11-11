@@ -1,0 +1,45 @@
+// LeetCode #1118: Number of Days in a Month -- the bench: the ★ arm over
+// 10^6 months drawn once from LeetCode's years, 1583 to 2100, asked again
+// in each of 40 rounds, each call's year moved by the last answer so no
+// call can start before the one before it ends.
+
+fn is_leap(year: i32) -> bool {
+    year % 4 == 0 and year % 100 != 0 or year % 400 == 0
+}
+
+fn number_of_days(year: i32, month: i32) -> i32 {
+    match month {
+        2 => if is_leap(year) { 29 } else { 28 },
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1118;
+    let mut years: Vec[i32] = Vec.with_capacity(1000000);
+    let mut months: Vec[i32] = Vec.with_capacity(1000000);
+    for _ in 0..1000000 {
+        years.push((1583 + next_random(mut seed) % 517) as i32);
+        months.push((1 + next_random(mut seed) % 12) as i32);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    let mut last: i32 = 0;
+    for _ in 0..40 {
+        for i in 0..years.len() {
+            let d = number_of_days(years[i] + (last & 1), months[i]);
+            total += d;
+            if i % 64 == 0 {
+                check = (check * 31 + d) % 1000000007;
+            }
+            last = d;
+        }
+    }
+    println(f"40 rounds over 10^6 months: {total} days, checksum {check}");
+}

@@ -1,0 +1,78 @@
+// LeetCode #1123: Lowest Common Ancestor of Deepest Leaves -- the bench:
+// the ★ arm over 16 trees of 10^4 nodes, built once, each round hanging
+// one more node on every tree and solving it again.
+
+fn walk(node: Option[TreeNode]) -> (i64, Option[TreeNode]) {
+    let Some(n) = node else {
+        return (0, None);
+    };
+    let (ld, la) = walk(n.left);
+    let (rd, ra) = walk(n.right);
+    if ld == rd {
+        (ld + 1, Some(n))
+    } else if ld > rd {
+        (ld + 1, la)
+    } else {
+        (rd + 1, ra)
+    }
+}
+
+fn lca_deepest_leaves(root: Option[TreeNode]) -> Option[TreeNode] {
+    walk(root).1
+}
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64) -> i32 {
+    ((next_random(mut seed) * 32768 + next_random(mut seed)) % 100001) as i32
+}
+
+// Hangs a new node at a random free place below the tree's nodes.
+fn grow(nodes: mut ref Vec[TreeNode], seed: mut ref i64) {
+    let c = TreeNode { val: random_value(mut seed), left: None, right: None };
+    loop {
+        let at = nodes[next_random(mut seed) % nodes.len()];
+        if next_random(mut seed) % 2 == 0 {
+            if at.left.is_none() {
+                at.left = Some(c);
+                break;
+            }
+        } else if at.right.is_none() {
+            at.right = Some(c);
+            break;
+        }
+    }
+    nodes.push(c);
+}
+
+fn main() {
+    let mut seed = 1123;
+    let mut trees: Vec[Vec[TreeNode]] = [];
+    for _ in 0..16 {
+        let mut nodes: Vec[TreeNode] = [TreeNode { val: random_value(mut seed), left: None, right: None }];
+        for _ in 1..10000 {
+            grow(mut nodes, mut seed);
+        }
+        trees.push(nodes);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..200 {
+        for j in 0..trees.len() {
+            grow(mut trees[j], mut seed);
+            let answer = lca_deepest_leaves(Some(trees[j][0])).unwrap();
+            total += answer.val;
+            check = (check * 31 + answer.val) % 1000000007;
+        }
+    }
+    println(f"200 rounds over 16 trees of 10^4 nodes: answers total {total}, checksum {check}");
+}

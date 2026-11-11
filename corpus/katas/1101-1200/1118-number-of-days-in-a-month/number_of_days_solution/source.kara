@@ -1,0 +1,56 @@
+// LeetCode #1118: Number of Days in a Month -- a Rust solution as
+// LeetCode's Rust users write it: `impl Solution` with a `match` on the
+// month, the leap test inline, carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn number_of_days(year: i32, month: i32) -> i32 {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            _ => {
+                if (year % 4 == 0 and year % 100 != 0) or year % 400 == 0 {
+                    29
+                } else {
+                    28
+                }
+            }
+        }
+    }
+}
+
+fn number_of_days(year: i32, month: i32) -> i32 {
+    Solution.number_of_days(year, month)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's three examples
+    println(f"1992 7 -> {number_of_days(1992, 7)}");
+    println(f"2000 2 -> {number_of_days(2000, 2)}");
+    println(f"1900 2 -> {number_of_days(1900, 2)}");
+    // every month of a few years: a common year, a leap year, a century
+    // that is not a leap year, the first and last years LeetCode allows
+    for year in [2023i32, 2024, 2100, 1583, 1600] {
+        let days: Vec[String] = (1..13).map(|m| f"{number_of_days(year, m)}").collect();
+        println(f"{year}: {days.join(" ")}");
+    }
+    // every month of every year LeetCode allows, 1583 to 2100: the days
+    // summed, the leap Februaries counted, and a checksum in order
+    let mut total = 0;
+    let mut leap = 0;
+    let mut check = 0;
+    for year in 1583..2101 {
+        for month in 1..13 {
+            let d = number_of_days(year, month);
+            total += d;
+            if month == 2 and d == 29 {
+                leap += 1;
+            }
+            check = (check * 31 + d) % 1000000007;
+        }
+    }
+    println(f"1583 to 2100: {total} days, {leap} leap years, checksum {check}");
+}
