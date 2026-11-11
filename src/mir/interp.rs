@@ -15697,9 +15697,17 @@ impl<'a> Interp<'a> {
                 {
                     let ms = (*ms).max(0) as u64;
                     let t = &mut self.tasks[self.cur_task];
-                    let at = *t.deadline.get_or_insert_with(|| {
-                        std::time::Instant::now() + std::time::Duration::from_millis(ms)
-                    });
+                    // A sleep is a suspension point (core semantics
+                    // §11.1): asked the first time, it parks even when its
+                    // pause is already over, so a zero sleep lets the other
+                    // tasks run.
+                    if t.deadline.is_none() {
+                        let at = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+                        t.deadline = Some(at);
+                        self.wait = Some(Wait::Until(at));
+                        return Ok(Value::Bool(false));
+                    }
+                    let at = t.deadline.unwrap_or_else(std::time::Instant::now);
                     Some(Wait::Until(at))
                 }
                 #[cfg(target_arch = "wasm32")]

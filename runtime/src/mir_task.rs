@@ -2648,22 +2648,27 @@ pub extern "C" fn karac_mir_ready_join(block: *mut u8, ready: u8) -> u8 {
 /// follows returns at once.
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
+    // A sleep is a suspension point (core semantics §11.1): asked the first
+    // time, it parks even when its pause is already over, so a zero sleep
+    // lets the other tasks run.
     let at = EXEC.with(|e| {
         let mut e = e.borrow_mut();
         let cur = e.cur_mut().as_mut()?;
         let now = Instant::now();
-        let at = *cur
-            .deadline
-            .get_or_insert_with(|| now + Duration::from_millis(ms.max(0) as u64));
+        let Some(at) = cur.deadline else {
+            let at = now + Duration::from_millis(ms.max(0) as u64);
+            cur.deadline = Some(at);
+            return Some((at, false));
+        };
         if now >= at {
             cur.deadline = None;
             cur.slept = true;
         }
-        Some(at)
+        Some((at, now >= at))
     });
     match at {
         None => 1,
-        Some(at) => note(Instant::now() >= at, Wait::Until(at)),
+        Some((at, ready)) => note(ready, Wait::Until(at)),
     }
 }
 
