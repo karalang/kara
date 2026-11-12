@@ -1,0 +1,105 @@
+// LeetCode #1135: Connecting Cities With Minimum Cost -- Prim's algorithm:
+// the network grown from city 1, a `PriorityQueue` of `(cost, city)`
+// handing out the cheapest road to a city not yet reached; a city popped
+// again is passed over. O(m log m)
+
+fn minimum_cost(n: i64, connections: Vec[Vec[i64]]) -> i64 {
+    let mut roads: Vec[Vec[(i64, i64)]] = Vec.filled(n + 1, []);
+    for road in connections.iter() {
+        roads[road[0]].push((road[1], road[2]));
+        roads[road[1]].push((road[0], road[2]));
+    }
+    let mut reached = Vec.filled(n + 1, false);
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, 1));
+    let mut total = 0;
+    let mut count = 0;
+    while let Some((cost, city)) = queue.pop() {
+        if reached[city] {
+            continue;
+        }
+        reached[city] = true;
+        total += cost;
+        count += 1;
+        for (next, c) in roads[city].iter() {
+            if not reached[next] {
+                queue.push((c, next));
+            }
+        }
+    }
+    if count == n { total } else { -1 }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples and six more: three roads between the same
+    // two cities, a ring of equal costs, a dear hub beside cheap roads, two
+    // parts, a ring of falling costs, and the dearest roads
+    let cases: Vec[(i64, Vec[Vec[i64]])] = [
+        (3, [[1, 2, 5], [1, 3, 6], [2, 3, 1]]),
+        (4, [[1, 2, 3], [3, 4, 4]]),
+        (2, [[1, 2, 7], [2, 1, 3], [1, 2, 9]]),
+        (4, [[1, 2, 1], [2, 3, 1], [3, 4, 1], [4, 1, 1]]),
+        (5, [[1, 2, 10], [1, 3, 10], [1, 4, 10], [1, 5, 10], [2, 3, 1], [3, 4, 1]]),
+        (5, [[1, 2, 4], [2, 3, 4], [4, 5, 4]]),
+        (6, [[1, 2, 6], [2, 3, 5], [3, 4, 4], [4, 5, 3], [5, 6, 2], [6, 1, 1]]),
+        (3, [[2, 3, 100000], [1, 2, 100000]]),
+    ];
+    for (n, roads) in cases.iter() {
+        println(f"{n}, {roads} -> {minimum_cost(n, roads)}");
+    }
+    // 2000 random networks of 2 to 12 cities and 1 to 20 roads costing 1 to
+    // 20: the costs summed, how many are not connected, and a checksum
+    let mut seed = 1135;
+    let mut total = 0;
+    let mut none = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 11 + 2;
+        let m = next_random(mut seed) % 20 + 1;
+        let mut roads: Vec[Vec[i64]] = [];
+        for _ in 0..m {
+            let x = next_random(mut seed) % n + 1;
+            let mut y = next_random(mut seed) % (n - 1) + 1;
+            if y >= x {
+                y += 1;
+            }
+            roads.push([x, y, next_random(mut seed) % 20 + 1]);
+        }
+        let r = minimum_cost(n, roads);
+        if r == -1 {
+            none += 1;
+        } else {
+            total += r;
+        }
+        check = (check * 31 + r + 1) % 1000000007;
+    }
+    println(f"2000 random networks: costs total {total}, {none} not connected, checksum {check}");
+    // LeetCode's largest: 10000 cities on a random tree and one more road,
+    // and 1000 cities with 10000 random roads, costs to 100000
+    let mut tree: Vec[Vec[i64]] = [];
+    for i in 2..10001 {
+        let parent = next_random(mut seed) % (i - 1) + 1;
+        let high = next_random(mut seed);
+        tree.push([parent, i, (high * 32768 + next_random(mut seed)) % 100000 + 1]);
+    }
+    tree.push([1, 10000, 1]);
+    println(f"10000 cities on a random tree and one more road: {minimum_cost(10000, tree)}");
+    let mut dense: Vec[Vec[i64]] = [];
+    for _ in 0..10000 {
+        let x = next_random(mut seed) % 1000 + 1;
+        let mut y = next_random(mut seed) % 999 + 1;
+        if y >= x {
+            y += 1;
+        }
+        let high = next_random(mut seed);
+        dense.push([x, y, (high * 32768 + next_random(mut seed)) % 100000 + 1]);
+    }
+    println(f"1000 cities and 10000 random roads: {minimum_cost(1000, dense)}");
+}

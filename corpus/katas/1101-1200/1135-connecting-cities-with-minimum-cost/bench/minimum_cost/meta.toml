@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1135-connecting-cities-with-minimum-cost/bench/minimum_cost.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1135 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "5972d4c84"
+extracted_src = "f27dfe3a"

@@ -1,0 +1,73 @@
+// LeetCode #1135: Connecting Cities With Minimum Cost -- the bench: the ★
+// arm over 8 networks of 1000 cities and 10000 roads, LeetCode's largest
+// road count, built once, each of 50 rounds changing one road's cost in
+// every network and answering it again.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn minimum_cost(n: i64, connections: Vec[Vec[i64]]) -> i64 {
+    let mut roads = connections.clone();
+    roads.sort_by_key(|road| road[2]);
+    let mut parent: Vec[i64] = (0..n + 1).collect();
+    let mut size = Vec.filled(n + 1, 1);
+    let mut total = 0;
+    let mut joined = 1;
+    for road in roads.iter() {
+        let mut a = find(mut parent, road[0]);
+        let mut b = find(mut parent, road[1]);
+        if a != b {
+            if size[a] < size[b] {
+                let t = a;
+                a = b;
+                b = t;
+            }
+            parent[b] = a;
+            size[a] += size[b];
+            total += road[2];
+            joined += 1;
+        }
+    }
+    if joined == n { total } else { -1 }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1135;
+    let mut networks: Vec[Vec[Vec[i64]]] = [];
+    for _ in 0..8 {
+        let mut roads: Vec[Vec[i64]] = [];
+        for _ in 0..10000 {
+            let x = next_random(mut seed) % 1000 + 1;
+            let mut y = next_random(mut seed) % 999 + 1;
+            if y >= x {
+                y += 1;
+            }
+            let high = next_random(mut seed);
+            roads.push([x, y, (high * 32768 + next_random(mut seed)) % 100000 + 1]);
+        }
+        networks.push(roads);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..50 {
+        for j in 0..8 {
+            let at = (round * 7919 + j * 104729) % 10000;
+            networks[j][at][2] = (networks[j][at][2] * 7 + 13) % 100000 + 1;
+            let r = minimum_cost(1000, networks[j]);
+            total += r;
+            check = (check * 31 + r + 1) % 1000000007;
+        }
+    }
+    println(f"50 rounds over 8 networks of 1000 cities and 10000 roads: costs total {total}, checksum {check}");
+}

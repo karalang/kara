@@ -1,0 +1,401 @@
+// LeetCode #1135: Connecting Cities With Minimum Cost -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- minimum_cost.kara ----
+
+fn a0_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn a0_minimum_cost(n: i64, connections: Vec[Vec[i64]]) -> i64 {
+    let mut roads = connections.clone();
+    roads.sort_by_key(|road| road[2]);
+    let mut parent: Vec[i64] = (0..n + 1).collect();
+    let mut size = Vec.filled(n + 1, 1);
+    let mut total = 0;
+    let mut joined = 1;
+    for road in roads.iter() {
+        let mut a = a0_find(mut parent, road[0]);
+        let mut b = a0_find(mut parent, road[1]);
+        if a != b {
+            if size[a] < size[b] {
+                let t = a;
+                a = b;
+                b = t;
+            }
+            parent[b] = a;
+            size[a] += size[b];
+            total += road[2];
+            joined += 1;
+        }
+    }
+    if joined == n { total } else { -1 }
+}
+
+// ---- minimum_cost_prim.kara ----
+
+fn a1_minimum_cost(n: i64, connections: Vec[Vec[i64]]) -> i64 {
+    let mut roads: Vec[Vec[(i64, i64)]] = Vec.filled(n + 1, []);
+    for road in connections.iter() {
+        roads[road[0]].push((road[1], road[2]));
+        roads[road[1]].push((road[0], road[2]));
+    }
+    let mut reached = Vec.filled(n + 1, false);
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, 1));
+    let mut total = 0;
+    let mut count = 0;
+    while let Some((cost, city)) = queue.pop() {
+        if reached[city] {
+            continue;
+        }
+        reached[city] = true;
+        total += cost;
+        count += 1;
+        for (next, c) in roads[city].iter() {
+            if not reached[next] {
+                queue.push((c, next));
+            }
+        }
+    }
+    if count == n { total } else { -1 }
+}
+
+// ---- minimum_cost_boruvka.kara ----
+
+fn a2_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn a2_minimum_cost(n: i64, connections: Vec[Vec[i64]]) -> i64 {
+    let mut parent: Vec[i64] = (0..n + 1).collect();
+    let mut parts = n;
+    let mut total = 0;
+    loop {
+        let mut cheapest = Vec.filled(n + 1, -1);
+        for i in 0..connections.len() {
+            let road = ref connections[i];
+            let a = a2_find(mut parent, road[0]);
+            let b = a2_find(mut parent, road[1]);
+            if a == b {
+                continue;
+            }
+            for p in [a, b] {
+                let best = cheapest[p];
+                if best == -1 or road[2] < connections[best][2] {
+                    cheapest[p] = i;
+                }
+            }
+        }
+        let mut merged = false;
+        for p in 1..n + 1 {
+            if cheapest[p] == -1 {
+                continue;
+            }
+            let road = ref connections[cheapest[p]];
+            let a = a2_find(mut parent, road[0]);
+            let b = a2_find(mut parent, road[1]);
+            if a != b {
+                parent[a] = b;
+                total += road[2];
+                parts -= 1;
+                merged = true;
+            }
+        }
+        if not merged {
+            break;
+        }
+    }
+    if parts == 1 { total } else { -1 }
+}
+
+// ---- minimum_cost_labels.kara ----
+
+fn a3_minimum_cost(n: i64, connections: Vec[Vec[i64]]) -> i64 {
+    let mut roads = connections.clone();
+    roads.sort_by_key(|road| road[2]);
+    let mut label: Vec[i64] = (0..n + 1).collect();
+    let mut members: Vec[Vec[i64]] = (0..n + 1).map(|i| [i]).collect();
+    let mut total = 0;
+    let mut parts = n;
+    for road in roads.iter() {
+        let mut a = label[road[0]];
+        let mut b = label[road[1]];
+        if a == b {
+            continue;
+        }
+        if members[a].len() < members[b].len() {
+            let t = a;
+            a = b;
+            b = t;
+        }
+        let moved = members[b].clone();
+        members[b].clear();
+        for city in moved.iter() {
+            label[city] = a;
+            members[a].push(city);
+        }
+        total += road[2];
+        parts -= 1;
+    }
+    if parts == 1 { total } else { -1 }
+}
+
+// ---- minimum_cost_solution.kara ----
+
+struct A4UnionFind {
+    parent: Vec[i64],
+    rank: Vec[i64],
+}
+
+impl A4UnionFind {
+    fn new(n: i64) -> Self {
+        A4UnionFind { parent: (0..n).collect(), rank: Vec.filled(n, 0) }
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        if self.parent[x] != x {
+            self.parent[x] = self.find(self.parent[x]);
+        }
+        self.parent[x]
+    }
+
+    fn union(mut ref self, x: i64, y: i64) -> bool {
+        let (rx, ry) = (self.find(x), self.find(y));
+        if rx == ry {
+            return false;
+        }
+        if self.rank[rx] < self.rank[ry] {
+            self.parent[rx] = ry;
+        } else if self.rank[rx] > self.rank[ry] {
+            self.parent[ry] = rx;
+        } else {
+            self.parent[ry] = rx;
+            self.rank[rx] += 1;
+        }
+        true
+    }
+}
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_minimum_cost(n: i32, connections: own Vec[Vec[i32]]) -> i32 {
+        let mut connections = connections;
+        connections.sort_by_key(|c| c[2]);
+        let mut uf = A4UnionFind.new(n as i64 + 1);
+        let mut cost: i32 = 0;
+        let mut edges = 0;
+        for c in connections.iter() {
+            if uf.union(c[0], c[1]) {
+                cost += c[2];
+                edges += 1;
+                if edges == n - 1 {
+                    return cost;
+                }
+            }
+        }
+        if edges == n - 1 { cost } else { -1 }
+    }
+}
+
+fn a4_minimum_cost(n: i64, connections: Vec[Vec[i64]]) -> i64 {
+    let cs: Vec[Vec[i32]] = connections
+        .iter()
+        .map(|c| c.iter().map(|v| v as i32).collect())
+        .collect();
+    A4Solution.a4_minimum_cost(n as i32, cs)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, n: i64, roads: Vec[Vec[i64]]) -> i64 {
+    match which {
+        0 => a0_minimum_cost(n, roads),
+        1 => a1_minimum_cost(n, roads),
+        2 => a2_minimum_cost(n, roads),
+        3 => a3_minimum_cost(n, roads),
+        _ => a4_minimum_cost(n, roads),
+    }
+}
+
+// The statement read literally: every set of roads that connects all the
+// cities, and the least cost among them, or -1 when there is none. A set
+// is chosen by the bits of `mask`, and it connects the cities when a walk
+// from city 1 along its roads reaches every city.
+fn literal(n: i64, roads: Vec[Vec[i64]]) -> i64 {
+    let m = roads.len();
+    let mut best = -1;
+    for mask in 0..(1 << m) {
+        let mut cost = 0;
+        for i in 0..m {
+            if (mask >> i) & 1 == 1 {
+                cost += roads[i][2];
+            }
+        }
+        if best != -1 and cost >= best {
+            continue;
+        }
+        let mut reached = Vec.filled(n + 1, false);
+        reached[1] = true;
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for i in 0..m {
+                if (mask >> i) & 1 == 1 and reached[roads[i][0]] != reached[roads[i][1]] {
+                    reached[roads[i][0]] = true;
+                    reached[roads[i][1]] = true;
+                    grew = true;
+                }
+            }
+        }
+        if (1..n + 1).all(|c| reached[c]) {
+            best = cost;
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn road(seed: mut ref i64, lo: i64, hi: i64, top: i64) -> Vec[i64] {
+    // a road between two different cities from `lo` to `hi`
+    let x = lo + next_random(mut seed) % (hi - lo + 1);
+    let mut y = lo + next_random(mut seed) % (hi - lo);
+    if y >= x {
+        y += 1;
+    }
+    [x, y, next_random(mut seed) % top + 1]
+}
+
+// `n` cities and 1 to 8 roads: costs from 1 to 100; from 1 to 3, so many
+// tie; all 5; a random tree with costs to 20 and up to 3 roads more; or
+// two parts with no road between them.
+fn problem(seed: mut ref i64, kind: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut roads: Vec[Vec[i64]] = [];
+    if kind == 3 {
+        for i in 2..n + 1 {
+            let parent = next_random(mut seed) % (i - 1) + 1;
+            roads.push([i, parent, next_random(mut seed) % 20 + 1]);
+        }
+        let extra = next_random(mut seed) % 4;
+        for _ in 0..extra {
+            roads.push(road(mut seed, 1, n, 20));
+        }
+        return roads;
+    }
+    let m = next_random(mut seed) % 8 + 1;
+    for _ in 0..m {
+        roads.push(match kind {
+            0 => road(mut seed, 1, n, 100),
+            1 => road(mut seed, 1, n, 3),
+            2 => {
+                let mut r = road(mut seed, 1, n, 1);
+                r[2] = 5;
+                r
+            }
+            _ => {
+                // cities 1 and 2 in one part, the rest in the other
+                if n == 3 or next_random(mut seed) % 2 == 0 { road(mut seed, 1, 2, 50) } else { road(mut seed, 3, n, 50) }
+            }
+        });
+    }
+    roads
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, n: i64, roads: Vec[Vec[i64]], names: Vec[i64], copy: i64, extra: i64) {
+    let want = literal(n, roads);
+    for w in 0..5 {
+        let answer = arm(w, n, roads);
+        let what = f"arm {w}, case {t.cases} {n}, {roads} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: the roads listed in reverse give the same answer
+        let rev: Vec[Vec[i64]] = roads.iter().rev().cloned().collect();
+        let r = arm(w, n, rev);
+        expect(mut t, 2, r == answer, f"P2 {what}, reversed {r}");
+        // P3: each road's two ends swapped give the same answer
+        let turned: Vec[Vec[i64]] = roads.iter().map(|road| [road[1], road[0], road[2]]).collect();
+        let s = arm(w, n, turned);
+        expect(mut t, 3, s == answer, f"P3 {what}, ends swapped {s}");
+        // P4: every cost doubled doubles the answer
+        let doubled: Vec[Vec[i64]] = roads.iter().map(|road| [road[0], road[1], 2 * road[2]]).collect();
+        let d = arm(w, n, doubled);
+        expect(mut t, 4, d == if answer == -1 { -1 } else { 2 * answer }, f"P4 {what}, doubled {d}");
+        // P5: a dearer copy of one road, added at the front, changes nothing
+        let mut more: Vec[Vec[i64]] = [[roads[copy][0], roads[copy][1], roads[copy][2] + extra]];
+        more.extend(roads.clone());
+        let m = arm(w, n, more);
+        expect(mut t, 5, m == answer, f"P5 {what}, with a dearer copy of road {copy} {m}");
+        // P6: the cities renamed by a drawn order give the same answer
+        let renamed: Vec[Vec[i64]] = roads.iter().map(|road| [names[road[0]], names[road[1]], road[2]]).collect();
+        let g = arm(w, n, renamed);
+        expect(mut t, 6, g == answer, f"P6 {what}, renamed {names} {g}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems of 2 to 6 cities in five kinds, 400 each (two parts
+    // from 3 cities). Every choice, the renaming and the road copied for
+    // P5 and P6 among them, is drawn before any arm answers.
+    let mut seed = 11351;
+    let mut problems: Vec[(i64, Vec[Vec[i64]], Vec[i64], i64, i64)] = [];
+    for i in 0..2000 {
+        let kind = i % 5;
+        let n = if kind == 4 { next_random(mut seed) % 4 + 3 } else { next_random(mut seed) % 5 + 2 };
+        let roads = problem(mut seed, kind, n);
+        let mut names: Vec[i64] = (0..n + 1).collect();
+        for j in (2..n + 1).rev() {
+            let k = next_random(mut seed) % j + 1;
+            names.swap(j, k);
+        }
+        let copy = next_random(mut seed) % roads.len();
+        let extra = next_random(mut seed) % 10 + 1;
+        problems.push((n, roads, names, copy, extra));
+    }
+    for (n, roads, names, copy, extra) in problems.iter() {
+        check_case(mut t, n, roads, names, copy, extra);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
