@@ -36,7 +36,9 @@ fn karac(root: &Path, args: &[&str]) -> (Option<i32>, String) {
 }
 
 fn events(stdout: &str) -> Vec<Value> {
+    // A path's host separator, `\\` in a JSON string on Windows, as `/`.
     stdout
+        .replace("\\\\", "/")
         .lines()
         .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")))
         .collect()

@@ -84,7 +84,8 @@ fn check_refuses_a_borrow_error_in_a_library_package() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!ok, "check must refuse: {out}");
     assert!(
-        out.contains("src/lib.kara:3:5") && out.contains("E0516"),
+        // The host's separator: `src\lib.kara` on Windows.
+        out.replace('\\', "/").contains("src/lib.kara:3:5") && out.contains("E0516"),
         "{out}"
     );
 }

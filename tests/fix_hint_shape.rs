@@ -30,7 +30,8 @@ fn diagnostics(dir: &Path, mode: &str, args: &[&str]) -> Vec<serde_json::Value> 
         .current_dir(dir)
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    // A path's host separator, `\\` in a JSON string on Windows, as `/`.
+    let stdout = String::from_utf8_lossy(&out.stdout).replace("\\\\", "/");
     let mut found = Vec::new();
     for line in stdout.lines().filter(|l| l.starts_with('{')) {
         let v: serde_json::Value =

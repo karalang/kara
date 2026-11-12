@@ -207,8 +207,10 @@ fn a_deprecated_use_through_a_module_binding_points_at_the_name() {
     let carets = "    println(util.old() + util.old());\n  |                  ^^^";
     let second = "    println(util.old() + util.old());\n  |                               ^^^";
     for text in [&out, &build] {
-        assert!(text.contains("src/main.kara:4:18:"), "{text}");
-        assert!(text.contains("src/main.kara:4:31:"), "{text}");
+        // The host's separator: `src\main.kara` on Windows.
+        let slashed = text.replace('\\', "/");
+        assert!(slashed.contains("src/main.kara:4:18:"), "{text}");
+        assert!(slashed.contains("src/main.kara:4:31:"), "{text}");
         assert!(text.contains(carets) && text.contains(second), "{text}");
     }
     assert!(

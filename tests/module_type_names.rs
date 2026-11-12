@@ -97,7 +97,8 @@ fn a_snippet_quotes_the_file_and_moves_its_carets() {
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
-    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    // The host's separator: `src\main.kara` on Windows.
+    let text = String::from_utf8_lossy(&out.stderr).replace('\\', "/");
     assert!(!text.contains("P__"), "{text}");
     // The header's column and the carets are the file's, under `BP { x: 1 }`.
     assert!(
