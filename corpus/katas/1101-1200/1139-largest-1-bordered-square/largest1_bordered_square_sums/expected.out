@@ -1,0 +1,13 @@
+example 1: 9
+example 2: 1
+one 1: 1
+one 0: 0
+all 0: 0
+a column: 1
+solid 3 by 4: 9
+broken border: 4
+a frame of 4 in a broken frame of 7: 25
+2000 random grids: areas total 22972, checksum 443688415
+100 by 100, all 1: 10000
+100 by 100, 90 in 100: 625
+100 by 100, 0 on the diagonal: 2500

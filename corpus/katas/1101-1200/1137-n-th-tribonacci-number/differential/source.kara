@@ -1,0 +1,194 @@
+// LeetCode #1137: N-th Tribonacci Number -- a differential over the
+// five arms. Every n the constraints allow is checked against the
+// statement read literally and against five properties that do not
+// compute the answer; see the README.
+
+// ---- tribonacci.kara ----
+
+fn a0_tribonacci(n: i64) -> i64 {
+    let mut a = 0;
+    let mut b = 1;
+    let mut c = 1;
+    for _ in 0..n {
+        let next = a + b + c;
+        a = b;
+        b = c;
+        c = next;
+    }
+    a
+}
+
+// ---- tribonacci_memo.kara ----
+
+fn a1_trib(n: i64, memo: mut ref Vec[i64]) -> i64 {
+    if memo[n] >= 0 {
+        return memo[n];
+    }
+    let t = a1_trib(n - 1, mut memo) + a1_trib(n - 2, mut memo) + a1_trib(n - 3, mut memo);
+    memo[n] = t;
+    t
+}
+
+fn a1_tribonacci(n: i64) -> i64 {
+    let mut memo = Vec.filled(n.max(2) + 1, -1);
+    memo[0] = 0;
+    memo[1] = 1;
+    memo[2] = 1;
+    a1_trib(n, mut memo)
+}
+
+// ---- tribonacci_table.kara ----
+
+fn a2_tribonacci(n: i64) -> i64 {
+    let mut t: Vec[i64] = [0, 1, 1];
+    while t.len() <= n {
+        let k = t.len();
+        t.push(t[k - 1] + t[k - 2] + t[k - 3]);
+    }
+    t[n]
+}
+
+// ---- tribonacci_matrix.kara ----
+
+fn a3_multiply(x: Array[Array[i64, 3], 3], y: Array[Array[i64, 3], 3]) -> Array[Array[i64, 3], 3] {
+    let mut z = [[0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                z[i][j] += x[i][k] * y[k][j];
+            }
+        }
+    }
+    z
+}
+
+fn a3_tribonacci(n: i64) -> i64 {
+    let mut result: Array[Array[i64, 3], 3] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    let mut step: Array[Array[i64, 3], 3] = [[1, 1, 1], [1, 0, 0], [0, 1, 0]];
+    let mut e = n;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = a3_multiply(result, step);
+        }
+        e /= 2;
+        if e > 0 {
+            step = a3_multiply(step, step);
+        }
+    }
+    result[1][0]
+}
+
+// ---- tribonacci_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_tribonacci(n: i32) -> i32 {
+        let mut t = [0, 1, 1];
+        if n < 3 {
+            return t[n as usize];
+        }
+        for _ in 3..=n {
+            let next = t[0] + t[1] + t[2];
+            t[0] = t[1];
+            t[1] = t[2];
+            t[2] = next;
+        }
+        t[2]
+    }
+}
+
+fn a4_tribonacci(n: i64) -> i64 {
+    A4Solution.a4_tribonacci(n as i32)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, n: i64) -> i64 {
+    match which {
+        0 => a0_tribonacci(n),
+        1 => a1_tribonacci(n),
+        2 => a2_tribonacci(n),
+        3 => a3_tribonacci(n),
+        _ => a4_tribonacci(n),
+    }
+}
+
+// The statement read literally: T(0) = 0, T(1) = 1, T(2) = 1, and each
+// later term the sum of the three before it, every term kept.
+fn literal(n: i64) -> i64 {
+    let mut t: Vec[i64] = [0, 1, 1];
+    while t.len() <= n {
+        let k = t.len();
+        t.push(t[k - 3] + t[k - 2] + t[k - 1]);
+    }
+    t[n]
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_arm(t: mut ref Tally, w: i64) {
+    for n in 0..38 {
+        let answer = arm(w, n);
+        let what = f"arm {w}, T({n}) = {answer}";
+        // P1: the statement read literally
+        let want = literal(n);
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: three terms in a row sum to the next
+        if n + 3 < 38 {
+            let next = arm(w, n + 3);
+            let sum = answer + arm(w, n + 1) + arm(w, n + 2);
+            expect(mut t, 2, next == sum, f"P2 {what}, T({n + 3}) = {next}, three before sum to {sum}");
+        }
+        // P3: no term is smaller than the one before
+        if n + 1 < 38 {
+            let after = arm(w, n + 1);
+            expect(mut t, 3, after >= answer, f"P3 {what}, T({n + 1}) = {after}");
+        }
+        // P4: T(n) is even exactly when n leaves 0 or 3 over 4
+        expect(mut t, 4, (answer % 2 == 0) == (n % 4 == 0 or n % 4 == 3), f"P4 {what}, parity");
+        // P5: T(m + k) = T(m + 1) T(k) + (T(m) + T(m - 1)) T(k - 1) + T(m) T(k - 2)
+        //     for m >= 1 and k >= 2, at every split of n
+        for m in 1..n - 1 {
+            let k = n - m;
+            let split = arm(w, m + 1) * arm(w, k) + (arm(w, m) + arm(w, m - 1)) * arm(w, k - 1) + arm(w, m) * arm(w, k - 2);
+            expect(mut t, 5, split == answer, f"P5 {what}, split {m} + {k} gives {split}");
+        }
+        // P6: over 3 the terms repeat every 13
+        if n + 13 < 38 {
+            let later = arm(w, n + 13);
+            expect(mut t, 6, later % 3 == answer % 3, f"P6 {what}, T({n + 13}) = {later}");
+        }
+        if w == 0 {
+            t.check = (t.check * 31 + want % 1000003) % 1000000007;
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    for w in 0..5 {
+        check_arm(mut t, w);
+    }
+    println(f"38 n from 0 to 37: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

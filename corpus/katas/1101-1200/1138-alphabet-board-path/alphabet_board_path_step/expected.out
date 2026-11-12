@@ -1,0 +1,20 @@
+leet -> length 15, spells it: DDR!UURRR!!DDD!
+code -> length 14, spells it: RR!DDRR!UUL!R!
+a -> length 1, spells it: !
+e -> length 5, spells it: RRRR!
+z -> length 6, spells it: DDDDD!
+zz -> length 7, spells it: DDDDD!!
+za -> length 12, spells it: DDDDD!UUUUU!
+az -> length 7, spells it: !DDDDD!
+zdz -> length 24, spells it: DDDDD!UUUUURRR!LLLDDDDD!
+yz -> length 15, spells it: DDDDRRRR!LLLLD!
+zy -> length 12, spells it: DDDDD!URRRR!
+uzu -> length 9, spells it: DDDD!D!U!
+zez -> length 26, spells it: DDDDD!UUUUURRRR!LLLLDDDDD!
+abcdefghijklmnopqrstuvwxyz -> length 71, spells it: !R!R!R!R!LLLLD!R!R!R!R!LLLLD!R!R!R!R!LLLLD!R!R!R!R!LLLLD!R!R!R!R!LLLLD!
+zyxwvutsrqponmlkjihgfedcba -> length 76, spells it: DDDDD!URRRR!L!L!L!L!URRRR!L!L!L!L!URRRR!L!L!L!L!URRRR!L!L!L!L!URRRR!L!L!L!L!
+2000 random targets: lengths total 437268, 0 wrong, checksum 869572194
+100 letters from zz: length 105, spells it true
+100 letters from az: length 595, spells it true
+100 letters from ez: length 995, spells it true
+100 letters from ya: length 900, spells it true

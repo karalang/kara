@@ -1,0 +1,377 @@
+// LeetCode #1138: Alphabet Board Path -- a differential over the five
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- alphabet_board_path.kara ----
+
+fn a0_alphabet_board_path(target: String) -> String {
+    let mut path = String.new();
+    let mut row = 0;
+    let mut col = 0;
+    for c in target.chars() {
+        let k = c as i64 - 'a' as i64;
+        let (r, k_col) = (k / 5, k % 5);
+        path.push_str("U".repeat((row - r).max(0)));
+        path.push_str("L".repeat((col - k_col).max(0)));
+        path.push_str("D".repeat((r - row).max(0)));
+        path.push_str("R".repeat((k_col - col).max(0)));
+        path.push('!');
+        row = r;
+        col = k_col;
+    }
+    path
+}
+
+// ---- alphabet_board_path_bfs.kara ----
+
+// A a1_cell's letter number, row * 5 + column, if the board has that a1_cell.
+fn a1_cell(row: i64, col: i64) -> Option[i64] {
+    if row < 0 or col < 0 or col >= 5 or row * 5 + col >= 26 {
+        None
+    } else {
+        Some(row * 5 + col)
+    }
+}
+
+fn a1_shortest(from: i64, to: i64) -> String {
+    let steps = [(-1, 0, 'U'), (0, -1, 'L'), (1, 0, 'D'), (0, 1, 'R')];
+    let mut came_from = Vec.filled(26, -1);
+    let mut how = Vec.filled(26, '!');
+    let mut queue = [from];
+    came_from[from] = from;
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        for (dr, dc, name) in steps.iter() {
+            if let Some(next) = a1_cell(at / 5 + dr, at % 5 + dc) {
+                if came_from[next] == -1 {
+                    came_from[next] = at;
+                    how[next] = name;
+                    queue.push(next);
+                }
+            }
+        }
+    }
+    let mut back: Vec[char] = [];
+    let mut at = to;
+    while at != from {
+        back.push(how[at]);
+        at = came_from[at];
+    }
+    back.iter().rev().collect()
+}
+
+fn a1_alphabet_board_path(target: String) -> String {
+    let mut path = String.new();
+    let mut at = 0;
+    for c in target.chars() {
+        let to = c as i64 - 'a' as i64;
+        path.push_str(a1_shortest(at, to));
+        path.push('!');
+        at = to;
+    }
+    path
+}
+
+// ---- alphabet_board_path_find.kara ----
+
+fn a2_alphabet_board_path(target: String) -> String {
+    let board = ["abcde", "fghij", "klmno", "pqrst", "uvwxy", "z"];
+    let mut path = String.new();
+    let mut row = 0;
+    let mut col = 0;
+    for c in target.chars() {
+        for (r, line) in board.iter().enumerate() {
+            if let Some(k) = line.chars().position(|x| x == c) {
+                path.push_str("L".repeat((col - k).max(0)));
+                path.push_str("U".repeat((row - r).max(0)));
+                path.push_str("R".repeat((k - col).max(0)));
+                path.push_str("D".repeat((r - row).max(0)));
+                row = r;
+                col = k;
+            }
+        }
+        path.push('!');
+    }
+    path
+}
+
+// ---- alphabet_board_path_step.kara ----
+
+fn a3_alphabet_board_path(target: String) -> String {
+    let mut path = String.new();
+    let mut row = 0;
+    let mut col = 0;
+    for c in target.chars() {
+        let k = c as i64 - 'a' as i64;
+        let want_row = k / 5;
+        let want_col = k % 5;
+        while row != want_row or col != want_col {
+            if row > want_row {
+                path.push('U');
+                row -= 1;
+            } else if col > want_col {
+                path.push('L');
+                col -= 1;
+            } else if col < want_col {
+                path.push('R');
+                col += 1;
+            } else {
+                path.push('D');
+                row += 1;
+            }
+        }
+        path.push('!');
+    }
+    path
+}
+
+// ---- alphabet_board_path_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_alphabet_board_path(target: String) -> String {
+        let mut res = String.new();
+        let mut (x, y) = (0i32, 0i32);
+        for b in target.bytes() {
+            let idx = (b - b'a') as i32;
+            let (nx, ny) = (idx / 5, idx % 5);
+            while y > ny {
+                res.push('L');
+                y -= 1;
+            }
+            while x > nx {
+                res.push('U');
+                x -= 1;
+            }
+            while x < nx {
+                res.push('D');
+                x += 1;
+            }
+            while y < ny {
+                res.push('R');
+                y += 1;
+            }
+            res.push('!');
+        }
+        res
+    }
+}
+
+fn a4_alphabet_board_path(target: String) -> String {
+    A4Solution.a4_alphabet_board_path(target)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, target: String) -> String {
+    match which {
+        0 => a0_alphabet_board_path(target),
+        1 => a1_alphabet_board_path(target),
+        2 => a2_alphabet_board_path(target),
+        3 => a3_alphabet_board_path(target),
+        _ => a4_alphabet_board_path(target),
+    }
+}
+
+fn board() -> Vec[Vec[char]] {
+    ["abcde", "fghij", "klmno", "pqrst", "uvwxy", "z"].iter().map(|r| r.chars().collect()).collect()
+}
+
+// The statement read literally: the fewest moves that, starting at `a`,
+// type the target, by breadth-first search over every place on the board
+// paired with how many letters are typed so far. A move is U, D, L or R
+// onto a cell of the board, or ! where the cell's letter is the next one
+// to type.
+fn literal(target: String) -> i64 {
+    let board = board();
+    let want: Vec[char] = target.chars().collect();
+    let n = want.len();
+    let mut dist = Vec.filled(30 * (n + 1), -1);
+    let mut queue = [(0, 0, 0)];
+    dist[0] = 0;
+    let mut head = 0;
+    while head < queue.len() {
+        let (r, c, k) = queue[head];
+        head += 1;
+        let d = dist[(r * 5 + c) * (n + 1) + k];
+        if k == n {
+            return d;
+        }
+        let mut next: Vec[(i64, i64, i64)] = [(r - 1, c, k), (r + 1, c, k), (r, c - 1, k), (r, c + 1, k)];
+        if board[r][c] == want[k] {
+            next.push((r, c, k + 1));
+        }
+        for (nr, nc, nk) in next.iter() {
+            if nr >= 0 and nr < board.len() and nc >= 0 and nc < board[nr].len() {
+                let at = (nr * 5 + nc) * (n + 1) + nk;
+                if dist[at] == -1 {
+                    dist[at] = d + 1;
+                    queue.push((nr, nc, nk));
+                }
+            }
+        }
+    }
+    -1
+}
+
+// What `path` spells walking the board from `a`, or why it cannot.
+fn walk(path: String) -> String {
+    let board = board();
+    let mut row = 0;
+    let mut col = 0;
+    let mut spelled = String.new();
+    for m in path.chars() {
+        match m {
+            'U' => row -= 1,
+            'D' => row += 1,
+            'L' => col -= 1,
+            'R' => col += 1,
+            '!' => spelled.push(board[row][col]),
+            _ => return f"a move '{m}'",
+        }
+        if row < 0 or row >= board.len() or col < 0 or col >= board[row].len() {
+            return f"off the board at row {row}, column {col}";
+        }
+    }
+    spelled
+}
+
+// Whether some letter's moves go both up and down, or both left and right.
+fn backtracks(path: String) -> bool {
+    let mut seen = [false, false, false, false];
+    for m in path.chars() {
+        match m {
+            'U' => seen[0] = true,
+            'D' => seen[1] = true,
+            'L' => seen[2] = true,
+            'R' => seen[3] = true,
+            _ => {
+                if (seen[0] and seen[1]) or (seen[2] and seen[3]) {
+                    return true;
+                }
+                seen = [false, false, false, false];
+            }
+        }
+    }
+    false
+}
+
+// How many moves come before and with the `k`th !.
+fn through_bang(path: String, k: i64) -> i64 {
+    let mut bangs = 0;
+    for (i, m) in path.chars().enumerate() {
+        if m == '!' {
+            bangs += 1;
+            if bangs == k {
+                return i + 1;
+            }
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1 to 10 letters: any letters; letters from the corners and the cells
+// around `z`; `z` half the time; or runs of 1 to 3 of one letter.
+fn problem(seed: mut ref i64, kind: i64) -> String {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let edge: Vec[char] = "aeuvyzt".chars().collect();
+    let len = next_random(mut seed) % 10 + 1;
+    let mut target = String.new();
+    while target.len() < len {
+        let c = if kind == 1 {
+            edge[next_random(mut seed) % edge.len()]
+        } else if kind == 2 and next_random(mut seed) % 2 == 0 {
+            'z'
+        } else {
+            letters[next_random(mut seed) % 26]
+        };
+        let run = if kind == 3 { next_random(mut seed) % 3 + 1 } else { 1 };
+        for _ in 0..run.min(len - target.len()) {
+            target.push(c);
+        }
+    }
+    target
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, target: String, cut: i64) {
+    let want = literal(target.clone());
+    let doubled: String = target.chars().flat_map(|c| [c, c].into_iter()).collect();
+    let rounded = f"a{target}a";
+    let back: String = rounded.chars().rev().collect();
+    let prefix: String = target.chars().take(cut).collect();
+    for w in 0..5 {
+        let path = arm(w, target.clone());
+        let what = f"arm {w}, case {t.cases} {target} -> {path}";
+        // P1: the statement read literally: the path types the target, on
+        // the board, in the fewest moves
+        let spelled = walk(path.clone());
+        expect(mut t, 1, spelled == target and path.len() == want, f"P1 {what}, spells {spelled}, literally {want} moves");
+        // P2: each letter typed twice is typed, with one ! more per letter
+        let d = arm(w, doubled.clone());
+        expect(mut t, 2, walk(d.clone()) == doubled and d.len() == path.len() + target.len(), f"P2 {what}, doubled {d}");
+        // P3: an `a` typed first is typed, with one move more
+        let a = arm(w, f"a{target}");
+        expect(mut t, 3, walk(a.clone()) == f"a{target}" and a.len() == path.len() + 1, f"P3 {what}, after an a {a}");
+        // P4: a prefix takes as many moves as the path up to its last !
+        let p = arm(w, prefix.clone());
+        expect(mut t, 4, p.len() == through_bang(path.clone(), cut), f"P4 {what}, prefix {prefix} {p}");
+        // P5: no letter's moves go both ways along a row or a column
+        expect(mut t, 5, not backtracks(path.clone()), f"P5 {what}, backtracks");
+        // P6: between two `a`s, the target and the target backwards are
+        // typed in as many moves
+        let r = arm(w, rounded.clone());
+        let b = arm(w, back.clone());
+        expect(mut t, 6, walk(r.clone()) == rounded and walk(b.clone()) == back and r.len() == b.len(), f"P6 {what}, {rounded} {r}, {back} {b}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 targets of 1 to 10 letters in four kinds, 500 each. Every
+    // choice, the prefix length for P4 among them, is drawn before any
+    // arm answers.
+    let mut seed = 11381;
+    let mut problems: Vec[(String, i64)] = [];
+    for i in 0..2000 {
+        let target = problem(mut seed, i % 4);
+        let cut = next_random(mut seed) % target.len() + 1;
+        problems.push((target, cut));
+    }
+    for (target, cut) in problems.iter() {
+        check_case(mut t, target.clone(), cut);
+    }
+    println(f"{t.cases} targets: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

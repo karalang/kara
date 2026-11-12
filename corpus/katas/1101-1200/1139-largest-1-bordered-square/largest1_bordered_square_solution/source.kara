@@ -1,0 +1,117 @@
+// LeetCode #1139: Largest 1-Bordered Square -- a Rust solution as
+// LeetCode's Rust users write it (`impl Solution`, `grid: Vec<Vec<i32>>`,
+// `vec![vec![0; n + 1]; m + 1]` tables of runs indexed from 1, `as usize`
+// lengths, `std::cmp::min` and a `for k in (1..=..).rev()` scan), carried
+// to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn largest1_bordered_square(grid: Vec[Vec[i32]]) -> i32 {
+        let m = grid.len();
+        let n = grid[0].len();
+        let mut left = Vec.filled(m + 1, Vec.filled(n + 1, 0i32));
+        let mut up = Vec.filled(m + 1, Vec.filled(n + 1, 0));
+        let mut res: i32 = 0;
+        for i in 1..=m {
+            for j in 1..=n {
+                if grid[i - 1][j - 1] == 1 {
+                    left[i][j] = left[i][j - 1] + 1;
+                    up[i][j] = up[i - 1][j] + 1;
+                    let max_k = min(left[i][j], up[i][j]);
+                    for k in (1..=max_k).rev() {
+                        if k <= res {
+                            break;
+                        }
+                        if left[i - k + 1][j] >= k and up[i][j - k + 1] >= k {
+                            res = k;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        res * res
+    }
+}
+
+fn largest1_bordered_square(grid: Vec[Vec[i64]]) -> i64 {
+    let g: Vec[Vec[i32]] = grid.iter().map(|r| r.iter().map(|x| x as i32).collect()).collect();
+    Solution.largest1_bordered_square(g)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `rows` by `cols`, each cell 1 with probability `ones` in 100.
+fn random_grid(seed: mut ref i64, rows: i64, cols: i64, ones: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = [];
+    for _ in 0..rows {
+        let row: Vec[i64] = (0..cols).map(|_| if next_random(mut seed) % 100 < ones { 1 } else { 0 }).collect();
+        grid.push(row);
+    }
+    grid
+}
+
+// A `size` by `size` frame of 1s, its corner at (`top`, `left`), drawn on `grid`.
+fn frame(grid: mut ref Vec[Vec[i64]], top: i64, left: i64, size: i64) {
+    for k in 0..size {
+        grid[top][left + k] = 1;
+        grid[top + size - 1][left + k] = 1;
+        grid[top + k][left] = 1;
+        grid[top + k][left + size - 1] = 1;
+    }
+}
+
+fn main() {
+    // LeetCode's two examples
+    println(f"example 1: {largest1_bordered_square([[1, 1, 1], [1, 0, 1], [1, 1, 1]])}");
+    println(f"example 2: {largest1_bordered_square([[1, 1, 0, 0]])}");
+    // one cell; no 1 at all; a column; a solid block; a block with a hole
+    // in its border; a frame inside a bigger broken one
+    println(f"one 1: {largest1_bordered_square([[1]])}");
+    println(f"one 0: {largest1_bordered_square([[0]])}");
+    println(f"all 0: {largest1_bordered_square([[0, 0, 0], [0, 0, 0]])}");
+    println(f"a column: {largest1_bordered_square([[1], [1], [1]])}");
+    println(f"solid 3 by 4: {largest1_bordered_square([[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]])}");
+    println(f"broken border: {largest1_bordered_square([[1, 1, 1], [1, 1, 0], [1, 1, 1]])}");
+    let mut nested: Vec[Vec[i64]] = (0..7).map(|_| Vec.filled(7, 0)).collect();
+    frame(mut nested, 0, 0, 7);
+    nested[6][3] = 0;
+    frame(mut nested, 1, 2, 4);
+    println(f"a frame of 4 in a broken frame of 7: {largest1_bordered_square(nested)}");
+    // 2000 random grids of 1 to 12 rows and columns, each cell 1 with
+    // probability 50, 70 or 90 in 100, every fourth with a frame drawn on it:
+    // the areas summed and a checksum
+    let mut seed = 1139;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let rows = next_random(mut seed) % 12 + 1;
+        let cols = next_random(mut seed) % 12 + 1;
+        let ones = [50, 70, 90][i % 3];
+        let mut grid = random_grid(mut seed, rows, cols, ones);
+        if i % 4 == 3 {
+            let size = next_random(mut seed) % rows.min(cols) + 1;
+            let top = next_random(mut seed) % (rows - size + 1);
+            let left = next_random(mut seed) % (cols - size + 1);
+            frame(mut grid, top, left, size);
+        }
+        let area = largest1_bordered_square(grid);
+        total += area;
+        check = (check * 131 + area + 1) % 1000000007;
+    }
+    println(f"2000 random grids: areas total {total}, checksum {check}");
+    // the largest the constraints allow, 100 by 100: all 1s; 1 in 90 of
+    // 100 cells; and 0s on the diagonal
+    let ones: Vec[Vec[i64]] = (0..100).map(|_| Vec.filled(100, 1)).collect();
+    println(f"100 by 100, all 1: {largest1_bordered_square(ones)}");
+    let dense = random_grid(mut seed, 100, 100, 90);
+    println(f"100 by 100, 90 in 100: {largest1_bordered_square(dense)}");
+    let diagonal: Vec[Vec[i64]] = (0..100).map(|i| (0..100).map(|j| if i == j { 0 } else { 1 }).collect()).collect();
+    println(f"100 by 100, 0 on the diagonal: {largest1_bordered_square(diagonal)}");
+}

@@ -1,0 +1,345 @@
+// LeetCode #1139: Largest 1-Bordered Square -- a differential over the five
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- largest1_bordered_square.kara ----
+
+fn a0_largest1_bordered_square(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut left: Vec[Vec[i64]] = (0..rows).map(|_| Vec.filled(cols, 0)).collect();
+    let mut up: Vec[Vec[i64]] = (0..rows).map(|_| Vec.filled(cols, 0)).collect();
+    for i in 0..rows {
+        for j in 0..cols {
+            if grid[i][j] == 1 {
+                left[i][j] = if j > 0 { left[i][j - 1] + 1 } else { 1 };
+                up[i][j] = if i > 0 { up[i - 1][j] + 1 } else { 1 };
+            }
+        }
+    }
+    let mut best = 0;
+    for i in 0..rows {
+        for j in 0..cols {
+            let mut k = left[i][j].min(up[i][j]);
+            while k > best {
+                if left[i - k + 1][j] >= k and up[i][j - k + 1] >= k {
+                    best = k;
+                }
+                k -= 1;
+            }
+        }
+    }
+    best * best
+}
+
+// ---- largest1_bordered_square_brute.kara ----
+
+fn a1_border_is_ones(grid: Vec[Vec[i64]], top: i64, left: i64, side: i64) -> bool {
+    for k in 0..side {
+        if grid[top][left + k] == 0 or grid[top + side - 1][left + k] == 0 {
+            return false;
+        }
+        if grid[top + k][left] == 0 or grid[top + k][left + side - 1] == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn a1_largest1_bordered_square(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    for side in (1..rows.min(cols) + 1).rev() {
+        for top in 0..rows - side + 1 {
+            for left in 0..cols - side + 1 {
+                if a1_border_is_ones(grid, top, left, side) {
+                    return side * side;
+                }
+            }
+        }
+    }
+    0
+}
+
+// ---- largest1_bordered_square_sums.kara ----
+
+fn a2_largest1_bordered_square(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    // across[i][j]: the 1s in row i before column j; down[i][j]: the 1s
+    // in column j above row i
+    let mut across: Vec[Vec[i64]] = (0..rows).map(|_| Vec.filled(cols + 1, 0)).collect();
+    let mut down: Vec[Vec[i64]] = (0..rows + 1).map(|_| Vec.filled(cols, 0)).collect();
+    for i in 0..rows {
+        for j in 0..cols {
+            across[i][j + 1] = across[i][j] + grid[i][j];
+            down[i + 1][j] = down[i][j] + grid[i][j];
+        }
+    }
+    let mut best = 0;
+    for top in 0..rows {
+        for left in 0..cols {
+            let mut side = (rows - top).min(cols - left);
+            while side > best {
+                let bottom = top + side - 1;
+                let right = left + side - 1;
+                if across[top][right + 1] - across[top][left] == side
+                    and across[bottom][right + 1] - across[bottom][left] == side
+                    and down[bottom + 1][left] - down[top][left] == side
+                    and down[bottom + 1][right] - down[top][right] == side
+                {
+                    best = side;
+                }
+                side -= 1;
+            }
+        }
+    }
+    best * best
+}
+
+// ---- largest1_bordered_square_corner.kara ----
+
+fn a3_largest1_bordered_square(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut right = Vec.filled(rows + 1, Vec.filled(cols + 1, 0));
+    let mut below = Vec.filled(rows + 1, Vec.filled(cols + 1, 0));
+    for i in (0..rows).rev() {
+        for j in (0..cols).rev() {
+            if grid[i][j] == 1 {
+                right[i][j] = right[i][j + 1] + 1;
+                below[i][j] = below[i + 1][j] + 1;
+            }
+        }
+    }
+    let mut best = 0;
+    for i in 0..rows {
+        for j in 0..cols {
+            for side in (best + 1..right[i][j].min(below[i][j]) + 1).rev() {
+                if below[i][j + side - 1] >= side and right[i + side - 1][j] >= side {
+                    best = side;
+                    break;
+                }
+            }
+        }
+    }
+    best * best
+}
+
+// ---- largest1_bordered_square_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_largest1_bordered_square(grid: Vec[Vec[i32]]) -> i32 {
+        let m = grid.len();
+        let n = grid[0].len();
+        let mut left = Vec.filled(m + 1, Vec.filled(n + 1, 0i32));
+        let mut up = Vec.filled(m + 1, Vec.filled(n + 1, 0));
+        let mut res: i32 = 0;
+        for i in 1..=m {
+            for j in 1..=n {
+                if grid[i - 1][j - 1] == 1 {
+                    left[i][j] = left[i][j - 1] + 1;
+                    up[i][j] = up[i - 1][j] + 1;
+                    let max_k = min(left[i][j], up[i][j]);
+                    for k in (1..=max_k).rev() {
+                        if k <= res {
+                            break;
+                        }
+                        if left[i - k + 1][j] >= k and up[i][j - k + 1] >= k {
+                            res = k;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        res * res
+    }
+}
+
+fn a4_largest1_bordered_square(grid: Vec[Vec[i64]]) -> i64 {
+    let g: Vec[Vec[i32]] = grid.iter().map(|r| r.iter().map(|x| x as i32).collect()).collect();
+    A4Solution.a4_largest1_bordered_square(g)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, grid: Vec[Vec[i64]]) -> i64 {
+    match which {
+        0 => a0_largest1_bordered_square(grid),
+        1 => a1_largest1_bordered_square(grid),
+        2 => a2_largest1_bordered_square(grid),
+        3 => a3_largest1_bordered_square(grid),
+        _ => a4_largest1_bordered_square(grid),
+    }
+}
+
+// The statement read literally: of every square of the grid, the largest
+// area of one whose border cells, walked round from its top-left corner,
+// are all 1, or 0 when none is.
+fn literal(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut best = 0;
+    for top in 0..rows {
+        for left in 0..cols {
+            for side in 1..(rows - top).min(cols - left) + 1 {
+                let mut border: Vec[(i64, i64)] = [];
+                for k in 0..side {
+                    border.push((top, left + k));
+                }
+                for k in 1..side {
+                    border.push((top + k, left + side - 1));
+                }
+                for k in 1..side {
+                    border.push((top + side - 1, left + side - 1 - k));
+                }
+                for k in 1..side - 1 {
+                    border.push((top + side - 1 - k, left));
+                }
+                if border.iter().all(|(r, c)| grid[r][c] == 1) {
+                    best = best.max(side * side);
+                }
+            }
+        }
+    }
+    best
+}
+
+fn transpose(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    (0..grid[0].len()).map(|j| (0..grid.len()).map(|i| grid[i][j]).collect()).collect()
+}
+
+fn mirror(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    grid.iter().map(|row| row.iter().rev().cloned().collect()).collect()
+}
+
+fn padded(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let cols = grid[0].len();
+    let mut out: Vec[Vec[i64]] = [Vec.filled(cols + 2, 0)];
+    for row in grid.iter() {
+        let mut r = [0];
+        r.extend(row.clone());
+        r.push(0);
+        out.push(r);
+    }
+    out.push(Vec.filled(cols + 2, 0));
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1 to 8 rows and columns: cells 1 with probability 50, 75 or 90 in 100;
+// a frame of 1s drawn on a sparse grid; the same with one cell of the
+// frame cleared; or every cell 1.
+fn problem(seed: mut ref i64, kind: i64) -> Vec[Vec[i64]] {
+    let rows = next_random(mut seed) % 8 + 1;
+    let cols = next_random(mut seed) % 8 + 1;
+    let ones = if kind == 0 { [50, 75, 90][next_random(mut seed) % 3] } else if kind == 3 { 100 } else { 30 };
+    let mut grid: Vec[Vec[i64]] = [];
+    for _ in 0..rows {
+        let row: Vec[i64] = (0..cols).map(|_| if next_random(mut seed) % 100 < ones { 1 } else { 0 }).collect();
+        grid.push(row);
+    }
+    if kind == 1 or kind == 2 {
+        let side = next_random(mut seed) % rows.min(cols) + 1;
+        let top = next_random(mut seed) % (rows - side + 1);
+        let left = next_random(mut seed) % (cols - side + 1);
+        for k in 0..side {
+            grid[top][left + k] = 1;
+            grid[top + side - 1][left + k] = 1;
+            grid[top + k][left] = 1;
+            grid[top + k][left + side - 1] = 1;
+        }
+        if kind == 2 {
+            let k = next_random(mut seed) % side;
+            match next_random(mut seed) % 4 {
+                0 => grid[top][left + k] = 0,
+                1 => grid[top + side - 1][left + k] = 0,
+                2 => grid[top + k][left] = 0,
+                _ => grid[top + k][left + side - 1] = 0,
+            }
+        }
+    }
+    grid
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, grid: Vec[Vec[i64]], cell: (i64, i64)) {
+    let want = literal(grid);
+    let (ci, cj) = cell;
+    let mut set = grid.clone();
+    set[ci][cj] = 1;
+    let mut cleared = grid.clone();
+    cleared[ci][cj] = 0;
+    let flipped: Vec[Vec[i64]] = grid.iter().rev().cloned().collect();
+    for w in 0..5 {
+        let answer = arm(w, grid.clone());
+        let what = f"arm {w}, case {t.cases} {grid} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: the grid transposed gives the same answer
+        let tr = arm(w, transpose(grid.clone()));
+        expect(mut t, 2, tr == answer, f"P2 {what}, transposed {tr}");
+        // P3: each row reversed gives the same answer
+        let m = arm(w, mirror(grid.clone()));
+        expect(mut t, 3, m == answer, f"P3 {what}, mirrored {m}");
+        // P4: the rows in reverse order give the same answer
+        let f = arm(w, flipped.clone());
+        expect(mut t, 4, f == answer, f"P4 {what}, upside down {f}");
+        // P5: a ring of 0s round the grid gives the same answer
+        let p = arm(w, padded(grid.clone()));
+        expect(mut t, 5, p == answer, f"P5 {what}, padded {p}");
+        // P6: a drawn cell set to 1 gives no smaller answer, and set to 0
+        // no larger
+        let up = arm(w, set.clone());
+        let down = arm(w, cleared.clone());
+        expect(mut t, 6, up >= answer and down <= answer, f"P6 {what}, cell {cell} set {up}, cleared {down}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 grids of 1 to 8 rows and columns in four kinds, 500 each. Every
+    // choice, the cell for P6 among them, is drawn before any arm answers.
+    let mut seed = 11391;
+    let mut problems: Vec[(Vec[Vec[i64]], (i64, i64))] = [];
+    for i in 0..2000 {
+        let grid = problem(mut seed, i % 4);
+        let cell = (next_random(mut seed) % grid.len(), next_random(mut seed) % grid[0].len());
+        problems.push((grid, cell));
+    }
+    for (grid, cell) in problems.iter() {
+        check_case(mut t, grid.clone(), cell);
+    }
+    println(f"{t.cases} grids: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,56 @@
+// LeetCode #1137: N-th Tribonacci Number -- a Rust solution as LeetCode's
+// Rust users write it (`impl Solution`, `n: i32`, a `[0, 1, 1]` array
+// indexed through `as usize`, rotated in place over `3..=n`), carried to
+// Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn tribonacci(n: i32) -> i32 {
+        let mut t = [0, 1, 1];
+        if n < 3 {
+            return t[n as usize];
+        }
+        for _ in 3..=n {
+            let next = t[0] + t[1] + t[2];
+            t[0] = t[1];
+            t[1] = t[2];
+            t[2] = next;
+        }
+        t[2]
+    }
+}
+
+fn tribonacci(n: i64) -> i64 {
+    Solution.tribonacci(n as i32)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples
+    println(f"4 -> {tribonacci(4)}");
+    println(f"25 -> {tribonacci(25)}");
+    // every n the constraints allow, 0 to 37, eight to a line
+    let all: Vec[i64] = (0..38).map(|n| tribonacci(n)).collect();
+    for start in [0, 8, 16, 24, 32] {
+        let row: Vec[String] = all.iter().skip(start).take(8).map(|t| f"{t}").collect();
+        println(f"{start}..: {row.join(" ")}");
+    }
+    // 2000 random n from 0 to 37: the answers summed and a checksum
+    let mut seed = 1137;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 38;
+        let t = tribonacci(n);
+        total += t;
+        check = (check * 31 + t % 1000003) % 1000000007;
+    }
+    println(f"2000 random n: answers total {total}, checksum {check}");
+}

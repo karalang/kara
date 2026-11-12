@@ -1,0 +1,157 @@
+// LeetCode #1138: Alphabet Board Path -- breadth-first search over the
+// board's 26 cells from each letter to the next, the path read back
+// through the move that first reached each cell. Each search is
+// O(26), so O(target.len() * 26)
+
+// A cell's letter number, row * 5 + column, if the board has that cell.
+fn cell(row: i64, col: i64) -> Option[i64] {
+    if row < 0 or col < 0 or col >= 5 or row * 5 + col >= 26 {
+        None
+    } else {
+        Some(row * 5 + col)
+    }
+}
+
+fn shortest(from: i64, to: i64) -> String {
+    let steps = [(-1, 0, 'U'), (0, -1, 'L'), (1, 0, 'D'), (0, 1, 'R')];
+    let mut came_from = Vec.filled(26, -1);
+    let mut how = Vec.filled(26, '!');
+    let mut queue = [from];
+    came_from[from] = from;
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        for (dr, dc, name) in steps.iter() {
+            if let Some(next) = cell(at / 5 + dr, at % 5 + dc) {
+                if came_from[next] == -1 {
+                    came_from[next] = at;
+                    how[next] = name;
+                    queue.push(next);
+                }
+            }
+        }
+    }
+    let mut back: Vec[char] = [];
+    let mut at = to;
+    while at != from {
+        back.push(how[at]);
+        at = came_from[at];
+    }
+    back.iter().rev().collect()
+}
+
+fn alphabet_board_path(target: String) -> String {
+    let mut path = String.new();
+    let mut at = 0;
+    for c in target.chars() {
+        let to = c as i64 - 'a' as i64;
+        path.push_str(shortest(at, to));
+        path.push('!');
+        at = to;
+    }
+    path
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// What `path` spells walking LeetCode's board from `a`, or why it cannot:
+// a move off the board, or a move other than U, D, L, R and !.
+fn walk(path: String) -> String {
+    let board: Vec[Vec[char]] = ["abcde", "fghij", "klmno", "pqrst", "uvwxy", "z"]
+        .iter()
+        .map(|r| r.chars().collect())
+        .collect();
+    let mut row = 0;
+    let mut col = 0;
+    let mut spelled = String.new();
+    for m in path.chars() {
+        match m {
+            'U' => row -= 1,
+            'D' => row += 1,
+            'L' => col -= 1,
+            'R' => col += 1,
+            '!' => spelled.push(board[row][col]),
+            _ => return f"a move '{m}'",
+        }
+        if row < 0 or row >= board.len() or col < 0 or col >= board[row].len() {
+            return f"off the board at row {row}, column {col}";
+        }
+    }
+    spelled
+}
+
+// The path's moves for each letter in a fixed order (U, L, D, R, then !):
+// every shortest path between two cells makes the same moves, in some
+// order, so two shortest answers have the same form here.
+fn canonical(path: String) -> String {
+    let mut out = String.new();
+    let mut count = [0, 0, 0, 0];
+    for m in path.chars() {
+        match m {
+            'U' => count[0] += 1,
+            'L' => count[1] += 1,
+            'D' => count[2] += 1,
+            'R' => count[3] += 1,
+            _ => {
+                for (i, name) in ["U", "L", "D", "R"].iter().enumerate() {
+                    out.push_str(name.repeat(count[i]));
+                    count[i] = 0;
+                }
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
+fn show(target: String) {
+    let path = alphabet_board_path(target.clone());
+    let spelled = walk(path.clone());
+    let verdict = if spelled == target { "spells it" } else { f"spells {spelled}" };
+    println(f"{target} -> length {path.len()}, {verdict}: {canonical(path)}");
+}
+
+fn main() {
+    // LeetCode's two examples, then the corners, `z` on its own row, and
+    // the whole alphabet both ways
+    for target in ["leet", "code", "a", "e", "z", "zz", "za", "az", "zdz", "yz", "zy", "uzu", "zez"] {
+        show(target);
+    }
+    show("abcdefghijklmnopqrstuvwxyz");
+    show("zyxwvutsrqponmlkjihgfedcba");
+    // 2000 random targets of 1 to 100 letters: the lengths summed, how many
+    // fail to spell their target, and a checksum over every answer's form
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut seed = 1138;
+    let mut total = 0;
+    let mut wrong = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let len = next_random(mut seed) % 100 + 1;
+        let mut target = String.new();
+        for _ in 0..len {
+            target.push(letters[next_random(mut seed) % 26]);
+        }
+        let path = alphabet_board_path(target.clone());
+        total += path.len();
+        if walk(path.clone()) != target {
+            wrong += 1;
+        }
+        for c in canonical(path).chars() {
+            check = (check * 131 + c as i64) % 1000000007;
+        }
+    }
+    println(f"2000 random targets: lengths total {total}, {wrong} wrong, checksum {check}");
+    // the longest the constraints allow: 100 letters
+    for target in ["z".repeat(100), "az".repeat(50), "ez".repeat(50), "ya".repeat(50)] {
+        let path = alphabet_board_path(target.clone());
+        let ok = walk(path.clone()) == target;
+        println(f"{target.len()} letters from {target.char_at(0).unwrap()}{target.char_at(1).unwrap()}: length {path.len()}, spells it {ok}");
+    }
+}
