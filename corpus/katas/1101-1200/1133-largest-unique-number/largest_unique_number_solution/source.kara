@@ -1,0 +1,78 @@
+// LeetCode #1133: Largest Unique Number -- a Rust solution as LeetCode's
+// Rust users write it (`impl Solution`, a `Vec<i32>`, a `HashMap` counted
+// with `*count.entry(n).or_insert(0) += 1` over `for &n in &nums`, then
+// `into_iter().filter(|&(_, c)| c == 1).map(|(n, _)| n).max()
+// .unwrap_or(-1)`), carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn largest_unique_number(nums: Vec[i32]) -> i32 {
+        let mut count = Map.new();
+        for n in ref nums {
+            *count.entry(n).or_insert(0) += 1;
+        }
+        count
+            .into_iter()
+            .filter(|(_, c)| c == 1)
+            .map(|(n, _)| n)
+            .max()
+            .unwrap_or(-1)
+    }
+}
+
+fn largest_unique_number(nums: Vec[i64]) -> i64 {
+    let v: Vec[i32] = nums.iter().map(|x| x as i32).collect();
+    Solution.largest_unique_number(v)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples and six more: one value, the largest alone,
+    // the largest twice, one value three times, every value twice but 0,
+    // and a mix
+    let cases: Vec[Vec[i64]] = [
+        [5, 7, 3, 9, 4, 9, 8, 3, 1],
+        [9, 9, 8, 8],
+        [0],
+        [1000],
+        [1000, 1000, 0],
+        [4, 4, 4],
+        [2, 1, 2, 3, 3, 1, 0],
+        [7, 3, 7, 3, 5, 6, 6],
+    ];
+    for nums in cases.iter() {
+        println(f"{nums} -> {largest_unique_number(nums)}");
+    }
+    // 2000 random arrays of 1 to 60 values, each below a drawn top of 5,
+    // 31 or 1001: the answers summed, how many have none, and a checksum
+    let mut seed = 1133;
+    let tops = [5, 31, 1001];
+    let mut total = 0;
+    let mut none = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 60 + 1;
+        let top = tops[next_random(mut seed) % 3];
+        let nums: Vec[i64] = (0..n).map(|_| next_random(mut seed) % top).collect();
+        let r = largest_unique_number(nums);
+        total += r;
+        if r == -1 {
+            none += 1;
+        }
+        check = (check * 31 + r + 1) % 1000000007;
+    }
+    println(f"2000 random arrays: answers total {total}, {none} with none, checksum {check}");
+    // LeetCode's largest: 2000 values from 0 to 1000 at random, and every
+    // value from 0 to 999 twice
+    let big: Vec[i64] = (0..2000).map(|_| next_random(mut seed) % 1001).collect();
+    println(f"2000 random values: {largest_unique_number(big)}");
+    let twice: Vec[i64] = (0..2000).map(|i| i % 1000).collect();
+    println(f"every value twice: {largest_unique_number(twice)}");
+}
