@@ -1,0 +1,72 @@
+// LeetCode #1130: Minimum Cost Tree From Leaf Values -- recursion over
+// ranges with a memo: the leaves `lo..hi` give back both their least cost
+// and their largest leaf, every split tried, each range's pair kept in a
+// `Map` keyed by `(lo, hi)`. O(n^3)
+
+fn least(arr: Vec[i64], lo: i64, hi: i64, memo: mut ref Map[(i64, i64), (i64, i64)]) -> (i64, i64) {
+    if hi - lo == 1 {
+        return (0, arr[lo]);
+    }
+    if let Some(known) = memo.get((lo, hi)) {
+        return known;
+    }
+    let mut best = i64.MAX;
+    let mut largest = 0;
+    for k in lo + 1..hi {
+        let (left_cost, left_max) = least(arr, lo, k, mut memo);
+        let (right_cost, right_max) = least(arr, k, hi, mut memo);
+        best = best.min(left_cost + right_cost + left_max * right_max);
+        largest = left_max.max(right_max);
+    }
+    memo.insert((lo, hi), (best, largest));
+    (best, largest)
+}
+
+fn mct_from_leaf_values(arr: Vec[i64]) -> i64 {
+    let mut memo: Map[(i64, i64), (i64, i64)] = Map.new();
+    least(arr, 0, arr.len(), mut memo).0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples and seven more: rising, falling, a valley,
+    // all alike, peaks between ones, 1 to 15, and 40 of the largest
+    let cases: Vec[Vec[i64]] = [
+        [6, 2, 4],
+        [4, 11],
+        [1, 2, 3, 4],
+        [4, 3, 2, 1],
+        [3, 1, 2],
+        [2, 2, 2, 2, 2],
+        [1, 15, 1, 15, 1, 15],
+        (1..16).collect(),
+        Vec.filled(40, 15),
+    ];
+    for arr in cases.iter() {
+        println(f"{arr} -> {mct_from_leaf_values(arr)}");
+    }
+    // 2000 random arrays of 2 to 40 leaves from 1 to 15: the costs summed
+    // and a checksum
+    let mut seed = 1130;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 39 + 2;
+        let arr: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 15 + 1).collect();
+        let c = mct_from_leaf_values(arr);
+        total += c;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"2000 random arrays: costs total {total}, checksum {check}");
+    // LeetCode's largest: 40 leaves at random, and 40 rising and falling
+    let big: Vec[i64] = (0..40).map(|_| next_random(mut seed) % 15 + 1).collect();
+    println(f"40 random leaves: {mct_from_leaf_values(big)}");
+    let wave: Vec[i64] = (0..40).map(|i| (20 - i).abs() % 15 + 1).collect();
+    println(f"40 leaves rising and falling: {mct_from_leaf_values(wave)}");
+}

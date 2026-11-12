@@ -1,0 +1,282 @@
+// LeetCode #1130: Minimum Cost Tree From Leaf Values -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- mct_from_leaf_values.kara ----
+
+fn a0_mct_from_leaf_values(arr: Vec[i64]) -> i64 {
+    let mut cost = 0;
+    let mut stack: Vec[i64] = [];
+    for a in arr.iter() {
+        while not stack.is_empty() and stack[stack.len() - 1] <= a {
+            let mid = stack.pop().unwrap();
+            let partner = match stack.last() {
+                Some(left) => left.min(a),
+                None => a,
+            };
+            cost += mid * partner;
+        }
+        stack.push(a);
+    }
+    while stack.len() > 1 {
+        let top = stack.pop().unwrap();
+        cost += top * stack[stack.len() - 1];
+    }
+    cost
+}
+
+// ---- mct_from_leaf_values_dp.kara ----
+
+fn a1_mct_from_leaf_values(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut largest = Vec.filled(n, Vec.filled(n, 0));
+    for i in 0..n {
+        largest[i][i] = arr[i];
+        for j in i + 1..n {
+            largest[i][j] = largest[i][j - 1].max(arr[j]);
+        }
+    }
+    let mut cost = Vec.filled(n, Vec.filled(n, 0));
+    for width in 1..n {
+        for i in 0..n - width {
+            let j = i + width;
+            let mut best = i64.MAX;
+            for k in i..j {
+                best = best.min(cost[i][k] + cost[k + 1][j] + largest[i][k] * largest[k + 1][j]);
+            }
+            cost[i][j] = best;
+        }
+    }
+    cost[0][n - 1]
+}
+
+// ---- mct_from_leaf_values_memo.kara ----
+
+fn a2_least(arr: Vec[i64], lo: i64, hi: i64, memo: mut ref Map[(i64, i64), (i64, i64)]) -> (i64, i64) {
+    if hi - lo == 1 {
+        return (0, arr[lo]);
+    }
+    if let Some(known) = memo.get((lo, hi)) {
+        return known;
+    }
+    let mut best = i64.MAX;
+    let mut largest = 0;
+    for k in lo + 1..hi {
+        let (left_cost, left_max) = a2_least(arr, lo, k, mut memo);
+        let (right_cost, right_max) = a2_least(arr, k, hi, mut memo);
+        best = best.min(left_cost + right_cost + left_max * right_max);
+        largest = left_max.max(right_max);
+    }
+    memo.insert((lo, hi), (best, largest));
+    (best, largest)
+}
+
+fn a2_mct_from_leaf_values(arr: Vec[i64]) -> i64 {
+    let mut memo: Map[(i64, i64), (i64, i64)] = Map.new();
+    a2_least(arr, 0, arr.len(), mut memo).0
+}
+
+// ---- mct_from_leaf_values_greedy.kara ----
+
+fn a3_mct_from_leaf_values(arr: Vec[i64]) -> i64 {
+    let mut leaves = arr.clone();
+    let mut cost = 0;
+    while leaves.len() > 1 {
+        let mut at = 0;
+        for i in 1..leaves.len() {
+            if leaves[i] < leaves[at] {
+                at = i;
+            }
+        }
+        let left = if at > 0 { leaves[at - 1] } else { i64.MAX };
+        let right = if at + 1 < leaves.len() { leaves[at + 1] } else { i64.MAX };
+        cost += leaves[at] * left.min(right);
+        leaves.remove(at);
+    }
+    cost
+}
+
+// ---- mct_from_leaf_values_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_mct_from_leaf_values(arr: Vec[i32]) -> i32 {
+        let mut stack: Vec[i32] = [i32.MAX];
+        let mut res: i32 = 0;
+        for a in arr.iter() {
+            while *stack.last().unwrap() <= a {
+                let mid = stack.pop().unwrap();
+                res += mid * min(*stack.last().unwrap(), a);
+            }
+            stack.push(a);
+        }
+        while stack.len() > 2 {
+            res += stack.pop().unwrap() * stack.last().unwrap();
+        }
+        res
+    }
+}
+
+fn a4_mct_from_leaf_values(arr: Vec[i64]) -> i64 {
+    A4Solution.a4_mct_from_leaf_values(arr.iter().map(|x| x as i32).collect())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, arr: Vec[i64]) -> i64 {
+    match which {
+        0 => a0_mct_from_leaf_values(arr),
+        1 => a1_mct_from_leaf_values(arr),
+        2 => a2_mct_from_leaf_values(arr),
+        3 => a3_mct_from_leaf_values(arr),
+        _ => a4_mct_from_leaf_values(arr),
+    }
+}
+
+// The statement read literally: every binary tree whose leaves are
+// `arr[lo..hi]` in order, each non-leaf node the product of the largest
+// leaf in its left subtree and in its right, and the sum of those over
+// the tree; the costs of all such trees.
+fn tree_costs(arr: Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    if hi - lo == 1 {
+        return [0];
+    }
+    let mut out: Vec[i64] = [];
+    for k in lo + 1..hi {
+        let node = arr[lo..k].iter().max().unwrap() * arr[k..hi].iter().max().unwrap();
+        for a in tree_costs(arr, lo, k).iter() {
+            for b in tree_costs(arr, k, hi).iter() {
+                out.push(a + b + node);
+            }
+        }
+    }
+    out
+}
+
+fn literal(arr: Vec[i64]) -> i64 {
+    tree_costs(arr, 0, arr.len()).iter().min().unwrap()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaves(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = [];
+    for _ in 0..n {
+        out.push(next_random(mut seed) % top + 1);
+    }
+    out
+}
+
+// `n` leaves from 1 to 15, sorted, then the part after a drawn place
+// turned around: a mountain when `rise`, a valley otherwise.
+fn shaped(seed: mut ref i64, n: i64, rise: bool) -> Vec[i64] {
+    let mut out = leaves(mut seed, n, 15);
+    out.sort();
+    if not rise {
+        out.reverse();
+    }
+    let at = next_random(mut seed) % n;
+    let tail: Vec[i64] = out[at..n].iter().rev().cloned().collect();
+    out.truncate(at);
+    out.extend(tail);
+    out
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, arr: Vec[i64]) {
+    let n = arr.len();
+    let want = literal(arr);
+    let largest = arr.iter().max().unwrap();
+    for w in 0..5 {
+        let answer = arm(w, arr);
+        let what = f"arm {w}, case {t.cases} {arr} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: the answer splits: the least, over every place to split the
+        // leaves, of the two sides' answers and the product of their
+        // largest leaves, a single leaf costing nothing
+        let mut split = i64.MAX;
+        for k in 1..n {
+            let left = arr[0..k].to_vec();
+            let right = arr[k..n].to_vec();
+            let l = if k == 1 { 0 } else { arm(w, left) };
+            let r = if n - k == 1 { 0 } else { arm(w, right) };
+            split = split.min(l + r + left.iter().max().unwrap() * right.iter().max().unwrap());
+        }
+        expect(mut t, 2, answer == split, f"P2 {what}, split {split}");
+        // P3: the leaves reversed give the same answer
+        let rev: Vec[i64] = arr.iter().rev().cloned().collect();
+        let r = arm(w, rev);
+        expect(mut t, 3, r == answer, f"P3 {what}, reversed {r}");
+        // P4: every leaf doubled makes every product, and the answer, 4x
+        let doubled: Vec[i64] = arr.iter().map(|v| 2 * v).collect();
+        let d = arm(w, doubled);
+        expect(mut t, 4, d == 4 * answer, f"P4 {what}, doubled {d}");
+        // P5: a new leaf above every other at the end adds it times the
+        // old largest, since it is joined last
+        let mut taller = arr.clone();
+        taller.push(largest + 1);
+        let h = arm(w, taller);
+        expect(mut t, 5, h == answer + (largest + 1) * largest, f"P5 {what}, taller {h}");
+        // P6: a leaf of 1 at the end, at or below every other, adds the old
+        // last leaf, since it is joined first
+        let mut low = arr.clone();
+        low.push(1);
+        let o = arm(w, low);
+        expect(mut t, 6, o == answer + arr[n - 1], f"P6 {what}, with 1 {o}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in five kinds, 400 each: 2 to 8 leaves from 1 to 15;
+    // from 1 to 3, so many tie; from 1 and 2 alone; a mountain, sorted
+    // leaves rising then falling; and a valley, falling then rising. Every
+    // choice is drawn before any arm answers.
+    let mut seed = 11301;
+    let mut problems: Vec[Vec[i64]] = [];
+    for i in 0..2000 {
+        let n = next_random(mut seed) % 7 + 2;
+        let arr = match i % 5 {
+            0 => leaves(mut seed, n, 15),
+            1 => leaves(mut seed, n, 3),
+            2 => leaves(mut seed, n, 2),
+            3 => shaped(mut seed, n, true),
+            _ => shaped(mut seed, n, false),
+        };
+        problems.push(arr);
+    }
+    for arr in problems.iter() {
+        check_case(mut t, arr);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

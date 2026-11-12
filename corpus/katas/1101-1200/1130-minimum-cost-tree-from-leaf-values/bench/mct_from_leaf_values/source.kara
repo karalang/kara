@@ -1,0 +1,49 @@
+// LeetCode #1130: Minimum Cost Tree From Leaf Values -- the bench: the ★
+// arm over 4096 arrays of 40 leaves, LeetCode's largest, built once, each
+// of 400 rounds changing one leaf of every array and answering it again.
+
+fn mct_from_leaf_values(arr: Vec[i64]) -> i64 {
+    let mut cost = 0;
+    let mut stack: Vec[i64] = [];
+    for a in arr.iter() {
+        while not stack.is_empty() and stack[stack.len() - 1] <= a {
+            let mid = stack.pop().unwrap();
+            let partner = match stack.last() {
+                Some(left) => left.min(a),
+                None => a,
+            };
+            cost += mid * partner;
+        }
+        stack.push(a);
+    }
+    while stack.len() > 1 {
+        let top = stack.pop().unwrap();
+        cost += top * stack[stack.len() - 1];
+    }
+    cost
+}
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1130;
+    let mut arrays: Vec[Vec[i64]] = [];
+    for _ in 0..4096 {
+        let arr: Vec[i64] = (0..40).map(|_| next_random(mut seed) % 15 + 1).collect();
+        arrays.push(arr);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..400 {
+        for j in 0..4096 {
+            let at = (round * 7919 + j * 104729) % 40;
+            arrays[j][at] = arrays[j][at] % 15 + 1;
+            let c = mct_from_leaf_values(arrays[j]);
+            total += c;
+            check = (check * 31 + c) % 1000000007;
+        }
+    }
+    println(f"400 rounds over 4096 arrays of 40 leaves: costs total {total}, checksum {check}");
+}
