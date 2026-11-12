@@ -1,0 +1,102 @@
+// LeetCode #1129: Shortest Path with Alternating Colors -- relaxation,
+// as Bellman-Ford does it: `red[v]` and `blue[v]` the shortest lengths
+// known ending on a red or a blue edge, every red edge lowering `red`
+// from `blue` and every blue edge `blue` from `red`, round after round
+// until a round changes nothing. O(n * edges)
+
+fn shortest_alternating_paths(n: i64, red_edges: Vec[Vec[i64]], blue_edges: Vec[Vec[i64]]) -> Vec[i64] {
+    let unreached = 2 * n + 1;
+    let mut red = Vec.filled(n, unreached);
+    let mut blue = Vec.filled(n, unreached);
+    red[0] = 0;
+    blue[0] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for e in red_edges.iter() {
+            if blue[e[0]] + 1 < red[e[1]] {
+                red[e[1]] = blue[e[0]] + 1;
+                changed = true;
+            }
+        }
+        for e in blue_edges.iter() {
+            if red[e[0]] + 1 < blue[e[1]] {
+                blue[e[1]] = red[e[0]] + 1;
+                changed = true;
+            }
+        }
+    }
+    (0..n).map(|v| {
+        let best = red[v].min(blue[v]);
+        if best >= unreached { -1 } else { best }
+    }).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn edges(seed: mut ref i64, n: i64, m: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = [];
+    for _ in 0..m {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        out.push([a, b]);
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's five examples and four more: one node, a red and a blue
+    // cycle that a long path winds through, loops at node 0, and every
+    // edge in both colours
+    let cases: Vec[(i64, Vec[Vec[i64]], Vec[Vec[i64]])] = [
+        (3, [[0, 1], [1, 2]], []),
+        (3, [[0, 1]], [[2, 1]]),
+        (3, [[1, 0]], [[2, 1]]),
+        (3, [[0, 1]], [[1, 2]]),
+        (3, [[0, 1], [0, 2]], [[1, 0]]),
+        (1, [], []),
+        (5, [[0, 1], [1, 2], [2, 3], [3, 4]], [[1, 2], [2, 3], [3, 1]]),
+        (4, [[0, 0], [0, 1]], [[0, 0], [1, 2], [2, 3]]),
+        (6, [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]], [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]]),
+    ];
+    for (n, red, blue) in cases.iter() {
+        println(f"n = {n}, red {red}, blue {blue} -> {shortest_alternating_paths(n, red, blue)}");
+    }
+    // 2000 random graphs of up to 100 nodes and up to 2n edges of each
+    // colour: the nodes reached, the lengths summed and a checksum
+    let mut seed = 1129;
+    let mut total = 0;
+    let mut reached = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let rm = next_random(mut seed) % (2 * n + 1);
+        let red = edges(mut seed, n, rm);
+        let bm = next_random(mut seed) % (2 * n + 1);
+        let blue = edges(mut seed, n, bm);
+        for d in shortest_alternating_paths(n, red, blue) {
+            total += d;
+            if d >= 0 {
+                reached += 1;
+            }
+            check = (check * 31 + d + 2) % 1000000007;
+        }
+    }
+    println(f"2000 random graphs: {reached} nodes reached, lengths total {total}, checksum {check}");
+    // LeetCode's largest: 100 nodes and 400 edges of each colour, and a
+    // chain of 100 whose edges alternate
+    let red = edges(mut seed, 100, 400);
+    let blue = edges(mut seed, 100, 400);
+    let big = shortest_alternating_paths(100, red, blue);
+    let big_reached = big.iter().filter(|d| d >= 0).count();
+    println(f"100 nodes, 400 edges of each colour: {big_reached} reached, longest {big.iter().max().unwrap()}");
+    let chain_red: Vec[Vec[i64]] = (0..99).step_by(2).map(|i| [i, i + 1]).collect();
+    let chain_blue: Vec[Vec[i64]] = (1..99).step_by(2).map(|i| [i, i + 1]).collect();
+    let chain = shortest_alternating_paths(100, chain_red, chain_blue);
+    println(f"an alternating chain of 100: last {chain[99]}, total {chain.iter().sum()}");
+}

@@ -1,0 +1,456 @@
+// LeetCode #1129: Shortest Path with Alternating Colors -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- shortest_alternating_paths.kara ----
+
+fn a0_shortest_alternating_paths(n: i64, red_edges: Vec[Vec[i64]], blue_edges: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut adj: Vec[Vec[Vec[i64]]] = Vec.filled(2, Vec.filled(n, []));
+    for e in red_edges.iter() {
+        adj[0][e[0]].push(e[1]);
+    }
+    for e in blue_edges.iter() {
+        adj[1][e[0]].push(e[1]);
+    }
+    let mut dist = Vec.filled(2, Vec.filled(n, -1));
+    dist[0][0] = 0;
+    dist[1][0] = 0;
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((0, 0));
+    queue.push_back((0, 1));
+    while let Some((node, colour)) = queue.pop_front() {
+        let next = 1 - colour;
+        for m in adj[next][node].iter() {
+            if dist[next][m] < 0 {
+                dist[next][m] = dist[colour][node] + 1;
+                queue.push_back((m, next));
+            }
+        }
+    }
+    (0..n).map(|x| {
+        let (a, b) = (dist[0][x], dist[1][x]);
+        if a < 0 { b } else if b < 0 { a } else { a.min(b) }
+    }).collect()
+}
+
+// ---- shortest_alternating_paths_levels.kara ----
+
+fn a1_shortest_alternating_paths(n: i64, red_edges: Vec[Vec[i64]], blue_edges: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut red: Vec[Vec[i64]] = Vec.filled(n, []);
+    let mut blue: Vec[Vec[i64]] = Vec.filled(n, []);
+    for e in red_edges.iter() {
+        red[e[0]].push(e[1]);
+    }
+    for e in blue_edges.iter() {
+        blue[e[0]].push(e[1]);
+    }
+    let mut answer = Vec.filled(n, -1);
+    let mut seen_red = Vec.filled(n, false);
+    let mut seen_blue = Vec.filled(n, false);
+    answer[0] = 0;
+    seen_red[0] = true;
+    seen_blue[0] = true;
+    let mut after_red: Vec[i64] = [0];
+    let mut after_blue: Vec[i64] = [0];
+    let mut level = 0;
+    while not after_red.is_empty() or not after_blue.is_empty() {
+        level += 1;
+        let mut next_red: Vec[i64] = [];
+        let mut next_blue: Vec[i64] = [];
+        for u in after_red.iter() {
+            for v in blue[u].iter() {
+                if not seen_blue[v] {
+                    seen_blue[v] = true;
+                    next_blue.push(v);
+                }
+            }
+        }
+        for u in after_blue.iter() {
+            for v in red[u].iter() {
+                if not seen_red[v] {
+                    seen_red[v] = true;
+                    next_red.push(v);
+                }
+            }
+        }
+        for v in next_red.iter().chain(next_blue.iter()) {
+            if answer[v] < 0 {
+                answer[v] = level;
+            }
+        }
+        after_red = next_red;
+        after_blue = next_blue;
+    }
+    answer
+}
+
+// ---- shortest_alternating_paths_relax.kara ----
+
+fn a2_shortest_alternating_paths(n: i64, red_edges: Vec[Vec[i64]], blue_edges: Vec[Vec[i64]]) -> Vec[i64] {
+    let unreached = 2 * n + 1;
+    let mut red = Vec.filled(n, unreached);
+    let mut blue = Vec.filled(n, unreached);
+    red[0] = 0;
+    blue[0] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for e in red_edges.iter() {
+            if blue[e[0]] + 1 < red[e[1]] {
+                red[e[1]] = blue[e[0]] + 1;
+                changed = true;
+            }
+        }
+        for e in blue_edges.iter() {
+            if red[e[0]] + 1 < blue[e[1]] {
+                blue[e[1]] = red[e[0]] + 1;
+                changed = true;
+            }
+        }
+    }
+    (0..n).map(|v| {
+        let best = red[v].min(blue[v]);
+        if best >= unreached { -1 } else { best }
+    }).collect()
+}
+
+// ---- shortest_alternating_paths_steps.kara ----
+
+fn a3_shortest_alternating_paths(n: i64, red_edges: Vec[Vec[i64]], blue_edges: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut answer = Vec.filled(n, -1);
+    answer[0] = 0;
+    let mut ends_red = Vec.filled(n, false);
+    let mut ends_blue = Vec.filled(n, false);
+    ends_red[0] = true;
+    ends_blue[0] = true;
+    for k in 1..2 * n + 1 {
+        let mut red = Vec.filled(n, false);
+        let mut blue = Vec.filled(n, false);
+        for e in red_edges.iter() {
+            if ends_blue[e[0]] {
+                red[e[1]] = true;
+            }
+        }
+        for e in blue_edges.iter() {
+            if ends_red[e[0]] {
+                blue[e[1]] = true;
+            }
+        }
+        for v in 0..n {
+            if (red[v] or blue[v]) and answer[v] < 0 {
+                answer[v] = k;
+            }
+        }
+        ends_red = red;
+        ends_blue = blue;
+    }
+    answer
+}
+
+// ---- shortest_alternating_paths_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_shortest_alternating_paths(n: i32, red_edges: Vec[Vec[i32]], blue_edges: Vec[Vec[i32]]) -> Vec[i32] {
+        let n = n as i64;
+        let mut graph = Vec.filled(n, Vec.new());
+        for e in ref red_edges {
+            graph[e[0] as i64].push((e[1] as i64, 0));
+        }
+        for e in ref blue_edges {
+            graph[e[0] as i64].push((e[1] as i64, 1));
+        }
+        let mut ans = Vec.filled(n, -1i32);
+        let mut seen = Vec.filled(n, [false; 2]);
+        let mut q = VecDeque.new();
+        q.push_back((0, 0i32, -1i32));
+        seen[0] = [true, true];
+        while let Some((node, d, last)) = q.pop_front() {
+            if ans[node] == -1 {
+                ans[node] = d;
+            }
+            for (next, color) in ref graph[node] {
+                if color != last and not seen[next][color] {
+                    seen[next][color] = true;
+                    q.push_back((next, d + 1, color as i32));
+                }
+            }
+        }
+        ans
+    }
+}
+
+fn a4_shortest_alternating_paths(n: i64, red_edges: Vec[Vec[i64]], blue_edges: Vec[Vec[i64]]) -> Vec[i64] {
+    let narrow: Fn(ref Vec[Vec[i64]]) -> Vec[Vec[i32]] = |edges: ref Vec[Vec[i64]]| {
+        edges.iter().map(|e| [e[0] as i32, e[1] as i32]).collect()
+    };
+    A4Solution.a4_shortest_alternating_paths(n as i32, narrow(red_edges), narrow(blue_edges))
+        .into_iter()
+        .map(|d| d as i64)
+        .collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, n: i64, red: Vec[Vec[i64]], blue: Vec[Vec[i64]]) -> Vec[i64] {
+    match which {
+        0 => a0_shortest_alternating_paths(n, red, blue),
+        1 => a1_shortest_alternating_paths(n, red, blue),
+        2 => a2_shortest_alternating_paths(n, red, blue),
+        3 => a3_shortest_alternating_paths(n, red, blue),
+        _ => a4_shortest_alternating_paths(n, red, blue),
+    }
+}
+
+// The statement read literally: every walk from node 0 whose edges
+// alternate in colour, followed edge by edge up to `2n` edges, and each
+// node's shortest; -1 where none ends.
+fn walk(at: i64, last: i64, len: i64, limit: i64, red: Vec[Vec[i64]], blue: Vec[Vec[i64]], best: mut ref Vec[i64]) {
+    if best[at] < 0 or len < best[at] {
+        best[at] = len;
+    }
+    if len == limit {
+        return;
+    }
+    if last != 0 {
+        for e in red.iter() {
+            if e[0] == at {
+                walk(e[1], 0, len + 1, limit, red, blue, mut best);
+            }
+        }
+    }
+    if last != 1 {
+        for e in blue.iter() {
+            if e[0] == at {
+                walk(e[1], 1, len + 1, limit, red, blue, mut best);
+            }
+        }
+    }
+}
+
+fn literal(n: i64, red: Vec[Vec[i64]], blue: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut best = Vec.filled(n, -1);
+    walk(0, -1, 0, 2 * n, red, blue, mut best);
+    best
+}
+
+// P2's second reading, from the sets of nodes `k` alternating edges reach
+// ending red and ending blue: a node with answer `d` is in a set of `d`
+// and in none before, and a node with -1 is in none up to `2n`.
+fn reads_as_shortest(answer: Vec[i64], n: i64, red: Vec[Vec[i64]], blue: Vec[Vec[i64]]) -> bool {
+    if answer.len() != n {
+        return false;
+    }
+    let mut first = Vec.filled(n, -1);
+    let mut end_red = Vec.filled(n, false);
+    let mut end_blue = Vec.filled(n, false);
+    end_red[0] = true;
+    end_blue[0] = true;
+    first[0] = 0;
+    for k in 1..2 * n + 1 {
+        let mut r = Vec.filled(n, false);
+        let mut b = Vec.filled(n, false);
+        for e in red.iter() {
+            r[e[1]] = r[e[1]] or end_blue[e[0]];
+        }
+        for e in blue.iter() {
+            b[e[1]] = b[e[1]] or end_red[e[0]];
+        }
+        for v in 0..n {
+            if first[v] < 0 and (r[v] or b[v]) {
+                first[v] = k;
+            }
+        }
+        end_red = r;
+        end_blue = b;
+    }
+    answer == first
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn edges(seed: mut ref i64, n: i64, m: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = [];
+    for _ in 0..m {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        out.push([a, b]);
+    }
+    out
+}
+
+// A chain 0 -> 1 -> .. -> n - 1 whose edges alternate in colour, the
+// first colour drawn, and `noise` more edges of each colour at random.
+fn chain(seed: mut ref i64, n: i64, noise: i64) -> (Vec[Vec[i64]], Vec[Vec[i64]]) {
+    let mut red = edges(mut seed, n, noise);
+    let mut blue = edges(mut seed, n, noise);
+    let start = next_random(mut seed) % 2;
+    for i in 0..n - 1 {
+        if (i + start) % 2 == 0 {
+            red.push([i, i + 1]);
+        } else {
+            blue.push([i, i + 1]);
+        }
+    }
+    (red, blue)
+}
+
+// A chain 0 -> 1 -> .. -> n - 1 all of one colour, drawn, and a loop of
+// the other colour on every node between its ends, so node `k` is reached
+// at `2k - 1` and the longest answers need more than `n` edges; and
+// `noise` more edges of each colour at random.
+fn zigzag(seed: mut ref i64, n: i64, noise: i64) -> (Vec[Vec[i64]], Vec[Vec[i64]]) {
+    let mut red = edges(mut seed, n, noise);
+    let mut blue = edges(mut seed, n, noise);
+    let chain_red = next_random(mut seed) % 2 == 0;
+    for i in 0..n - 1 {
+        if chain_red {
+            red.push([i, i + 1]);
+        } else {
+            blue.push([i, i + 1]);
+        }
+    }
+    for i in 1..n - 1 {
+        if chain_red {
+            blue.push([i, i]);
+        } else {
+            red.push([i, i]);
+        }
+    }
+    (red, blue)
+}
+
+struct Problem {
+    n: i64,
+    red: Vec[Vec[i64]],
+    blue: Vec[Vec[i64]],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn reversed(edges: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    edges.iter().rev().cloned().collect()
+}
+
+// node 0 stays, every other `v` becomes `n - v`
+fn relabelled(edges: Vec[Vec[i64]], n: i64) -> Vec[Vec[i64]] {
+    edges.iter().map(|e| [if e[0] == 0 { 0 } else { n - e[0] }, if e[1] == 0 { 0 } else { n - e[1] }]).collect()
+}
+
+fn check_case(t: mut ref Tally, p: Problem) {
+    let n = p.n;
+    let want = literal(n, p.red, p.blue);
+    let mut grown_red = p.red.clone();
+    grown_red.push([0, n]);
+    for w in 0..5 {
+        let answer = arm(w, n, p.red, p.blue);
+        let what = f"arm {w}, case {t.cases} n = {n}, red {p.red}, blue {p.blue} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: by a second reading, from the sets each length reaches
+        expect(mut t, 2, reads_as_shortest(answer, n, p.red, p.blue), f"P2 {what}");
+        // P3: red and blue swapped give the same answer
+        let s = arm(w, n, p.blue, p.red);
+        expect(mut t, 3, s == answer, f"P3 {what}, swapped {s}");
+        // P4: each colour's edges listed last first give the same answer
+        let r = arm(w, n, reversed(p.red), reversed(p.blue));
+        expect(mut t, 4, r == answer, f"P4 {what}, reversed {r}");
+        // P5: every node but 0 relabelled `n - v` moves the answers with it
+        let l = arm(w, n, relabelled(p.red, n), relabelled(p.blue, n));
+        let moved: Vec[i64] = (0..n).map(|v| if v == 0 { l[0] } else { l[n - v] }).collect();
+        expect(mut t, 5, moved == answer, f"P5 {what}, relabelled {l}");
+        // P6: a new node `n` with one red edge from node 0 is at 1, and
+        // every other answer stays
+        let g = arm(w, n + 1, grown_red, p.blue);
+        let kept = g.len() == n + 1 and g[n] == 1 and (0..n).all(|v| g[v] == answer[v]);
+        expect(mut t, 6, kept, f"P6 {what}, grown {g}");
+    }
+    t.cases += 1;
+    for d in want.iter() {
+        t.check = (t.check * 131 + d + 2) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in five kinds, 400 each: up to 6 nodes and up to `n`
+    // edges of each colour; up to 4 nodes and up to 8 of each, so walks
+    // cross and loop; up to 6 nodes, up to `2n` red edges and one or two
+    // blue; a chain of up to 7 nodes alternating in colour; and a chain of
+    // 2 to 8 nodes in one colour with a loop of the other on every node
+    // between its ends. The two chains carry up to 2 edges of each colour
+    // more. Every choice is drawn before any arm answers.
+    let mut seed = 11291;
+    let mut problems: Vec[Problem] = [];
+    for i in 0..2000 {
+        let p = match i % 5 {
+            0 => {
+                let n = next_random(mut seed) % 6 + 1;
+                let rm = next_random(mut seed) % (n + 1);
+                let red = edges(mut seed, n, rm);
+                let bm = next_random(mut seed) % (n + 1);
+                let blue = edges(mut seed, n, bm);
+                Problem { n: n, red: red, blue: blue }
+            }
+            1 => {
+                let n = next_random(mut seed) % 4 + 1;
+                let rm = next_random(mut seed) % 9;
+                let red = edges(mut seed, n, rm);
+                let bm = next_random(mut seed) % 9;
+                let blue = edges(mut seed, n, bm);
+                Problem { n: n, red: red, blue: blue }
+            }
+            2 => {
+                let n = next_random(mut seed) % 6 + 1;
+                let rm = next_random(mut seed) % (2 * n + 1);
+                let red = edges(mut seed, n, rm);
+                let bm = next_random(mut seed) % 2 + 1;
+                let blue = edges(mut seed, n, bm);
+                Problem { n: n, red: red, blue: blue }
+            }
+            3 => {
+                let n = next_random(mut seed) % 7 + 1;
+                let noise = next_random(mut seed) % 3;
+                let (red, blue) = chain(mut seed, n, noise);
+                Problem { n: n, red: red, blue: blue }
+            }
+            _ => {
+                let n = next_random(mut seed) % 7 + 2;
+                let noise = next_random(mut seed) % 3;
+                let (red, blue) = zigzag(mut seed, n, noise);
+                Problem { n: n, red: red, blue: blue }
+            }
+        };
+        problems.push(p);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
