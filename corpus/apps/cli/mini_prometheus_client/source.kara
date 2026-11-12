@@ -801,7 +801,7 @@ fn worker(shared: Shared, words: own Vec[String], runs: i64) {
             shared.failed.fetch_add(1);
             let mut g = shared.first_error.lock();
             if g.value.is_none() {
-                g.value = Some(e);
+                *g.value = Some(e);
             }
         }
     }
@@ -812,7 +812,7 @@ fn parallel(shared: Shared, n: i64, words: Slice[String]) -> Result[String, Stri
     shared.failed.store(0);
     {
         let mut g = shared.first_error.lock();
-        g.value = None;
+        *g.value = None;
     }
     {
         let workers = TaskGroup.new();
