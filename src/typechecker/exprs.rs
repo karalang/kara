@@ -14577,7 +14577,7 @@ impl<'a> super::TypeChecker<'a> {
                     // `if c { 0 } else { y }` with `y: u128` is a `u128`. A
                     // `ref` to a number gives the number.
                     let then_ty = match self.ref_number(&then_ty) {
-                        Some(n) if Self::is_literal_tree(else_expr, &n) => n,
+                        Some(n) if Self::literal_tree_fits(else_expr, &n) => n,
                         _ => then_ty,
                     };
                     let else_ty = match self.ref_number(&else_ty) {
@@ -14585,25 +14585,31 @@ impl<'a> super::TypeChecker<'a> {
                             if then_block
                                 .final_expr
                                 .as_deref()
-                                .is_some_and(|t| Self::is_literal_tree(t, &n)) =>
+                                .is_some_and(|t| Self::literal_tree_fits(t, &n)) =>
                         {
                             n
                         }
                         _ => else_ty,
                     };
                     if then_ty != else_ty {
+                        // Only a literal its sibling can hold takes its type:
+                        // `if c < 128 { c } else { 65533 }` over `c: u8` took
+                        // the `65533` as a `u8` and ran as 253 (B-2026-11-12-6).
                         let then_lit = then_block.stmts.is_empty().then_some(()).and_then(|_| {
                             Self::literal_taking_branch_type(
                                 then_block.final_expr.as_deref()?,
                                 &else_ty,
                             )
+                            .filter(|t| Self::literal_tree_fits(t, &else_ty))
                         });
                         if let Some(t) = then_lit {
                             self.record_promoted_literal(t, &else_ty);
                             self.record_expr_type(&then_block.span, &else_ty);
                             return else_ty;
                         }
-                        if let Some(t) = Self::literal_taking_branch_type(else_expr, &then_ty) {
+                        if let Some(t) = Self::literal_taking_branch_type(else_expr, &then_ty)
+                            .filter(|t| Self::literal_tree_fits(t, &then_ty))
+                        {
                             self.record_promoted_literal(t, &then_ty);
                             if !std::ptr::eq(t, else_expr.as_ref()) {
                                 self.record_expr_type(&else_expr.span, &then_ty);
@@ -14618,7 +14624,7 @@ impl<'a> super::TypeChecker<'a> {
                             && then_block
                                 .final_expr
                                 .as_deref()
-                                .is_some_and(|t| Self::is_literal_tree(t, &else_ty))
+                                .is_some_and(|t| Self::literal_tree_fits(t, &else_ty))
                         {
                             if let Some(t) = then_block.final_expr.as_deref() {
                                 self.promote_literal_tree(t, &else_ty);
@@ -14626,7 +14632,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.record_expr_type(&then_block.span, &else_ty);
                             return else_ty;
                         }
-                        if numeric(&then_ty) && Self::is_literal_tree(else_expr, &then_ty) {
+                        if numeric(&then_ty) && Self::literal_tree_fits(else_expr, &then_ty) {
                             self.promote_literal_tree(else_expr, &then_ty);
                             return then_ty;
                         }
@@ -14719,14 +14725,14 @@ impl<'a> super::TypeChecker<'a> {
                     // `if let Some(g) = v.last() { g } else { 0 }`: the
                     // literal takes the number the `ref` reads as (§5.10).
                     if let Some(n) = self.ref_number(&then_ty) {
-                        if Self::is_literal_tree(else_expr, &n) {
+                        if Self::literal_tree_fits(else_expr, &n) {
                             self.promote_literal_tree(else_expr, &n);
                             return n;
                         }
                     }
                     if let Some(n) = self.ref_number(&else_ty) {
                         if let Some(t) = then_block.final_expr.as_deref() {
-                            if Self::is_literal_tree(t, &n) {
+                            if Self::literal_tree_fits(t, &n) {
                                 self.promote_literal_tree(t, &n);
                                 self.record_expr_type(&then_block.span, &n);
                                 return n;

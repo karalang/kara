@@ -12033,8 +12033,10 @@ impl<'a> super::TypeChecker<'a> {
                 // A binding whose literal no use has fixed yet is fixed by
                 // the value assigned to it (`b = y` with `y: i32`; design.md
                 // § Type inference, B-2026-11-07-57).
+                let mut open_target = false;
                 let target_ty = if matches!(target.kind, ExprKind::Identifier(_)) {
                     let t = self.infer_expr_open(target);
+                    open_target = self.unbound_literal_var(&t).is_some();
                     self.fix_literal_from_assigned(target, &t, value)
                 } else {
                     self.infer_expr(target)
@@ -12064,7 +12066,46 @@ impl<'a> super::TypeChecker<'a> {
                     _ => target_ty.clone(),
                 };
                 let slot_ty = self.solve_open_slot_from(value, slot_ty);
+                // A cast stored into a binding no use has fixed yet is what
+                // fixes it: `letter = b[j] as i64` after `let mut letter = -1`
+                // makes `letter` an `i64`, and without the cast a `u8` that
+                // `-1` cannot initialize. The slot's `i64` comes from the cast,
+                // so `lossless_cast` must not call it unnecessary
+                // (B-2026-11-12-8).
+                if open_target && matches!(value.kind, ExprKind::Cast { .. }) {
+                    self.cast_lints_reported
+                        .insert(SpanKey::from_span(&value.span));
+                }
                 self.check_expr(value, &slot_ty);
+                let mut errors_before_check = errors_before_check;
+                // An `if`, `if let` or `match` checked against the slot widens
+                // each branch to it, as after `let y: i64 =`; the first walk
+                // joined the branches with no slot to widen to, and its
+                // mismatch (`y = if c { a } else { y }`, `a: u8`) is not this
+                // value's fault (B-2026-11-12-7).
+                let joins_branches = matches!(
+                    &value.kind,
+                    ExprKind::If {
+                        else_branch: Some(_),
+                        ..
+                    } | ExprKind::IfLet {
+                        else_branch: Some(_),
+                        ..
+                    } | ExprKind::Match { .. }
+                );
+                if joins_branches && self.errors.len() == errors_before_check {
+                    let mut i = errors_before_rhs;
+                    while i < errors_before_check {
+                        if self.errors[i].kind == TypeErrorKind::BranchTypeMismatch
+                            && self.errors[i].span == value.span
+                        {
+                            self.errors.remove(i);
+                            errors_before_check -= 1;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
                 self.reject_range_assign_non_copy(target, value, &target_ty);
                 // `v[1..] = [5, 6]` writes elements through the range; it
                 // rebinds no slice (B-2026-10-21-36).

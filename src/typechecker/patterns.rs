@@ -113,12 +113,21 @@ impl<'a> super::TypeChecker<'a> {
     /// The join and not the first arm, because an arm can satisfy a
     /// partly-unknown expectation without pinning it: `None` against
     /// `Option[U]` leaves `U` open where a later `Some(w)` fills it.
-    fn join_checked_arms(&self, arms: impl IntoIterator<Item = Type>) -> Type {
+    ///
+    /// Arms that joined only by each widening to a concrete expectation
+    /// (`if c < 128 { c } else { 65533 }` against `i64`, `c: u8`) have the
+    /// expectation's type: the first arm's `u8` made the `if` a `u8` that
+    /// the `65533` was stored into, and it ran as 253 (B-2026-11-12-6).
+    fn join_checked_arms(&self, arms: impl IntoIterator<Item = Type>, expected: &Type) -> Type {
         let mut out: Option<Type> = None;
         for t in arms.into_iter().filter(|t| *t != Type::Never) {
             out = Some(match out {
                 None => t,
-                Some(acc) => self.join_branch_types(&acc, &t).unwrap_or(acc),
+                Some(acc) => match self.join_branch_types(&acc, &t) {
+                    Some(joined) => joined,
+                    None if super::exprs::expectation_is_concrete(expected) => expected.clone(),
+                    None => acc,
+                },
             });
         }
         out.unwrap_or(Type::Never)
@@ -151,7 +160,7 @@ impl<'a> super::TypeChecker<'a> {
             // against `expected` if it didn't comply; no need to re-check
             // cross-branch compatibility (it's transitive through expected).
             // Pick a non-Never type as the recorded result.
-            let result_ty = self.join_checked_arms([then_ty, else_ty]);
+            let result_ty = self.join_checked_arms([then_ty, else_ty], expected);
             self.record_expr_type(span, &result_ty);
             result_ty
         } else {
@@ -224,7 +233,7 @@ impl<'a> super::TypeChecker<'a> {
         self.local_scope.pop();
         if let Some(else_expr) = else_branch {
             let else_ty = self.check_expr(else_expr, expected);
-            let result_ty = self.join_checked_arms([then_ty, else_ty]);
+            let result_ty = self.join_checked_arms([then_ty, else_ty], expected);
             self.record_expr_type(span, &result_ty);
             result_ty
         } else {
@@ -339,7 +348,7 @@ impl<'a> super::TypeChecker<'a> {
         if !scrutinee_mismatch {
             self.check_exhaustiveness(&dispatch_ty, arms, *span);
         }
-        let result_ty = self.join_checked_arms(arm_types);
+        let result_ty = self.join_checked_arms(arm_types, expected);
         self.record_expr_type(span, &result_ty);
         result_ty
     }
@@ -802,13 +811,15 @@ impl<'a> super::TypeChecker<'a> {
                 if *t == peer {
                     continue;
                 }
-                if let Some(lit) = Self::literal_taking_branch_type(&arm.body, &peer) {
+                if let Some(lit) = Self::literal_taking_branch_type(&arm.body, &peer)
+                    .filter(|l| Self::literal_tree_fits(l, &peer))
+                {
                     self.record_promoted_literal(lit, &peer);
                     if !std::ptr::eq(lit, &arm.body) {
                         self.record_expr_type(&arm.body.span, &peer);
                     }
                     *t = peer.clone();
-                } else if Self::is_literal_tree(&arm.body, &peer) {
+                } else if Self::literal_tree_fits(&arm.body, &peer) {
                     // An arm that is an `if` or `match` of literals
                     // (B-2026-11-06-15).
                     self.promote_literal_tree(&arm.body, &peer);
