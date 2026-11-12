@@ -1,0 +1,72 @@
+// LeetCode #1131: Maximum of Absolute Value Expression -- the expression
+// is the L1 distance between the points `(arr1[i], arr2[i], i)` and
+// `(arr1[j], arr2[j], j)`, and an L1 distance is the largest of `s * (u -
+// v)` over the eight sign vectors `s`: so the answer is the largest, over
+// the eight, of the points' largest `s`-value less their smallest. O(n)
+
+fn max_abs_val_expr(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let n = arr1.len();
+    let mut best = 0;
+    for signs in 0..8 {
+        let s1 = if signs & 1 == 0 { 1 } else { -1 };
+        let s2 = if signs & 2 == 0 { 1 } else { -1 };
+        let s3 = if signs & 4 == 0 { 1 } else { -1 };
+        let values: Vec[i64] = (0..n).map(|i| s1 * arr1[i] + s2 * arr2[i] + s3 * i).collect();
+        let spread = values.iter().max().unwrap() - values.iter().min().unwrap();
+        best = best.max(spread);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn value(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed);
+    let low = next_random(mut seed);
+    (high * 32768 + low) % 2000001 - 1000000
+}
+
+fn main() {
+    // LeetCode's two examples and six more: two zeros, all alike, rising
+    // against falling, the widest values, a zigzag, and a mix
+    let cases: Vec[(Vec[i64], Vec[i64])] = [
+        ([1, 2, 3, 4], [-1, 4, 5, 6]),
+        ([1, -2, -5, 0, 10], [0, -2, -1, -7, -4]),
+        ([0, 0], [0, 0]),
+        ([7, 7, 7, 7, 7, 7], [3, 3, 3, 3, 3, 3]),
+        ([1, 2, 3, 4, 5], [5, 4, 3, 2, 1]),
+        ([-1000000, 1000000], [1000000, -1000000]),
+        ([5, -5, 5, -5], [-5, 5, -5, 5]),
+        ([3, 1, 4, 1, 5, 9, 2, 6], [2, 7, 1, 8, 2, 8, 1, 8]),
+    ];
+    for (a, b) in cases.iter() {
+        println(f"{a}, {b} -> {max_abs_val_expr(a, b)}");
+    }
+    // 2000 random pairs of 2 to 60 values from -10^6 to 10^6: the answers
+    // summed and a checksum
+    let mut seed = 1131;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 59 + 2;
+        let a: Vec[i64] = (0..n).map(|_| value(mut seed)).collect();
+        let b: Vec[i64] = (0..n).map(|_| value(mut seed)).collect();
+        let r = max_abs_val_expr(a, b);
+        total += r;
+        check = (check * 31 + r) % 1000000007;
+    }
+    println(f"2000 random pairs: answers total {total}, checksum {check}");
+    // LeetCode's largest: 40000 values at random each, and 40000 rising
+    // against 40000 falling
+    let a: Vec[i64] = (0..40000).map(|_| value(mut seed)).collect();
+    let b: Vec[i64] = (0..40000).map(|_| value(mut seed)).collect();
+    println(f"40000 random values each: {max_abs_val_expr(a, b)}");
+    let up: Vec[i64] = (0..40000).collect();
+    let down: Vec[i64] = (0..40000).map(|i| -i).collect();
+    println(f"40000 rising against falling: {max_abs_val_expr(up, down)}");
+}

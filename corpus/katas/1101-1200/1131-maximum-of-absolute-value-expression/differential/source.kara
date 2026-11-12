@@ -1,0 +1,244 @@
+// LeetCode #1131: Maximum of Absolute Value Expression -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- max_abs_val_expr.kara ----
+
+fn a0_max_abs_val_expr(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for (p, q) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
+        let mut high = i64.MIN;
+        let mut low = i64.MAX;
+        for i in 0..arr1.len() {
+            let v = p * arr1[i] + q * arr2[i] + i;
+            high = high.max(v);
+            low = low.min(v);
+        }
+        best = best.max(high - low);
+    }
+    best
+}
+
+// ---- max_abs_val_expr_eight.kara ----
+
+fn a1_max_abs_val_expr(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let n = arr1.len();
+    let mut best = 0;
+    for signs in 0..8 {
+        let s1 = if signs & 1 == 0 { 1 } else { -1 };
+        let s2 = if signs & 2 == 0 { 1 } else { -1 };
+        let s3 = if signs & 4 == 0 { 1 } else { -1 };
+        let values: Vec[i64] = (0..n).map(|i| s1 * arr1[i] + s2 * arr2[i] + s3 * i).collect();
+        let spread = values.iter().max().unwrap() - values.iter().min().unwrap();
+        best = best.max(spread);
+    }
+    best
+}
+
+// ---- max_abs_val_expr_sort.kara ----
+
+fn a2_max_abs_val_expr(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for (p, q) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
+        let mut values: Vec[i64] = [];
+        for i in 0..arr1.len() {
+            values.push(p * arr1[i] + q * arr2[i] + i);
+        }
+        values.sort();
+        best = best.max(values[values.len() - 1] - values[0]);
+    }
+    best
+}
+
+// ---- max_abs_val_expr_running.kara ----
+
+fn a3_max_abs_val_expr(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let signs = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let mut least = [i64.MAX; 4];
+    let mut best = 0;
+    for j in 0..arr1.len() {
+        for k in 0..4 {
+            let (p, q) = signs[k];
+            let v = p * arr1[j] + q * arr2[j] + j;
+            if least[k] < i64.MAX {
+                best = best.max(v - least[k]);
+            }
+            least[k] = least[k].min(v);
+        }
+    }
+    best
+}
+
+// ---- max_abs_val_expr_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_max_abs_val_expr(arr1: Vec[i32], arr2: Vec[i32]) -> i32 {
+        let mut ans: i32 = 0;
+        for (p, q) in [(1i32, 1i32), (1, -1), (-1, 1), (-1, -1)] {
+            let mut mx = i32.MIN;
+            let mut mn = i32.MAX;
+            for i in 0..arr1.len() {
+                let v = p * arr1[i] + q * arr2[i] + i as i32;
+                mx = mx.max(v);
+                mn = mn.min(v);
+            }
+            ans = ans.max(mx - mn);
+        }
+        ans
+    }
+}
+
+fn a4_max_abs_val_expr(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let a: Vec[i32] = arr1.iter().map(|x| x as i32).collect();
+    let b: Vec[i32] = arr2.iter().map(|x| x as i32).collect();
+    A4Solution.a4_max_abs_val_expr(a, b)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    match which {
+        0 => a0_max_abs_val_expr(arr1, arr2),
+        1 => a1_max_abs_val_expr(arr1, arr2),
+        2 => a2_max_abs_val_expr(arr1, arr2),
+        3 => a3_max_abs_val_expr(arr1, arr2),
+        _ => a4_max_abs_val_expr(arr1, arr2),
+    }
+}
+
+// The statement read literally: `|arr1[i] - arr1[j]| + |arr2[i] -
+// arr2[j]| + |i - j|` over every pair of indices, and the largest.
+fn literal(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let n = arr1.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in 0..n {
+            let d = (arr1[i] - arr1[j]).abs() + (arr2[i] - arr2[j]).abs() + (i - j).abs();
+            best = best.max(d);
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn value(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed);
+    let low = next_random(mut seed);
+    (high * 32768 + low) % 2000001 - 1000000
+}
+
+fn values(seed: mut ref i64, n: i64, small: bool) -> Vec[i64] {
+    let mut out: Vec[i64] = [];
+    for _ in 0..n {
+        if small {
+            out.push(next_random(mut seed) % 7 - 3);
+        } else {
+            out.push(value(mut seed));
+        }
+    }
+    out
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, arr1: Vec[i64], arr2: Vec[i64], shift: i64) {
+    let n = arr1.len();
+    let want = literal(arr1, arr2);
+    for w in 0..5 {
+        let answer = arm(w, arr1, arr2);
+        let what = f"arm {w}, case {t.cases} {arr1}, {arr2} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: the two arrays swapped give the same answer
+        let s = arm(w, arr2, arr1);
+        expect(mut t, 2, s == answer, f"P2 {what}, swapped {s}");
+        // P3: both arrays reversed give the same answer
+        let r1: Vec[i64] = arr1.iter().rev().cloned().collect();
+        let r2: Vec[i64] = arr2.iter().rev().cloned().collect();
+        let r = arm(w, r1, r2);
+        expect(mut t, 3, r == answer, f"P3 {what}, reversed {r}");
+        // P4: every value negated gives the same answer
+        let n1: Vec[i64] = arr1.iter().map(|v| -v).collect();
+        let n2: Vec[i64] = arr2.iter().map(|v| -v).collect();
+        let g = arm(w, n1, n2);
+        expect(mut t, 4, g == answer, f"P4 {what}, negated {g}");
+        // P5: a constant added to every value of the first array gives the
+        // same answer
+        let moved: Vec[i64] = arr1.iter().map(|v| v + shift).collect();
+        let m = arm(w, moved, arr2);
+        expect(mut t, 5, m == answer, f"P5 {what}, moved by {shift} {m}");
+        // P6: the answer is at least the indices' spread, `n - 1`, and at
+        // least the answer with the last pair dropped
+        let shorter = if n > 2 { arm(w, arr1[0..n - 1].to_vec(), arr2[0..n - 1].to_vec()) } else { 0 };
+        expect(mut t, 6, answer >= n - 1 and answer >= shorter, f"P6 {what}, shorter {shorter}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in five kinds, 400 each: 2 to 12 values from -10^6 to
+    // 10^6; from -3 to 3, so many tie; the second array the first; the
+    // first sorted rising and the second falling; and every value alike.
+    // Every choice is drawn before any arm answers.
+    let mut seed = 11311;
+    let mut problems: Vec[(Vec[i64], Vec[i64], i64)] = [];
+    for i in 0..2000 {
+        let n = next_random(mut seed) % 11 + 2;
+        let (a, b) = match i % 5 {
+            0 => (values(mut seed, n, false), values(mut seed, n, false)),
+            1 => (values(mut seed, n, true), values(mut seed, n, true)),
+            2 => {
+                let a = values(mut seed, n, false);
+                (a.clone(), a)
+            }
+            3 => {
+                let mut a = values(mut seed, n, false);
+                let mut b = values(mut seed, n, false);
+                a.sort();
+                b.sort();
+                b.reverse();
+                (a, b)
+            }
+            _ => {
+                let v = value(mut seed);
+                (Vec.filled(n, v), Vec.filled(n, v))
+            }
+        };
+        let shift = value(mut seed);
+        problems.push((a, b, shift));
+    }
+    for (a, b, shift) in problems.iter() {
+        check_case(mut t, a, b, shift);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

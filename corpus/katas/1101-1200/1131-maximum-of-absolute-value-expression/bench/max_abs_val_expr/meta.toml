@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1131-maximum-of-absolute-value-expression/bench/max_abs_val_expr.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1131 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "610c9cb00"
+extracted_src = "e2e9d807"
