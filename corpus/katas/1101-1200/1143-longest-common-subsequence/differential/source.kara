@@ -1,0 +1,269 @@
+// LeetCode #1143: Longest Common Subsequence -- a differential over the five
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- longest_common_subsequence.kara ----
+
+fn a0_longest_common_subsequence(text1: String, text2: String) -> i64 {
+    let a: Vec[char] = text1.chars().collect();
+    let b: Vec[char] = text2.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut best = Vec.filled(m + 1, Vec.filled(n + 1, 0));
+    for i in 1..m + 1 {
+        for j in 1..n + 1 {
+            best[i][j] = if a[i - 1] == b[j - 1] {
+                best[i - 1][j - 1] + 1
+            } else {
+                best[i - 1][j].max(best[i][j - 1])
+            };
+        }
+    }
+    best[m][n]
+}
+
+// ---- longest_common_subsequence_rows.kara ----
+
+fn a1_longest_common_subsequence(text1: String, text2: String) -> i64 {
+    let (long, short) = if text1.len() >= text2.len() { (text1, text2) } else { (text2, text1) };
+    let s: Vec[u8] = short.bytes().iter().collect();
+    let mut prev: Vec[i64] = Vec.filled(s.len() + 1, 0);
+    let mut cur: Vec[i64] = Vec.filled(s.len() + 1, 0);
+    for x in long.bytes() {
+        for j in 1..s.len() + 1 {
+            cur[j] = if x == s[j - 1] { prev[j - 1] + 1 } else { prev[j].max(cur[j - 1]) };
+        }
+        mem.swap(mut prev, mut cur);
+    }
+    prev[s.len()]
+}
+
+// ---- longest_common_subsequence_memo.kara ----
+
+fn a2_lcs_from(a: Vec[char], b: Vec[char], i: i64, j: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == a.len() or j == b.len() {
+        return 0;
+    }
+    if let Some(v) = memo.get((i, j)) {
+        return v;
+    }
+    let v = if a[i] == b[j] {
+        1 + a2_lcs_from(a, b, i + 1, j + 1, mut memo)
+    } else {
+        a2_lcs_from(a, b, i + 1, j, mut memo).max(a2_lcs_from(a, b, i, j + 1, mut memo))
+    };
+    memo.insert((i, j), v);
+    v
+}
+
+fn a2_longest_common_subsequence(text1: String, text2: String) -> i64 {
+    let a: Vec[char] = text1.chars().collect();
+    let b: Vec[char] = text2.chars().collect();
+    let mut memo = Map.new();
+    a2_lcs_from(a, b, 0, 0, mut memo)
+}
+
+// ---- longest_common_subsequence_hunt.kara ----
+
+fn a3_longest_common_subsequence(text1: String, text2: String) -> i64 {
+    let mut places: Map[char, Vec[i64]] = Map.new();
+    for (j, c) in text2.chars().enumerate() {
+        places.entry(c).or_insert(Vec.new()).push(j);
+    }
+    let mut ends: Vec[i64] = [];
+    for c in text1.chars() {
+        if let Some(ps) = places.get(c) {
+            for p in ps.iter().rev() {
+                let mut lo = 0;
+                let mut hi = ends.len();
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if ends[mid] < *p {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                if lo == ends.len() {
+                    ends.push(*p);
+                } else {
+                    ends[lo] = *p;
+                }
+            }
+        }
+    }
+    ends.len()
+}
+
+// ---- longest_common_subsequence_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_longest_common_subsequence(text1: String, text2: String) -> i32 {
+        let (a, b) = (text1.bytes(), text2.bytes());
+        let (m, n) = (a.len(), b.len());
+        let mut dp = Vec.filled(m + 1, Vec.filled(n + 1, 0i32));
+        for i in 1..=m {
+            for j in 1..=n {
+                if a[i - 1] == b[j - 1] {
+                    dp[i][j] = dp[i - 1][j - 1] + 1;
+                } else {
+                    dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+                }
+            }
+        }
+        dp[m][n]
+    }
+}
+
+fn a4_longest_common_subsequence(text1: String, text2: String) -> i64 {
+    A4Solution.a4_longest_common_subsequence(text1, text2)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, text1: String, text2: String) -> i64 {
+    match which {
+        0 => a0_longest_common_subsequence(text1, text2),
+        1 => a1_longest_common_subsequence(text1, text2),
+        2 => a2_longest_common_subsequence(text1, text2),
+        3 => a3_longest_common_subsequence(text1, text2),
+        _ => a4_longest_common_subsequence(text1, text2),
+    }
+}
+
+// Whether `s` can be read in `t` in order, skipping letters of `t`.
+fn reads_in(s: Vec[char], t: Vec[char]) -> bool {
+    let mut k = 0;
+    for c in t.iter() {
+        if k < s.len() and s[k] == *c {
+            k += 1;
+        }
+    }
+    k == s.len()
+}
+
+// The statement read literally: of every subsequence of `text1`, every
+// choice of its letters kept in order, the longest that is also a
+// subsequence of `text2`.
+fn literal(text1: String, text2: String) -> i64 {
+    let a: Vec[char] = text1.chars().collect();
+    let b: Vec[char] = text2.chars().collect();
+    let mut best = 0;
+    for mask in 0..(1 << a.len()) {
+        let kept: Vec[char] = (0..a.len()).filter(|i| (mask >> i) & 1 == 1).map(|i| a[i]).collect();
+        if kept.len() > best and reads_in(kept, b) {
+            best = kept.len();
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(seed: mut ref i64, n: i64, k: i64) -> String {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    (0..n).map(|_| letters[next_random(mut seed) % k]).collect()
+}
+
+// 1 to 8 letters each: from 2 letters; from 3; from 26; or the second
+// text the first with 0 to 4 letters put in among it.
+fn problem(seed: mut ref i64, kind: i64) -> (String, String) {
+    let n1 = next_random(mut seed) % 8 + 1;
+    let n2 = next_random(mut seed) % 8 + 1;
+    if kind == 3 {
+        let t1 = random_text(mut seed, n1, 3);
+        let mut t2: Vec[char] = t1.chars().collect();
+        for _ in 0..next_random(mut seed) % 5 {
+            let at = next_random(mut seed) % (t2.len() + 1);
+            t2.insert(at, 'd');
+        }
+        return (t1, t2.iter().collect());
+    }
+    let k = [2, 3, 26][kind];
+    (random_text(mut seed, n1, k), random_text(mut seed, n2, k))
+}
+
+// Every letter moved on by `shift` places round the alphabet.
+fn renamed(text: String, shift: i64) -> String {
+    text.chars().map(|c| (((c as i64 - 'a' as i64 + shift) % 26 + 'a' as i64) as u8) as char).collect()
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, text1: String, text2: String, choice: (i64, i64, char)) {
+    let want = literal(text1, text2);
+    let (shift, cut, letter) = choice;
+    let back1: String = text1.chars().rev().collect();
+    let back2: String = text2.chars().rev().collect();
+    let r1 = renamed(text1, shift);
+    let r2 = renamed(text2, shift);
+    let shorter: String = text1.chars().enumerate().filter(|(i, _)| i != cut).map(|(_, c)| c).collect();
+    for w in 0..5 {
+        let answer = arm(w, text1, text2);
+        let what = f"arm {w}, case {t.cases} {text1} {text2} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: the texts the other way round
+        let swapped = arm(w, text2, text1);
+        expect(mut t, 2, swapped == answer, f"P2 {what}, swapped {swapped}");
+        // P3: both texts backwards
+        let back = arm(w, back1, back2);
+        expect(mut t, 3, back == answer, f"P3 {what}, backwards {back}");
+        // P4: every letter renamed alike
+        let r = arm(w, r1, r2);
+        expect(mut t, 4, r == answer, f"P4 {what}, renamed by {shift} {r}");
+        // P5: one letter put after both, one more
+        let more = arm(w, text1 + letter.to_string(), text2 + letter.to_string());
+        expect(mut t, 5, more == answer + 1, f"P5 {what}, {letter} after both {more}");
+        // P6: a letter of the first text taken out, 0 or 1 less
+        let less = arm(w, shorter, text2);
+        expect(mut t, 6, less == answer or less == answer - 1, f"P6 {what}, letter {cut} out {less}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 pairs in four kinds, 500 each. Every choice, P4's shift, P5's
+    // letter and P6's cut among them, is drawn before any arm answers.
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut seed = 11431;
+    let mut problems: Vec[(String, String, (i64, i64, char))] = [];
+    for i in 0..2000 {
+        let (t1, t2) = problem(mut seed, i % 4);
+        let shift = next_random(mut seed) % 25 + 1;
+        let cut = next_random(mut seed) % t1.len();
+        let letter = letters[next_random(mut seed) % 4];
+        problems.push((t1, t2, (shift, cut, letter)));
+    }
+    for (t1, t2, choice) in problems.iter() {
+        check_case(mut t, t1.clone(), t2.clone(), choice);
+    }
+    println(f"{t.cases} pairs: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,12 @@
+example 1: 3
+example 2: 3
+example 3: 0
+one letter, alike: 1
+one letter, not: 0
+one inside the other: 3
+backwards: 1
+crossing: 3
+2000 random pairs: answers total 17620, checksum 180185282
+1000 and 1000 of 4 letters: 648
+1000 and 1000 of 26 letters: 318
+1000 letters, every tenth changed: 903
