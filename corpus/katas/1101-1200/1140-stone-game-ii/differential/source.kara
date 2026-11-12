@@ -1,0 +1,293 @@
+// LeetCode #1140: Stone Game II -- a differential over the five
+// arms. Each answer is checked against the statement read literally and
+// against five properties that do not compute the answer; see the README.
+
+// ---- stone_game_ii.kara ----
+
+fn a0_stone_game_ii(piles: Vec[i64]) -> i64 {
+    let n = piles.len();
+    let mut left = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        left[i] = left[i + 1] + piles[i];
+    }
+    let mut best = Vec.filled(n + 1, Vec.filled(n + 1, 0));
+    for i in (0..n).rev() {
+        for m in 1..n + 1 {
+            if i + 2 * m >= n {
+                best[i][m] = left[i];
+            } else {
+                let mut most = 0;
+                for x in 1..2 * m + 1 {
+                    most = most.max(left[i] - best[i + x][m.max(x)]);
+                }
+                best[i][m] = most;
+            }
+        }
+    }
+    best[0][1]
+}
+
+// ---- stone_game_ii_memo.kara ----
+
+fn a1_most_from(left: Vec[i64], i: i64, m: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    let n = left.len() - 1;
+    if i + 2 * m >= n {
+        return left[i];
+    }
+    if memo[i][m] >= 0 {
+        return memo[i][m];
+    }
+    let mut most = 0;
+    for x in 1..=2 * m {
+        let theirs = a1_most_from(left, i + x, m.max(x), mut memo);
+        most = most.max(left[i] - theirs);
+    }
+    memo[i][m] = most;
+    most
+}
+
+fn a1_stone_game_ii(piles: Vec[i64]) -> i64 {
+    let n = piles.len();
+    let mut left: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        left[i] = left[i + 1] + piles[i];
+    }
+    let mut memo: Vec[Vec[i64]] = (0..n + 1).map(|_| Vec.filled(n + 1, -1)).collect();
+    a1_most_from(left, 0, 1, mut memo)
+}
+
+// ---- stone_game_ii_minimax.kara ----
+
+fn a2_alice_gets(piles: Vec[i64], i: i64, m: i64, alice: bool, memo: mut ref Map[(i64, i64, bool), i64]) -> i64 {
+    let n = piles.len();
+    if i == n {
+        return 0;
+    }
+    if let Some(v) = memo.get((i, m, alice)) {
+        return v;
+    }
+    let mut result = if alice { 0 } else { i64.MAX };
+    let mut taken = 0;
+    for x in 1..=2 * m {
+        if i + x > n {
+            break;
+        }
+        taken += piles[i + x - 1];
+        let rest = a2_alice_gets(piles, i + x, m.max(x), not alice, mut memo);
+        if alice {
+            result = result.max(taken + rest);
+        } else {
+            result = result.min(rest);
+        }
+    }
+    memo.insert((i, m, alice), result);
+    result
+}
+
+fn a2_stone_game_ii(piles: Vec[i64]) -> i64 {
+    let mut memo = Map.new();
+    a2_alice_gets(piles, 0, 1, true, mut memo)
+}
+
+// ---- stone_game_ii_lead.kara ----
+
+fn a3_stone_game_ii(piles: Vec[i64]) -> i64 {
+    let n = piles.len();
+    let mut before = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        before[i + 1] = before[i] + piles[i];
+    }
+    let mut lead: Vec[Vec[i64]] = [];
+    for _ in 0..n + 1 {
+        lead.push(Vec.filled(n + 1, 0));
+    }
+    for i in (0..n).rev() {
+        for m in 1..n + 1 {
+            let mut most = i64.MIN;
+            let mut x = 1;
+            while x <= 2 * m and i + x <= n {
+                let gain = before[i + x] - before[i];
+                most = most.max(gain - lead[i + x][m.max(x)]);
+                x += 1;
+            }
+            lead[i][m] = most;
+        }
+    }
+    (before[n] + lead[0][1]) / 2
+}
+
+// ---- stone_game_ii_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_stone_game_ii(piles: Vec[i32]) -> i32 {
+        let n = piles.len();
+        let mut suffix = Vec.filled(n + 1, 0i32);
+        for i in (0..n).rev() {
+            suffix[i] = suffix[i + 1] + piles[i];
+        }
+        let mut dp = Vec.filled(n + 1, Vec.filled(n + 1, 0i32));
+        for i in (0..n).rev() {
+            for m in 1..=n {
+                if i + 2 * m >= n {
+                    dp[i][m] = suffix[i];
+                } else {
+                    for x in 1..=2 * m {
+                        dp[i][m] = max(dp[i][m], suffix[i] - dp[i + x][max(m, x)]);
+                    }
+                }
+            }
+        }
+        dp[0][1]
+    }
+}
+
+fn a4_stone_game_ii(piles: Vec[i64]) -> i64 {
+    let p: Vec[i32] = piles.iter().map(|x| x as i32).collect();
+    A4Solution.a4_stone_game_ii(p)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, piles: Vec[i64]) -> i64 {
+    match which {
+        0 => a0_stone_game_ii(piles),
+        1 => a1_stone_game_ii(piles),
+        2 => a2_stone_game_ii(piles),
+        3 => a3_stone_game_ii(piles),
+        _ => a4_stone_game_ii(piles),
+    }
+}
+
+// The statement read literally: every way the game can go from pile `i`
+// with `M = m`, the player to move taking 1 to 2M piles, each player
+// taking the most stones they can; the stones Alice and Bob end with.
+fn play(piles: Vec[i64], i: i64, m: i64, alice: bool) -> (i64, i64) {
+    let n = piles.len();
+    if i == n {
+        return (0, 0);
+    }
+    let mut best = (-1, -1);
+    let mut taken = 0;
+    for x in 1..=2 * m {
+        if i + x > n {
+            break;
+        }
+        taken += piles[i + x - 1];
+        let (a, b) = play(piles, i + x, m.max(x), not alice);
+        let ends = if alice { (a + taken, b) } else { (a, b + taken) };
+        let (mine, best_mine) = if alice { (ends.0, best.0) } else { (ends.1, best.1) };
+        if mine > best_mine {
+            best = ends;
+        }
+    }
+    best
+}
+
+fn literal(piles: Vec[i64]) -> i64 {
+    play(piles, 0, 1, true).0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1 to 12 piles: 1 to 10000 stones; 1 to 3, so moves tie; 1 to 5 with
+// one pile of 1000 to 2000; or every pile the same.
+fn problem(seed: mut ref i64, kind: i64) -> Vec[i64] {
+    let n = next_random(mut seed) % 12 + 1;
+    if kind == 3 {
+        let v = next_random(mut seed) % 100 + 1;
+        return Vec.filled(n, v);
+    }
+    let most = if kind == 0 { 10000 } else if kind == 1 { 3 } else { 5 };
+    let mut piles: Vec[i64] = (0..n).map(|_| next_random(mut seed) % most + 1).collect();
+    if kind == 2 {
+        let at = next_random(mut seed) % n;
+        piles[at] = next_random(mut seed) % 1001 + 1000;
+    }
+    piles
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, piles: Vec[i64], raise: (i64, i64)) {
+    let want = literal(piles);
+    let n = piles.len();
+    let total: i64 = piles.iter().sum();
+    let tripled: Vec[i64] = piles.iter().map(|p| p * 3).collect();
+    let rest: Vec[i64] = piles.iter().skip(1).cloned().collect();
+    let (at, by) = raise;
+    let mut raised = piles.clone();
+    raised[at] += by;
+    for w in 0..5 {
+        let answer = arm(w, piles.clone());
+        let what = f"arm {w}, case {t.cases} {piles} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: every pile three times as big, three times the answer
+        let three = arm(w, tripled.clone());
+        expect(mut t, 2, three == 3 * answer, f"P2 {what}, tripled {three}");
+        // P3: Alice takes at least her first move's most, the first two
+        // piles or the only one, and at most every stone
+        let first = if n == 1 { piles[0] } else { piles[0] + piles[1] };
+        expect(mut t, 3, answer >= first and answer <= total, f"P3 {what}, first move {first} of {total}");
+        // P4: taking one pile first, Alice leaves Bob the answer to the
+        // rest with M = 1, so her answer and the rest's cover the total
+        if n >= 2 {
+            let other = arm(w, rest.clone());
+            expect(mut t, 4, answer + other >= total, f"P4 {what}, the rest {other} of {total}");
+        }
+        // P5: a pile raised by `by` raises the answer by 0 to `by`
+        let up = arm(w, raised.clone());
+        expect(mut t, 5, up >= answer and up <= answer + by, f"P5 {what}, pile {at} raised by {by}: {up}");
+        // P6: past two piles Bob moves at least once, taking the second or
+        // third pile at least
+        if n >= 3 {
+            let least = piles[1].min(piles[2]);
+            expect(mut t, 6, answer <= total - least, f"P6 {what}, Bob takes at least {least} of {total}");
+        }
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 rows in four kinds, 500 each. Every choice, the pile P5 raises
+    // and by how much among them, is drawn before any arm answers.
+    let mut seed = 11401;
+    let mut problems: Vec[(Vec[i64], (i64, i64))] = [];
+    for i in 0..2000 {
+        let piles = problem(mut seed, i % 4);
+        let raise = (next_random(mut seed) % piles.len(), next_random(mut seed) % 50 + 1);
+        problems.push((piles, raise));
+    }
+    for (piles, raise) in problems.iter() {
+        check_case(mut t, piles.clone(), raise);
+    }
+    println(f"{t.cases} rows: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

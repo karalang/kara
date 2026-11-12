@@ -1,0 +1,55 @@
+// LeetCode #1140: Stone Game II -- the bench, the ★ arm's algorithm: the
+// most the player to move can take from every pile on, with every `M`,
+// filled from the last pile back.
+
+fn stone_game_ii(piles: Vec[i64]) -> i64 {
+    let n = piles.len();
+    let mut left = Vec.filled(n + 1, 0);
+    for i in (0..n).rev() {
+        left[i] = left[i + 1] + piles[i];
+    }
+    let mut best = Vec.filled(n + 1, Vec.filled(n + 1, 0));
+    for i in (0..n).rev() {
+        for m in 1..n + 1 {
+            if i + 2 * m >= n {
+                best[i][m] = left[i];
+            } else {
+                let mut most = 0;
+                for x in 1..2 * m + 1 {
+                    most = most.max(left[i] - best[i + x][m.max(x)]);
+                }
+                best[i][m] = most;
+            }
+        }
+    }
+    best[0][1]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 rows of 100 piles of 1 to 10000 stones, LeetCode's largest,
+    // built once. Each of 100 rounds draws one pile of every row again and
+    // answers the row.
+    let mut seed = 1140;
+    let mut rows: Vec[Vec[i64]] = [];
+    for _ in 0..20 {
+        let row: Vec[i64] = (0..100).map(|_| next_random(mut seed) % 10000 + 1).collect();
+        rows.push(row);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        for r in 0..20 {
+            let at = next_random(mut seed) % 100;
+            rows[r][at] = next_random(mut seed) % 10000 + 1;
+            let answer = stone_game_ii(rows[r]);
+            total += answer;
+            check = (check * 131 + answer + 1) % 1000000007;
+        }
+    }
+    println(f"100 rounds over 20 rows of 100 piles: answers total {total}, checksum {check}");
+}

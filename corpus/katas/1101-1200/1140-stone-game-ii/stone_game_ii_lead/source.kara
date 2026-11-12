@@ -1,0 +1,74 @@
+// LeetCode #1140: Stone Game II -- the lead: how many stones more than
+// the other the player to move can end with, from pile `i` with `M = m`,
+// each first move worth the piles it takes less the other's lead after
+// it. Alice's stones are half of the total and her lead. O(n^3)
+
+fn stone_game_ii(piles: Vec[i64]) -> i64 {
+    let n = piles.len();
+    let mut before = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        before[i + 1] = before[i] + piles[i];
+    }
+    let mut lead: Vec[Vec[i64]] = [];
+    for _ in 0..n + 1 {
+        lead.push(Vec.filled(n + 1, 0));
+    }
+    for i in (0..n).rev() {
+        for m in 1..n + 1 {
+            let mut most = i64.MIN;
+            let mut x = 1;
+            while x <= 2 * m and i + x <= n {
+                let gain = before[i + x] - before[i];
+                most = most.max(gain - lead[i + x][m.max(x)]);
+                x += 1;
+            }
+            lead[i][m] = most;
+        }
+    }
+    (before[n] + lead[0][1]) / 2
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` piles of 1 to `most` stones each.
+fn random_piles(seed: mut ref i64, n: i64, most: i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % most + 1).collect()
+}
+
+fn main() {
+    // LeetCode's two examples
+    println(f"example 1: {stone_game_ii([2, 7, 9, 4, 4])}");
+    println(f"example 2: {stone_game_ii([1, 2, 3, 4, 5, 100])}");
+    // one pile; two; a big pile third and fifth, beyond Alice's first
+    // move; equal piles
+    println(f"one pile: {stone_game_ii([5])}");
+    println(f"two piles: {stone_game_ii([3, 9])}");
+    println(f"a big pile third: {stone_game_ii([1, 1, 100])}");
+    println(f"a big pile fifth: {stone_game_ii([1, 1, 1, 1, 100])}");
+    println(f"seven equal piles: {stone_game_ii([4, 4, 4, 4, 4, 4, 4])}");
+    // 2000 random rows of 1 to 30 piles, of 1 to 10000 stones or, every
+    // third row, of 1 to 10: the answers summed and a checksum
+    let mut seed = 1140;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let n = next_random(mut seed) % 30 + 1;
+        let most = if i % 3 == 2 { 10 } else { 10000 };
+        let piles = random_piles(mut seed, n, most);
+        let answer = stone_game_ii(piles);
+        total += answer;
+        check = (check * 131 + answer + 1) % 1000000007;
+    }
+    println(f"2000 random rows: answers total {total}, checksum {check}");
+    // the largest the constraints allow, 100 piles: all 10000; 1 to 100
+    // rising; and 1 to 10000 at random
+    println(f"100 piles of 10000: {stone_game_ii(Vec.filled(100, 10000))}");
+    let rising: Vec[i64] = (1..101).collect();
+    println(f"100 piles rising: {stone_game_ii(rising)}");
+    println(f"100 random piles: {stone_game_ii(random_piles(mut seed, 100, 10000))}");
+}
