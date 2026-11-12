@@ -104,7 +104,12 @@ fn run(cmd: &str, path: &PathBuf, units: &str, handoff: &str) -> (Output, Vec<St
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with(&prefix))
+        // The pid must end where the prefix does: another process's
+        // `karac-mir-8803.ll` is not this child 880's.
+        .filter(|n| {
+            n.strip_prefix(&prefix)
+                .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
         .collect();
     (out, left)
 }
