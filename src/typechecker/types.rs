@@ -841,6 +841,25 @@ fn hidden_hasher(t: &Type) -> bool {
     matches!(t, Type::TypeVar(_)) || *t == default_hasher()
 }
 
+/// `t` with every `Map` / `Set` hasher its display leaves off dropped, at
+/// any depth: `Set[i64, ?H]` from `Set.new()` and a written `Set[i64]`
+/// compare equal, as they read.
+pub fn without_hidden_hashers(t: &Type) -> Type {
+    match t {
+        Type::Named { name, args } => Type::Named {
+            name: name.clone(),
+            args: without_default_hasher(name, args)
+                .iter()
+                .map(without_hidden_hashers)
+                .collect(),
+        },
+        Type::Ref(inner) => Type::Ref(Box::new(without_hidden_hashers(inner))),
+        Type::MutRef(inner) => Type::MutRef(Box::new(without_hidden_hashers(inner))),
+        Type::Tuple(items) => Type::Tuple(items.iter().map(without_hidden_hashers).collect()),
+        other => other.clone(),
+    }
+}
+
 pub fn type_display(ty: &Type) -> String {
     match ty {
         Type::Shape(dims) => {

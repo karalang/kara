@@ -7698,9 +7698,22 @@ impl<'a> super::TypeChecker<'a> {
                             .iter()
                             .flatten()
                             .all(|t| type_is_fully_concrete(t) && !contains_type_param(t));
+                    // A hasher a `Map` / `Set` item leaves unnamed is the
+                    // default on either side: `Set.new()` items make a
+                    // `Vec[Set[i64]]` (B-2026-11-12-14).
                     let offered: Vec<Vec<Type>> = offered
                         .iter()
-                        .map(|a| a.iter().map(|t| self.read_as_value(t)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .map(|t| {
+                                    super::types::without_hidden_hashers(&self.read_as_value(t))
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    let want: Vec<Type> = want
+                        .iter()
+                        .map(super::types::without_hidden_hashers)
                         .collect();
                     // Borrowed items for an owned collection (`Vec[String]`
                     // from `ref String`s) are refused where MIR lowers the
@@ -13853,7 +13866,17 @@ impl<'a> super::TypeChecker<'a> {
                     self.pending_cast_expected
                         .push((SpanKey::from_span(&index.span), Type::Int(IntSize::I64)));
                 }
-                let idx_ty = self.infer_expr(index);
+                let mut idx_ty = self.infer_expr(index);
+                // A literal a generic call holds open (a `fold` seed read in
+                // its closure) is decided where it indexes, as where a
+                // method is called on it: a position is an `i64`
+                // (B-2026-11-12-13).
+                if self
+                    .unbound_literal_var(Self::peel_borrow(&idx_ty))
+                    .is_some_and(|(id, _)| self.literal_held_open(id))
+                {
+                    idx_ty = self.settle_literals(&idx_ty);
+                }
                 self.assigning_lhs = lhs;
                 if let Some(t) =
                     self.user_index_impl(&obj_ty, &idx_ty, index, index_is_lhs, &expr.span)
