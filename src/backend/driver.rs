@@ -6,6 +6,9 @@
 //! `create_target_machine` and the CPU/feature validation, and the
 //! opt-level env reader.
 
+use inkwell::attributes::AttributeLoc;
+use inkwell::context::Context;
+use inkwell::module::Module;
 use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::OptimizationLevel;
 
@@ -1759,6 +1762,51 @@ pub(crate) fn resolve_runtime_path(
     Err(
         "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo rustc -p karac-runtime --release --crate-type staticlib` — NOT plain `cargo build`, which co-emits the rlib and defeats the staticlib's dead-strip; see runtime/Cargo.toml). For the lean compute-only archive also build `--no-default-features --features net` and install it as `libkarac_runtime_min.a` alongside.".to_string(),
     )
+}
+
+/// The `frame-pointer` value an Apple target's ABI requires
+/// (B-2026-11-12-10): every frame record linked through `x29` / `rbp`, which
+/// the system's backtracers (`sample`, Instruments, crash reports) walk
+/// without unwind tables. arm64 lets a leaf skip its record; x86_64 does
+/// not. These are rustc's and clang's defaults for the same triples. `None`
+/// elsewhere, where the frame pointer stays LLVM's to omit.
+pub(crate) fn platform_frame_pointer(triple: &str) -> Option<&'static str> {
+    if !triple.contains("-apple-") {
+        return None;
+    }
+    if triple.starts_with("aarch64") || triple.starts_with("arm64") {
+        Some("non-leaf")
+    } else {
+        Some("all")
+    }
+}
+
+/// Gives every function `module` defines the frame pointer its target's
+/// ABI requires ([`platform_frame_pointer`]), unless it already names one
+/// (the sanitizer builds ask for `all`). `KARAC_MIR_FRAME_POINTER=0` leaves
+/// them out. It lives here rather than beside its caller in `mir/` because
+/// `library_prune`'s test reads every string literal there as a library
+/// method name, and `all` is one.
+pub(crate) fn mark_frame_pointers(llcx: &Context, module: &Module<'_>) {
+    if std::env::var("KARAC_MIR_FRAME_POINTER").as_deref() == Ok("0") {
+        return;
+    }
+    let Ok(tm) = create_target_machine() else {
+        return;
+    };
+    let triple = tm.get_triple();
+    let Some(kind) = platform_frame_pointer(&triple.as_str().to_string_lossy()) else {
+        return;
+    };
+    let attr = llcx.create_string_attribute("frame-pointer", kind);
+    for f in module.get_functions() {
+        if f.count_basic_blocks() > 0
+            && f.get_string_attribute(AttributeLoc::Function, "frame-pointer")
+                .is_none()
+        {
+            f.add_attribute(AttributeLoc::Function, attr);
+        }
+    }
 }
 
 /// Dispatch on the active compilation target (phase-10 `--target`).

@@ -128,6 +128,7 @@ pub fn compile_mir_with<'ctx>(
     cx.mark_noalias();
     cx.hot_swap_finish()?;
     cx.debug_finish();
+    super::driver::mark_frame_pointers(llcx, &cx.module);
     cx.module.verify().map_err(|e| e.to_string())?;
     Ok(cx.module)
 }

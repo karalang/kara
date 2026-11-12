@@ -313,6 +313,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A program built for macOS keeps a frame record in every function, as
+  Apple's arm64 and x86_64 ABIs require (arm64 leaf functions may skip
+  theirs, as rustc's and clang's do). Compiled code saved `x29` / `rbp`
+  without pointing it at its own record, so `sample`, Instruments and crash
+  reports walked past every Kāra frame. `KARAC_MIR_FRAME_POINTER=0` leaves
+  the records out (B-2026-11-12-10).
 - A tuple, array, `Vec`, `Option` or derived-`Ord` struct holding a value
   with a hand-written `Ord` sorts, searches and keys a sorted table by that
   `Ord`, as its derived `cmp` does. `sort`, `sort_by_key`, `binary_search`,
