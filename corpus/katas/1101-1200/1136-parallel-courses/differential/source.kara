@@ -1,0 +1,401 @@
+// LeetCode #1136: Parallel Courses -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- minimum_semesters.kara ----
+
+fn a0_minimum_semesters(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    let mut after: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    let mut need = Vec.filled(n + 1, 0);
+    for r in relations.iter() {
+        after[r[0]].push(r[1]);
+        need[r[1]] += 1;
+    }
+    let mut now: Vec[i64] = (1..n + 1).filter(|c| need[c] == 0).collect();
+    let mut semesters = 0;
+    let mut taken = 0;
+    while not now.is_empty() {
+        semesters += 1;
+        taken += now.len();
+        let mut upcoming: Vec[i64] = [];
+        for c in now.iter() {
+            for d in after[c].iter() {
+                need[d] -= 1;
+                if need[d] == 0 {
+                    upcoming.push(d);
+                }
+            }
+        }
+        now = upcoming;
+    }
+    if taken == n { semesters } else { -1 }
+}
+
+// ---- minimum_semesters_memo.kara ----
+
+fn a1_depth(c: i64, after: Vec[Vec[i64]], state: mut ref Vec[i64], memo: mut ref Vec[i64]) -> i64 {
+    // state: 0 not seen, 1 open, 2 done
+    if state[c] == 1 {
+        return -1;
+    }
+    if state[c] == 2 {
+        return memo[c];
+    }
+    state[c] = 1;
+    let mut most = 0;
+    for d in after[c].iter() {
+        let k = a1_depth(d, after, mut state, mut memo);
+        if k == -1 {
+            return -1;
+        }
+        most = most.max(k);
+    }
+    state[c] = 2;
+    memo[c] = most + 1;
+    most + 1
+}
+
+fn a1_minimum_semesters(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    let mut after: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    for r in relations.iter() {
+        after[r[0]].push(r[1]);
+    }
+    let mut state = Vec.filled(n + 1, 0);
+    let mut memo = Vec.filled(n + 1, 0);
+    let mut best = 0;
+    for c in 1..n + 1 {
+        let k = a1_depth(c, after, mut state, mut memo);
+        if k == -1 {
+            return -1;
+        }
+        best = best.max(k);
+    }
+    best
+}
+
+// ---- minimum_semesters_order.kara ----
+
+fn a2_minimum_semesters(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    let mut after: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    for r in relations.iter() {
+        after[r[0]].push(r[1]);
+    }
+    // state: 0 not seen, 1 on the stack, 2 placed
+    let mut state = Vec.filled(n + 1, 0);
+    let mut placed: Vec[i64] = [];
+    for start in 1..n + 1 {
+        if state[start] != 0 {
+            continue;
+        }
+        let mut stack: Vec[(i64, i64)] = [(start, 0)];
+        state[start] = 1;
+        while not stack.is_empty() {
+            let top = stack.len() - 1;
+            let (c, next) = stack[top];
+            if next < after[c].len() {
+                stack[top] = (c, next + 1);
+                let d = after[c][next];
+                if state[d] == 1 {
+                    return -1;
+                }
+                if state[d] == 0 {
+                    state[d] = 1;
+                    stack.push((d, 0));
+                }
+            } else {
+                state[c] = 2;
+                placed.push(c);
+                stack.pop();
+            }
+        }
+    }
+    placed.reverse();
+    let mut semester = Vec.filled(n + 1, 1);
+    let mut best = 0;
+    for c in placed.iter() {
+        best = best.max(semester[c]);
+        for d in after[c].iter() {
+            semester[d] = semester[d].max(semester[c] + 1);
+        }
+    }
+    best
+}
+
+// ---- minimum_semesters_sinks.kara ----
+
+fn a3_minimum_semesters(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    let mut before: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    let mut needed_by = Vec.filled(n + 1, 0);
+    for r in relations.iter() {
+        before[r[1]].push(r[0]);
+        needed_by[r[0]] += 1;
+    }
+    let mut last: Vec[i64] = [];
+    for c in 1..n + 1 {
+        if needed_by[c] == 0 {
+            last.push(c);
+        }
+    }
+    let mut semesters = 0;
+    let mut removed = 0;
+    while last.len() > 0 {
+        semesters += 1;
+        removed += last.len();
+        let mut earlier: Vec[i64] = [];
+        for c in last.iter() {
+            for p in before[c].iter() {
+                needed_by[p] -= 1;
+                if needed_by[p] == 0 {
+                    earlier.push(p);
+                }
+            }
+        }
+        last = earlier;
+    }
+    if removed < n { -1 } else { semesters }
+}
+
+// ---- minimum_semesters_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_minimum_semesters(n: i32, relations: Vec[Vec[i32]]) -> i32 {
+        let n = n as i64;
+        let mut graph = Vec.filled(n + 1, Vec.new());
+        let mut indegree = Vec.filled(n + 1, 0);
+        for r in ref relations {
+            graph[r[0]].push(r[1] as i64);
+            indegree[r[1]] += 1;
+        }
+        let mut queue = VecDeque.new();
+        for i in 1..=n {
+            if indegree[i] == 0 {
+                queue.push_back(i);
+            }
+        }
+        let mut semesters = 0;
+        let mut studied = 0;
+        while not queue.is_empty() {
+            semesters += 1;
+            for _ in 0..queue.len() {
+                let course = queue.pop_front().unwrap();
+                studied += 1;
+                for next in ref graph[course] {
+                    indegree[next] -= 1;
+                    if indegree[next] == 0 {
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+        if studied == n { semesters } else { -1 }
+    }
+}
+
+fn a4_minimum_semesters(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    let rs: Vec[Vec[i32]] = relations
+        .iter()
+        .map(|r| r.iter().map(|v| v as i32).collect())
+        .collect();
+    A4Solution.a4_minimum_semesters(n as i32, rs)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    match which {
+        0 => a0_minimum_semesters(n, relations),
+        1 => a1_minimum_semesters(n, relations),
+        2 => a2_minimum_semesters(n, relations),
+        3 => a3_minimum_semesters(n, relations),
+        _ => a4_minimum_semesters(n, relations),
+    }
+}
+
+// The statement read literally: the fewest semesters `k` for which some
+// plan gives every course a semester from 1 to `k` and takes each
+// relation's first course in an earlier semester than its second, or -1.
+// Every plan for each `k` is tried, counted out in base `k`. No plan needs
+// more semesters than there are courses, since a semester with no course
+// can be dropped, so `k` stops at `n`.
+fn literal(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    for k in 1..n + 1 {
+        let mut plan = Vec.filled(n + 1, 1);
+        loop {
+            if relations.iter().all(|r| plan[r[0]] < plan[r[1]]) {
+                return k;
+            }
+            let mut c = 1;
+            while c <= n and plan[c] == k {
+                plan[c] = 1;
+                c += 1;
+            }
+            if c > n {
+                break;
+            }
+            plan[c] += 1;
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn has(relations: Vec[Vec[i64]], a: i64, b: i64) -> bool {
+    relations.iter().any(|r| r[0] == a and r[1] == b)
+}
+
+// A relation from an earlier to a later course of `order`, not one already listed.
+fn forward(seed: mut ref i64, order: Vec[i64], relations: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = order.len();
+    loop {
+        let i = next_random(mut seed) % (n - 1);
+        let j = i + 1 + next_random(mut seed) % (n - 1 - i);
+        if not has(relations, order[i], order[j]) {
+            return [order[i], order[j]];
+        }
+    }
+}
+
+// `n` courses: 1 to 8 relations between any two; 1 to 8 relations that
+// follow a drawn order, so no cycle; a chain through a drawn order and up
+// to 2 relations more along it; relations along a drawn order and one
+// against it; or courses in 2 to `n` layers, each course after the first
+// layer needing one course of the layer before.
+fn problem(seed: mut ref i64, kind: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut order: Vec[i64] = (1..n + 1).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    let mut relations: Vec[Vec[i64]] = [];
+    if kind == 0 {
+        let m = next_random(mut seed) % 8.min(n * (n - 1)) + 1;
+        while relations.len() < m {
+            let a = next_random(mut seed) % n + 1;
+            let mut b = next_random(mut seed) % (n - 1) + 1;
+            if b >= a {
+                b += 1;
+            }
+            if not has(relations, a, b) {
+                relations.push([a, b]);
+            }
+        }
+    } else if kind == 1 or kind == 3 {
+        let m = next_random(mut seed) % 8.min(n * (n - 1) / 2) + 1;
+        while relations.len() < m {
+            let r = forward(mut seed, order, relations);
+            relations.push(r);
+        }
+        if kind == 3 {
+            let i = next_random(mut seed) % (n - 1);
+            let j = i + 1 + next_random(mut seed) % (n - 1 - i);
+            relations.push([order[j], order[i]]);
+        }
+    } else if kind == 2 {
+        for i in 1..n {
+            relations.push([order[i - 1], order[i]]);
+        }
+        let extra = next_random(mut seed) % 3;
+        for _ in 0..extra.min(n * (n - 1) / 2 - (n - 1)) {
+            let r = forward(mut seed, order, relations);
+            relations.push(r);
+        }
+    } else {
+        let layers = next_random(mut seed) % (n - 1) + 2;
+        // the course at place i of `order` is in layer i * layers / n
+        for i in 0..n {
+            let layer = i * layers / n;
+            if layer > 0 {
+                let first: Vec[i64] = (0..i).filter(|p| p * layers / n == layer - 1).collect();
+                let p = first[next_random(mut seed) % first.len()];
+                relations.push([order[p], order[i]]);
+            }
+        }
+    }
+    relations
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, n: i64, relations: Vec[Vec[i64]], names: Vec[i64]) {
+    let want = literal(n, relations);
+    for w in 0..5 {
+        let answer = arm(w, n, relations);
+        let what = f"arm {w}, case {t.cases} {n}, {relations} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: the relations listed in reverse give the same answer
+        let rev: Vec[Vec[i64]] = relations.iter().rev().cloned().collect();
+        let r = arm(w, n, rev);
+        expect(mut t, 2, r == answer, f"P2 {what}, reversed {r}");
+        // P3: the courses renamed by a drawn order give the same answer
+        let renamed: Vec[Vec[i64]] = relations.iter().map(|r| [names[r[0]], names[r[1]]]).collect();
+        let g = arm(w, n, renamed);
+        expect(mut t, 3, g == answer, f"P3 {what}, renamed {names} {g}");
+        // P4: every relation turned around gives the same answer
+        let turned: Vec[Vec[i64]] = relations.iter().map(|r| [r[1], r[0]]).collect();
+        let s = arm(w, n, turned);
+        expect(mut t, 4, s == answer, f"P4 {what}, turned around {s}");
+        // P5: a new course before every course takes one semester more
+        let mut first: Vec[Vec[i64]] = (1..n + 1).map(|c| [n + 1, c]).collect();
+        first.extend(relations.clone());
+        let f = arm(w, n + 1, first);
+        expect(mut t, 5, f == if answer == -1 { -1 } else { answer + 1 }, f"P5 {what}, a course before all {f}");
+        // P6: a new course with no relation changes nothing
+        let alone = arm(w, n + 1, relations);
+        expect(mut t, 6, alone == answer, f"P6 {what}, a course alone {alone}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems of 2 to 6 courses in five kinds, 400 each. Every
+    // choice, the renaming for P3 among them, is drawn before any arm
+    // answers.
+    let mut seed = 11361;
+    let mut problems: Vec[(i64, Vec[Vec[i64]], Vec[i64])] = [];
+    for i in 0..2000 {
+        let kind = i % 5;
+        let n = next_random(mut seed) % 5 + 2;
+        let relations = problem(mut seed, kind, n);
+        let mut names: Vec[i64] = (0..n + 1).collect();
+        for j in (2..n + 1).rev() {
+            let k = next_random(mut seed) % j + 1;
+            names.swap(j, k);
+        }
+        problems.push((n, relations, names));
+    }
+    for (n, relations, names) in problems.iter() {
+        check_case(mut t, n, relations, names);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

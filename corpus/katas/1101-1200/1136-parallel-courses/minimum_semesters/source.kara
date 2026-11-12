@@ -1,0 +1,119 @@
+// LeetCode #1136: Parallel Courses -- the ★ arm: Kahn's algorithm a
+// semester at a time. The courses with no prerequisite left are this
+// semester's; taking them lowers the counts of the courses that follow,
+// and those that reach 0 are next semester's. A course never taken means
+// a cycle. O(n + m)
+
+fn minimum_semesters(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    let mut after: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    let mut need = Vec.filled(n + 1, 0);
+    for r in relations.iter() {
+        after[r[0]].push(r[1]);
+        need[r[1]] += 1;
+    }
+    let mut now: Vec[i64] = (1..n + 1).filter(|c| need[c] == 0).collect();
+    let mut semesters = 0;
+    let mut taken = 0;
+    while not now.is_empty() {
+        semesters += 1;
+        taken += now.len();
+        let mut upcoming: Vec[i64] = [];
+        for c in now.iter() {
+            for d in after[c].iter() {
+                need[d] -= 1;
+                if need[d] == 0 {
+                    upcoming.push(d);
+                }
+            }
+        }
+        now = upcoming;
+    }
+    if taken == n { semesters } else { -1 }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut order: Vec[i64] = (1..n + 1).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    order
+}
+
+// `m` distinct relations among `n` courses in a drawn order; when
+// `acyclic`, each runs from earlier to later in that order.
+fn random_relations(seed: mut ref i64, n: i64, m: i64, acyclic: bool) -> Vec[Vec[i64]] {
+    let order = shuffled(mut seed, n);
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut out: Vec[Vec[i64]] = [];
+    while out.len() < m {
+        let mut a = next_random(mut seed) % n;
+        let mut b = next_random(mut seed) % (n - 1);
+        if b >= a {
+            b += 1;
+        }
+        if acyclic and a > b {
+            let t = a;
+            a = b;
+            b = t;
+        }
+        if seen.insert((order[a], order[b])) {
+            out.push([order[a], order[b]]);
+        }
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's two examples and six more: one course, a chain, a ring,
+    // four before one, a diamond with a tail, and a cycle beside a pair
+    let cases: Vec[(i64, Vec[Vec[i64]])] = [
+        (3, [[1, 3], [2, 3]]),
+        (3, [[1, 2], [2, 3], [3, 1]]),
+        (1, []),
+        (4, [[1, 2], [2, 3], [3, 4]]),
+        (4, [[4, 3], [3, 2], [2, 1], [1, 4]]),
+        (5, [[1, 5], [2, 5], [3, 5], [4, 5]]),
+        (6, [[1, 2], [1, 3], [2, 4], [3, 4], [4, 5], [3, 6]]),
+        (5, [[1, 2], [3, 4], [4, 3]]),
+    ];
+    for (n, relations) in cases.iter() {
+        println(f"{n}, {relations} -> {minimum_semesters(n, relations)}");
+    }
+    // 2000 random plans of 2 to 12 courses and 1 to 15 relations, every
+    // other one without a cycle: the semesters summed, how many have a
+    // cycle, and a checksum
+    let mut seed = 1136;
+    let mut total = 0;
+    let mut cycles = 0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let n = next_random(mut seed) % 11 + 2;
+        let m = next_random(mut seed) % 15.min(n * (n - 1) / 2) + 1;
+        let relations = random_relations(mut seed, n, m, i % 2 == 0);
+        let r = minimum_semesters(n, relations);
+        if r == -1 {
+            cycles += 1;
+        } else {
+            total += r;
+        }
+        check = (check * 31 + r + 1) % 1000000007;
+    }
+    println(f"2000 random plans: semesters total {total}, {cycles} with a cycle, checksum {check}");
+    // LeetCode's largest: 5000 courses in one chain, 5000 random relations
+    // without a cycle, and the chain closed into a ring
+    let order = shuffled(mut seed, 5000);
+    let mut chain: Vec[Vec[i64]] = (0..4999).map(|i| [order[i], order[i + 1]]).collect();
+    println(f"5000 courses in one chain: {minimum_semesters(5000, chain)}");
+    let dag = random_relations(mut seed, 5000, 5000, true);
+    println(f"5000 courses and 5000 random relations without a cycle: {minimum_semesters(5000, dag)}");
+    chain.push([order[4999], order[0]]);
+    println(f"5000 courses in one ring: {minimum_semesters(5000, chain)}");
+}

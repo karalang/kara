@@ -1,0 +1,64 @@
+// LeetCode #1136: Parallel Courses -- the bench: the ★ arm over 8 plans
+// of 5000 courses, LeetCode's largest, built once, each of 300 rounds
+// drawing one course's prerequisite again in every plan.
+
+fn minimum_semesters(n: i64, relations: Vec[Vec[i64]]) -> i64 {
+    let mut after: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    let mut need = Vec.filled(n + 1, 0);
+    for r in relations.iter() {
+        after[r[0]].push(r[1]);
+        need[r[1]] += 1;
+    }
+    let mut now: Vec[i64] = (1..n + 1).filter(|c| need[c] == 0).collect();
+    let mut semesters = 0;
+    let mut taken = 0;
+    while not now.is_empty() {
+        semesters += 1;
+        taken += now.len();
+        let mut upcoming: Vec[i64] = [];
+        for c in now.iter() {
+            for d in after[c].iter() {
+                need[d] -= 1;
+                if need[d] == 0 {
+                    upcoming.push(d);
+                }
+            }
+        }
+        now = upcoming;
+    }
+    if taken == n { semesters } else { -1 }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 8 plans of 5000 courses, each course from 2 on needing one earlier
+    // course drawn at random: 4999 relations, no cycle.
+    let n = 5000;
+    let mut seed = 1136;
+    let mut plans: Vec[Vec[Vec[i64]]] = [];
+    for _ in 0..8 {
+        let mut relations: Vec[Vec[i64]] = [];
+        for c in 2..n + 1 {
+            relations.push([next_random(mut seed) % (c - 1) + 1, c]);
+        }
+        plans.push(relations);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..300 {
+        for j in 0..8 {
+            // one course's prerequisite drawn again
+            let at = (round * 7919 + j * 104729) % (n - 1);
+            let c = plans[j][at][1];
+            plans[j][at][0] = next_random(mut seed) % (c - 1) + 1;
+            let r = minimum_semesters(n, plans[j]);
+            total += r;
+            check = (check * 31 + r + 1) % 1000000007;
+        }
+    }
+    println(f"300 rounds over 8 plans of 5000 courses and 4999 relations: semesters total {total}, checksum {check}");
+}
