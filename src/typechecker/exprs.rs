@@ -11719,29 +11719,23 @@ impl<'a> super::TypeChecker<'a> {
             length: 0,
             ..s
         };
-        let fill = match &value.kind {
-            ExprKind::RepeatLiteral { value: v, .. } => Some(&**v),
-            ExprKind::Call { callee, args }
-                if args.len() == 2
-                    && matches!(&callee.kind, ExprKind::Path { segments, .. }
-                        if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled") =>
-            {
-                Some(&args[1].value)
+        let entry = if let Some(mut lit) = Self::fill_value(value) {
+            // A fill of fills (`Vec.filled(m, Vec.filled(n, 0))`) is read
+            // down to its innermost literal (kata 1139).
+            let mut element = self.fill_element_type(ty);
+            let mut depth = 1;
+            while let Some(inner) = Self::fill_value(lit) {
+                lit = inner;
+                element = element.and_then(|el| self.fill_element_type(&el));
+                depth += 1;
             }
-            _ => None,
-        };
-        let entry = if let Some(lit) = fill {
-            let element = match resolve_type_var_top(ty, &self.env.substitutions) {
-                Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                    Some(args[0].clone())
-                }
-                Type::Array { element, .. } => Some((*element).clone()),
-                _ => None,
-            };
-            element.and_then(|el| self.literal_entry(lit, &el, end(lit.span), true, true, name))
+            element
+                .and_then(|el| self.literal_entry(lit, &el, end(lit.span), true, true, name))
+                .map(|e| super::LiteralLet { depth, ..e })
         } else {
             self.literal_entry(value, ty, end(name_span), false, false, name)
                 .or_else(|| self.literal_copy(value, ty))
+                .or_else(|| self.literal_element_copy(value, ty))
         };
         match entry {
             Some(e) => {
@@ -11751,6 +11745,113 @@ impl<'a> super::TypeChecker<'a> {
                 self.literal_lets.remove(name);
             }
         }
+    }
+
+    /// The value a fill repeats: `v` of `[v; n]` or `Vec.filled(n, v)`.
+    pub(super) fn fill_value(e: &Expr) -> Option<&Expr> {
+        match &e.kind {
+            ExprKind::RepeatLiteral { value, .. } => Some(value),
+            ExprKind::Call { callee, args }
+                if args.len() == 2
+                    && matches!(&callee.kind, ExprKind::Path { segments, .. }
+                        if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled") =>
+            {
+                Some(&args[1].value)
+            }
+            _ => None,
+        }
+    }
+
+    /// The element type of a fill's `Vec` or `Array` type.
+    fn fill_element_type(&self, ty: &Type) -> Option<Type> {
+        match resolve_type_var_top(ty, &self.env.substitutions) {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => Some(args[0].clone()),
+            Type::Array { element, .. } => Some(*element),
+            _ => None,
+        }
+    }
+
+    /// The fill binding an element read reads and how many indexes deep:
+    /// `g` and 2 for `g[i][j]`.
+    fn element_read_root(e: &Expr) -> Option<(&str, usize)> {
+        match &e.kind {
+            ExprKind::Index { object, index } if !matches!(index.kind, ExprKind::Range { .. }) => {
+                match &object.kind {
+                    ExprKind::Identifier(n) => Some((n.as_str(), 1)),
+                    _ => Self::element_read_root(object).map(|(n, d)| (n, d + 1)),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// A binding that holds one element read out of a fill whose literal
+    /// kept the default `i64` (an operator settled it), directly or through
+    /// `min`/`max` or another such binding: `let k = g[i][j]`, `let m =
+    /// min(left[i][j], up[i][j])`. A narrowing refused where it is used is
+    /// fixed on the fill's literal, as at the element read itself (kata
+    /// 1139's Rust arm: `res = k` into an `i32`).
+    fn literal_element_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
+        if resolve_type_var_top(ty, &self.env.substitutions) != Type::Int(IntSize::I64) {
+            return None;
+        }
+        self.element_copy_source(value)
+    }
+
+    fn element_copy_source(&self, value: &Expr) -> Option<super::LiteralLet> {
+        let settled = |this: &Self, e: &super::LiteralLet| {
+            e.element
+                && e.suffix
+                && e.var
+                    .is_none_or(|v| this.resolved_now(&Type::TypeVar(v)) == Type::Int(IntSize::I64))
+        };
+        match &value.kind {
+            ExprKind::Index { .. } => {
+                let (root, depth) = Self::element_read_root(value)?;
+                let e = self.literal_lets.get(root)?;
+                (e.depth == depth && settled(self, e)).then(|| super::LiteralLet {
+                    depth: 0,
+                    ..e.clone()
+                })
+            }
+            ExprKind::Identifier(n) => {
+                let e = self.literal_lets.get(n.as_str())?;
+                (e.depth == 0 && settled(self, e)).then(|| e.clone())
+            }
+            ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Identifier(f) if f == "min" || f == "max") => {
+                args.iter().find_map(|a| self.element_copy_source(&a.value))
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if matches!(method.as_str(), "min" | "max") => self
+                .element_copy_source(object)
+                .or_else(|| args.iter().find_map(|a| self.element_copy_source(&a.value))),
+            _ => None,
+        }
+    }
+
+    /// `for k in 1..=m` or `for k in (1..=m).rev()` with `m` holding a
+    /// fill's element ([`Self::literal_element_copy`]): `k` holds one too.
+    fn literal_range_for_entry(&self, iterable: &Expr) -> Option<super::LiteralLet> {
+        let range = match &iterable.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "rev" && args.is_empty() => object,
+            _ => iterable,
+        };
+        let ExprKind::Range { start, end, .. } = &range.kind else {
+            return None;
+        };
+        [end, start]
+            .into_iter()
+            .flatten()
+            .find_map(|b| self.element_copy_source(b))
     }
 
     /// The binding a collection expression is rooted at: `left` of `left`,
@@ -11805,7 +11906,8 @@ impl<'a> super::TypeChecker<'a> {
         let entry = Self::collection_root_name(iterable)
             .and_then(|root| self.literal_pushes.get(root))
             .cloned()
-            .or_else(|| self.literal_array_for_entry(name, iterable));
+            .or_else(|| self.literal_array_for_entry(name, iterable))
+            .or_else(|| self.literal_range_for_entry(iterable));
         let prev = match entry {
             Some(e) => self.literal_lets.insert(name.clone(), e),
             None => self.literal_lets.remove(name.as_str()),
@@ -11999,6 +12101,7 @@ impl<'a> super::TypeChecker<'a> {
                 .flatten(),
             low: None,
             root: root.to_string(),
+            depth: usize::from(element),
         })
     }
 
@@ -12127,7 +12230,7 @@ impl<'a> super::TypeChecker<'a> {
             .literal_collection_uses
             .get(&SpanKey::from_span(use_span))?;
         let entry = self.literal_lets.get(name.as_str())?;
-        if !entry.element || !entry.suffix {
+        if entry.depth != 1 || !entry.suffix {
             return None;
         }
         if entry
@@ -12212,15 +12315,16 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             }
         }
-        fn names<'e>(e: &'e Expr, out: &mut Vec<(&'e str, bool)>) {
+        // Each with how many indexes deep it is read (`g[i][j]` is 2).
+        fn names<'e>(e: &'e Expr, out: &mut Vec<(&'e str, usize)>) {
             match &e.kind {
-                ExprKind::Identifier(n) => out.push((n.as_str(), false)),
+                ExprKind::Identifier(n) => out.push((n.as_str(), 0)),
                 ExprKind::MethodCall { .. } if element_of(e).is_some() => {
-                    out.extend(element_of(e).map(|n| (n, true)))
+                    out.extend(element_of(e).map(|n| (n, 1)))
                 }
-                ExprKind::Index { object, .. } => {
-                    if let ExprKind::Identifier(n) = &object.kind {
-                        out.push((n.as_str(), true));
+                ExprKind::Index { .. } => {
+                    if let Some(read) = super::TypeChecker::element_read_root(e) {
+                        out.push(read);
                     }
                 }
                 ExprKind::Unary { operand, .. } => names(operand, out),
@@ -12239,10 +12343,10 @@ impl<'a> super::TypeChecker<'a> {
         }
         let mut found = Vec::new();
         names(expr, &mut found);
-        found.into_iter().find_map(|(name, indexed)| {
+        found.into_iter().find_map(|(name, depth)| {
             let entry = self.literal_lets.get(name)?;
             let name = entry.root.as_str();
-            if entry.element != indexed
+            if entry.depth != depth
                 || entry.var.is_some_and(|v| self.resolved_now(&Type::TypeVar(v)) != *source)
             {
                 return None;
@@ -13212,7 +13316,7 @@ impl<'a> super::TypeChecker<'a> {
                 if self
                     .literal_lets
                     .get(name.as_str())
-                    .is_some_and(|e| e.element)
+                    .is_some_and(|e| e.depth > 0)
                 {
                     self.literal_collection_uses
                         .insert(SpanKey::from_span(&expr.span), name.clone());
@@ -16291,7 +16395,16 @@ impl<'a> super::TypeChecker<'a> {
                 // a later use to fix: a return, an argument, an assignment
                 // (design.md §8 Literals; B-2026-11-08-57).
                 let elem_ty = if self.open_collection_let == Some(expr.id) && !expr.id.is_dummy() {
-                    self.infer_expr_open(value)
+                    // A fill of fills leaves the innermost literal open too
+                    // (`[[0; 3]; 3]`, kata 1139).
+                    let saved = Self::fill_value(value)
+                        .is_some()
+                        .then(|| self.open_collection_let.replace(value.id));
+                    let t = self.infer_expr_open(value);
+                    if let Some(saved) = saved {
+                        self.open_collection_let = saved;
+                    }
+                    t
                 } else {
                     self.infer_expr(value)
                 };

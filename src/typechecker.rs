@@ -1041,6 +1041,12 @@ pub(crate) struct LiteralLet {
     /// The binding to fix: the literal's own, or for a copy (`let y = x`)
     /// the one it copies.
     pub(crate) root: String,
+    /// How many indexes a read takes to reach the literal: 1 for a fill's
+    /// element (`v[i]` of `Vec.filled(n, 0)`), 2 for a fill of fills
+    /// (`g[i][j]` of `Vec.filled(m, Vec.filled(n, 0))`), 0 for a binding's
+    /// own literal and for a binding holding one element read out of a fill
+    /// (`let k = g[i][j]`, kata 1139), which keeps `element` for the advice.
+    pub(crate) depth: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]

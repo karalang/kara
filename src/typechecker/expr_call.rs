@@ -2253,7 +2253,17 @@ impl<'a> super::TypeChecker<'a> {
                 let n_ty = self.infer_expr(&args[0].value);
                 self.check_i64_arg(&args[0].value, &n_ty);
                 let elem_ty = if open {
-                    self.infer_expr_open(&args[1].value)
+                    // A fill of fills leaves the innermost literal open too
+                    // (`Vec.filled(m, Vec.filled(n, 0))`, kata 1139).
+                    let inner = &args[1].value;
+                    let saved = Self::fill_value(inner)
+                        .is_some()
+                        .then(|| self.open_collection_let.replace(inner.id));
+                    let t = self.infer_expr_open(inner);
+                    if let Some(saved) = saved {
+                        self.open_collection_let = saved;
+                    }
+                    t
                 } else {
                     self.infer_expr(&args[1].value)
                 };

@@ -11957,7 +11957,17 @@ impl<'a> super::TypeChecker<'a> {
                 // which a `ref T` cannot supply.
                 let errors_before_rhs = self.errors.len();
                 let rhs_ty = {
-                    let rhs_ty = self.infer_expr(value);
+                    // A binding or an element read whose number no use has
+                    // fixed yet stays open here, so the place it is stored
+                    // into fixes it below, as a typed `let` does: `res = k`
+                    // after `let k = t[1]` with `t = Vec.filled(n, 0)` and
+                    // `res: i32` (kata 1139).
+                    let rhs_ty =
+                        if matches!(value.kind, ExprKind::Identifier(_) | ExprKind::Index { .. }) {
+                            self.infer_expr_open(value)
+                        } else {
+                            self.infer_expr(value)
+                        };
                     self.reject_index_move_non_copy(value, &rhs_ty);
                     // B-2026-09-01-4 — sibling of the rule above, same
                     // value position. v2 core §1.1: assigning to a `ref`
