@@ -11692,6 +11692,18 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether `ty[i]` takes `i` as a position: a `Vec`, `VecDeque`,
+    /// fixed array or slice, through any borrow. A `Map` is indexed by its
+    /// key type and is not one.
+    fn indexes_by_position(ty: &Type) -> bool {
+        match ty {
+            Type::Ref(inner) | Type::MutRef(inner) => Self::indexes_by_position(inner),
+            Type::Array { .. } | Type::Slice { .. } => true,
+            Type::Named { name, args } => (name == "Vec" || name == "VecDeque") && args.len() == 1,
+            _ => false,
+        }
+    }
+
     /// Note `let name = <integer literal>` with no annotation, and
     /// `let name = [<literal>; n]` / `Vec.filled(n, <literal>)`, whose
     /// elements take the literal's type (see `TypeChecker::literal_lets`).
@@ -13728,6 +13740,15 @@ impl<'a> super::TypeChecker<'a> {
                 // = x` writes `v`, so `n.val` is not checked as an assignment
                 // place (B-2026-10-14-1). The object keeps the flag above.
                 let lhs = std::mem::replace(&mut self.assigning_lhs, false);
+                // A position of a list takes any integer and widens it, so
+                // `graph[r[0] as i64]` with `r: Vec[i32]` casts for nothing,
+                // which `lossless_cast` says as it does for an argument
+                // (kata 1136, B-2026-11-12-5).
+                if matches!(index.kind, ExprKind::Cast { .. }) && Self::indexes_by_position(&obj_ty)
+                {
+                    self.pending_cast_expected
+                        .push((SpanKey::from_span(&index.span), Type::Int(IntSize::I64)));
+                }
                 let idx_ty = self.infer_expr(index);
                 self.assigning_lhs = lhs;
                 if let Some(t) =

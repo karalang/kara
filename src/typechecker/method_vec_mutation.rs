@@ -764,6 +764,14 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Tuple(es) if es.iter().any(super::exprs::is_collection_literal)
         );
         let slot = resolve_type_var_top(elem, &self.env.substitutions);
+        // A cast to the element type is a widening the slot makes itself,
+        // `v.push(x as i64)` with `x: i32`, which `lossless_cast` says as it
+        // does for an argument (kata 1136, B-2026-11-12-5).
+        if matches!(arg.kind, ExprKind::Cast { .. }) && super::exprs::expectation_is_concrete(&slot)
+        {
+            self.pending_cast_expected
+                .push((crate::resolver::SpanKey::from_span(&arg.span), slot.clone()));
+        }
         if (literal || is_open_value(arg)) && super::exprs::expectation_is_concrete(&slot) {
             return self.check_expr(arg, &slot);
         }

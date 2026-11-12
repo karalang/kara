@@ -84,7 +84,13 @@ fn main() {
     assert!(clean, "still refused after fix:\n{text}");
     assert!(!text.contains("usize"), "{text}");
     assert!(
-        text.contains("adj[e[0] as i64].push(e[1] as i64)") && text.contains("i64.MAX"),
+        // A list position widens any integer, so the index's `as i64`
+        // goes too; the first push's stays, since it is what makes `adj`
+        // a list of `i64` lists, and the second push's then goes
+        // (B-2026-11-12-5).
+        text.contains("adj[e[0]].push(e[1] as i64)")
+            && text.contains("adj[e[1]].push(e[0]);")
+            && text.contains("i64.MAX"),
         "{text}"
     );
     assert_eq!(out, "4\n2\n1\n1\n", "{text}");
