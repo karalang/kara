@@ -11749,6 +11749,13 @@ impl<'a> super::TypeChecker<'a> {
             self.literal_entry(value, ty, end(name_span), false, false, name)
                 .or_else(|| self.literal_copy(value, ty))
                 .or_else(|| self.literal_element_copy(value, ty))
+                // `let mut res = [0, 0]`: an array of literals is typed by
+                // its first, so a narrowing read of an element offers that
+                // literal's suffix as a fill's does (kata 1144).
+                .or_else(|| {
+                    self.literal_array_entry(name, value, true)
+                        .map(|e| super::LiteralLet { depth: 1, ..e })
+                })
         };
         match entry {
             Some(e) => {
@@ -11919,7 +11926,7 @@ impl<'a> super::TypeChecker<'a> {
         let entry = Self::collection_root_name(iterable)
             .and_then(|root| self.literal_pushes.get(root))
             .cloned()
-            .or_else(|| self.literal_array_for_entry(name, iterable))
+            .or_else(|| self.literal_array_entry(name, iterable, false))
             .or_else(|| self.literal_range_for_entry(iterable));
         let prev = match entry {
             Some(e) => self.literal_lets.insert(name.clone(), e),
@@ -11983,7 +11990,15 @@ impl<'a> super::TypeChecker<'a> {
     /// literals: `v` is each of them, so a refusal at a use of `v` (Rust's
     /// `ListNode::new(v)` taking an `i32`, kata 2046) offers the first
     /// literal's suffix, which types the whole array.
-    fn literal_array_for_entry(&self, name: &str, iterable: &Expr) -> Option<super::LiteralLet> {
+    ///
+    /// With `element`, the array is bound whole (`let res = [0, 0]`) and a
+    /// read of one of its elements is what offers the suffix.
+    fn literal_array_entry(
+        &self,
+        name: &str,
+        iterable: &Expr,
+        element: bool,
+    ) -> Option<super::LiteralLet> {
         let ExprKind::ArrayLiteral(elems) = &iterable.kind else {
             return None;
         };
@@ -12005,7 +12020,7 @@ impl<'a> super::TypeChecker<'a> {
             length: 0,
             ..first.span
         };
-        let mut entry = self.literal_entry(first, &ty, at, true, false, name)?;
+        let mut entry = self.literal_entry(first, &ty, at, true, element, name)?;
         entry.value = values.iter().copied().max();
         entry.low = values.iter().copied().min();
         Some(entry)
@@ -12372,15 +12387,32 @@ impl<'a> super::TypeChecker<'a> {
             };
             let t = type_display(target);
             let (replacement, why) = if entry.suffix {
-                let lit = entry
-                    .value
-                    .map_or_else(|| format!("with the suffix `{t}`"), |v| format!("`{v}{t}`"));
-                let whose = if entry.element {
-                    format!("the elements of `{name}` are 'i64' because the literal it is filled with")
+                // An array of several literals (`[0, 7]`) is typed by its
+                // first, which is where the suffix goes.
+                let several = entry.low.is_some();
+                let lit = if several {
+                    format!("the first of them with the suffix `{t}`, which types them all")
                 } else {
-                    format!("`{name}` is an 'i64' because the literal it is bound to")
+                    entry.value.map_or_else(
+                        || format!("that literal with the suffix `{t}`"),
+                        |v| format!("that literal `{v}{t}`"),
+                    )
                 };
-                (t.clone(), format!("{whose} took the default (design.md §8 Literals); write that literal {lit}"))
+                let whose = match (entry.element, several) {
+                    (true, true) => format!(
+                        "the elements of `{name}` are 'i64' because the literals it is written with"
+                    ),
+                    (true, false) => format!(
+                        "the elements of `{name}` are 'i64' because the literal it is filled with"
+                    ),
+                    (false, true) => {
+                        format!("`{name}` is an 'i64' because the literals of the array it walks")
+                    }
+                    (false, false) => {
+                        format!("`{name}` is an 'i64' because the literal it is bound to")
+                    }
+                };
+                (t.clone(), format!("{whose} took the default (design.md §8 Literals); write {lit}"))
             } else {
                 (
                     format!(": {t}"),
