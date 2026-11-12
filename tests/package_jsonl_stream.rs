@@ -44,6 +44,12 @@ fn events(stdout: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The batch `--output=json` document, its paths read as `events` reads
+/// the stream's, so the two compare equal on Windows too.
+fn document(json: &str) -> Value {
+    serde_json::from_str(json.trim().replace("\\\\", "/").as_str()).unwrap()
+}
+
 /// The stream is well formed: every line has a `type`, it opens with
 /// `build_start` naming the package's files and closes with
 /// `build_complete`, whose `total_errors` is the number of error
@@ -109,7 +115,7 @@ fn package_member_check_streams_every_phase() {
         "places name the package's file: {jsonl}"
     );
     // The batch document: the same diagnostics, and the effects keys.
-    let doc: Value = serde_json::from_str(json.trim()).unwrap();
+    let doc = document(&json);
     assert!(doc["program_effects"].is_array(), "{json}");
     assert_eq!(doc["diagnostics"].as_array().unwrap(), &streamed, "{json}");
 }
@@ -147,7 +153,7 @@ fn package_refusal_streams_with_ids() {
             .any(|e| e["type"] == "phase_skipped" && e["phase"] == "ownership"),
         "the phases after it are skipped: {jsonl}"
     );
-    let doc: Value = serde_json::from_str(json.trim()).unwrap();
+    let doc = document(&json);
     assert!(doc["program_effects"].is_null(), "{json}");
     assert_eq!(doc["diagnostics"].as_array().unwrap(), &streamed, "{json}");
 }
@@ -176,7 +182,7 @@ fn clean_project_check_json_carries_effects_and_ids() {
     let (_, jsonl) = karac(&root, &["check", "--output=jsonl"]);
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(code, Some(0), "{json}");
-    let doc: Value = serde_json::from_str(json.trim()).unwrap();
+    let doc = document(&json);
     assert_eq!(
         doc["program_effects"],
         serde_json::json!(["writes(Stdout)"]),
