@@ -91,8 +91,14 @@ const RESET: &str = r#"fn main() {
 "#;
 
 /// The reset's errno is the platform's (104 on Linux, 54 on macOS), so it
-/// is compared without its number.
-const RESET_OUT: &str = "got 4\nerr os error N\n";
+/// is compared without its number. Winsock discards a connection's unread
+/// bytes when its reset arrives, so on Windows the read reports the reset
+/// alone, as a compiled Windows build's `recv` would.
+const RESET_OUT: &str = if cfg!(windows) {
+    "err os error N\n"
+} else {
+    "got 4\nerr os error N\n"
+};
 
 /// `out` with each `os error <digits>` written `os error N`.
 fn any_errno(out: &str) -> String {
@@ -127,7 +133,14 @@ const REFUSED: &str = r#"fn main() {
 }
 "#;
 
-const REFUSED_OUT: &str = "err connection refused\n";
+/// Winsock reports the refusal (an ICMP port unreachable) on a connected
+/// UDP socket as a reset, WSAECONNRESET, so on Windows it is that error's
+/// code rather than `ConnectionRefused`.
+const REFUSED_OUT: &str = if cfg!(windows) {
+    "err os error N\n"
+} else {
+    "err connection refused\n"
+};
 
 #[test]
 fn interp_reads_a_reset_the_readiness_peek_took() {
@@ -136,7 +149,7 @@ fn interp_reads_a_reset_the_readiness_peek_took() {
 
 #[test]
 fn interp_recv_reports_a_refusal_the_readiness_peek_took() {
-    assert_eq!(run(REFUSED), REFUSED_OUT);
+    assert_eq!(any_errno(&run(REFUSED)), REFUSED_OUT);
 }
 
 #[cfg(feature = "llvm")]
@@ -151,6 +164,6 @@ fn compiled_reads_a_reset_as_the_interp_does() {
 #[test]
 fn compiled_recv_reports_a_refusal_as_the_interp_does() {
     if let Some(out) = compiled(REFUSED) {
-        assert_eq!(out, REFUSED_OUT);
+        assert_eq!(any_errno(&out), REFUSED_OUT);
     }
 }
