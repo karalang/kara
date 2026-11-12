@@ -164,13 +164,18 @@ fn main() {
     let group = TaskGroup.new();
     let s = group.spawn(|| send(at));
     let mut buf: Array[u8, 8] = [0u8; 8];
-    match r.recv(mut buf) {
-        Ok(n) => println(f"got {n}"),
-        Err(_) => println("recv failed"),
-    }
+    let got = match r.recv(mut buf) {
+        Ok(n) => f"got {n}",
+        Err(_) => "recv failed".to_string(),
+    };
     s.join();
+    println(got);
 }
 "#;
+    // Once the datagram is out, the sender's `sent` and the receiver's
+    // `got` race (design.md: TaskGroup tasks run in any order, in parallel
+    // or one after another; CI printed `got` first once), so the receiver
+    // prints only after joining the sender.
     assert_eq!(stdout_on_both("recv", src), "sending\nsent 4\ngot 4\n");
 }
 
