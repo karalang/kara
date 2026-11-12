@@ -1359,6 +1359,16 @@ impl super::Parser {
                             | ExprKind::ByteLit(_)
                             | ExprKind::Bool(_)
                     );
+                // `for &(p, q) in &[(1, 1), (1, -1)]`: a list literal is a
+                // new value, not a place, and `ref [..]` is refused, so the
+                // edit drops the `&` (kata 1131, B-2026-11-12-3).
+                let list = !is_mut
+                    && matches!(
+                        &operand.kind,
+                        ExprKind::ArrayLiteral(_)
+                            | ExprKind::PrefixCollectionLiteral { .. }
+                            | ExprKind::RepeatLiteral { .. }
+                    );
                 let (message, kara) = if is_mut {
                     (
                         "`&mut` is Rust syntax -- a borrow that writes is `mut ref place`",
@@ -1368,6 +1378,12 @@ impl super::Parser {
                     (
                         "`&` is Rust syntax -- a literal is a value and takes no borrow: \
                          Kāra compares and passes it as it is",
+                        "",
+                    )
+                } else if list {
+                    (
+                        "`&` is Rust syntax -- a list literal is a new value, not a place, so it \
+                         takes no borrow: Kāra iterates and passes it as it is",
                         "",
                     )
                 } else if view {
@@ -1388,7 +1404,7 @@ impl super::Parser {
                         replacement: kara.to_string(),
                     },
                 );
-                if view || literal {
+                if view || literal || list {
                     return Some(operand);
                 }
                 Some(Expr {

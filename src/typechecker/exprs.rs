@@ -12013,7 +12013,10 @@ impl<'a> super::TypeChecker<'a> {
     /// `mid` is fixed on `lo` (kata 1095: LeetCode's binary searches over
     /// its `i32` interface, B-2026-11-10-30). Every other operand must be a
     /// literal or an integer narrower than `i64`, so the annotation is the
-    /// whole fix; the entry is the literal binding's.
+    /// whole fix; the entry is the literal binding's. With several literal
+    /// bindings (`p * a + q`, kata 1131's sign pair, B-2026-11-12-4) the
+    /// entry is the first one's: its fix types it, and a later round fixes
+    /// the next, which the value is then an `i64` because of.
     fn literal_operator_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
         if !matches!(value.kind, ExprKind::Binary { .. } | ExprKind::Unary { .. }) {
             return None;
@@ -12065,10 +12068,9 @@ impl<'a> super::TypeChecker<'a> {
                         .is_some_and(|e| !e.element) =>
                 {
                     let e = self.literal_lets.get(n.as_str())?;
-                    if entry.is_some_and(|f| f.root != e.root || f.at != e.at) {
-                        return None;
+                    if entry.is_none() {
+                        entry = Some(e);
                     }
-                    entry = Some(e);
                 }
                 _ => {
                     let t = self.expr_types.get(&SpanKey::from_span(&leaf.span))?;
