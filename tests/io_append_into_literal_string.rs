@@ -29,7 +29,9 @@ fn main() {{
     println(f\"{{u}}]\");
 }}
 ",
-        p = data.display()
+        // Forward slashes: a Windows temp path's backslashes would read as
+        // escapes inside the Kāra string literal.
+        p = data.display().to_string().replace('\\', "/")
     );
     let prog = dir.join(format!("karac-io-literal-{}.kara", std::process::id()));
     std::fs::write(&prog, &src).expect("write program");
