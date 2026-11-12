@@ -795,12 +795,21 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         // A pushed literal is open for the element type to fix
-        // (B-2026-11-07-3).
-        let mut ty = if matches!(slot, Type::TypeVar(_)) {
+        // (B-2026-11-07-3), and so is each number in a tuple pushed into a
+        // tuple slot, for the slot to fix below (B-2026-11-12-1).
+        let tuple_into_tuple =
+            matches!(arg.kind, ExprKind::Tuple(_)) && matches!(slot, Type::Tuple(_));
+        let mut ty = if matches!(slot, Type::TypeVar(_)) || tuple_into_tuple {
             self.infer_element_open(arg)
         } else {
             self.infer_expr_open(arg)
         };
+        // A tuple literal is an argument for each of its elements: an open
+        // number among them takes its slot's type, as one pushed alone does
+        // (`q.push((x, 1))` into a `Vec[(i32, i32)]` with `let x = 0`).
+        if tuple_into_tuple {
+            self.fix_tuple_literal_slots(&ty, &slot);
+        }
         // One the element type cannot take (a `Vec[T]`'s `T`) keeps its
         // default, as it had before, and is judged against the slot as that.
         if self.unbound_literal_var(&ty).is_some()
@@ -825,6 +834,39 @@ impl<'a> super::TypeChecker<'a> {
         // B-2026-11-08-19).
         self.solve_collection_var_by_value(elem, &ty);
         ty
+    }
+
+    /// Unify each open literal variable inside a tuple value's type with
+    /// the number type at the same place in its slot, through nested
+    /// tuples. Only those positions: a concrete element is left for the
+    /// slot check to judge, so a mismatch elsewhere binds nothing here. A
+    /// `ref` to an open number (a `for` element's) is copied into its slot,
+    /// so the number under it takes the slot's type.
+    pub(super) fn fix_tuple_literal_slots(&mut self, ty: &Type, slot: &Type) {
+        let ty = match resolve_type_var_top(ty, &self.env.substitutions) {
+            Type::Ref(inner) | Type::MutRef(inner) => *inner,
+            t => t,
+        };
+        let ty = resolve_type_var_top(&ty, &self.env.substitutions);
+        let slot = resolve_type_var_top(slot, &self.env.substitutions);
+        match (&ty, &slot) {
+            (Type::Tuple(tys), Type::Tuple(slots)) if tys.len() == slots.len() => {
+                for (t, s) in tys.iter().zip(slots) {
+                    self.fix_tuple_literal_slots(t, s);
+                }
+            }
+            (_, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+                if self.unbound_literal_var(&ty).is_some() =>
+            {
+                unify_types(
+                    &ty,
+                    &slot,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+            }
+            _ => {}
+        }
     }
 
     /// The item type of an owned `extend` source that is not slice-shaped:

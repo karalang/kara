@@ -15466,7 +15466,11 @@ impl<'a> super::TypeChecker<'a> {
                     let types: Vec<Type> = exprs
                         .iter()
                         .map(|e| {
-                            let t = if open {
+                            // A tuple inside an open one is open too
+                            // (`w.push(((z, 5), 0.5))`, B-2026-11-12-1).
+                            let t = if open && matches!(e.kind, ExprKind::Tuple(_)) {
+                                self.infer_element_open(e)
+                            } else if open {
                                 self.infer_expr_open(e)
                             } else {
                                 self.infer_expr(e)
