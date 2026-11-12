@@ -1,0 +1,262 @@
+// LeetCode #1134: Armstrong Number -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- is_armstrong.kara ----
+
+fn a0_is_armstrong(n: i64) -> bool {
+    let mut k = 0;
+    let mut m = n;
+    while m > 0 {
+        k += 1;
+        m /= 10;
+    }
+    let mut total = 0;
+    m = n;
+    while m > 0 {
+        let d = m % 10;
+        let mut p = 1;
+        for _ in 0..k {
+            p *= d;
+        }
+        total += p;
+        m /= 10;
+    }
+    total == n
+}
+
+// ---- is_armstrong_text.kara ----
+
+fn a1_is_armstrong(n: i64) -> bool {
+    let text = n.to_string();
+    let k = text.len();
+    let mut total = 0;
+    for c in text.chars() {
+        let d = c.to_digit(10).unwrap() as i64;
+        total += d.pow(k as u32);
+    }
+    total == n
+}
+
+// ---- is_armstrong_recur.kara ----
+
+fn a2_digits(n: i64) -> i64 {
+    if n < 10 { 1 } else { 1 + a2_digits(n / 10) }
+}
+
+fn a2_power(d: i64, k: i64) -> i64 {
+    if k == 0 { 1 } else { d * a2_power(d, k - 1) }
+}
+
+fn a2_power_sum(n: i64, k: i64) -> i64 {
+    if n == 0 { 0 } else { a2_power(n % 10, k) + a2_power_sum(n / 10, k) }
+}
+
+fn a2_is_armstrong(n: i64) -> bool {
+    a2_power_sum(n, a2_digits(n)) == n
+}
+
+// ---- is_armstrong_count.kara ----
+
+fn a3_is_armstrong(n: i64) -> bool {
+    let mut seen = [0; 10];
+    let mut k = 0;
+    let mut m = n;
+    while m > 0 {
+        seen[m % 10] += 1;
+        k += 1;
+        m /= 10;
+    }
+    let mut total = 0;
+    for d in 0..10 {
+        if seen[d] > 0 {
+            let mut p = 1;
+            for _ in 0..k {
+                p *= d;
+            }
+            total += seen[d] * p;
+        }
+    }
+    total == n
+}
+
+// ---- is_armstrong_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_is_armstrong(n: i32) -> bool {
+        let s = n.to_string();
+        let k = s.len() as u32;
+        let sum: i32 = s
+            .chars()
+            .map(|c| (c.to_digit(10).unwrap() as i32).pow(k))
+            .sum();
+        sum == n
+    }
+}
+
+fn a4_is_armstrong(n: i64) -> bool {
+    A4Solution.a4_is_armstrong(n as i32)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, n: i64) -> bool {
+    match which {
+        0 => a0_is_armstrong(n),
+        1 => a1_is_armstrong(n),
+        2 => a2_is_armstrong(n),
+        3 => a3_is_armstrong(n),
+        _ => a4_is_armstrong(n),
+    }
+}
+
+// The statement read literally: `n` written out has `k` digits, and it is
+// an Armstrong number when the k-th powers of those digits sum to `n`.
+fn literal(n: i64) -> bool {
+    let text = f"{n}";
+    let k = text.len();
+    let mut total = 0;
+    for c in text.chars() {
+        let d = c as i64 - '0' as i64;
+        let mut p = 1;
+        for _ in 0..k {
+            p *= d;
+        }
+        total += p;
+    }
+    total == n
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digits_of(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = [];
+    let mut m = n;
+    while m > 0 {
+        out.push(m % 10);
+        m /= 10;
+    }
+    out.reverse();
+    out
+}
+
+fn number_of(digits: Vec[i64]) -> i64 {
+    let mut n = 0;
+    for d in digits.iter() {
+        n = n * 10 + d;
+    }
+    n
+}
+
+// The digits of `n` in a drawn order, with no leading 0.
+fn shuffled(seed: mut ref i64, n: i64) -> i64 {
+    let mut ds = digits_of(n);
+    for i in (1..ds.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        ds.swap(i, j);
+    }
+    if ds[0] == 0 {
+        let at = ds.iter().position(|d| d != 0).unwrap();
+        ds.swap(0, at);
+    }
+    number_of(ds)
+}
+
+const KNOWN: Array[i64, 27] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 153, 370, 371, 407, 1634, 8208, 9474, 54748,
+    92727, 93084, 548834, 1741725, 4210818, 9800817, 9926315, 24678050, 24678051, 88593477];
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, n: i64, shuffle: i64) {
+    let want = literal(n);
+    let k = digits_of(n).len();
+    let mut ten = 1;
+    for _ in 0..k {
+        ten *= 10;
+    }
+    let reversed = if n % 10 == 0 { n } else { number_of(digits_of(n).iter().rev().cloned().collect()) };
+    for w in 0..5 {
+        let answer = arm(w, n);
+        let what = f"arm {w}, case {t.cases} {n} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: n's digits reversed have the same power sum, so when they
+        // make another number, the two are not both accepted
+        let r = arm(w, reversed);
+        expect(mut t, 2, reversed == n or not (answer and r), f"P2 {what}, reversed {reversed} -> {r}");
+        // P3: the same for a drawn order of n's digits
+        let s = arm(w, shuffle);
+        expect(mut t, 3, shuffle == n or not (answer and s), f"P3 {what}, shuffled {shuffle} -> {s}");
+        // P4: n's last digit, when not 0, is accepted: one digit to the
+        // first power is itself
+        let last = n % 10;
+        expect(mut t, 4, last == 0 or arm(w, last), f"P4 {what}, last digit {last}");
+        // P5: 10^k, one digit more than n, sums to 1 and is rejected
+        let p = arm(w, ten);
+        expect(mut t, 5, not p, f"P5 {what}, {ten} -> {p}");
+        // P6: the k nines, 10^k - 1, are accepted only when k is 1
+        let nines = arm(w, ten - 1);
+        expect(mut t, 6, nines == (k == 1), f"P6 {what}, {ten - 1} -> {nines}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + n % 1000003 + if want { 1 } else { 0 }) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in five kinds, 400 each: from 1 to 10^8; from 1 to
+    // 10^4; one of the 27 Armstrong numbers up to 10^8; one of them moved
+    // by 1 to 9 either way; and one of them with its digits in a drawn
+    // order. Every choice is drawn before any arm answers.
+    let mut seed = 11341;
+    let mut problems: Vec[(i64, i64)] = [];
+    for i in 0..2000 {
+        let pick = KNOWN[next_random(mut seed) % 27];
+        let n = match i % 5 {
+            0 => {
+                let high = next_random(mut seed);
+                (high * 32768 + next_random(mut seed)) % 100000000 + 1
+            }
+            1 => next_random(mut seed) % 10000 + 1,
+            2 => pick,
+            3 => {
+                let step = next_random(mut seed) % 9 + 1;
+                if next_random(mut seed) % 2 == 0 or pick <= step { pick + step } else { pick - step }
+            }
+            _ => shuffled(mut seed, pick),
+        };
+        let shuffle = shuffled(mut seed, n);
+        problems.push((n, shuffle));
+    }
+    for (n, shuffle) in problems.iter() {
+        check_case(mut t, n, shuffle);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

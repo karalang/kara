@@ -1,0 +1,74 @@
+// LeetCode #1134: Armstrong Number -- the ★ arm: the digits counted by
+// dividing by 10, then each digit's k-th power summed by repeated
+// multiplication, and the sum compared with n. O(k^2) for k digits
+
+fn is_armstrong(n: i64) -> bool {
+    let mut k = 0;
+    let mut m = n;
+    while m > 0 {
+        k += 1;
+        m /= 10;
+    }
+    let mut total = 0;
+    m = n;
+    while m > 0 {
+        let d = m % 10;
+        let mut p = 1;
+        for _ in 0..k {
+            p *= d;
+        }
+        total += p;
+        m /= 10;
+    }
+    total == n
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples and ten more: one digit, the first two
+    // digits, three digits, four, a neighbour, 10^8, and the largest two
+    // up to 10^8
+    for n in [153, 123, 1, 9, 10, 370, 371, 9474, 9475, 100000000, 88593477, 24678050] {
+        println(f"{n} -> {is_armstrong(n)}");
+    }
+    // every Armstrong number from 1 to 20000
+    let found: Vec[i64] = (1..20001).filter(|n| is_armstrong(n)).collect();
+    println(f"Armstrong numbers to 20000: {found}");
+    // all 27 up to 10^8, and their neighbours that are not among them
+    let known = [1, 2, 3, 4, 5, 6, 7, 8, 9, 153, 370, 371, 407, 1634, 8208, 9474, 54748, 92727,
+        93084, 548834, 1741725, 4210818, 9800817, 9926315, 24678050, 24678051, 88593477];
+    let mut yes = 0;
+    let mut near = 0;
+    for n in known {
+        if is_armstrong(n) {
+            yes += 1;
+        }
+        for m in [n - 1, n + 1] {
+            if m >= 1 and not known.contains(m) and is_armstrong(m) {
+                near += 1;
+            }
+        }
+    }
+    println(f"{yes} of the {known.len()} up to 10^8 accepted, {near} of their other neighbours");
+    // 2000 random numbers from 1 to 10^8: how many are accepted, and a
+    // checksum over the numbers and the answers
+    let mut seed = 1134;
+    let mut count = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let high = next_random(mut seed);
+        let n = (high * 32768 + next_random(mut seed)) % 100000000 + 1;
+        let a = is_armstrong(n);
+        if a {
+            count += 1;
+        }
+        check = (check * 31 + n % 1000 + if a { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"2000 random numbers to 10^8: {count} accepted, checksum {check}");
+}

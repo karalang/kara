@@ -1,0 +1,15 @@
+153 -> true
+123 -> false
+1 -> true
+9 -> true
+10 -> false
+370 -> true
+371 -> true
+9474 -> true
+9475 -> false
+100000000 -> false
+88593477 -> true
+24678050 -> true
+Armstrong numbers to 20000: [1, 2, 3, 4, 5, 6, 7, 8, 9, 153, 370, 371, 407, 1634, 8208, 9474]
+27 of the 27 up to 10^8 accepted, 0 of their other neighbours
+2000 random numbers to 10^8: 0 accepted, checksum 491060536

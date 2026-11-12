@@ -1,0 +1,38 @@
+// LeetCode #1134: Armstrong Number -- the bench: the ★ arm asked of every
+// number from 1 to 15000000, the Armstrong numbers counted, summed and
+// folded into a checksum.
+
+fn is_armstrong(n: i64) -> bool {
+    let mut k = 0;
+    let mut m = n;
+    while m > 0 {
+        k += 1;
+        m /= 10;
+    }
+    let mut total = 0;
+    m = n;
+    while m > 0 {
+        let d = m % 10;
+        let mut p = 1;
+        for _ in 0..k {
+            p *= d;
+        }
+        total += p;
+        m /= 10;
+    }
+    total == n
+}
+
+fn main() {
+    let mut count = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for n in 1..15000001 {
+        if is_armstrong(n) {
+            count += 1;
+            sum += n;
+            check = (check * 31 + n) % 1000000007;
+        }
+    }
+    println(f"1 to 15000000: {count} Armstrong numbers, summing to {sum}, checksum {check}");
+}

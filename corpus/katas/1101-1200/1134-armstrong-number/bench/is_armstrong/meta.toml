@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1134-armstrong-number/bench/is_armstrong.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1134 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "b2526bc3a"
+extracted_src = "37e18405"
