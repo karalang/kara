@@ -109,7 +109,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-12-2 | 2026-11-12 | typecheck | low | A number read out of a tuple a literal was pushed into, then kept `i64` by a comparison, narrows into an `i32` slot with no machine fix: kata 1129's solution arm needs a hand `as i32` | — |
-| B-2026-11-12-10 | 2026-11-12 | mir-llvm | medium | Programs built for macOS keep no frame records: every function saved x29 (rbp) without pointing it at its own record, against Apple's arm64 and x86_64 ABIs, so sample, Instruments and crash reports walk past every Kāra frame | — |
 
 ### Relocated
 
@@ -1100,6 +1099,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-7 | typecheck | medium | An assignment refuses an `if`/`match` whose branches widen to the place: `y = if c { a } else { y }` with `a: u8`, `y: i64` is "if/else branches have… | 3436c6649a |
 | B-2026-11-12-8 | typecheck | low | `lossless_cast` calls a cast unnecessary where it fixes an open binding's type: `letter = b[j] as i64` after `let mut letter = -1` with `b: Vec[u8]`,… | 3436c6649a |
 | B-2026-11-12-9 | typecheck | low | A nested list literal passed as a nested `Array` is refused with no explanation or fix: `let mut result = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]; result =… | 97dd97098e |
+| B-2026-11-12-10 | mir-llvm | medium | Programs built for macOS keep no frame records: every function saved x29 (rbp) without pointing it at its own record, against Apple's arm64 and x86_6… | c5e9a24b82 |
 
 </details>
 
