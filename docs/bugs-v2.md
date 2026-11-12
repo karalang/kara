@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 267 |
 | false-positive | 190 |
-| perf | 156 |
+| perf | 157 |
 | missing-feature | 147 |
 | soundness | 61 |
 | miscompile | 56 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 412 |
-| mir-llvm | 203 |
+| mir-llvm | 204 |
 | mir | 170 |
 | cli | 95 |
 | parser | 74 |
@@ -111,6 +111,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-2 | 2026-11-12 | typecheck | low | A number read out of a tuple a literal was pushed into, then kept `i64` by a comparison, narrows into an `i32` slot with no machine fix: kata 1129's solution arm needs a hand `as i32` | — |
 | B-2026-11-12-12 | 2026-11-12 | typecheck | low | A literal stored into an element of an open fill settles the fill's literal: `let mut t = Vec.filled(3, 0); t[1] = 4; let r: i32 = t[1];` is refused (narrowing i64 to i32), though without `t[1] = 4` it is accepted and `t[1] = 4` after the typed read is too | — |
 | B-2026-11-12-15 | 2026-11-12 | mir-llvm | low | `"U".repeat(n)` of a one-byte string is a call into `karac_mir_str_repeat`, an allocation through `karac_alloc_or_panic` and up to three `memcpy` calls where Rust's is inlined: kata 1138's bench runs 7.0G instructions to Rust's 4.6G (0.81 s to 0.59 s) | — |
+| B-2026-11-12-17 | 2026-11-12 | mir-llvm | low | `for i in (low..n).step_by(2)` over an `i64` range runs about 1.2x the same loop written `while i < n { ...; i += 2 }`: `IterStepBy[Range].next` takes the generic path (a `first` flag, `advance_by(step - 1)` through `step_forward_within` and an `Option`, then `next`), which Rust's `StepBy<Range>` specializes | — |
 
 ### Relocated
 
