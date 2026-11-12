@@ -1,0 +1,62 @@
+// LeetCode #1144: Decrease Elements To Make Array Zigzag -- the moves for
+// each parity of lowered places as an iterator: the places of that parity
+// filtered from the indices, each mapped to how far it stands above one
+// below its smaller neighbour, summed; the smaller sum is the answer. O(n)
+
+fn moves_lowering(nums: Vec[i64], low: i64) -> i64 {
+    let n = nums.len();
+    (0..n)
+        .filter(|i| i % 2 == low)
+        .map(|i| {
+            let left = if i > 0 { nums[i - 1] } else { i64.MAX };
+            let right = if i + 1 < n { nums[i + 1] } else { i64.MAX };
+            (nums[i] - left.min(right) + 1).max(0)
+        })
+        .sum()
+}
+
+fn moves_to_make_zigzag(nums: Vec[i64]) -> i64 {
+    moves_lowering(nums, 0).min(moves_lowering(nums, 1))
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` values from 1 to `top`.
+fn random_array(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % top + 1).collect()
+}
+
+fn main() {
+    // LeetCode's two examples
+    println(f"example 1: {moves_to_make_zigzag([1, 2, 3])}");
+    println(f"example 2: {moves_to_make_zigzag([9, 6, 1, 6, 2])}");
+    // one element; two alike; a zigzag already; seven alike; rising
+    println(f"one element: {moves_to_make_zigzag([5])}");
+    println(f"two alike: {moves_to_make_zigzag([5, 5])}");
+    println(f"a zigzag already: {moves_to_make_zigzag([1, 3, 1, 3, 2])}");
+    println(f"seven alike: {moves_to_make_zigzag([4, 4, 4, 4, 4, 4, 4])}");
+    println(f"rising 1 to 10: {moves_to_make_zigzag((1..11).collect())}");
+    // 2000 random arrays of 1 to 50 values from 1 to 1000 or, every third
+    // array, 1 to 10: the answers summed and a checksum
+    let mut seed = 1144;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let n = next_random(mut seed) % 50 + 1;
+        let top = if i % 3 == 2 { 10 } else { 1000 };
+        let answer = moves_to_make_zigzag(random_array(mut seed, n, top));
+        total += answer;
+        check = (check * 131 + answer + 1) % 1000000007;
+    }
+    println(f"2000 random arrays: answers total {total}, checksum {check}");
+    // the longest the constraints allow, 1000 values: all 1000; rising
+    // from 1 to 1000; and random from 1 to 1000
+    println(f"1000 of 1000: {moves_to_make_zigzag(Vec.filled(1000, 1000))}");
+    println(f"1 to 1000 rising: {moves_to_make_zigzag((1..1001).collect())}");
+    println(f"1000 random: {moves_to_make_zigzag(random_array(mut seed, 1000, 1000))}");
+}

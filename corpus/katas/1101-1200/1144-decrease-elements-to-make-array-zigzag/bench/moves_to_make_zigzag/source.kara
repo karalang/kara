@@ -1,0 +1,56 @@
+// LeetCode #1144: Decrease Elements To Make Array Zigzag -- one pass for
+// each choice of which places are lowered, the even ones or the odd ones,
+// stepping over every second place: each lowered place is brought to one
+// below its smaller neighbour when it is not there already, and the
+// cheaper choice is the answer. O(n)
+
+fn moves_to_make_zigzag(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = i64.MAX;
+    for low in 0..2 {
+        let mut moves = 0;
+        for i in (low..n).step_by(2) {
+            let mut least = i64.MAX;
+            if i > 0 {
+                least = least.min(nums[i - 1]);
+            }
+            if i + 1 < n {
+                least = least.min(nums[i + 1]);
+            }
+            if nums[i] >= least {
+                moves += nums[i] - least + 1;
+            }
+        }
+        best = best.min(moves);
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 arrays of 1000 values from 1 to 1000, LeetCode's longest, built
+    // once. Each of 5000 rounds draws one value of every array again and
+    // answers every array.
+    let mut seed = 1144;
+    let mut arrays: Vec[Vec[i64]] = [];
+    for _ in 0..20 {
+        let a: Vec[i64] = (0..1000).map(|_| next_random(mut seed) % 1000 + 1).collect();
+        arrays.push(a);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..5000 {
+        for a in 0..20 {
+            let at = next_random(mut seed) % 1000;
+            arrays[a][at] = next_random(mut seed) % 1000 + 1;
+            let answer = moves_to_make_zigzag(arrays[a]);
+            total += answer;
+            check = (check * 131 + answer + 1) % 1000000007;
+        }
+    }
+    println(f"5000 rounds over 20 arrays of 1000 values: answers total {total}, checksum {check}");
+}

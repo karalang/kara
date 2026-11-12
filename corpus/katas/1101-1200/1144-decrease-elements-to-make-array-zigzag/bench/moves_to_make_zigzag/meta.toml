@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1144-decrease-elements-to-make-array-zigzag/bench/moves_to_make_zigzag.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1144 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "359f311d3"
+extracted_src = "93c45946"
