@@ -109,8 +109,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-12-2 | 2026-11-12 | typecheck | low | A number read out of a tuple a literal was pushed into, then kept `i64` by a comparison, narrows into an `i32` slot with no machine fix: kata 1129's solution arm needs a hand `as i32` | — |
-| B-2026-11-12-3 | 2026-11-12 | parser | low | `karac fix` rewrites Rust's `&[..]` on a list literal to `ref [..]`, which the checker refuses: `for &(p, q) in &[(1, 1), (1, -1)]` (kata 1131) | — |
-| B-2026-11-12-4 | 2026-11-12 | typecheck | low | A value made an `i64` by two literal bindings has no machine fix: `let p = 1; let q = 2; m = m.max(p * a + q * a)` with `a: i32` (kata 1131) | — |
 
 ### Relocated
 
@@ -1094,6 +1092,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-86 | typecheck | medium | A number a closure gives to `map` takes `i64` before `collect` can type it: `(0..n).map(\|i\| if i % 2 == 0 { [4, 7] } else { [7, 4] }).collect()` into… | 5a92d2ae01 |
 | B-2026-11-11-87 | parser+typecheck | low | `karac fix` turns `let run = (j - i) as i64;` into `let run = (j - i);`: the redundant cast's fix keeps parentheses that group nothing (kata 1128's s… | 0385ddd3ac |
 | B-2026-11-12-1 | typecheck | medium | A number inside a tuple pushed into a tuple slot keeps `i64`: `let x = 0; q.push((x, 1))` into a `Vec[(i32, i32)]` is refused as narrowing `x` (kata… | 2d47b8e713 |
+| B-2026-11-12-3 | parser | low | `karac fix` rewrites Rust's `&[..]` on a list literal to `ref [..]`, which the checker refuses: `for &(p, q) in &[(1, 1), (1, -1)]` (kata 1131) | 73ec8b248f |
+| B-2026-11-12-4 | typecheck | low | A value made an `i64` by two literal bindings has no machine fix: `let p = 1; let q = 2; m = m.max(p * a + q * a)` with `a: i32` (kata 1131) | 73ec8b248f |
 
 </details>
 
