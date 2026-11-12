@@ -109,9 +109,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-12-2 | 2026-11-12 | typecheck | low | A number read out of a tuple a literal was pushed into, then kept `i64` by a comparison, narrows into an `i32` slot with no machine fix: kata 1129's solution arm needs a hand `as i32` | — |
-| B-2026-11-12-6 | 2026-11-12 | typecheck | high | A literal beside a narrower branch takes that branch's type even when it does not fit: `show(if c < 128 { c } else { 0xFFFD })` with `c: u8` and `show(x: i64)` prints 253, and `let d = if c < 128 { c } else { 65533 }` is accepted as a `u8` (kata 1136) | — |
-| B-2026-11-12-7 | 2026-11-12 | typecheck | medium | An assignment refuses an `if`/`match` whose branches widen to the place: `y = if c { a } else { y }` with `a: u8`, `y: i64` is "if/else branches have incompatible types" where `let y2: i64 = if c { a } else { y }` is accepted, so `karac fix` deleting a flagged `a as i64` breaks the program (kata 1136) | — |
-| B-2026-11-12-8 | 2026-11-12 | typecheck | low | `lossless_cast` calls a cast unnecessary where it fixes an open binding's type: `letter = b[j] as i64` after `let mut letter = -1` with `b: Vec[u8]`, and `karac fix` deleting it leaves `-1` initializing a `u8` (kata 1136) | — |
 
 ### Relocated
 
@@ -1098,6 +1095,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-3 | parser | low | `karac fix` rewrites Rust's `&[..]` on a list literal to `ref [..]`, which the checker refuses: `for &(p, q) in &[(1, 1), (1, -1)]` (kata 1131) | 73ec8b248f |
 | B-2026-11-12-4 | typecheck | low | A value made an `i64` by two literal bindings has no machine fix: `let p = 1; let q = 2; m = m.max(p * a + q * a)` with `a: i32` (kata 1131) | 73ec8b248f |
 | B-2026-11-12-5 | typecheck | low | `lossless_cast` misses a widening cast pushed or inserted into a list and one used as a list position, so `karac fix` leaves `graph[r[0] as i64].push… | d361886e40 |
+| B-2026-11-12-6 | typecheck | high | A literal beside a narrower branch takes that branch's type even when it does not fit: `show(if c < 128 { c } else { 0xFFFD })` with `c: u8` and `sho… | 3436c6649a |
+| B-2026-11-12-7 | typecheck | medium | An assignment refuses an `if`/`match` whose branches widen to the place: `y = if c { a } else { y }` with `a: u8`, `y: i64` is "if/else branches have… | 3436c6649a |
+| B-2026-11-12-8 | typecheck | low | `lossless_cast` calls a cast unnecessary where it fixes an open binding's type: `letter = b[j] as i64` after `let mut letter = -1` with `b: Vec[u8]`,… | 3436c6649a |
 
 </details>
 
