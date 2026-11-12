@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 258 |
-| false-positive | 184 |
+| diagnostics | 259 |
+| false-positive | 185 |
 | perf | 155 |
 | missing-feature | 147 |
 | soundness | 61 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 397 |
+| typecheck | 399 |
 | mir-llvm | 201 |
 | mir | 170 |
 | cli | 95 |
 | ownership | 73 |
-| parser | 72 |
+| parser | 73 |
 | interp | 51 |
 | runtime | 40 |
 | effect | 30 |
@@ -109,6 +109,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
+| B-2026-11-11-86 | 2026-11-11 | typecheck | medium | A number a closure gives to `map` takes `i64` before `collect` can type it: `(0..n).map(|i| if i % 2 == 0 { [4, 7] } else { [7, 4] }).collect()` into a `Vec[Vec[i32]]` is refused as `FromIterator[Vec[i64]]` (kata 1128's harness) | — |
+| B-2026-11-11-87 | 2026-11-11 | parser+typecheck | low | `karac fix` turns `let run = (j - i) as i64;` into `let run = (j - i);`: the redundant cast's fix keeps parentheses that group nothing (kata 1128's sort arm) | — |
 
 ### Relocated
 
