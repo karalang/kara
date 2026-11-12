@@ -1,0 +1,73 @@
+// LeetCode #1128: Number of Equivalent Domino Pairs -- a 10 by 10 grid
+// counts the dominoes by their smaller and larger number, then each cell
+// of `c` gives `c * (c - 1) / 2` pairs. O(n)
+
+fn num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i64 {
+    let mut grid = Vec.filled(10, Vec.filled(10, 0));
+    for d in dominoes.iter() {
+        let lo = d[0].min(d[1]) as i64;
+        let hi = d[0].max(d[1]) as i64;
+        grid[lo][hi] += 1;
+    }
+    let mut pairs = 0;
+    for row in grid.iter() {
+        for c in row.iter() {
+            pairs += c * (c - 1) / 2;
+        }
+    }
+    pairs
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples and six more: one domino, four alike, a
+    // pair and its turn, the highest numbers, a ring of three, and a mix
+    let cases: Vec[Vec[Vec[i32]]] = [
+        [[1, 2], [2, 1], [3, 4], [5, 6]],
+        [[1, 2], [1, 2], [1, 1], [1, 2], [2, 2]],
+        [[1, 1]],
+        [[1, 1], [1, 1], [1, 1], [1, 1]],
+        [[1, 2], [2, 1], [1, 2], [2, 1]],
+        [[1, 9], [9, 1], [9, 9], [1, 1]],
+        [[3, 4], [4, 5], [5, 3], [4, 3]],
+        [[2, 7], [7, 2], [2, 7], [7, 7], [2, 2], [7, 2]],
+    ];
+    for c in cases.iter() {
+        println(f"{c} -> {num_equiv_domino_pairs(c)}");
+    }
+    // 2000 random sets of up to 400 dominoes, their numbers up to 1 to 9:
+    // the pairs summed and a checksum
+    let mut seed = 1128;
+    let mut total = 0;
+    let mut check = 0;
+    for t in 0..2000 {
+        let n = next_random(mut seed) % 400 + 1;
+        let top = 1 + t % 9;
+        let mut dominoes: Vec[Vec[i32]] = [];
+        for _ in 0..n {
+            let a = next_random(mut seed) % top + 1;
+            let b = next_random(mut seed) % top + 1;
+            dominoes.push([a as i32, b as i32]);
+        }
+        let answer = num_equiv_domino_pairs(dominoes);
+        total += answer;
+        check = (check * 31 + answer + n) % 1000000007;
+    }
+    println(f"2000 random sets: pairs total {total}, checksum {check}");
+    // two of LeetCode's largest: 40000 dominoes at random, and 40000 alike
+    let mut big: Vec[Vec[i32]] = [];
+    for _ in 0..40000 {
+        let a = next_random(mut seed) % 9 + 1;
+        let b = next_random(mut seed) % 9 + 1;
+        big.push([a as i32, b as i32]);
+    }
+    println(f"40000 random dominoes: {num_equiv_domino_pairs(big)} pairs");
+    let same: Vec[Vec[i32]] = (0..40000).map(|i| if i % 2 == 0 { [4, 7] } else { [7, 4] }).collect();
+    println(f"40000 alike: {num_equiv_domino_pairs(same)} pairs");
+}

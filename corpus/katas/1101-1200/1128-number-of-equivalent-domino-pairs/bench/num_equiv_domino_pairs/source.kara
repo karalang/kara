@@ -1,0 +1,47 @@
+// LeetCode #1128: Number of Equivalent Domino Pairs -- the bench: the ★ arm
+// over 16 sets of 4 * 10^4 dominoes, LeetCode's largest, built once, each
+// of 300 rounds changing one number of one domino in every set and
+// counting the set's pairs again.
+
+fn num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i64 {
+    let mut count = [0; 100];
+    let mut pairs = 0;
+    for d in dominoes.iter() {
+        let key = d[0].min(d[1]) * 10 + d[0].max(d[1]);
+        pairs += count[key];
+        count[key] += 1;
+    }
+    pairs
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 1128;
+    let mut sets: Vec[Vec[Vec[i32]]] = [];
+    for _ in 0..16 {
+        let mut dominoes: Vec[Vec[i32]] = [];
+        for _ in 0..40000 {
+            let a = next_random(mut seed) % 9 + 1;
+            let b = next_random(mut seed) % 9 + 1;
+            dominoes.push([a as i32, b as i32]);
+        }
+        sets.push(dominoes);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..300 {
+        for j in 0..sets.len() {
+            let at = (round * 7919 + j * 104729) % 40000;
+            let side = round % 2;
+            sets[j][at][side] = sets[j][at][side] % 9 + 1;
+            let answer = num_equiv_domino_pairs(sets[j]);
+            total += answer;
+            check = (check * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"300 rounds over 16 sets of 4 * 10^4 dominoes: pairs total {total}, checksum {check}");
+}

@@ -1,0 +1,242 @@
+// LeetCode #1128: Number of Equivalent Domino Pairs -- a differential over
+// the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- num_equiv_domino_pairs.kara ----
+
+fn a0_num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i64 {
+    let mut count = [0; 100];
+    let mut pairs = 0;
+    for d in dominoes.iter() {
+        let key = d[0].min(d[1]) * 10 + d[0].max(d[1]);
+        pairs += count[key];
+        count[key] += 1;
+    }
+    pairs
+}
+
+// ---- num_equiv_domino_pairs_map.kara ----
+
+fn a1_num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i64 {
+    let mut seen: Map[(i32, i32), i64] = Map.new();
+    let mut pairs = 0;
+    for d in dominoes.iter() {
+        let key = if d[0] <= d[1] { (d[0], d[1]) } else { (d[1], d[0]) };
+        let before = seen.get(key).cloned().unwrap_or(0);
+        pairs += before;
+        seen[key] = before + 1;
+    }
+    pairs
+}
+
+// ---- num_equiv_domino_pairs_sort.kara ----
+
+fn a2_num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i64 {
+    let mut keys: Vec[i32] = dominoes.iter().map(|d| d[0].min(d[1]) * 10 + d[0].max(d[1])).collect();
+    keys.sort();
+    let mut pairs = 0;
+    let mut i = 0;
+    while i < keys.len() {
+        let mut j = i;
+        while j < keys.len() and keys[j] == keys[i] {
+            j += 1;
+        }
+        let run = j - i;
+        pairs += run * (run - 1) / 2;
+        i = j;
+    }
+    pairs
+}
+
+// ---- num_equiv_domino_pairs_grid.kara ----
+
+fn a3_num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i64 {
+    let mut grid = Vec.filled(10, Vec.filled(10, 0));
+    for d in dominoes.iter() {
+        let lo = d[0].min(d[1]) as i64;
+        let hi = d[0].max(d[1]) as i64;
+        grid[lo][hi] += 1;
+    }
+    let mut pairs = 0;
+    for row in grid.iter() {
+        for c in row.iter() {
+            pairs += c * (c - 1) / 2;
+        }
+    }
+    pairs
+}
+
+// ---- num_equiv_domino_pairs_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i32 {
+        let mut count: Map[(i32, i32), i32] = Map.new();
+        for d in dominoes.iter() {
+            let key = if d[0] <= d[1] { (d[0], d[1]) } else { (d[1], d[0]) };
+            *count.entry(key).or_insert(0) += 1;
+        }
+        count.values().map(|v| v * (v - 1) / 2).sum()
+    }
+}
+
+fn a4_num_equiv_domino_pairs(dominoes: Vec[Vec[i32]]) -> i64 {
+    A4Solution.a4_num_equiv_domino_pairs(dominoes)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(which: i64, dominoes: Vec[Vec[i32]]) -> i64 {
+    match which {
+        0 => a0_num_equiv_domino_pairs(dominoes),
+        1 => a1_num_equiv_domino_pairs(dominoes),
+        2 => a2_num_equiv_domino_pairs(dominoes),
+        3 => a3_num_equiv_domino_pairs(dominoes),
+        _ => a4_num_equiv_domino_pairs(dominoes),
+    }
+}
+
+// The statement read literally: every pair `i < j`, equivalent when
+// `a == c and b == d` or `a == d and b == c`.
+fn literal(dominoes: Vec[Vec[i32]]) -> i64 {
+    let n = dominoes.len();
+    let mut pairs = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            let (a, b) = (dominoes[i][0], dominoes[i][1]);
+            let (c, d) = (dominoes[j][0], dominoes[j][1]);
+            if (a == c and b == d) or (a == d and b == c) {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+
+// P2's second reading: two dominoes hold the same two numbers when their
+// sums and products agree, and each domino counts the others it matches;
+// every pair is counted from both of its ends.
+fn matches_from_both_ends(dominoes: Vec[Vec[i32]]) -> i64 {
+    let mut ends = 0;
+    for (i, x) in dominoes.iter().enumerate() {
+        for (j, y) in dominoes.iter().enumerate() {
+            if i != j and x[0] + x[1] == y[0] + y[1] and x[0] * x[1] == y[0] * y[1] {
+                ends += 1;
+            }
+        }
+    }
+    ends
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` dominoes, each number from 1 to `top`.
+fn dominoes_up_to(seed: mut ref i64, n: i64, top: i64) -> Vec[Vec[i32]] {
+    let mut out: Vec[Vec[i32]] = [];
+    for _ in 0..n {
+        let a = next_random(mut seed) % top + 1;
+        let b = next_random(mut seed) % top + 1;
+        out.push([a as i32, b as i32]);
+    }
+    out
+}
+
+// `n` dominoes drawn from three, each turned or not at random.
+fn from_three(seed: mut ref i64, n: i64) -> Vec[Vec[i32]] {
+    let palette = dominoes_up_to(mut seed, 3, 9);
+    let mut out: Vec[Vec[i32]] = [];
+    for _ in 0..n {
+        let p = palette[next_random(mut seed) % 3].clone();
+        if next_random(mut seed) % 2 == 0 {
+            out.push(p);
+        } else {
+            out.push([p[1], p[0]]);
+        }
+    }
+    out
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, dominoes: Vec[Vec[i32]]) {
+    let n = dominoes.len();
+    let want = literal(dominoes);
+    let ends = matches_from_both_ends(dominoes);
+    let turned: Vec[Vec[i32]] = dominoes.iter().map(|d| [d[1], d[0]]).collect();
+    let reversed: Vec[Vec[i32]] = dominoes.iter().rev().cloned().collect();
+    let mut doubled = dominoes.clone();
+    doubled.extend(dominoes.iter().cloned());
+    let relabelled: Vec[Vec[i32]] = dominoes.iter().map(|d| [10 - d[0], 10 - d[1]]).collect();
+    for w in 0..5 {
+        let answer = arm(w, dominoes);
+        let what = f"arm {w}, case {t.cases} {dominoes} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: every pair counted from both of its ends, by sums and products
+        expect(mut t, 2, 2 * answer == ends, f"P2 {what}, ends {ends}");
+        // P3: each domino turned gives the same answer
+        let r = arm(w, turned);
+        expect(mut t, 3, r == answer, f"P3 {what}, turned {r}");
+        // P4: the dominoes in reverse order give the same answer
+        let v = arm(w, reversed);
+        expect(mut t, 4, v == answer, f"P4 {what}, reversed {v}");
+        // P5: a copy of every domino appended: each kind of `c` becomes
+        // `2c`, so the pairs become `4 * answer + n`
+        let d = arm(w, doubled);
+        expect(mut t, 5, d == 4 * answer + n, f"P5 {what}, doubled {d}");
+        // P6: each number `k` relabelled `10 - k` gives the same answer
+        let l = arm(w, relabelled);
+        expect(mut t, 6, l == answer, f"P6 {what}, relabelled {l}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + want + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 problems in four kinds, 500 each: up to 30 dominoes of any
+    // numbers; up to 30 of the numbers 1 to 3; up to 40 of 1 and 2 alone;
+    // and up to 40 drawn from three dominoes, each turned or not. Every
+    // choice is drawn before any arm answers.
+    let mut seed = 11281;
+    let mut problems: Vec[Vec[Vec[i32]]] = [];
+    for i in 0..2000 {
+        let dominoes = match i % 4 {
+            0 => dominoes_up_to(mut seed, next_random(mut seed) % 30 + 1, 9),
+            1 => dominoes_up_to(mut seed, next_random(mut seed) % 30 + 1, 3),
+            2 => dominoes_up_to(mut seed, next_random(mut seed) % 40 + 1, 2),
+            _ => from_three(mut seed, next_random(mut seed) % 40 + 1),
+        };
+        problems.push(dominoes);
+    }
+    for p in problems.iter() {
+        check_case(mut t, p);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
