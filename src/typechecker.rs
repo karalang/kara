@@ -969,15 +969,49 @@ pub(crate) struct StrLitLet {
 pub(crate) struct ListLitLet {
     /// The bound name; `: Array[T, N]` goes at its end.
     name: Span,
-    /// How many elements the literal lists.
-    len: usize,
+    /// How many elements the literal lists, and as much again for its
+    /// elements when they are list literals of one shape.
+    shape: ListShape,
     /// Whether nothing else is assigned to it, so declaring it an `Array`
     /// is the whole fix.
     literal_only: bool,
     /// The errors reported where it is used as an `Array` of its length,
-    /// in order, and the `Array` type the first one wants.
-    uses: Vec<usize>,
+    /// in order, with the use's span (an argument checked twice leaves an
+    /// index another error has taken since), and the `Array` type the
+    /// first one wants.
+    uses: Vec<(usize, SpanKey)>,
     want: Option<Type>,
+}
+
+/// The lengths of a list literal and, when its elements are list literals
+/// of one shape, of theirs (`[[1, 0], [0, 1]]` is 2 of 2), so a nested
+/// literal is offered the nested `Array` only when every length fits.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ListShape {
+    len: usize,
+    inner: Option<Box<ListShape>>,
+}
+
+impl ListShape {
+    fn of(items: &[Expr]) -> ListShape {
+        let shapes: Vec<Option<ListShape>> = items
+            .iter()
+            .map(|e| match &e.kind {
+                ExprKind::ArrayLiteral(inner) if !inner.is_empty() => Some(ListShape::of(inner)),
+                _ => None,
+            })
+            .collect();
+        let inner = match shapes.first() {
+            Some(Some(first)) if shapes.iter().all(|s| s.as_ref() == Some(first)) => {
+                Some(Box::new(first.clone()))
+            }
+            _ => None,
+        };
+        ListShape {
+            len: items.len(),
+            inner,
+        }
+    }
 }
 
 /// Where a binding's integer type comes from an unsuffixed literal that
@@ -7584,7 +7618,7 @@ impl<'a> TypeChecker<'a> {
                     name.to_string(),
                     ListLitLet {
                         name: name_span,
-                        len: items.len(),
+                        shape: ListShape::of(items),
                         literal_only: true,
                         uses: Vec::new(),
                         want: None,
@@ -7598,12 +7632,46 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// `name = value`: another value may have another length, so `: Array`
-    /// alone no longer fixes the binding.
-    pub(super) fn note_list_lit_assign(&mut self, target: &Expr) {
+    /// alone no longer fixes the binding, unless the value is an `Array`
+    /// itself, whose type carries its length (`result = multiply(result,
+    /// step)` returning the `Array` the literal is meant to be, kata 1137).
+    pub(super) fn note_list_lit_assign(&mut self, target: &Expr, value_ty: &Type) {
+        let array = matches!(
+            inference::resolve_type_var_top(value_ty, &self.env.substitutions),
+            Type::Array { .. }
+        );
         if let ExprKind::Identifier(n) = &target.kind {
             if let Some(rec) = self.list_lit_lets.get_mut(n.as_str()) {
-                rec.literal_only = false;
+                rec.literal_only &= array;
             }
+        }
+    }
+
+    /// Whether `found`, a list literal's `Vec` of the given shape, is the
+    /// `Array` `want` written without its annotation: the same lengths at
+    /// every level, and the same element type (or an open literal) inside.
+    fn list_shape_is_array(&self, want: &Type, found: &Type, shape: &ListShape) -> bool {
+        let want = inference::resolve_type_var_top(want, &self.env.substitutions);
+        let found = inference::resolve_type_var_top(found, &self.env.substitutions);
+        let (
+            Type::Array {
+                element,
+                size: ConstArg::Literal(n),
+            },
+            Type::Named { name, args },
+        ) = (&want, &found)
+        else {
+            return false;
+        };
+        if name != "Vec" || args.len() != 1 || usize::try_from(*n).ok() != Some(shape.len) {
+            return false;
+        }
+        let elem_now = inference::resolve_type_var_top(&args[0], &self.env.substitutions);
+        match (&shape.inner, element.as_ref()) {
+            (Some(inner), Type::Array { .. }) => {
+                self.list_shape_is_array(element, &elem_now, inner)
+            }
+            _ => elem_now == **element || matches!(elem_now, Type::TypeVar(_)),
         }
     }
 
@@ -7635,7 +7703,19 @@ impl<'a> TypeChecker<'a> {
                  expected type is one (design.md § Collection literals)",
                 rec.name.line, rec.name.column
             );
-            for (i, at) in rec.uses.iter().enumerate() {
+            let mut seen = FxHashSet::default();
+            let uses: Vec<usize> = rec
+                .uses
+                .iter()
+                .filter(|(at, key)| {
+                    self.errors
+                        .get(*at)
+                        .is_some_and(|e| SpanKey::from_span(&e.span) == *key)
+                        && seen.insert(*at)
+                })
+                .map(|(at, _)| *at)
+                .collect();
+            for (i, at) in uses.iter().enumerate() {
                 let Some(e) = self.errors.get_mut(*at) else {
                     continue;
                 };
@@ -8970,44 +9050,30 @@ impl<'a> TypeChecker<'a> {
             };
             let want = inference::resolve_type_var_top(want, &self.env.substitutions);
             let found_now = inference::resolve_type_var_top(found, &self.env.substitutions);
-            let len = self.list_lit_lets.get(name.as_str()).map(|r| r.len);
-            if let (
-                Type::Array {
-                    element,
-                    size: ConstArg::Literal(n),
-                },
-                Type::Named { name: vec, args },
-                Some(len),
-            ) = (&want, &found_now, len)
-            {
-                let elem_now = args
-                    .first()
-                    .map(|a| inference::resolve_type_var_top(a, &self.env.substitutions));
-                if vec == "Vec"
-                    && args.len() == 1
-                    && usize::try_from(*n).is_ok_and(|n| n == len)
-                    && (elem_now.as_ref() == Some(element.as_ref())
-                        // A list of open literals (`[1, 2, 3]`).
-                        || matches!(elem_now, Some(Type::TypeVar(_))))
-                {
-                    self.type_error_with_types(
-                        format!(
-                            "expected '{}', found '{}'",
-                            type_display(&want),
-                            type_display(&found_now)
-                        ),
-                        span,
-                        TypeErrorKind::TypeMismatch,
-                        expected,
-                        found,
-                    );
-                    let at = self.errors.len() - 1;
-                    if let Some(rec) = self.list_lit_lets.get_mut(name.as_str()) {
-                        rec.uses.push(at);
-                        rec.want.get_or_insert_with(|| want.clone());
-                    }
-                    return false;
+            let shape = self
+                .list_lit_lets
+                .get(name.as_str())
+                .map(|r| r.shape.clone());
+            // A list of open literals (`[1, 2, 3]`) or of list literals of
+            // one shape (`[[1, 0], [0, 1]]`, kata 1137).
+            if shape.is_some_and(|sh| self.list_shape_is_array(&want, &found_now, &sh)) {
+                self.type_error_with_types(
+                    format!(
+                        "expected '{}', found '{}'",
+                        type_display(&want),
+                        type_display(&found_now)
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    expected,
+                    found,
+                );
+                let at = self.errors.len() - 1;
+                if let Some(rec) = self.list_lit_lets.get_mut(name.as_str()) {
+                    rec.uses.push((at, SpanKey::from_span(&span)));
+                    rec.want.get_or_insert_with(|| want.clone());
                 }
+                return false;
             }
         }
         if let Some(name) = self

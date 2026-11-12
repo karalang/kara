@@ -11950,7 +11950,6 @@ impl<'a> super::TypeChecker<'a> {
             StmtKind::Assign { target, value } => {
                 self.note_last_mut_write(target);
                 self.note_str_lit_assign(target, value);
-                self.note_list_lit_assign(target);
                 // design.md § "The index operator (`expr[i]`)" — the RHS of an
                 // assignment is a value position exactly as a `let` initializer
                 // is, so `v[i] = v[j]` falls to the same rule
@@ -11975,6 +11974,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.reject_shared_field_move(value, &rhs_ty);
                     rhs_ty
                 };
+                self.note_list_lit_assign(target, &rhs_ty);
                 self.reject_owned_value_into_ref_local(target, value, &rhs_ty);
                 self.reject_plain_assign_through_mut_ref(target, &rhs_ty);
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
