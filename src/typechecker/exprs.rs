@@ -2702,7 +2702,11 @@ impl<'a> super::TypeChecker<'a> {
         match resolve_type_var_top(&ty, &self.env.substitutions) {
             Type::Ref(inner) => {
                 let inner = resolve_type_var_top(&inner, &self.env.substitutions);
-                if copied_item(&inner) {
+                // A literal no use has typed yet (`(1..10).filter(|x| ..)`)
+                // is a number all the same, so its item is a copy as an
+                // `i64`'s is: `*x` is refused as it is over `(1..n)`
+                // (B-2026-11-12-18).
+                if copied_item(&inner) || self.unbound_literal_var(&inner).is_some() {
                     inner
                 } else {
                     ty
