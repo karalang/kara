@@ -320,6 +320,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A top-level `const` names its value as an array or vector length:
+  `Array[i64, SIZE]` with `const SIZE: i64 = 3;` was kept as an opaque name,
+  so `[0; 3]` was refused as a mismatch with its own declared type
+  (B-2026-11-13-22).
+
 - A `Slice` compared with an `Array` (or a `Vec`) of the same element
   type, `pkt[236..240] != COOKIE`, was never equal in compiled code: the
   right side was read as a slice. The interpreter was right. Compiled code
@@ -810,6 +815,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   interpreter (B-2026-11-08-52).
 
 ### Diagnostics
+
+- A run-time value as a const generic argument (`Array[i64, n]` with `n` a
+  parameter or local, or `n + 1`) is one error at the argument, "const
+  generic argument must be a compile-time constant expression", naming the
+  value and pointing to `Vec`. It used to surface later as a type mismatch,
+  an "undefined type", or three cascading errors (B-2026-11-13-22).
+- Assigning into a field of a value moved as a whole (`eat(p); p.a = 1;`)
+  says the value is initialized again only as a whole (core semantics
+  § 3.4), and to assign all of it or move only the fields the callee
+  needs. The help used to suggest deriving `Clone` and cloning at the
+  move, though nothing reads the value, with a `karac fix` edit to match
+  (B-2026-11-13-23).
 
 - An E0516 whose borrow lends a `shared` value (`let e2 = e;` over
   `m.get(k)` for a `shared struct Ent`) says that `*r` is a second counted

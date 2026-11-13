@@ -1122,71 +1122,44 @@ impl<'a> super::TypeChecker<'a> {
             GenericArg::Const(_) => return None,
             GenericArg::Shape(_) => return None,
         };
-        let size: ConstArg = match &args[1] {
-            GenericArg::Const(expr) => match &expr.kind {
-                ExprKind::Integer(n, _) if *n >= 0 => ConstArg::Literal(narrow_literal_to_i64(*n)),
-                // Const generics slice 3 (fork G4): an `Identifier` whose
-                // name is a const-generic param in scope flows through
-                // as `ConstArg::ConstParam(name)` — the inference solver
-                // will substitute when the function is monomorphized.
-                ExprKind::Identifier(name) if generic_scope.contains(name) => {
-                    ConstArg::ConstParam(name.clone())
-                }
-                // Other shapes (non-literal, non-const-param) route
-                // through slice 2's const-expression evaluator. A
-                // successful evaluation to a non-negative integer
-                // becomes a `Literal`; eval errors emit a focused
-                // diagnostic and fall back to `Literal(0)` so downstream
-                // consumers don't crash.
-                _ => match self.eval_const_expr(expr, &Type::UInt(UIntSize::Usize)) {
-                    Ok(cv) => match const_value_to_array_size(&cv) {
-                        Some(n) => ConstArg::Literal(n as i64),
-                        None => {
-                            self.type_error(
-                                format!(
-                                    "Array size const-arg must evaluate to a \
-                                     non-negative integer; got {}",
-                                    type_display(&const_value_type(&cv))
-                                ),
-                                expr.span,
-                                TypeErrorKind::TypeMismatch,
-                            );
-                            return None;
-                        }
-                    },
-                    Err(e) => {
-                        self.emit_const_eval_error(e);
-                        return None;
+        let mut synthesized = None;
+        let expr = self.const_arg_expr(&args[1], &mut synthesized)?;
+        let size: ConstArg = match &expr.kind {
+            ExprKind::Integer(n, _) if *n >= 0 => ConstArg::Literal(narrow_literal_to_i64(*n)),
+            // Const generics slice 3 (fork G4): an `Identifier` whose
+            // name is a const-generic param in scope flows through
+            // as `ConstArg::ConstParam(name)` — the inference solver
+            // will substitute when the function is monomorphized.
+            ExprKind::Identifier(name) if generic_scope.contains(name) => {
+                ConstArg::ConstParam(name.clone())
+            }
+            // Other shapes (non-literal, non-const-param) route through
+            // slice 2's const-expression evaluator: a top-level `const`, or
+            // arithmetic over them. A successful evaluation to a
+            // non-negative integer becomes a `Literal`; anything else is
+            // reported at the argument, and the type is `Error` so the
+            // annotation does not also fail every use (B-2026-11-13-22).
+            _ => match self.eval_const_expr(expr, &Type::UInt(UIntSize::Usize)) {
+                Ok(cv) => match const_value_to_array_size(&cv) {
+                    Some(n) => ConstArg::Literal(n as i64),
+                    None => {
+                        self.type_error(
+                            format!(
+                                "Array size const-arg must evaluate to a \
+                                 non-negative integer; got {}",
+                                type_display(&const_value_type(&cv))
+                            ),
+                            expr.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Some(Type::Error);
                     }
                 },
-            },
-            // Parser-side carveout (const generics slice 3b): the
-            // generic-arg parser routes plain `Identifier` to
-            // `GenericArg::Type` (it can't disambiguate a type-param
-            // ref from a const-param ref without scope info). At type
-            // lowering we recover: an Identifier in scope that's
-            // *not* a type-param can be treated as a `ConstParam`
-            // reference for the Array size position. `lower_array_type`
-            // is the only place that needs this disambiguation today
-            // (other `Type::Named.args` consumers stay type-only per
-            // the deferred-F carveout).
-            GenericArg::Type(te) => {
-                if let TypeKind::Path(p) = &te.kind {
-                    if p.segments.len() == 1 && p.generic_args.is_none() {
-                        let name = &p.segments[0];
-                        if generic_scope.contains(name) {
-                            ConstArg::ConstParam(name.clone())
-                        } else {
-                            return None;
-                        }
-                    } else {
-                        return None;
-                    }
-                } else {
-                    return None;
+                Err(e) => {
+                    self.report_const_arg_error(e);
+                    return Some(Type::Error);
                 }
-            }
-            GenericArg::Shape(_) => return None,
+            },
         };
         Some(Type::Array {
             element: Box::new(element_ty),
@@ -1242,60 +1215,41 @@ impl<'a> super::TypeChecker<'a> {
             return None;
         }
         // Reuse Array's const-arg parsing shape, then reject N <= 0.
-        let lanes: ConstArg = match &args[1] {
-            GenericArg::Const(expr) => match &expr.kind {
-                ExprKind::Integer(n, _) => {
-                    if *n <= 0 {
+        let mut synthesized = None;
+        let expr = self.const_arg_expr(&args[1], &mut synthesized)?;
+        let lanes: ConstArg = match &expr.kind {
+            ExprKind::Integer(n, _) => {
+                if *n <= 0 {
+                    self.type_error(
+                        format!("Vector lane count must be positive (N > 0); got {}", n),
+                        expr.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return None;
+                }
+                ConstArg::Literal(narrow_literal_to_i64(*n))
+            }
+            ExprKind::Identifier(name) if generic_scope.contains(name) => {
+                ConstArg::ConstParam(name.clone())
+            }
+            _ => match self.eval_const_expr(expr, &Type::UInt(UIntSize::Usize)) {
+                Ok(cv) => match const_value_to_array_size(&cv) {
+                    Some(0) | None => {
                         self.type_error(
-                            format!("Vector lane count must be positive (N > 0); got {}", n),
+                            "Vector lane count must evaluate to a positive integer (N > 0)"
+                                .to_string(),
                             expr.span,
                             TypeErrorKind::TypeMismatch,
                         );
                         return None;
                     }
-                    ConstArg::Literal(narrow_literal_to_i64(*n))
-                }
-                ExprKind::Identifier(name) if generic_scope.contains(name) => {
-                    ConstArg::ConstParam(name.clone())
-                }
-                _ => match self.eval_const_expr(expr, &Type::UInt(UIntSize::Usize)) {
-                    Ok(cv) => match const_value_to_array_size(&cv) {
-                        Some(0) | None => {
-                            self.type_error(
-                                "Vector lane count must evaluate to a positive integer (N > 0)"
-                                    .to_string(),
-                                expr.span,
-                                TypeErrorKind::TypeMismatch,
-                            );
-                            return None;
-                        }
-                        Some(n) => ConstArg::Literal(n as i64),
-                    },
-                    Err(e) => {
-                        self.emit_const_eval_error(e);
-                        return None;
-                    }
+                    Some(n) => ConstArg::Literal(n as i64),
                 },
-            },
-            // Parser carveout: plain identifier routed to GenericArg::Type
-            // (same disambiguation as `lower_array_type`).
-            GenericArg::Type(te) => {
-                if let TypeKind::Path(p) = &te.kind {
-                    if p.segments.len() == 1 && p.generic_args.is_none() {
-                        let name = &p.segments[0];
-                        if generic_scope.contains(name) {
-                            ConstArg::ConstParam(name.clone())
-                        } else {
-                            return None;
-                        }
-                    } else {
-                        return None;
-                    }
-                } else {
-                    return None;
+                Err(e) => {
+                    self.report_const_arg_error(e);
+                    return Some(Type::Error);
                 }
-            }
-            GenericArg::Shape(_) => return None,
+            },
         };
         Some(Type::Vector {
             element: Box::new(element_ty),
@@ -1480,6 +1434,73 @@ impl<'a> super::TypeChecker<'a> {
     /// the passed `generic_scope` is empty (the signature path threads the full
     /// `gp` list instead). Kept to SHAPE-dim resolution only — body type-param
     /// spelling stays the bare `Named{"T"}` form downstream code relies on.
+    /// The expression a const-generic length argument (`Array[T, n]`,
+    /// `Vector[T, n]`) stands for. The parser routes a lone name to
+    /// `GenericArg::Type`, since it cannot tell a type parameter from a
+    /// const; such a name is rebuilt here as an identifier in `slot`, so a
+    /// top-level `const` evaluates and anything else reaches the
+    /// const-argument report (B-2026-11-13-22). `None` for a type that is
+    /// not a lone name, or a shape argument.
+    fn const_arg_expr<'e>(
+        &self,
+        arg: &'e GenericArg,
+        slot: &'e mut Option<Expr>,
+    ) -> Option<&'e Expr> {
+        match arg {
+            GenericArg::Const(expr) => Some(expr),
+            GenericArg::Type(te) => {
+                let TypeKind::Path(p) = &te.kind else {
+                    return None;
+                };
+                if p.segments.len() != 1 || p.generic_args.is_some() || p.effect_args.is_some() {
+                    return None;
+                }
+                Some(slot.insert(Expr {
+                    kind: ExprKind::Identifier(p.segments[0].clone()),
+                    span: te.span,
+                    id: crate::ids::NodeId::DUMMY,
+                }))
+            }
+            GenericArg::Shape(_) => None,
+        }
+    }
+
+    /// Reports a const-generic argument that does not evaluate. A name the
+    /// evaluator does not know is reported with design.md § Const generic
+    /// parameters' wording, saying whether it is a run-time value (a local
+    /// or parameter) or names nothing constant; other evaluation errors keep
+    /// their own text (B-2026-11-13-22).
+    fn report_const_arg_error(&mut self, e: super::const_eval::ConstEvalError) {
+        let super::const_eval::ConstEvalError::UndefinedConst { name, span } = e else {
+            self.emit_const_eval_error(e);
+            return;
+        };
+        const WHAT: &str = "const generic argument must be a compile-time constant expression";
+        let run_time = self.local_scope.lookup(&name).is_some();
+        let message = if run_time {
+            format!(
+                "{WHAT}: `{name}` is a run-time value (a length known only at run time \
+                 needs a `Vec`)"
+            )
+        } else {
+            format!("{WHAT}: `{name}` is not a `const` or a const generic parameter in scope")
+        };
+        // A signature is lowered before its body's scope exists and again
+        // inside it: one report per argument, naming a parameter as the
+        // run-time value it is once the second pass can tell.
+        if let Some(prior) = self
+            .errors
+            .iter_mut()
+            .find(|e| e.span == span && e.message.starts_with(WHAT))
+        {
+            if run_time {
+                prior.message = message;
+            }
+            return;
+        }
+        self.type_error(message, span, TypeErrorKind::TypeMismatch);
+    }
+
     pub(super) fn is_enclosing_generic(&self, name: &str) -> bool {
         self.enclosing_bounds.contains_key(name)
     }

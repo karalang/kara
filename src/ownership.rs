@@ -1583,6 +1583,52 @@ fn once_closure_of(body: &Block, name: &str, before: &Span) -> Option<SpanKey> {
     out
 }
 
+/// Whether the use at `at` is the root of a plain assignment into one of the
+/// root's parts (`p.a = v`, `p.0.b = v`). After a whole move that is the
+/// refused partial reinitialization of core semantics §3.4, whose remedy is
+/// assigning the whole root, not a copy of the value (B-2026-11-13-23).
+fn assigns_into_part(body: &Block, at: &Span) -> bool {
+    fn root_at(target: &Expr, at: &Span) -> bool {
+        let mut e = target;
+        let mut parts = 0;
+        loop {
+            match &e.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    e = object;
+                    parts += 1;
+                }
+                ExprKind::Identifier(_) => {
+                    return parts > 0 && e.span.offset == at.offset;
+                }
+                _ => return false,
+            }
+        }
+    }
+    fn block(b: &Block, at: &Span) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Assign { target, value } => {
+                root_at(target, at) || expr(target, at) || expr(value, at)
+            }
+            StmtKind::Let { value, .. } => expr(value, at),
+            StmtKind::Expr(e) => expr(e, at),
+            _ => false,
+        }) || b.final_expr.as_ref().is_some_and(|e| expr(e, at))
+    }
+    fn expr(e: &Expr, at: &Span) -> bool {
+        let mut found = false;
+        crate::index_disjoint::for_each_child_public(e, &mut |c| {
+            if !found {
+                found = match c {
+                    crate::index_disjoint::Child::Expr(x) => expr(x, at),
+                    crate::index_disjoint::Child::Block(b) => block(b, at),
+                };
+            }
+        });
+        found
+    }
+    block(body, at)
+}
+
 /// Whether `ty` holds a `Result` by value (in itself, an `Option`, a tuple or
 /// an array), which core semantics §1.1 never makes `Copy`.
 fn mentions_result(ty: &Type) -> bool {
@@ -4024,6 +4070,10 @@ impl<'a> OwnershipChecker<'a> {
             } else {
                 String::new()
             };
+            // `eat(p); p.a = v`: nothing reads `p`, so a copy of it is
+            // off target (B-2026-11-13-23).
+            let part_assign = !once_call && assigns_into_part(&f.body, &w.other_use_span);
+            let replacement = if part_assign { None } else { replacement };
             let fn_value = !once_call
                 && matches!(
                     self.typecheck_result
@@ -4060,6 +4110,12 @@ impl<'a> OwnershipChecker<'a> {
                     format!(
                         "call `{binding}` once, or have its body clone what it moves out so \
                          it is an `Fn` (design.md §7 Function types and kinds)"
+                    )
+                } else if part_assign {
+                    format!(
+                        "'{binding}' was moved as a whole, and a wholly moved value is \
+                         initialized again only as a whole (core semantics §3.4): assign all of \
+                         it (`{binding} = ...`), or move out only the fields the callee needs"
                     )
                 } else if fn_value {
                     format!(

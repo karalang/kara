@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 273 |
+| diagnostics | 275 |
 | false-positive | 193 |
 | perf | 157 |
 | missing-feature | 149 |
@@ -75,11 +75,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 422 |
+| typecheck | 423 |
 | mir-llvm | 206 |
 | mir | 173 |
 | cli | 98 |
-| ownership | 74 |
+| ownership | 75 |
 | parser | 74 |
 | interp | 51 |
 | runtime | 40 |
@@ -121,6 +121,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-19 | 2026-11-13 | mir | low | A `par` or `par for` that calls an un-annotated local holding a returned function value is refused as "`unknown (a call through a value)`", even when the function's return type declares `with ()` | — |
 | B-2026-11-13-20 | 2026-11-13 | cli | low | 86 of the 96 symbolic `E_*` codes minted in src/ are unknown to `karac explain`, against design.md §17's "every code is catalogued" | — |
 | B-2026-11-13-21 | 2026-11-13 | mir | low | `ParseError` variants differ from core-types.md Parsing in two edge cases: `u8.parse("-0")` gives `Invalid` where `InvalidDigit` is specified, and whitespace-only input to `i64.parse` gives `InvalidDigit` where `Empty` is specified | — |
+| B-2026-11-13-22 | 2026-11-13 | typecheck | low | A run-time value as a const generic argument (`Array[i64, n]` with `n` a parameter or local, or `n + 1`) is not reported at the argument as design.md § Const generic parameters specifies; it surfaces later as a type mismatch, an "undefined type", or three cascading errors. The same path leaves a top-level `const` opaque, so `Array[i64, SIZE]` refuses its own `[0; 3]` | — |
+| B-2026-11-13-23 | 2026-11-13 | ownership | low | Assigning into a field of a value moved as a whole (`eat(p); p.a = 1;`) is correctly refused, but the help suggests deriving `Clone` and cloning `p` at the move (with a `karac fix` edit) though nothing reads `p`; it should say a wholly moved value is initialized again only as a whole (core semantics § 3.4) | — |
 
 ### Relocated
 
