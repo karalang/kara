@@ -6290,8 +6290,6 @@ Keeping construction safe means hot paths, such as taking a field address inside
 | `ptr.from_exposed(addr: usize) -> *const T` | unsafe | Synthesise a pointer from a previously exposed address. |
 | `ptr.from_exposed_mut(addr: usize) -> *mut T` | unsafe | Mutable counterpart. |
 
-`ptr.with_addr` and `ptr.with_addr_mut` are not yet implemented.
-
 `null`, `null_mut`, `dangling`, `dangling_mut`, `from_exposed` and `from_exposed_mut` are ordinary generic functions. Their pointee type `T` comes from the expected type, usually an annotation (`let p: *const u8 = ptr.null();`), because Kāra has no call-site type arguments ([§8](#8-type-inference-and-generics)). Only `const` and `mut` are place-taking special forms.
 
 `ptr.mut(xs[i])` takes an element's address and moves nothing, whatever the element type. `p.read()` copies the pointee's bits out and `p.write(v)` stores `v` without dropping what was there, as Rust's `ptr::read` and `ptr::write` do, for a non-`Copy` pointee too: that each value ends up owned exactly once is the promise the `unsafe` block makes. `PriorityQueue` moves its elements along a sift path this way (B-2026-11-08-87).
@@ -6310,8 +6308,8 @@ The `ptr` module provides both as named operations:
 ```kara
 // Tagging: take the address, set the low bit, write it back. Provenance preserved end to end.
 let p: *mut u32 = ptr.mut(my_buffer);
-let tagged: *mut u32 = ptr.with_addr_mut(p, ptr.addr(p) | 1);
-let cleaned: *mut u32 = ptr.with_addr_mut(tagged, ptr.addr(tagged) & !1);
+let tagged: *mut u32 = ptr.with_addr_mut(p, ptr.addr(p as *const u32) | 1);
+let cleaned: *mut u32 = ptr.with_addr_mut(tagged, ptr.addr(tagged as *const u32) & ~1);
 
 // Round trip through opaque storage: the source provenance must be exposed explicitly.
 let exposed: usize = ptr.expose(p);          // p's provenance is now in the exposed set
