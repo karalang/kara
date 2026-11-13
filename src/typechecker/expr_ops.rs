@@ -2761,6 +2761,49 @@ impl<'a> super::TypeChecker<'a> {
         (rhs, self.normalize_enclosing_assoc_eqs(&projection))
     }
 
+    /// For an operand of a projection (`I.Item`) that an enclosing where
+    /// clause bounds by the operator trait `tr`: the right operand's type
+    /// (the bound's type argument, else the projection itself) and the
+    /// result, the bound's `Output = X` when it names one, and, for a bound
+    /// written bare (`Add`), its span, where `[Output = ..]` goes
+    /// (B-2026-11-13-48). `None` when no such bound is in scope.
+    pub(super) fn projection_operator_types(
+        &mut self,
+        ty: &Type,
+        tr: &str,
+    ) -> Option<(Type, Option<Type>, Option<Span>)> {
+        let Type::AssocProjection { param, assoc, .. } = ty else {
+            return None;
+        };
+        let bound = self
+            .enclosing_proj_bounds
+            .get(&(param.clone(), assoc.clone()))?
+            .iter()
+            .find(|b| b.path.last().is_some_and(|t| t == tr))?
+            .clone();
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        let rhs = bound
+            .generic_args
+            .as_ref()
+            .and_then(|args| {
+                args.iter().find_map(|a| match a {
+                    GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                })
+            })
+            .map(|t| self.lower_type_expr(&t, &scope))
+            .unwrap_or_else(|| ty.clone());
+        let output = bound
+            .assoc_bindings
+            .iter()
+            .find(|b| b.name == "Output")
+            .map(|b| b.ty.clone())
+            .map(|t| self.lower_type_expr(&t, &scope));
+        let bare =
+            (bound.generic_args.is_none() && bound.assoc_bindings.is_empty()).then_some(bound.span);
+        Some((rhs, output, bare))
+    }
+
     /// When `ty` is the `Output` of an operator on an in-scope parameter
     /// (`T.Output` from `a + b` under `T: Add`) that no `Output =` fixes: the
     /// parameter, and the edit that has its operator bound say `Output = T`
@@ -5463,6 +5506,60 @@ impl<'a> super::TypeChecker<'a> {
                         None => {}
                     }
                     output
+                } else if let Some((rhs, output, bare)) = Self::arithmetic_operator_trait(op)
+                    .and_then(|tr| self.projection_operator_types(&left_ty, tr))
+                {
+                    // An operand of a projection a where clause bounds by the
+                    // operator trait (`where I.Item: Add[Output = I.Item]`,
+                    // design.md §9's own `total`): the bound's impl, as for a
+                    // bounded parameter above (B-2026-11-13-48).
+                    let tr = Self::arithmetic_operator_trait(op).unwrap_or("");
+                    // `check_assignable` takes a projection on either side
+                    // for anything, so one must be the same projection.
+                    let rigid = matches!(rhs, Type::AssocProjection { .. })
+                        || matches!(right_ty, Type::AssocProjection { .. });
+                    if rigid && type_display(&rhs) != type_display(&right_ty) {
+                        self.type_error(
+                            format!(
+                                "expected '{}', found '{}': the bound `{tr}` on '{}' names \
+                                 the right-hand type",
+                                type_display(&rhs),
+                                type_display(&right_ty),
+                                type_display(&left_ty)
+                            ),
+                            right.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Type::Error;
+                    }
+                    if rhs != right_ty && !self.check_assignable(&rhs, &right_ty, right.span) {
+                        return Type::Error;
+                    }
+                    match output {
+                        Some(output) => output,
+                        None => {
+                            let shown = type_display(&left_ty);
+                            let fix = bare.map(|at| FixIt {
+                                span: Span {
+                                    offset: at.offset + at.length,
+                                    length: 0,
+                                    ..at
+                                },
+                                replacement: format!("[Output = {shown}]"),
+                            });
+                            self.type_error_maybe_fix_it(
+                                format!(
+                                    "'{shown}' has an operator here only through its bound's \
+                                     `Output` (design.md § Operator traits), which the bound does \
+                                     not name: write `{tr}[Output = {shown}]` in the where clause"
+                                ),
+                                left.span,
+                                TypeErrorKind::TypeMismatch,
+                                fix,
+                            );
+                            Type::Error
+                        }
+                    }
                 } else if let Some((param, fix)) = self.unfixed_operator_output(&left_ty, None) {
                     // `a + b + c` under `T: Add`: the first sum is a
                     // `T.Output`, which nothing says is a `T` again.

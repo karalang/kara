@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 287 |
-| false-positive | 197 |
+| false-positive | 198 |
 | perf | 159 |
 | missing-feature | 156 |
 | soundness | 64 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 435 |
+| typecheck | 436 |
 | mir-llvm | 211 |
 | mir | 179 |
 | cli | 106 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
 | B-2026-11-13-46 | 2026-11-13 | mir+mir-llvm | medium | Two non-generic traits with a method of one name, both implemented for a primitive (`impl A for i64 { fn m }`, `impl B for i64 { fn m }`): `A.m(n)` checks but fails at run with `call of unknown function i64.m` (LLVM: `native i64.m is not lowered yet`); on a struct receiver both calls are right | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
+| B-2026-11-13-48 | 2026-11-13 | typecheck | medium | An operator bound on a projection in a where clause is not consulted by the operator lookup: design.md §9's own `fn total[I: Iterator](it: own I, zero: own I.Item) -> I.Item where I.Item: Add[Output = I.Item] { ... acc = acc + x ... }` is refused on every lane with "type 'I.Item' does not implement trait Add" (also bare `Add`, and `Mul` with `*`) | — |
 | B-2026-11-13-79 | 2026-11-13 | mir | medium | Results borrow what a view parameter views (core semantics §5.4 ruling, 6980a490b6): a parameter or receiver of a view type (`struct Cursor { src: Str, pos: i64 }`, bare, `mut ref` or self) whose result reference comes only through a view type contributes its origins, not its place, so `fn parse_until(c: mut ref Cursor, stop: char) -> Str` leaves `c` usable and two results can be live while `c` advances | — |
 
 ### Relocated

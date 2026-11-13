@@ -433,6 +433,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   files' errors (B-2026-11-13-42). The named test file was left out of the
   package check, so it printed "All checks passed." and exited 0. `karac fix`
   of a test file now fixes its imports.
+- A where clause that bounds a projection by an operator trait gives it the
+  operator: design.md §9's own `total`, `where I.Item: Add[Output =
+  I.Item]` with `acc = acc + x`, was refused on every lane with "type
+  'I.Item' does not implement trait Add" (also `Mul`, `Sub`, `+=`). A bare
+  `where I.Item: Add` names no `Output`, which `karac fix` adds, as for
+  `T: Add` (B-2026-11-13-48).
 - An error on an imported name in a package's `_test.kara` names that file,
   not its sibling's (B-2026-11-13-40), and `karac fix` of a mistyped module
   in an import of a package's non-entry module rewrites the module name. It
