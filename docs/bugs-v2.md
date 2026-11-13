@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 276 |
 | false-positive | 193 |
-| perf | 157 |
+| perf | 158 |
 | missing-feature | 150 |
 | soundness | 63 |
 | miscompile | 57 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 423 |
-| mir-llvm | 206 |
+| mir-llvm | 207 |
 | mir | 173 |
 | cli | 99 |
 | ownership | 76 |
@@ -121,6 +121,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-20 | 2026-11-13 | cli | low | 86 of the 96 symbolic `E_*` codes minted in src/ are unknown to `karac explain`, against design.md §17's "every code is catalogued" | — |
 | B-2026-11-13-21 | 2026-11-13 | mir | low | `ParseError` variants differ from core-types.md Parsing in two edge cases: `u8.parse("-0")` gives `Invalid` where `InvalidDigit` is specified, and whitespace-only input to `i64.parse` gives `InvalidDigit` where `Empty` is specified | — |
 | B-2026-11-13-31 | 2026-11-13 | ownership | high | A method with a `self` or `mut ref self` receiver may return a view-typed ARGUMENT (`fn pick(self, other: Str) -> Str { other }`, also `Option[ref T]`, `Option[Str]`, `Result[Str, E]`, a tuple, `own Vec[Str]`, `own V` with a view field): the §5.4 receiver check of B-2026-11-02-28 covers only `ref T` and `Slice[T]` arguments, so a caller keeps the result past the argument and reads freed memory (ASan heap-use-after-free) | — |
+| B-2026-11-13-33 | 2026-11-13 | mir-llvm | low | `==` and `!=` on two `Slice[u8]` compile to a byte-by-byte loop where `Str` equality calls `memcmp`: kata 1147's greedy arm written over `text.bytes()` takes 1.32 s against 1.08 s over `Str`, and Rust's byte-slice mirror 0.75 s | — |
 
 ### Relocated
 
