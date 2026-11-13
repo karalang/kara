@@ -123,8 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-33 | 2026-11-13 | mir-llvm | low | `==` and `!=` on two `Slice[u8]` compile to a byte-by-byte loop where `Str` equality calls `memcmp`: kata 1147's greedy arm written over `text.bytes()` takes 1.32 s against 1.08 s over `Str`, and Rust's byte-slice mirror 0.75 s | — |
 | B-2026-11-13-34 | 2026-11-13 | mir-llvm | low | `partition_point` is the branching binary search (runtime/stdlib/source/collections.kara) where Rust's is branch-free: kata 1150's 10,000,000 searches of 1000 values take 0.76 s in Kāra (C's and Go's branching searches 0.75 and 0.80 s) against 0.37 s in overflow-checked Rust | — |
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
-| B-2026-11-13-40 | 2026-11-13 | resolver+cli | low | An import's segment and name spans are not shifted with the rest of a module's: a merged `_test.kara`'s E0111 names its sibling's file, and `karac fix` of a mistyped module in a non-entry package module writes the fix at the start of the file | — |
-| B-2026-11-13-41 | 2026-11-13 | cli | low | `karac check` and `karac run` validate a package's manifest and dependencies differently from `build` and `test`: a registry or git dependency passes them, the bare package `check` reports a path-dependency cycle as E0112, and only `build` warns of an unknown `[package]` key | — |
 | B-2026-11-13-42 | 2026-11-13 | cli | medium | `karac check src/x_test.kara` on a package's test companion reports "All checks passed" while the package check refuses that very file | — |
 
 ### Relocated
@@ -1139,6 +1137,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-27 | parser | low | An attributed block-like statement needs a trailing `;`: `#[allow(unused_mut)] { let mut x = 1; println(x); }` and `#[allow(x)] if c { . | 483e7d5400 |
 | B-2026-11-13-28 | parser+typecheck | low | An unsuffixed literal in `u128`'s upper half is refused at parse even under a `u128` annotation: `let h: u128 = 1701411834604692317316873037158841057… | 8048a5fb01 |
 | B-2026-11-13-36 | typecheck | medium | `assert(1)`, `assert("x")` and `assert_eq(1, "a".to_string())` pass check and then fail inside the compiler's MIR stage ("invalid MIR", "not lowered… | 601dac91cc |
+| B-2026-11-13-40 | resolver+cli | low | An import's segment and name spans are not shifted with the rest of a module's: a merged `_test.kara`'s E0111 names its sibling's file, and `karac fi… | 9d85811653 |
+| B-2026-11-13-41 | cli | low | `karac check` and `karac run` validate a package's manifest and dependencies differently from `build` and `test`: a registry or git dependency passes… | 9d85811653 |
 
 </details>
 
