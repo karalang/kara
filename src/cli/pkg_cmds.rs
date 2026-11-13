@@ -408,11 +408,26 @@ pub(super) fn cmd_update(package: Option<&str>, output: OutputMode, no_proxy: bo
     // refreshed lockfile pins the same per-target deps `karac build` resolves
     // (resolver follow-up (e)).
     let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
+    // In a workspace the lock is the root's, solved over every member
+    // (design.md § Workspaces, B-2026-11-13-60), so `karac update` in a member
+    // refreshes that one.
+    let loader = crate::dep_graph::FsLoader;
+    let (root, mf) = match crate::dep_graph::workspace_root_of(&root, &loader) {
+        Some(ws_root) => {
+            match crate::dep_graph::workspace_lock_manifest(&ws_root, &loader, false) {
+                Ok(wmf) => (ws_root, wmf),
+                Err(e) => {
+                    emit_manifest_error(&e, output);
+                    process::exit(1);
+                }
+            }
+        }
+        None => (root, mf),
+    };
 
     // Unlike cmd_build_project, we *always* run the resolver here even when
     // the manifest declares no deps. The user explicitly asked to refresh
     // the lockfile — honoring that is the whole point of the subcommand.
-    let loader = crate::dep_graph::FsLoader;
     let graph = match crate::dep_graph::build_dep_graph(&root, mf, &loader) {
         Ok(g) => g,
         Err(e) => {

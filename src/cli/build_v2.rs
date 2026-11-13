@@ -213,10 +213,11 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     // `.gitignore` ignores and `karac clean` removes (design.md § Build
     // cache), under the target's directory: `dist/native/<pkg>`,
     // `dist/wasm/<pkg>.wasm` (design.md § Target build artifacts,
-    // B-2026-11-05-12).
+    // B-2026-11-05-12). A workspace member's goes in the workspace root's
+    // `dist/`, which every member shares (B-2026-11-13-60).
     let exe = a.out_path.map_or_else(
         || {
-            let dist = root
+            let dist = super::build_cmds::output_root(&root)
                 .join("dist")
                 .join(if is_wasm_wasi(&a) { "wasm" } else { "native" });
             if let Err(e) = std::fs::create_dir_all(&dist) {

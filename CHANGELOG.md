@@ -398,6 +398,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- Workspace members share one `kara.lock` and one `dist/`, at the workspace
+  root (B-2026-11-13-60). The lock is solved once over every member's
+  dependencies, so two members agree on a dependency's version. Each member
+  used to resolve alone and write its own `kara.lock` and `dist/`, so a member
+  allowing `demo_dep = "1.0"` locked 1.5.0 while a sibling capped below 1.2
+  locked 1.0.0. `karac update` in a member refreshes the root's lock, `karac
+  clean` in a member removes the shared `dist/`, and `karac doc` writes a
+  member's pages to `dist/doc/<member>`.
 - `karac check src/x_test.kara` in a package reports the package's test
   files' errors (B-2026-11-13-42). The named test file was left out of the
   package check, so it printed "All checks passed." and exited 0. `karac fix`

@@ -952,6 +952,90 @@ fn discover_ancestor_workspace_deps(
     BTreeMap::new()
 }
 
+/// The workspace whose `kara.lock` and `dist/` the package at `dir` shares
+/// (design.md § Workspaces, B-2026-11-13-60): `dir` itself when its
+/// manifest declares `[workspace].members`, else the nearest ancestor whose
+/// manifest lists `dir` among its members. `None` for a package outside any
+/// workspace, and for one under a workspace root that does not list it,
+/// which keeps its own lock and output as before.
+pub fn workspace_root_of(dir: &Path, loader: &dyn ManifestLoader) -> Option<PathBuf> {
+    let dir = canonicalize_or_self(dir);
+    for candidate in dir.ancestors() {
+        if !loader.manifest_exists(candidate) {
+            continue;
+        }
+        let Ok(mf) = loader.load(candidate) else {
+            continue;
+        };
+        if !mf.is_workspace_root || mf.workspace_members.is_empty() {
+            continue;
+        }
+        let listed = candidate == dir
+            || mf
+                .workspace_members
+                .iter()
+                .any(|m| canonicalize_or_self(&candidate.join(m)) == dir);
+        if listed {
+            return Some(candidate.to_path_buf());
+        }
+    }
+    None
+}
+
+/// The manifest the workspace's one lock is solved from: the root's own
+/// manifest with a path dependency on every member, so a single PubGrub solve
+/// sees each member's requirements and two members cannot lock different
+/// versions of one package (B-2026-11-13-60). With `include_dev_deps`, each
+/// member's `[dev-dependencies]` join the root's, with relative paths made
+/// root-relative; two members' registry constraints on one dev-dependency are
+/// intersected.
+pub fn workspace_lock_manifest(
+    ws_root: &Path,
+    loader: &dyn ManifestLoader,
+    include_dev_deps: bool,
+) -> Result<Manifest, manifest::ManifestError> {
+    let ws_root = canonicalize_or_self(ws_root);
+    let mut root = loader.load(&ws_root)?;
+    for member in root.workspace_members.clone() {
+        let dir = canonicalize_or_self(&ws_root.join(&member));
+        if dir == ws_root || !loader.manifest_exists(&dir) {
+            continue;
+        }
+        let mf = loader.load(&dir)?;
+        root.dependencies
+            .entry(mf.name.clone())
+            .or_insert(DependencySpec::Path {
+                path: dir.clone(),
+                version: None,
+            });
+        if !include_dev_deps {
+            continue;
+        }
+        for (name, spec) in mf.dev_dependencies {
+            let spec = match spec {
+                DependencySpec::Path { path, version } if path.is_relative() => {
+                    DependencySpec::Path {
+                        path: dir.join(path),
+                        version,
+                    }
+                }
+                spec => spec,
+            };
+            match (root.dev_dependencies.get_mut(&name), spec) {
+                (
+                    Some(DependencySpec::Registry { version: have }),
+                    DependencySpec::Registry { version: more },
+                ) => have.comparators.extend(more.comparators),
+                (Some(_), _) => {}
+                (None, spec) => {
+                    root.dev_dependencies.insert(name, spec);
+                }
+            }
+        }
+    }
+    Ok(root)
+}
+
 /// The registry-dep `(name, constraint)` edges a manifest declares — the
 /// per-version dependency data PubGrub needs to solve. Path/git deps of a
 /// published package are outside the v1 version-solve domain and are excluded.

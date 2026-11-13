@@ -94,7 +94,9 @@ pub(super) fn cmd_clean(global: bool) {
                 process::exit(1);
             }
         };
-        cwd.join("dist")
+        // A workspace member's output is in the workspace root's `dist/`
+        // (B-2026-11-13-60).
+        super::build_cmds::output_root(&cwd).join("dist")
     };
 
     let scope_label = if global {
