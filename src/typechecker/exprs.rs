@@ -6248,6 +6248,7 @@ impl<'a> super::TypeChecker<'a> {
                 solutions.insert(name.clone(), resolved);
             }
         }
+        self.solve_params_from_assoc_eqs(where_clause, formal_generic_params, &mut solutions);
         // A `const` parameter's value is recorded with the types, as the
         // length of a `()` array: `N` -> `Array[(), 3]`, or the caller's own
         // `Array[(), M]` when it passes its parameter through, so the
@@ -6508,7 +6509,13 @@ impl<'a> super::TypeChecker<'a> {
             // where-clause at FunctionSig construction
             // (`normalize_bounds_into_where_clause`) so this single
             // discharge call covers both inline and where-clause surfaces.
-            let all_param_names: Vec<String> = name_to_id.keys().cloned().collect();
+            // With the parameters only a bound's equation solved (`T` of
+            // `I: Iterator[Item = T]`, B-2026-11-13-18).
+            let all_param_names: Vec<String> = name_to_id
+                .keys()
+                .chain(solutions.keys().filter(|n| !name_to_id.contains_key(*n)))
+                .cloned()
+                .collect();
             self.record_into_iter_sites(args, params, &all_param_names, discharge_span);
             self.discharge_type_bounds(wc, &solutions, &all_param_names, discharge_span);
             // A bound on a parameter only the context solves (`collect`'s
@@ -13210,6 +13217,81 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A parameter that only a bound's associated-type equation names
+    /// (`T` of `fn show[T: Display, I: Iterator[Item = T]](it: own I)`) is
+    /// solved by it once the bounded parameter is: `show(v.into_iter())` with
+    /// `v: Vec[i64]` makes `T` an `i64` (B-2026-11-13-18).
+    fn solve_params_from_assoc_eqs(
+        &mut self,
+        where_clause: Option<&WhereClause>,
+        formal_generic_params: Option<&[String]>,
+        solutions: &mut HashMap<String, Type>,
+    ) {
+        let Some(wc) = where_clause else {
+            return;
+        };
+        for c in &wc.constraints {
+            let WhereConstraint::AssocTypeEq {
+                type_name,
+                assoc_name,
+                ty,
+                trait_name,
+                ..
+            } = c
+            else {
+                continue;
+            };
+            let crate::ast::TypeKind::Path(path) = &ty.kind else {
+                continue;
+            };
+            let [target] = path.segments.as_slice() else {
+                continue;
+            };
+            if path.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                || solutions.contains_key(target)
+            {
+                continue;
+            }
+            // The callee's own parameter, which only bounds name.
+            let is_param = formal_generic_params.is_some_and(|f| f.contains(target))
+                || wc.constraints.iter().any(
+                    |c| matches!(c, WhereConstraint::TypeBound { type_name, .. } if type_name == target),
+                );
+            if !is_param {
+                continue;
+            }
+            let Some(mut solved) = solutions.get(type_name).cloned() else {
+                continue;
+            };
+            // Items that are literals nothing else fixes (`[1, 2].into_iter()`)
+            // take their default here: the parameter they solve is named by
+            // no argument or result that could fix them.
+            if self.has_open_literal(&solved) {
+                solved = self.settle_literals(&solved);
+                solutions.insert(type_name.clone(), solved.clone());
+            }
+            if !type_is_fully_concrete(&solved) {
+                continue;
+            }
+            let tr = trait_name
+                .clone()
+                .or_else(|| self.declaring_bound_trait(wc, type_name, assoc_name));
+            let projection = Type::AssocProjection {
+                param: type_name.clone(),
+                assoc: assoc_name.clone(),
+                args: Vec::new(),
+                receiver_args: Vec::new(),
+                trait_name: tr,
+            };
+            let subs: HashMap<String, SubstValue> =
+                std::iter::once((type_name.clone(), SubstValue::Type(solved))).collect();
+            let item = self.resolve_assoc_projections(&substitute_type_params(&projection, &subs));
+            if type_is_fully_concrete(&item) {
+                solutions.insert(target.clone(), item);
+            }
+        }
+    }
+
     /// Whether `id` is, or has been unified with, a literal variable a
     /// generic call holds open ([`Self::held_open_literals`]).
     pub(super) fn literal_held_open(&self, id: TypeVarId) -> bool {
@@ -15130,6 +15212,7 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(item) = self
                     .iterable_item(&iter_ty)
                     .or_else(|| self.iterable_param_item(&iter_ty))
+                    .or_else(|| self.iterator_param_item(&iter_ty))
                 {
                     elem_ty = item;
                 }

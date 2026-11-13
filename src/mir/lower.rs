@@ -6497,7 +6497,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         };
                         let t = declared.unwrap_or(t);
                         let l = self.user_local(name, t, pattern.id);
-                        self.note_declared_effects(l, (pattern.id, name), ty.as_ref());
+                        self.note_declared_effects(l, (pattern.id, name), ty.as_ref(), value);
                         let rv = match declared {
                             Some(d) => Rvalue::Cast(CastKind::Erase, self.erase_source(op), d),
                             None => Rvalue::Use(op),
@@ -6530,7 +6530,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                     }
                     let l = self.user_local(name, t, pattern.id);
-                    self.note_declared_effects(l, (pattern.id, name), ty.as_ref());
+                    self.note_declared_effects(l, (pattern.id, name), ty.as_ref(), value);
                     self.note_frozen(value, l);
                     let outer = self.let_scope.replace(self.scopes.len() - 1);
                     self.push_scope();
@@ -8975,8 +8975,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             let dt = self.place_type(&dest);
             // Only a tuple slot asks the expression's type: a `par` or
             // `spawn` block has none recorded.
+            // The lookup's own "no recorded type" is not this expression's
+            // error, so a miss takes the slot's type quietly
+            // (B-2026-11-13-4: a `par for` task body is such a block).
             let et = match self.tys().tcx().kind(dt) {
-                HK::Tuple(_) => self.expr_ty(e).unwrap_or(dt),
+                HK::Tuple(_) => {
+                    let n = self.errors.len();
+                    let t = self.expr_ty(e);
+                    if t.is_err() {
+                        self.errors.truncate(n);
+                    }
+                    t.unwrap_or(dt)
+                }
                 _ => dt,
             };
             let tcx = self.tys().tcx();
@@ -25579,8 +25589,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         l: Local,
         (node, name): (NodeId, &str),
         ty: Option<&ast::TypeExpr>,
+        value: &Expr,
     ) {
-        if let Some(declared) = ty.and_then(declared_effects) {
+        // An un-annotated `let f = mk();` has the clause `mk`'s declared
+        // return type writes (B-2026-11-13-19).
+        let declared = match ty {
+            Some(te) => declared_effects(te),
+            None => self.returned_fn_effects(value),
+        };
+        if let Some(declared) = declared {
             if let Some(&sym) = self.lcx.binding_syms.get(&(node, name.to_string())) {
                 self.lcx.let_fn_effects.insert(sym, declared.clone());
             }
@@ -25591,6 +25608,25 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.lcx.let_elem_fn_effects.insert(sym, declared);
             }
         }
+    }
+
+    /// The clause of the function value a call to a function returns, when
+    /// that function's written return type declares one: `fn mk() -> Fn()
+    /// -> i64 + CrossTask with () { .. }` called as `mk()`.
+    fn returned_fn_effects(&self, value: &Expr) -> Option<Vec<DeclaredEffect>> {
+        if !matches!(value.kind, ExprKind::Call { .. }) {
+            return None;
+        }
+        let Some(Callee::Def(d)) = self.lcx.calls.get(&value.id).map(|rc| &rc.callee) else {
+            return None;
+        };
+        self.lcx
+            .fns
+            .get(d)?
+            .f
+            .return_type
+            .as_ref()
+            .and_then(declared_effects)
     }
 
     /// The declared clause of the function values the collection `e` holds,

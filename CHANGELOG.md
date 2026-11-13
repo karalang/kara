@@ -513,6 +513,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   first (garbage compiled, an AddressSanitizer abort); it is refused now,
   with the `scan` state's `0i32` fix offered through the `chain`
   (B-2026-11-11-41).
+- `for x in it` over an owned parameter `it: own I` with `I:
+  Iterator[Item = i64]` typed `x` as `I`, so `x.abs()` and `let y: i64 = x`
+  were refused. It yields the bound's item now. A `T` that only the bound's
+  equation names (`fn show[T: Display, I: Iterator[Item = T]](it: own I)`)
+  is solved at the call from the iterator's item, where it was refused as
+  `I.Item = T` not satisfied (B-2026-11-13-18).
+- A `par for` whose body's value is a tuple, written in place or returned
+  by a call, was refused with the internal "an expression with no recorded
+  type is not lowered yet" (B-2026-11-13-4).
+- A `par` or `par for` calling an un-annotated `let f = mk();` was refused
+  as a conflict through "`unknown (a call through a value)`" even when
+  `mk`'s return type declares `with ()`. The `let` takes that clause now,
+  as an annotated one does (B-2026-11-13-19).
 - A list literal compared with `==` or `!=` was typed `Vec` on its own, so
   `m != [75u8, 82u8, 69u8, 67u8]` with `m: Array[u8, 4]` was refused as
   "cannot compare 'Array[u8, 4]' and 'Vec[u8]'", as were `s == [1, 2]`

@@ -329,6 +329,20 @@ impl<'a> super::TypeChecker<'a> {
         Some(self.lower_type_expr(&te, &scope))
     }
 
+    /// The item of an owned parameter bounded by `Iterator[Item = T]`
+    /// (`it: own I`): `for x in it` yields `T` (design.md § `Iterator` and
+    /// `Iterable`, B-2026-11-13-18). A borrowed one is
+    /// [`Self::borrowed_iterator_for`]'s.
+    pub(super) fn iterator_param_item(&mut self, ty: &Type) -> Option<Type> {
+        let param = self.type_param_name(ty)?.clone();
+        let te = self
+            .enclosing_assoc_eqs
+            .get(&(param, "Item".to_string(), Some("Iterator".to_string())))?
+            .clone();
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        Some(self.lower_type_expr(&te, &scope))
+    }
+
     /// design.md § Type aliases: "When the aliased type already requires the
     /// bound (`type SortedKeyMap[T: Ord] = SortedMap[T, i32]`, where
     /// `SortedMap` already needs `K: Ord`), the bound is redundant but
