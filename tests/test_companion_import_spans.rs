@@ -34,8 +34,12 @@ fn karac(args: &[&str], cwd: &Path) -> Output {
         .unwrap()
 }
 
+/// Both streams, with the host's path separator as `/`: karac prints
+/// `src\ui.kara` on Windows, and `src\\ui.kara` inside JSON.
 fn text(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout)
+    (String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout))
+        .replace("\\\\", "/")
+        .replace('\\', "/")
 }
 
 #[test]
