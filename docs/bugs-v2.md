@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 270 |
+| diagnostics | 272 |
 | false-positive | 191 |
 | perf | 157 |
 | missing-feature | 148 |
 | soundness | 62 |
-| miscompile | 56 |
+| miscompile | 57 |
 | run-vs-build | 31 |
 | other | 30 |
 | codegen-gap | 30 |
@@ -75,8 +75,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 419 |
-| mir-llvm | 205 |
+| typecheck | 421 |
+| mir-llvm | 206 |
 | mir | 171 |
 | cli | 97 |
 | ownership | 74 |
@@ -117,6 +117,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-3 | 2026-11-13 | typecheck+ownership | medium | A `MutFn` stored in a struct field or a `Vec` can be called through shared access (a non-`mut` binding, a borrowed `self`, a bare parameter), which core-semantics §9.6 forbids; `unused_mut` even tells the user to drop the `mut` | — |
 | B-2026-11-13-4 | 2026-11-13 | typecheck+mir | medium | A `par for` whose body value is a tuple is refused at check with the internal `an expression with no recorded type is not lowered yet` | — |
 | B-2026-11-13-5 | 2026-11-13 | typecheck | low | `div_euclid` and `rem_euclid` exist only on `i64`: `i32`, `u8` and the other integer widths, and `f64`, have neither, although design.md names them as the Euclidean forms of `/` and `%` | — |
+| B-2026-11-13-15 | 2026-11-13 | typecheck | medium | Rust's `dst.copy_from_slice(src)` is "no method 'copy_from_slice' on type 'Slice'" with no fix, and the error type sets off a borrow error at every later use of the buffer | — |
+| B-2026-11-13-16 | 2026-11-13 | mir-llvm | high | `s == a` with a `Slice` on the left and an `Array` of the same element type on the right is never equal in compiled code (the array is read as a slice header); the MIR interpreter compares them | — |
+| B-2026-11-13-17 | 2026-11-13 | typecheck | low | Comparing a `Slice` with an `Array` or `Vec` is accepted with the slice on the left and refused with it on the right; design.md § Slices does not say which a comparison is | — |
 
 ### Relocated
 
