@@ -1968,12 +1968,14 @@ impl<'a> EffectChecker<'a> {
                 "TcpStream.read",
                 "TcpStream.write",
                 "TcpStream.write_all",
+                "TcpStream.read_to_end",
                 // std.tls
                 "TlsListener.accept",
                 "TlsStream.connect",
                 "TlsStream.read",
                 "TlsStream.write",
                 "TlsStream.write_all",
+                "TlsStream.read_to_end",
                 // A buffer over a connection (B-2026-11-10-14): the
                 // `MethodCall` arm keys a call on one this way.
                 "BufReader[TcpStream].read_line",

@@ -6671,6 +6671,14 @@ fn rust_string_method_twin(method: &str) -> Option<&'static str> {
             "Kāra strips each end with `strip_prefix(p)` and `strip_suffix(p)`, \
              and whitespace with `trim()`"
         }
+        // Rust's `addr.rsplit(':').next()`, the text after the last
+        // separator; edit distance offered `split`, which starts from the
+        // other end (B-2026-11-13-71).
+        "rsplit" | "rsplitn" => {
+            "Kāra splits at the last separator with `rsplit_once(sep)`, which \
+             returns the text before and after it as `Option[(Str, Str)]`, and \
+             the last piece of a split is `split(sep).last()`"
+        }
         "to_owned" => "an owned copy of the text is `to_string()`",
         // Rust's `String::from_utf8_lossy(&b).into_owned()` turns a `Cow`
         // into a `String`; Kāra's returns the `String` (B-2026-11-11-24).

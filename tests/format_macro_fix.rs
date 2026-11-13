@@ -70,10 +70,8 @@ fn format_macro_without_a_one_to_one_rewrite_has_no_fix() {
         "format!(\"{}\", n, n)",
         // A spec an f-string does not take (Debug is deferred).
         "format!(\"{:?}\", n)",
-        // Argument text that cannot sit in a hole as written: a brace or a
-        // `:` inside its string literal.
-        "format!(\"{}\", g(\"{\"))",
-        "format!(\"{}\", g(\"a:b\"))",
+        // A string literal holding a brace or a `:` sits in a hole as
+        // written since B-2026-11-13-70 (tests/format_macro_literal_args.rs).
         // The format string is not a plain literal.
         "format!(r\"{}\", n)",
         "format!(f, n)",

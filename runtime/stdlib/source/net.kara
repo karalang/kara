@@ -220,6 +220,26 @@ impl TcpStream {
         Ok(())
     }
 
+    // Everything up to the end of the stream, appended to `buf` by `read`
+    // until it returns 0; `Interrupted` goes round again. The count read;
+    // after an error `buf` ends with the bytes read so far (io.md,
+    // B-2026-11-13-73).
+    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+        let mut chunk = [0u8; 8192];
+        let mut done = 0;
+        loop {
+            match self.read(mut chunk) {
+                Ok(0) => return Ok(done),
+                Ok(n) => {
+                    buf.extend_from_slice(chunk[0..n]);
+                    done = done + n;
+                }
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     // How long a `read` waits before failing with `TimedOut`, in
     // milliseconds; `None` waits for ever. A timeout below 1 ms fails with
     // `InvalidInput`.
@@ -340,6 +360,23 @@ impl TlsStream {
             }
         }
         Ok(done)
+    }
+
+    // As `TcpStream.read_to_end`: up to the peer's `close_notify`.
+    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+        let mut chunk = [0u8; 8192];
+        let mut done = 0;
+        loop {
+            match self.read(mut chunk) {
+                Ok(0) => return Ok(done),
+                Ok(n) => {
+                    buf.extend_from_slice(chunk[0..n]);
+                    done = done + n;
+                }
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     // As `TcpStream.read_exact`. A peer that sends `close_notify` before

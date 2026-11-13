@@ -149,6 +149,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `TcpStream.read_to_end` and `TlsStream.read_to_end` append everything up
+  to the end of the stream and return the count (docs/library/io.md;
+  B-2026-11-13-73). A connection that carries one payload and closes, such as
+  an FTP data connection, needed a hand-written `read` loop.
 - A workspace root may be virtual: a `kara.toml` with `[workspace]` and
   `[workspace.dependencies]` and no `[package]` (design.md § Workspaces;
   B-2026-11-13-50). `karac build`, `check` and `test` at it run in each of
@@ -933,6 +937,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `karac fix` rewrites `println!` and `format!` whose arguments hold a
+  string or char literal with an escape, a brace or a colon, such as
+  `text.matches("\r\n").count()` (B-2026-11-13-70). An f-string hole takes
+  such a literal as written; the rewrite used to refuse it.
+- `s.rsplit(sep)` names `rsplit_once(sep)` and `split(sep).last()`, rather
+  than offering `split`, which starts from the other end (B-2026-11-13-71).
+- `group.join()` on a `TaskGroup` says that dropping a group joins its
+  tasks, and `karac fix` writes `drop(group)` (B-2026-11-13-72).
 - `unused_mut` honours `#[allow]`, `#[deny]` and `#[expect]` on the `let`
   statement or an enclosing block statement, innermost first, so a
   statement `allow` beats a function `deny`. A statement-level

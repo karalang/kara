@@ -1967,6 +1967,38 @@ impl<'a> super::TypeChecker<'a> {
                             return Type::Error;
                         }
                     }
+                    // `group.join()`, as a Rust scoped thread is joined:
+                    // dropping a group joins every task it started
+                    // (concurrency.md), so a group a binding names is
+                    // `drop(group)` (B-2026-11-13-72).
+                    if type_name == "TaskGroup" && method == "join" && args.is_empty() {
+                        let msg = "no method 'join' on type 'TaskGroup': dropping a group \
+                                   joins every task it started, so `drop(group)` waits for \
+                                   them; `spawn` returns a `TaskHandle`, whose `join` waits \
+                                   for one task and returns its value \
+                                   (docs/library/concurrency.md)"
+                            .to_string();
+                        let to = span.offset + span.length;
+                        match &object.kind {
+                            ExprKind::Identifier(name) if to > object.span.offset => self
+                                .type_error_with_fix_it(
+                                    msg,
+                                    *span,
+                                    TypeErrorKind::NoMethodFound,
+                                    FixIt {
+                                        span: Span {
+                                            line: object.span.line,
+                                            column: object.span.column,
+                                            offset: object.span.offset,
+                                            length: to - object.span.offset,
+                                        },
+                                        replacement: format!("drop({name})"),
+                                    },
+                                ),
+                            _ => self.type_error(msg, *span, TypeErrorKind::NoMethodFound),
+                        }
+                        return Type::Error;
+                    }
                     // A method of the guarded value called on the guard
                     // (`m.lock().send(x)`): method lookup does not pass
                     // through the guard, so it is reached as `.value`.

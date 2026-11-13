@@ -72,13 +72,44 @@ fn main() {
 }
 
 #[test]
-fn a_format_argument_a_hole_cannot_hold_keeps_the_call_unrewritten() {
+fn a_block_argument_whose_literal_holds_a_brace_or_colon_is_rewritten() {
+    // A hole balances quotes, so a literal's `{` or `:` is the literal's own
+    // (B-2026-11-13-70); these two were kept unrewritten before.
     let src = "fn main() {
     let x = true;
     let a = format!(\"{}\", if x { \"a:b\" } else { \"c\" });
     let c = format!(\"{}\", if x { \"{\" } else { \"c\" });
     println(a);
     println(c);
+}
+";
+    let path = scratch("literal-brace.kara", src);
+    let _ = karac(&["fix"], &path);
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        fixed.contains("let a = f\"{if x { \"a:b\" } else { \"c\" }}\";"),
+        "{fixed}"
+    );
+    assert!(
+        fixed.contains("let c = f\"{if x { \"{\" } else { \"c\" }}\";"),
+        "{fixed}"
+    );
+    let run = karac(&["__mir-run"], &path);
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "a:b\n{\n",
+        "{}",
+        text(&run)
+    );
+}
+
+#[test]
+fn a_format_argument_a_hole_cannot_hold_keeps_the_call_unrewritten() {
+    // A turbofish has no hole form.
+    let src = "fn main() {
+    let x = 1;
+    let a = format!(\"{}\", Vec::<i64>::new().len() + x);
+    println(a);
 }
 ";
     let path = scratch("refused.kara", src);

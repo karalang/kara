@@ -282,6 +282,7 @@ impl TcpStream {
     fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks suspends
     fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
     fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) blocks suspends
+    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
     fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn try_clone(self) -> Result[TcpStream, NetError]
@@ -333,6 +334,8 @@ type TcpError = NetError;
 
 **Reading an exact count.** `read_exact` (on `TcpStream`, `TlsStream`, `File`, `ChildStdout`, `ChildStderr` and `BufReader`) reads until `buf` is full: it calls `read` again after a short read and retries a read that fails with `Interrupted`. A read that returns 0 before `buf` is full ends it with `UnexpectedEof` (`NetError.UnexpectedEof` on a socket, `IoError.UnexpectedEof` on a file or pipe), and any other error ends it with that error. A `BufReader`'s takes the bytes it holds first and then reads what it wraps, with that reader's effects; its errors are `IoError`s, as its other reads' are. After an error `buf` holds the bytes read so far at its start; how many is not reported, so a program that needs the count calls `read` itself. An empty `buf` returns `Ok(())` without reading. On a `TlsStream`, a peer that closes with `close_notify` before `buf` is full is `UnexpectedEof`, and one gone without it is `Tls(UnexpectedClose)`, as for `read`. Under a `FileSystem` or `Network` override `read_exact` calls the fake's `read_handle` or `read_stream` until `buf` is full, and a 0 from the fake is the end. A `UdpSocket` has none (a datagram is one `recv`), and neither does `stdin`, whose byte-level read is deferred. It is how a binary protocol's fixed-size header is read: `let mut head = [0u8; 2]; conn.read_exact(mut head)?;`.
 
+**Reading to the end.** `read_to_end` (on `TcpStream` and `TlsStream`, as on `ChildStdout` and `ChildStderr`) appends everything up to the end of the stream to `buf`, calling `read` until it returns 0 and retrying a read that fails with `Interrupted`, and returns the count it appended. Any other error ends it with that error, and `buf` then ends with the bytes read so far. On a `TlsStream` the end is the peer's `close_notify`. It is how a connection that carries one payload and then closes is read, such as an FTP data connection: `let mut got = Vec.new(); data.read_to_end(mut got)?;` (B-2026-11-13-73).
+
 **UDP.** A `UdpSocket` sends and receives datagrams, each one `send_to` or `send` call. UDP does not guarantee delivery or order: a datagram may be lost, duplicated or overtaken by a later one. `recv_from` waits for one datagram, stores it in `buf` and returns the number of bytes stored and the sender's address. A datagram longer than `buf` is cut to fit and the rest is lost, which is not an error, so the count is the bytes stored, not the datagram's size. `connect` sets the peer that `send` sends to, and after it `recv` takes datagrams from that peer only.
 
 **Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `InvalidInput`. Inside a task, a read that waits suspends its task, and the timeout still ends it, so the program's other tasks run until the data or the deadline arrives ([core semantics §11.10](../core-semantics.md)).
@@ -368,6 +371,7 @@ impl TlsListener {
 impl TlsStream {
     fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
     fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) blocks suspends
+    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
     fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks

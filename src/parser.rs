@@ -206,11 +206,13 @@ pub(crate) fn kara_module_call<S: AsRef<str>>(names: &[S], at: usize) -> bool {
 
 /// Whether a `format!` argument's text can stand in an f-string hole as it
 /// is. An `if`, `match` or block expression can: its braces balance, and a
-/// hole takes them (B-2026-11-10-17). A `:` outside a literal (a Rust path, an
-/// ascription) would read as the hole's format spec, a literal holding a
-/// brace, a colon or an escape would end or split the hole, and a nested
-/// `format!` or f-string is a rewrite of its own; those, a comment and a line
-/// break keep the call unrewritten.
+/// hole takes them (B-2026-11-10-17). So can a string or char literal with a
+/// brace, a colon or an escape in it: a hole balances quotes and lexes the
+/// literal's escapes (B-2026-11-13-70). A `:` outside a literal (a Rust path
+/// aside, an ascription) would read as the hole's format spec, a backslash
+/// outside one is an error in a hole, and a nested `format!` or f-string is a
+/// rewrite of its own; those, a comment and a line break keep the call
+/// unrewritten.
 fn format_arg_fits_hole(arg: &str) -> bool {
     if arg.contains('\n') || arg.contains("!(") || arg.contains("![") {
         return false;
@@ -222,11 +224,23 @@ fn format_arg_fits_hole(arg: &str) -> bool {
     // starts a word, so `"f"`, a literal ending in `f`, is no f-string
     // (B-2026-11-10-50).
     let mut before = ' ';
+    let mut escaped = false;
     let chars: Vec<char> = arg.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
+        // An escape in a literal skips the character it escapes, so `"\""`
+        // stays one literal.
+        if escaped {
+            escaped = false;
+            before = prev;
+            prev = ' ';
+            continue;
+        }
         match quote {
+            // A hole balances a literal's quotes and lexes its escapes, so a
+            // brace, a colon or an escape inside one is the literal's own
+            // (`text.matches("\r\n")`, `s.split(":")`, B-2026-11-13-70).
             Some(q) => match c {
-                '{' | '}' | ':' | '\\' => return false,
+                '\\' => escaped = true,
                 c if c == q => quote = None,
                 _ => {}
             },
@@ -280,6 +294,12 @@ fn path_colons_as_dots(arg: &str) -> String {
     while i < chars.len() {
         let c = chars[i];
         match quote {
+            Some(_) if c == '\\' && i + 1 < chars.len() => {
+                out.push(c);
+                out.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
             Some(q) if c == q => quote = None,
             Some(_) => {}
             None if c == '"' || c == '\'' => quote = Some(c),
