@@ -1,0 +1,635 @@
+// ftp_server: an FTP server (RFC 959, with PASV, EPSV from RFC 2428, and
+// SIZE and FEAT from RFC 3659 and 2389) over an in-memory file tree, on
+// loopback TCP. Each control connection is a task reading CRLF commands
+// through a BufReader. PASV and EPSV open a listener on a free port, and the
+// next LIST, NLST, RETR, STOR or APPE accepts its data connection there.
+// TYPE A turns LF into CRLF on the way out and back on the way in; TYPE I
+// sends the bytes as they are. Anonymous users may read; `dev` may write.
+// Scripted clients on the main task run three sessions, two of them open at
+// once, and the server then prints its tree and its command counts.
+
+import std::sync::{TaskGroup, Mutex};
+import std::io::{BufReader, BufWriter};
+
+const ADDR: &str = "127.0.0.1:47780";
+const SESSIONS: usize = 3;
+
+fn users() -> SortedMap<String, String> {
+    let mut m = SortedMap::new();
+    m.insert("dev".to_string(), "s3cret".to_string());
+    m
+}
+
+struct State {
+    files: SortedMap<String, Vec<u8>>,
+    dirs: SortedSet<String>,
+    counts: SortedMap<String, i64>,
+}
+
+fn seed() -> State {
+    let mut files = SortedMap::new();
+    files.insert("/readme.txt".to_string(), b"Welcome to the kara FTP server.\nAnonymous users may read.\n".to_vec());
+    files.insert("/pub/notes.txt".to_string(), b"line one\nline two\nline three\n".to_vec());
+    files.insert("/pub/data.csv".to_string(), b"id,name\n1,ada\n2,grace\n".to_vec());
+    let mut dirs = SortedSet::new();
+    for d in ["/", "/pub", "/incoming"] {
+        dirs.insert(d.to_string());
+    }
+    State { files, dirs, counts: SortedMap::new() }
+}
+
+sync struct Server {
+    state: Mutex<State>,
+}
+
+fn parent(path: &str) -> String {
+    let i = path.rfind('/').unwrap();
+    if i == 0 { "/".to_string() } else { path[..i].to_string() }
+}
+
+fn resolve(cwd: &str, arg: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !arg.starts_with('/') {
+        for p in cwd.split('/') {
+            if !p.is_empty() {
+                parts.push(p.to_string());
+            }
+        }
+    }
+    for part in arg.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            parts.pop();
+        } else {
+            parts.push(part.to_string());
+        }
+    }
+    format!("/{}", parts.join("/"))
+}
+
+struct Session {
+    user: Option<String>,
+    logged_in: bool,
+    anonymous: bool,
+    cwd: String,
+    binary: bool,
+    passive: Option<TcpListener>,
+    rename_from: Option<String>,
+    closing: bool,
+}
+
+fn to_ascii(data: &[u8]) -> Vec<u8> {
+    String::from_utf8(data.to_vec()).unwrap().replace("\n", "\r\n").into_bytes()
+}
+
+fn from_ascii(data: &[u8]) -> Vec<u8> {
+    String::from_utf8(data.to_vec()).unwrap().replace("\r\n", "\n").into_bytes()
+}
+
+fn listing(st: &State, path: &str, names_only: bool) -> Vec<u8> {
+    let prefix = if path == "/" { "/".to_string() } else { format!("{}/", path) };
+    let mut names: SortedSet<String> = SortedSet::new();
+    for p in st.files.keys().chain(st.dirs.iter()) {
+        if p.starts_with(&prefix) && p != path && p != "/" {
+            names.insert(p[prefix.len()..].split('/').next().unwrap().to_string());
+        }
+    }
+    let mut out = String::new();
+    for name in names.iter() {
+        let full = format!("{}{}", prefix, name);
+        if names_only {
+            out.push_str(name);
+        } else if st.dirs.contains(&full) {
+            out.push_str(&format!("drwxr-xr-x 1 ftp ftp {:>8} {}", 0, name));
+        } else {
+            out.push_str(&format!("-rw-r--r-- 1 ftp ftp {:>8} {}", st.files[&full].len(), name));
+        }
+        out.push_str("\r\n");
+    }
+    out.into_bytes()
+}
+
+fn send(out: &mut BufWriter<TcpStream>, text: &str) {
+    let _ = out.write_all(format!("{}\r\n", text).as_bytes());
+    let _ = out.flush();
+}
+
+fn open_passive(s: &mut Session) -> i64 {
+    let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = ln.local_addr().unwrap();
+    let port: i64 = addr.rsplit(':').next().unwrap().parse().unwrap();
+    s.passive = Some(ln);
+    port
+}
+
+fn take_data(s: &mut Session) -> TcpStream {
+    let ln = s.passive.take().unwrap();
+    ln.accept().unwrap()
+}
+
+fn handle(st: &mut State, s: &mut Session, line: &str, out: &mut BufWriter<TcpStream>) {
+    let (verb, arg) = match line.split_once(' ') {
+        Some((v, a)) => (v.to_uppercase(), a.to_string()),
+        None => (line.to_uppercase(), String::new()),
+    };
+    *st.counts.entry(verb.clone()).or_insert(0) += 1;
+    match verb.as_str() {
+        "QUIT" => {
+            s.closing = true;
+            return send(out, "221 Goodbye");
+        }
+        "NOOP" => return send(out, "200 NOOP ok"),
+        "SYST" => return send(out, "215 UNIX Type: L8"),
+        "FEAT" => return send(out, "211-Features:\r\n EPSV\r\n PASV\r\n SIZE\r\n UTF8\r\n211 End"),
+        "USER" => {
+            if arg.is_empty() {
+                return send(out, "501 Syntax error in parameters or arguments");
+            }
+            s.user = Some(arg.clone());
+            s.logged_in = false;
+            if arg == "anonymous" {
+                return send(out, "331 Anonymous login ok, send your email as password");
+            }
+            return send(out, &format!("331 Password required for {}", arg));
+        }
+        "PASS" => {
+            let user = match &s.user {
+                None => return send(out, "503 Login with USER first"),
+                Some(u) => u.clone(),
+            };
+            if user == "anonymous" {
+                s.logged_in = true;
+                s.anonymous = true;
+                return send(out, "230 Anonymous access granted, restrictions apply");
+            }
+            if users().get(&user) == Some(&arg) {
+                s.logged_in = true;
+                s.anonymous = false;
+                return send(out, &format!("230 User {} logged in", user));
+            }
+            s.user = None;
+            return send(out, "530 Login incorrect");
+        }
+        _ => {}
+    }
+    if !s.logged_in {
+        return send(out, "530 Please login with USER and PASS");
+    }
+    match verb.as_str() {
+        "PWD" => return send(out, &format!("257 \"{}\" is the current directory", s.cwd)),
+        "CWD" | "CDUP" => {
+            let target = resolve(&s.cwd, if verb == "CDUP" { ".." } else { &arg });
+            if !st.dirs.contains(&target) {
+                return send(out, &format!("550 {}: No such directory", target));
+            }
+            s.cwd = target.clone();
+            return send(out, &format!("250 Directory changed to {}", target));
+        }
+        "TYPE" => {
+            return match arg.to_uppercase().as_str() {
+                "I" => {
+                    s.binary = true;
+                    send(out, "200 Type set to I")
+                }
+                "A" => {
+                    s.binary = false;
+                    send(out, "200 Type set to A")
+                }
+                _ => send(out, "504 Command not implemented for that parameter"),
+            };
+        }
+        "PASV" => {
+            let port = open_passive(s);
+            return send(out, &format!("227 Entering Passive Mode (127,0,0,1,{},{})", port / 256, port % 256));
+        }
+        "EPSV" => {
+            let port = open_passive(s);
+            return send(out, &format!("229 Entering Extended Passive Mode (|||{}|)", port));
+        }
+        _ => {}
+    }
+    let needs_arg = ["MKD", "RMD", "DELE", "RNFR", "RNTO", "SIZE", "RETR", "STOR", "APPE"];
+    if needs_arg.contains(&verb.as_str()) && arg.is_empty() {
+        return send(out, "501 Syntax error in parameters or arguments");
+    }
+    let path = if arg.is_empty() { s.cwd.clone() } else { resolve(&s.cwd, &arg) };
+    let writes = ["MKD", "RMD", "DELE", "RNFR", "RNTO", "STOR", "APPE"];
+    if writes.contains(&verb.as_str()) && s.anonymous {
+        if verb == "STOR" || verb == "APPE" {
+            s.passive = None;
+        }
+        return send(out, "550 Permission denied");
+    }
+    match verb.as_str() {
+        "SIZE" => {
+            match st.files.get(&path) {
+                None => send(out, &format!("550 {}: No such file", path)),
+                Some(_) if !s.binary => send(out, "550 SIZE not allowed in ASCII mode"),
+                Some(body) => send(out, &format!("213 {}", body.len())),
+            }
+        }
+        "MKD" => {
+            if st.dirs.contains(&path) || st.files.contains_key(&path) {
+                return send(out, &format!("550 {}: File exists", path));
+            }
+            let up = parent(&path);
+            if !st.dirs.contains(&up) {
+                return send(out, &format!("550 {}: No such directory", up));
+            }
+            st.dirs.insert(path.clone());
+            send(out, &format!("257 \"{}\" created", path));
+        }
+        "RMD" => {
+            if path == "/" {
+                return send(out, "550 Cannot remove the root directory");
+            }
+            if !st.dirs.contains(&path) {
+                return send(out, &format!("550 {}: No such directory", path));
+            }
+            let inside = format!("{}/", path);
+            if st.files.keys().chain(st.dirs.iter()).any(|p| p.starts_with(&inside)) {
+                return send(out, &format!("550 {}: Directory not empty", path));
+            }
+            st.dirs.remove(&path);
+            send(out, "250 Directory removed");
+        }
+        "DELE" => {
+            if st.files.remove(&path).is_none() {
+                return send(out, &format!("550 {}: No such file", path));
+            }
+            send(out, "250 File deleted");
+        }
+        "RNFR" => {
+            if !st.files.contains_key(&path) {
+                return send(out, &format!("550 {}: No such file", path));
+            }
+            s.rename_from = Some(path);
+            send(out, "350 Ready for RNTO");
+        }
+        "RNTO" => {
+            let src = match s.rename_from.take() {
+                None => return send(out, "503 Bad sequence of commands"),
+                Some(p) => p,
+            };
+            let up = parent(&path);
+            if !st.dirs.contains(&up) {
+                return send(out, &format!("550 {}: No such directory", up));
+            }
+            let body = st.files.remove(&src).unwrap();
+            st.files.insert(path, body);
+            send(out, "250 Rename successful");
+        }
+        "LIST" | "NLST" | "RETR" | "STOR" | "APPE" => transfer(st, s, &verb, &path, out),
+        _ => send(out, "502 Command not implemented"),
+    }
+}
+
+fn transfer(st: &mut State, s: &mut Session, verb: &str, path: &str, out: &mut BufWriter<TcpStream>) {
+    if s.passive.is_none() {
+        return send(out, "425 Use PASV or EPSV first");
+    }
+    if verb == "LIST" || verb == "NLST" {
+        if !st.dirs.contains(path) {
+            s.passive = None;
+            return send(out, &format!("550 {}: No such directory", path));
+        }
+        send(out, "150 Here comes the directory listing");
+        let mut data = take_data(s);
+        let _ = data.write_all(&listing(st, path, verb == "NLST"));
+        drop(data);
+        return send(out, "226 Directory send OK");
+    }
+    if verb == "RETR" {
+        let body = match st.files.get(path) {
+            None => {
+                s.passive = None;
+                return send(out, &format!("550 {}: No such file", path));
+            }
+            Some(b) => b.clone(),
+        };
+        let body = if s.binary {
+            send(out, &format!("150 Opening BINARY mode data connection for {} ({} bytes)", path, body.len()));
+            body
+        } else {
+            send(out, &format!("150 Opening ASCII mode data connection for {}", path));
+            to_ascii(&body)
+        };
+        let mut data = take_data(s);
+        let _ = data.write_all(&body);
+        drop(data);
+        return send(out, "226 Transfer complete");
+    }
+    let up = parent(path);
+    if !st.dirs.contains(&up) {
+        s.passive = None;
+        return send(out, &format!("550 {}: No such directory", up));
+    }
+    send(out, "150 Ok to send data");
+    let mut data = take_data(s);
+    let mut got = Vec::new();
+    let _ = data.read_to_end(&mut got);
+    drop(data);
+    let got = if s.binary { got } else { from_ascii(&got) };
+    let n = got.len();
+    if verb == "APPE" {
+        st.files.entry(path.to_string()).or_insert_with(Vec::new).extend(got);
+    } else {
+        st.files.insert(path.to_string(), got);
+    }
+    send(out, &format!("226 Transfer complete ({} bytes stored)", n));
+}
+
+fn serve(srv: &Server, conn: TcpStream) {
+    let mut out = BufWriter::new(conn.try_clone().unwrap());
+    let reader = BufReader::new(conn);
+    let mut s = Session {
+        user: None,
+        logged_in: false,
+        anonymous: false,
+        cwd: "/".to_string(),
+        binary: false,
+        passive: None,
+        rename_from: None,
+        closing: false,
+    };
+    send(&mut out, "220 kara FTP server ready");
+    for raw in reader.lines() {
+        let line = match raw {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        {
+            let mut g = srv.state.lock();
+            handle(&mut g.value, &mut s, &line, &mut out);
+        }
+        if s.closing {
+            break;
+        }
+    }
+}
+
+fn run_server(srv: &Server, listener: TcpListener) {
+    let tasks = TaskGroup::new();
+    for _ in 0..SESSIONS {
+        let conn = listener.accept().unwrap();
+        tasks.spawn(|| serve(srv, conn));
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+fn chomp(s: &str) -> &str {
+    let s = s.strip_suffix("\n").unwrap_or(s);
+    s.strip_suffix("\r").unwrap_or(s)
+}
+
+struct Client {
+    name: String,
+    out: BufWriter<TcpStream>,
+    inp: BufReader<TcpStream>,
+}
+
+impl Client {
+    fn connect(name: &str) -> Client {
+        let s = TcpStream::connect(ADDR).unwrap();
+        let _ = s.set_read_timeout(Some(2000));
+        let mut c = Client {
+            name: name.to_string(),
+            out: BufWriter::new(s.try_clone().unwrap()),
+            inp: BufReader::new(s),
+        };
+        c.read_reply();
+        c
+    }
+
+    fn read_line(&mut self) -> Option<String> {
+        let mut s = String::new();
+        match self.inp.read_line(&mut s) {
+            Ok(0) => {
+                println!("{} <- (closed)", self.name);
+                None
+            }
+            Ok(_) => Some(chomp(&s).to_string()),
+            Err(e) => {
+                println!("{} <- error {}", self.name, e);
+                None
+            }
+        }
+    }
+
+    // Reads one reply, a multi-line one ("211-" .. "211 ") included. A
+    // passive reply's port changes from run to run, so it is shown masked.
+    fn read_reply(&mut self) -> String {
+        let first = match self.read_line() {
+            None => return String::new(),
+            Some(l) => l,
+        };
+        let mut lines = vec![first.clone()];
+        if first.len() > 3 && &first[3..4] == "-" {
+            let end = format!("{} ", &first[..3]);
+            while let Some(l) = self.read_line() {
+                let done = l.starts_with(&end);
+                lines.push(l);
+                if done {
+                    break;
+                }
+            }
+        }
+        for l in lines.iter() {
+            let shown = if l.starts_with("227 ") {
+                format!("{}(127,0,0,1,*,*)", &l[..l.find('(').unwrap()])
+            } else if l.starts_with("229 ") {
+                format!("{}(|||*|)", &l[..l.find('(').unwrap()])
+            } else {
+                l.clone()
+            };
+            println!("{} <- {}", self.name, shown);
+        }
+        first
+    }
+
+    fn cmd(&mut self, line: &str) -> String {
+        println!("{} -> {}", self.name, line);
+        let _ = self.out.write_all(format!("{}\r\n", line).as_bytes());
+        let _ = self.out.flush();
+        self.read_reply()
+    }
+
+    fn passive(&mut self, extended: bool) -> Option<TcpStream> {
+        let reply = self.cmd(if extended { "EPSV" } else { "PASV" });
+        let port: i64 = if extended {
+            if !reply.starts_with("229 ") {
+                return None;
+            }
+            reply[reply.find("|||").unwrap() + 3..reply.rfind('|').unwrap()].parse().unwrap()
+        } else {
+            if !reply.starts_with("227 ") {
+                return None;
+            }
+            let inner = &reply[reply.find('(').unwrap() + 1..reply.find(')').unwrap()];
+            let nums: Vec<i64> = inner.split(',').map(|n| n.parse().unwrap()).collect();
+            nums[4] * 256 + nums[5]
+        };
+        Some(TcpStream::connect(&format!("127.0.0.1:{}", port)).unwrap())
+    }
+
+    fn fetch(&mut self, line: &str, extended: bool) {
+        let mut data = match self.passive(extended) {
+            None => return,
+            Some(d) => d,
+        };
+        let first = self.cmd(line);
+        if !first.starts_with("150") {
+            return;
+        }
+        let mut got = Vec::new();
+        let _ = data.read_to_end(&mut got);
+        drop(data);
+        let text = String::from_utf8(got).unwrap();
+        println!("{} :: {} bytes, {} CRLF", self.name, text.len(), text.matches("\r\n").count());
+        for l in text.split('\n') {
+            if !l.is_empty() {
+                println!("{} :: | {}", self.name, l.trim_end_matches('\r'));
+            }
+        }
+        self.read_reply();
+    }
+
+    fn send_file(&mut self, line: &str, body: &[u8], extended: bool) {
+        let mut data = match self.passive(extended) {
+            None => return,
+            Some(d) => d,
+        };
+        let first = self.cmd(line);
+        if !first.starts_with("150") {
+            return;
+        }
+        let _ = data.write_all(body);
+        drop(data);
+        println!("{} :: sent {} bytes", self.name, body.len());
+        self.read_reply();
+    }
+
+    fn expect_close(&mut self) {
+        let mut s = String::new();
+        match self.inp.read_line(&mut s) {
+            Ok(0) => println!("{} <- (closed)", self.name),
+            Ok(_) => println!("{} <- unexpected {}", self.name, chomp(&s)),
+            Err(e) => println!("{} <- error {}", self.name, e),
+        }
+    }
+}
+
+fn main() {
+    let listener = TcpListener::bind(ADDR).unwrap();
+    let srv = Server { state: Mutex::new(seed()) };
+    let group = TaskGroup::new();
+    group.spawn(|| run_server(&srv, listener));
+
+    println!("== session 1: anonymous reads");
+    let mut a = Client::connect("anon");
+    a.cmd("SYST");
+    a.cmd("FEAT");
+    a.cmd("PWD");
+    a.cmd("LIST");
+    a.cmd("USER anonymous");
+    a.cmd("PASS guest@example.test");
+    a.cmd("PWD");
+    a.fetch("LIST", false);
+    a.cmd("CWD pub");
+    a.cmd("PWD");
+    a.fetch("NLST", true);
+    a.fetch("RETR notes.txt", false);
+    a.cmd("TYPE I");
+    a.cmd("SIZE notes.txt");
+    a.fetch("RETR notes.txt", true);
+    a.cmd("TYPE A");
+    a.cmd("SIZE notes.txt");
+    a.cmd("SIZE missing.txt");
+    a.fetch("RETR missing.txt", false);
+    a.cmd("RETR notes.txt");
+    a.cmd("CWD /nowhere");
+    a.cmd("CDUP");
+    a.cmd("PWD");
+    a.send_file("STOR hack.txt", b"nope\n", false);
+    a.cmd("DELE readme.txt");
+    a.cmd("TYPE X");
+    a.cmd("HELP");
+
+    println!("== session 2: dev uploads while anonymous stays connected");
+    let mut d = Client::connect("dev");
+    d.cmd("USER dev");
+    d.cmd("PASS wrong");
+    d.cmd("PASS s3cret");
+    d.cmd("USER dev");
+    d.cmd("PASS s3cret");
+    d.cmd("CWD /incoming");
+    d.send_file("STOR report.txt", b"quarter one\r\nquarter two\r\n", false);
+    d.cmd("TYPE I");
+    d.send_file("STOR raw.bin", b"a\r\nb\n", true);
+    d.cmd("SIZE report.txt");
+    d.cmd("SIZE raw.bin");
+    d.cmd("TYPE A");
+    d.send_file("APPE report.txt", b"quarter three\r\n", false);
+    d.fetch("RETR report.txt", false);
+    d.cmd("MKD archive");
+    d.cmd("MKD archive");
+    d.cmd("MKD /nowhere/deep");
+    d.cmd("RNTO elsewhere.txt");
+    d.cmd("RNFR report.txt");
+    d.cmd("RNTO archive/q.txt");
+    d.cmd("RNFR ghost.txt");
+    d.cmd("RMD archive");
+    d.fetch("LIST archive", true);
+    d.fetch("LIST /", false);
+    d.send_file("STOR /nowhere/x.txt", b"x\n", false);
+
+    a.fetch("NLST /incoming", false);
+    a.cmd("NOOP");
+    a.cmd("QUIT");
+    a.expect_close();
+    drop(a);
+
+    println!("== session 3: dev tidies up");
+    let mut e = Client::connect("dev2");
+    e.cmd("PASS s3cret");
+    e.cmd("USER dev");
+    e.cmd("PASS s3cret");
+    e.cmd("DELE /incoming/archive/q.txt");
+    e.cmd("DELE /incoming/archive/q.txt");
+    e.cmd("RMD /incoming/archive");
+    e.cmd("RMD /");
+    e.cmd("PASV");
+    e.cmd("QUIT");
+    e.expect_close();
+    drop(e);
+
+    d.cmd("QUIT");
+    d.expect_close();
+    drop(d);
+
+    group.join();
+    println!("== server state");
+    let st = srv.state.lock();
+    let mut paths: SortedSet<String> = SortedSet::new();
+    for p in st.value.files.keys() {
+        paths.insert(p.clone());
+    }
+    for p in st.value.dirs.iter() {
+        paths.insert(p.clone());
+    }
+    for p in paths.iter() {
+        if p == "/" {
+            println!("/");
+        } else if st.value.dirs.contains(p) {
+            println!("{}/", p);
+        } else {
+            println!("{} ({} bytes)", p, st.value.files[p].len());
+        }
+    }
+    for (verb, n) in st.value.counts.iter() {
+        println!("{} {}", verb, n);
+    }
+}

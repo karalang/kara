@@ -1,0 +1,246 @@
+== session 1: anonymous reads
+anon <- 220 kara FTP server ready
+anon -> SYST
+anon <- 215 UNIX Type: L8
+anon -> FEAT
+anon <- 211-Features:
+anon <-  EPSV
+anon <-  PASV
+anon <-  SIZE
+anon <-  UTF8
+anon <- 211 End
+anon -> PWD
+anon <- 530 Please login with USER and PASS
+anon -> LIST
+anon <- 530 Please login with USER and PASS
+anon -> USER anonymous
+anon <- 331 Anonymous login ok, send your email as password
+anon -> PASS guest@example.test
+anon <- 230 Anonymous access granted, restrictions apply
+anon -> PWD
+anon <- 257 "/" is the current directory
+anon -> PASV
+anon <- 227 Entering Passive Mode (127,0,0,1,*,*)
+anon -> LIST
+anon <- 150 Here comes the directory listing
+anon :: 117 bytes, 3 CRLF
+anon :: | drwxr-xr-x 1 ftp ftp        0 incoming
+anon :: | drwxr-xr-x 1 ftp ftp        0 pub
+anon :: | -rw-r--r-- 1 ftp ftp       58 readme.txt
+anon <- 226 Directory send OK
+anon -> CWD pub
+anon <- 250 Directory changed to /pub
+anon -> PWD
+anon <- 257 "/pub" is the current directory
+anon -> EPSV
+anon <- 229 Entering Extended Passive Mode (|||*|)
+anon -> NLST
+anon <- 150 Here comes the directory listing
+anon :: 21 bytes, 2 CRLF
+anon :: | data.csv
+anon :: | notes.txt
+anon <- 226 Directory send OK
+anon -> PASV
+anon <- 227 Entering Passive Mode (127,0,0,1,*,*)
+anon -> RETR notes.txt
+anon <- 150 Opening ASCII mode data connection for /pub/notes.txt
+anon :: 32 bytes, 3 CRLF
+anon :: | line one
+anon :: | line two
+anon :: | line three
+anon <- 226 Transfer complete
+anon -> TYPE I
+anon <- 200 Type set to I
+anon -> SIZE notes.txt
+anon <- 213 29
+anon -> EPSV
+anon <- 229 Entering Extended Passive Mode (|||*|)
+anon -> RETR notes.txt
+anon <- 150 Opening BINARY mode data connection for /pub/notes.txt (29 bytes)
+anon :: 29 bytes, 0 CRLF
+anon :: | line one
+anon :: | line two
+anon :: | line three
+anon <- 226 Transfer complete
+anon -> TYPE A
+anon <- 200 Type set to A
+anon -> SIZE notes.txt
+anon <- 550 SIZE not allowed in ASCII mode
+anon -> SIZE missing.txt
+anon <- 550 /pub/missing.txt: No such file
+anon -> PASV
+anon <- 227 Entering Passive Mode (127,0,0,1,*,*)
+anon -> RETR missing.txt
+anon <- 550 /pub/missing.txt: No such file
+anon -> RETR notes.txt
+anon <- 425 Use PASV or EPSV first
+anon -> CWD /nowhere
+anon <- 550 /nowhere: No such directory
+anon -> CDUP
+anon <- 250 Directory changed to /
+anon -> PWD
+anon <- 257 "/" is the current directory
+anon -> PASV
+anon <- 227 Entering Passive Mode (127,0,0,1,*,*)
+anon -> STOR hack.txt
+anon <- 550 Permission denied
+anon -> DELE readme.txt
+anon <- 550 Permission denied
+anon -> TYPE X
+anon <- 504 Command not implemented for that parameter
+anon -> HELP
+anon <- 502 Command not implemented
+== session 2: dev uploads while anonymous stays connected
+dev <- 220 kara FTP server ready
+dev -> USER dev
+dev <- 331 Password required for dev
+dev -> PASS wrong
+dev <- 530 Login incorrect
+dev -> PASS s3cret
+dev <- 503 Login with USER first
+dev -> USER dev
+dev <- 331 Password required for dev
+dev -> PASS s3cret
+dev <- 230 User dev logged in
+dev -> CWD /incoming
+dev <- 250 Directory changed to /incoming
+dev -> PASV
+dev <- 227 Entering Passive Mode (127,0,0,1,*,*)
+dev -> STOR report.txt
+dev <- 150 Ok to send data
+dev :: sent 26 bytes
+dev <- 226 Transfer complete (24 bytes stored)
+dev -> TYPE I
+dev <- 200 Type set to I
+dev -> EPSV
+dev <- 229 Entering Extended Passive Mode (|||*|)
+dev -> STOR raw.bin
+dev <- 150 Ok to send data
+dev :: sent 5 bytes
+dev <- 226 Transfer complete (5 bytes stored)
+dev -> SIZE report.txt
+dev <- 213 24
+dev -> SIZE raw.bin
+dev <- 213 5
+dev -> TYPE A
+dev <- 200 Type set to A
+dev -> PASV
+dev <- 227 Entering Passive Mode (127,0,0,1,*,*)
+dev -> APPE report.txt
+dev <- 150 Ok to send data
+dev :: sent 15 bytes
+dev <- 226 Transfer complete (14 bytes stored)
+dev -> PASV
+dev <- 227 Entering Passive Mode (127,0,0,1,*,*)
+dev -> RETR report.txt
+dev <- 150 Opening ASCII mode data connection for /incoming/report.txt
+dev :: 41 bytes, 3 CRLF
+dev :: | quarter one
+dev :: | quarter two
+dev :: | quarter three
+dev <- 226 Transfer complete
+dev -> MKD archive
+dev <- 257 "/incoming/archive" created
+dev -> MKD archive
+dev <- 550 /incoming/archive: File exists
+dev -> MKD /nowhere/deep
+dev <- 550 /nowhere: No such directory
+dev -> RNTO elsewhere.txt
+dev <- 503 Bad sequence of commands
+dev -> RNFR report.txt
+dev <- 350 Ready for RNTO
+dev -> RNTO archive/q.txt
+dev <- 250 Rename successful
+dev -> RNFR ghost.txt
+dev <- 550 /incoming/ghost.txt: No such file
+dev -> RMD archive
+dev <- 550 /incoming/archive: Directory not empty
+dev -> EPSV
+dev <- 229 Entering Extended Passive Mode (|||*|)
+dev -> LIST archive
+dev <- 150 Here comes the directory listing
+dev :: 37 bytes, 1 CRLF
+dev :: | -rw-r--r-- 1 ftp ftp       38 q.txt
+dev <- 226 Directory send OK
+dev -> PASV
+dev <- 227 Entering Passive Mode (127,0,0,1,*,*)
+dev -> LIST /
+dev <- 150 Here comes the directory listing
+dev :: 117 bytes, 3 CRLF
+dev :: | drwxr-xr-x 1 ftp ftp        0 incoming
+dev :: | drwxr-xr-x 1 ftp ftp        0 pub
+dev :: | -rw-r--r-- 1 ftp ftp       58 readme.txt
+dev <- 226 Directory send OK
+dev -> PASV
+dev <- 227 Entering Passive Mode (127,0,0,1,*,*)
+dev -> STOR /nowhere/x.txt
+dev <- 550 /nowhere: No such directory
+anon -> PASV
+anon <- 227 Entering Passive Mode (127,0,0,1,*,*)
+anon -> NLST /incoming
+anon <- 150 Here comes the directory listing
+anon :: 18 bytes, 2 CRLF
+anon :: | archive
+anon :: | raw.bin
+anon <- 226 Directory send OK
+anon -> NOOP
+anon <- 200 NOOP ok
+anon -> QUIT
+anon <- 221 Goodbye
+anon <- (closed)
+== session 3: dev tidies up
+dev2 <- 220 kara FTP server ready
+dev2 -> PASS s3cret
+dev2 <- 503 Login with USER first
+dev2 -> USER dev
+dev2 <- 331 Password required for dev
+dev2 -> PASS s3cret
+dev2 <- 230 User dev logged in
+dev2 -> DELE /incoming/archive/q.txt
+dev2 <- 250 File deleted
+dev2 -> DELE /incoming/archive/q.txt
+dev2 <- 550 /incoming/archive/q.txt: No such file
+dev2 -> RMD /incoming/archive
+dev2 <- 250 Directory removed
+dev2 -> RMD /
+dev2 <- 550 Cannot remove the root directory
+dev2 -> PASV
+dev2 <- 227 Entering Passive Mode (127,0,0,1,*,*)
+dev2 -> QUIT
+dev2 <- 221 Goodbye
+dev2 <- (closed)
+dev -> QUIT
+dev <- 221 Goodbye
+dev <- (closed)
+== server state
+/
+/incoming/
+/incoming/raw.bin (5 bytes)
+/pub/
+/pub/data.csv (22 bytes)
+/pub/notes.txt (29 bytes)
+/readme.txt (58 bytes)
+APPE 1
+CDUP 1
+CWD 3
+DELE 3
+EPSV 4
+FEAT 1
+HELP 1
+LIST 4
+MKD 3
+NLST 2
+NOOP 1
+PASS 6
+PASV 11
+PWD 4
+QUIT 3
+RETR 5
+RMD 3
+RNFR 2
+RNTO 2
+SIZE 5
+STOR 4
+SYST 1
+TYPE 5
+USER 4
