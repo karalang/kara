@@ -1,0 +1,18 @@
+nums = [2, 4, 5, 5, 5, 5, 5, 6, 6], target = 5  ->  true
+nums = [10, 100, 101, 101], target = 101  ->  false
+nums = [7], target = 7  ->  true
+nums = [7], target = 8  ->  false
+nums = [1, 1, 2, 2], target = 1  ->  false
+nums = [1, 1, 2, 2], target = 2  ->  false
+nums = [1, 2, 2], target = 2  ->  true
+nums = [1, 1, 2], target = 1  ->  true
+nums = [3, 3, 3], target = 1  ->  false
+nums = [3, 3, 3], target = 9  ->  false
+2000 random lists: majority 668, checksum 286058900
+1000 copies of 10^9, target 10^9  ->  true
+501 copies of 7 from index 0 of 1000  ->  true
+501 copies of 7 from index 499 of 1000  ->  true
+501 copies of 7 from index 250 of 1000  ->  true
+500 copies of 7 from index 0 of 1000  ->  false
+500 copies of 7 from index 500 of 1000  ->  false
+500 copies of 7 from index 250 of 1000  ->  false

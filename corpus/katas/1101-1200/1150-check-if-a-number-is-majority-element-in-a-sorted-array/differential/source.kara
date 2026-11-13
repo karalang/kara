@@ -1,0 +1,230 @@
+// LeetCode #1150: Check If a Number Is Majority Element in a Sorted Array
+// -- a differential over the five arms. Each answer is checked against
+// the statement read literally and against six properties that do not
+// compute the answer; see the README.
+
+// ---- is_majority_element.kara ----
+
+fn a0_is_majority_element(nums: Vec[i64], target: i64) -> bool {
+    let n = nums.len();
+    let first = nums.partition_point(|x| x < target);
+    first + n / 2 < n and nums[first + n / 2] == target
+}
+
+// ---- is_majority_element_bounds.kara ----
+
+fn a1_is_majority_element(nums: Vec[i64], target: i64) -> bool {
+    let first = nums.partition_point(|x| x < target);
+    let last = nums.partition_point(|x| x <= target);
+    2 * (last - first) > nums.len()
+}
+
+// ---- is_majority_element_count.kara ----
+
+fn a2_is_majority_element(nums: Vec[i64], target: i64) -> bool {
+    2 * nums.iter().filter(|x| x == target).count() > nums.len()
+}
+
+// ---- is_majority_element_search.kara ----
+
+fn a3_is_majority_element(nums: Vec[i64], target: i64) -> bool {
+    let n = nums.len();
+    let mut low = 0;
+    let mut high = n;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if nums[mid] < target {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    let end = low + n / 2;
+    end < n and nums[end] == target
+}
+
+// ---- is_majority_element_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_is_majority_element(nums: Vec[i32], target: i32) -> bool {
+        let left = nums.partition_point(|x| x < target);
+        let right = nums.partition_point(|x| x <= target);
+        (right - left) * 2 > nums.len()
+    }
+}
+
+fn a4_is_majority_element(nums: Vec[i64], target: i64) -> bool {
+    A4Solution.a4_is_majority_element(nums.iter().map(|x| x as i32).collect(), target as i32)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums: Vec[i64], target: i64) -> bool {
+    match which {
+        0 => a0_is_majority_element(nums, target),
+        1 => a1_is_majority_element(nums, target),
+        2 => a2_is_majority_element(nums, target),
+        3 => a3_is_majority_element(nums, target),
+        _ => a4_is_majority_element(nums, target),
+    }
+}
+
+// The statement read literally: the target appears more than
+// nums.length / 2 times.
+fn literal(nums: Vec[i64], target: i64) -> bool {
+    let mut times = 0;
+    for x in nums.iter() {
+        if x == target {
+            times += 1;
+        }
+    }
+    times > nums.len() / 2
+}
+
+// A sorted list of 1 to 30 values and a target in four kinds: values 1
+// to 2 and a target 1 to 3; values 1 to 4 and a target 0 to 5; about half
+// the list one target and the rest above and below it, values up to
+// 10^9; one or two runs of the target and its neighbours.
+fn problem(seed: mut ref i64, kind: i64) -> (Vec[i64], i64) {
+    let n = 1 + next_random(mut seed) % 30;
+    let mut nums: Vec[i64] = [];
+    let mut target = 0;
+    if kind < 2 {
+        let values = 2 * kind + 2;
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % values);
+        }
+        target = next_random(mut seed) % (values + 2);
+    } else if kind == 2 {
+        target = 2 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 999999998;
+        let copies = (n / 2 + next_random(mut seed) % 5 - 2).clamp(0, n);
+        for _ in 0..copies {
+            nums.push(target);
+        }
+        for _ in copies..n {
+            if next_random(mut seed) % 2 == 0 {
+                nums.push(1 + next_random(mut seed) % (target - 1));
+            } else {
+                nums.push(target + 1 + next_random(mut seed) % (1000000000 - target));
+            }
+        }
+    } else {
+        target = 2 + next_random(mut seed) % 8;
+        let below = next_random(mut seed) % (n + 1);
+        let copies = next_random(mut seed) % (n - below + 1);
+        for i in 0..n {
+            nums.push(if i < below { target - 1 } else if i < below + copies { target } else { target + 1 });
+        }
+    }
+    nums.sort();
+    (nums, target)
+}
+
+// `v` put in its sorted place.
+fn insert(nums: Vec[i64], v: i64) -> Vec[i64] {
+    let mut out = nums.clone();
+    let at = out.partition_point(|x| x <= v);
+    out.insert(at, v);
+    out
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// The choices a problem's properties draw: P3's gap and offset for the
+// values renamed in order, and P6's value that is not the target.
+struct Choice {
+    gap: i64,
+    offset: i64,
+    other: i64,
+}
+
+fn check_case(t: mut ref Tally, nums: Vec[i64], target: i64, c: Choice) {
+    let n = nums.len();
+    let want = literal(nums, target);
+    let mirrored: Vec[i64] = nums.iter().rev().map(|x| 1000000001 - x).collect();
+    let mut distinct: Vec[i64] = nums.clone();
+    distinct.dedup();
+    let rank = |x: i64| distinct.partition_point(|d| d < x);
+    let renamed: Vec[i64] = nums.iter().map(|x| c.offset + c.gap * rank(x)).collect();
+    let renamed_target = if distinct.contains(target) { c.offset + c.gap * rank(target) } else { c.offset + c.gap * rank(target) - c.gap / 2 };
+    let doubled: Vec[i64] = nums.iter().flat_map(|x| [x, x].into_iter()).collect();
+    let more = insert(nums, target);
+    let other = insert(nums, c.other);
+    for w in 0..5 {
+        let got = arm(w, nums, target);
+        let what = f"arm {w}, case {t.cases} nums {nums} target {target} -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        // P2: the values mirrored, 10^9 + 1 - x, the list reversed
+        let m = arm(w, mirrored, 1000000001 - target);
+        expect(mut t, 2, m == got, f"P2 {what}, mirrored {m}");
+        // P3: the values renamed in order
+        let r = arm(w, renamed, renamed_target);
+        expect(mut t, 3, r == got, f"P3 {what}, renamed {renamed} target {renamed_target} -> {r}");
+        // P4: every value twice
+        let d = arm(w, doubled, target);
+        expect(mut t, 4, d == got, f"P4 {what}, doubled {d}");
+        // P5: one more of the target never takes a majority away, and makes
+        // one of a target that filled exactly half
+        let p = arm(w, more, target);
+        let half = 2 * nums.iter().filter(|x| x == target).count() == n;
+        expect(mut t, 5, p == (got or half), f"P5 {what}, one more {p}");
+        // P6: one more value that is not the target never makes a majority
+        let o = arm(w, other, target);
+        expect(mut t, 6, not o or got, f"P6 {what}, one more {c.other} -> {o}");
+        // P7: a majority holds the middle of the list
+        expect(mut t, 7, not got or (nums[n / 2] == target and nums[(n - 1) / 2] == target), f"P7 {what}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + if want { 2 } else { 1 } + n) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(8, 0) };
+    // 2000 problems in four kinds, 500 each. Every choice, P3's gap and
+    // offset and P6's value among them, is drawn before any arm answers.
+    let mut seed = 11501;
+    let mut problems: Vec[(Vec[i64], i64, Choice)] = [];
+    for i in 0..2000 {
+        let (nums, target) = problem(mut seed, i % 4);
+        let gap = 2 + next_random(mut seed) % 1000;
+        let offset = gap + next_random(mut seed) % 1000;
+        let mut other = if next_random(mut seed) % 2 == 0 { nums[next_random(mut seed) % nums.len()] } else { 1 + next_random(mut seed) % 10 };
+        if other == target {
+            other = if target > 1 { target - 1 } else { target + 1 };
+        }
+        problems.push((nums, target, Choice { gap, offset, other }));
+    }
+    for (nums, target, c) in problems.iter() {
+        check_case(mut t, nums, target, c);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..8).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

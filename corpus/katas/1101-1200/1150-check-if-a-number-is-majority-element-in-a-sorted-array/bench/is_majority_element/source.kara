@@ -1,0 +1,58 @@
+// LeetCode #1150: Check If a Number Is Majority Element in a Sorted Array
+// -- the ★ arm, one binary search: the target's run starts at the first
+// index whose value is not below it, and the target fills more than half
+// the list exactly when it is still the value n / 2 places further on.
+// O(log n)
+
+fn is_majority_element(nums: Vec[i64], target: i64) -> bool {
+    let n = nums.len();
+    let first = nums.partition_point(|x| x < target);
+    first + n / 2 < n and nums[first + n / 2] == target
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn big(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000 + 1
+}
+
+// 1000 values, LeetCode's longest list: 450 to 550 copies of one value,
+// the rest anywhere from 1 to 10^9, sorted.
+fn list(seed: mut ref i64) -> Vec[i64] {
+    let copies = 450 + next_random(mut seed) % 101;
+    let v = big(mut seed);
+    let mut nums: Vec[i64] = Vec.filled(copies, v);
+    for _ in copies..1000 {
+        nums.push(big(mut seed));
+    }
+    nums.sort();
+    nums
+}
+
+fn main() {
+    // 64 lists built once, then 10000000 queries, each a list in turn and a
+    // target: a value of the list, its middle value, one above a value of
+    // the list, or any value.
+    let mut seed = 1150;
+    let mut lists: Vec[Vec[i64]] = [];
+    for _ in 0..64 {
+        lists.push(list(mut seed));
+    }
+    let mut yes = 0;
+    let mut check = 0;
+    for q in 0..10000000 {
+        let nums = ref lists[q % 64];
+        let kind = next_random(mut seed) % 4;
+        let target = if kind == 0 { nums[next_random(mut seed) % 1000] } else if kind == 1 { nums[500] } else if kind == 2 { nums[next_random(mut seed) % 1000] + 1 } else { big(mut seed) };
+        if is_majority_element(nums, target) {
+            yes += 1;
+            check = (check * 31 + q) % 1000000007;
+        }
+    }
+    println(f"10000000 queries over 64 lists of 1000 values: majority {yes}, checksum {check}");
+}
