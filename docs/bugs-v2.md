@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 287 |
 | false-positive | 197 |
 | perf | 159 |
-| missing-feature | 155 |
+| missing-feature | 156 |
 | soundness | 64 |
 | miscompile | 59 |
 | run-vs-build | 32 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 434 |
+| typecheck | 435 |
 | mir-llvm | 211 |
 | mir | 179 |
 | cli | 106 |
@@ -1156,6 +1156,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-76 | cli+resolver | low | A `test "..." { }` block in a package's `src/main.kara` (not a `_test.kara` file) is silently never run: `karac check` passes and `karac test` report… | e84c3d02ad |
 | B-2026-11-13-77 | mir | low | E0509 for a view stored where its borrow is not kept says "a view of a temporary value" where the program names the place (`t`, `t.s`), and the share… | e84c3d02ad |
 | B-2026-11-13-78 | typecheck | low | A default generic argument is not applied to a type written with no arguments: `struct Holder[T = i64]` then `let a: Holder = Holder { v: 3 }` is "ex… | e84c3d02ad |
+| B-2026-11-13-80 | typecheck | medium | A struct or enum's `const` parameter could not be given an argument: design.md § Const generic parameters gives user types `const` parameters (`struc… | 5a2e3d6aa6 |
 
 </details>
 
