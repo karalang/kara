@@ -112,7 +112,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-12 | 2026-11-12 | typecheck | low | A literal stored into an element of an open fill settles the fill's literal: `let mut t = Vec.filled(3, 0); t[1] = 4; let r: i32 = t[1];` is refused (narrowing i64 to i32), though without `t[1] = 4` it is accepted and `t[1] = 4` after the typed read is too | — |
 | B-2026-11-12-15 | 2026-11-12 | mir-llvm | low | `"U".repeat(n)` of a one-byte string is a call into `karac_mir_str_repeat`, an allocation through `karac_alloc_or_panic` and up to three `memcpy` calls where Rust's is inlined: kata 1138's bench runs 7.0G instructions to Rust's 4.6G (0.81 s to 0.59 s) | — |
 | B-2026-11-12-17 | 2026-11-12 | mir-llvm | low | `for i in (low..n).step_by(2)` over an `i64` range runs about 1.2x the same loop written `while i < n { ...; i += 2 }`: `IterStepBy[Range].next` takes the generic path (a `first` flag, `advance_by(step - 1)` through `step_forward_within` and an `Option`, then `next`), which Rust's `StepBy<Range>` specializes | — |
-| B-2026-11-13-3 | 2026-11-13 | typecheck+ownership | medium | A `MutFn` stored in a struct field or a `Vec` can be called through shared access (a non-`mut` binding, a borrowed `self`, a bare parameter), which core-semantics §9.6 forbids; `unused_mut` even tells the user to drop the `mut` | — |
 | B-2026-11-13-4 | 2026-11-13 | typecheck+mir | medium | A `par for` whose body value is a tuple is refused at check with the internal `an expression with no recorded type is not lowered yet` | — |
 | B-2026-11-13-5 | 2026-11-13 | typecheck | low | `div_euclid` and `rem_euclid` exist only on `i64`: `i32`, `u8` and the other integer widths, and `f64`, have neither, although design.md names them as the Euclidean forms of `/` and `%` | — |
 | B-2026-11-13-18 | 2026-11-13 | typecheck | medium | In a generic fn with `it: own I` and `I: Iterator[Item = T]`, the item of `for x in it` is typed as `I` itself for method calls and annotations: `x.abs()` gets "no method 'abs' on type parameter 'I'" and `let y: i64 = x` gets "expected 'i64', found 'I'" | — |
@@ -123,7 +122,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-34 | 2026-11-13 | mir-llvm | low | `partition_point` is the branching binary search (runtime/stdlib/source/collections.kara) where Rust's is branch-free: kata 1150's 10,000,000 searches of 1000 values take 0.76 s in Kāra (C's and Go's branching searches 0.75 and 0.80 s) against 0.37 s in overflow-checked Rust | — |
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
 | B-2026-11-13-42 | 2026-11-13 | cli | medium | `karac check src/x_test.kara` on a package's test companion reports "All checks passed" while the package check refuses that very file | — |
-| B-2026-11-13-43 | 2026-11-13 | runtime | high | The library's `split`, `splitn`, `match_indices` and `matches` iterators keep a `Str` view of the PATTERN, while §5.4 has the method's result borrow the text only: dropping the pattern before walking the iterator reads freed memory (ASan heap-use-after-free) | — |
 
 ### Relocated
 
@@ -1122,6 +1120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-18 | typecheck | low | `(1..10).filter(\|x\| *x % 2 == 0)` is accepted while `(1..n).filter(\|x\| *x % 2 == 0)` is refused with "drop the `*`": over a range of bare literals th… | 18ea960272 |
 | B-2026-11-13-1 | mir-llvm+cli | medium | `String.normalize` and `std.regex` pass `karac check --targets=wasm_wasi` and then fail `karac build --target=wasm_wasi` with a bare wasm-ld `undefin… | 637125377c |
 | B-2026-11-13-2 | typecheck | low | A list literal compared with `==` / `!=` against an `Array` is typed `Vec` instead of taking the other operand as its expected type: `m != [75u8, 82u… | 16d2756e18 |
+| B-2026-11-13-3 | typecheck+ownership | medium | A `MutFn` stored in a struct field or a `Vec` can be called through shared access (a non-`mut` binding, a borrowed `self`, a bare parameter), which c… | e809f0725c |
 | B-2026-11-13-6 | typecheck+cli | medium | Rust's `binary_search_by_key` and `binary_search_by` taken apart as a `Result` have no fix: `match h.binary_search_by_key(&snap_id, \|&(s, _)\| s) { Ok… | 4341008d1e |
 | B-2026-11-13-7 | typecheck | low | `Vec.filled(n as i64, 0)` with `n: i32` is not linted as a lossless cast, while `let x: i64 = n as i64` and `g(n as i64)` at a user function's `i64`… | 4341008d1e |
 | B-2026-11-13-15 | typecheck | medium | Rust's `dst.copy_from_slice(src)` is "no method 'copy_from_slice' on type 'Slice'" with no fix, and the error type sets off a borrow error at every l… | b4be496812 |
@@ -1140,6 +1139,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-36 | typecheck | medium | `assert(1)`, `assert("x")` and `assert_eq(1, "a".to_string())` pass check and then fail inside the compiler's MIR stage ("invalid MIR", "not lowered… | 601dac91cc |
 | B-2026-11-13-40 | resolver+cli | low | An import's segment and name spans are not shifted with the rest of a module's: a merged `_test.kara`'s E0111 names its sibling's file, and `karac fi… | 9d85811653 |
 | B-2026-11-13-41 | cli | low | `karac check` and `karac run` validate a package's manifest and dependencies differently from `build` and `test`: a registry or git dependency passes… | 9d85811653 |
+| B-2026-11-13-43 | runtime | high | The library's `split`, `splitn`, `match_indices` and `matches` iterators keep a `Str` view of the PATTERN, while §5.4 has the method's result borrow… | 0afc89e2e8 |
 
 </details>
 
