@@ -31,6 +31,12 @@ pub(super) fn substitute_const_arg(arg: &ConstArg, subs: &HashMap<String, SubstV
                 Some(n) => ConstArg::Literal(n),
                 None => arg.clone(),
             },
+            // A struct's or enum's `const` parameter is bound to its
+            // argument as written, a `const_arg_type` (B-2026-11-13-80).
+            Some(SubstValue::Type(t)) => match super::types::const_arg_of(t) {
+                Some(c) => c.clone(),
+                None => arg.clone(),
+            },
             _ => arg.clone(),
         },
         _ => arg.clone(),
@@ -41,7 +47,7 @@ pub(super) fn substitute_const_arg(arg: &ConstArg, subs: &HashMap<String, SubstV
 /// `ConstArg::Literal` shape. Integer variants widen / narrow into i64;
 /// bool / char / enum-variant become their underlying numeric (false=0,
 /// true=1, char-codepoint, enum-discriminant); float variants return None.
-fn const_value_to_i64(cv: &ConstValue) -> Option<i64> {
+pub(super) fn const_value_to_i64(cv: &ConstValue) -> Option<i64> {
     use ConstValue::*;
     match cv {
         I8(v) => Some(*v as i64),

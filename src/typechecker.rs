@@ -4109,6 +4109,10 @@ pub struct TypeChecker<'a> {
     /// value of type `i64` in the body (design.md § Const generic parameters;
     /// B-2026-11-06-14). Set by `check_function` (save/restore).
     pub(super) current_fn_const_params: Vec<(String, Type)>,
+    /// The `const` generic parameters of the impl whose methods are being
+    /// checked (`impl[const N: i64] Buf[N]`): each is a value in a method
+    /// body, as a function's own are (B-2026-11-13-80).
+    pub(super) current_impl_const_params: Vec<(String, Type)>,
     /// Name of the enclosing trait declaration when type-checking a default
     /// method body. Populated on entering `check_trait_def`, cleared on exit.
     /// Consumed by `dispatch_self_receiver_method` (slice 3.5 of the
@@ -4670,6 +4674,7 @@ impl<'a> TypeChecker<'a> {
             enclosing_proj_bounds: FxHashMap::default(),
             current_body_dim_scope: Vec::new(),
             current_fn_const_params: Vec::new(),
+            current_impl_const_params: Vec::new(),
             enclosing_trait: None,
             closure_once_reasons: FxHashMap::default(),
             returned_closure_spans: Default::default(),

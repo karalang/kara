@@ -155,6 +155,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- A struct or enum takes `const` parameters (design.md § Const generic
+  parameters; B-2026-11-13-80): `struct Buf[const N: i64] { a: Array[i64, N] }`,
+  written `Buf[3]`, `Buf[2 + 1]` or `Buf[SIZE]`, one type per value, served
+  by `impl[const N: i64] Buf[N]`, where `N` is a value. Every argument on a
+  user type was refused as "not yet supported in this slice".
 - `TcpStream.read_to_end` and `TlsStream.read_to_end` append everything up
   to the end of the stream and return the count (docs/library/io.md;
   B-2026-11-13-73). A connection that carries one payload and closes, such as

@@ -86,6 +86,11 @@ impl<'a> super::TypeChecker<'a> {
                             .shape_param_positions
                             .insert(s.name.clone(), positions);
                     }
+                    if let Some(positions) = Self::const_param_positions(&s.generic_params) {
+                        self.env
+                            .const_param_positions
+                            .insert(s.name.clone(), positions);
+                    }
                     self.record_generic_defaults(&s.name, &s.generic_params);
                     let derived_traits = extract_derived_traits(&s.attributes);
                     let must_use_message = extract_must_use_message(&s.attributes);
@@ -117,6 +122,11 @@ impl<'a> super::TypeChecker<'a> {
                     if let Some(positions) = Self::shape_param_positions(&e.generic_params) {
                         self.env
                             .shape_param_positions
+                            .insert(e.name.clone(), positions);
+                    }
+                    if let Some(positions) = Self::const_param_positions(&e.generic_params) {
+                        self.env
+                            .const_param_positions
                             .insert(e.name.clone(), positions);
                     }
                     self.record_generic_defaults(&e.name, &e.generic_params);
@@ -2413,6 +2423,11 @@ impl<'a> super::TypeChecker<'a> {
                 .shape_param_positions
                 .insert(s.name.clone(), positions);
         }
+        if let Some(positions) = Self::const_param_positions(&s.generic_params) {
+            self.env
+                .const_param_positions
+                .insert(s.name.clone(), positions);
+        }
         let fields: Vec<(String, Type, bool)> = s
             .fields
             .iter()
@@ -2550,6 +2565,11 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(positions) = Self::shape_param_positions(&e.generic_params) {
             self.env
                 .shape_param_positions
+                .insert(e.name.clone(), positions);
+        }
+        if let Some(positions) = Self::const_param_positions(&e.generic_params) {
+            self.env
+                .const_param_positions
                 .insert(e.name.clone(), positions);
         }
         let variants: Vec<(String, VariantTypeInfo)> = e

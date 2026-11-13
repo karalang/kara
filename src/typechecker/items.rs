@@ -2622,7 +2622,7 @@ impl<'a> super::TypeChecker<'a> {
             std::mem::replace(&mut self.current_body_dim_scope, body_dim_scope);
         // A `const` parameter is a value of its declared type in the body
         // (B-2026-11-06-14).
-        let mut const_params: Vec<(String, Type)> = Vec::new();
+        let mut const_params: Vec<(String, Type)> = self.current_impl_const_params.clone();
         if let Some(gps) = &f.generic_params {
             for p in &gps.params {
                 if let (true, Some(ct)) = (p.is_const, &p.const_type) {
@@ -5865,7 +5865,21 @@ impl<'a> super::TypeChecker<'a> {
                         &mut self.current_default_trait,
                         copied_default.and_then(|t| t.segments.last().cloned()),
                     );
+                    let impl_consts: Vec<(String, Type)> = imp
+                        .generic_params
+                        .iter()
+                        .flat_map(|g| &g.params)
+                        .filter_map(|p| match (p.is_const, &p.const_type) {
+                            (true, Some(ct)) => {
+                                Some((p.name.clone(), self.lower_type_expr(ct, &gp)))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let saved_consts =
+                        std::mem::replace(&mut self.current_impl_const_params, impl_consts);
                     self.check_function(method, Some(&self_type), &gp);
+                    self.current_impl_const_params = saved_consts;
                     self.current_default_trait = saved;
                 }
                 ImplItem::AssocType(binding) => {

@@ -484,6 +484,33 @@ impl ScrutineeMode {
     }
 }
 
+/// A `const` generic argument of a struct or enum, carried among
+/// `Type::Named`'s arguments as a `()` array whose length is the value,
+/// which is how MIR carries an instance's const argument too
+/// (B-2026-11-13-80). `Buf[3]` is `Named { "Buf", [Array[(), 3]] }`.
+pub fn const_arg_type(c: ConstArg) -> Type {
+    Type::Array {
+        element: Box::new(Type::Unit),
+        size: c,
+    }
+}
+
+/// The value a [`const_arg_type`] argument carries.
+pub fn const_arg_of(t: &Type) -> Option<&ConstArg> {
+    match t {
+        Type::Array { element, size } if **element == Type::Unit => Some(size),
+        _ => None,
+    }
+}
+
+/// An argument of a `Named` type as written: a const argument by its value.
+fn named_arg_display(t: &Type) -> String {
+    match const_arg_of(t) {
+        Some(c) => const_arg_display(c),
+        None => type_display(t),
+    }
+}
+
 /// User-facing rendering of a `ConstArg` for diagnostic messages.
 /// `Literal(4)` → `"4"`; `ConstParam(N)` → `"N"`; `ConstVar(id)` →
 /// `"?C{id}"` (parallel to `?M{id}` for type metavars).
@@ -748,8 +775,14 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
         // (`NonEmpty[T]`) carries the type param inside `base`.
         Type::Refinement { base, .. } => type_is_fully_concrete(base),
         Type::Tuple(types) => types.iter().all(type_is_fully_concrete),
-        Type::Array { element, .. } => type_is_fully_concrete(element),
-        Type::Vector { element, .. } => type_is_fully_concrete(element),
+        // A length that names a `const` parameter is one per instance, as a
+        // user type's `const` argument is (B-2026-11-13-80).
+        Type::Array { element, size } => {
+            type_is_fully_concrete(element) && matches!(size, ConstArg::Literal(_))
+        }
+        Type::Vector { element, lanes } => {
+            type_is_fully_concrete(element) && matches!(lanes, ConstArg::Literal(_))
+        }
         Type::Slice { element, .. } => type_is_fully_concrete(element),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => type_is_fully_concrete(inner),
         Type::Rc(inner) | Type::Arc(inner) => type_is_fully_concrete(inner),
@@ -945,7 +978,7 @@ pub fn type_display(ty: &Type) -> String {
             // the one that names none, which is the same type.
             let inner: Vec<String> = without_default_hasher(name, args)
                 .iter()
-                .map(type_display)
+                .map(named_arg_display)
                 .collect();
             format!("{}[{}]", name, inner.join(", "))
         }

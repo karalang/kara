@@ -434,15 +434,27 @@ impl<'a> super::TypeChecker<'a> {
                 ga.iter()
                     .enumerate()
                     .filter_map(|(arg_idx, arg)| match arg {
+                        // A `const` parameter's argument is a value, carried
+                        // as a `const_arg_type` (B-2026-11-13-80).
+                        _ if type_name
+                            .and_then(|n| self.env.const_param_positions.get(n))
+                            .and_then(|positions| positions.get(arg_idx))
+                            .copied()
+                            .unwrap_or(false) =>
+                        {
+                            Some(match self.lower_user_const_arg(arg, generic_scope) {
+                                Some(c) => super::types::const_arg_type(c),
+                                None => Type::Error,
+                            })
+                        }
                         GenericArg::Type(t) => Some(self.lower_type_expr(t, generic_scope)),
                         GenericArg::Const(expr) => {
                             let target = type_name.unwrap_or("this type");
                             self.type_error(
                                 format!(
-                                    "const generic argument on user-defined type '{}' is \
-                                     not yet supported in this slice; only the built-in \
-                                     `Array[T, N]` accepts const-args in 0.8",
-                                    target
+                                    "`{target}` takes a type here, not a value: its \
+                                     generic parameter {} is not `const`",
+                                    arg_idx + 1
                                 ),
                                 expr.span,
                                 TypeErrorKind::TypeMismatch,
@@ -1178,7 +1190,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 },
                 Err(e) => {
-                    self.report_const_arg_error(e);
+                    self.report_const_arg_error(e, true);
                     return Some(Type::Error);
                 }
             },
@@ -1268,7 +1280,7 @@ impl<'a> super::TypeChecker<'a> {
                     Some(n) => ConstArg::Literal(n as i64),
                 },
                 Err(e) => {
-                    self.report_const_arg_error(e);
+                    self.report_const_arg_error(e, true);
                     return Some(Type::Error);
                 }
             },
@@ -1487,12 +1499,65 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The value of a struct's or enum's `const` generic argument: a literal,
+    /// a `const` parameter in scope (`Buf[N]` in an `impl[const N: i64]`), or
+    /// a constant expression (`Buf[SIZE]`, `Buf[2 + 1]`). `None` once the
+    /// argument is reported (B-2026-11-13-80).
+    fn lower_user_const_arg(
+        &mut self,
+        arg: &GenericArg,
+        generic_scope: &[String],
+    ) -> Option<ConstArg> {
+        let mut synthesized = None;
+        let Some(expr) = self.const_arg_expr(arg, &mut synthesized) else {
+            let span = match arg {
+                GenericArg::Type(t) => t.span,
+                GenericArg::Const(e) => e.span,
+                GenericArg::Shape(l) => l.span,
+            };
+            self.type_error(
+                "a `const` generic parameter takes a compile-time constant value here, \
+                 not a type"
+                    .to_string(),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return None;
+        };
+        match &expr.kind {
+            ExprKind::Integer(n, _) => Some(ConstArg::Literal(narrow_literal_to_i64(*n))),
+            ExprKind::Identifier(name) if generic_scope.contains(name) => {
+                Some(ConstArg::ConstParam(name.clone()))
+            }
+            _ => match self.eval_const_expr(expr, &Type::Int(IntSize::I64)) {
+                Ok(cv) => match super::const_eval::const_value_to_i64(&cv) {
+                    Some(n) => Some(ConstArg::Literal(n)),
+                    None => {
+                        self.type_error(
+                            format!(
+                                "a `const` generic argument must be an integer; got {}",
+                                type_display(&const_value_type(&cv))
+                            ),
+                            expr.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        None
+                    }
+                },
+                Err(e) => {
+                    self.report_const_arg_error(e, false);
+                    None
+                }
+            },
+        }
+    }
+
     /// Reports a const-generic argument that does not evaluate. A name the
     /// evaluator does not know is reported with design.md § Const generic
     /// parameters' wording, saying whether it is a run-time value (a local
     /// or parameter) or names nothing constant; other evaluation errors keep
     /// their own text (B-2026-11-13-22).
-    fn report_const_arg_error(&mut self, e: super::const_eval::ConstEvalError) {
+    fn report_const_arg_error(&mut self, e: super::const_eval::ConstEvalError, length: bool) {
         let super::const_eval::ConstEvalError::UndefinedConst { name, span } = e else {
             self.emit_const_eval_error(e);
             return;
@@ -1500,10 +1565,12 @@ impl<'a> super::TypeChecker<'a> {
         const WHAT: &str = "const generic argument must be a compile-time constant expression";
         let run_time = self.local_scope.lookup(&name).is_some();
         let message = if run_time {
-            format!(
-                "{WHAT}: `{name}` is a run-time value (a length known only at run time \
-                 needs a `Vec`)"
-            )
+            let hint = if length {
+                " (a length known only at run time needs a `Vec`)"
+            } else {
+                ""
+            };
+            format!("{WHAT}: `{name}` is a run-time value{hint}")
         } else {
             format!("{WHAT}: `{name}` is not a `const` or a const generic parameter in scope")
         };
@@ -1532,6 +1599,16 @@ impl<'a> super::TypeChecker<'a> {
             .as_ref()
             .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
             .unwrap_or_default()
+    }
+
+    /// The positions of `generics`' `const` parameters, when it has one.
+    pub(super) fn const_param_positions(generics: &Option<GenericParams>) -> Option<Vec<bool>> {
+        let g = generics.as_ref()?;
+        if g.params.iter().any(|p| p.is_const) {
+            Some(g.params.iter().map(|p| p.is_const).collect())
+        } else {
+            None
+        }
     }
 
     /// Positional shape-kinded flags for a generic-param list — `Some`

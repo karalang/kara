@@ -22915,27 +22915,14 @@ fn test_where_predicate_via_inferred_const_arg() {
 }
 
 #[test]
-fn test_const_arg_user_defined_struct_rejected() {
-    // Const generics slice 3d (deferred-F regression-pin). Users can
-    // declare `struct Buffer[T, const N: i64]` (slice 1 accepts the
-    // const-param in the generic-param list), but `Type::Named.args`
-    // is `Vec<Type>` and can't carry a const-arg. Writing
-    // `Buffer[i64, 4]` at a type position used to silently drop the
-    // `4`; slice 3d emits a focused regression-pin diagnostic so
-    // users know the limitation. The pin flips to a success test
-    // when a future slice extends `Type::Named.args` to carry mixed
-    // type / const arguments.
-    let errs = typecheck_errors(
+fn test_const_arg_user_defined_struct_accepted() {
+    // Const generics slice 3d pinned `Buffer[i64, 4]` as refused ("const
+    // generic argument on user-defined type"): `Type::Named.args` could not
+    // carry a const argument. It carries one now, as a `const_arg_type`, so
+    // the pin is flipped (B-2026-11-13-80; tests/const_generic_user_types.rs).
+    typecheck_ok(
         "struct Buffer[T, const N: i64] { x: T }\n\
          fn f(b: Buffer[i64, 4]) { }",
-    );
-    assert!(
-        errs.iter().any(|e| e
-            .message
-            .contains("const generic argument on user-defined type")
-            && e.message.contains("Buffer")),
-        "expected regression-pin diagnostic for `Buffer[i64, 4]`, got: {:?}",
-        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 

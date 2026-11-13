@@ -1394,7 +1394,27 @@ impl<'a> super::TypeChecker<'a> {
                 param_subs.insert(p.clone(), SubstValue::Type(arg.clone()));
             }
         } else {
-            for p in &struct_info.generic_params {
+            let consts = self.env.const_param_positions.get(&struct_name).cloned();
+            for (i, p) in struct_info.generic_params.iter().enumerate() {
+                // A `const` parameter is a const variable, which an
+                // `Array[T, N]` field or the literal's context fixes
+                // (B-2026-11-13-80).
+                if consts
+                    .as_ref()
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    let id = super::types::ConstVarId(self.env.next_const_var);
+                    self.env.next_const_var += 1;
+                    param_subs.insert(
+                        p.clone(),
+                        SubstValue::Type(super::types::const_arg_type(
+                            super::types::ConstArg::ConstVar(id),
+                        )),
+                    );
+                    continue;
+                }
                 let var = self.env.fresh_type_var();
                 if let Type::TypeVar(id) = var {
                     id_to_name.insert(id, p.clone());

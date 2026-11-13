@@ -458,6 +458,11 @@ pub struct TypeEnv {
     /// `lower_generic_args` to accept a `GenericArg::Shape` at that
     /// position (Phase 11 Q1; design.md § Numerical Types > Shape kind).
     pub shape_param_positions: FxHashMap<String, Vec<bool>>,
+    /// Positions of a struct's or enum's `const` generic parameters,
+    /// parallel to its `generic_params`; only types with one have an entry.
+    /// An argument there is a value, carried as [`super::types::const_arg_type`]
+    /// (B-2026-11-13-80).
+    pub const_param_positions: FxHashMap<String, Vec<bool>>,
     /// A struct's or enum's generic parameters, in order, with their
     /// defaults (design.md § Default generic arguments), for a type with at
     /// least one default. An omitted trailing argument takes its default.
@@ -643,6 +648,7 @@ impl TypeEnv {
             ufcs_trait: None,
             ufcs_trait_args: None,
             shape_param_positions: FxHashMap::default(),
+            const_param_positions: FxHashMap::default(),
             generic_defaults: FxHashMap::default(),
             unions: FxHashMap::default(),
             distinct_types: FxHashMap::default(),
