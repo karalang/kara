@@ -771,6 +771,9 @@ pub(super) fn cmd_check_project(
              use `karac build --concurrency-report`."
         );
     }
+    if mf.is_virtual {
+        super::build_cmds::run_in_members(&root, &mf, output);
+    }
     super::build_cmds::emit_manifest_warnings(&mf, output);
     // The package's dependencies resolve as `karac build` resolves them, so
     // a cycle among them is E_DEPENDENCY_CYCLE here too rather than an

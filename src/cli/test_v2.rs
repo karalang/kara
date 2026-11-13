@@ -25,10 +25,14 @@ const PACKAGE: &str = "<package>";
 pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
     // The manifest's soft notices go to stderr, as every command reports
     // them; the stream on stdout stays the runner's (B-2026-11-13-41).
-    if let Ok((_, mf)) = std::env::current_dir()
+    if let Ok((root, mf)) = std::env::current_dir()
         .map_err(|_| ())
         .and_then(|cwd| crate::manifest::load_from_cwd(&cwd).map_err(|_| ()))
     {
+        // A virtual workspace root tests its members (B-2026-11-13-50).
+        if mf.is_virtual {
+            super::build_cmds::run_in_members(&root, &mf, OutputMode::Jsonl);
+        }
         super::build_cmds::emit_manifest_warnings(&mf, OutputMode::Text);
     }
     let TestFront { mf, tree, tests } = test_front(filter.as_deref(), true);

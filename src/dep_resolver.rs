@@ -836,6 +836,8 @@ mod tests {
             dev_dependencies: BTreeMap::new(),
             workspace_dependencies: BTreeMap::new(),
             is_workspace_root: false,
+            workspace_members: Vec::new(),
+            is_virtual: false,
             target_dependencies: BTreeMap::new(),
             target_dev_dependencies: BTreeMap::new(),
             target_profile_overrides: BTreeMap::new(),

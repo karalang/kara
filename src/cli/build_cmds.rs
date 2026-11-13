@@ -2650,6 +2650,54 @@ pub(super) fn emit_lockfile_warning(err: &crate::lockfile::LockfileError, output
     }
 }
 
+/// `karac build`, `check` or `test` at a virtual workspace root
+/// (B-2026-11-13-50): the same command, with the same arguments, in each
+/// member's directory in `[workspace].members` order. Text output heads each
+/// member's report with its name. Exits 1 when any member fails or is
+/// missing, else 0.
+pub(super) fn run_in_members(
+    root: &std::path::Path,
+    mf: &crate::manifest::Manifest,
+    output: OutputMode,
+) -> ! {
+    if mf.workspace_members.is_empty() {
+        eprintln!(
+            "error[manifest]: `{}` is a workspace root with no `[package]` and no \
+             `[workspace].members`, so there is nothing to run the command in",
+            root.join(crate::manifest::MANIFEST_FILENAME).display()
+        );
+        process::exit(1);
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|e| {
+        eprintln!("error: cannot find the running karac: {e}");
+        process::exit(1);
+    });
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let mut failed = false;
+    for member in &mf.workspace_members {
+        let dir = root.join(member);
+        if !dir.join(crate::manifest::MANIFEST_FILENAME).is_file() {
+            eprintln!(
+                "error[manifest]: workspace member `{member}` has no `{}` at `{}`",
+                crate::manifest::MANIFEST_FILENAME,
+                dir.display()
+            );
+            failed = true;
+            continue;
+        }
+        if output == OutputMode::Text {
+            eprintln!("==> {member}");
+        }
+        let ok = process::Command::new(&exe)
+            .args(&args)
+            .current_dir(&dir)
+            .status()
+            .is_ok_and(|s| s.success());
+        failed |= !ok;
+    }
+    process::exit(i32::from(failed));
+}
+
 /// The manifest's soft notices (an unknown `[package]` key), as every
 /// command that reads the manifest reports them, once per process
 /// (B-2026-11-13-41). Text output only: the machine reports carry

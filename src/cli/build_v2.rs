@@ -87,6 +87,9 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         emit_manifest_error(&e, output);
         process::exit(1);
     });
+    if raw.is_virtual {
+        super::build_cmds::run_in_members(&root, &raw, output);
+    }
     if !super::build_cmds::enforce_toolchain_pin(&root, output) {
         process::exit(1);
     }

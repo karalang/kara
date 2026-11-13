@@ -499,7 +499,10 @@ pub fn build_dep_graph_with_options(
     // ancestor → empty, and a `workspace = true` dep then surfaces
     // `E_WORKSPACE_DEP_OUTSIDE_WORKSPACE` exactly as before.
     let workspace_deps = if root_manifest.is_workspace_root {
-        root_manifest.workspace_dependencies.clone()
+        rooted_workspace_deps(
+            &root_canonical,
+            root_manifest.workspace_dependencies.clone(),
+        )
     } else {
         discover_ancestor_workspace_deps(&root_canonical, loader)
     };
@@ -901,6 +904,27 @@ fn resolve_path_dep_dir(from_dir: &Path, path: &Path) -> PathBuf {
     }
 }
 
+/// A `[workspace.dependencies]` table with each relative `path` made
+/// relative to the workspace root that declares it, `root_dir`, rather than
+/// to the member that names it with `workspace = true` (B-2026-11-13-50).
+fn rooted_workspace_deps(
+    root_dir: &Path,
+    deps: BTreeMap<String, DependencySpec>,
+) -> BTreeMap<String, DependencySpec> {
+    deps.into_iter()
+        .map(|(name, spec)| match spec {
+            DependencySpec::Path { path, version } if path.is_relative() => (
+                name,
+                DependencySpec::Path {
+                    path: root_dir.join(path),
+                    version,
+                },
+            ),
+            spec => (name, spec),
+        })
+        .collect()
+}
+
 /// Walk upward from `start_dir`'s parent to the filesystem root, returning the
 /// `[workspace.dependencies]` of the nearest ancestor `kara.toml` that declares
 /// a `[workspace]` table (empty when there is none). This implements the spec's
@@ -921,7 +945,7 @@ fn discover_ancestor_workspace_deps(
         }
         if let Ok(mf) = loader.load(ancestor) {
             if mf.is_workspace_root {
-                return mf.workspace_dependencies;
+                return rooted_workspace_deps(ancestor, mf.workspace_dependencies);
             }
         }
     }
@@ -1054,6 +1078,8 @@ mod tests {
             dev_dependencies: BTreeMap::new(),
             workspace_dependencies: BTreeMap::new(),
             is_workspace_root: false,
+            workspace_members: Vec::new(),
+            is_virtual: false,
             target_dependencies: BTreeMap::new(),
             target_dev_dependencies: BTreeMap::new(),
             target_profile_overrides: BTreeMap::new(),

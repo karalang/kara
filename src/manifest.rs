@@ -398,6 +398,13 @@ pub struct Manifest {
     /// workspace-root-upward discovery keys on when building a *member*
     /// package whose own manifest is not the root (resolver follow-up (g)).
     pub is_workspace_root: bool,
+    /// `[workspace].members`: the member packages' directories, relative to
+    /// this manifest's. Empty without a `[workspace]` table.
+    pub workspace_members: Vec<String>,
+    /// A virtual workspace root: a `[workspace]` table and no `[package]`
+    /// (B-2026-11-13-50). It names no package of its own; `karac build`,
+    /// `check` and `test` at it run in each member.
+    pub is_virtual: bool,
     /// `[target.<triple>.dependencies]` — per-target dependency
     /// overlays keyed by target triple. The build pipeline picks the
     /// matching entry (if any) for the active target and merges it
@@ -877,8 +884,19 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
                 message: e.message().to_string(),
             })?;
 
+    // A `[workspace]` with no `[package]` is a virtual workspace root
+    // (B-2026-11-13-50): it reads as a package named `workspace` with
+    // nothing else of its own.
+    let is_virtual = table.get("package").is_none()
+        && table.get("workspace").and_then(|w| w.as_table()).is_some();
+    let virtual_package = is_virtual.then(|| {
+        let mut t = toml::Table::new();
+        t.insert("name".into(), toml::Value::String("workspace".into()));
+        toml::Value::Table(t)
+    });
     let package = table
         .get("package")
+        .or(virtual_package.as_ref())
         .ok_or_else(|| ManifestError::MissingPackageSection {
             path: path.to_path_buf(),
         })?
@@ -1036,6 +1054,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     // above if present) marks this manifest as a workspace root — even when it
     // carries no `[workspace.dependencies]`.
     let is_workspace_root = table.get("workspace").and_then(|w| w.as_table()).is_some();
+    let workspace_members = parse_workspace_members(path, &table)?;
     let (target_dependencies, target_dev_dependencies, target_profile_overrides) =
         parse_target_tables(path, &table, &mut warnings)?;
     let build_default_target = parse_build_default_target(path, &table)?;
@@ -1074,6 +1093,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         dev_dependencies,
         workspace_dependencies,
         is_workspace_root,
+        workspace_members,
+        is_virtual,
         target_dependencies,
         target_dev_dependencies,
         target_profile_overrides,
@@ -1772,6 +1793,29 @@ fn parse_lints_table(
 /// `[workspace]` namespace — but the value-shape grammar is identical, so the
 /// dependency-spec parser is reused verbatim. Members reference these entries
 /// via `name = { workspace = true }` on their own `[dependencies]`.
+/// `[workspace].members`: an array of member directories, relative to the
+/// workspace root.
+fn parse_workspace_members(path: &Path, table: &toml::Table) -> Result<Vec<String>, ManifestError> {
+    let Some(members) = table
+        .get("workspace")
+        .and_then(|w| w.as_table())
+        .and_then(|w| w.get("members"))
+    else {
+        return Ok(Vec::new());
+    };
+    let bad = || ManifestError::InvalidFieldType {
+        path: path.to_path_buf(),
+        key: "workspace.members".to_string(),
+        expected: "an array of member directories (e.g. `[\"core\", \"cli\"]`)",
+    };
+    members
+        .as_array()
+        .ok_or_else(bad)?
+        .iter()
+        .map(|m| m.as_str().map(str::to_string).ok_or_else(bad))
+        .collect()
+}
+
 fn parse_workspace_dependencies(
     path: &Path,
     table: &toml::Table,

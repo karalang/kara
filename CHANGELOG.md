@@ -149,6 +149,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- A workspace root may be virtual: a `kara.toml` with `[workspace]` and
+  `[workspace.dependencies]` and no `[package]` (design.md § Workspaces;
+  B-2026-11-13-50). `karac build`, `check` and `test` at it run in each of
+  `[workspace].members`, and a member's `workspace = true` dependencies come
+  from it. A `path` in `[workspace.dependencies]` is relative to the root
+  that declares it; it was joined to the member's directory, so a root's
+  `path = "util"` was not found from `core/`.
 - `assert(cond, msg)`, `assert_eq(a, b, msg)` and `assert_ne(a, b, msg)`
   take an optional `String` or `Str` message, evaluated only when the
   assertion fails; it replaces the `assertion failed: ...` line, and the
