@@ -2803,13 +2803,31 @@ impl Pipeline {
             };
             let class = crate::typechecker::class_for_type_error_kind(&kind);
             let fix_it = if e.code == "E0516" && self.renames.is_empty() {
-                held_borrow_copy_fix(&src, typed, &e)
+                shared_handle_copy_fix(&src, typed, &e)
+                    .or_else(|| held_borrow_copy_fix(&src, typed, &e))
                     .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
             } else {
                 None
             };
+            let mut message = mir_check_message(&e);
+            // A `ref` to a `shared` value is copied by `*r`, a counted
+            // handle, not by a deep `.clone()` (the probe's LRU cache).
+            if e.code == "E0516" {
+                if let Some(name) = e0516_shared_referent(&src, typed, &e) {
+                    message = message.replace(
+                        "take a copy of the value (`.clone()`, `.cloned()`, `*r` for a \
+                         `Copy` value) where it is borrowed",
+                        &format!(
+                            "copy the handle where it is borrowed: `{name}` is `shared`, so \
+                             `*r` of a `ref {name}` is a second counted handle to the same \
+                             value, which holds no borrow (`let h = *r;`, or `.cloned()` on \
+                             an `Option[ref {name}]`)"
+                        ),
+                    );
+                }
+            }
             typed.errors.push(crate::typechecker::TypeError {
-                message: mir_check_message(&e),
+                message,
                 span,
                 kind,
                 lint_name: None,
@@ -3897,6 +3915,106 @@ fn source_span_at(src: &str, at: Option<(usize, usize)>) -> Option<crate::token:
         length,
         line,
         column,
+    })
+}
+
+/// The byte offset of a `line:column` in `src`.
+fn offset_at(src: &str, (line, column): (usize, usize)) -> Option<usize> {
+    let start: usize = src
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)?)
+        .map(str::len)
+        .sum();
+    Some(start + column.checked_sub(1)?)
+}
+
+/// Whether `t` is a `shared` struct or enum, or a `shared` handle type.
+fn is_shared_type(
+    typed: &crate::typechecker::TypeCheckResult,
+    t: &crate::typechecker::types::Type,
+) -> bool {
+    use crate::typechecker::types::Type;
+    match t {
+        Type::Shared(_) => true,
+        Type::Named { name, .. } => typed
+            .struct_info
+            .get(name)
+            .map(|s| s.is_shared)
+            .or_else(|| typed.enum_info.get(name).map(|en| en.is_shared))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// The `shared` type an E0516's borrow lends, when the borrow is of one:
+/// the borrow expression is a `ref T` or an `Option[ref T]` with `T`
+/// `shared` (`m.get(k)` over a `Map[K, Ent]`). Its name, for the help.
+fn e0516_shared_referent(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<String> {
+    use crate::typechecker::types::Type;
+    let loan = offset_at(src, e.loan_at?)?;
+    let (_, ty) = typed
+        .expr_types
+        .iter()
+        .filter(|(k, _)| k.0 == loan && k.1 > 0)
+        .max_by_key(|(k, _)| k.1)?;
+    let inner = match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+        Type::Named { name, args } if name == "Option" && args.len() == 1 => match &args[0] {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    is_shared_type(typed, inner).then(|| crate::typechecker::types::type_display(inner))
+}
+
+/// The machine-applicable repair for an E0516 whose holder is bound from a
+/// `ref` to a `shared` value (`Some(e) => { let e2 = e; .. }` over
+/// `m.get(k)`): `let e2 = *e;`. `*e` on a `ref` to a `shared` value is a
+/// second counted handle to the same value, so `e2` holds no borrow of the
+/// map and the conflicting borrow of its owner is free (core-semantics §5.4,
+/// design.md §11). The probe's LRU cache.
+fn shared_handle_copy_fix(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    use crate::typechecker::types::Type;
+    let holder = e.holder.as_ref()?;
+    let loan = offset_at(src, e.loan_at?)?;
+    let access = offset_at(src, e.at?)?;
+    let between = src.get(loan..access)?;
+    let bind = regex::Regex::new(&format!(
+        r"\blet\s+(?:mut\s+)?{}(?:\s*:[^=;]*)?\s*=\s*([A-Za-z_]\w*)\s*;",
+        regex::escape(holder)
+    ))
+    .ok()?;
+    let ident = bind.captures_iter(between).last()?.get(1)?;
+    let offset = loan + ident.start();
+    let ty = typed
+        .expr_types
+        .get(&crate::resolver::SpanKey(offset, ident.len()))?;
+    let Type::Ref(inner) = ty else {
+        return None;
+    };
+    if !is_shared_type(typed, inner) {
+        return None;
+    }
+    let before = &src[..offset];
+    let line = before.matches('\n').count() + 1;
+    let column = offset - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset,
+            length: 0,
+            line,
+            column,
+        },
+        replacement: "*".to_string(),
     })
 }
 

@@ -794,6 +794,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- An E0516 whose borrow lends a `shared` value (`let e2 = e;` over
+  `m.get(k)` for a `shared struct Ent`) says that `*r` is a second counted
+  handle, which holds no borrow. It no longer offers `.clone()` and "`*r`
+  for a `Copy` value", and `karac fix` writes `let e2 = *e;`.
 - `karac fix` mends Rust's pause to `std.time.sleep` (B-2026-11-11-73):
   `use std::thread;` and `use std::thread::sleep;` become
   `import std.time.sleep;`, and `thread::sleep(d)` and
