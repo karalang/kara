@@ -5262,6 +5262,16 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // A statement's own attributes, under the levels around it
+        // (B-2026-11-13-26), in span order for a stable emission sequence.
+        let mut stmt_overrides: Vec<_> = self.program.stmt_lint_overrides.iter().collect();
+        stmt_overrides.sort_by_key(|(k, _)| (k.0, k.1));
+        for (key, overs) in &stmt_overrides {
+            if has_unknown_lint(overs) {
+                let outer = enclosing_lint_levels(self.program, &stmt_overrides, key);
+                emissions.push((outer, (*overs).clone()));
+            }
+        }
         for (outer, inner) in emissions {
             // Push the cascade frames (impl block first, then item /
             // method) so the innermost frame is the item's own
@@ -5377,6 +5387,13 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
             }
+        }
+        // A statement's own `#[expect(unfulfilled_lint_expectation)]` too
+        // (B-2026-11-13-26).
+        let mut stmt_overrides: Vec<_> = self.program.stmt_lint_overrides.iter().collect();
+        stmt_overrides.sort_by_key(|(k, _)| (k.0, k.1));
+        for (_, overs) in stmt_overrides {
+            collect_expect_on_unfulfilled(overs, &mut emissions);
         }
         for span in emissions {
             let message = String::from(

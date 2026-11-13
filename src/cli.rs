@@ -1905,12 +1905,41 @@ impl Pipeline {
             if u.let_span.offset >= user {
                 continue;
             }
-            let level = u.source_level.unwrap_or_else(|| {
-                self.lint_overrides
-                    .level_for("unused_mut", LintLevel::Warn)
-                    .unwrap_or(LintLevel::Warn)
-            });
-            if matches!(level, LintLevel::Allow | LintLevel::Expect) {
+            // The innermost attribute naming the lint: the statement's, the
+            // statements around it, then the function's and its `impl`
+            // block's, as `deprecated` and the style lints read it
+            // (B-2026-11-13-26).
+            let attribute = crate::typechecker::attribute_lint_level_at(
+                &self.parsed.program,
+                &u.let_span,
+                "unused_mut",
+            );
+            let level = if self.lint_overrides.is_forbidden("unused_mut") {
+                LintLevel::Deny
+            } else if let Some(ov) = &attribute {
+                ov.level
+            } else {
+                u.source_level.unwrap_or_else(|| {
+                    self.lint_overrides
+                        .level_for("unused_mut", LintLevel::Warn)
+                        .unwrap_or(LintLevel::Warn)
+                })
+            };
+            if level == LintLevel::Expect {
+                // The `#[expect]` is fulfilled, which the typechecker could
+                // not know when it reported it unfulfilled.
+                if let Some(ov) = attribute {
+                    let unfulfilled = |w: &crate::typechecker::TypeError| {
+                        w.kind == crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation
+                            && w.span == ov.span
+                            && w.message.contains("`unused_mut`")
+                    };
+                    typed.warnings.retain(|w| !unfulfilled(w));
+                    typed.errors.retain(|w| !unfulfilled(w));
+                }
+                continue;
+            }
+            if level == LintLevel::Allow {
                 continue;
             }
             let Some(rest) = src.get(u.let_span.offset..) else {

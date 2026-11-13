@@ -678,9 +678,17 @@ impl super::Parser {
     /// Extracted so the attribute arm can rewind into it when the attributes
     /// turn out to belong to a loop.
     fn parse_expression_statement(&mut self) -> Option<Stmt> {
+        let expr = self.parse_expression()?;
+        self.finish_expression_statement(expr, false)
+    }
+
+    /// The rest of an expression statement once its expression is parsed.
+    /// With `block_ends`, a block-like expression (`{ … }`, `if`, `match`)
+    /// needs no `;`, as in a block's own statement list: the attributed
+    /// statement `#[allow(x)] { … }` reads that way (B-2026-11-13-27).
+    fn finish_expression_statement(&mut self, expr: Expr, block_ends: bool) -> Option<Stmt> {
         {
             {
-                let expr = self.parse_expression()?;
                 if self.check(&Token::Comma) {
                     // Parallel / destructuring assignment:
                     // `t1, t2, ... = v1, v2, ...;`
@@ -711,6 +719,15 @@ impl super::Parser {
                             op: cop,
                             value,
                         },
+                    })
+                } else if block_ends
+                    && Self::is_block_like_prefix(&expr)
+                    && !self.check(&Token::Semicolon)
+                {
+                    Some(Stmt {
+                        id: crate::ids::NodeId::DUMMY,
+                        span: expr.span,
+                        kind: StmtKind::Expr(expr),
                     })
                 } else {
                     let semi = self.current_span();
@@ -781,7 +798,14 @@ impl super::Parser {
             }
         }
 
-        let stmt = self.parse_statement()?;
+        // An expression statement reads as in a block's statement list, where
+        // a block-like one needs no `;`.
+        let stmt = if self.is_statement_start() {
+            self.parse_statement()?
+        } else {
+            let expr = self.parse_expression_stmt()?;
+            self.finish_expression_statement(expr, true)?
+        };
         if !overrides.is_empty() {
             self.stmt_lint_overrides
                 .insert(crate::resolver::SpanKey::from_span(&stmt.span), overrides);
