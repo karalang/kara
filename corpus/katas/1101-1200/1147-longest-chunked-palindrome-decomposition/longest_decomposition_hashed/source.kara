@@ -1,0 +1,116 @@
+// LeetCode #1147: Longest Chunked Palindrome Decomposition -- greedy from
+// both ends with rolling hashes: the chunk at the front grows by a letter
+// on the right, its hash times the base plus the letter, and the chunk at
+// the back by a letter on the left, the letter times the base's power
+// plus its hash. Only when the two hashes agree are the chunks compared
+// letter by letter. O(n) when no two hashes agree by chance.
+
+const BASE: i64 = 131;
+const MODULUS: i64 = 1000000007;
+
+fn longest_decomposition(text: Str) -> i64 {
+    let b: Vec[u8] = text.bytes().iter().collect();
+    // the front chunk is b[start..start + size], the back b[end - size..end]
+    let mut start = 0;
+    let mut end = b.len();
+    let mut size = 0;
+    let mut front = 0;
+    let mut back = 0;
+    let mut power = 1;
+    let mut k = 0;
+    while 2 * (size + 1) <= end - start {
+        size += 1;
+        front = (front * BASE + b[start + size - 1]) % MODULUS;
+        back = (b[end - size] * power + back) % MODULUS;
+        power = power * BASE % MODULUS;
+        if front == back and b[start..start + size] == b[end - size..end] {
+            k += 2;
+            start += size;
+            end -= size;
+            size = 0;
+            front = 0;
+            back = 0;
+            power = 1;
+        }
+    }
+    if start < end { k + 1 } else { k }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `size` letters drawn from the first `letters` of the alphabet.
+fn word(seed: mut ref i64, size: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..size {
+        s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+// `count` chunks of 1 to 3 letters, then the same chunks in the reverse
+// order, with a middle of 0 to 3 letters between.
+fn chunked(seed: mut ref i64, count: i64, letters: i64) -> String {
+    let mut chunks: Vec[String] = [];
+    for _ in 0..count {
+        let size = 1 + next_random(mut seed) % 3;
+        chunks.push(word(mut seed, size, letters));
+    }
+    let middle_size = next_random(mut seed) % 4;
+    let middle = word(mut seed, middle_size, letters);
+    let mut s = chunks.concat();
+    s.push_str(middle);
+    for c in chunks.iter().rev() {
+        s.push_str(c);
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's three examples, then short texts at the edges
+    let cases = [
+        "ghiabcdefhelloadamhelloabcdefghi",
+        "merchant",
+        "antaprezatepzapreanta",
+        "a",
+        "aa",
+        "ab",
+        "aba",
+        "abab",
+        "ababa",
+        "elvtoelvto",
+    ];
+    for text in cases.iter() {
+        println(f"{text} -> {longest_decomposition(text)}");
+    }
+    // 2000 random texts over 1, 2, 3 or 26 letters: every other one of 1
+    // to 60 letters at random, the rest 1 to 10 chunks mirrored around a
+    // middle, so the answers run high
+    let mut seed = 1147;
+    let mut total = 0;
+    let mut check = 0;
+    for t in 0..2000 {
+        let letters = [1, 2, 3, 26][next_random(mut seed) % 4];
+        let text = if t % 2 == 0 {
+            let size = 1 + next_random(mut seed) % 60;
+            word(mut seed, size, letters)
+        } else {
+            let count = 1 + next_random(mut seed) % 10;
+            chunked(mut seed, count, letters)
+        };
+        let k = longest_decomposition(text);
+        total += k;
+        check = (check * 31 + k + text.len()) % 1000000007;
+    }
+    println(f"2000 random texts: chunks total {total}, checksum {check}");
+    // the constraints' longest, 1000 letters, and one of 928
+    println(f"1000 a's: {longest_decomposition("a".repeat(1000))}");
+    println(f"ab 500 times: {longest_decomposition("ab".repeat(500))}");
+    println(f"999 a's and a b: {longest_decomposition("a".repeat(999) + "b")}");
+    let big = chunked(mut seed, 240, 2);
+    println(f"240 chunks of 1 to 3 letters mirrored, {big.len()} letters: {longest_decomposition(big)}");
+}
