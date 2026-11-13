@@ -2331,6 +2331,12 @@ pub struct TypeCheckResult {
     /// types` were fine). B-2026-07-08-6 secondary. Recorded only for the
     /// single-candidate case; an ambiguous/zero-bound call is an error already.
     pub method_typeparam_trait_key: FxHashMap<SpanKey, String>,
+    /// MethodCall span → the arguments of the bound `method_typeparam_trait_key`
+    /// names, in the trait's parameter order, when the trait is generic:
+    /// `[f64]` for `x.conv()` under `X: Conv[f64]`. A type with two impls of
+    /// one generic trait (`impl Conv[String] for i64`, `impl Conv[f64] for
+    /// i64`) has the impl picked by them (B-2026-11-13-44).
+    pub method_typeparam_trait_args: FxHashMap<SpanKey, Vec<Type>>,
     /// Call-expression span → the callee's `Fn(..)` `TypeExpr`, for every
     /// `Call` whose callee is a closure VALUE produced by a non-identifier
     /// place expression (a struct field `(h.f)(x)`, a Vec/array index
@@ -3675,6 +3681,8 @@ pub struct TypeChecker<'a> {
     /// generic-receiver dispatch. See the matching `TypeCheckResult` field
     /// (B-2026-07-08-6 secondary — ownership arg-mode of a generic trait call).
     pub(super) method_typeparam_trait_key: FxHashMap<SpanKey, String>,
+    /// Working half of `TypeCheckResult::method_typeparam_trait_args`.
+    pub(super) method_typeparam_trait_args: FxHashMap<SpanKey, Vec<Type>>,
     /// Method calls on a concrete receiver answered by a blanket impl over
     /// its own parameter (`5.twice()` of `impl[T: Display] Twice for T`).
     /// They record no `Type.method` callee: the MIR builder finds the blanket
@@ -4557,6 +4565,7 @@ impl<'a> TypeChecker<'a> {
             direct_iter_terminals: FxHashSet::default(),
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),
+            method_typeparam_trait_args: FxHashMap::default(),
             blanket_method_spans: FxHashSet::default(),
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
@@ -5169,6 +5178,7 @@ impl<'a> TypeChecker<'a> {
             direct_iter_terminals: self.direct_iter_terminals,
             method_typeparam_receiver: self.method_typeparam_receiver,
             method_typeparam_trait_key: self.method_typeparam_trait_key,
+            method_typeparam_trait_args: self.method_typeparam_trait_args,
             fn_value_callee_types: self.fn_value_callee_types,
             fn_value_param_types: self.fn_value_param_types,
             error_fix_diffs: self.error_fix_diffs,

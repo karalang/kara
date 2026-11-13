@@ -2423,9 +2423,19 @@ impl<'a> Lcx<'a> {
                 }
             }
             Some(FnItem {
-                impl_prim: Some(t), ..
+                impl_prim: Some(t),
+                impl_suffix,
+                ..
             }) => {
-                let s = format!("{}.{name}", self.tys.display(*t));
+                // The second and later impls of one trait for one primitive
+                // (`impl Conv[String] for i64`, `impl Conv[f64] for i64`) are
+                // named apart like a defined type's, else every instance of
+                // the two shared one name and the first lowered body took
+                // every call (B-2026-11-13-44).
+                let mut s = format!("{}.{name}", self.tys.display(*t));
+                if let Some(k) = impl_suffix {
+                    s.push_str(k);
+                }
                 if args.is_empty() {
                     s
                 } else {
@@ -22821,7 +22831,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the checker dispatched the call `e` through names (`Named.label` for
     /// `T.label()` or `x.label()` under `T: Named`), when it has no generic
     /// parameters of its own.
-    fn bound_impl_fn(&self, e: &Expr, t: Ty, m: &str) -> Option<(DefId, Vec<Ty>)> {
+    fn bound_impl_fn(&mut self, e: &Expr, t: Ty, m: &str) -> Option<(DefId, Vec<Ty>)> {
         let key = self
             .lcx
             .tc
@@ -22831,10 +22841,62 @@ impl<'l, 'a> Bx<'l, 'a> {
         if km != m {
             return None;
         }
-        let (d, inst_args) = self.user_impl_method(self.strip_ty_full(t).1, tr, m)?;
+        let (d, inst_args) = self.bound_trait_impl_method(e, self.strip_ty_full(t).1, tr, m)?;
         let own = self.lcx.fns.get(&d)?.f.generic_params.as_ref();
         own.is_none_or(|g| g.params.is_empty())
             .then_some((d, inst_args))
+    }
+
+    /// The arguments of the generic bound a method call in a generic body
+    /// goes through (`[f64]` for `x.conv()` under `X: Conv[f64]`), at this
+    /// instance; `None` when the bound's trait takes none.
+    fn bound_trait_args(&mut self, e: &Expr) -> Option<Vec<Ty>> {
+        let written = self
+            .lcx
+            .tc
+            .method_typeparam_trait_args
+            .get(&SpanKey::from_span(&e.span))?;
+        let def = self.outer_fn.unwrap_or(self.b.instance().def);
+        let key = self.lcx.fn_key(def);
+        let frame = self.lcx.tc.fn_return_types.get(&key)?.1;
+        let params = self
+            .lcx
+            .tc
+            .node_generic_frames
+            .get(frame as usize)
+            .cloned()
+            .unwrap_or_default();
+        let projs = self
+            .lcx
+            .tc
+            .node_generic_frame_proj_traits
+            .get(frame as usize);
+        let args = self.args.clone();
+        let mut out = Vec::with_capacity(written.len());
+        for t in written {
+            let hir = self.lcx.lower_legacy(t, &params, projs).ok()?;
+            out.push(self.lcx.mir_ty(hir, &args).ok()?);
+        }
+        Some(out)
+    }
+
+    /// `method` of `t`'s impl of the trait a generic bound names: of two
+    /// impls of one generic trait for one type (`impl Conv[String] for i64`
+    /// and `impl Conv[f64] for i64`), the one the bound's arguments name
+    /// (B-2026-11-13-44); else the type's impl of the trait.
+    fn bound_trait_impl_method(
+        &mut self,
+        e: &Expr,
+        t: Ty,
+        tr: &str,
+        m: &str,
+    ) -> Option<(DefId, Vec<Ty>)> {
+        if let Some(targs) = self.bound_trait_args(e) {
+            if let Some(hit) = self.trait_impl_method(t, tr, m, &targs) {
+                return Some(hit);
+            }
+        }
+        self.user_impl_method(t, tr, m)
     }
 
     /// The method `method` of the impl for `recv`'s type, when exactly one

@@ -721,6 +721,12 @@ impl<'a> super::TypeChecker<'a> {
                 // — without this, `c.sum()` under `C: Reduce[i64]` typed
                 // as the raw TypeParam `T` (S6a, expected-i64-found-T).
                 let trait_subs = self.trait_bound_arg_subs(&bound);
+                if !trait_subs.is_empty() {
+                    self.method_typeparam_trait_args.insert(
+                        SpanKey::from_span(span),
+                        trait_subs.iter().map(|(_, t)| t.clone()).collect(),
+                    );
+                }
                 // `I.Item` names the type a `where I.Item = T` (or an
                 // `I: Iterator[Item = T]` bound) fixes, so `next()` under
                 // that bound is an `Option[T]`, not an abstract projection
@@ -1158,6 +1164,12 @@ impl<'a> super::TypeChecker<'a> {
                 // (B-2026-11-04-54).
                 let bound = found[0].clone();
                 let trait_subs = self.trait_bound_arg_subs(&bound);
+                if !trait_subs.is_empty() {
+                    self.method_typeparam_trait_args.insert(
+                        SpanKey::from_span(call_span),
+                        trait_subs.iter().map(|(_, t)| t.clone()).collect(),
+                    );
+                }
                 let trait_method = self.find_trait_method(&trait_name, method)?.clone();
                 // The trait the bound names, which picks the impl's function
                 // over an inherent one of the same name once `T` is known

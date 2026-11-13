@@ -2304,10 +2304,19 @@ impl super::env::TypeEnv {
                 {
                     return true;
                 }
+                // A derive on a generic type holds for the arguments that have
+                // the trait: `#[derive(PartialEq)] struct Pair[T]` is
+                // `impl[T: PartialEq] PartialEq for Pair[T]` (design.md §
+                // "Derive adds the bounds"), so it is not `PartialEq` at
+                // `Pair[NoEq]` (B-2026-11-13-45, as B-2026-10-27-25 for `Eq`).
+                let derived = |d: &std::collections::HashSet<String>| {
+                    (d.contains("Eq") || d.contains("PartialEq"))
+                        && args.iter().all(|a| self.type_supports_partial_eq(a))
+                };
                 if let Some(info) = self.structs.get(name) {
-                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
+                    derived(&info.derived_traits)
                 } else if let Some(info) = self.enums.get(name) {
-                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
+                    derived(&info.derived_traits)
                 } else {
                     true
                 }

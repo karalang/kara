@@ -5579,8 +5579,43 @@ impl<'a> super::TypeChecker<'a> {
                     // breaks reflexivity), sending that reader to a dead
                     // end. design.md: the `Eq` marker "is never named by
                     // the desugaring".
+                    // A derived generic type at an argument that lacks the
+                    // trait names the unmet bound, not the derive it already
+                    // has (B-2026-11-13-45).
+                    let unmet_arg = match cmp_left {
+                        Type::Named { name, args } if !args.is_empty() => {
+                            let derived = |d: &std::collections::HashSet<String>| {
+                                d.contains("PartialEq") || d.contains("Eq")
+                            };
+                            let has = self
+                                .env
+                                .structs
+                                .get(name)
+                                .map(|i| derived(&i.derived_traits))
+                                .or_else(|| {
+                                    self.env.enums.get(name).map(|i| derived(&i.derived_traits))
+                                })
+                                .unwrap_or(false);
+                            has.then(|| {
+                                args.iter()
+                                    .find(|a| !self.type_supports_partial_eq(a))
+                                    .cloned()
+                            })
+                            .flatten()
+                        }
+                        _ => None,
+                    };
                     match self.comparison_impl_written_but_undispatched(cmp_left, true) {
                         Some(msg) => self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp),
+                        None if unmet_arg.is_some() => {
+                            let msg = format!(
+                                "type '{}' does not implement PartialEq: its \
+                                 #[derive(PartialEq)] holds only where '{}' implements PartialEq",
+                                type_display(cmp_left),
+                                type_display(unmet_arg.as_ref().unwrap_or(cmp_left))
+                            );
+                            self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp)
+                        }
                         None if !self.program_declares(cmp_left) => {
                             // A library or built-in type takes no derive
                             // from the program (B-2026-11-08-82).
