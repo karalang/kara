@@ -153,7 +153,7 @@ Pins:
 
 **3.3 Loops.** Moving, inside a loop body, a place declared outside the loop is E0500 unless every path back to the loop head initializes the place again. Pin: `err_moved_in_loop`; today there is no diagnostic.
 
-**3.4 Reinitialization.** Assigning to a moved place makes it initialized again. Pin: `ok_reinit`.
+**3.4 Reinitialization.** Assigning to a moved place makes it initialized again. Pin: `ok_reinit`. A root moved as a whole is reinitialized only by assigning the whole root: assigning one of its fields (`eat(p); p.a = x;`) is an error, as in Rust, because the other fields would be left uninitialized. Only a field moved out on its own (§3.6) may be assigned back. (Clarified 2026-11-13, probe.)
 
 **3.5 Conditional moves.** A place moved on some paths only is maybe-moved after the paths join.
 - Using it there is E0500 (§3.2).
