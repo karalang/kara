@@ -1633,6 +1633,20 @@ impl super::Parser {
                             kind: ExprKind::Integer(v, None),
                         });
                     }
+                    // Past `i128::MAX`, only `u128` holds it, so it takes the
+                    // `u128` suffix's wrapped carrier: no reader can take it
+                    // for the negative number its bits spell. Whether its
+                    // context allows a `u128` is the typechecker's call, by
+                    // the mark (B-2026-11-13-28): `let h: u128 = 2^127` is
+                    // accepted and `let x: i128 = 2^127` is out of range.
+                    let span = self.span_from(&start);
+                    self.unsuffixed_u128_literals
+                        .insert(crate::resolver::SpanKey::from_span(&span));
+                    return Some(Expr {
+                        id: crate::ids::NodeId::DUMMY,
+                        span,
+                        kind: ExprKind::Integer(m as i128, Some(crate::token::IntSuffix::U128)),
+                    });
                 }
                 let span = self.span_from(&start);
                 // A 128-bit-suffixed magnitude that reached here is out of
@@ -1647,14 +1661,6 @@ impl super::Parser {
                          `-170141183460469231731687303715884105728i128` for the \
                          negative bound, or use the `u128` suffix for a value in \
                          the upper half of u128"
-                    )
-                } else if sfx.is_none() {
-                    // Past `i128::MAX`: only `u128` holds it, and only with
-                    // the suffix, since the carrier is signed.
-                    format!(
-                        "integer literal `{m}` is out of range for i128; add the \
-                         `u128` suffix (`{m}u128`) for a value in the upper half \
-                         of u128"
                     )
                 } else {
                     let unsigned = if m > u128::from(u64::MAX) {
@@ -1911,6 +1917,9 @@ impl super::Parser {
                             }
                             for k in &result.program.mut_ref_binding_spans {
                                 self.mut_ref_binding_spans.insert(shift_key(*k));
+                            }
+                            for k in &result.program.unsuffixed_u128_literals {
+                                self.unsuffixed_u128_literals.insert(shift_key(*k));
                             }
                             for (k, at) in &result.program.ref_binding_keywords {
                                 let key = shift_key(*k);

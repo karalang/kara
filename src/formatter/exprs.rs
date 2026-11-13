@@ -169,7 +169,15 @@ impl super::Formatter {
         // first, see `paren_block_like_at_stmt_start`.
         let stmt_start = std::mem::take(&mut self.stmt_start);
         match &expr.kind {
-            ExprKind::Integer(n, sfx) => self.write_str(&super::int_literal(*n, *sfx)),
+            ExprKind::Integer(n, sfx) => {
+                let text = super::int_literal(*n, *sfx);
+                let key = crate::resolver::SpanKey::from_span(&expr.span);
+                if self.unsuffixed_u128_literals.contains(&key) {
+                    self.write_str(text.trim_end_matches("u128"));
+                } else {
+                    self.write_str(&text);
+                }
+            }
             ExprKind::Float(f, sfx) => {
                 // `{:?}` keeps the `.0` (`1.0`, not `1`, which reads back as
                 // an integer) and writes a large or tiny value with an

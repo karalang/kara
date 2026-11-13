@@ -11384,6 +11384,16 @@ impl<'a> super::TypeChecker<'a> {
         self.check_float_narrowing_coercion(e, slot, got);
     }
 
+    /// An unsuffixed literal past `i128::MAX` that the parser gave the
+    /// `u128` suffix (`Program::unsuffixed_u128_literals`, B-2026-11-13-28).
+    pub(super) fn is_unsuffixed_u128_literal(&self, span: &Span) -> bool {
+        !self.program.unsuffixed_u128_literals.is_empty()
+            && self
+                .program
+                .unsuffixed_u128_literals
+                .contains(&crate::resolver::SpanKey::from_span(span))
+    }
+
     /// Emit the out-of-range diagnostic when `value` does not fit `ty`'s
     /// literal range. Returns whether the literal fits (true = no error).
     /// Pre-fix every out-of-range literal was silently admitted and the two
@@ -11414,11 +11424,40 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(ty, Type::UInt(UIntSize::U128))
             && matches!(sfx, Some(crate::token::IntSuffix::U128))
         {
+            if self.is_unsuffixed_u128_literal(span) {
+                self.wide_int_literals_judged
+                    .insert(crate::resolver::SpanKey::from_span(span));
+            }
             return true;
         }
         let Some((min, max)) = Self::int_literal_range(ty) else {
             return true;
         };
+        // The upper half of `u128` rides as a wrapped NEGATIVE carrier, so
+        // the signed comparison below would admit `2^127` into an `i128` as
+        // `i128::MIN` (B-2026-11-13-28). It fits `u128` alone.
+        let upper_half = value < 0
+            && (matches!(sfx, Some(crate::token::IntSuffix::U128))
+                || self.is_unsuffixed_u128_literal(span));
+        if upper_half {
+            self.wide_int_literals_judged
+                .insert(crate::resolver::SpanKey::from_span(span));
+            if matches!(ty, Type::UInt(UIntSize::U128)) {
+                return true;
+            }
+            self.type_error(
+                format!(
+                    "integer literal {} out of range for '{}' (expected {}..={})",
+                    value as u128,
+                    type_display(ty),
+                    min,
+                    max
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return false;
+        }
         // B-2026-10-15-54: an integer type has judged this wide literal, so
         // `check_wide_int_literals` must not judge it again as an `i64`.
         if sfx.is_none() && i64::try_from(value).is_err() {
@@ -11552,7 +11591,12 @@ impl<'a> super::TypeChecker<'a> {
             }
             ExprKind::Unary { operand, .. } => {
                 if let ExprKind::Integer(n, None) = &operand.kind {
-                    if !self.check_int_literal_fits(-*n, ty, &e.span, None) {
+                    // `--170141183460469231731687303715884105728` has no
+                    // negation; the Unary arm reports it.
+                    let Some(v) = n.checked_neg() else {
+                        return false;
+                    };
+                    if !self.check_int_literal_fits(v, ty, &e.span, None) {
                         return false;
                     }
                     self.record_expr_type(&operand.span, ty);
@@ -11634,7 +11678,7 @@ impl<'a> super::TypeChecker<'a> {
                 op: UnaryOp::Neg,
                 operand,
             } => match &operand.kind {
-                ExprKind::Integer(n, None) => Some(-*n),
+                ExprKind::Integer(n, None) => n.checked_neg(),
                 _ => None,
             },
             _ => None,
@@ -11666,7 +11710,10 @@ impl<'a> super::TypeChecker<'a> {
                 // as negative. The suffix is deliberately dropped: `-1u128` is
                 // a genuine negative, not a wrapped pattern, and must clear the
                 // unsigned `min` like any other.
-                ExprKind::Integer(n, Some(_)) => Some((-*n, None)),
+                // A negated upper-half `u128` carrier is below `i128::MIN`
+                // (or is it): the Unary arm reports it (B-2026-11-13-28).
+                ExprKind::Integer(n, Some(crate::token::IntSuffix::U128)) if *n < 0 => None,
+                ExprKind::Integer(n, Some(_)) => n.checked_neg().map(|v| (v, None)),
                 _ => None,
             },
             _ => None,
@@ -13262,6 +13309,15 @@ impl<'a> super::TypeChecker<'a> {
                 if sfx.is_none() && i64::try_from(*n).is_err() {
                     self.wide_int_literals.push((expr.span, *n));
                 }
+                // An unsuffixed literal only `u128` holds (B-2026-11-13-28)
+                // stays open where a later use may fix it, as any unsuffixed
+                // literal does: `let a = 2^127; let b: u128 = a` fixes it,
+                // and left to the `i64` default it is out of range there.
+                if self.is_unsuffixed_u128_literal(&expr.span) {
+                    if let Some(var) = self.literal_var(expr, Some(*n)) {
+                        return var;
+                    }
+                }
                 if sfx.is_none() {
                     self.int_literal_spans.insert(
                         crate::resolver::SpanKey::from_span(&expr.span),
@@ -13591,15 +13647,70 @@ impl<'a> super::TypeChecker<'a> {
                     if i64::try_from(*n).is_err() {
                         self.wide_int_literals_judged
                             .insert(crate::resolver::SpanKey::from_span(&operand.span));
-                        if i64::try_from(-*n).is_err() {
-                            self.wide_int_literals.push((expr.span, -*n));
+                        match n.checked_neg() {
+                            Some(v) if i64::try_from(v).is_err() => {
+                                self.wide_int_literals.push((expr.span, v));
+                            }
+                            Some(_) => {}
+                            // `--170141183460469231731687303715884105728`: the
+                            // operand is the folded `i128::MIN`, and its
+                            // negation fits no signed type.
+                            None => self.type_error(
+                                format!(
+                                    "integer literal {} out of range for 'i128' (expected {}..={})",
+                                    (*n as u128),
+                                    i128::MIN,
+                                    i128::MAX
+                                ),
+                                expr.span,
+                                TypeErrorKind::TypeMismatch,
+                            ),
                         }
                     }
                 }
                 if matches!(op, UnaryOp::Neg) {
                     if let ExprKind::Integer(n, Some(sfx)) = &operand.kind {
                         let ty = self.type_from_int_suffix(Some(*sfx), operand.span);
-                        self.check_int_literal_fits(-*n, &ty, &expr.span, None);
+                        if *n < 0 && matches!(sfx, crate::token::IntSuffix::U128) {
+                            // A magnitude past `i128::MAX` (B-2026-11-13-28):
+                            // its negation is below `i128::MIN`, or is
+                            // `i128::MIN` itself, which only the unparenthesized
+                            // `-170141183460469231731687303715884105728` spells.
+                            let m = *n as u128;
+                            let msg = if !self.is_unsuffixed_u128_literal(&operand.span) {
+                                format!(
+                                    "negative integer literal -{m} cannot initialize \
+                                     unsigned type 'u128'"
+                                )
+                            } else if *n == i128::MIN {
+                                format!(
+                                    "integer literal -{m} is written with parentheses; \
+                                     write `-{m}` for i128::MIN, with the minus directly \
+                                     before the digits"
+                                )
+                            } else {
+                                format!(
+                                    "integer literal -{m} out of range for every integer \
+                                     type (i128 holds down to {})",
+                                    i128::MIN
+                                )
+                            };
+                            self.type_error(msg, expr.span, TypeErrorKind::TypeMismatch);
+                        } else if let Some(v) = n.checked_neg() {
+                            self.check_int_literal_fits(v, &ty, &expr.span, None);
+                        } else {
+                            // `--170141183460469231731687303715884105728i128`.
+                            self.type_error(
+                                format!(
+                                    "integer literal {} out of range for 'i128' (expected {}..={})",
+                                    (*n as u128),
+                                    i128::MIN,
+                                    i128::MAX
+                                ),
+                                expr.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
                         // The negated value ruled; suppress the Integer arm's
                         // positive-operand check for this operand (`-128i8` —
                         // bare `128i8` is out of range, the negated form is
@@ -13614,19 +13725,29 @@ impl<'a> super::TypeChecker<'a> {
                 // `-5` left open: the negation is the literal, of the
                 // negated value (B-2026-11-07-3).
                 if let (UnaryOp::Neg, Some((id, _))) = (op, self.unbound_literal_var(&ty)) {
+                    let marked = self.is_unsuffixed_u128_literal(&operand.span);
                     if let Some(site) =
                         self.body_literal_vars.iter_mut().rev().find(|s| {
                             s.id == id && s.nodes.first().is_some_and(|n| n.1 == operand.id)
                         })
                     {
                         site.nodes.insert(0, (expr.span, expr.id));
-                        site.value = site.value.map(|v| -v);
+                        // A negated `u128`-only magnitude was reported above
+                        // (B-2026-11-13-28); its carrier has no negation.
+                        site.value = if marked {
+                            None
+                        } else {
+                            site.value.and_then(i128::checked_neg)
+                        };
                     }
                 }
                 if let (UnaryOp::Neg, ExprKind::Integer(n, None)) = (op, &operand.kind) {
                     self.int_literal_spans.insert(
                         crate::resolver::SpanKey::from_span(&expr.span),
-                        (vec![(expr.span, expr.id), (operand.span, operand.id)], -*n),
+                        (
+                            vec![(expr.span, expr.id), (operand.span, operand.id)],
+                            n.wrapping_neg(),
+                        ),
                     );
                 }
                 ty

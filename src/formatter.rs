@@ -35,6 +35,7 @@ fn format_program_inner(program: &Program, comments: Vec<comments::Comment>) -> 
     f.freeze_spans = program.freeze_spans.clone();
     f.ref_binding_spans = program.ref_binding_spans.clone();
     f.block_const_spans = program.block_const_spans.clone();
+    f.unsuffixed_u128_literals = program.unsuffixed_u128_literals.clone();
     f.mut_ref_binding_spans = program.mut_ref_binding_spans.clone();
     f.escaping_fn_types = program.escaping_fn_types.clone();
     f.mut_fn_types = program.mut_fn_types.clone();
@@ -205,6 +206,9 @@ pub(super) struct Formatter {
     pub(super) ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `Program::block_const_spans`: a block's `const`, parsed as a `let`.
     pub(super) block_const_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `Program::unsuffixed_u128_literals`: written without the suffix the
+    /// parser gave them.
+    pub(super) unsuffixed_u128_literals: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// The `mut ref name` bindings among them.
     pub(super) mut_ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `escaping Fn(...)` parameter types, copied from
@@ -252,6 +256,7 @@ impl Formatter {
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
             block_const_spans: rustc_hash::FxHashSet::default(),
+            unsuffixed_u128_literals: rustc_hash::FxHashSet::default(),
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),

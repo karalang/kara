@@ -854,6 +854,15 @@ pub struct Program {
     /// to module scope under a name no source can write, and the formatter
     /// writes `const` back.
     pub block_const_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Unsuffixed integer literals past `i128::MAX` (B-2026-11-13-28): only
+    /// `u128` holds one, so the parser gives it the `u128` suffix, with the
+    /// wrapped bit pattern a written `u128` suffix gets, and marks its span
+    /// here. The typechecker reads the mark to judge the literal by the type
+    /// its context gives it, as any unsuffixed literal is (design.md §5
+    /// Numeric literals), and the formatter to leave the suffix unwritten.
+    /// A program that loses the mark (a module tree) still holds the value
+    /// as a `u128`, never as the negative carrier.
+    pub unsuffixed_u128_literals: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// The base of each struct update `D { a: 5, ..o }` that
     /// `struct_spread` expanded into field copies (`c: o.c`), keyed by the
     /// literal's span. Kept so the check can still compare the base's type

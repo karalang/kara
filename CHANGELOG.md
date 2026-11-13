@@ -29,6 +29,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   that kept the result past the argument read freed memory. They are now
   refused at the return; make the method an associated function, whose
   result borrows its view parameters (B-2026-11-13-31).
+- `SortedMap.floor` and `ceiling` return `Option[(ref K, ref V)]`, the entry
+  itself as docs/library/collections.md gives it and as `first` and `last`
+  already did, not a copy typed `Option[(K, V)]`. A binding of the key is a
+  `ref` into the map, so the map cannot be written while it is live: kata
+  455's `let Some((size, _)) = cookies.ceiling(want)` followed by
+  `cookies[size] -= 1` now takes the key out as `let size = *size;`. A
+  helper declared over `Option[(K, V)]` takes `Option[(ref K, ref V)]`
+  (B-2026-11-13-25).
+- A `u128` literal past `i128::MAX` in another integer context is out of
+  range: `let z: i128 = 170141183460469231731687303715884105728u128` was
+  accepted and held `i128::MIN`, and `-340282366920938463463374607431768211455u128`
+  was accepted and held `1`. The first is now "out of range for 'i128'", the
+  second "cannot initialize unsigned type 'u128'" (B-2026-11-13-28).
 - A `shared` value held by a plain `let` cannot be lent as `mut`: a `mut`
   marker on the bare binding lends the binding itself, and a callee's
   `*t = n` replaced the object the `let` named. `advance(mut tail)` with
@@ -267,6 +280,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   first with an `.as_slice()` fix) while `s == a` was accepted, and an
   `Array` against a `Slice` of another length is `false`. An ordering
   comparison (`v < s`) still takes `.as_slice()`.
+- An unsuffixed integer literal past `i128::MAX` takes `u128` from its
+  context, as any unsuffixed literal takes its type:
+  `let h: u128 = 170141183460469231731687303715884105728;`, a `u128`
+  argument, element or operand, and `let a = <it>; let b: u128 = a;` are
+  accepted, where the parser refused them all ("add the `u128` suffix").
+  Anywhere else it is out of range for the type it gets, `i64` by default
+  (B-2026-11-13-28).
+- An attributed block-like statement ends without `;`, as it does without
+  the attribute: `#[allow(unused_mut)] { let mut x = 1; println(x); }` and
+  `#[allow(x)] if c { .. }` were parse errors (B-2026-11-13-27).
 - `set_read_timeout` on a socket a `Network` fake opened returns `Ok(())`
   and changes nothing, since a fake's read never waits; it was
   `Err(Unsupported)`, so a client that sets a timeout could not be tested
@@ -839,6 +862,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `unused_mut` honours `#[allow]`, `#[deny]` and `#[expect]` on the `let`
+  statement or an enclosing block statement, innermost first, so a
+  statement `allow` beats a function `deny`. A statement-level
+  `#[expect(unfulfilled_lint_expectation)]` is E_EXPECT_ON_UNFULFILLED and an
+  unknown lint name there is `unknown_lint`, as on an item
+  (B-2026-11-13-26).
 - A run-time value as a const generic argument (`Array[i64, n]` with `n` a
   parameter or local, or `n + 1`) is one error at the argument, "const
   generic argument must be a compile-time constant expression", naming the
