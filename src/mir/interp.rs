@@ -6460,6 +6460,15 @@ impl<'a> Interp<'a> {
     }
 
     /// The payload type of the `Option` type `ret` that `name` returns.
+    /// Does `ret` hand out an entry as views, `Option[(ref K, ref V)]`
+    /// (`SortedMap.floor` / `ceiling`, B-2026-11-13-25), rather than clones?
+    fn entry_views(&self, ret: Ty) -> bool {
+        self.option_payload(ret, "").is_ok_and(|p| {
+            matches!(self.tys.kind(p), TyKind::Tuple(ts)
+                if ts.first().is_some_and(|&t| matches!(self.tys.kind(t), TyKind::Ref(_))))
+        })
+    }
+
     fn option_payload(&self, ret: Ty, name: &str) -> R<Ty> {
         self.tys
             .tcx()
@@ -9473,6 +9482,7 @@ impl<'a> Interp<'a> {
                         }
                         _ => return err(format!("{name} into {}", self.tys.display(ret))),
                     };
+                let views = is_map && !ranged && self.entry_views(ret);
                 let mut out = Vec::with_capacity(picked.len());
                 for i in picked {
                     let at = Addr {
@@ -9481,6 +9491,11 @@ impl<'a> Interp<'a> {
                     };
                     if by_ref {
                         out.push(Value::Ref(at));
+                    } else if views {
+                        out.push(Value::Agg(vec![
+                            Value::Ref(at.child(0)),
+                            Value::Ref(at.child(1)),
+                        ]));
                     } else if is_map {
                         let (k, v) = (self.slot(&at.child(0))?, self.slot(&at.child(1))?);
                         out.push(Value::Agg(vec![
@@ -9648,12 +9663,20 @@ impl<'a> Interp<'a> {
                         .into_iter()
                         .collect(),
                 };
+                let views = matches!(method, "floor" | "ceiling") && self.entry_views(ret);
                 let mut out = Vec::with_capacity(picked.len());
                 for j in picked {
                     let e = Addr {
                         root: Root::Heap(id),
                         path: Path::from_slice(&[slots[j] as u64]),
                     };
+                    if views {
+                        out.push(Value::Agg(vec![
+                            Value::Ref(e.child(0)),
+                            Value::Ref(e.child(1)),
+                        ]));
+                        continue;
+                    }
                     let (k, v) = (self.slot(&e.child(0))?, self.slot(&e.child(1))?);
                     out.push(Value::Agg(vec![
                         self.clone_value(&k, key_ty)?,

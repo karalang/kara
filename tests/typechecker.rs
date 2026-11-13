@@ -15910,8 +15910,12 @@ fn test_sorted_map_min_max_return_option_pair() {
 
 #[test]
 fn test_sorted_map_floor_ceiling_return_option_pair() {
-    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[(i64, String)] { m.floor(1_i64) }");
-    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[(i64, String)] { m.ceiling(1_i64) }");
+    typecheck_ok(
+        "fn f(m: SortedMap[i64, String]) -> Option[(ref i64, ref String)] { m.floor(1_i64) }",
+    );
+    typecheck_ok(
+        "fn f(m: SortedMap[i64, String]) -> Option[(ref i64, ref String)] { m.ceiling(1_i64) }",
+    );
 }
 
 #[test]

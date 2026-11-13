@@ -1160,7 +1160,15 @@ impl<'a> super::TypeChecker<'a> {
                     let at = self.infer_expr(&arg.value);
                     self.check_assignable(&k, &at, arg.value.span);
                 }
-                option_kv
+                // A view of the entry, as `first` / `last` hand out
+                // (collections.md; B-2026-11-13-25).
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Tuple(vec![
+                        Type::Ref(Box::new(k.clone())),
+                        Type::Ref(Box::new(v.clone())),
+                    ])],
+                }
             }
             "range" | "range_inclusive" => {
                 if args.len() != 2 {

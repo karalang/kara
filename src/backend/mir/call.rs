@@ -782,6 +782,22 @@ impl<'ctx> Cx<'ctx, '_> {
         let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
         match (self.tys.kind(pt), self.tys.kind(el)) {
             (TyKind::Ref(_) | TyKind::MutRef(_), _) => self.store_ref(q, at, el),
+            // A map entry handed out as views of its parts, `(ref K, ref V)`
+            // (`SortedMap.floor` / `ceiling`, B-2026-11-13-25).
+            (TyKind::Tuple(ps), TyKind::Tuple(es))
+                if ps.len() == es.len()
+                    && ps
+                        .iter()
+                        .all(|&p| matches!(self.tys.kind(p), TyKind::Ref(_))) =>
+            {
+                for (f, &part) in es.iter().enumerate() {
+                    let f = f as u32;
+                    let from = self.offset(at, self.field_offset(el, None, f)?)?;
+                    let to = self.offset(q, self.field_offset(pt, None, f)?)?;
+                    self.store_ref(to, from, part)?;
+                }
+                Ok(())
+            }
             (TyKind::Shared(_), TyKind::Weak(_)) => {
                 let (_, none) = self.option_variants(dty)?;
                 self.store_tag(d, dty, none)?;

@@ -3,7 +3,7 @@
 struct Rev { v: i64 }
 impl PartialOrd for Rev { fn partial_cmp(self, other: Rev) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
 impl Ord for Rev { fn cmp(self, other: Rev) -> Ordering { other.v.cmp(self.v) } }
-fn show(o: Option[(i64, String)]) -> String {
+fn show(o: Option[(ref i64, ref String)]) -> String {
     match o { Some((k, v)) => f"{k}={v}", None => "none" }
 }
 fn main() {

@@ -8722,28 +8722,13 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// Is `value` a `SortedMap.floor` / `ceiling` call on the MIR pipeline?
-    /// See [`Self::current_scrutinee_clone_view`].
+    /// Is `value` a scrutinee whose `Copy` parts bind as views on the MIR
+    /// pipeline (`core_iter_next_scrutinee`)? See
+    /// [`Self::current_scrutinee_clone_view`]. `SortedMap.floor` /
+    /// `ceiling` were here while their natives handed out clones
+    /// (B-2026-10-12-28); they hand out views now (B-2026-11-13-25).
     pub(super) fn lib_clone_view_scrutinee(&self, value: &Expr) -> bool {
-        if self.core_iter_next_scrutinee(value) {
-            return true;
-        }
-        if !self.library_methods_from_source || self.cli_lint_overrides.strict_core {
-            return false;
-        }
-        let ExprKind::MethodCall { object, method, .. } = &value.kind else {
-            return false;
-        };
-        if !matches!(method.as_str(), "floor" | "ceiling") {
-            return false;
-        }
-        let Some(mut ty) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
-            return false;
-        };
-        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
-            ty = inner;
-        }
-        matches!(ty, Type::Named { name, .. } if name == "SortedMap")
+        self.core_iter_next_scrutinee(value)
     }
 
     /// `m.floor(k).expect(..)` / `.unwrap()` on the MIR pipeline: the
