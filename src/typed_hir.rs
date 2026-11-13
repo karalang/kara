@@ -208,8 +208,14 @@ impl HirDefs for ProgramHirDefs<'_> {
         impl_target: crate::resolver::SpanKey,
     ) -> Option<Callee> {
         let owner_def = crate::node_res::renamed_library_type(self.defs, self.module, owner)
-            .or_else(|| self.defs.lookup(self.module, owner))?;
-        let cands = self.defs.methods.get(&owner_def)?.get(method)?;
+            .or_else(|| self.defs.lookup(self.module, owner));
+        // A primitive has no definition: its impls' methods are listed by
+        // its name (`impl A for i64`, `impl B for i64` each with `m`,
+        // B-2026-11-13-46).
+        let cands = match owner_def {
+            Some(d) => self.defs.methods.get(&d)?.get(method)?,
+            None => self.defs.builtin_methods.get(owner)?.get(method)?,
+        };
         if cands.len() < 2 {
             return None;
         }

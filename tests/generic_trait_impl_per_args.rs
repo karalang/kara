@@ -208,3 +208,42 @@ fn derived_partial_eq_needs_its_argument_s_partial_eq() {
         "true false\n",
     );
 }
+
+/// Two non-generic traits with a method of one name, both implemented for a
+/// primitive: `A.m(n)` and `B.m(n)` each run their trait's impl, as on a
+/// struct (B-2026-11-13-46). The call used to reach the backends as a native
+/// `i64.m`, unknown to both.
+#[test]
+fn two_traits_one_method_name_on_a_primitive() {
+    let traits = "trait A { fn m(self) -> String; }\ntrait B { fn m(self) -> String; }\n";
+    runs_as(
+        "ab_prim",
+        &format!(
+            "{traits}impl A for i64 {{ fn m(self) -> String {{ \"a\" }} }}\n\
+             impl B for i64 {{ fn m(self) -> String {{ \"b\" }} }}\n\
+             fn main() {{ let n: i64 = 1; println(f\"{{A.m(n)}} {{B.m(n)}}\"); }}\n"
+        ),
+        "a b\n",
+    );
+    runs_as(
+        "ab_bound",
+        &format!(
+            "{traits}impl A for i64 {{ fn m(self) -> String {{ \"a\" }} }}\n\
+             impl B for i64 {{ fn m(self) -> String {{ \"b\" }} }}\n\
+             fn fa[X: A](x: X) -> String {{ x.m() }}\n\
+             fn fb[X: B](x: X) -> String {{ x.m() }}\n\
+             fn main() {{ println(f\"{{fa(1)}} {{fb(1)}}\"); }}\n"
+        ),
+        "a b\n",
+    );
+    runs_as(
+        "ab_struct",
+        &format!(
+            "{traits}struct S {{ v: i64 }}\n\
+             impl A for S {{ fn m(self) -> String {{ \"a\" }} }}\n\
+             impl B for S {{ fn m(self) -> String {{ \"b\" }} }}\n\
+             fn main() {{ let n = S {{ v: 1 }}; println(f\"{{A.m(n)}} {{B.m(n)}}\"); }}\n"
+        ),
+        "a b\n",
+    );
+}
