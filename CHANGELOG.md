@@ -451,6 +451,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   first (garbage compiled, an AddressSanitizer abort); it is refused now,
   with the `scan` state's `0i32` fix offered through the `chain`
   (B-2026-11-11-41).
+- A list literal compared with `==` or `!=` was typed `Vec` on its own, so
+  `m != [75u8, 82u8, 69u8, 67u8]` with `m: Array[u8, 4]` was refused as
+  "cannot compare 'Array[u8, 4]' and 'Vec[u8]'", as were `s == [1, 2]`
+  with `s: Set[i64]` and `v == [1, 2]` with `v: Vec[i32]`. The other
+  operand is the literal's expected type, as it is for a number literal,
+  in either order (design.md § Collection literals, B-2026-11-13-2).
 - `self` in a generic `impl[R] Wrap[R]` was typed `Wrap` without its
   arguments, so `helper(self)` with `fn helper[R](w: ref Wrap[R])` was
   refused "expected 'Wrap[R]', found 'Wrap'", and in a library `impl[R]

@@ -4624,7 +4624,45 @@ impl<'a> super::TypeChecker<'a> {
         // types from the expected type, and in a comparison that is the other
         // operand's: `v == []` (B-2026-11-04-75).
         let empty = |e: &Expr| matches!(&e.kind, ExprKind::ArrayLiteral(v) if v.is_empty());
-        let (mut left_ty, mut right_ty) = if compares && empty(right) && !empty(left) {
+        // So is a list literal's whole type, for `==` and `!=`: with `m:
+        // Array[u8, 4]`, `m != [75, 82, 69, 67]` builds an `Array[u8, 4]`,
+        // with `s: Set[i64]`, `s == [1, 2]` a `Set`, and with `v: Vec[i32]`,
+        // `v == [1, 2]` a `Vec[i32]` (B-2026-11-13-2).
+        let list = |e: &Expr| matches!(&e.kind, ExprKind::ArrayLiteral(v) if !v.is_empty());
+        let equality = matches!(op, BinOp::Eq | BinOp::NotEq);
+        let lit_side = if equality && list(right) && !list(left) && !empty(left) {
+            Some(false)
+        } else if equality && list(left) && !list(right) && !empty(right) {
+            Some(true)
+        } else {
+            None
+        };
+        let (mut left_ty, mut right_ty) = if let Some(lit_left) = lit_side {
+            let (other, lit) = if lit_left {
+                (right, left)
+            } else {
+                (left, right)
+            };
+            let o = strip_refinement(&self.infer_expr(other)).clone();
+            let want = self.resolved_now(strip_refs_for_compare(&o));
+            let builds = match &want {
+                Type::Array { .. } => true,
+                Type::Named { name, args } => {
+                    matches!(name.as_str(), "Vec" | "Set") && args.len() == 1
+                }
+                _ => false,
+            };
+            let l = if builds {
+                strip_refinement(&self.check_expr(lit, &want)).clone()
+            } else {
+                strip_refinement(&self.infer_expr_open(lit)).clone()
+            };
+            if lit_left {
+                (l, o)
+            } else {
+                (o, l)
+            }
+        } else if compares && empty(right) && !empty(left) {
             // The comparison reads the other side's literals at their type
             // now, as it does below (`let v = [1, 2]; v == []`).
             let l = strip_refinement(&self.infer_expr(left)).clone();
