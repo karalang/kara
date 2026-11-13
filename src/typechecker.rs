@@ -8279,6 +8279,35 @@ impl<'a> TypeChecker<'a> {
         Some((param.to_string(), at))
     }
 
+    /// The places where one of two types has a literal a generic call holds
+    /// open ([`Self::literal_held_open`]) and the other a number that literal
+    /// can take, each with that number (B-2026-11-13-35).
+    fn held_open_meets_number(&self, a: &Type, b: &Type, out: &mut Vec<(TypeVarId, Type)>) {
+        match (a, b) {
+            (Type::TypeVar(id), t) | (t, Type::TypeVar(id))
+                if self.literal_held_open(*id)
+                    && types::is_numeric(t)
+                    && inference::literal_var_kind(*id)
+                        .is_some_and(|kind| inference::literal_takes(kind, t)) =>
+            {
+                out.push((*id, t.clone()));
+            }
+            (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => {
+                for (x, y) in xs.iter().zip(ys) {
+                    self.held_open_meets_number(x, y, out);
+                }
+            }
+            (Type::Named { name: n, args: xs }, Type::Named { name: m, args: ys })
+                if n == m && xs.len() == ys.len() =>
+            {
+                for (x, y) in xs.iter().zip(ys) {
+                    self.held_open_meets_number(x, y, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // `let s: Str = ref name`: outside a call argument a `ref String` is
         // not a `Str`, and `name.as_str()` is (B-2026-11-13-74).
@@ -8445,11 +8474,32 @@ impl<'a> TypeChecker<'a> {
         // slot that still names the callee's other parameters (the
         // closure's `Option[(StateV, OutV)]`): read through what is solved,
         // the two agree (B-2026-11-11-61).
-        if types::contains_type_param(expected)
-            && ids.iter().any(|id| self.literal_held_open(*id))
-            && types::types_compatible(&self.resolved_now(expected), &self.resolved_now(found))
+        if types::contains_type_param(expected) && ids.iter().any(|id| self.literal_held_open(*id))
         {
-            return true;
+            if types::types_compatible(&self.resolved_now(expected), &self.resolved_now(found)) {
+                return true;
+            }
+            // The state meets a number the closure computed without it
+            // (`|prev, x| Some((*x, prev))`): that number fixes the state's
+            // literal, as it would the literal itself (B-2026-11-13-35).
+            let mut fixed = Vec::new();
+            self.held_open_meets_number(
+                &self.resolved_now(expected),
+                &self.resolved_now(found),
+                &mut fixed,
+            );
+            if !fixed.is_empty() {
+                for (id, t) in &fixed {
+                    self.env.substitutions.insert(*id, t.clone());
+                }
+                if types::types_compatible(&self.resolved_now(expected), &self.resolved_now(found))
+                {
+                    return true;
+                }
+                for (id, _) in &fixed {
+                    self.env.substitutions.remove(id);
+                }
+            }
         }
         if !types::contains_type_param(expected)
             && ids
