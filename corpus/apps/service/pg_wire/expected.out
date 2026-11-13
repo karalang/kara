@@ -1,0 +1,172 @@
+== session 1: a wrong password
+mallory -> StartupMessage user=alice protocol=3.0
+mallory <- Authentication cleartext password
+mallory -> PasswordMessage
+mallory <- ErrorResponse S=ERROR C=28P01 M=password authentication failed for user "alice"
+mallory <- (closed)
+== session 2: an unsupported protocol version
+old -> StartupMessage user=alice protocol=2.0
+old <- ErrorResponse S=ERROR C=0A000 M=unsupported frontend protocol 2.0
+old <- (closed)
+== session 3: alice queries and writes
+alice -> StartupMessage user=alice protocol=3.0
+alice <- Authentication cleartext password
+alice -> PasswordMessage
+alice <- Authentication ok
+alice <- ParameterStatus server_version=16.0-kara
+alice <- ParameterStatus client_encoding=UTF8
+alice <- BackendKeyData pid=1001 key=62599
+alice <- ReadyForQuery I
+alice -> Query SELECT * FROM items
+alice <- RowDescription id:int4/4 name:text/-1 qty:int4/4
+alice <- DataRow 1 | apple | 5
+alice <- DataRow 2 | banana | 12
+alice <- DataRow 3 | cherry | 0
+alice <- CommandComplete SELECT 3
+alice <- ReadyForQuery I
+alice -> Query SELECT name, qty FROM items WHERE qty > 3 ORDER BY qty
+alice <- RowDescription name:text/-1 qty:int4/4
+alice <- DataRow apple | 5
+alice <- DataRow banana | 12
+alice <- CommandComplete SELECT 2
+alice <- ReadyForQuery I
+alice -> Query INSERT INTO items VALUES (4, 'dragon''s fruit', 7)
+alice <- CommandComplete INSERT 0 1
+alice <- ReadyForQuery I
+alice -> Query INSERT INTO items VALUES (5, NULL, 1); SELECT id, name FROM items WHERE id >= 4
+alice <- CommandComplete INSERT 0 1
+alice <- RowDescription id:int4/4 name:text/-1
+alice <- DataRow 4 | dragon's fruit
+alice <- DataRow 5 | NULL
+alice <- CommandComplete SELECT 2
+alice <- ReadyForQuery I
+alice -> Query INSERT INTO items VALUES (4, 'again', 1)
+alice <- ErrorResponse S=ERROR C=23505 M=duplicate key value violates unique constraint "items_pkey"
+alice <- ReadyForQuery I
+alice -> Query INSERT INTO items VALUES (6, 'fig')
+alice <- ErrorResponse S=ERROR C=42601 M=INSERT has more target columns than expressions
+alice <- ReadyForQuery I
+alice -> Query INSERT INTO items VALUES ('six', 'fig', 1)
+alice <- ErrorResponse S=ERROR C=22P02 M=invalid input syntax for type integer: "six"
+alice <- ReadyForQuery I
+alice -> Query UPDATE items SET qty = 9 WHERE name = 'apple'
+alice <- CommandComplete UPDATE 1
+alice <- ReadyForQuery I
+alice -> Query UPDATE items SET name = 3 WHERE id = 1
+alice <- ErrorResponse S=ERROR C=42804 M=column "name" is of type text but expression is of type integer
+alice <- ReadyForQuery I
+alice -> Query DELETE FROM items WHERE qty = 0
+alice <- CommandComplete DELETE 1
+alice <- ReadyForQuery I
+alice -> Query SELECT price FROM items
+alice <- ErrorResponse S=ERROR C=42703 M=column "price" does not exist
+alice <- ReadyForQuery I
+alice -> Query SELECT * FROM orders
+alice <- ErrorResponse S=ERROR C=42P01 M=relation "orders" does not exist
+alice <- ReadyForQuery I
+alice -> Query SELEC * FROM items
+alice <- ErrorResponse S=ERROR C=42601 M=syntax error at or near "selec"
+alice <- ReadyForQuery I
+alice -> Query SELECT * FROM items WHERE name = 'x
+alice <- ErrorResponse S=ERROR C=42601 M=unterminated quoted string
+alice <- ReadyForQuery I
+alice -> Query SELECT * FROM items WHERE qty = 'many'
+alice <- ErrorResponse S=ERROR C=42883 M=operator does not exist: integer = text
+alice <- ReadyForQuery I
+alice -> Query 
+alice <- EmptyQueryResponse
+alice <- ReadyForQuery I
+alice -> Query  ; 
+alice <- EmptyQueryResponse
+alice <- ReadyForQuery I
+alice -> P (12 bytes)
+alice <- ErrorResponse S=ERROR C=08P01 M=unsupported message type 'P'
+alice <- ReadyForQuery I
+== session 4: bob's transaction while alice reads
+bob -> StartupMessage user=bob protocol=3.0
+bob <- Authentication cleartext password
+bob -> PasswordMessage
+bob <- Authentication ok
+bob <- ParameterStatus server_version=16.0-kara
+bob <- ParameterStatus client_encoding=UTF8
+bob <- BackendKeyData pid=1002 key=4982
+bob <- ReadyForQuery I
+bob -> Query BEGIN
+bob <- CommandComplete BEGIN
+bob <- ReadyForQuery T
+bob -> Query UPDATE items SET qty = 100 WHERE id = 2
+bob <- CommandComplete UPDATE 1
+bob <- ReadyForQuery T
+bob -> Query INSERT INTO items VALUES (7, 'grape', 30)
+bob <- CommandComplete INSERT 0 1
+bob <- ReadyForQuery T
+bob -> Query SELECT id, qty FROM items ORDER BY id
+bob <- RowDescription id:int4/4 qty:int4/4
+bob <- DataRow 1 | 9
+bob <- DataRow 2 | 100
+bob <- DataRow 4 | 7
+bob <- DataRow 5 | 1
+bob <- DataRow 7 | 30
+bob <- CommandComplete SELECT 5
+bob <- ReadyForQuery T
+alice -> Query SELECT id, qty FROM items ORDER BY id
+alice <- RowDescription id:int4/4 qty:int4/4
+alice <- DataRow 1 | 9
+alice <- DataRow 2 | 12
+alice <- DataRow 4 | 7
+alice <- DataRow 5 | 1
+alice <- CommandComplete SELECT 4
+alice <- ReadyForQuery I
+bob -> Query BEGIN
+bob <- NoticeResponse S=WARNING C=25001 M=there is already a transaction in progress
+bob <- CommandComplete BEGIN
+bob <- ReadyForQuery T
+bob -> Query COMMIT
+bob <- CommandComplete COMMIT
+bob <- ReadyForQuery I
+alice -> Query SELECT id, qty FROM items ORDER BY id
+alice <- RowDescription id:int4/4 qty:int4/4
+alice <- DataRow 1 | 9
+alice <- DataRow 2 | 100
+alice <- DataRow 4 | 7
+alice <- DataRow 5 | 1
+alice <- DataRow 7 | 30
+alice <- CommandComplete SELECT 5
+alice <- ReadyForQuery I
+bob -> Query BEGIN; DELETE FROM items WHERE id = 1; SELECT * FROM nowhere; SELECT 1
+bob <- CommandComplete BEGIN
+bob <- CommandComplete DELETE 1
+bob <- ErrorResponse S=ERROR C=42P01 M=relation "nowhere" does not exist
+bob <- ReadyForQuery E
+bob -> Query SELECT * FROM items
+bob <- ErrorResponse S=ERROR C=25P02 M=current transaction is aborted, commands ignored until end of transaction block
+bob <- ReadyForQuery E
+bob -> Query ROLLBACK
+bob <- CommandComplete ROLLBACK
+bob <- ReadyForQuery I
+bob -> Query COMMIT
+bob <- NoticeResponse S=WARNING C=25P01 M=there is no transaction in progress
+bob <- CommandComplete COMMIT
+bob <- ReadyForQuery I
+bob -> Query SELECT count FROM items
+bob <- ErrorResponse S=ERROR C=42703 M=column "count" does not exist
+bob <- ReadyForQuery I
+bob -> Query SELECT * FROM items ORDER BY name
+bob <- RowDescription id:int4/4 name:text/-1 qty:int4/4
+bob <- DataRow 1 | apple | 9
+bob <- DataRow 2 | banana | 100
+bob <- DataRow 4 | dragon's fruit | 7
+bob <- DataRow 7 | grape | 30
+bob <- DataRow 5 | NULL | 1
+bob <- CommandComplete SELECT 5
+bob <- ReadyForQuery I
+bob -> Terminate
+bob <- (closed)
+alice -> Terminate
+alice <- (closed)
+== server: 31 queries, 5 rows
+1 | apple | 9
+2 | banana | 100
+4 | dragon's fruit | 7
+5 | NULL | 1
+7 | grape | 30
