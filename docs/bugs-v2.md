@@ -123,11 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-33 | 2026-11-13 | mir-llvm | low | `==` and `!=` on two `Slice[u8]` compile to a byte-by-byte loop where `Str` equality calls `memcmp`: kata 1147's greedy arm written over `text.bytes()` takes 1.32 s against 1.08 s over `Str`, and Rust's byte-slice mirror 0.75 s | — |
 | B-2026-11-13-34 | 2026-11-13 | mir-llvm | low | `partition_point` is the branching binary search (runtime/stdlib/source/collections.kara) where Rust's is branch-free: kata 1150's 10,000,000 searches of 1000 values take 0.76 s in Kāra (C's and Go's branching searches 0.75 and 0.80 s) against 0.37 s in overflow-checked Rust | — |
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
-| B-2026-11-13-24 | 2026-11-13 | interp | low | On the MIR interpreter `i128.MIN.abs()` returns `i128.MIN` instead of trapping as integer overflow, and `i128.MIN.abs_diff(3)` prints 2^127 - 3 (...105725) instead of 2^127 + 3 (...105731) | — |
-| B-2026-11-13-25 | 2026-11-13 | typecheck+mir | low | `SortedMap.floor` / `ceiling` are typed `Option[(K, V)]` where docs/library/collections.md:213-214 says `Option[(ref K, ref V)]`: `let e: Option[(ref i64, ref String)] = m.ceiling(1)` and a helper taking `Option[(ref i64, ref String)]` are refused (`first` and `last` already return views) | — |
-| B-2026-11-13-26 | 2026-11-13 | ownership+cli | low | `unused_mut` ignores statement and block lint attributes: `#[allow(unused_mut)] let mut x = 1;` still warns, `#[deny]` / `#[expect]` on the statement do nothing, and a statement `allow` does not beat a function `deny`; at statement level `#[expect(unfulfilled_lint_expectation)]` gives no E_EXPECT_ON_UNFULFILLED and `#[allow(nope_lint)]` no unknown_lint | — |
-| B-2026-11-13-27 | 2026-11-13 | parser | low | An attributed block-like statement needs a trailing `;`: `#[allow(unused_mut)] { let mut x = 1; println(x); }` and `#[allow(x)] if c { .. }` are parse errors ("expected `;`") where the same statement without the attribute needs none | — |
-| B-2026-11-13-28 | 2026-11-13 | parser+typecheck | low | An unsuffixed literal in `u128`'s upper half is refused at parse even under a `u128` annotation: `let h: u128 = 170141183460469231731687303715884105728;` is "out of range for i128; add the `u128` suffix"; and a `u128` carrier is read as the negative number its bits spell, so `let z: i128 = 170141183460469231731687303715884105728u128` was accepted and printed i128::MIN and `-340282366920938463463374607431768211455u128` printed 1 | — |
 
 ### Relocated
 
@@ -1135,6 +1130,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-23 | ownership | low | Assigning into a field of a value moved as a whole (`eat(p); p.a = 1;`) is correctly refused, but the help suggests deriving `Clone` and cloning `p`… | 2d1651fa5d |
 | B-2026-11-13-30 | cli+resolver | medium | A script inside a package but outside `src/` does not get the package's dependencies: `karac run app/scripts/s.kara` importing a path dependency is "… | 0e77ed613d |
 | B-2026-11-13-32 | effect | low | An effect slot's refusal prints a verb that names no resource with empty parentheses: a closure that calls `sleep` in a field `Fn() with reads(Clock)… | 416dbf25cc |
+| B-2026-11-13-24 | interp | low | On the MIR interpreter `i128.MIN.abs()` returns `i128.MIN` instead of trapping as integer overflow, and `i128.MIN.abs_diff(3)` prints 2^127 - 3 (...1… | 5d1858adec |
+| B-2026-11-13-25 | typecheck+mir | low | `SortedMap.floor` / `ceiling` are typed `Option[(K, V)]` where docs/library/collections.md:213-214 says `Option[(ref K, ref V)]`: `let e: Option[(ref… | 861ab09e35 |
+| B-2026-11-13-26 | ownership+cli | low | `unused_mut` ignores statement and block lint attributes: `#[allow(unused_mut)] let mut x = 1;` still warns, `#[deny]` / `#[expect]` on the statement… | 483e7d5400 |
+| B-2026-11-13-27 | parser | low | An attributed block-like statement needs a trailing `;`: `#[allow(unused_mut)] { let mut x = 1; println(x); }` and `#[allow(x)] if c { . | 483e7d5400 |
+| B-2026-11-13-28 | parser+typecheck | low | An unsuffixed literal in `u128`'s upper half is refused at parse even under a `u128` annotation: `let h: u128 = 1701411834604692317316873037158841057… | 8048a5fb01 |
 
 </details>
 
