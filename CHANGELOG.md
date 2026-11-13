@@ -313,6 +313,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A `Slice` compared with an `Array` (or a `Vec`) of the same element
+  type, `pkt[236..240] != COOKIE`, was never equal in compiled code: the
+  right side was read as a slice. The interpreter was right. Compiled code
+  now compares both sides as slices (B-2026-11-13-16).
 - A program built for macOS keeps a frame record in every function, as
   Apple's arm64 and x86_64 ABIs require (arm64 leaf functions may skip
   theirs, as rustc's and clang's do). Compiled code saved `x29` / `rbp`
@@ -798,6 +802,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `m.get(k)` for a `shared struct Ent`) says that `*r` is a second counted
   handle, which holds no borrow. It no longer offers `.clone()` and "`*r`
   for a `Copy` value", and `karac fix` writes `let e2 = *e;`.
+- Rust's slice copy, `dst.copy_from_slice(src)`, used to be refused as
+  "no method 'copy_from_slice' on type 'Slice'" with no fix, and a borrow
+  error followed at every later use of the buffer. The error now names
+  Kāra's spelling, and `karac fix` writes it (design.md § Range indexing;
+  B-2026-11-13-15): `pkt[4..8].copy_from_slice(xid)` becomes the range
+  assignment `pkt[4..8] = xid` when the element is `Copy`, and any other
+  receiver gets `clone_from_slice`.
 - `karac fix` mends Rust's pause to `std.time.sleep` (B-2026-11-11-73):
   `use std::thread;` and `use std::thread::sleep;` become
   `import std.time.sleep;`, and `thread::sleep(d)` and

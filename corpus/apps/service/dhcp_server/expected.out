@@ -1,0 +1,67 @@
+alpha: OFFER yiaddr=10.0.0.100 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+alpha: ACK yiaddr=10.0.0.100 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+beta: OFFER yiaddr=10.0.0.103 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+beta: no reply
+beta: OFFER yiaddr=10.0.0.101 mask=255.255.255.0 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+beta: ACK yiaddr=10.0.0.101 mask=255.255.255.0 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+alpha: ACK yiaddr=10.0.0.100 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+gamma: NAK server=10.0.0.1 message="address not yours"
+gamma: OFFER yiaddr=10.0.0.102 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+gamma: NAK server=10.0.0.1 message="address not yours"
+gamma: OFFER yiaddr=10.0.0.102 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+gamma: ACK yiaddr=10.0.0.102 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+gamma: no reply
+alpha: no reply
+beta: no reply
+delta: OFFER yiaddr=10.0.0.100 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+epsilon: OFFER yiaddr=10.0.0.103 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+zeta: OFFER yiaddr=10.0.0.104 mask=255.255.255.0 router=10.0.0.1 dns=10.0.0.53 lease=3600 server=10.0.0.1 t1=1800 t2=3150
+eta: no reply
+office: ACK ciaddr=10.0.0.50 router=10.0.0.1 server=10.0.0.1
+broken: no reply
+broken: no reply
+broken: no reply
+broken: no reply
+broken: no reply
+== server
+#1 02:00:00:00:00:01 (alpha) DISCOVER -> OFFER 10.0.0.100
+#2 02:00:00:00:00:01 (alpha) REQUEST 10.0.0.100 -> ACK
+#3 02:00:00:00:00:02 (beta) DISCOVER -> OFFER 10.0.0.103
+#4 02:00:00:00:00:02 (beta) REQUEST: chose server 10.0.0.9
+#5 02:00:00:00:00:02 (beta) DISCOVER -> OFFER 10.0.0.101
+#6 02:00:00:00:00:02 (beta) REQUEST 10.0.0.101 -> ACK
+#7 02:00:00:00:00:01 (alpha) REQUEST 10.0.0.100 -> ACK
+#8 02:00:00:00:00:03 REQUEST 10.0.0.104 -> NAK
+#9 02:00:00:00:00:03 DISCOVER -> OFFER 10.0.0.102
+#10 02:00:00:00:00:03 REQUEST 10.0.0.104 -> NAK
+#11 02:00:00:00:00:03 DISCOVER -> OFFER 10.0.0.102
+#12 02:00:00:00:00:03 REQUEST 10.0.0.102 -> ACK
+#13 02:00:00:00:00:03 DECLINE 10.0.0.102: marked in use
+#14 02:00:00:00:00:01 (alpha) RELEASE 10.0.0.100
+#15 02:00:00:00:00:02 (beta) RELEASE 10.0.0.100: not its lease
+#16 02:00:00:00:00:04 (delta) DISCOVER -> OFFER 10.0.0.100
+#17 02:00:00:00:00:07 (epsilon) DISCOVER -> OFFER 10.0.0.103
+#18 02:00:00:00:00:08 (zeta) DISCOVER -> OFFER 10.0.0.104
+#19 02:00:00:00:00:09 (eta) DISCOVER: pool exhausted
+#20 02:00:00:00:00:05 (printer) INFORM 10.0.0.50 -> ACK
+#21 dropped: short
+#22 dropped: bad cookie
+#23 dropped: not a request
+#24 dropped: no message type
+#25 dropped: option overruns
+ack: 4
+decline: 1
+dropped: 5
+elsewhere: 1
+exhausted: 1
+ignored: 1
+inform: 1
+nak: 2
+offer: 8
+release: 1
+== leases
+10.0.0.100 offered 02:00:00:00:00:04
+10.0.0.101 bound 02:00:00:00:00:02
+10.0.0.102 declined -
+10.0.0.103 offered 02:00:00:00:00:07
+10.0.0.104 offered 02:00:00:00:00:08

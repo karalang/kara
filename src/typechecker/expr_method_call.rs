@@ -264,6 +264,10 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
 /// (B-2026-11-06-37).
 pub(crate) const SLICE_MUTATING_METHODS: &[&str] = &[
     "clone_from_slice",
+    // Rust's spelling, refused with a fix to a range assignment
+    // (`method_copy_from_slice.rs`); listed so the view it writes through
+    // lives for the call alone (B-2026-11-13-15).
+    "copy_from_slice",
     "fill",
     "iter_mut",
     "reverse",
@@ -2204,6 +2208,12 @@ impl<'a> super::TypeChecker<'a> {
         // element fails.
         if let Some(t) =
             self.try_concat_of_sequences(object, method, args, span, args_close_span, &obj_ty)
+        {
+            return t;
+        }
+        // Rust's `copy_from_slice` is a range assignment (B-2026-11-13-15).
+        if let Some(t) =
+            self.try_copy_from_slice(object, method, args, span, args_close_span, &obj_ty)
         {
             return t;
         }

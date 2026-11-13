@@ -10260,6 +10260,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         } else {
             dest.clone()
         };
+        // `s == a` across a `Vec`, an `Array` and a `Slice` of one element
+        // type compares the two as slices. `eq_places` reads both sides as
+        // the left's type, so a slice against an array read the array as a
+        // slice and was never equal in compiled code (B-2026-11-13-16).
+        if lt != rt {
+            if let Some(st) = self.mixed_seq_slice(lt, rt) {
+                let lp = self.seq_as_slice(lp, lt, st);
+                let rp = self.seq_as_slice(rp, rt, st);
+                self.eq_places(left.span, lp, rp, st, out)?;
+                if negate {
+                    self.assign(
+                        dest,
+                        Rvalue::UnaryOp(UnOp::Not, Operand::Move(Place::local(t))),
+                    );
+                }
+                return Ok(());
+            }
+        }
         // `meters == 3`: the `impl PartialEq[i64] for Meters` the checker
         // accepted (B-2026-11-06-25).
         match self.partial_eq_with_rhs(lt, rt)? {
@@ -11036,6 +11054,40 @@ impl<'l, 'a> Bx<'l, 'a> {
         let r = self.ref_to(p, t);
         let name = format!("{}.clone", self.tys().display(t));
         self.call_native(&name, vec![r], dest);
+    }
+
+    /// The element type of a `Vec`, an `Array` or a `Slice`.
+    fn seq_elem_ty(&self, t: Ty) -> Option<Ty> {
+        let tcx = self.tys().tcx();
+        match tcx.kind(t) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => Some(tcx.list(args)[0]),
+            HK::Array { elem, .. } | HK::Slice { elem, .. } => Some(elem),
+            _ => None,
+        }
+    }
+
+    /// The read-only `Slice` both of two different sequence types of one
+    /// element type are compared as, or `None`.
+    fn mixed_seq_slice(&self, lt: Ty, rt: Ty) -> Option<Ty> {
+        let elem = self.seq_elem_ty(lt)?;
+        if self.seq_elem_ty(rt)? != elem {
+            return None;
+        }
+        Some(self.tys().tcx().intern(HK::Slice {
+            elem,
+            mutable: false,
+        }))
+    }
+
+    /// `p`, of sequence type `t`, as a place of the read-only slice `st`.
+    fn seq_as_slice(&mut self, p: Place, t: Ty, st: Ty) -> Place {
+        match self.tys().tcx().kind(t) {
+            HK::Slice { .. } => p,
+            _ => Place::local(self.slice_view_of(p, t, st, false)),
+        }
     }
 
     /// `dest = l == r` for two places of type `t`.

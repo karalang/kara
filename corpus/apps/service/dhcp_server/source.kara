@@ -1,0 +1,549 @@
+// dhcp_server: a DHCP server (RFC 2131, options of RFC 2132) on loopback
+// UDP. One server task answers each datagram in turn from a pool of five
+// addresses: DISCOVER gets an OFFER, REQUEST an ACK or a NAK, INFORM an ACK
+// without a lease, and RELEASE and DECLINE no answer. Scripted clients on
+// the main task, each with a socket of its own, send each kind and print
+// what comes back; then the server prints its log and leases.
+
+import std.sync.{TaskGroup, Mutex};
+
+const ADDR: Str = "127.0.0.1:47769";
+const DATAGRAMS: i64 = 25;
+const QUIET_MS: i64 = 300;
+const COOKIE: Array[u8, 4] = [99, 130, 83, 99];
+
+const SERVER_ID: Array[u8, 4] = [10, 0, 0, 1];
+const ROUTER: Array[u8, 4] = [10, 0, 0, 1];
+const DNS: Array[u8, 4] = [10, 0, 0, 53];
+const MASK: Array[u8, 4] = [255, 255, 255, 0];
+const POOL_FIRST: u8 = 100;
+const POOL_SIZE: u8 = 5;
+const LEASE: u32 = 3600;
+
+const DISCOVER: u8 = 1;
+const OFFER: u8 = 2;
+const REQUEST: u8 = 3;
+const DECLINE: u8 = 4;
+const ACK: u8 = 5;
+const NAK: u8 = 6;
+const RELEASE: u8 = 7;
+const INFORM: u8 = 8;
+const KINDS: Array[Str, 9] = ["?", "DISCOVER", "OFFER", "REQUEST", "DECLINE", "ACK", "NAK", "RELEASE", "INFORM"];
+
+const OPT_MASK: u8 = 1;
+const OPT_ROUTER: u8 = 3;
+const OPT_DNS: u8 = 6;
+const OPT_HOSTNAME: u8 = 12;
+const OPT_REQUESTED: u8 = 50;
+const OPT_LEASE: u8 = 51;
+const OPT_TYPE: u8 = 53;
+const OPT_SERVER: u8 = 54;
+const OPT_PARAMS: u8 = 55;
+const OPT_MESSAGE: u8 = 56;
+const OPT_T1: u8 = 58;
+const OPT_T2: u8 = 59;
+
+fn ip_text(b: Slice[u8]) -> String {
+    Vec[String].from_iter(b.iter().map(|x| x.to_string())).join(".")
+}
+
+fn mac_text(b: Slice[u8]) -> String {
+    Vec[String].from_iter(b.iter().map(|x| f"{x:02x}")).join(":")
+}
+
+// The options after the magic cookie, up to the end option.
+fn parse_options(pkt: Slice[u8], from: i64) -> Result[SortedMap[u8, Vec[u8]], String] {
+    let mut opts = SortedMap.new();
+    let mut i = from;
+    loop {
+        if i >= pkt.len() {
+            return Err("no end option");
+        }
+        let code = pkt[i];
+        if code == 255 {
+            break;
+        }
+        if code == 0 {
+            i += 1;
+            continue;
+        }
+        if i + 1 >= pkt.len() or i + 2 + pkt[i + 1] > pkt.len() {
+            return Err("option overruns");
+        }
+        let n = pkt[i + 1] as i64;
+        opts.insert(code, pkt[i + 2..i + 2 + n].to_vec());
+        i += 2 + n;
+    }
+    Ok(opts)
+}
+
+struct Request {
+    kind: u8,
+    xid: Vec[u8],
+    ciaddr: Vec[u8],
+    chaddr: Vec[u8],
+    opts: SortedMap[u8, Vec[u8]],
+}
+
+fn parse(pkt: Slice[u8]) -> Result[Request, String] {
+    if pkt.len() < 240 {
+        return Err("short");
+    }
+    if pkt[0] != 1 {
+        return Err("not a request");
+    }
+    if pkt[1] != 1 or pkt[2] != 6 {
+        return Err("not ethernet");
+    }
+    if pkt[236..240] != COOKIE {
+        return Err("bad cookie");
+    }
+    let opts = parse_options(pkt, 240)?;
+    let kind = match opts.get(OPT_TYPE) {
+        Some(k) if k.len() == 1 and k[0] >= 1 and k[0] <= 8 => k[0],
+        _ => return Err("no message type"),
+    };
+    Ok(Request {
+        kind,
+        xid: pkt[4..8].to_vec(),
+        ciaddr: pkt[12..16].to_vec(),
+        chaddr: pkt[28..34].to_vec(),
+        opts,
+    })
+}
+
+fn option(code: u8, data: Slice[u8]) -> Vec[u8] {
+    let mut out = [code, data.len() as u8];
+    out.extend_from_slice(data);
+    out
+}
+
+fn message(op: u8, xid: Slice[u8], ciaddr: Slice[u8], yiaddr: Slice[u8], chaddr: Slice[u8], opts: Slice[Vec[u8]]) -> Vec[u8] {
+    let mut pkt = Vec.filled(240, 0u8);
+    pkt[0] = op;
+    pkt[1] = 1;
+    pkt[2] = 6;
+    pkt[4..8] = xid;
+    pkt[12..16] = ciaddr;
+    pkt[16..20] = yiaddr;
+    pkt[20..24] = SERVER_ID;
+    pkt[28..34] = chaddr;
+    pkt[236..240] = COOKIE;
+    for o in opts {
+        pkt.extend_from_slice(o);
+    }
+    pkt.push(255);
+    pkt
+}
+
+#[derive(Clone, PartialEq)]
+enum State {
+    Offered,
+    Bound,
+    Declined,
+}
+
+#[derive(Clone)]
+struct Slot {
+    state: State,
+    mac: Vec[u8],
+}
+
+struct Book {
+    log: Vec[String],
+    counts: SortedMap[String, i64],
+    slots: SortedMap[u8, Slot],
+}
+
+impl Book {
+    fn note(mut ref self, line: own String, count: Str) {
+        self.log.push(line);
+        *self.counts.entry(count.to_string()).or_insert(0) += 1;
+    }
+
+    fn holds(self, k: u8, state: State, mac: Slice[u8]) -> bool {
+        match self.slots.get(k) {
+            Some(s) => s.state == state and s.mac.as_slice() == mac,
+            None => false,
+        }
+    }
+
+    fn holder(self, mac: Slice[u8], state: State) -> Option[u8] {
+        for (k, s) in self.slots.iter() {
+            if s.state == state and s.mac.as_slice() == mac {
+                return Some(*k);
+            }
+        }
+        None
+    }
+
+    fn free(self, k: u8) -> bool {
+        k >= POOL_FIRST and k < POOL_FIRST + POOL_SIZE and not self.slots.contains_key(k)
+    }
+
+    fn drop_offers(mut ref self, mac: Slice[u8]) {
+        let offered: Vec[u8] = self
+            .slots
+            .iter()
+            .filter(|(_, s)| s.state == State.Offered and s.mac.as_slice() == mac)
+            .map(|(k, _)| *k)
+            .collect();
+        for k in offered {
+            self.slots.remove(k);
+        }
+    }
+
+    fn handle(mut ref self, pkt: Slice[u8]) -> Option[Vec[u8]] {
+        let r = match parse(pkt) {
+            Ok(r) => r,
+            Err(e) => {
+                self.note(f"dropped: {e}", "dropped");
+                return None;
+            }
+        };
+        let mac = r.chaddr.clone();
+        let mut who = mac_text(mac);
+        if let Some(name) = r.opts.get(OPT_HOSTNAME) {
+            who.push_str(f" ({String.from_utf8_lossy(name)})");
+        }
+        let want: Option[Vec[u8]] = match r.opts.get(OPT_REQUESTED) {
+            Some(w) if w.len() == 4 => Some(w.clone()),
+            _ => None,
+        };
+        match r.kind {
+            DISCOVER => {
+                self.drop_offers(mac);
+                let mut k = self.holder(mac, State.Bound);
+                if k.is_none() {
+                    if let Some(w) = ref want {
+                        if w[..3] == SERVER_ID[..3] and self.free(w[3]) {
+                            k = Some(w[3]);
+                        }
+                    }
+                }
+                if k.is_none() {
+                    k = (POOL_FIRST..POOL_FIRST + POOL_SIZE).find(|j| self.free(j));
+                }
+                let k = match k {
+                    Some(k) => k,
+                    None => {
+                        self.note(f"{who} DISCOVER: pool exhausted", "exhausted");
+                        return None;
+                    }
+                };
+                if not self.holds(k, State.Bound, mac) {
+                    self.slots.insert(k, Slot { state: State.Offered, mac: mac.clone() });
+                }
+                self.note(f"{who} DISCOVER -> OFFER 10.0.0.{k}", "offer");
+                Some(reply(OFFER, r, [0, 0, 0, 0], [10, 0, 0, k], true))
+            }
+            REQUEST => {
+                if let Some(sid) = r.opts.get(OPT_SERVER) {
+                    if sid[..] != SERVER_ID[..] {
+                        self.drop_offers(mac);
+                        self.note(f"{who} REQUEST: chose server {ip_text(sid)}", "elsewhere");
+                        return None;
+                    }
+                }
+                let addr = match ref want {
+                    Some(w) => w.clone(),
+                    None => r.ciaddr.clone(),
+                };
+                let k = addr[3];
+                let ours = addr[..3] == SERVER_ID[..3] and k >= POOL_FIRST and k < POOL_FIRST + POOL_SIZE;
+                let ok = if r.opts.contains_key(OPT_SERVER) {
+                    ours and self.holds(k, State.Offered, mac)
+                } else {
+                    ours and self.holds(k, State.Bound, mac)
+                };
+                if not ok {
+                    self.drop_offers(mac);
+                    self.note(f"{who} REQUEST {ip_text(addr)} -> NAK", "nak");
+                    return Some(reply(NAK, r, [0, 0, 0, 0], [0, 0, 0, 0], false));
+                }
+                self.slots.insert(k, Slot { state: State.Bound, mac: mac.clone() });
+                self.note(f"{who} REQUEST {ip_text(addr)} -> ACK", "ack");
+                Some(reply(ACK, r, [0, 0, 0, 0], [10, 0, 0, k], true))
+            }
+            RELEASE => {
+                let k = r.ciaddr[3];
+                if self.holds(k, State.Bound, mac) {
+                    self.slots.remove(k);
+                    self.note(f"{who} RELEASE {ip_text(r.ciaddr)}", "release");
+                } else {
+                    self.note(f"{who} RELEASE {ip_text(r.ciaddr)}: not its lease", "ignored");
+                }
+                None
+            }
+            DECLINE => {
+                let mine = match ref want {
+                    Some(w) => match self.slots.get(w[3]) {
+                        Some(s) => s.mac == mac,
+                        None => false,
+                    },
+                    None => false,
+                };
+                if mine {
+                    let w = want.unwrap();
+                    self.slots.insert(w[3], Slot { state: State.Declined, mac: Vec.new() });
+                    self.note(f"{who} DECLINE {ip_text(w)}: marked in use", "decline");
+                } else {
+                    self.note(f"{who} DECLINE: not its address", "ignored");
+                }
+                None
+            }
+            INFORM => {
+                self.note(f"{who} INFORM {ip_text(r.ciaddr)} -> ACK", "inform");
+                Some(reply(ACK, r, r.ciaddr, [0, 0, 0, 0], false))
+            }
+            _ => {
+                self.note(f"{who} {KINDS[r.kind]}: not a client message", "dropped");
+                None
+            }
+        }
+    }
+}
+
+fn be32(n: u32) -> Array[u8, 4] {
+    n.to_be_bytes()
+}
+
+fn reply(kind: u8, r: Request, ciaddr: Slice[u8], yiaddr: Slice[u8], lease: bool) -> Vec[u8] {
+    let params = r.opts.get(OPT_PARAMS);
+    let mut out = [option(OPT_TYPE, [kind]), option(OPT_SERVER, SERVER_ID)];
+    if lease {
+        out.push(option(OPT_LEASE, be32(LEASE)));
+        out.push(option(OPT_T1, be32(LEASE / 2)));
+        out.push(option(OPT_T2, be32(LEASE * 7 / 8)));
+    }
+    if kind != NAK {
+        for (code, data) in [(OPT_MASK, MASK), (OPT_ROUTER, ROUTER), (OPT_DNS, DNS)] {
+            let asked = match params {
+                Some(p) => p.contains(code),
+                None => true,
+            };
+            if asked {
+                out.push(option(code, data));
+            }
+        }
+    } else {
+        out.push(option(OPT_MESSAGE, b"address not yours"));
+    }
+    message(2, r.xid, ciaddr, yiaddr, r.chaddr, out)
+}
+
+sync struct Server {
+    book: Mutex[Book],
+}
+
+fn serve(srv: Server, sock: UdpSocket) {
+    let mut buf = [0u8; 1500];
+    for _ in 0..DATAGRAMS {
+        let (len, peer) = sock.recv_from(mut buf).unwrap();
+        let out = {
+            let mut g = srv.book.lock();
+            g.value.handle(buf[..len])
+        };
+        if let Some(pkt) = out {
+            let _ = sock.send_to(pkt, peer);
+        }
+    }
+}
+
+// One line for a server's reply.
+fn describe(pkt: Slice[u8], xid: Slice[u8]) -> String {
+    if pkt.len() < 240 or pkt[0] != 2 or pkt[236..240] != COOKIE {
+        return "not a reply";
+    }
+    if pkt[4..8] != xid {
+        return "wrong xid";
+    }
+    let opts = match parse_options(pkt, 240) {
+        Ok(o) => o,
+        Err(_) => return "truncated reply",
+    };
+    let mut parts: Vec[String] = Vec.new();
+    let kind = match opts.get(OPT_TYPE) {
+        Some(k) if k.len() == 1 and (k[0] as i64) < KINDS.len() => k[0] as i64,
+        _ => 0,
+    };
+    parts.push(KINDS[kind].to_string());
+    if pkt[16..20] != [0u8; 4] {
+        parts.push(f"yiaddr={ip_text(pkt[16..20])}");
+    }
+    if pkt[12..16] != [0u8; 4] {
+        parts.push(f"ciaddr={ip_text(pkt[12..16])}");
+    }
+    for (code, data) in opts.iter() {
+        match *code {
+            OPT_SERVER => parts.push(f"server={ip_text(data)}"),
+            OPT_MASK => parts.push(f"mask={ip_text(data)}"),
+            OPT_ROUTER => parts.push(f"router={ip_text(data)}"),
+            OPT_DNS => parts.push(f"dns={ip_text(data)}"),
+            OPT_LEASE | OPT_T1 | OPT_T2 => {
+                let n = u32.from_be_bytes([data[0], data[1], data[2], data[3]]);
+                let name = match *code {
+                    OPT_LEASE => "lease",
+                    OPT_T1 => "t1",
+                    _ => "t2",
+                };
+                parts.push(f"{name}={n}");
+            }
+            OPT_MESSAGE => parts.push(f"message=\"{String.from_utf8_lossy(data)}\""),
+            _ => {}
+        }
+    }
+    parts.join(" ")
+}
+
+struct Client {
+    name: String,
+    mac: Vec[u8],
+    xid: Vec[u8],
+    hostname: String,
+    sock: UdpSocket,
+}
+
+impl Client {
+    fn new(name: Str, n: u8, hostname: Str) -> Client {
+        let sock = UdpSocket.bind("127.0.0.1:0").unwrap();
+        Client {
+            name: name.to_string(),
+            mac: [2, 0, 0, 0, 0, n],
+            xid: [0x4B, 0x41, 0x52, n],
+            hostname: hostname.to_string(),
+            sock,
+        }
+    }
+
+    fn send(self, kind: u8, ciaddr: Slice[u8], extra: Vec[Vec[u8]]) {
+        let mut opts = [option(OPT_TYPE, [kind])];
+        if not self.hostname.is_empty() {
+            opts.push(option(OPT_HOSTNAME, self.hostname.bytes()));
+        }
+        opts.extend(extra.clone());
+        let pkt = message(1, self.xid, ciaddr, [0, 0, 0, 0], self.mac, opts);
+        let _ = self.sock.send_to(pkt, ADDR);
+    }
+
+    fn send_raw(self, pkt: Slice[u8]) {
+        let _ = self.sock.send_to(pkt, ADDR);
+    }
+
+    // Prints the reply, or that none came within `wait_ms`.
+    fn recv(self, wait_ms: i64) {
+        let _ = self.sock.set_read_timeout(Some(wait_ms));
+        let mut buf = [0u8; 1500];
+        match self.sock.recv_from(mut buf) {
+            Ok((n, _)) => println(f"{self.name}: {describe(buf[..n], self.xid)}"),
+            Err(_) => println(f"{self.name}: no reply"),
+        }
+    }
+}
+
+fn requested(ip: Slice[u8]) -> Vec[u8] {
+    option(OPT_REQUESTED, ip)
+}
+
+fn server_id(ip: Slice[u8]) -> Vec[u8] {
+    option(OPT_SERVER, ip)
+}
+
+fn main() {
+    let srv = Server {
+        book: Mutex.new(Book { log: Vec.new(), counts: SortedMap.new(), slots: SortedMap.new() }),
+    };
+    let sock = UdpSocket.bind(ADDR).unwrap();
+    let group = TaskGroup.new();
+    let server = group.spawn(|| serve(srv, sock));
+    let zero = [0u8; 4];
+
+    let alpha = Client.new("alpha", 1, "alpha");
+    alpha.send(DISCOVER, zero, Vec.new());
+    alpha.recv(2000);
+    alpha.send(REQUEST, zero, [requested([10, 0, 0, 100]), server_id(SERVER_ID)]);
+    alpha.recv(2000);
+
+    let beta = Client.new("beta", 2, "beta");
+    beta.send(DISCOVER, zero, [requested([10, 0, 0, 103])]);
+    beta.recv(2000);
+    beta.send(REQUEST, zero, [requested([10, 0, 0, 103]), server_id([10, 0, 0, 9])]);
+    beta.recv(QUIET_MS);
+    beta.send(DISCOVER, zero, [option(OPT_PARAMS, [OPT_MASK, OPT_DNS])]);
+    beta.recv(2000);
+    beta.send(REQUEST, zero, [requested([10, 0, 0, 101]), server_id(SERVER_ID), option(OPT_PARAMS, [OPT_MASK, OPT_DNS])]);
+    beta.recv(2000);
+
+    alpha.send(REQUEST, [10, 0, 0, 100], Vec.new());
+    alpha.recv(2000);
+
+    let gamma = Client.new("gamma", 3, "");
+    gamma.send(REQUEST, zero, [requested([10, 0, 0, 104])]);
+    gamma.recv(2000);
+    gamma.send(DISCOVER, zero, Vec.new());
+    gamma.recv(2000);
+    gamma.send(REQUEST, zero, [requested([10, 0, 0, 104]), server_id(SERVER_ID)]);
+    gamma.recv(2000);
+    gamma.send(DISCOVER, zero, Vec.new());
+    gamma.recv(2000);
+    gamma.send(REQUEST, zero, [requested([10, 0, 0, 102]), server_id(SERVER_ID)]);
+    gamma.recv(2000);
+    gamma.send(DECLINE, zero, [requested([10, 0, 0, 102]), server_id(SERVER_ID)]);
+    gamma.recv(QUIET_MS);
+
+    alpha.send(RELEASE, [10, 0, 0, 100], [server_id(SERVER_ID)]);
+    alpha.recv(QUIET_MS);
+    beta.send(RELEASE, [10, 0, 0, 100], [server_id(SERVER_ID)]);
+    beta.recv(QUIET_MS);
+
+    let delta = Client.new("delta", 4, "delta");
+    delta.send(DISCOVER, zero, Vec.new());
+    delta.recv(2000);
+
+    for (i, name) in ["epsilon", "zeta", "eta"].iter().enumerate() {
+        let c = Client.new(name, 7 + i as u8, name);
+        c.send(DISCOVER, zero, Vec.new());
+        c.recv(if *name != "eta" { 2000 } else { QUIET_MS });
+    }
+
+    let office = Client.new("office", 5, "printer");
+    office.send(INFORM, [10, 0, 0, 50], [option(OPT_PARAMS, [OPT_ROUTER])]);
+    office.recv(2000);
+
+    let bad = Client.new("broken", 6, "");
+    bad.send_raw([0u8; 10]);
+    bad.recv(QUIET_MS);
+    let mut pkt = message(1, bad.xid, zero, zero, bad.mac, [option(OPT_TYPE, [DISCOVER])]);
+    pkt[236] = 0;
+    bad.send_raw(pkt);
+    bad.recv(QUIET_MS);
+    bad.send_raw(message(2, bad.xid, zero, zero, bad.mac, [option(OPT_TYPE, [OFFER])]));
+    bad.recv(QUIET_MS);
+    bad.send_raw(message(1, bad.xid, zero, zero, bad.mac, [option(OPT_HOSTNAME, b"x")]));
+    bad.recv(QUIET_MS);
+    let mut pkt = message(1, bad.xid, zero, zero, bad.mac, [option(OPT_TYPE, [DISCOVER])]);
+    pkt.pop();
+    pkt.extend_from_slice([OPT_HOSTNAME, 9, 65]);
+    bad.send_raw(pkt);
+    bad.recv(QUIET_MS);
+
+    let _ = server.join();
+    println("== server");
+    let g = srv.book.lock();
+    for (i, line) in g.value.log.iter().enumerate() {
+        println(f"#{i + 1} {line}");
+    }
+    for (k, v) in g.value.counts.iter() {
+        println(f"{k}: {v}");
+    }
+    println("== leases");
+    for (k, s) in g.value.slots.iter() {
+        let state = match s.state {
+            State.Offered => "offered",
+            State.Bound => "bound",
+            State.Declined => "declined",
+        };
+        let mac = if s.mac.is_empty() { "-" } else { mac_text(s.mac) };
+        println(f"10.0.0.{k} {state} {mac}");
+    }
+}
