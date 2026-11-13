@@ -1,0 +1,218 @@
+== session 1: alice reads and deletes
+alice1 <- +OK kara POP3 server ready
+alice1 -> CAPA
+alice1 <- +OK Capability list follows
+alice1 <- TOP
+alice1 <- USER
+alice1 <- UIDL
+alice1 <- RESP-CODES
+alice1 <- IMPLEMENTATION kara-pop3
+alice1 <- .
+alice1 -> STAT
+alice1 <- -ERR command not valid in this state
+alice1 -> PASS wonderland
+alice1 <- -ERR USER first
+alice1 -> USER alice
+alice1 <- +OK send PASS for alice
+alice1 -> PASS rabbit-hole
+alice1 <- -ERR [AUTH] invalid credentials
+alice1 -> USER alice
+alice1 <- +OK send PASS for alice
+alice1 -> PASS wonderland
+alice1 <- +OK alice has 4 messages (863 octets)
+alice1 -> STAT
+alice1 <- +OK 4 863
+alice1 -> LIST
+alice1 <- +OK 4 messages
+alice1 <- 1 172
+alice1 <- 2 218
+alice1 <- 3 335
+alice1 <- 4 138
+alice1 <- .
+alice1 -> LIST 3
+alice1 <- +OK 3 335
+alice1 -> LIST 9
+alice1 <- -ERR no such message
+alice1 -> UIDL
+alice1 <- +OK unique-id listing follows
+alice1 <- 1 2f95c19497a8b018
+alice1 <- 2 ced370ef1adcf181
+alice1 <- 3 f88db3c9d6cea7f6
+alice1 <- 4 3eb956001f7c7162
+alice1 <- .
+alice1 -> RETR 2
+alice1 <- +OK 218 octets
+alice1 <- From: dave@example.test
+alice1 <- To: inbox@example.test
+alice1 <- Subject: Dots and signatures
+alice1 <- Message-ID: <m2@example.test>
+alice1 <- 
+alice1 <- Lines that start with a dot are stuffed on the wire.
+alice1 <- ..hidden line one
+alice1 <- ..
+alice1 <- ...two dots already
+alice1 <- -- 
+alice1 <- Dave
+alice1 <- .
+alice1 :: message 2: 6 body lines, 218 octets (server said 218, ok), subject "Dots and signatures"
+alice1 -> TOP 3 2
+alice1 <- +OK top of message follows
+alice1 <- From: erin@example.test
+alice1 <- To: inbox@example.test
+alice1 <- Subject: Quarterly numbers
+alice1 <- Message-ID: <m3@example.test>
+alice1 <- 
+alice1 <- Line 1: revenue 1250 units
+alice1 <- Line 2: revenue 2500 units
+alice1 <- .
+alice1 -> DELE 1
+alice1 <- +OK message 1 deleted
+alice1 -> DELE 1
+alice1 <- -ERR message 1 already deleted
+alice1 -> LIST 1
+alice1 <- -ERR message 1 already deleted
+alice1 -> STAT
+alice1 <- +OK 3 691
+alice1 -> RSET
+alice1 <- +OK maildrop has 4 messages (863 octets)
+alice1 -> STAT
+alice1 <- +OK 4 863
+alice1 -> DELE 4
+alice1 <- +OK message 4 deleted
+== session 2: alice again while the maildrop is locked
+alice2 <- +OK kara POP3 server ready
+alice2 -> USER alice
+alice2 <- +OK send PASS for alice
+alice2 -> PASS wonderland
+alice2 <- -ERR [IN-USE] maildrop already locked
+alice2 -> QUIT
+alice2 <- +OK kara POP3 server signing off
+alice2 <- (closed)
+alice1 -> NOOP
+alice1 <- +OK
+alice1 -> QUIT
+alice1 <- +OK kara POP3 server signing off (3 messages left)
+alice1 <- (closed)
+== session 3: deletes, then hangs up without QUIT
+alice3 <- +OK kara POP3 server ready
+alice3 -> USER alice
+alice3 <- +OK send PASS for alice
+alice3 -> PASS wonderland
+alice3 <- +OK alice has 3 messages (725 octets)
+alice3 -> UIDL
+alice3 <- +OK unique-id listing follows
+alice3 <- 1 2f95c19497a8b018
+alice3 <- 2 ced370ef1adcf181
+alice3 <- 3 f88db3c9d6cea7f6
+alice3 <- .
+alice3 -> DELE 1
+alice3 <- +OK message 1 deleted
+alice3 -> DELE 2
+alice3 <- +OK message 2 deleted
+alice3 -- hangs up without QUIT
+alice3 <- (closed)
+== session 4: nothing was deleted
+alice4 <- +OK kara POP3 server ready
+alice4 -> USER alice
+alice4 <- +OK send PASS for alice
+alice4 -> PASS wonderland
+alice4 <- +OK alice has 3 messages (725 octets)
+alice4 -> STAT
+alice4 <- +OK 3 725
+alice4 -> RETR 1
+alice4 <- +OK 172 octets
+alice4 <- From: carol@example.test
+alice4 <- To: inbox@example.test
+alice4 <- Subject: Lunch on Friday?
+alice4 <- Message-ID: <m1@example.test>
+alice4 <- 
+alice4 <- Are you free for lunch on Friday?
+alice4 <- The usual place, at noon.
+alice4 <- .
+alice4 :: message 1: 2 body lines, 172 octets (server said 172, ok), subject "Lunch on Friday?"
+alice4 -> QUIT
+alice4 <- +OK kara POP3 server signing off (3 messages left)
+alice4 <- (closed)
+== session 5: bob guesses
+bob1 <- +OK kara POP3 server ready
+bob1 -> USER bob
+bob1 <- +OK send PASS for bob
+bob1 -> PASS build
+bob1 <- -ERR [AUTH] invalid credentials
+bob1 -> USER bob
+bob1 <- +OK send PASS for bob
+bob1 -> PASS Builder
+bob1 <- -ERR [AUTH] invalid credentials
+bob1 -> USER bob
+bob1 <- +OK send PASS for bob
+bob1 -> PASS bob
+bob1 <- -ERR [AUTH] too many failures, goodbye
+bob1 <- (closed)
+== session 6: bob and the error replies
+bob2 <- +OK kara POP3 server ready
+bob2 -> USER bob
+bob2 <- +OK send PASS for bob
+bob2 -> PASS builder
+bob2 <- +OK bob has 1 messages (140 octets)
+bob2 -> USER bob
+bob2 <- -ERR command not valid in this state
+bob2 -> RETR
+bob2 <- -ERR RETR takes 1 argument
+bob2 -> RETR abc
+bob2 <- -ERR invalid message number
+bob2 -> RETR 0
+bob2 <- -ERR no such message
+bob2 -> TOP 1
+bob2 <- -ERR TOP takes 2 arguments
+bob2 -> TOP 1 x
+bob2 <- -ERR invalid line count
+bob2 -> XYZZY
+bob2 <- -ERR unknown command
+bob2 -> NOOP xxxxxxxxxxxxxxx... (305 octets)
+bob2 <- -ERR line too long
+bob2 -> RETR 1
+bob2 <- +OK 140 octets
+bob2 <- From: alice@example.test
+bob2 <- To: inbox@example.test
+bob2 <- Subject: Kara build
+bob2 <- Message-ID: <m5@example.test>
+bob2 <- 
+bob2 <- The build is green again.
+bob2 <- 
+bob2 <- Alice
+bob2 <- .
+bob2 :: message 1: 3 body lines, 140 octets (server said 140, ok), subject "Kara build"
+bob2 -> TOP 1 0
+bob2 <- +OK top of message follows
+bob2 <- From: alice@example.test
+bob2 <- To: inbox@example.test
+bob2 <- Subject: Kara build
+bob2 <- Message-ID: <m5@example.test>
+bob2 <- 
+bob2 <- .
+bob2 -> DELE 1
+bob2 <- +OK message 1 deleted
+bob2 -> STAT
+bob2 <- +OK 0 0
+bob2 -> QUIT
+bob2 <- +OK kara POP3 server signing off (0 messages left)
+bob2 <- (closed)
+== server
+CAPA 1
+DELE 6
+LIST 4
+NOOP 1
+PASS 10
+QUIT 4
+RETR 6
+RSET 1
+STAT 6
+TOP 4
+UIDL 2
+USER 10
+XYZZY 1
+alice: 3 messages, locked no
+  2f95c19497a8b018 172 Lunch on Friday?
+  ced370ef1adcf181 218 Dots and signatures
+  f88db3c9d6cea7f6 335 Quarterly numbers
+bob: 0 messages, locked no

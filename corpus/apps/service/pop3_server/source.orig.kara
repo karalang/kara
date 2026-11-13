@@ -1,0 +1,617 @@
+// pop3_server: a POP3 server (RFC 1939, with CAPA and the response codes of
+// RFC 2449) on loopback TCP. Each connection is a task reading CRLF lines
+// through a BufReader. The maildrops and the command counts are one Mutex
+// in a sync struct; a session holds its maildrop's lock from PASS to QUIT
+// or hang-up, and only QUIT removes the messages it marked deleted. RETR and
+// TOP byte-stuff lines that start with a dot. Scripted clients on the main
+// task run six sessions in turn, decode each multi-line answer, and check a
+// retrieved message's size against what the server claimed; then the
+// server prints its counts and what is left in each maildrop.
+
+import std::sync::{TaskGroup, Mutex};
+import std::io::{BufReader, BufWriter};
+
+const ADDR: &str = "127.0.0.1:47770";
+const MAX_LINE: usize = 255;
+const MAX_FAILS: i64 = 3;
+const SESSIONS: i64 = 6;
+
+fn message(n: i64, sender: &str, subject: &str, body: Vec<String>) -> Vec<String> {
+    let mut lines = vec![
+        format!("From: {}", sender),
+        "To: inbox@example.test".to_string(),
+        format!("Subject: {}", subject),
+        format!("Message-ID: <m{}@example.test>", n),
+        String::new(),
+    ];
+    lines.extend(body);
+    lines
+}
+
+fn strings(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|l| l.to_string()).collect::<Vec<String>>()
+}
+
+fn seed() -> SortedMap<String, Maildrop> {
+    let mut numbers = Vec::new();
+    for i in 1..9 {
+        numbers.push(format!("Line {}: revenue {} units", i, i * 1250));
+    }
+    let alice = vec![
+        message(1, "carol@example.test", "Lunch on Friday?",
+            strings(&["Are you free for lunch on Friday?", "The usual place, at noon."])),
+        message(2, "dave@example.test", "Dots and signatures",
+            strings(&["Lines that start with a dot are stuffed on the wire.", ".hidden line one", ".",
+                      "..two dots already", "-- ", "Dave"])),
+        message(3, "erin@example.test", "Quarterly numbers", numbers),
+        message(4, "frank@example.test", "Unsubscribe", strings(&["Please remove me from the list."])),
+    ];
+    let bob = vec![
+        message(5, "alice@example.test", "Kara build", strings(&["The build is green again.", "", "Alice"])),
+    ];
+    let mut drops = SortedMap::new();
+    drops.insert("alice".to_string(), Maildrop { password: "wonderland".to_string(), msgs: alice, locked: false });
+    drops.insert("bob".to_string(), Maildrop { password: "builder".to_string(), msgs: bob, locked: false });
+    drops
+}
+
+// A message's size in octets as it is stored, each line ending in CRLF.
+fn size(msg: &Vec<String>) -> i64 {
+    let mut n = 0;
+    for line in msg.iter() {
+        n += line.len() + 2;
+    }
+    n
+}
+
+fn total(msgs: &Vec<Vec<String>>) -> i64 {
+    let mut n = 0;
+    for m in msgs.iter() {
+        n += size(m);
+    }
+    n
+}
+
+// The unique id UIDL reports: FNV-1a over the stored octets.
+fn uid(msg: &Vec<String>) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for line in msg.iter() {
+        for b in format!("{}\r\n", line).bytes() {
+            h = h ^ (b as u64);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{:016x}", h)
+}
+
+fn subject(msg: &Vec<String>) -> String {
+    for line in msg.iter() {
+        if line.starts_with("Subject: ") {
+            return line[9..].to_string();
+        }
+    }
+    "?".to_string()
+}
+
+fn stuffed(lines: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for l in lines.iter() {
+        if l.starts_with(".") {
+            out.push(format!(".{}", l));
+        } else {
+            out.push(l.clone());
+        }
+    }
+    out
+}
+
+struct Maildrop {
+    password: String,
+    msgs: Vec<Vec<String>>,
+    locked: bool,
+}
+
+struct State {
+    drops: SortedMap<String, Maildrop>,
+    counts: SortedMap<String, i64>,
+}
+
+sync struct Server {
+    state: Mutex<State>,
+}
+
+#[derive(PartialEq)]
+enum Phase {
+    Authorization,
+    Transaction,
+}
+
+struct Session {
+    phase: Phase,
+    user: Option<String>,
+    fails: i64,
+    deleted: Vec<i64>,
+    closing: bool,
+}
+
+fn is_number(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b >= 48 && b <= 57)
+}
+
+impl Session {
+    fn live(&self, drop: &Maildrop) -> Vec<i64> {
+        let mut out = Vec::new();
+        for i in 1..=drop.msgs.len() {
+            if !self.deleted.contains(&i) {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    // The message an argument names, or the error reply.
+    fn msg_arg(&self, drop: &Maildrop, arg: &str) -> Result<i64, String> {
+        if !is_number(arg) {
+            return Err("-ERR invalid message number".to_string());
+        }
+        let n = arg.parse::<i64>().unwrap();
+        if n < 1 || n > drop.msgs.len() {
+            return Err("-ERR no such message".to_string());
+        }
+        if self.deleted.contains(&n) {
+            return Err(format!("-ERR message {} already deleted", n));
+        }
+        Ok(n)
+    }
+}
+
+fn handle(st: &mut State, s: &mut Session, line: &str) -> Vec<String> {
+    if line.len() > MAX_LINE {
+        return vec!["-ERR line too long".to_string()];
+    }
+    let parts = line.split(" ");
+    let verb = parts[0].to_uppercase();
+    let mut args: Vec<String> = Vec::new();
+    for p in parts[1..].iter() {
+        if !p.is_empty() {
+            args.push(p.clone());
+        }
+    }
+    let seen = st.counts.get(&verb).copied().unwrap_or(0);
+    st.counts.insert(verb.clone(), seen + 1);
+
+    if verb == "CAPA" {
+        return strings(&["+OK Capability list follows", "TOP", "USER", "UIDL", "RESP-CODES",
+                         "IMPLEMENTATION kara-pop3", "."]);
+    }
+    if verb == "QUIT" {
+        s.closing = true;
+        if s.phase == Phase::Transaction {
+            let user = s.user.clone().unwrap();
+            let drop = st.drops.get_mut(&user).unwrap();
+            let mut kept = Vec::new();
+            for (i, m) in drop.msgs.iter().enumerate() {
+                if !s.deleted.contains(&(i + 1)) {
+                    kept.push(m.clone());
+                }
+            }
+            drop.msgs = kept;
+            drop.locked = false;
+            return vec![format!("+OK kara POP3 server signing off ({} messages left)", drop.msgs.len())];
+        }
+        return vec!["+OK kara POP3 server signing off".to_string()];
+    }
+    if verb == "NOOP" && s.phase == Phase::Transaction {
+        return vec!["+OK".to_string()];
+    }
+    if s.phase == Phase::Authorization {
+        return authorize(st, s, &verb, &args);
+    }
+    transact(st, s, &verb, &args)
+}
+
+fn authorize(st: &mut State, s: &mut Session, verb: &str, args: &Vec<String>) -> Vec<String> {
+    match verb {
+        "USER" => {
+            if args.len() != 1 {
+                return vec!["-ERR USER takes one argument".to_string()];
+            }
+            s.user = Some(args[0].clone());
+            vec![format!("+OK send PASS for {}", args[0])]
+        }
+        "PASS" => {
+            let user = match &s.user {
+                Some(u) => u.clone(),
+                None => return vec!["-ERR USER first".to_string()],
+            };
+            let given = args.join(" ");
+            let ok = match st.drops.get(&user) {
+                Some(d) => d.password == given,
+                None => false,
+            };
+            if !ok {
+                s.fails += 1;
+                s.user = None;
+                if s.fails >= MAX_FAILS {
+                    s.closing = true;
+                    return vec!["-ERR [AUTH] too many failures, goodbye".to_string()];
+                }
+                return vec!["-ERR [AUTH] invalid credentials".to_string()];
+            }
+            let drop = st.drops.get_mut(&user).unwrap();
+            if drop.locked {
+                s.user = None;
+                return vec!["-ERR [IN-USE] maildrop already locked".to_string()];
+            }
+            drop.locked = true;
+            s.phase = Phase::Transaction;
+            vec![format!("+OK {} has {} messages ({} octets)", user, drop.msgs.len(), total(&drop.msgs))]
+        }
+        "STAT" | "LIST" | "UIDL" | "RETR" | "TOP" | "DELE" | "RSET" | "NOOP" => {
+            vec!["-ERR command not valid in this state".to_string()]
+        }
+        _ => vec!["-ERR unknown command".to_string()],
+    }
+}
+
+fn listing(drop: &Maildrop, verb: &str, i: i64) -> String {
+    if verb == "LIST" {
+        format!("{} {}", i, size(&drop.msgs[i - 1]))
+    } else {
+        format!("{} {}", i, uid(&drop.msgs[i - 1]))
+    }
+}
+
+fn transact(st: &mut State, s: &mut Session, verb: &str, args: &Vec<String>) -> Vec<String> {
+    let user = s.user.clone().unwrap();
+    let drop = st.drops.get(&user).unwrap();
+    match verb {
+        "STAT" => {
+            let live = s.live(drop);
+            let mut octets = 0;
+            for i in live.iter() {
+                octets += size(&drop.msgs[*i - 1]);
+            }
+            vec![format!("+OK {} {}", live.len(), octets)]
+        }
+        "LIST" | "UIDL" => {
+            if args.len() > 0 {
+                return match s.msg_arg(drop, &args[0]) {
+                    Ok(n) => vec![format!("+OK {}", listing(drop, verb, n))],
+                    Err(e) => vec![e],
+                };
+            }
+            let live = s.live(drop);
+            let mut out = Vec::new();
+            if verb == "LIST" {
+                out.push(format!("+OK {} messages", live.len()));
+            } else {
+                out.push("+OK unique-id listing follows".to_string());
+            }
+            for i in live.iter() {
+                out.push(listing(drop, verb, *i));
+            }
+            out.push(".".to_string());
+            out
+        }
+        "RETR" | "TOP" => {
+            let want = if verb == "TOP" { 2 } else { 1 };
+            if args.len() != want {
+                let plural = if want > 1 { "s" } else { "" };
+                return vec![format!("-ERR {} takes {} argument{}", verb, want, plural)];
+            }
+            let n = match s.msg_arg(drop, &args[0]) {
+                Ok(n) => n,
+                Err(e) => return vec![e],
+            };
+            let msg = &drop.msgs[n - 1];
+            if verb == "RETR" {
+                let mut out = vec![format!("+OK {} octets", size(msg))];
+                out.extend(stuffed(&msg[..]));
+                out.push(".".to_string());
+                return out;
+            }
+            if !is_number(&args[1]) {
+                return vec!["-ERR invalid line count".to_string()];
+            }
+            let k = args[1].parse::<i64>().unwrap();
+            let mut blank = 0;
+            while !msg[blank].is_empty() {
+                blank += 1;
+            }
+            let end = std::cmp::min(blank + 1 + k, msg.len());
+            let mut out = vec!["+OK top of message follows".to_string()];
+            out.extend(stuffed(&msg[..end]));
+            out.push(".".to_string());
+            out
+        }
+        "DELE" => {
+            if args.len() != 1 {
+                return vec!["-ERR DELE takes 1 argument".to_string()];
+            }
+            match s.msg_arg(drop, &args[0]) {
+                Ok(n) => {
+                    s.deleted.push(n);
+                    vec![format!("+OK message {} deleted", n)]
+                }
+                Err(e) => vec![e],
+            }
+        }
+        "RSET" => {
+            s.deleted.clear();
+            vec![format!("+OK maildrop has {} messages ({} octets)", drop.msgs.len(), total(&drop.msgs))]
+        }
+        "USER" | "PASS" => vec!["-ERR command not valid in this state".to_string()],
+        _ => vec!["-ERR unknown command".to_string()],
+    }
+}
+
+fn serve(srv: &Server, conn: TcpStream) {
+    let mut out = BufWriter::new(conn.try_clone().unwrap());
+    let reader = BufReader::new(conn);
+    let mut s = Session { phase: Phase::Authorization, user: None, fails: 0, deleted: Vec::new(), closing: false };
+    let _ = out.write_all("+OK kara POP3 server ready\r\n".as_bytes());
+    let _ = out.flush();
+    for raw in reader.lines() {
+        let line = match raw {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let replies = {
+            let mut g = srv.state.lock();
+            handle(&mut g.value, &mut s, &line)
+        };
+        let mut text = String::new();
+        for r in replies.iter() {
+            text.push_str(r);
+            text.push_str("\r\n");
+        }
+        let _ = out.write_all(text.as_bytes());
+        let _ = out.flush();
+        if s.closing {
+            break;
+        }
+    }
+    // A session that ends without QUIT keeps every message and frees its
+    // maildrop before the connection closes.
+    if s.phase == Phase::Transaction && !s.closing {
+        let mut g = srv.state.lock();
+        let user = s.user.clone().unwrap();
+        g.value.drops.get_mut(&user).unwrap().locked = false;
+    }
+}
+
+fn run_server(srv: &Server, listener: &TcpListener) {
+    let tasks = TaskGroup::new();
+    for _ in 0..SESSIONS {
+        let conn = listener.accept().unwrap();
+        tasks.spawn(|| serve(srv, conn));
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+fn chomp(s: &str) -> &str {
+    let s = s.strip_suffix("\n").unwrap_or(s);
+    s.strip_suffix("\r").unwrap_or(s)
+}
+
+struct Client {
+    name: String,
+    raw: TcpStream,
+    out: BufWriter<TcpStream>,
+    inp: BufReader<TcpStream>,
+}
+
+impl Client {
+    fn connect(name: &str) -> Client {
+        let s = TcpStream::connect(ADDR).unwrap();
+        let _ = s.set_read_timeout(Some(2000));
+        let mut c = Client {
+            name: name.to_string(),
+            raw: s.try_clone().unwrap(),
+            out: BufWriter::new(s.try_clone().unwrap()),
+            inp: BufReader::new(s),
+        };
+        c.read_line();
+        c
+    }
+
+    fn read_line(&mut self) -> Option<String> {
+        let mut s = String::new();
+        match self.inp.read_line(&mut s) {
+            Ok(0) => {
+                println!("{} <- (closed)", self.name);
+                None
+            }
+            Ok(_) => {
+                let line = chomp(&s).to_string();
+                println!("{} <- {}", self.name, line);
+                Some(line)
+            }
+            Err(e) => {
+                println!("{} <- error {}", self.name, e);
+                None
+            }
+        }
+    }
+
+    // Sends one command and reads its answer: the status line, and for a
+    // multi-line answer the lines up to the lone dot, unstuffed.
+    fn cmd(&mut self, line: &str, multi: bool) -> (String, Vec<String>) {
+        if line.len() <= 40 {
+            println!("{} -> {}", self.name, line);
+        } else {
+            println!("{} -> {}... ({} octets)", self.name, &line[..20], line.len());
+        }
+        let _ = self.out.write_all(format!("{}\r\n", line).as_bytes());
+        let _ = self.out.flush();
+        let first = self.read_line().unwrap_or_default();
+        let mut body = Vec::new();
+        if multi && first.starts_with("+OK") {
+            loop {
+                match self.read_line() {
+                    None => break,
+                    Some(l) => {
+                        if l == "." {
+                            break;
+                        }
+                        if l.starts_with(".") {
+                            body.push(l[1..].to_string());
+                        } else {
+                            body.push(l);
+                        }
+                    }
+                }
+            }
+        }
+        (first, body)
+    }
+
+    fn say(&mut self, line: &str) {
+        self.cmd(line, false);
+    }
+
+    fn many(&mut self, line: &str) {
+        self.cmd(line, true);
+    }
+
+    fn retr(&mut self, n: i64) {
+        let (first, body) = self.cmd(&format!("RETR {}", n), true);
+        if !first.starts_with("+OK") {
+            return;
+        }
+        let claimed = first.split(" ")[1].parse::<i64>().unwrap();
+        let octets = size(&body);
+        let mut blank = 0;
+        while !body[blank].is_empty() {
+            blank += 1;
+        }
+        let verdict = if octets == claimed { "ok" } else { "MISMATCH" };
+        println!("{} :: message {}: {} body lines, {} octets (server said {}, {}), subject \"{}\"",
+            self.name, n, body.len() - blank - 1, octets, claimed, verdict, subject(&body));
+    }
+
+    fn expect_close(&mut self) {
+        let mut s = String::new();
+        match self.inp.read_line(&mut s) {
+            Ok(0) => println!("{} <- (closed)", self.name),
+            Ok(_) => println!("{} <- unexpected {}", self.name, chomp(&s)),
+            Err(e) => println!("{} <- error {}", self.name, e),
+        }
+    }
+
+    // Closes the write side without QUIT and waits for the server to close.
+    fn hang_up(&mut self) {
+        println!("{} -- hangs up without QUIT", self.name);
+        let _ = self.raw.shutdown_write();
+        self.expect_close();
+    }
+}
+
+fn main() {
+    let listener = TcpListener::bind(ADDR).unwrap();
+    let srv = Server { state: Mutex::new(State { drops: seed(), counts: SortedMap::new() }) };
+    let group = TaskGroup::new();
+    let server = group.spawn(|| run_server(&srv, &listener));
+
+    println!("== session 1: alice reads and deletes");
+    let mut a = Client::connect("alice1");
+    a.many("CAPA");
+    a.say("STAT");
+    a.say("PASS wonderland");
+    a.say("USER alice");
+    a.say("PASS rabbit-hole");
+    a.say("USER alice");
+    a.say("PASS wonderland");
+    a.say("STAT");
+    a.many("LIST");
+    a.say("LIST 3");
+    a.say("LIST 9");
+    a.many("UIDL");
+    a.retr(2);
+    a.many("TOP 3 2");
+    a.say("DELE 1");
+    a.say("DELE 1");
+    a.say("LIST 1");
+    a.say("STAT");
+    a.say("RSET");
+    a.say("STAT");
+    a.say("DELE 4");
+
+    println!("== session 2: alice again while the maildrop is locked");
+    let mut b = Client::connect("alice2");
+    b.say("USER alice");
+    b.say("PASS wonderland");
+    b.say("QUIT");
+    b.expect_close();
+    drop(b);
+
+    a.say("NOOP");
+    a.say("QUIT");
+    a.expect_close();
+    drop(a);
+
+    println!("== session 3: deletes, then hangs up without QUIT");
+    let mut c = Client::connect("alice3");
+    c.say("USER alice");
+    c.say("PASS wonderland");
+    c.many("UIDL");
+    c.say("DELE 1");
+    c.say("DELE 2");
+    c.hang_up();
+    drop(c);
+
+    println!("== session 4: nothing was deleted");
+    let mut d = Client::connect("alice4");
+    d.say("USER alice");
+    d.say("PASS wonderland");
+    d.say("STAT");
+    d.retr(1);
+    d.say("QUIT");
+    d.expect_close();
+    drop(d);
+
+    println!("== session 5: bob guesses");
+    let mut e = Client::connect("bob1");
+    for pw in ["build", "Builder", "bob"].iter() {
+        e.say("USER bob");
+        e.say(&format!("PASS {}", pw));
+    }
+    e.expect_close();
+    drop(e);
+
+    println!("== session 6: bob and the error replies");
+    let mut f = Client::connect("bob2");
+    f.say("USER bob");
+    f.say("PASS builder");
+    f.say("USER bob");
+    f.say("RETR");
+    f.say("RETR abc");
+    f.say("RETR 0");
+    f.say("TOP 1");
+    f.say("TOP 1 x");
+    f.say("XYZZY");
+    f.say(&format!("NOOP {}", "x".repeat(300)));
+    f.retr(1);
+    f.many("TOP 1 0");
+    f.say("DELE 1");
+    f.say("STAT");
+    f.say("QUIT");
+    f.expect_close();
+    drop(f);
+
+    server.join();
+    println!("== server");
+    let g = srv.state.lock();
+    for (verb, n) in g.value.counts.iter() {
+        println!("{} {}", verb, n);
+    }
+    for (user, drop) in g.value.drops.iter() {
+        let locked = if drop.locked { "yes" } else { "no" };
+        println!("{}: {} messages, locked {}", user, drop.msgs.len(), locked);
+        for m in drop.msgs.iter() {
+            println!("  {} {} {}", uid(m), size(m), subject(m));
+        }
+    }
+}
