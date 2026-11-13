@@ -1701,7 +1701,7 @@ match n {
 - When both bounds are present they must have the same type, integer or `char`. Float ranges are not supported, because of NaN ordering.
 - A bounded inclusive range needs start ≤ end; `9..=0` is a compile error. The check runs after named bounds are resolved.
 - Range patterns compose with or-patterns (`0..=9 | 100..=199 => …`) and `@` bindings (`n @ 0..=9 => …`).
-- For exhaustiveness, a range pattern covers exactly its values. A match over integers or `char` still needs a wildcard arm: the compiler does not check whether a set of ranges partitions the whole type.
+- For exhaustiveness, a range pattern covers exactly its values, and ranges that together cover the whole type make a match exhaustive without a wildcard: `match n { 0..=127 => .., 128..=255 => .. }` on a `u8`, or `..=-1`, `0` and `1..` on an `i64`. A gap is an error that names the first value not covered (`pattern `10` not covered` for `0..=9` alone on a `u8`), as in Rust.
 
 **Named bounds.** A bound may be a literal or a path to a module-level `const` of integer or `char` type. The path is resolved during type checking and the constant's value is used as the bound:
 
