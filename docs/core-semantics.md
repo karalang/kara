@@ -298,7 +298,7 @@ Pins:
 - a field of a `shared`, `sync` or `frozen` type;
 - a global;
 - a channel;
-- an escaping closure (§9.3);
+- an escaping closure (§9.3), except one that is the function's result: a returned closure that captures a view is a view result, which §5.4 allows and which carries the view's origins, so `fn mk(s: Str) -> Fn() -> i64 { || s.len() }` is accepted and `mk(t.as_str())` may not outlive `t` (ruled 2026-11-13, probe);
 - the function's result, except as §5.4 allows.
 
 A view **may** enter a branch of `par {}` or `par for`, or a `TaskGroup` task that joins inside the scope of every origin (§9.5).
