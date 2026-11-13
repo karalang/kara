@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 276 |
-| false-positive | 193 |
+| false-positive | 194 |
 | perf | 159 |
 | missing-feature | 150 |
 | soundness | 63 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 423 |
+| typecheck | 424 |
 | mir-llvm | 208 |
 | mir | 173 |
 | cli | 99 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-31 | 2026-11-13 | ownership | high | A method with a `self` or `mut ref self` receiver may return a view-typed ARGUMENT (`fn pick(self, other: Str) -> Str { other }`, also `Option[ref T]`, `Option[Str]`, `Result[Str, E]`, a tuple, `own Vec[Str]`, `own V` with a view field): the §5.4 receiver check of B-2026-11-02-28 covers only `ref T` and `Slice[T]` arguments, so a caller keeps the result past the argument and reads freed memory (ASan heap-use-after-free) | — |
 | B-2026-11-13-33 | 2026-11-13 | mir-llvm | low | `==` and `!=` on two `Slice[u8]` compile to a byte-by-byte loop where `Str` equality calls `memcmp`: kata 1147's greedy arm written over `text.bytes()` takes 1.32 s against 1.08 s over `Str`, and Rust's byte-slice mirror 0.75 s | — |
 | B-2026-11-13-34 | 2026-11-13 | mir-llvm | low | `partition_point` is the branching binary search (runtime/stdlib/source/collections.kara) where Rust's is branch-free: kata 1150's 10,000,000 searches of 1000 values take 0.76 s in Kāra (C's and Go's branching searches 0.75 and 0.80 s) against 0.37 s in overflow-checked Rust | — |
+| B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
 
 ### Relocated
 
