@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-20 | 2026-11-13 | cli | low | 86 of the 96 symbolic `E_*` codes minted in src/ are unknown to `karac explain`, against design.md §17's "every code is catalogued" | — |
 | B-2026-11-13-21 | 2026-11-13 | mir | low | `ParseError` variants differ from core-types.md Parsing in two edge cases: `u8.parse("-0")` gives `Invalid` where `InvalidDigit` is specified, and whitespace-only input to `i64.parse` gives `InvalidDigit` where `Empty` is specified | — |
 | B-2026-11-13-31 | 2026-11-13 | ownership | high | A method with a `self` or `mut ref self` receiver may return a view-typed ARGUMENT (`fn pick(self, other: Str) -> Str { other }`, also `Option[ref T]`, `Option[Str]`, `Result[Str, E]`, a tuple, `own Vec[Str]`, `own V` with a view field): the §5.4 receiver check of B-2026-11-02-28 covers only `ref T` and `Slice[T]` arguments, so a caller keeps the result past the argument and reads freed memory (ASan heap-use-after-free) | — |
-| B-2026-11-13-32 | 2026-11-13 | effect | low | An effect slot's refusal prints a verb that names no resource with empty parentheses: a closure that calls `sleep` in a field `Fn() with reads(Clock) writes(Stdout)` is refused with "field `f` has effect blocks() not declared in slot", where the language and the rest of the effect checker write `blocks` bare | — |
 
 ### Relocated
 
@@ -1127,6 +1126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-22 | typecheck | low | A run-time value as a const generic argument (`Array[i64, n]` with `n` a parameter or local, or `n + 1`) is not reported at the argument as design.md… | 2d1651fa5d |
 | B-2026-11-13-23 | ownership | low | Assigning into a field of a value moved as a whole (`eat(p); p.a = 1;`) is correctly refused, but the help suggests deriving `Clone` and cloning `p`… | 2d1651fa5d |
 | B-2026-11-13-30 | cli+resolver | medium | A script inside a package but outside `src/` does not get the package's dependencies: `karac run app/scripts/s.kara` importing a path dependency is "… | 0e77ed613d |
+| B-2026-11-13-32 | effect | low | An effect slot's refusal prints a verb that names no resource with empty parentheses: a closure that calls `sleep` in a field `Fn() with reads(Clock)… | 416dbf25cc |
 
 </details>
 
