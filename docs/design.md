@@ -6847,6 +6847,8 @@ Each target provides a subset of the built-in resources ([§12](#12-effects)). A
 
 `Network` is not provided on `wasm_wasi` in v1: WASI preview 1 has no socket `connect` or `bind`, so a TCP or UDP socket, the HTTP client or a server is refused when compiling for it, with the call chain, as for `ProcessTable` (review-thread ruling 2026-11-08, B-2026-11-08-37). It returns with a WASI version that has sockets.
 
+Pure-computation library surfaces with no resource, such as `String.normalize` and `std.regex`, work on both targets. On `wasm_wasi` they link from opt-in runtime archives (`libkarac_runtime_wasm[_threads]_{unicode,regex}.a`), which the driver selects from the symbols the module references, as it does on native. A missing archive fails at link with the command that builds it, not with an undefined symbol (B-2026-11-13-1, 637125377c).
+
 User-defined resources have no target affinity. The target gate does not see a user resource directly, only the built-in resources it reaches transitively.
 
 #### Effect-driven target gating
