@@ -124,10 +124,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-46 | 2026-11-13 | mir+mir-llvm | medium | Two non-generic traits with a method of one name, both implemented for a primitive (`impl A for i64 { fn m }`, `impl B for i64 { fn m }`): `A.m(n)` checks but fails at run with `call of unknown function i64.m` (LLVM: `native i64.m is not lowered yet`); on a struct receiver both calls are right | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
 | B-2026-11-13-74 | 2026-11-13 | typecheck | low | `karac fix` writes Rust's `if c { ".." } else { &arg }` as `{ ref arg }`, which the check then refuses ("if/else branches have incompatible types: 'String' and 'ref String'") with no fix; `arg.as_str()` is what typechecks | — |
-| B-2026-11-13-75 | 2026-11-13 | mir-llvm+runtime | medium | Output printed before a foreign `exit()` is lost in compiled code: `unsafe extern "C" { fn exit(code: i32) with panics; }` then `println("a"); exit(3);` prints `a` under `__mir-run` but nothing under `__mir-llvm-run` or a built binary writing to a pipe (all exit 3) | — |
-| B-2026-11-13-76 | 2026-11-13 | cli+resolver | low | A `test "..." { }` block in a package's `src/main.kara` (not a `_test.kara` file) is silently never run: `karac check` passes and `karac test` reports 0 tests; it should be an error naming `main_test.kara` | — |
-| B-2026-11-13-77 | 2026-11-13 | mir | low | E0509 for a view stored where its borrow is not kept says "a view of a temporary value" where the program names the place (`t`, `t.s`), and the shared-field E0509 prints the view type with MIR's `str` (`Option[str]`) where the program writes `Str` | — |
-| B-2026-11-13-78 | 2026-11-13 | typecheck | low | A default generic argument is not applied to a type written with no arguments: `struct Holder[T = i64]` then `let a: Holder = Holder { v: 3 }` is "expected 'Holder', found 'Holder[i64]'" | — |
 | B-2026-11-13-79 | 2026-11-13 | mir | medium | Results borrow what a view parameter views (core semantics §5.4 ruling, 6980a490b6): a parameter or receiver of a view type (`struct Cursor { src: Str, pos: i64 }`, bare, `mut ref` or self) whose result reference comes only through a view type contributes its origins, not its place, so `fn parse_until(c: mut ref Cursor, stop: char) -> Str` leaves `c` usable and two results can be live while `c` advances | — |
 
 ### Relocated
@@ -1156,6 +1152,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-71 | typecheck | low | `addr.rsplit(':')` is answered "did you mean 'split'?", which starts from the other end; Kāra's spelling of taking the last piece is `rsplit_once` | e65451aad4 |
 | B-2026-11-13-72 | typecheck | low | `group.join()` on a `TaskGroup` is a bare "no method 'join'": a group joins its tasks when dropped, so the repair is `drop(group)` | e65451aad4 |
 | B-2026-11-13-73 | typecheck+mir | medium | `TcpStream` (and `TlsStream`) have no `read_to_end`: a connection that carries one payload and closes, such as an FTP data connection, can only be re… | e65451aad4 |
+| B-2026-11-13-75 | mir-llvm+runtime | medium | Output printed before a foreign `exit()` is lost in compiled code: `unsafe extern "C" { fn exit(code: i32) with panics; }` then `println("a"); exit(3… | e84c3d02ad |
+| B-2026-11-13-76 | cli+resolver | low | A `test "..." { }` block in a package's `src/main.kara` (not a `_test.kara` file) is silently never run: `karac check` passes and `karac test` report… | e84c3d02ad |
+| B-2026-11-13-77 | mir | low | E0509 for a view stored where its borrow is not kept says "a view of a temporary value" where the program names the place (`t`, `t.s`), and the share… | e84c3d02ad |
+| B-2026-11-13-78 | typecheck | low | A default generic argument is not applied to a type written with no arguments: `struct Holder[T = i64]` then `let a: Holder = Holder { v: 3 }` is "ex… | e84c3d02ad |
 
 </details>
 
