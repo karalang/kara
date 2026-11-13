@@ -1226,7 +1226,7 @@ impl StringSlice {
         let empty = sep.is_empty();
         StrSplit {
             s: self,
-            sep: sep,
+            sep: sep.to_string(),
             pos: 0,
             back: self.len(),
             lead: empty,
@@ -1362,13 +1362,13 @@ impl StringSlice {
     /// offset, the match a view into the text. An empty `pat` matches at
     /// every char boundary, the end included (B-2026-11-09-57).
     fn match_indices(self, pat: Str) -> StrMatchIndices {
-        StrMatchIndices { s: self, pat: pat, pos: 0 }
+        StrMatchIndices { s: self, pat: pat.to_string(), pos: 0 }
     }
 
     /// Every non-overlapping match of `pat`, left to right, each a view
     /// into the text: `match_indices` without the offsets (kata 2086).
     fn matches(self, pat: Str) -> StrMatches {
-        StrMatches { s: self, pat: pat, pos: 0 }
+        StrMatches { s: self, pat: pat.to_string(), pos: 0 }
     }
 }
 
@@ -1513,9 +1513,13 @@ impl DoubleEndedIterator for StrCharIndices {
 /// their byte offsets: `match_indices`. What is left to search starts at
 /// `pos`; past the end, nothing is. An empty `pat` matches at each char
 /// boundary in turn, the end included.
+/// It keeps its own copy of `pat`: a method with a `self` receiver returns
+/// a borrow of `self` only (core semantics §5.4), so the text is all the
+/// iterator may borrow, and the pattern may be gone before it is walked
+/// (B-2026-11-13-43).
 struct StrMatchIndices {
     s: Str,
-    pat: Str,
+    pat: String,
     pos: i64,
 }
 
@@ -1532,7 +1536,7 @@ impl Iterator for StrMatchIndices {
             self.pos = if at == n { n + 1 } else { at + self.s.char_at_byte(at).len_utf8() };
             return Some((at, self.s.slice(at, at)));
         }
-        match self.s.find_at_byte(self.pat, at) {
+        match self.s.find_at_byte(self.pat.as_str(), at) {
             Some(i) => {
                 self.pos = i + self.pat.len();
                 Some((i, self.s.slice(i, self.pos)))
@@ -1549,9 +1553,13 @@ impl Iterator for StrMatchIndices {
 /// `matches`, the matches of `match_indices` without their offsets. It
 /// keeps the text itself rather than a `StrMatchIndices`, so each match it
 /// yields borrows the text its `s` field borrows.
+/// It keeps its own copy of `pat`: a method with a `self` receiver returns
+/// a borrow of `self` only (core semantics §5.4), so the text is all the
+/// iterator may borrow, and the pattern may be gone before it is walked
+/// (B-2026-11-13-43).
 struct StrMatches {
     s: Str,
-    pat: Str,
+    pat: String,
     pos: i64,
 }
 
@@ -1568,7 +1576,7 @@ impl Iterator for StrMatches {
             self.pos = if at == n { n + 1 } else { at + self.s.char_at_byte(at).len_utf8() };
             return Some(self.s.slice(at, at));
         }
-        match self.s.find_at_byte(self.pat, at) {
+        match self.s.find_at_byte(self.pat.as_str(), at) {
             Some(i) => {
                 self.pos = i + self.pat.len();
                 Some(self.s.slice(i, self.pos))
@@ -1587,9 +1595,13 @@ impl Iterator for StrMatches {
 /// `rev()` yields the same pieces last first (B-2026-11-08-15). An empty
 /// separator yields an empty piece, each char, and an empty piece: `lead`
 /// and `trail` say whether the two empty pieces are still to come.
+/// It keeps its own copy of `sep`: a method with a `self` receiver returns
+/// a borrow of `self` only (core semantics §5.4), so the text is all the
+/// iterator may borrow, and the pattern may be gone before it is walked
+/// (B-2026-11-13-43).
 struct StrSplit {
     s: Str,
-    sep: Str,
+    sep: String,
     pos: i64,
     back: i64,
     lead: bool,
@@ -1608,14 +1620,14 @@ impl StrSplit {
         let mut border = false;
         let mut k = 1;
         while k < m {
-            if self.sep.slice(0, k) == self.sep.slice(m - k, m) {
+            if self.sep.as_str().slice(0, k) == self.sep.as_str().slice(m - k, m) {
                 border = true;
                 break;
             }
             k = k + 1;
         }
         if not border {
-            return match self.s.slice(self.pos, self.back).rfind(self.sep) {
+            return match self.s.slice(self.pos, self.back).rfind(self.sep.as_str()) {
                 Some(j) => Some(self.pos + j),
                 None => None,
             };
@@ -1623,7 +1635,7 @@ impl StrSplit {
         let mut last: Option[i64] = None;
         let mut at = self.pos;
         loop {
-            match self.s.find_at_byte(self.sep, at) {
+            match self.s.find_at_byte(self.sep.as_str(), at) {
                 Some(i) => {
                     if i + m > self.back {
                         return last;
@@ -1663,7 +1675,7 @@ impl Iterator for StrSplit {
             return None;
         }
         let at = self.pos;
-        match self.s.find_at_byte(self.sep, at) {
+        match self.s.find_at_byte(self.sep.as_str(), at) {
             Some(i) => {
                 if i + self.sep.len() <= self.back {
                     self.pos = i + self.sep.len();

@@ -388,6 +388,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   in an import of a package's non-entry module rewrites the module name. It
   wrote the fix at the start of the file: `import db.conx.x;` became
   `db.conndb.conx.x;`.
+- `s.split(p)`, `s.splitn(n, p)`, `s.match_indices(p)` and `s.matches(p)`
+  return an iterator that borrows `s` only (core semantics §5.4), but the
+  iterator kept a view of the pattern too, so dropping the pattern before
+  walking it (`let it = { let p = sep(); s.split(p.as_str()) };`) read
+  freed memory in a built binary. The iterators now keep their own copy of
+  the pattern (B-2026-11-13-43).
 - A top-level `const` names its value as an array or vector length:
   `Array[i64, SIZE]` with `const SIZE: i64 = 3;` was kept as an opaque name,
   so `[0; 3]` was refused as a mismatch with its own declared type

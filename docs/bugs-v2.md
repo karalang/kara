@@ -69,7 +69,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen-gap | 30 |
 | crash | 23 |
 | leak | 4 |
-| use-after-free | 2 |
+| use-after-free | 3 |
 
 ### By surface
 
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 77 |
 | parser | 76 |
 | interp | 52 |
-| runtime | 40 |
+| runtime | 41 |
 | effect | 31 |
 | resolver | 25 |
 | codegen | 22 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-34 | 2026-11-13 | mir-llvm | low | `partition_point` is the branching binary search (runtime/stdlib/source/collections.kara) where Rust's is branch-free: kata 1150's 10,000,000 searches of 1000 values take 0.76 s in Kāra (C's and Go's branching searches 0.75 and 0.80 s) against 0.37 s in overflow-checked Rust | — |
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
 | B-2026-11-13-42 | 2026-11-13 | cli | medium | `karac check src/x_test.kara` on a package's test companion reports "All checks passed" while the package check refuses that very file | — |
+| B-2026-11-13-43 | 2026-11-13 | runtime | high | The library's `split`, `splitn`, `match_indices` and `matches` iterators keep a `Str` view of the PATTERN, while §5.4 has the method's result borrow the text only: dropping the pattern before walking the iterator reads freed memory (ASan heap-use-after-free) | — |
 
 ### Relocated
 
