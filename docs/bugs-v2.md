@@ -112,7 +112,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-12 | 2026-11-12 | typecheck | low | A literal stored into an element of an open fill settles the fill's literal: `let mut t = Vec.filled(3, 0); t[1] = 4; let r: i32 = t[1];` is refused (narrowing i64 to i32), though without `t[1] = 4` it is accepted and `t[1] = 4` after the typed read is too | — |
 | B-2026-11-12-15 | 2026-11-12 | mir-llvm | low | `"U".repeat(n)` of a one-byte string is a call into `karac_mir_str_repeat`, an allocation through `karac_alloc_or_panic` and up to three `memcpy` calls where Rust's is inlined: kata 1138's bench runs 7.0G instructions to Rust's 4.6G (0.81 s to 0.59 s) | — |
 | B-2026-11-12-17 | 2026-11-12 | mir-llvm | low | `for i in (low..n).step_by(2)` over an `i64` range runs about 1.2x the same loop written `while i < n { ...; i += 2 }`: `IterStepBy[Range].next` takes the generic path (a `first` flag, `advance_by(step - 1)` through `step_forward_within` and an `Option`, then `next`), which Rust's `StepBy<Range>` specializes | — |
-| B-2026-11-12-18 | 2026-11-12 | typecheck | low | `(1..10).filter(|x| *x % 2 == 0)` is accepted while `(1..n).filter(|x| *x % 2 == 0)` is refused with "drop the `*`": over a range of bare literals the predicate's item is a literal no use has typed yet, which `copy_item_param` does not take for a copy, so the parameter keeps the library's `ref` | — |
 
 ### Relocated
 
@@ -1108,6 +1107,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-13 | typecheck | medium | A `fold` seed read as an index in its closure is refused, `index must be an integer or range, found 'i64'`: the seed is held open while the closure i… | d34854564c |
 | B-2026-11-12-14 | typecheck | medium | `(0..=n).map(\|_\| Set.new()).collect()` into a `Vec[Set[i64]]` is refused, `Vec[Set[i64]]` implements `FromIterator[Set[i64]]`, not `FromIterator[Set[… | d34854564c |
 | B-2026-11-12-16 | typecheck | low | A narrowing read of an element of an array of literals offers only `as i32`: LeetCode's `let mut res = [0, 0]; .. | 9049969b63 |
+| B-2026-11-12-18 | typecheck | low | `(1..10).filter(\|x\| *x % 2 == 0)` is accepted while `(1..n).filter(\|x\| *x % 2 == 0)` is refused with "drop the `*`": over a range of bare literals th… | 18ea960272 |
 
 </details>
 
