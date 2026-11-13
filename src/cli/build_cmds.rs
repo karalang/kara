@@ -2023,55 +2023,35 @@ pub(super) fn default_resolution_target(mf: &manifest::Manifest) -> String {
 /// `false` (halt the command) when a fatal graph error is emitted; `true` to
 /// continue.
 ///
-/// A structural graph error — a dependency cycle, a missing path-dep, or a
-/// workspace-deref failure — fails `build_dep_graph_with_options` and halts.
-/// A version conflict or an MSRV (`kara-version`) violation surfaces from the
-/// resolve step and halts. Registry/git deps, by contrast, cannot be satisfied
-/// without a fetch and neither command fetches or loads dependency modules from
-/// a registry/git source, so an `E_*_DEP_UNSUPPORTED` finding is a build-time
-/// concern — it is skipped here (the same dep surfaces on `karac build`).
+/// The dependency resolution `karac check` and `karac run` do before
+/// checking a package or a file of one: the same as `karac build`'s
+/// ([`run_dep_resolution`]), fetching a git dependency and, through a
+/// configured proxy, a registry one, so every command refuses what the build
+/// refuses with the same code (B-2026-11-13-41). It writes no `kara.lock`.
+/// The dependencies it resolves are the ones the package check then walks
+/// ([`super::run_check_cmds::install_resolved_dep_walks`]). `false` means a
+/// diagnostic was emitted and the command must halt.
 pub(super) fn surface_dep_graph_diagnostics(
     root: &std::path::Path,
     mf: crate::manifest::Manifest,
     output: OutputMode,
 ) -> bool {
-    let loader = crate::dep_graph::FsLoader;
-    let options = crate::dep_graph::DepGraphOptions {
-        offline_root: None,
-        include_dev_deps: false,
-        registry_provider: None,
-        git_provider: None,
-        // Path-dep-only lenient walk — no lockfile pinning here.
-        pins: None,
+    let Ok(resolution) = run_dep_resolution(root, mf, output, None, false, false, false) else {
+        return false;
     };
-    let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
-        Ok(g) => g,
-        Err(e) => {
-            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
-            emit_dep_diagnostic(&diag, output, "error");
-            return false;
+    let platform = walk_platform_for_target(crate::target::active_target());
+    match dep_package_walks(root, resolution.as_ref(), platform, output) {
+        Ok(walks) => {
+            super::run_check_cmds::install_resolved_dep_walks(walks);
+            true
         }
-    };
-    let active = crate::dep_resolver::active_toolchain_version();
-    match crate::dep_resolver::resolve(&graph, &active) {
-        Ok(_) => true,
-        Err(boxed) => {
-            if matches!(
-                boxed.code(),
-                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED"
-            ) {
-                return true;
-            }
-            let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
-            emit_dep_diagnostic(&diag, output, "error");
-            false
-        }
+        Err(()) => false,
     }
 }
 
 /// Build the dep graph and resolve it against the active toolchain. Returns
-/// `true` to continue with the build, `false` to halt. Registry/git
-/// unsupported errors downgrade to warnings — the rest are fatal. Slice 7
+/// `true` to continue with the build, `false` to halt. Every finding is
+/// fatal, an unsupported registry/git source included (B-2026-11-13-41). Slice 7
 /// of the PubGrub-resolver entry (`docs/implementation_checklist/phase-5-
 /// diagnostics.md` line 813). Wiring point: `cmd_build_project` right
 /// after the manifest loads.
@@ -2083,9 +2063,8 @@ pub(super) fn surface_dep_graph_diagnostics(
 /// Resolve the project's dependency graph. `Err(())` means a fatal
 /// diagnostic was emitted and the build must halt. `Ok(Some(resolution))`
 /// carries the concrete package set for cross-package module loading
-/// (phase-5 line 898); `Ok(None)` is the legacy warning-and-continue path
-/// (unsupported registry/git sources outside offline mode), where the
-/// build proceeds without dependency modules.
+/// (phase-5 line 898). `Ok(None)` is no longer returned; an unsupported
+/// registry/git source is an `Err(())` like any other finding.
 pub(super) fn run_dep_resolution(
     root: &std::path::Path,
     mf: crate::manifest::Manifest,
@@ -2220,27 +2199,12 @@ pub(super) fn run_dep_resolution(
         }
         Err(boxed) => {
             let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
-            let code = boxed.code();
-            // In offline mode, registry/git deps can't be satisfied from
-            // vendor/ today (registry/git vendoring lands alongside line
-            // 845); the unsupported-source diagnostic must halt the build
-            // so the operator doesn't get a silent partial resolution.
-            // Outside offline, the existing warning-and-continue behavior
-            // preserves the pre-fetch v1.1 contract.
-            let severity = if offline_root.is_some() {
-                "error"
-            } else {
-                match code {
-                    "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
-                    _ => "error",
-                }
-            };
-            emit_dep_diagnostic(&diag, output, severity);
-            if severity == "warning" {
-                Ok(None)
-            } else {
-                Err(())
-            }
+            // A registry dependency with no configured proxy, or a git one
+            // with nothing to fetch it with, is refused: dropped, it would
+            // only resurface as an "unknown module" at its first import
+            // (design.md § 4, Dependencies in 0.8; B-2026-11-13-41).
+            emit_dep_diagnostic(&diag, output, "error");
+            Err(())
         }
     }
 }
@@ -2683,6 +2647,23 @@ pub(super) fn emit_lockfile_warning(err: &crate::lockfile::LockfileError, output
                 ),
             );
         }
+    }
+}
+
+/// The manifest's soft notices (an unknown `[package]` key), as every
+/// command that reads the manifest reports them, once per process
+/// (B-2026-11-13-41). Text output only: the machine reports carry
+/// diagnostics, and these are not.
+pub(super) fn emit_manifest_warnings(mf: &crate::manifest::Manifest, output: OutputMode) {
+    static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if output != OutputMode::Text
+        || mf.warnings.is_empty()
+        || SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    for w in &mf.warnings {
+        eprintln!("warning[manifest]: {}", w.message);
     }
 }
 

@@ -688,6 +688,10 @@ pub(super) fn run_manifest_preamble(
         }
     };
 
+    if let Some(mf) = &discovered_manifest {
+        super::build_cmds::emit_manifest_warnings(mf, output);
+    }
+
     // Toolchain pin enforcement (tracker line 892) runs from the
     // script-dir ancestor chain. Skipped when --no-manifest is set
     // (the operator explicitly opted out of project-level gating).
@@ -766,6 +770,19 @@ pub(super) fn cmd_check_project(
              analysis; project-mode reporting is a follow-up. Point them at one file, or \
              use `karac build --concurrency-report`."
         );
+    }
+    super::build_cmds::emit_manifest_warnings(&mf, output);
+    // The package's dependencies resolve as `karac build` resolves them, so
+    // a cycle among them is E_DEPENDENCY_CYCLE here too rather than an
+    // "unknown module" at the import (B-2026-11-13-41).
+    {
+        let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
+        let has_deps = !mf.dependencies.is_empty()
+            || !mf.dev_dependencies.is_empty()
+            || mf.kara_version.is_some();
+        if has_deps && !surface_dep_graph_diagnostics(&root, mf, output) {
+            process::exit(1);
+        }
     }
     let mut lints = lint_overrides;
     lints.apply_manifest_lints(&mf.lints);
@@ -1541,6 +1558,7 @@ pub(super) fn cmd_check(
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     if let Some(root) = manifest::discover_project_root(&file_dir) {
         if let Ok(mf) = manifest::load_from_root(&root) {
+            super::build_cmds::emit_manifest_warnings(&mf, output);
             let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
             let has_deps = !mf.dependencies.is_empty()
                 || !mf.dev_dependencies.is_empty()

@@ -187,7 +187,14 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::EffectGroup(g) => visit(&g.span),
         Item::EffectVerbDecl(v) => visit(&v.span),
         Item::LayoutDef(l) => visit(&l.span),
-        Item::Import(i) => visit(&i.span),
+        // Each segment's and each imported name's span too: a merged test
+        // companion's spans are shifted past its sibling's, and an import's
+        // diagnostics point at a segment or a name (B-2026-11-13-40).
+        Item::Import(i) => {
+            visit(&i.span);
+            i.path_spans.iter().for_each(&mut *visit);
+            i.items.iter().for_each(|ii| visit(&ii.span));
+        }
         Item::ConstDecl(c) => {
             visit(&c.span);
             visit_type(&c.ty, visit);
@@ -1559,7 +1566,15 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
         Item::EffectGroup(g) => visit.span(&mut g.span),
         Item::EffectVerbDecl(v) => visit.span(&mut v.span),
         Item::LayoutDef(l) => visit.span(&mut l.span),
-        Item::Import(i) => visit.span(&mut i.span),
+        Item::Import(i) => {
+            visit.span(&mut i.span);
+            for sp in &mut i.path_spans {
+                visit.span(sp);
+            }
+            for ii in &mut i.items {
+                visit.span(&mut ii.span);
+            }
+        }
         Item::ConstDecl(c) => {
             visit.span(&mut c.span);
             visit_type_spans_mut(&mut c.ty, visit);

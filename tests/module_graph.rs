@@ -186,10 +186,20 @@ fn resolve_module_errors(
         items: tree.module(module_id).items.clone(),
         ..Program::default()
     };
-    Resolver::new(&program)
+    let mut errors = Resolver::new(&program)
         .with_tree(tree, module_id)
         .resolve()
-        .errors
+        .errors;
+    // A fix's edit is an offset into the module's FILE, as `karac fix`
+    // applies it: the module's spans sit at `span_base` in the tree, its
+    // imports' segment and name spans included (B-2026-11-13-40).
+    let base = tree.module(module_id).span_base;
+    for e in &mut errors {
+        if let Some(r) = e.replacement.as_deref_mut() {
+            r.offset -= base;
+        }
+    }
+    errors
 }
 
 #[test]

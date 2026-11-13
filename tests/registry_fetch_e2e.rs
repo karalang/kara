@@ -280,10 +280,12 @@ fn resolve_lists_a_fetched_registry_dep_read_only() {
 }
 
 #[test]
-fn build_without_configured_proxy_keeps_unsupported_warning() {
+fn build_without_configured_proxy_refuses_the_registry_dep() {
     // The contract complement: with no `KARAC_REGISTRY_PROXY` (and the
-    // built-in placeholder URL not being live), the registry dep must still
-    // warn-and-continue rather than attempt a fetch against the placeholder.
+    // built-in placeholder URL not being live), the registry dep is refused
+    // with its code rather than fetched against the placeholder. It used to
+    // warn and build without it, so its first import was an "unknown module"
+    // (B-2026-11-13-41).
     let proj = unique("proj-noproxy");
     write(
         &proj.join("kara.toml"),
@@ -301,13 +303,10 @@ fn build_without_configured_proxy_keeps_unsupported_warning() {
     let _ = std::fs::remove_dir_all(&proj);
 
     assert!(
-        stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
-        "unconfigured proxy must keep the warn-and-continue contract;\nstderr={stderr}",
+        stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "an unconfigured proxy refuses the registry dep;\nstderr={stderr}",
     );
-    assert!(
-        !stderr.contains("error[E_REGISTRY"),
-        "no registry error should surface without a configured proxy;\nstderr={stderr}",
-    );
+    assert!(!out.status.success(), "stderr={stderr}");
 }
 
 /// Direct-from-source registry fetch under `--no-proxy` (registry-proxy
@@ -387,12 +386,12 @@ fn build_no_proxy_fetches_direct_from_registry() {
 
 /// The contract complement for `--no-proxy`: with no upstream registry
 /// configured (`KARAC_REGISTRY_URL` unset, no `[build].registry` pin), a
-/// registry dep must keep the warn-and-continue contract rather than attempt
-/// a direct fetch against nothing. Proves the direct-from-source path is gated
+/// registry dep is refused with its code (B-2026-11-13-41) rather than
+/// fetched directly from nothing. Proves the direct-from-source path is gated
 /// on an explicit upstream, symmetric to the proxy path's
 /// `explicit_proxy_configured` gate.
 #[test]
-fn build_no_proxy_without_direct_registry_keeps_unsupported_warning() {
+fn build_no_proxy_without_direct_registry_refuses_the_registry_dep() {
     let proj = unique("proj-direct-unconfigured");
     write(
         &proj.join("kara.toml"),
@@ -412,13 +411,10 @@ fn build_no_proxy_without_direct_registry_keeps_unsupported_warning() {
     let _ = std::fs::remove_dir_all(&proj);
 
     assert!(
-        stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
-        "an unconfigured direct registry must keep the warn-and-continue contract;\nstderr={stderr}",
+        stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "an unconfigured direct registry refuses the registry dep;\nstderr={stderr}",
     );
-    assert!(
-        !stderr.contains("error[E_REGISTRY"),
-        "no registry error should surface without a configured upstream;\nstderr={stderr}",
-    );
+    assert!(!out.status.success(), "stderr={stderr}");
 }
 
 /// `--output=json` must emit a machine-readable error envelope when a registry

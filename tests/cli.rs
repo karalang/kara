@@ -14304,11 +14304,11 @@ fn slice7_tempdir(slug: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn test_slice7_registry_dep_warns_but_does_not_fail() {
-    // A `[dependencies]` table containing only registry deps should NOT
-    // break the build — slice 7 downgrades E_REGISTRY_DEP_UNSUPPORTED
-    // to a warning so existing projects with registry-style manifests
-    // continue to compile until line 819's fetch surface ships.
+fn test_slice7_registry_dep_without_a_proxy_is_refused() {
+    // A registry dependency with no configured proxy is refused with
+    // E_REGISTRY_DEP_UNSUPPORTED (B-2026-11-13-41). Slice 7 downgraded it to
+    // a warning and built without the dependency, so its first import was an
+    // "unknown module" instead.
     let tmp = slice7_tempdir("registry-warn");
     std::fs::write(
         tmp.join("kara.toml"),
@@ -14325,8 +14325,7 @@ http = "1.2"
 
     // Slice 4 activates registry fetch only when an explicit proxy is
     // configured. Scrub `KARAC_REGISTRY_PROXY` so a developer's shell env
-    // can't flip this project onto the fetch path — with no explicit proxy
-    // the registry dep must still warn-and-continue (the pre-fetch contract).
+    // can't flip this project onto the fetch path.
     let out = karac_bin()
         .arg("build")
         .env_remove("KARAC_REGISTRY_PROXY")
@@ -14337,16 +14336,10 @@ http = "1.2"
     let _ = std::fs::remove_dir_all(&tmp);
 
     assert!(
-        stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
-        "expected warning for registry dep; stderr={stderr}",
+        stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "expected the registry dep refused; stderr={stderr}",
     );
-    // Build doesn't have to succeed (LLVM gating may skip codegen) but
-    // the resolver should not have halted it. The error-line invariant
-    // is that no `error[E_*]` from the resolver appears.
-    assert!(
-        !stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
-        "registry dep should warn, not error; stderr={stderr}",
-    );
+    assert!(!out.status.success(), "stderr={stderr}");
 }
 
 #[test]
@@ -16197,7 +16190,7 @@ child = {{ path = "vendor/child" }}
 /// `E_WORKSPACE_DEP_OUTSIDE_WORKSPACE` because the member's own manifest carries
 /// no `[workspace.dependencies]`; now the upward walk finds the parent root, so
 /// the entry dereferences (here to a registry spec, which — with no proxy —
-/// surfaces the ordinary `E_REGISTRY_DEP_UNSUPPORTED` warning instead).
+/// is refused with the ordinary `E_REGISTRY_DEP_UNSUPPORTED` instead).
 #[test]
 fn test_resolve_member_inherits_ancestor_workspace_deps() {
     let tmp = update_tempdir("ws-member");

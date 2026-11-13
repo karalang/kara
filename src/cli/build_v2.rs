@@ -102,11 +102,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     set_cross_triple(Some(overlay.as_str()));
     let mf = manifest::merge_target_overlay(&raw, Some(overlay.as_str()));
     refuse_hot_swap(&a, Some(mf.profile));
-    if output == OutputMode::Text {
-        for w in &mf.warnings {
-            eprintln!("warning[manifest]: {}", w.message);
-        }
-    }
+    super::build_cmds::emit_manifest_warnings(&mf, output);
     #[cfg(feature = "llvm")]
     if wasm {
         apply_wasm_cpu(&a);

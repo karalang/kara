@@ -48,6 +48,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   accepted and held `i128::MIN`, and `-340282366920938463463374607431768211455u128`
   was accepted and held `1`. The first is now "out of range for 'i128'", the
   second "cannot initialize unsigned type 'u128'" (B-2026-11-13-28).
+- A registry dependency with no configured proxy is refused with error
+  `E_REGISTRY_DEP_UNSUPPORTED` by `karac check`, `run`, `build` and `test`
+  (B-2026-11-13-41). `build` and `test` warned and went on without it, so
+  its first import was "unknown module"; `check` and `run` said nothing.
+  `check` and `run` now also fetch a git dependency as `build` does
+  (`E_GIT_FETCH_FAILED` when they cannot), the bare package `karac check`
+  reports a cycle among path dependencies as `E_DEPENDENCY_CYCLE` rather than
+  E0112 at the import, and every command warns of an unknown `[package]`
+  key.
 - A `shared` value held by a plain `let` cannot be lent as `mut`: a `mut`
   marker on the bare binding lends the binding itself, and a callee's
   `*t = n` replaced the object the `let` named. `advance(mut tail)` with
@@ -374,6 +383,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- An error on an imported name in a package's `_test.kara` names that file,
+  not its sibling's (B-2026-11-13-40), and `karac fix` of a mistyped module
+  in an import of a package's non-entry module rewrites the module name. It
+  wrote the fix at the start of the file: `import db.conx.x;` became
+  `db.conndb.conx.x;`.
 - A top-level `const` names its value as an array or vector length:
   `Array[i64, SIZE]` with `const SIZE: i64 = 3;` was kept as an opaque name,
   so `[0; 3]` was refused as a mismatch with its own declared type
