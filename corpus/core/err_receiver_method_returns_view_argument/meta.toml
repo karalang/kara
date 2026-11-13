@@ -1,0 +1,10 @@
+source = "B-2026-11-13-31"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-13-31: core semantics §5.4 holds whatever the result type: a method with a `self` or `mut ref self` receiver returns a borrow of `self` only, so returning the `Str` argument `other` is an error at the return. Before the fix only `ref T` and `Slice[T]` arguments were held to the rule, and the caller read `t.s` after it dropped (ASan heap-use-after-free). The expected.out wording of an error pin is guidance, not a byte oracle."

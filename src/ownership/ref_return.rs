@@ -107,31 +107,23 @@ impl<'a> super::OwnershipChecker<'a> {
         // parameters are no source for the result.
         let receiver_only = super::core_rules()
             && matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef));
-        let all_params = ref_params.clone();
+        // Every view-typed parameter (`Str`, `Option[ref T]`, a tuple
+        // holding a `ref`) could lend the result too, so a return only one of
+        // them reaches gets the §5.4 message (B-2026-11-13-31).
+        let mut all_params = ref_params.clone();
+        if receiver_only {
+            for p in &f.params {
+                if self.holds_view(&p.ty, 0) {
+                    all_params.extend(p.pattern.binding_names());
+                }
+            }
+        }
         if receiver_only {
             ref_params.retain(|n| n == "self");
         }
         let ref_returning_fns = self.ref_returning_fn_names();
-        let locals_for = |params: &HashSet<String>| {
-            let mut locals: HashSet<String> = HashSet::new();
-            collect_ref_locals(&f.body, &ref_returning_fns, &mut locals);
-            // v2 core §5.1: `let x = ref <place>` borrows the place, so `x`
-            // is a borrow source when the place's root is one
-            // (B-2026-10-14-38).
-            if super::core_rules() {
-                // A local bound to a call or `??` whose result borrows only
-                // what the parameters lend is one too: `let o = m.get(k);
-                // o ?? ""` (B-2026-11-02-29).
-                let lent = |e: &Expr, all: &HashSet<String>| {
-                    matches!(
-                        e.kind,
-                        ExprKind::MethodCall { .. } | ExprKind::NilCoalesce { .. }
-                    ) && self.core_return_shape(e, params, all).is_none()
-                };
-                collect_core_ref_locals(&f.body, params, &mut locals, &lent);
-            }
-            locals
-        };
+        let locals_for =
+            |params: &HashSet<String>| self.borrow_locals(f, params, &ref_returning_fns);
         let ref_locals = locals_for(&ref_params);
         // The sources the result could borrow without the receiver rule:
         // a return that only they reach gets the §5.4 message, not the
@@ -234,18 +226,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             .core_return_shape(e, &all_params, &all_locals)
                             .is_none() =>
                 {
-                    (
-                        "a method with a `self` receiver returns a borrow of `self` only \
-                     (core semantics §5.4), and this returned borrow is not reached \
-                     through `self`"
-                            .to_string(),
-                        Some(
-                            "return a borrow reached through `self` (`ref self.field`), return \
-                         an owned value, or make it an associated function without `self`, \
-                         whose result borrows its `ref` parameters"
-                                .to_string(),
-                        ),
-                    )
+                    receiver_rule_message()
                 }
                 BorrowReturnShape::DanglingSource => (
                     "returned borrow does not originate from a borrowed parameter; its source \
@@ -693,6 +674,214 @@ impl<'a> super::OwnershipChecker<'a> {
         }
         names
     }
+
+    /// The locals a returned borrow may name besides the parameters in
+    /// `params`: a `let` bound to a ref-returning call and, under the core
+    /// rules, one bound to a borrow of a source place (§5.1, B-2026-10-14-38)
+    /// or to a call or `??` whose result borrows only what `params` lend
+    /// (`let o = m.get(k); o ?? ""`, B-2026-11-02-29).
+    fn borrow_locals(
+        &self,
+        f: &Function,
+        params: &HashSet<String>,
+        ref_returning_fns: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut locals: HashSet<String> = HashSet::new();
+        collect_ref_locals(&f.body, ref_returning_fns, &mut locals);
+        if super::core_rules() {
+            let lent = |e: &Expr, all: &HashSet<String>| {
+                matches!(
+                    e.kind,
+                    ExprKind::MethodCall { .. } | ExprKind::NilCoalesce { .. }
+                ) && self.core_return_shape(e, params, all).is_none()
+            };
+            collect_core_ref_locals(&f.body, params, &mut locals, &lent);
+        }
+        locals
+    }
+
+    /// v2 core §5.4 whatever the result's type (B-2026-11-13-31): a method with a
+    /// `self` or `mut ref self` receiver returns a borrow of `self` only, so
+    /// its callers keep the result as long as `self` and no longer, and the
+    /// body is checked against that. The pass above judges `ref T`,
+    /// `StringSlice` and `Slice[T]` results against `ref` and `Slice`
+    /// parameters, which left a `Str` result and a view-typed argument
+    /// (`other: Str`, `o: Option[ref T]`, a tuple holding a `ref`) out:
+    /// `fn pick(self, other: Str) -> Str { other }` was accepted, and a
+    /// caller that kept the result past the argument read freed memory. Here
+    /// every return site is walked twice, once with every view-typed
+    /// parameter as a source and once with `self` alone, and a site that
+    /// only another parameter lends is refused.
+    pub(crate) fn check_receiver_rule_views(&mut self, f: &Function) {
+        if !super::core_rules() || !matches!(f.self_param, Some(SelfParam::Ref | SelfParam::MutRef))
+        {
+            return;
+        }
+        let Some(ret) = &f.return_type else {
+            return;
+        };
+        if !self.holds_view(ret, 0) {
+            return;
+        }
+        let self_only: HashSet<String> = HashSet::from(["self".to_string()]);
+        let mut all_params = self_only.clone();
+        for p in &f.params {
+            if self.holds_view(&p.ty, 0) {
+                all_params.extend(p.pattern.binding_names());
+            }
+        }
+        if all_params.len() == 1 {
+            return;
+        }
+        let ref_returning_fns = self.ref_returning_fn_names();
+        let self_locals = self.borrow_locals(f, &self_only, &ref_returning_fns);
+        let all_locals = self.borrow_locals(f, &all_params, &ref_returning_fns);
+        let mut returns: Vec<&Expr> = Vec::new();
+        collect_return_exprs_in_block(&f.body, &mut returns);
+        if let Some(tail) = &f.body.final_expr {
+            if !matches!(tail.kind, ExprKind::Return(_)) {
+                returns.push(tail);
+            }
+        }
+        let mut refused = Vec::new();
+        for e in returns {
+            let reported = self.errors.iter().any(|err| {
+                err.span == e.span
+                    && matches!(
+                        err.kind,
+                        OwnershipErrorKind::BorrowReturnNotSourcePinned { .. }
+                    )
+            });
+            if !reported
+                && self
+                    .view_return_shape(e, &all_params, &all_locals)
+                    .is_none()
+                && self.view_return_shape(e, &self_only, &self_locals)
+                    == Some(BorrowReturnShape::DanglingSource)
+            {
+                refused.push(e.span);
+            }
+        }
+        for span in refused {
+            let (message, suggestion) = receiver_rule_message();
+            self.errors.push(OwnershipError {
+                message,
+                span,
+                kind: OwnershipErrorKind::BorrowReturnNotSourcePinned {
+                    shape: BorrowReturnShape::DanglingSource,
+                },
+                suggestion,
+                replacement: None,
+                consume_span: None,
+            });
+        }
+    }
+
+    /// Whether a value of the written type can hold a borrow: a `ref`, a
+    /// view (`Str`, `StringSlice`, `Slice[T]`, `mut Slice[T]`), a generic or
+    /// tuple holding one (`Option[ref T]`, `Vec[Str]`, `(Str, i64)`), or a
+    /// plain struct with a field that does (`struct V { s: Str }`), as the
+    /// typechecker's `core_is_view` counts them.
+    fn holds_view(&self, te: &TypeExpr, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match &te.kind {
+            TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_) => true,
+            TypeKind::Path(p) => {
+                let last = p.segments.last().map(String::as_str);
+                matches!(last, Some("Str" | "StringSlice" | "Slice"))
+                    || p.generic_args.as_ref().is_some_and(|args| {
+                        args.iter().any(
+                            |a| matches!(a, GenericArg::Type(inner) if self.holds_view(inner, depth)),
+                        )
+                    })
+                    || last.is_some_and(|n| {
+                        self.program.items.iter().any(|item| {
+                            matches!(item, Item::StructDef(s) if s.name == n
+                                && !s.is_shared
+                                && !s.is_par
+                                && s.fields.iter().any(|fl| self.holds_view(&fl.ty, depth + 1)))
+                        })
+                    })
+            }
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.holds_view(e, depth)),
+            _ => false,
+        }
+    }
+
+    /// The core shape of a returned view, looking through the forms that
+    /// carry a borrow without making one: a tuple, a struct literal and a
+    /// call whose result holds a borrow (`Some(o)`, a variant's payload, a
+    /// free function's result, which borrows its view arguments) are judged
+    /// by their parts that hold one; a block or a branch by its tails; a
+    /// literal is static data. Everything else is [`Self::core_return_shape`].
+    fn view_return_shape(
+        &self,
+        e: &Expr,
+        params: &HashSet<String>,
+        locals: &HashSet<String>,
+    ) -> Option<BorrowReturnShape> {
+        let holds = |x: &Expr| {
+            self.typecheck_result
+                .expr_type(x)
+                .is_some_and(type_holds_ref)
+        };
+        let parts = |xs: Vec<&Expr>| {
+            xs.into_iter()
+                .filter(|x| holds(x))
+                .map(|x| self.view_return_shape(x, params, locals))
+                .fold(None, combine_borrow_shapes)
+        };
+        match &e.kind {
+            ExprKind::StringLit(..)
+            | ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..) => None,
+            ExprKind::Tuple(xs) => parts(xs.iter().collect()),
+            ExprKind::StructLiteral { fields, .. } => {
+                parts(fields.iter().map(|fi| &fi.value).collect())
+            }
+            ExprKind::Call { args, .. } if holds(e) => {
+                parts(args.iter().map(|a| &a.value).collect())
+            }
+            ExprKind::Block(b) => match &b.final_expr {
+                Some(t) => self.view_return_shape(t, params, locals),
+                None => Some(BorrowReturnShape::UnsupportedForm),
+            },
+            ExprKind::If {
+                then_block,
+                else_branch: Some(else_e),
+                ..
+            } => combine_borrow_shapes(
+                match &then_block.final_expr {
+                    Some(t) => self.view_return_shape(t, params, locals),
+                    None => Some(BorrowReturnShape::UnsupportedForm),
+                },
+                self.view_return_shape(else_e, params, locals),
+            ),
+            _ => self.core_return_shape(e, params, locals),
+        }
+    }
+}
+
+/// The §5.4 receiver rule's error: a method with a `self` or `mut ref self`
+/// receiver returned a borrow that is not reached through `self`.
+fn receiver_rule_message() -> (String, Option<String>) {
+    (
+        "a method with a `self` receiver returns a borrow of `self` only \
+         (core semantics §5.4), and this returned borrow is not reached \
+         through `self`"
+            .to_string(),
+        Some(
+            "return a borrow reached through `self` (`ref self.field`), return \
+             an owned value, or make it an associated function without `self`, \
+             whose result borrows its `ref` parameters"
+                .to_string(),
+        ),
+    )
 }
 
 /// Classify a returned expression as a valid borrow source (`None`) or an

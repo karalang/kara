@@ -1,0 +1,20 @@
+// A method with a `self` receiver returns a borrow of `self` only (core
+// semantics §5.4), whatever the result's type, so a `Str` argument is no
+// source for a `Str` result. The caller keeps `c.pick(..)` past `t`, whose
+// run-time-built `String` the argument viewed: returning `other` would let
+// it read freed memory. The body is checked against the rule.
+struct T { s: String }
+struct C { s: String }
+impl C {
+    fn pick(self, other: Str) -> Str { other }
+}
+fn main() {
+    let c = C { s: "a".to_string() };
+    let r = {
+        let mut b = String.new();
+        for i in 0..40 { b.push(((97 + i % 26) as u8) as char); }
+        let t = T { s: b };
+        c.pick(t.s.as_str())
+    };
+    println(f"r = {r}");
+}

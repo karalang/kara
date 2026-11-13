@@ -20,6 +20,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A method with a `self` or `mut ref self` receiver returns a borrow of
+  `self` only (core semantics §5.4), whatever the result's type. Only
+  `ref T` and `Slice[T]` arguments were held to it, so
+  `fn pick(self, other: Str) -> Str { other }` was accepted, and so were
+  `Option[ref T]`, `Option[Str]`, `Result[Str, E]`, tuple, `Vec[Str]` and
+  view-struct arguments returned or wrapped (`Some(o)`, `(o, 1)`). A caller
+  that kept the result past the argument read freed memory. They are now
+  refused at the return; make the method an associated function, whose
+  result borrows its view parameters (B-2026-11-13-31).
 - A `shared` value held by a plain `let` cannot be lent as `mut`: a `mut`
   marker on the bare binding lends the binding itself, and a callee's
   `*t = n` replaced the object the `let` named. `advance(mut tail)` with

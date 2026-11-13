@@ -3690,6 +3690,8 @@ impl<'a> OwnershipChecker<'a> {
         // borrow must trace to a `ref` parameter, or it would dangle.
         // design.md § Feature 4 Part 3; B-2026-06-07-5. Emits E0509.
         self.check_ref_return_source_pinning(f);
+        // §5.4's receiver rule over every view-typed result and argument.
+        self.check_receiver_rule_views(f);
 
         // `frozen` parameter escape (B-2026-08-01-33 mechanism 3, stage 1):
         // a non-counting handle must not outlive the call. Runs before the

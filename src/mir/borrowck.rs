@@ -2805,6 +2805,8 @@ fn main() -> () {
             // B-2026-11-02-31).
             "err_receiver_method_returns_argument",
             "err_returned_closure_captures_non_escaping_param",
+            // The same body check over a view-typed argument (B-2026-11-13-31).
+            "err_receiver_method_returns_view_argument",
             // A function value whose environment reaches a `shared` handle
             // called from a `par` branch or `par for` body: refused by the
             // strict cross-task pass, before MIR (B-2026-11-03-8).
