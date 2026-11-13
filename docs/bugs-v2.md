@@ -123,10 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
 | B-2026-11-13-46 | 2026-11-13 | mir+mir-llvm | medium | Two non-generic traits with a method of one name, both implemented for a primitive (`impl A for i64 { fn m }`, `impl B for i64 { fn m }`): `A.m(n)` checks but fails at run with `call of unknown function i64.m` (LLVM: `native i64.m is not lowered yet`); on a struct receiver both calls are right | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
-| B-2026-11-13-70 | 2026-11-13 | parser | medium | `karac fix` leaves `println!("{} CRLF", text.matches("\r\n").count())` unrewritten: a format argument whose string or char literal holds an escape, a brace or a colon was refused, though an f-string hole takes it as written | — |
-| B-2026-11-13-71 | 2026-11-13 | typecheck | low | `addr.rsplit(':')` is answered "did you mean 'split'?", which starts from the other end; Kāra's spelling of taking the last piece is `rsplit_once` | — |
-| B-2026-11-13-72 | 2026-11-13 | typecheck | low | `group.join()` on a `TaskGroup` is a bare "no method 'join'": a group joins its tasks when dropped, so the repair is `drop(group)` | — |
-| B-2026-11-13-73 | 2026-11-13 | typecheck+mir | medium | `TcpStream` (and `TlsStream`) have no `read_to_end`: a connection that carries one payload and closes, such as an FTP data connection, can only be read with a hand-written `read` loop | — |
 | B-2026-11-13-74 | 2026-11-13 | typecheck | low | `karac fix` writes Rust's `if c { ".." } else { &arg }` as `{ ref arg }`, which the check then refuses ("if/else branches have incompatible types: 'String' and 'ref String'") with no fix; `arg.as_str()` is what typechecks | — |
 
 ### Relocated
@@ -1151,6 +1147,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-45 | typecheck | low | `#[derive(PartialEq)] struct Pair[T]` is accepted as PartialEq at an argument that is not (`Pair[NoEq] == Pair[NoEq]` checks and prints true), agains… | ddc4a7ab43 |
 | B-2026-11-13-50 | cli | low | A virtual workspace root (only `[workspace]` and `[workspace.dependencies]`) is refused, and a `path` in `[workspace.dependencies]` resolves against… | a36e3f7376 |
 | B-2026-11-13-60 | cli | medium | Workspace members do not share one `kara.lock` and one output directory: each member resolves and writes its own, so two members can lock different v… | 4061fcf76f |
+| B-2026-11-13-70 | parser | medium | `karac fix` leaves `println!("{} CRLF", text.matches("\r\n").count())` unrewritten: a format argument whose string or char literal holds an escape, a… | e65451aad4 |
+| B-2026-11-13-71 | typecheck | low | `addr.rsplit(':')` is answered "did you mean 'split'?", which starts from the other end; Kāra's spelling of taking the last piece is `rsplit_once` | e65451aad4 |
+| B-2026-11-13-72 | typecheck | low | `group.join()` on a `TaskGroup` is a bare "no method 'join'": a group joins its tasks when dropped, so the repair is `drop(group)` | e65451aad4 |
+| B-2026-11-13-73 | typecheck+mir | medium | `TcpStream` (and `TlsStream`) have no `read_to_end`: a connection that carries one payload and closes, such as an FTP data connection, can only be re… | e65451aad4 |
 
 </details>
 
