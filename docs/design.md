@@ -1466,6 +1466,8 @@ let s3 = sum(v[1..3]);    // a sub-range is a Slice[i64] too
 let window = v.as_slice();    // Slice[i64] as a first-class value
 ```
 
+**Comparison.** `==` and `!=` between a `Slice[T]`, a `Vec[T]` and an `Array[T, N]` compare elements, in either order, as Rust's do: `a == s` and `s == a` are both accepted and give the same answer, and an `Array` compared with a `Slice` of another length is `false`, not an error. No `.as_slice()` is needed on either side (review ruling 2026-11-13, B-2026-11-13-17).
+
 **Mutable slices.** An in-place view is written with the `mut` modifier, as with `ref T` and `mut ref T`:
 
 ```kara
