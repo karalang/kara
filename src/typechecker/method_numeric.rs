@@ -43,6 +43,7 @@ pub(crate) const FLOAT_METHODS: &[&str] = &[
     "copysign",
     "cos",
     "cosh",
+    "div_euclid",
     "exp",
     "exp2",
     "exp_m1",
@@ -63,6 +64,7 @@ pub(crate) const FLOAT_METHODS: &[&str] = &[
     "pow",
     "powi",
     "recip",
+    "rem_euclid",
     "round",
     "signum",
     "sin",
@@ -97,6 +99,7 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "clone",
     "count_ones",
     "count_zeros",
+    "div_euclid",
     "leading_zeros",
     "max",
     "min",
@@ -110,6 +113,7 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "overflowing_shr",
     "overflowing_sub",
     "pow",
+    "rem_euclid",
     "reverse_bits",
     "rotate_left",
     "rotate_right",
@@ -138,13 +142,7 @@ pub(crate) const INT_METHODS: &[&str] = &[
 ];
 
 /// The methods only a signed integer has.
-pub(crate) const SIGNED_INT_METHODS: &[&str] = &[
-    "abs",
-    "div_euclid",
-    "rem_euclid",
-    "saturating_neg",
-    "signum",
-];
+pub(crate) const SIGNED_INT_METHODS: &[&str] = &["abs", "saturating_neg", "signum"];
 
 /// The methods only an unsigned integer has.
 pub(crate) const UNSIGNED_INT_METHODS: &[&str] = &["is_power_of_two", "next_power_of_two"];
@@ -542,15 +540,16 @@ impl<'a> super::TypeChecker<'a> {
         // `rem_euclid` semantics: the remainder is always non-negative, so
         // `(-7).rem_euclid(3) == 2`). Both trap like `/` and `%` — `division by
         // zero` on a zero divisor, `integer overflow` on `iN::MIN / -1`.
-        // **Scoped to `i64` in this slice** (same 64-bit-first cut as
-        // `wrapping_*`): i64 is i64-backed end-to-end, so the interpreter's
-        // `checked_div_euclid`/`checked_rem_euclid` and codegen's signed
-        // correction agree without width-masking. Narrow signed widths and the
-        // unsigned widths (where Euclidean == truncating) are a tracked
-        // follow-on (`NoMethodFound` until then). Same strict same-type /
-        // literal-promotion arg rule as `wrapping_*`.
+        // Every integer width, where an unsigned one's Euclidean forms are
+        // its truncating ones, and both floats, as Rust's (B-2026-11-13-5):
+        // the interpreter checks the quotient against the receiver's width
+        // and codegen corrects the signed remainder at that width. Same
+        // strict same-type / literal-promotion arg rule as `wrapping_*`.
         if matches!(method, "div_euclid" | "rem_euclid")
-            && matches!(receiver_for_lookup, Type::Int(IntSize::I64))
+            && matches!(
+                receiver_for_lookup,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_)
+            )
         {
             if args.len() != 1 {
                 self.type_error(
@@ -562,7 +561,8 @@ impl<'a> super::TypeChecker<'a> {
             }
             let arg = &args[0].value;
             let arg_ty = self.infer_expr(arg);
-            if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+            let float = matches!(receiver_for_lookup, Type::Float(_));
+            if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(float) {
                 self.record_promoted_literal(arg, receiver_for_lookup);
                 self.record_expr_type(args_close_span, receiver_for_lookup);
                 return Some(receiver_for_lookup.clone());

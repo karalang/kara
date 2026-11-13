@@ -12436,10 +12436,27 @@ impl<'a> Interp<'a> {
                     }
                     return Err(Stop::Abort(AbortReason::DivByZero));
                 }
+                // A `u128` is held as its bits: its Euclidean forms are its
+                // unsigned `%` and `/` (B-2026-11-13-5).
+                if matches!(self.tys.kind(ret), TyKind::Int(IntTy::U128)) {
+                    let (a, b) = (*a as u128, *b as u128);
+                    let v = if method == "rem_euclid" { a % b } else { a / b };
+                    return Ok(Value::Int(v as i128));
+                }
+                // `MIN.rem_euclid(-1)` is 0 and `MIN.div_euclid(-1)`
+                // overflows, at 128 bits too (B-2026-11-13-5).
                 if method == "rem_euclid" {
-                    Ok(Value::Int(a.rem_euclid(*b)))
+                    Ok(Value::Int(a.checked_rem_euclid(*b).unwrap_or(0)))
                 } else {
-                    fit(self, a.div_euclid(*b))
+                    match a.checked_div_euclid(*b) {
+                        Some(q) => fit(self, q),
+                        None => {
+                            if self.trace {
+                                self.events.push(Event::Abort(AbortReason::Overflow));
+                            }
+                            Err(Stop::Abort(AbortReason::Overflow))
+                        }
+                    }
                 }
             }
             ("rem_euclid", [Value::Float(a), Value::Float(b)]) => {

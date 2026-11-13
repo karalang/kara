@@ -1733,7 +1733,10 @@ mod number_method_table_tests {
         ("cosh", "x.cosh()"),
         ("count_ones", "n.count_ones() u.count_ones()"),
         ("count_zeros", "n.count_zeros() u.count_zeros()"),
-        ("div_euclid", "n.div_euclid(n)"),
+        (
+            "div_euclid",
+            "n.div_euclid(n) u.div_euclid(u) x.div_euclid(x)",
+        ),
         ("exp", "x.exp()"),
         ("exp2", "x.exp2()"),
         ("exp_m1", "x.exp_m1()"),
@@ -1790,7 +1793,10 @@ mod number_method_table_tests {
         ("pow", "x.pow(x) n.pow(2) u.pow(2)"),
         ("powi", "x.powi(2)"),
         ("recip", "x.recip()"),
-        ("rem_euclid", "n.rem_euclid(n)"),
+        (
+            "rem_euclid",
+            "n.rem_euclid(n) u.rem_euclid(u) x.rem_euclid(x)",
+        ),
         ("reverse_bits", "n.reverse_bits() u.reverse_bits()"),
         ("rotate_left", "n.rotate_left(2) u.rotate_left(2)"),
         ("rotate_right", "n.rotate_right(2) u.rotate_right(2)"),

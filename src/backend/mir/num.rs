@@ -1632,14 +1632,10 @@ impl<'ctx> Cx<'ctx, '_> {
             self.store_int_as(dest, v, false)?;
             return Ok(Some(()));
         }
-        // The rest run at 128 bits too, but for these four, whose lowering
-        // is 64-bit (B-2026-10-19-27).
-        if it.bits() > 64
-            && matches!(
-                method,
-                "rem_euclid" | "div_euclid" | "bits_as_f64" | "bits_as_f32"
-            )
-        {
+        // The rest run at 128 bits too, but for these two, whose lowering
+        // is 64-bit (B-2026-10-19-27). The Euclidean pair runs at every
+        // width (B-2026-11-13-5).
+        if it.bits() > 64 && matches!(method, "bits_as_f64" | "bits_as_f32") {
             return Ok(None);
         }
         let x = self.operand_scalar(&args[0])?.into_int_value();
@@ -1833,7 +1829,15 @@ impl<'ctx> Cx<'ctx, '_> {
                             .map_err(e)?
                             .into_int_value()
                     } else {
-                        let min = xt.const_int(1u64 << (it.bits() - 1), false);
+                        // `MIN` of the width, built at the width so a
+                        // 128-bit one does not overflow a `u64` shift.
+                        let min = b
+                            .build_left_shift(
+                                xt.const_int(1, false),
+                                xt.const_int(u64::from(it.bits() - 1), false),
+                                "",
+                            )
+                            .map_err(e)?;
                         let at_min = b
                             .build_int_compare(IntPredicate::EQ, x, min, "")
                             .map_err(e)?;

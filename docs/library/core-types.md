@@ -111,6 +111,8 @@ Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).
 
 **Byte order.** As Rust's: `x.to_ne_bytes()`, `x.to_le_bytes()` and `x.to_be_bytes()` give an integer's bytes as an `Array[u8, N]`, `N` its byte width, in native, little-endian or big-endian order, and `<int>.from_ne_bytes(b)`, `from_le_bytes(b)` and `from_be_bytes(b)` read one back from an `Array[u8, N]` of that width. A wire format names its order: a SOCKS5 or IP port is `port.to_be_bytes()` and `u16.from_be_bytes([hi, lo])`. (B-2026-11-10-45.)
 
+**Euclidean division and distance.** As Rust's, on every integer type: `x.div_euclid(n)` is the quotient rounded so that the remainder is never negative, and `x.rem_euclid(n)` is that remainder, in `0..|n|` (`(-7).rem_euclid(3) == 2`, `(-7).div_euclid(3) == -3`). On an unsigned type they are `/` and `%`. Both are `Self` and panic as `/` and `%` do: on a zero divisor, and `div_euclid` on `MIN.div_euclid(-1)`, whose `rem_euclid` is 0. `f32` and `f64` have both too, `rem_euclid` in `[0, |n|)`. `x.abs_diff(y)` is the distance `|x - y|` without overflow, in the unsigned type of the same width (`i8` gives `u8`). (B-2026-11-13-5.)
+
 What the plain operators do on overflow, and the other numeric rules, are in [design.md §5](../design.md#numeric-semantics).
 
 **Char digits.** As Rust's: `c.to_digit(radix) -> Option[u32]` is the digit `c` stands for below the radix, `c.is_digit(radix) -> bool` whether it stands for one, and `char.from_digit(num: u32, radix: u32) -> Option[char]` the inverse, `0`..`9` then `a`..`z` for a `num` below the radix and `None` from the radix up. A radix outside 2..=36 panics in all three.
@@ -121,6 +123,7 @@ What the plain operators do on overflow, and the other numeric rules, are in [de
 |---|---|
 | Rounding | `floor()`, `ceil()`, `round()`, `trunc()`, `fract()` |
 | Sign and size | `abs()`, `signum()`, `copysign(y)`, `min(y)`, `max(y)`, `clamp(lo, hi)`, `recip()` |
+| Euclidean division | `div_euclid(y)`, `rem_euclid(y)` (above) |
 | Powers and roots | `pow(y)`, `powi(n: i32)`, `sqrt()`, `cbrt()`, `hypot(y)` |
 | Exponentials and logarithms | `exp()`, `exp2()`, `exp_m1()`, `ln()`, `ln_1p()`, `log2()`, `log10()` |
 | Trigonometry | `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2(x)`, `sinh()`, `cosh()`, `tanh()`, `asinh()`, `acosh()`, `atanh()`, `to_degrees()`, `to_radians()` |

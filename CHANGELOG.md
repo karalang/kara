@@ -171,6 +171,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from it. A `path` in `[workspace.dependencies]` is relative to the root
   that declares it; it was joined to the member's directory, so a root's
   `path = "util"` was not found from `core/`.
+- `div_euclid` and `rem_euclid` on every integer width and on `f32` /
+  `f64`, as Rust's (design.md § Division, remainder and shifts). They
+  existed only on `i64`; library/core-types.md now lists them, and
+  `abs_diff` (B-2026-11-13-5).
 - `assert(cond, msg)`, `assert_eq(a, b, msg)` and `assert_ne(a, b, msg)`
   take an optional `String` or `Str` message, evaluated only when the
   assertion fails; it replaces the `assertion failed: ...` line, and the
