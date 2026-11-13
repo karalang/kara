@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `assert`'s condition must be a `bool`, and `assert_eq` / `assert_ne`
+  operands are checked as `a == b` is: `assert(1)` and
+  `assert_eq(1, "a".to_string())` passed check and then failed in the
+  compiler's MIR stage (B-2026-11-13-36). Any count of arguments other than
+  the operands and an optional message is an error.
+
 - A method with a `self` or `mut ref self` receiver returns a borrow of
   `self` only (core semantics §5.4), whatever the result's type. Only
   `ref T` and `Slice[T]` arguments were held to it, so
@@ -125,6 +131,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (design.md § Vec; B-2026-11-11-51, tracker B-2026-11-11-81).
 
 ### Added
+
+- `assert(cond, msg)`, `assert_eq(a, b, msg)` and `assert_ne(a, b, msg)`
+  take an optional `String` or `Str` message, evaluated only when the
+  assertion fails; it replaces the `assertion failed: ...` line, and the
+  operand lines follow (design.md §14 Assertions, B-2026-11-13-36).
 
 - `String.normalize(form)` and `std.regex` build for `--target=wasm_wasi`. They
   passed `karac check --targets=wasm_wasi` and then failed in wasm-ld on an

@@ -21605,7 +21605,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let c = self.operand_at(&c.value, bool_t)?;
                         self.assign(Place::local(ok), Rvalue::Use(c));
                     }
-                    (_, [a, b]) => {
+                    (_, [a, b, ..]) => {
                         let base = |s: &mut Self, x: &Expr| -> R<Ty> {
                             let t = s.expr_ty(x)?;
                             Ok(match s.tys().tcx().kind(t) {
@@ -21718,13 +21718,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let s = s.lines().map(str::trim).collect::<Vec<_>>().join(" ");
                     s.replace(", }", " }")
                 };
-                let msg = match (name, args.get(1).map(|a| &a.value.kind)) {
-                    ("assert", Some(ExprKind::StringLit(m))) => m.clone(),
-                    ("assert", _) => format!("assertion failed: {}", text(0)),
-                    ("assert_eq", _) => format!("assertion failed: {} == {}", text(0), text(1)),
-                    _ => format!("assertion failed: {} != {}", text(0), text(1)),
-                };
-                let mut ops = vec![self.static_str(&msg)];
+                // A message argument, after the condition or the two
+                // operands, takes the place of that source text, and is
+                // evaluated only when the assertion fails (B-2026-11-13-36).
+                let operands = if name == "assert" { 1 } else { 2 };
+                let mut ops = Vec::new();
+                match args.get(operands).map(|a| &a.value) {
+                    Some(Expr {
+                        kind: ExprKind::StringLit(m),
+                        ..
+                    }) => ops.push(self.static_str(m)),
+                    Some(m) => self.print_operands(m, &mut ops)?,
+                    None => {
+                        let msg = match name {
+                            "assert" => format!("assertion failed: {}", text(0)),
+                            "assert_eq" => {
+                                format!("assertion failed: {} == {}", text(0), text(1))
+                            }
+                            _ => format!("assertion failed: {} != {}", text(0), text(1)),
+                        };
+                        ops.push(self.static_str(&msg));
+                    }
+                }
                 let labels: &[&str] = match name {
                     "assert_eq" => &["\n  left:  ", "\n  right: "],
                     _ => &["\n  value: "],

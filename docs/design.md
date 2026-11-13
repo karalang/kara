@@ -6075,7 +6075,8 @@ Discovery by a name prefix (`test_`) fails silently in two ways: a test is skipp
 | `assert_eq(a, b)` | `fn assert_eq[T: PartialEq + Debug](a: T, b: T) with panics` | `"assertion failed: a == b\n  left:  <a>\n  right: <b>"` |
 | `assert_ne(a, b)` | `fn assert_ne[T: PartialEq + Debug](a: T, b: T) with panics` | `"assertion failed: a != b\n  value: <a>"` |
 
-- `assert` takes a `bool` and has no bound. `assert_eq` and `assert_ne` need `PartialEq` to compare and `Debug` to print the operands ([§9 `Display` and `Debug`](#display-and-debug)). They borrow both operands, so neither moves: after `assert_eq(v, expected)`, `v` is still usable.
+- `assert` takes a `bool` and has no bound; any other condition is a type error. `assert_eq` and `assert_ne` need `PartialEq` to compare and `Debug` to print the operands ([§9 `Display` and `Debug`](#display-and-debug)), and their two operands are checked as `a == b` checks them: two types `==` cannot compare are a type error. They borrow both operands, so neither moves: after `assert_eq(v, expected)`, `v` is still usable.
+- Each takes an optional last argument, a `String` or `Str` message, as Rust's assertions do: `assert(cond, msg)`, `assert_eq(a, b, msg)`, `assert_ne(a, b, msg)`. It is evaluated only when the assertion fails, and it replaces the failure message's first line, the `assertion failed: ...` text; `assert_eq` and `assert_ne` still add their operand lines. Any other number of arguments is an error.
 - A failed assertion panics ([§10 Panics](#panics)).
 
 ### Isolation

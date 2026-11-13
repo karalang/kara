@@ -1993,38 +1993,91 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `assert_eq[T: PartialEq + Debug](a: T, b: T)` and `assert_ne`
-        // (design.md §14 Assertions): a failed assertion prints its operands'
-        // `Debug` text, so a type with no `Debug` is refused here rather than
-        // compiled to a message the program cannot render (B-2026-11-05-9).
-        // The operands' types are otherwise left to the comparison's own rules.
+        // `assert(cond[, msg])`, `assert_eq(a, b[, msg])` and
+        // `assert_ne(a, b[, msg])` (design.md §14 Assertions). The condition
+        // is a `bool`, the two operands are compared as `a == b` is, with
+        // its type errors, and the optional message is a `String` or `Str`
+        // (B-2026-11-13-36: the condition went unchecked and reached MIR as
+        // whatever it was). `assert_eq` / `assert_ne` print their operands'
+        // `Debug` text when they fail, so a type with no `Debug` is refused
+        // here rather than compiled to a message the program cannot render
+        // (B-2026-11-05-9).
         if let ExprKind::Identifier(name) = &callee.kind {
-            if (name == "assert_eq" || name == "assert_ne")
+            if matches!(name.as_str(), "assert" | "assert_eq" | "assert_ne")
                 && self.local_scope.lookup(name).is_none()
                 && !self.program_defines_fn(name, span)
             {
-                let tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
-                for (arg, ty) in args.iter().zip(&tys).take(2) {
-                    let mut t = ty;
-                    while let Type::Ref(inner) | Type::MutRef(inner) = t {
-                        t = inner;
+                let operands = if name == "assert" { 1 } else { 2 };
+                if args.len() < operands || args.len() > operands + 1 {
+                    let takes = if operands == 1 {
+                        "a `bool` condition"
+                    } else {
+                        "two operands"
+                    };
+                    self.type_error(
+                        format!(
+                            "`{name}` takes {takes} and an optional message, but {} \
+                             argument{} given (design.md §14 Assertions)",
+                            args.len(),
+                            if args.len() == 1 { " was" } else { "s were" }
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
                     }
-                    if matches!(t, Type::Error | Type::TypeVar(_)) {
-                        continue;
+                    return Type::Unit;
+                }
+                if operands == 1 {
+                    self.check_expr(&args[0].value, &Type::Bool);
+                } else {
+                    self.infer_binary(&BinOp::Eq, &args[0].value, &args[1].value, span);
+                    for arg in args.iter().take(2) {
+                        let Some(ty) = self
+                            .expr_types
+                            .get(&SpanKey::from_span(&arg.value.span))
+                            .cloned()
+                        else {
+                            continue;
+                        };
+                        let mut t = &ty;
+                        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                            t = inner;
+                        }
+                        if matches!(t, Type::Error | Type::TypeVar(_)) {
+                            continue;
+                        }
+                        if !self.type_supports_debug(t) {
+                            self.type_error(
+                                format!(
+                                    "`{name}` needs its operands to implement `Debug`, to print \
+                                     them when it fails, and `{}` does not (design.md §14 \
+                                     Assertions: `{name}[T: PartialEq + Debug]`); add \
+                                     `#[derive(Debug)]` to it, or compare with `assert(a == b)`",
+                                    type_display(t)
+                                ),
+                                arg.value.span,
+                                TypeErrorKind::TraitBoundNotSatisfied,
+                            );
+                            break;
+                        }
                     }
-                    if !self.type_supports_debug(t) {
+                }
+                if let Some(msg) = args.get(operands) {
+                    let t = self.infer_expr(&msg.value);
+                    if !super::stdlib_seq::is_str_like(&t)
+                        && !matches!(t, Type::Error | Type::TypeVar(_))
+                    {
                         self.type_error(
                             format!(
-                                "`{name}` needs its operands to implement `Debug`, to print them \
-                                 when it fails, and `{}` does not (design.md §14 Assertions: \
-                                 `{name}[T: PartialEq + Debug]`); add `#[derive(Debug)]` to it, \
-                                 or compare with `assert(a == b)`",
-                                type_display(t)
+                                "`{name}`'s message is a `String` or `Str`, shown when it fails; \
+                                 found '{}' (design.md §14 Assertions)",
+                                type_display(&t)
                             ),
-                            arg.value.span,
-                            TypeErrorKind::TraitBoundNotSatisfied,
+                            msg.value.span,
+                            TypeErrorKind::TypeMismatch,
                         );
-                        break;
                     }
                 }
                 return Type::Unit;

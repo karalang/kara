@@ -124,9 +124,12 @@ fn builtin_docs() -> Vec<BuiltinDoc> {
             signature: "fn assert(cond: bool) with panics",
             doc: "Panics unless `cond` is `true`. Use for invariants whose \
 violation indicates a bug. Carries the `panics` effect, which propagates \
-to the caller's inferred effect set.\n\nAnnotated `#[track_caller]`: a \
-failing `assert` reports the *caller's* source location, not a frame inside \
-the builtin.",
+to the caller's inferred effect set.\n\nAn optional second argument, a \
+`String` or `Str`, is the panic message in place of `assertion failed: \
+<cond>`, evaluated only when the assertion fails: `assert(n > 0, \
+\"n must be positive\")`.\n\nAnnotated `#[track_caller]`: a failing \
+`assert` reports the *caller's* source location, not a frame inside the \
+builtin.",
         },
         BuiltinDoc {
             name: "assert_eq",
@@ -134,16 +137,20 @@ the builtin.",
             doc: "Panics unless `a == b`. Requires `T: PartialEq + Debug`: \
 `PartialEq` to compare, `Debug` to print both operands in the failure \
 message:\n\n```\nassertion failed: a == b\n  left:  <a>\n  right: <b>\n```\n\n\
-Both operands are borrowed, so neither moves. Propagates `panics`; \
-annotated `#[track_caller]` so the report points at the call site.",
+Both operands are borrowed, so neither moves, and they are checked as \
+`a == b` is. An optional third argument, a `String` or `Str`, replaces the \
+first line of the message, evaluated only when the assertion fails. \
+Propagates `panics`; annotated `#[track_caller]` so the report points at \
+the call site.",
         },
         BuiltinDoc {
             name: "assert_ne",
             signature: "fn assert_ne[T: PartialEq + Debug](a: T, b: T) with panics",
             doc: "Panics unless `a != b`. Requires `T: PartialEq + Debug`. On \
 failure:\n\n```\nassertion failed: a != b\n  value: <a>\n```\n\n\
-Both operands are borrowed. Propagates `panics`; annotated \
-`#[track_caller]`.",
+Both operands are borrowed, and checked as `a != b` is. An optional \
+third argument, a `String` or `Str`, replaces the first line of the \
+message. Propagates `panics`; annotated `#[track_caller]`.",
         },
         BuiltinDoc {
             name: "dbg",
