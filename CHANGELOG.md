@@ -417,6 +417,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A view literal built in place at an `own` parameter moves in with what
+  it borrows: `pick([t.as_str()])` with `fn pick(other: own Vec[Str])` and
+  `pickv(V { s: t.as_str() })` were refused as "a reference to a temporary
+  outlives its statement", though the result borrows `t`, not the literal
+  (core-semantics §5.3; B-2026-11-13-81).
 - A compiled program that ends through a foreign `exit()` writes what it
   printed first: standard output to a pipe or a file was buffered and
   lost, though the interpreter printed it (B-2026-11-13-75).

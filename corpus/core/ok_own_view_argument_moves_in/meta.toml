@@ -1,0 +1,11 @@
+source = "corpus/core/ok_own_view_argument_moves_in"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3", "5.4"]
+backends = []
+env = {}
+note = "B-2026-11-13-81: §5.3 (a literal that builds a view takes the union of its fields' origins) with §5.4 (a free function's result borrows its view parameters): the literals move into the `own` parameters, so `r` and `w` borrow `t`, which outlives them. Before the fix §5.5 refused both `let`s as keeping a reference to a temporary. Expected output worked by hand."

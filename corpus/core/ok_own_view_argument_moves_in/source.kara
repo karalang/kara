@@ -1,0 +1,15 @@
+// B-2026-11-13-81, core semantics §5.3/§5.4: a view literal built in place at
+// an `own` parameter moves in with what it borrows, so each result borrows
+// `t`, not the literal, and may be kept while `t` lives.
+struct V { s: Str }
+
+fn pick(other: own Vec[Str]) -> Vec[Str] { other }
+
+fn pickv(other: own V) -> V { other }
+
+fn main() {
+    let t = "hello".to_string();
+    let r = pick([t.as_str(), "world"]);
+    let w = pickv(V { s: t.as_str() });
+    println(f"{r[0]} {r[1]} {w.s}");
+}

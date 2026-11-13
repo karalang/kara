@@ -10261,6 +10261,24 @@ impl<'a> super::TypeChecker<'a> {
         self.env.has_impl("Iterator", name, args)
     }
 
+    /// The temporary among the origins of a view moved into an `own`
+    /// parameter: a collection or struct literal built in place carries the
+    /// union of its parts' origins (§5.3), and is not itself a temporary the
+    /// result borrows (B-2026-11-13-81).
+    fn core_moved_view_temp_origin(&self, e: &Expr) -> Option<Span> {
+        let parts: Vec<&Expr> = match &e.kind {
+            ExprKind::ArrayLiteral(items) | ExprKind::PrefixCollectionLiteral { items, .. } => {
+                items.iter().collect()
+            }
+            ExprKind::StructLiteral { fields, .. } => fields.iter().map(|fi| &fi.value).collect(),
+            _ => return self.core_view_temp_origin(e),
+        };
+        parts
+            .into_iter()
+            .filter(|x| self.core_node_is_view(x) == Some(true))
+            .find_map(|x| self.core_moved_view_temp_origin(x))
+    }
+
     fn core_view_temp_origin(&self, e: &Expr) -> Option<Span> {
         // A branch or argument that is not itself a view borrows nothing.
         if self.core_node_is_view(e) == Some(false) {
@@ -10324,10 +10342,17 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 args.iter().enumerate().find_map(|(i, a)| {
                     let v = &a.value;
-                    let into_view = params
-                        .as_ref()
-                        .and_then(|p| p.get(i))
-                        .is_some_and(|t| self.core_is_view(t));
+                    let param = params.as_ref().and_then(|p| p.get(i));
+                    let into_view = param.is_some_and(|t| self.core_is_view(t));
+                    // An `own` view parameter takes the argument's value, so
+                    // a view built in place there (`pick([t.as_str()])`,
+                    // `V { s: t.as_str() }`) moves in carrying its own
+                    // origins (§5.3), and the literal is no temporary the
+                    // result borrows (B-2026-11-13-81).
+                    let owned = param.is_some_and(|t| !matches!(t, Type::Ref(_) | Type::MutRef(_)));
+                    if into_view && owned && self.core_node_is_view(v) == Some(true) {
+                        return self.core_moved_view_temp_origin(v);
+                    }
                     // A string literal lent to a view parameter is static
                     // text (§5.1), not a temporary: `tail("abc")` (B-2026-10-18-38).
                     if into_view
