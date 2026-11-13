@@ -1238,6 +1238,7 @@ let zeros = [0u8; 256];               // Array[u8, 256]
 let filled = Vec.filled(n, 0u8);      // a Vec of runtime length `n`
 ```
 
+- The other operand of `==` or `!=` is an expected type, as it is for a number literal (`x == 1` with `x: u8`): with `m: Array[u8, 4]`, `m != [75, 82, 69, 67]` builds an `Array[u8, 4]`, and with `s: Set[i64]`, `s == [1, 2]` builds a `Set`.
 - A length mismatch between a literal and its `Array[T, N]` annotation is a compile error.
 - `let v: Vec[i64] = [0; 8];` is an error, because `[v; n]` is an `Array`. Its fix is `Vec.filled(8, 0)`.
 
