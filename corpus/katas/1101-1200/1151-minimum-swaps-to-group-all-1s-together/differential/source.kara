@@ -1,0 +1,262 @@
+// LeetCode #1151: Minimum Swaps to Group All 1's Together -- a
+// differential over the four arms. Each answer is checked against the
+// statement read literally and against five properties that do not
+// compute the answer; see the README.
+
+// ---- min_swaps.kara ----
+
+fn a0_min_swaps(data: Vec[i64]) -> i64 {
+    let k = data.iter().sum();
+    if k == 0 {
+        return 0;
+    }
+    let mut inside = 0;
+    for i in 0..k {
+        inside += data[i];
+    }
+    let mut most = inside;
+    for i in k..data.len() {
+        inside += data[i] - data[i - k];
+        most = most.max(inside);
+    }
+    k - most
+}
+
+// ---- min_swaps_prefix.kara ----
+
+fn a1_min_swaps(data: Vec[i64]) -> i64 {
+    let mut before: Vec[i64] = [0];
+    before.extend(data.iter().scan(0, |sum, x| {
+        let sum = sum + x;
+        Some((sum, sum))
+    }));
+    let n = data.len();
+    let k = before[n];
+    let most = (0..n - k + 1).map(|i| before[i + k] - before[i]).max().unwrap();
+    k - most
+}
+
+// ---- min_swaps_positions.kara ----
+
+fn a2_min_swaps(data: Vec[i64]) -> i64 {
+    let at: Vec[i64] = (0..data.len()).filter(|i| data[i] == 1).collect();
+    let k = at.len();
+    let mut most = 0;
+    let mut j = 0;
+    for i in 0..k {
+        while j < k and at[j] < at[i] + k {
+            j += 1;
+        }
+        most = most.max(j - i);
+    }
+    k - most
+}
+
+// ---- min_swaps_solution.kara ----
+
+struct A3Solution {}
+
+impl A3Solution {
+    pub fn a3_min_swaps(data: Vec[i32]) -> i32 {
+        let ones: i32 = data.iter().sum();
+        let k = ones as i64;
+        if k == 0 {
+            return 0;
+        }
+        let mut cur: i32 = data[..k].iter().sum();
+        let mut best = cur;
+        for i in k..data.len() {
+            cur += data[i] - data[i - k];
+            best = best.max(cur);
+        }
+        ones - best
+    }
+}
+
+fn a3_min_swaps(data: Vec[i64]) -> i64 {
+    A3Solution.a3_min_swaps(data.iter().map(|x| x as i32).collect())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, data: Vec[i64]) -> i64 {
+    match which {
+        0 => a0_min_swaps(data),
+        1 => a1_min_swaps(data),
+        2 => a2_min_swaps(data),
+        _ => a3_min_swaps(data),
+    }
+}
+
+// Whether the ones of a mask of `n` bits stand together: none, or one run.
+fn grouped(mask: i64) -> bool {
+    if mask == 0 {
+        return true;
+    }
+    let low = mask / (mask & -mask);
+    low & (low + 1) == 0
+}
+
+// The statement read literally: a swap exchanges any two bits, and the
+// answer is the fewest swaps that leave the ones together, found by a
+// breadth-first search over the arrangements.
+fn literal(data: Vec[i64]) -> i64 {
+    let n = data.len();
+    let mut start = 0;
+    for i in 0..n {
+        start |= data[i] << i;
+    }
+    let mut steps: Vec[i64] = Vec.filled(1 << n, -1);
+    steps[start] = 0;
+    let mut queue: Vec[i64] = [start];
+    let mut head = 0;
+    while head < queue.len() {
+        let mask = queue[head];
+        head += 1;
+        if grouped(mask) {
+            return steps[mask];
+        }
+        for i in 0..n {
+            for j in i + 1..n {
+                if (mask >> i) & 1 != (mask >> j) & 1 {
+                    let next = mask ^ (1 << i) ^ (1 << j);
+                    if steps[next] < 0 {
+                        steps[next] = steps[mask] + 1;
+                        queue.push(next);
+                    }
+                }
+            }
+        }
+    }
+    -1
+}
+
+// A list of 1 to 10 bits in four kinds: each bit 1 with chance 4 or 6 in
+// 8; runs of ones and zeros of 1 to 3 bits each; and a run of 1 to 4 ones
+// at each end with zeros between, one bit then flipped in half of them,
+// so that the ones are far apart.
+fn problem(seed: mut ref i64, kind: i64) -> Vec[i64] {
+    if kind < 2 {
+        let n = 1 + next_random(mut seed) % 10;
+        return (0..n).map(|_| if next_random(mut seed) % 8 < 2 * kind + 4 { 1 } else { 0 }).collect();
+    }
+    let mut data: Vec[i64] = [];
+    if kind == 2 {
+        let n = 1 + next_random(mut seed) % 10;
+        let mut bit = next_random(mut seed) % 2;
+        while data.len() < n {
+            let run = 1 + next_random(mut seed) % 3;
+            for _ in 0..run {
+                if data.len() < n {
+                    data.push(bit);
+                }
+            }
+            bit = 1 - bit;
+        }
+        return data;
+    }
+    let a = 1 + next_random(mut seed) % 4;
+    let b = 1 + next_random(mut seed) % 4;
+    let zeros = 1 + next_random(mut seed) % (9 - a - b);
+    data = Vec.filled(a + zeros + b, 1);
+    for i in a..a + zeros {
+        data[i] = 0;
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let at = next_random(mut seed) % data.len();
+        data[at] = 1 - data[at];
+    }
+    data
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, data: Vec[i64], front: bool) {
+    let n = data.len();
+    let want = literal(data);
+    let reversed: Vec[i64] = data.iter().rev().collect();
+    let mut padded: Vec[i64] = if front { [0] } else { [] };
+    padded.extend(data.iter());
+    if not front {
+        padded.push(0);
+    }
+    let doubled: Vec[i64] = data.iter().flat_map(|x| [x, x].into_iter()).collect();
+    let k = data.iter().sum();
+    let first = (0..n).find(|i| data[i] == 1);
+    let last = (0..n).rev().find(|i| data[i] == 1);
+    let one_run = match (first, last) {
+        (Some(a), Some(b)) => b - a + 1 == k,
+        _ => true,
+    };
+    let mut longest = 0;
+    let mut run = 0;
+    for x in data.iter() {
+        run = if x == 1 { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    for w in 0..4 {
+        let got = arm(w, data);
+        let what = f"arm {w}, case {t.cases} data {data} -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        // P2: the list reversed
+        let r = arm(w, reversed);
+        expect(mut t, 2, r == got, f"P2 {what}, reversed {r}");
+        // P3: a zero at one end
+        let p = arm(w, padded);
+        expect(mut t, 3, p == got, f"P3 {what}, a zero at the {if front { "front" } else { "back" }} {p}");
+        // P4: every bit twice, twice the swaps
+        let d = arm(w, doubled);
+        expect(mut t, 4, d == 2 * got, f"P4 {what}, doubled {d}");
+        // P5: no swaps exactly when the ones are already one run
+        expect(mut t, 5, (got == 0) == one_run, f"P5 {what}, one run {one_run}");
+        // P6: no more swaps than the zeros, nor than the ones outside the
+        // longest run
+        expect(mut t, 6, got <= n - k and got <= k - longest, f"P6 {what}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + want + n) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 lists in four kinds, 500 each. Every choice, P3's end among
+    // them, is drawn before any arm answers.
+    let mut seed = 11511;
+    let mut problems: Vec[(Vec[i64], bool)] = [];
+    for i in 0..2000 {
+        let data = problem(mut seed, i % 4);
+        let front = next_random(mut seed) % 2 == 0;
+        problems.push((data, front));
+    }
+    for (data, front) in problems.iter() {
+        check_case(mut t, data, front);
+    }
+    println(f"{t.cases} lists: checksum {t.check}, {t.checks} checks over 4 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

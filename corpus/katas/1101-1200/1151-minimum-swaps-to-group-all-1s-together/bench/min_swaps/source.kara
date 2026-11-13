@@ -1,0 +1,53 @@
+// LeetCode #1151: Minimum Swaps to Group All 1's Together -- the ★ arm, a
+// sliding window: the ones end up in some window as long as their count,
+// and each zero in it costs one swap, so the answer is the count less the
+// most ones any such window already holds. O(n)
+
+fn min_swaps(data: Vec[i64]) -> i64 {
+    let k = data.iter().sum();
+    if k == 0 {
+        return 0;
+    }
+    let mut inside = 0;
+    for i in 0..k {
+        inside += data[i];
+    }
+    let mut most = inside;
+    for i in k..data.len() {
+        inside += data[i] - data[i - k];
+        most = most.max(inside);
+    }
+    k - most
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 16 lists of 100000 bits, LeetCode's longest, each bit 1 with chance
+    // 1 to 7 in 8 by list, built once. Each of 3000 rounds flips 64 bits of
+    // one list, in turn, at places from 0 to 32767 times 3, and answers it.
+    let mut seed = 1151;
+    let mut lists: Vec[Vec[i64]] = [];
+    for l in 0..16 {
+        let ones = 1 + l % 7;
+        lists.push((0..100000).map(|_| if next_random(mut seed) % 8 < ones { 1 } else { 0 }).collect());
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..3000 {
+        let l = r % 16;
+        for _ in 0..64 {
+            let at = next_random(mut seed) * 3;
+            lists[l][at] = 1 - lists[l][at];
+        }
+        let s = min_swaps(lists[l]);
+        total += s;
+        check = (check * 31 + s) % 1000000007;
+    }
+    println(f"3000 rounds over 16 lists of 100000 bits: swaps total {total}, checksum {check}");
+}
