@@ -4882,6 +4882,8 @@ shared struct Child {
 }
 ```
 
+**Storing into a `weak` field.** A strong handle is stored as it is (`c.parent = p`) and downgrades. `None` stores an empty weak, which is how the first node of a list or a root without a parent is written: `Child { parent: None }`. The field itself is `weak Parent`, not `Option[weak Parent]`: emptiness is a state of every weak handle, and a read gives `Option[Parent]` either way.
+
 A graph whose edges must not keep nodes alive makes every edge weak and keeps the strong handles in one place, such as the graph's node list:
 
 ```kara
