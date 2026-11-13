@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A `test "..." { }` block in a package file that is not a `_test.kara`
+  file is an error, `E_TEST_OUTSIDE_TEST_FILE`, naming the companion file
+  to move it to: `karac test` runs only the blocks in `_test.kara` files,
+  so it never ran (design.md §14 Testing, B-2026-11-13-76). A lone file
+  outside a package is unchanged.
+
 - `assert`'s condition must be a `bool`, and `assert_eq` / `assert_ne`
   operands are checked as `a == b` is: `assert(1)` and
   `assert_eq(1, "a".to_string())` passed check and then failed in the
@@ -401,6 +407,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Vec[ref i64]` keeps its references (B-2026-11-08-19).
 
 ### Wrong behaviour fixed
+
+- A compiled program that ends through a foreign `exit()` writes what it
+  printed first: standard output to a pipe or a file was buffered and
+  lost, though the interpreter printed it (B-2026-11-13-75).
+- A type written with no arguments takes its parameters' defaults when it
+  has one for each: `let a: Holder = Holder { v: 3 }` with
+  `struct Holder[T = i64]` was refused as `Holder` against `Holder[i64]`
+  (design.md § Default generic arguments, B-2026-11-13-78).
 
 - Workspace members share one `kara.lock` and one `dist/`, at the workspace
   root (B-2026-11-13-60). The lock is solved once over every member's
@@ -936,6 +950,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   interpreter (B-2026-11-08-52).
 
 ### Diagnostics
+
+- A view stored where its borrow is not kept (an escaping closure, a
+  `shared` value, a channel) names what it views, "a view of `t.s`",
+  rather than "a view of a temporary value", and a view stored in a
+  `shared` field prints its type as written, `Option[Str]` rather than
+  `Option[str]` (B-2026-11-13-77).
 
 - `karac fix` rewrites `println!` and `format!` whose arguments hold a
   string or char literal with an escape, a brace or a colon, such as

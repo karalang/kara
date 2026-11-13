@@ -1760,6 +1760,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     "E_HELPER_ATTRIBUTE_INVALID_POSITION"
                 }
                 crate::resolver::ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
+                crate::resolver::ResolveErrorKind::TestOutsideTestFile => {
+                    "E_TEST_OUTSIDE_TEST_FILE"
+                }
                 crate::resolver::ResolveErrorKind::MalformedAttributeArgs => {
                     "E_MALFORMED_ATTRIBUTE_ARGS"
                 }

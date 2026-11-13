@@ -867,6 +867,7 @@ pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::DefaultAttributeWithoutDerive => "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE",
         ResolveErrorKind::HelperAttributeInvalidPosition => "E_HELPER_ATTRIBUTE_INVALID_POSITION",
         ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
+        ResolveErrorKind::TestOutsideTestFile => "E_TEST_OUTSIDE_TEST_FILE",
         ResolveErrorKind::MalformedAttributeArgs => "E_MALFORMED_ATTRIBUTE_ARGS",
     }
 }

@@ -747,12 +747,12 @@ fn view_into_shared_errors(body: &Body, tys: &TyInterner) -> Vec<BorrowError> {
     // one, which stores no view until a view type fills its parameter.
     let subject = |t: Ty| {
         if body.instance.args.is_empty() {
-            format!("a view (`{}`) is stored", tys.display(t))
+            format!("a view (`{}`) is stored", source_ty(tys, t))
         } else {
             format!(
                 "the instance {} stores a view (`{}`)",
                 body.instance.name,
-                tys.display(t)
+                source_ty(tys, t)
             )
         }
     };
@@ -834,6 +834,28 @@ fn site_at(
 }
 
 /// The name the program gives local `l`, if it gives one.
+/// `t` as the program spells it: MIR's text form, with its string view
+/// `str` written `Str` (B-2026-11-13-77).
+fn source_ty(tys: &TyInterner, t: Ty) -> String {
+    let text = tys.display(t);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(i) = rest.find("str") {
+        let before = rest[..i].chars().next_back();
+        let after = rest[i + 3..].chars().next();
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        out.push_str(&rest[..i]);
+        out.push_str(if word(before) || word(after) {
+            "str"
+        } else {
+            "Str"
+        });
+        rest = &rest[i + 3..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn local_name(body: &Body, l: Local) -> Option<String> {
     match &body.local(l).kind {
         LocalKind::Arg { name, .. } | LocalKind::User { name, .. } => Some(name.clone()),

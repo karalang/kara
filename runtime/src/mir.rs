@@ -291,6 +291,32 @@ fn write(stderr: bool, bytes: &[u8]) {
     }
 }
 
+/// Writes what standard output holds when the process ends through an
+/// `exit` the runtime did not make: a program's foreign `exit()` left the
+/// buffer unwritten, so a pipe got nothing that was printed before it
+/// (B-2026-11-13-75). Every exit the runtime makes flushes first
+/// ([`karac_mir_exit`]), so there it finds the buffer empty. It never
+/// aborts: a buffer in use or gone is left as it is.
+#[cfg(unix)]
+extern "C" fn flush_at_exit() {
+    let _ = OUT_LOCAL.try_with(|o| {
+        if let Ok(mut o) = o.try_borrow_mut() {
+            if !o.is_empty() {
+                crate::fatal::write_all(1, o.as_slice());
+                o.clear();
+            }
+        }
+    });
+    if crate::mir_task::pooled() {
+        OUT_SHARED.with(|o| {
+            if !o.is_empty() {
+                crate::fatal::write_all(1, o.as_slice());
+                o.clear();
+            }
+        });
+    }
+}
+
 /// Whether standard output is a terminal, asked once.
 fn stdout_is_terminal() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
@@ -1546,6 +1572,14 @@ pub unsafe extern "C" fn karac_mir_str_replacen(
 #[no_mangle]
 pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
     crate::fatal::ignore_sigpipe();
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn atexit(f: extern "C" fn()) -> i32;
+        }
+        // SAFETY: registers a handler that only writes the output buffer.
+        unsafe { atexit(flush_at_exit) };
+    }
     // The small-chunk lists from the start (B-2026-11-11-42).
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     crate::alloc::small::start();

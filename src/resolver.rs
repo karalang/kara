@@ -979,6 +979,11 @@ pub enum ResolveErrorKind {
     /// A misplaced or ill-formed `#[panic_handler]`, or a second one
     /// (design.md § Panic handler). Mapped to `E_PANIC_HANDLER`.
     PanicHandlerInvalid,
+    /// A `test "..." { }` block in a package file that is not a
+    /// `_test.kara` file (design.md §14 Testing): `karac test` collects
+    /// cases only from those, so the block would never run
+    /// (B-2026-11-13-76). Mapped to `E_TEST_OUTSIDE_TEST_FILE`.
+    TestOutsideTestFile,
     /// `#[default(...)]` or `#[default = ...]` — the `#[default]`
     /// attribute accepts no arguments. Mapped to
     /// `E_MALFORMED_ATTRIBUTE_ARGS`.
@@ -1280,6 +1285,10 @@ pub struct Resolver<'a> {
     /// plain diagnostic is emitted. The CLI sets this via
     /// `Resolver::with_test_file(module.is_test_file)`.
     pub(crate) is_test_file: bool,
+    /// The file name of a package source file whose `test` blocks are
+    /// misplaced (it is not a `_test.kara` file); `None` outside a
+    /// package, where no runner collects tests at all (B-2026-11-13-76).
+    package_file: Option<String>,
     /// B-2026-10-14-30 — the v2 pipelines (`karac check`, the MIR
     /// backends) admit a user impl of an arithmetic or bitwise operator
     /// trait (design.md § Operator traits); the frozen legacy pipeline
@@ -1411,6 +1420,7 @@ impl<'a> Resolver<'a> {
             par_sibling_bindings: FxHashMap::default(),
             is_stdlib_source: false,
             is_test_file: false,
+            package_file: None,
             user_operator_impls: false,
             lone_file: false,
             call_callee_span: None,
@@ -1433,6 +1443,15 @@ impl<'a> Resolver<'a> {
     pub fn with_tree(mut self, tree: &'a ProgramTree, module_id: ModuleId) -> Self {
         self.tree = Some(tree);
         self.current_module = Some(module_id);
+        if let Some(m) = tree.modules.get(module_id) {
+            if !m.is_synthetic && m.package.is_none() {
+                self.package_file = m
+                    .file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string);
+            }
+        }
         // Sibling modules resolve in their own sessions, so this one sees
         // none of their references to our `pub` items.
         self.pub_refs_may_be_external = true;
@@ -1485,6 +1504,58 @@ impl<'a> Resolver<'a> {
         self
     }
 
+    /// Marks the program as the package source file `name` (`main.kara`),
+    /// checked on its own; [`Self::with_tree`] does this for a module.
+    pub fn with_package_file(mut self, name: &str) -> Self {
+        self.package_file = Some(name.to_string());
+        self
+    }
+
+    /// `E_TEST_OUTSIDE_TEST_FILE` at each `test` block of a package file
+    /// that is not a `_test.kara` file (design.md §14 Testing:
+    /// `karac test` collects the blocks in `_test.kara` files, so this one
+    /// would never run). A module's merged test companion sits past
+    /// `Module::test_span_base`, and its blocks are in place.
+    fn report_misplaced_tests(&mut self) {
+        let Some(file) = self.package_file.clone() else {
+            return;
+        };
+        if self.is_test_file || file.ends_with("_test.kara") {
+            return;
+        }
+        let companion = self
+            .tree
+            .zip(self.current_module)
+            .and_then(|(t, id)| t.modules.get(id))
+            .filter(|m| m.test_file.is_some())
+            .map(|m| m.span_base + m.test_span_base);
+        let stem = file.strip_suffix(".kara").unwrap_or(&file);
+        let target = format!("{stem}_test.kara");
+        let program = self.program;
+        for item in &program.items {
+            let Item::TestCase(tc) = item else { continue };
+            if companion.is_some_and(|at| tc.span.offset >= at) {
+                continue;
+            }
+            self.errors.push(ResolveError {
+                message: format!(
+                    "error[E_TEST_OUTSIDE_TEST_FILE]: test \"{}\" is in `{file}`, and \
+                     `karac test` runs only the `test` blocks in `_test.kara` files, so it \
+                     would never run (design.md §14 Testing)",
+                    tc.name
+                ),
+                span: tc.span,
+                kind: ResolveErrorKind::TestOutsideTestFile,
+                suggestion: Some(format!(
+                    "move it to `{target}` beside `{file}`, which is in the same module and \
+                     sees its private items"
+                )),
+                replacement: None,
+                stub_hint: None,
+            });
+        }
+    }
+
     /// See [`Self::user_operator_impls`].
     pub fn with_user_operator_impls(mut self, on: bool) -> Self {
         self.user_operator_impls = on;
@@ -1525,6 +1596,8 @@ impl<'a> Resolver<'a> {
             .extend(crate::attribute_validator::validate_panic_handler(
                 self.program,
             ));
+        // Pass 1.9: `test` blocks outside a `_test.kara` file.
+        self.report_misplaced_tests();
         // Pass 2: resolve all bodies
         self.resolve_items();
         // Pass 3: now that every reference has resolved, decide which of

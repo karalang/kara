@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 285 |
+| diagnostics | 287 |
 | false-positive | 197 |
 | perf | 159 |
-| missing-feature | 153 |
+| missing-feature | 155 |
 | soundness | 64 |
 | miscompile | 59 |
-| run-vs-build | 31 |
+| run-vs-build | 32 |
 | other | 30 |
 | codegen-gap | 30 |
 | crash | 24 |
@@ -75,16 +75,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 433 |
-| mir-llvm | 210 |
-| mir | 177 |
-| cli | 105 |
+| typecheck | 434 |
+| mir-llvm | 211 |
+| mir | 179 |
+| cli | 106 |
 | ownership | 77 |
 | parser | 77 |
 | interp | 52 |
-| runtime | 41 |
+| runtime | 42 |
 | effect | 31 |
-| resolver | 25 |
+| resolver | 26 |
 | codegen | 22 |
 | other | 7 |
 | autopar | 4 |
@@ -124,6 +124,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-46 | 2026-11-13 | mir+mir-llvm | medium | Two non-generic traits with a method of one name, both implemented for a primitive (`impl A for i64 { fn m }`, `impl B for i64 { fn m }`): `A.m(n)` checks but fails at run with `call of unknown function i64.m` (LLVM: `native i64.m is not lowered yet`); on a struct receiver both calls are right | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
 | B-2026-11-13-74 | 2026-11-13 | typecheck | low | `karac fix` writes Rust's `if c { ".." } else { &arg }` as `{ ref arg }`, which the check then refuses ("if/else branches have incompatible types: 'String' and 'ref String'") with no fix; `arg.as_str()` is what typechecks | — |
+| B-2026-11-13-75 | 2026-11-13 | mir-llvm+runtime | medium | Output printed before a foreign `exit()` is lost in compiled code: `unsafe extern "C" { fn exit(code: i32) with panics; }` then `println("a"); exit(3);` prints `a` under `__mir-run` but nothing under `__mir-llvm-run` or a built binary writing to a pipe (all exit 3) | — |
+| B-2026-11-13-76 | 2026-11-13 | cli+resolver | low | A `test "..." { }` block in a package's `src/main.kara` (not a `_test.kara` file) is silently never run: `karac check` passes and `karac test` reports 0 tests; it should be an error naming `main_test.kara` | — |
+| B-2026-11-13-77 | 2026-11-13 | mir | low | E0509 for a view stored where its borrow is not kept says "a view of a temporary value" where the program names the place (`t`, `t.s`), and the shared-field E0509 prints the view type with MIR's `str` (`Option[str]`) where the program writes `Str` | — |
+| B-2026-11-13-78 | 2026-11-13 | typecheck | low | A default generic argument is not applied to a type written with no arguments: `struct Holder[T = i64]` then `let a: Holder = Holder { v: 3 }` is "expected 'Holder', found 'Holder[i64]'" | — |
+| B-2026-11-13-79 | 2026-11-13 | mir | medium | Results borrow what a view parameter views (core semantics §5.4 ruling, 6980a490b6): a parameter or receiver of a view type (`struct Cursor { src: Str, pos: i64 }`, bare, `mut ref` or self) whose result reference comes only through a view type contributes its origins, not its place, so `fn parse_until(c: mut ref Cursor, stop: char) -> Str` leaves `c` usable and two results can be live while `c` advances | — |
 
 ### Relocated
 

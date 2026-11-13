@@ -554,11 +554,7 @@ impl<'a> super::TypeChecker<'a> {
         args
     }
 
-    pub(super) fn fill_default_generic_args(
-        &mut self,
-        name: &str,
-        mut args: Vec<Type>,
-    ) -> Vec<Type> {
+    pub(super) fn fill_default_generic_args(&mut self, name: &str, args: Vec<Type>) -> Vec<Type> {
         let Some(params) = self.env.generic_defaults.get(name).cloned() else {
             return args;
         };
@@ -568,6 +564,32 @@ impl<'a> super::TypeChecker<'a> {
         {
             return args;
         }
+        self.push_default_generic_args(&params, args)
+    }
+
+    /// `name` written as a type with no arguments: when every parameter has
+    /// a default, each takes it, so `Holder` of `struct Holder[T = i64]` is
+    /// `Holder[i64]` (design.md § Default generic arguments,
+    /// B-2026-11-13-78). Otherwise as [`Self::fill_default_generic_args`].
+    /// Only a type annotation comes here: a path an expression calls through
+    /// (`Holder.new()`) still infers its arguments.
+    pub(super) fn fill_written_generic_args(&mut self, name: &str, args: Vec<Type>) -> Vec<Type> {
+        if args.is_empty() {
+            if let Some(params) = self.env.generic_defaults.get(name).cloned() {
+                if !params.is_empty() && params.iter().all(|(_, d)| d.is_some()) {
+                    return self.push_default_generic_args(&params, args);
+                }
+            }
+        }
+        self.fill_default_generic_args(name, args)
+    }
+
+    /// `args` followed by the defaults of the parameters after them.
+    fn push_default_generic_args(
+        &mut self,
+        params: &[(String, Option<crate::ast::TypeExpr>)],
+        mut args: Vec<Type>,
+    ) -> Vec<Type> {
         for i in args.len()..params.len() {
             let scope: Vec<String> = params[..i].iter().map(|(n, _)| n.clone()).collect();
             let subs: HashMap<String, SubstValue> = scope
@@ -897,7 +919,7 @@ impl<'a> super::TypeChecker<'a> {
             // Named type (struct/enum/import)
             let mut args =
                 self.lower_generic_args_named(&path.generic_args, generic_scope, Some(name));
-            args = self.fill_default_generic_args(name, args);
+            args = self.fill_written_generic_args(name, args);
             // `Map[K, V, H]` / `Set[T, H]` — validate the trailing hasher
             // selector and STRIP it, so every downstream consumer keeps seeing
             // the two-ary `Map` / one-ary `Set` it always has (B-2026-08-21-6).
@@ -985,7 +1007,7 @@ impl<'a> super::TypeChecker<'a> {
             let name = path.segments.last().unwrap().clone();
             let args =
                 self.lower_generic_args_named(&path.generic_args, generic_scope, Some(&name));
-            let args = self.fill_default_generic_args(&name, args);
+            let args = self.fill_written_generic_args(&name, args);
             Type::Named { name, args }
         }
     }

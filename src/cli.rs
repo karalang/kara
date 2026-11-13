@@ -1626,8 +1626,17 @@ impl Pipeline {
         // name (B-2026-07-31-33) — the same blind spot that makes a
         // single-file `karac build` on a package member a refusal.
         let in_package = is_package_member(&self.filename);
+        let mut resolver = crate::resolver::Resolver::new(&self.parsed.program);
+        if in_package {
+            if let Some(name) = std::path::Path::new(&self.filename)
+                .file_name()
+                .and_then(|n| n.to_str())
+            {
+                resolver = resolver.with_package_file(name);
+            }
+        }
         self.resolved = Some(
-            crate::resolver::Resolver::new(&self.parsed.program)
+            resolver
                 .with_test_file(is_test_file)
                 .with_external_pub_refs(in_package)
                 .with_target_tombstones(target_tombstones)
@@ -4277,6 +4286,16 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
                 other => other,
             }
         ),
+        // A view stored where its borrow is not kept names what it views
+        // (`t`, `t.s`), which the MIR text has only as a local's number
+        // (B-2026-11-13-77).
+        ("E0509", Some(place)) if e.text.contains("where its borrow is not kept") => {
+            mir_check_text(&e.text).replacen(
+                "a view of a temporary value",
+                &format!("a view of {place}"),
+                1,
+            )
+        }
         ("E0509", Some(place)) if e.text.contains("which this function owns") => format!(
             "the result borrows {place}, which this function owns, so it would outlive \
              it (core-semantics.md §5.4) [E0509]"
