@@ -2274,6 +2274,29 @@ impl<'a> OwnershipChecker<'a> {
     /// Calling a local `MutFn` closure needs `let mut` (design.md §7), so
     /// the call uses its binding's `mut`.
     pub(crate) fn mark_mut_fn_call(&mut self, callee: &Expr) {
+        // A `MutFn` in a field or a collection writes its place, so a plain
+        // `let` root needs `mut` (core-semantics §9.6, B-2026-11-13-3).
+        if let ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } = &callee.kind
+        {
+            if self
+                .typecheck_result
+                .mut_fn_place_calls
+                .contains(&SpanKey::from_span(&callee.span))
+                && !self.receiver_is_shared_handle(object)
+            {
+                if let Some(root) = Self::root_identifier(callee) {
+                    self.report_write_to_immutable_binding(
+                        &root,
+                        &callee.span,
+                        OwnershipErrorKind::MutateImmutableBinding,
+                        format!("cannot call the `MutFn` stored in `{root}`"),
+                    );
+                }
+            }
+            return;
+        }
         if let ExprKind::Identifier(name) = &callee.kind {
             if self
                 .typecheck_result

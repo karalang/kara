@@ -26,6 +26,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   compiler's MIR stage (B-2026-11-13-36). Any count of arguments other than
   the operands and an optional message is an error.
 
+- A `MutFn` stored in a struct field or a collection is called only through
+  a unique access, as a local one is (core semantics §9.6). `(self.f)()`
+  in a method with a bare `self`, `(h.f)()` on a bare parameter, and
+  `(h.f)()` / `(fs[0])()` on a plain `let` were accepted, and the closure's
+  state changed through each shared path. They now need `mut ref self`,
+  `h: mut ref Holder` or `let mut`, which `karac fix` writes; such a call
+  also counts as a use of the `let mut`, which drew `unused_mut`
+  (B-2026-11-13-3).
 - A method with a `self` or `mut ref self` receiver returns a borrow of
   `self` only (core semantics §5.4), whatever the result's type. Only
   `ref T` and `Slice[T]` arguments were held to it, so

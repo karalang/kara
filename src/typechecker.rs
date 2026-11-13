@@ -2040,6 +2040,11 @@ pub struct TypeCheckResult {
     /// §7: calling one needs `let mut`). The ownership pass counts each as a
     /// write of the binding for `unused_mut` (B-2026-11-09-55).
     pub mut_fn_local_calls: FxHashSet<SpanKey>,
+    /// Callee spans of calls to a `MutFn` held in a field or a collection
+    /// (`(h.f)()`, `(fs[0])()`): the call writes the place (core-semantics
+    /// §9.6), so the ownership pass asks its root's `let mut` and counts
+    /// the call as a use of it (B-2026-11-13-3).
+    pub mut_fn_place_calls: FxHashSet<SpanKey>,
     /// Spans of method calls the strict check reads as writing their
     /// receiver (`w.push_back(x)` on any library or program type). The
     /// ownership pass counts each as a write of the receiver's root for
@@ -3111,6 +3116,8 @@ pub struct TypeChecker<'a> {
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// See [`TypeCheckResult::mut_fn_local_calls`].
     pub(super) mut_fn_local_calls: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::mut_fn_place_calls`].
+    pub(super) mut_fn_place_calls: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::receiver_write_calls`].
     pub(super) receiver_write_calls: FxHashMap<SpanKey, bool>,
     /// Set while a pattern binds a part that could move out of an owned
@@ -4432,6 +4439,7 @@ impl<'a> TypeChecker<'a> {
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
             mut_fn_local_calls: FxHashSet::default(),
+            mut_fn_place_calls: FxHashSet::default(),
             receiver_write_calls: FxHashMap::default(),
             pattern_may_move: false,
             moving_scrutinees: FxHashSet::default(),
@@ -5114,6 +5122,7 @@ impl<'a> TypeChecker<'a> {
             core_consuming_for_iterables: self.core_consuming_for_iterables,
             core_moving_scrutinees: self.core_moving_scrutinees,
             mut_fn_local_calls: self.mut_fn_local_calls,
+            mut_fn_place_calls: self.mut_fn_place_calls,
             receiver_write_calls: self.receiver_write_calls,
             core_borrowed_receivers: self.core_borrowed_receivers,
             core_for_into_iter_receivers: self.core_for_into_iter_receivers,

@@ -126,6 +126,11 @@ struct Walk<'t, 'a> {
     shared_mut_fn_calls: Vec<(Span, String, Option<FixIt>)>,
     /// See [`super::TypeCheckResult::mut_fn_local_calls`].
     mut_fn_local_calls: FxHashSet<SpanKey>,
+    /// See [`super::TypeCheckResult::mut_fn_place_calls`].
+    mut_fn_place_calls: FxHashSet<SpanKey>,
+    /// The written type of each parameter and annotated `let`, by binding:
+    /// where a `MutFn` in a collection is told from an `Fn` (§9.6).
+    declared_types: Vec<((usize, usize), TypeExpr)>,
     /// See [`super::TypeCheckResult::receiver_write_calls`].
     receiver_write_calls: FxHashMap<SpanKey, bool>,
     /// The scopes that hold a `for` pattern's bindings.
@@ -337,6 +342,8 @@ impl<'a> TypeChecker<'a> {
             shared_once_fn_params: FxHashMap::default(),
             shared_mut_fn_calls: Vec::new(),
             mut_fn_local_calls: FxHashSet::default(),
+            mut_fn_place_calls: FxHashSet::default(),
+            declared_types: Vec::new(),
             receiver_write_calls: FxHashMap::default(),
             for_item_scopes: Vec::new(),
             mut_closure_locals: Vec::new(),
@@ -409,6 +416,14 @@ impl<'a> TypeChecker<'a> {
             w.mut_closure_locals.clear();
             w.immutable_mut_closure_locals.clear();
             w.moved_mut_fns.clear();
+            w.declared_types.clear();
+            for p in &f.params {
+                for n in p.pattern.binding_names() {
+                    if let Some(Root::Local(i, j)) = w.binding_root(&n) {
+                        w.declared_types.push(((i, j), p.ty.clone()));
+                    }
+                }
+            }
             let mut_fns: Vec<String> = f
                 .params
                 .iter()
@@ -480,6 +495,7 @@ impl<'a> TypeChecker<'a> {
         let kind_errors = w.kind_errors;
         let shared_mut_fn_calls = w.shared_mut_fn_calls;
         let mut_fn_local_calls = w.mut_fn_local_calls;
+        let mut_fn_place_calls = w.mut_fn_place_calls;
         let receiver_write_calls = w.receiver_write_calls;
         let prefix_errors = w.prefix_errors;
         let once_calls = w.once_calls;
@@ -495,6 +511,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
         self.mut_fn_local_calls.extend(mut_fn_local_calls);
+        self.mut_fn_place_calls.extend(mut_fn_place_calls);
         self.receiver_write_calls.extend(receiver_write_calls);
         for (span, message) in removed_calls {
             self.type_error(message, span, TypeErrorKind::RemovedInCore);
@@ -594,6 +611,7 @@ impl Walk<'_, '_> {
         self.immutable_mut_closure_locals
             .retain(|((i, _), _)| *i < depth);
         self.moved_mut_fns.retain(|((i, _), _)| *i < depth);
+        self.declared_types.retain(|((i, _), _)| *i < depth);
     }
 
     /// Bring `pattern`'s bindings into the innermost scope with `origin`;
@@ -1035,8 +1053,8 @@ impl Walk<'_, '_> {
             StmtKind::Let {
                 is_mut,
                 pattern,
+                ty,
                 value,
-                ..
             } => {
                 self.expr(value);
                 self.check_mut_ref_bindings(pattern, value);
@@ -1102,6 +1120,11 @@ impl Walk<'_, '_> {
                     _ => (Origin::Owned, self.to_vec_fix(value)),
                 };
                 self.bind(pattern, origin, fix);
+                if let (Some(t), PatternKind::Binding(name)) = (ty, &pattern.kind) {
+                    if let Root::Local(i, j) = self.root_of(name) {
+                        self.declared_types.push(((i, j), t.clone()));
+                    }
+                }
                 let wrote = self.closure_writes.get(&value.span.offset).cloned();
                 if let (Some(n), PatternKind::Binding(name)) = (wrote, &pattern.kind) {
                     if matches!(value.kind, ExprKind::Closure { .. }) {
@@ -1338,6 +1361,7 @@ impl Walk<'_, '_> {
                 self.children(e);
                 self.check_fn_kinds(callee, args);
                 self.check_shared_mut_fn_call(callee);
+                self.check_mut_fn_place_call(callee, e.span);
                 return;
             }
             ExprKind::For {
@@ -1765,6 +1789,90 @@ impl Walk<'_, '_> {
             },
             fix,
         ));
+    }
+
+    /// §9.6 through a place: a `MutFn` held in a field or a collection
+    /// (`(h.f)()`, `(self.f)()`, `(fs[0])()`) is called only through a
+    /// unique access, as a local one is, so the call writes its place. A
+    /// borrowed `self` or a bare parameter on the way is refused with its
+    /// `mut ref` fix here; the ownership pass asks a plain `let` root for
+    /// `let mut` and counts the call as a use of it (B-2026-11-13-3).
+    fn check_mut_fn_place_call(&mut self, callee: &Expr, at: Span) {
+        let object = match &callee.kind {
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => object,
+            _ => return,
+        };
+        if !self
+            .place_type_expr(callee)
+            .is_some_and(|t| self.is_mut_fn(&t))
+        {
+            return;
+        }
+        self.mut_fn_place_calls
+            .insert(SpanKey::from_span(&callee.span));
+        let text = place_text(callee).unwrap_or_else(|| "this place".to_string());
+        let action = format!(
+            "a call of the `MutFn` in `{text}` (core-semantics.md §9.6: a `MutFn` is \
+             called only through a unique access)"
+        );
+        self.check_through(object, at, &action);
+        self.note_capture_write(object);
+    }
+
+    /// The type a declaration writes for `place`, under any `ref`: a
+    /// parameter's or an annotated `let`'s, a struct field's, and a
+    /// collection's element type (the last type argument: `Vec[T]`,
+    /// `Map[K, V]`).
+    fn place_type_expr(&self, place: &Expr) -> Option<TypeExpr> {
+        fn strip(t: &TypeExpr) -> TypeExpr {
+            match &t.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => strip(inner),
+                _ => t.clone(),
+            }
+        }
+        match &place.kind {
+            ExprKind::Identifier(n) => {
+                let Some(Root::Local(i, j)) = self.binding_root(n) else {
+                    return None;
+                };
+                self.declared_types
+                    .iter()
+                    .rev()
+                    .find(|(r, _)| *r == (i, j))
+                    .map(|(_, t)| strip(t))
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let (ty, _) = self.node_types.get(&object.id)?;
+                let ty = match ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                    t => t,
+                };
+                let Type::Named { name, .. } = ty else {
+                    return None;
+                };
+                self.tc.program.items.iter().find_map(|it| match it {
+                    Item::StructDef(s) if &s.name == name => s
+                        .fields
+                        .iter()
+                        .find(|fl| &fl.name == field)
+                        .map(|fl| strip(&fl.ty)),
+                    _ => None,
+                })
+            }
+            ExprKind::Index { object, .. } => {
+                let outer = self.place_type_expr(object)?;
+                let TypeKind::Path(p) = &outer.kind else {
+                    return None;
+                };
+                p.generic_args.as_ref()?.iter().rev().find_map(|a| match a {
+                    GenericArg::Type(t) => Some(strip(t)),
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
     }
 
     /// A `MutFn(...)` type, under any `ref`s.
