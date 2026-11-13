@@ -1,0 +1,153 @@
+// LeetCode #1146: Snapshot Array -- the ★ arm, a history for each place:
+// the (snap, value) pairs at which its value changed, in the order of the
+// snaps, starting from (0, 0). A set in the snap a history ends with
+// overwrites that pair, so each snap appears at most once; a get takes
+// the last pair at or before the snap asked, found with
+// `partition_point`. O(1) set and snap, O(log s) get.
+
+struct SnapshotArray {
+    history: Vec[Vec[(i64, i64)]],
+    snaps: i64,
+}
+
+impl SnapshotArray {
+    fn new(length: i64) -> SnapshotArray {
+        SnapshotArray { history: Vec.filled(length, [(0, 0)]), snaps: 0 }
+    }
+
+    fn set(mut ref self, index: i64, val: i64) {
+        let h = mut ref self.history[index];
+        let last = h.len() - 1;
+        if h[last].0 == self.snaps {
+            h[last].1 = val;
+        } else {
+            h.push((self.snaps, val));
+        }
+    }
+
+    fn snap(mut ref self) -> i64 {
+        self.snaps += 1;
+        self.snaps - 1
+    }
+
+    fn get(self, index: i64, snap_id: i64) -> i64 {
+        let h = ref self.history[index];
+        h[h.partition_point(|(s, _)| s <= snap_id) - 1].1
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random LeetCode `int` from 0 to `bound - 1`.
+fn pick(seed: mut ref i64, bound: i64) -> i32 {
+    (next_random(mut seed) % bound) as i32
+}
+
+// A value up to 10^9, the constraints' largest, or every third time 0 to 4.
+fn value(seed: mut ref i64) -> i32 {
+    if next_random(mut seed) % 3 == 0 {
+        pick(mut seed, 5)
+    } else {
+        ((next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001) as i32
+    }
+}
+
+// `calls` random calls on an array of `length`: a set, a snap or a get,
+// one in `snaps` of them a snap; a get asks a snap already taken, so the
+// first snap comes before any get. Returns the sum of the gets' answers
+// and a checksum of every answer, the snaps' ids among them.
+fn session(seed: mut ref i64, length: i64, calls: i64, snaps: i64) -> (i64, i64) {
+    let mut arr = SnapshotArray.new(length as i32);
+    let mut taken = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..calls {
+        let r = next_random(mut seed) % snaps;
+        if r == 0 or taken == 0 and r % 2 == 0 {
+            let id = arr.snap();
+            taken += 1;
+            check = (check * 31 + id + 1) % 1000000007;
+        } else if r % 2 == 1 or taken == 0 {
+            arr.set(pick(mut seed, length), value(mut seed));
+        } else {
+            let got = arr.get(pick(mut seed, length), pick(mut seed, taken));
+            total += got;
+            check = (check * 31 + got) % 1000000007;
+        }
+    }
+    (total, check)
+}
+
+fn main() {
+    // LeetCode's example
+    let mut arr = SnapshotArray.new(3);
+    arr.set(0, 5);
+    println(f"snap() = {arr.snap()}");
+    arr.set(0, 6);
+    println(f"get(0, 0) = {arr.get(0, 0)}");
+    // a get before any set; two sets before a snap, the second kept; a
+    // snap with nothing set; an old snap after its value is overwritten
+    println(f"get(2, 0) = {arr.get(2, 0)}");
+    arr.set(1, 7);
+    arr.set(1, 8);
+    println(f"snap() = {arr.snap()}");
+    println(f"snap() = {arr.snap()}");
+    arr.set(1, 9);
+    arr.set(0, 0);
+    println(f"snap() = {arr.snap()}");
+    println(f"get(1, 1) = {arr.get(1, 1)}, get(1, 2) = {arr.get(1, 2)}, get(1, 3) = {arr.get(1, 3)}");
+    println(f"get(0, 0) = {arr.get(0, 0)}, get(0, 2) = {arr.get(0, 2)}, get(0, 3) = {arr.get(0, 3)}");
+    println(f"get(1, 0) = {arr.get(1, 0)}");
+    // one place, set and snapped in turn
+    let mut one = SnapshotArray.new(1);
+    for v in 1..6 {
+        one.set(0, v * 10);
+        one.snap();
+    }
+    println(f"one place, snaps 0 to 4: {one.get(0, 0)} {one.get(0, 1)} {one.get(0, 2)} {one.get(0, 3)} {one.get(0, 4)}");
+    // 2000 random sessions of 1 to 60 calls on 1 to 20 places, a third of
+    // the calls snaps or, every other session, a tenth
+    let mut seed = 1146;
+    let mut total = 0;
+    let mut check = 0;
+    for s in 0..2000 {
+        let length = 1 + next_random(mut seed) % 20;
+        let calls = 1 + next_random(mut seed) % 60;
+        let (t, c) = session(mut seed, length, calls, if s % 2 == 0 { 3 } else { 10 });
+        total += t;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"2000 random sessions: gets total {total}, checksum {check}");
+    // the constraints' largest, 50000 places and up to 50000 calls: half
+    // the places set once, one snap, and those places got back; one place
+    // set and snapped 12500 times, then asked at every 50th snap; and
+    // random calls, one in a hundred a snap
+    let n = 50000;
+    let mut wide = SnapshotArray.new(n);
+    for i in 0..24999 {
+        wide.set(i, i * 3);
+    }
+    wide.snap();
+    let mut sum = 0;
+    for i in 0..25000 {
+        sum += wide.get(i, 0);
+    }
+    println(f"50000 places, half set once: gets total {sum}");
+    let mut deep = SnapshotArray.new(n);
+    for v in 0..12500 {
+        deep.set(0, v + 1);
+        deep.snap();
+    }
+    let mut sum = 0;
+    for s in 0..250 {
+        sum += deep.get(0, s * 50);
+    }
+    println(f"one place snapped 12500 times: gets total {sum}");
+    let (t, c) = session(mut seed, 50000, 50000, 100);
+    println(f"50000 random calls on 50000 places: gets total {t}, checksum {c}");
+}

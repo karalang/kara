@@ -1,0 +1,474 @@
+// LeetCode #1146: Snapshot Array -- a differential over the five arms.
+// Each session's answers are checked against the statement read
+// literally and against seven properties that do not compute them; see
+// the README.
+
+// ---- snapshot_array.kara ----
+
+struct A0SnapshotArray {
+    history: Vec[Vec[(i64, i64)]],
+    snaps: i64,
+}
+
+impl A0SnapshotArray {
+    fn new(length: i64) -> A0SnapshotArray {
+        A0SnapshotArray { history: Vec.filled(length, [(0, 0)]), snaps: 0 }
+    }
+
+    fn set(mut ref self, index: i64, val: i64) {
+        let h = mut ref self.history[index];
+        let last = h.len() - 1;
+        if h[last].0 == self.snaps {
+            h[last].1 = val;
+        } else {
+            h.push((self.snaps, val));
+        }
+    }
+
+    fn snap(mut ref self) -> i64 {
+        self.snaps += 1;
+        self.snaps - 1
+    }
+
+    fn get(self, index: i64, snap_id: i64) -> i64 {
+        let h = ref self.history[index];
+        h[h.partition_point(|(s, _)| s <= snap_id) - 1].1
+    }
+}
+
+// ---- snapshot_array_sorted.kara ----
+
+struct A1SnapshotArray {
+    history: Vec[SortedMap[i64, i64]],
+    snaps: i64,
+}
+
+impl A1SnapshotArray {
+    fn new(length: i64) -> A1SnapshotArray {
+        A1SnapshotArray { history: Vec.filled(length, SortedMap.new()), snaps: 0 }
+    }
+
+    fn set(mut ref self, index: i64, val: i64) {
+        self.history[index].insert(self.snaps, val);
+    }
+
+    fn snap(mut ref self) -> i64 {
+        self.snaps += 1;
+        self.snaps - 1
+    }
+
+    fn get(self, index: i64, snap_id: i64) -> i64 {
+        match self.history[index].floor(snap_id) {
+            Some((_, v)) => v,
+            None => 0,
+        }
+    }
+}
+
+// ---- snapshot_array_keyed.kara ----
+
+struct A2SnapshotArray {
+    entries: SortedMap[(i64, i64), i64],
+    snaps: i64,
+}
+
+impl A2SnapshotArray {
+    fn new(length: i64) -> A2SnapshotArray {
+        A2SnapshotArray { entries: SortedMap.new(), snaps: 0 }
+    }
+
+    fn set(mut ref self, index: i64, val: i64) {
+        self.entries.insert((index, self.snaps), val);
+    }
+
+    fn snap(mut ref self) -> i64 {
+        self.snaps += 1;
+        self.snaps - 1
+    }
+
+    fn get(self, index: i64, snap_id: i64) -> i64 {
+        match self.entries.floor((index, snap_id)) {
+            Some(((place, _), v)) if place == index => v,
+            _ => 0,
+        }
+    }
+}
+
+// ---- snapshot_array_diffs.kara ----
+
+struct A3SnapshotArray {
+    changes: Vec[Map[i64, i64]],
+    pending: Map[i64, i64],
+}
+
+impl A3SnapshotArray {
+    fn new(length: i64) -> A3SnapshotArray {
+        A3SnapshotArray { changes: Vec.new(), pending: Map.new() }
+    }
+
+    fn set(mut ref self, index: i64, val: i64) {
+        self.pending.insert(index, val);
+    }
+
+    fn snap(mut ref self) -> i64 {
+        self.changes.push(mem.take(mut self.pending));
+        self.changes.len() - 1
+    }
+
+    fn get(self, index: i64, snap_id: i64) -> i64 {
+        for s in (0..snap_id + 1).rev() {
+            if let Some(v) = self.changes[s].get(index) {
+                return *v;
+            }
+        }
+        0
+    }
+}
+
+// ---- snapshot_array_solution.kara ----
+
+struct A4SnapshotArray {
+    snap_id: i32,
+    history: Vec[Vec[(i32, i32)]],
+}
+
+impl A4SnapshotArray {
+    fn new(length: i32) -> Self {
+        A4SnapshotArray {
+            snap_id: 0,
+            history: Vec.filled(length, [(0, 0)]),
+        }
+    }
+
+    fn set(mut ref self, index: i32, val: i32) {
+        let h = mut ref self.history[index];
+        if h.len() > 0 {
+            if h[h.len() - 1].0 == self.snap_id {
+                h[h.len() - 1].1 = val;
+                return;
+            }
+        }
+        h.push((self.snap_id, val));
+    }
+
+    fn snap(mut ref self) -> i32 {
+        self.snap_id += 1;
+        self.snap_id - 1
+    }
+
+    fn get(self, index: i32, snap_id: i32) -> i32 {
+        let h = ref self.history[index];
+        {
+            let i = h.partition_point(|(s, _)| s < snap_id);
+            if i < h.partition_point(|(s, _)| s <= snap_id) {
+                h[i].1
+            } else {
+                h[i - 1].1
+            }
+        }
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A call: (0, place, value) a set, (1, 0, 0) a snap, (2, place, snap) a get.
+
+fn run0(length: i64, calls: Vec[(i64, i64, i64)]) -> (Vec[i64], Vec[i64]) {
+    let mut arr = A0SnapshotArray.new(length as i32);
+    let mut out: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 0 {
+            arr.set(a as i32, b as i32);
+        } else if kind == 1 {
+            out.push(arr.snap());
+        } else {
+            out.push(arr.get(a as i32, b as i32));
+        }
+    }
+    let mut again: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 2 {
+            again.push(arr.get(a as i32, b as i32));
+        }
+    }
+    (out, again)
+}
+
+fn run1(length: i64, calls: Vec[(i64, i64, i64)]) -> (Vec[i64], Vec[i64]) {
+    let mut arr = A1SnapshotArray.new(length as i32);
+    let mut out: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 0 {
+            arr.set(a as i32, b as i32);
+        } else if kind == 1 {
+            out.push(arr.snap());
+        } else {
+            out.push(arr.get(a as i32, b as i32));
+        }
+    }
+    let mut again: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 2 {
+            again.push(arr.get(a as i32, b as i32));
+        }
+    }
+    (out, again)
+}
+
+fn run2(length: i64, calls: Vec[(i64, i64, i64)]) -> (Vec[i64], Vec[i64]) {
+    let mut arr = A2SnapshotArray.new(length as i32);
+    let mut out: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 0 {
+            arr.set(a as i32, b as i32);
+        } else if kind == 1 {
+            out.push(arr.snap());
+        } else {
+            out.push(arr.get(a as i32, b as i32));
+        }
+    }
+    let mut again: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 2 {
+            again.push(arr.get(a as i32, b as i32));
+        }
+    }
+    (out, again)
+}
+
+fn run3(length: i64, calls: Vec[(i64, i64, i64)]) -> (Vec[i64], Vec[i64]) {
+    let mut arr = A3SnapshotArray.new(length as i32);
+    let mut out: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 0 {
+            arr.set(a as i32, b as i32);
+        } else if kind == 1 {
+            out.push(arr.snap());
+        } else {
+            out.push(arr.get(a as i32, b as i32));
+        }
+    }
+    let mut again: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 2 {
+            again.push(arr.get(a as i32, b as i32));
+        }
+    }
+    (out, again)
+}
+
+fn run4(length: i64, calls: Vec[(i64, i64, i64)]) -> (Vec[i64], Vec[i64]) {
+    let mut arr = A4SnapshotArray.new(length as i32);
+    let mut out: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 0 {
+            arr.set(a as i32, b as i32);
+        } else if kind == 1 {
+            out.push(arr.snap());
+        } else {
+            out.push(arr.get(a as i32, b as i32));
+        }
+    }
+    let mut again: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 2 {
+            again.push(arr.get(a as i32, b as i32));
+        }
+    }
+    (out, again)
+}
+
+// Each arm's answers, a call at a time, and every get asked again after
+// the last call.
+fn arm(which: i64, length: i64, calls: Vec[(i64, i64, i64)]) -> (Vec[i64], Vec[i64]) {
+    match which {
+        0 => run0(length, calls),
+        1 => run1(length, calls),
+        2 => run2(length, calls),
+        3 => run3(length, calls),
+        _ => run4(length, calls),
+    }
+}
+// The statement read literally: a snap copies the whole array, and a get
+// reads the copy.
+fn literal(length: i64, calls: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut now: Vec[i64] = Vec.filled(length, 0);
+    let mut copies: Vec[Vec[i64]] = [];
+    let mut out: Vec[i64] = [];
+    for (kind, a, b) in calls.iter() {
+        if kind == 0 {
+            now[a] = b;
+        } else if kind == 1 {
+            copies.push(now.clone());
+            out.push(copies.len() - 1);
+        } else {
+            out.push(copies[b][a]);
+        }
+    }
+    out
+}
+
+// A session of 1 to 40 calls on 1 to 8 places, in four kinds: values 0 to
+// 4; a snap one call in two; three places at most and sets two calls in
+// three, so a snap's sets overwrite each other; values up to 10^9.
+fn session(seed: mut ref i64, kind: i64) -> (i64, Vec[(i64, i64, i64)]) {
+    let length = if kind == 2 { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 8 };
+    let count = 1 + next_random(mut seed) % 40;
+    let mut calls: Vec[(i64, i64, i64)] = [];
+    let mut snaps = 0;
+    for _ in 0..count {
+        let r = next_random(mut seed) % 6;
+        let snap = if kind == 1 { r < 3 } else if kind == 2 { r == 0 } else { r < 2 };
+        let set = not snap and (snaps == 0 or if kind == 2 { r < 4 } else { r % 2 == 0 });
+        if snap {
+            calls.push((1, 0, 0));
+            snaps += 1;
+        } else if set {
+            let v = if kind == 3 { next_random(mut seed) * 32768 + next_random(mut seed) } else { next_random(mut seed) % 5 };
+            calls.push((0, next_random(mut seed) % length, v % 1000000001));
+        } else {
+            let place = next_random(mut seed) % length;
+            calls.push((2, place, next_random(mut seed) % snaps));
+        }
+    }
+    (length, calls)
+}
+
+// The answers to the gets alone, from the answers to the snaps and gets.
+fn gets(calls: Vec[(i64, i64, i64)], answers: Vec[i64]) -> Vec[i64] {
+    let asked: Vec[i64] = calls.iter().filter(|(k, _, _)| k != 0).map(|(k, _, _)| k).collect();
+    (0..asked.len()).filter(|j| asked[j] == 2).map(|j| answers[j]).collect()
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// The choices a session's properties draw: P5's new names for the places,
+// P6's value set before each set, P7's which of each doubled snap a get
+// asks, and P8's places added.
+struct Choice {
+    names: Vec[i64],
+    junk: Vec[i64],
+    second: Vec[bool],
+    more: i64,
+}
+
+fn check_case(t: mut ref Tally, length: i64, calls: Vec[(i64, i64, i64)], c: Choice) {
+    let want = literal(length, calls);
+    let renamed: Vec[(i64, i64, i64)] = calls.iter().map(|(k, a, b)| if k == 1 { (k, a, b) } else { (k, c.names[a], b) }).collect();
+    let mut doubled_sets: Vec[(i64, i64, i64)] = [];
+    let mut doubled_snaps: Vec[(i64, i64, i64)] = [];
+    for i in 0..calls.len() {
+        let (k, a, b) = calls[i];
+        if k == 0 {
+            doubled_sets.push((0, a, c.junk[i]));
+            doubled_snaps.push((k, a, b));
+        } else if k == 1 {
+            doubled_snaps.push((1, 0, 0));
+            doubled_snaps.push((1, 0, 0));
+        } else {
+            doubled_snaps.push((2, a, 2 * b + if c.second[i] { 1 } else { 0 }));
+        }
+        doubled_sets.push((k, a, b));
+    }
+    for w in 0..5 {
+        let (answers, again) = arm(w, length, calls);
+        let what = f"arm {w}, case {t.cases} length {length} calls {calls} -> {answers}";
+        // P1: the statement read literally
+        expect(mut t, 1, answers == want, f"P1 {what}, literally {want}");
+        // P2: each snap's id is the number of snaps before it
+        let mut taken = 0;
+        let mut ids = true;
+        let mut j = 0;
+        for (k, _, _) in calls.iter() {
+            if k == 1 {
+                ids = ids and answers[j] == taken;
+                taken += 1;
+            }
+            if k != 0 {
+                j += 1;
+            }
+        }
+        expect(mut t, 2, ids, f"P2 {what}");
+        // P3: every get asked again after the last call answers the same
+        expect(mut t, 3, again == gets(calls, answers), f"P3 {what}, asked again {again}");
+        // P4: a get answers 0 or a value set at its place
+        let mut found = true;
+        let mut j = 0;
+        for (k, a, _) in calls.iter() {
+            if k == 2 and answers[j] != 0 {
+                let got = answers[j];
+                found = found and calls.iter().any(|(k2, a2, b2)| k2 == 0 and a2 == a and b2 == got);
+            }
+            if k != 0 {
+                j += 1;
+            }
+        }
+        expect(mut t, 4, found, f"P4 {what}");
+        // P5: the places renamed
+        let (r, _) = arm(w, length, renamed);
+        expect(mut t, 5, r == answers, f"P5 {what}, renamed {r}");
+        // P6: every set made first with another value
+        let (d, _) = arm(w, length, doubled_sets);
+        expect(mut t, 6, gets(doubled_sets, d) == gets(calls, answers), f"P6 {what}, doubled sets {d}");
+        // P7: every snap taken twice, a get asking either of the pair
+        let (s, _) = arm(w, length, doubled_snaps);
+        expect(mut t, 7, gets(doubled_snaps, s) == gets(calls, answers), f"P7 {what}, doubled snaps {s}");
+        // P8: more places, never set
+        let (m, _) = arm(w, length + c.more, calls);
+        expect(mut t, 8, m == answers, f"P8 {what}, {c.more} more places {m}");
+    }
+    t.cases += 1;
+    for a in want.iter() {
+        t.check = (t.check * 31 + a) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(9, 0) };
+    // 2000 sessions in four kinds, 500 each. Every choice, P5's names,
+    // P6's values, P7's snaps and P8's places among them, is drawn before
+    // any arm answers.
+    let mut seed = 11461;
+    let mut problems: Vec[(i64, Vec[(i64, i64, i64)], Choice)] = [];
+    for i in 0..2000 {
+        let (length, calls) = session(mut seed, i % 4);
+        let mut names: Vec[i64] = (0..length).collect();
+        for j in (1..length).rev() {
+            names.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let junk: Vec[i64] = calls.iter().map(|_| next_random(mut seed) % 7 + 1000).collect();
+        let second: Vec[bool] = calls.iter().map(|_| next_random(mut seed) % 2 == 0).collect();
+        let more = 1 + next_random(mut seed) % 5;
+        problems.push((length, calls, Choice { names, junk, second, more }));
+    }
+    for (length, calls, c) in problems.iter() {
+        check_case(mut t, length, calls, c);
+    }
+    println(f"{t.cases} sessions: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..9).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

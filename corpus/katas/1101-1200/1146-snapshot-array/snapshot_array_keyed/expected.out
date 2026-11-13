@@ -1,0 +1,14 @@
+snap() = 0
+get(0, 0) = 5
+get(2, 0) = 0
+snap() = 1
+snap() = 2
+snap() = 3
+get(1, 1) = 8, get(1, 2) = 8, get(1, 3) = 9
+get(0, 0) = 5, get(0, 2) = 6, get(0, 3) = 0
+get(1, 0) = 0
+one place, snaps 0 to 4: 10 20 30 40 50
+2000 random sessions: gets total 1937645146745, checksum 3360841
+50000 places, half set once: gets total 937387503
+one place snapped 12500 times: gets total 1556500
+50000 random calls on 50000 places: gets total 1192398070649, checksum 7241494

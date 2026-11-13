@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1146-snapshot-array/bench/snapshot_array.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1146 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "9ec286465"
+extracted_src = "20e4de1a"

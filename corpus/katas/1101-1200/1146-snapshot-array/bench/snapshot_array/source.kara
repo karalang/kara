@@ -1,0 +1,74 @@
+// LeetCode #1146: Snapshot Array -- the ★ arm, a history for each place:
+// the (snap, value) pairs at which its value changed, in the order of the
+// snaps, starting from (0, 0). A set in the snap a history ends with
+// overwrites that pair, so each snap appears at most once; a get takes
+// the last pair at or before the snap asked, found with
+// `partition_point`. O(1) set and snap, O(log s) get.
+
+struct SnapshotArray {
+    history: Vec[Vec[(i64, i64)]],
+    snaps: i64,
+}
+
+impl SnapshotArray {
+    fn new(length: i64) -> SnapshotArray {
+        SnapshotArray { history: Vec.filled(length, [(0, 0)]), snaps: 0 }
+    }
+
+    fn set(mut ref self, index: i64, val: i64) {
+        let h = mut ref self.history[index];
+        let last = h.len() - 1;
+        if h[last].0 == self.snaps {
+            h[last].1 = val;
+        } else {
+            h.push((self.snaps, val));
+        }
+    }
+
+    fn snap(mut ref self) -> i64 {
+        self.snaps += 1;
+        self.snaps - 1
+    }
+
+    fn get(self, index: i64, snap_id: i64) -> i64 {
+        let h = ref self.history[index];
+        h[h.partition_point(|(s, _)| s <= snap_id) - 1].1
+    }
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random number from 0 to 2^30 - 1, from two draws.
+fn wide(seed: mut ref i64) -> i64 {
+    next_random(mut seed) * 32768 + next_random(mut seed)
+}
+
+fn main() {
+    // One array of 50000 places, LeetCode's longest. Each of 50000 rounds
+    // sets 50 random places to random values, takes a snap, and asks 50
+    // random places at random snaps taken so far: 5,050,000 calls.
+    let n = 50000;
+    let mut arr = SnapshotArray.new(n);
+    let mut seed = 1146;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..50000 {
+        for _ in 0..50 {
+            let i = wide(mut seed) % n;
+            arr.set(i, wide(mut seed) % 1000000001);
+        }
+        arr.snap();
+        for _ in 0..50 {
+            let i = wide(mut seed) % n;
+            let got = arr.get(i, wide(mut seed) % (r + 1));
+            total += got;
+            check = (check * 31 + got) % 1000000007;
+        }
+    }
+    println(f"50000 rounds of 50 sets, a snap and 50 gets on 50000 places: gets total {total}, checksum {check}");
+}
