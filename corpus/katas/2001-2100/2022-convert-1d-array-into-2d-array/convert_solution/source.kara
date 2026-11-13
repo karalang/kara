@@ -8,7 +8,7 @@ impl Solution {
         if original.len() != (m * n) as i64 {
             return Vec.new();
         }
-        original.chunks(n as i64).iter().map(|row| row.to_vec()).collect()
+        original.chunks(n).iter().map(|row| row.to_vec()).collect()
     }
 }
 

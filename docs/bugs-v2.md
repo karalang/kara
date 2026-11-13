@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 268 |
-| false-positive | 190 |
+| diagnostics | 270 |
+| false-positive | 191 |
 | perf | 157 |
-| missing-feature | 147 |
-| soundness | 61 |
+| missing-feature | 148 |
+| soundness | 62 |
 | miscompile | 56 |
 | run-vs-build | 31 |
 | other | 30 |
-| codegen-gap | 28 |
+| codegen-gap | 30 |
 | crash | 22 |
 | leak | 4 |
 | use-after-free | 2 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 413 |
-| mir-llvm | 204 |
-| mir | 170 |
-| cli | 95 |
+| typecheck | 419 |
+| mir-llvm | 205 |
+| mir | 171 |
+| cli | 97 |
+| ownership | 74 |
 | parser | 74 |
-| ownership | 73 |
 | interp | 51 |
 | runtime | 40 |
 | effect | 30 |
@@ -91,7 +91,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -112,6 +112,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-12 | 2026-11-12 | typecheck | low | A literal stored into an element of an open fill settles the fill's literal: `let mut t = Vec.filled(3, 0); t[1] = 4; let r: i32 = t[1];` is refused (narrowing i64 to i32), though without `t[1] = 4` it is accepted and `t[1] = 4` after the typed read is too | — |
 | B-2026-11-12-15 | 2026-11-12 | mir-llvm | low | `"U".repeat(n)` of a one-byte string is a call into `karac_mir_str_repeat`, an allocation through `karac_alloc_or_panic` and up to three `memcpy` calls where Rust's is inlined: kata 1138's bench runs 7.0G instructions to Rust's 4.6G (0.81 s to 0.59 s) | — |
 | B-2026-11-12-17 | 2026-11-12 | mir-llvm | low | `for i in (low..n).step_by(2)` over an `i64` range runs about 1.2x the same loop written `while i < n { ...; i += 2 }`: `IterStepBy[Range].next` takes the generic path (a `first` flag, `advance_by(step - 1)` through `step_forward_within` and an `Option`, then `next`), which Rust's `StepBy<Range>` specializes | — |
+| B-2026-11-13-1 | 2026-11-13 | mir-llvm+cli | medium | `String.normalize` and `std.regex` pass `karac check --targets=wasm_wasi` and then fail `karac build --target=wasm_wasi` with a bare wasm-ld `undefined symbol: karac_unicode_normalize_mir` / `karac_regex_mir` | — |
+| B-2026-11-13-2 | 2026-11-13 | typecheck | low | A list literal compared with `==` / `!=` against an `Array` is typed `Vec` instead of taking the other operand as its expected type: `m != [75u8, 82u8, 69u8, 67u8]` with `m: Array[u8, 4]` is refused | — |
+| B-2026-11-13-3 | 2026-11-13 | typecheck+ownership | medium | A `MutFn` stored in a struct field or a `Vec` can be called through shared access (a non-`mut` binding, a borrowed `self`, a bare parameter), which core-semantics §9.6 forbids; `unused_mut` even tells the user to drop the `mut` | — |
+| B-2026-11-13-4 | 2026-11-13 | typecheck+mir | medium | A `par for` whose body value is a tuple is refused at check with the internal `an expression with no recorded type is not lowered yet` | — |
+| B-2026-11-13-5 | 2026-11-13 | typecheck | low | `div_euclid` and `rem_euclid` exist only on `i64`: `i32`, `u8` and the other integer widths, and `f64`, have neither, although design.md names them as the Euclidean forms of `/` and `%` | — |
+| B-2026-11-13-6 | 2026-11-13 | typecheck+cli | medium | Rust's `binary_search_by_key` and `binary_search_by` taken apart as a `Result` have no fix: `match h.binary_search_by_key(&snap_id, |&(s, _)| s) { Ok(i) => h[i].1, Err(i) => h[i - 1].1 }` is refused with only "no method 'binary_search_by_key' on type 'Vec'" and "tuple pattern used but type is `?T7`", where the same shapes over `binary_search` are carried through `partition_point` (B-2026-11-09-14) | — |
+| B-2026-11-13-7 | 2026-11-13 | typecheck | low | `Vec.filled(n as i64, 0)` with `n: i32` is not linted as a lossless cast, while `let x: i64 = n as i64` and `g(n as i64)` at a user function's `i64` parameter are: a library argument checked through `check_i64_arg` is inferred with no expected type, so `lint_unneeded_cast` never sees the slot's `i64` | — |
 
 ### Relocated
 

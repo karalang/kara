@@ -18,23 +18,101 @@
 //!
 //! `xs` must be a plain place and `v` free of effects, since the rewrite
 //! names each more than once; otherwise the message says so.
+//!
+//! Kāra has no `binary_search_by_key` or `binary_search_by`, and the same
+//! shapes over them carry the same way (B-2026-11-13-6): the key closure
+//! `|p| key` against `k` searches with `partition_point(|p| key < k)`,
+//! and the index found holds `k` when it lies below
+//! `partition_point(|p| key <= k)`; an ordering closure `|p| order` reads
+//! `order == Ordering.Less` and `order != Ordering.Greater` for the two.
 
-use crate::ast::{CallArg, Expr, ExprKind, MatchArm, Pattern, PatternKind};
+use crate::ast::{BinOp, CallArg, Expr, ExprKind, MatchArm, Pattern, PatternKind};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::{TypeChecker, TypeErrorKind};
 
-/// `xs.binary_search(v)`: the receiver and the value.
-fn binary_search_call(e: &Expr) -> Option<(&Expr, &Expr)> {
+/// What a Rust binary search compares each element by.
+#[derive(Clone, Copy)]
+enum By<'a> {
+    /// `xs.binary_search(v)`: the element itself, against `v`.
+    Value(&'a Expr),
+    /// `xs.binary_search_by_key(k, |p| key)`: the key, against `k`.
+    Key(&'a Expr, &'a Expr),
+    /// `xs.binary_search_by(|p| order)`: the `Ordering` the closure gives.
+    Order(&'a Expr),
+}
+
+/// A closure of one parameter.
+fn is_closure1(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Closure { params, .. } if params.len() == 1)
+}
+
+/// Rust's `&v`, read as `v`: the rewrite compares by value.
+fn deref_arg(e: &Expr) -> &Expr {
     match &e.kind {
-        ExprKind::MethodCall {
-            object,
-            method,
-            args,
-            ..
-        } if method == "binary_search" && args.len() == 1 => Some((object, &args[0].value)),
-        _ => None,
+        ExprKind::Unary {
+            op: crate::ast::UnaryOp::Ref,
+            operand,
+        } => operand,
+        _ => e,
+    }
+}
+
+/// `xs.binary_search(v)`, `xs.binary_search_by_key(k, f)` or
+/// `xs.binary_search_by(f)`: the receiver and what it searches by.
+fn binary_search_call(e: &Expr) -> Option<(&Expr, By<'_>)> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &e.kind
+    else {
+        return None;
+    };
+    let by = match (method.as_str(), args.as_slice()) {
+        ("binary_search", [v]) => By::Value(&v.value),
+        ("binary_search_by_key", [k, f]) if is_closure1(&f.value) => {
+            By::Key(deref_arg(&k.value), &f.value)
+        }
+        ("binary_search_by", [f]) if is_closure1(&f.value) => By::Order(&f.value),
+        _ => return None,
+    };
+    Some((object, by))
+}
+
+/// `closure` with its body `body op right`.
+fn closure_with(closure: &Expr, op: BinOp, right: Expr) -> String {
+    let mut c = closure.clone();
+    if let ExprKind::Closure { body, .. } = &mut c.kind {
+        let left = std::mem::replace(
+            body,
+            Box::new(Expr {
+                kind: ExprKind::Bool(false),
+                span: closure.span,
+                id: crate::ids::NodeId::DUMMY,
+            }),
+        );
+        **body = Expr {
+            kind: ExprKind::Binary {
+                op,
+                left,
+                right: Box::new(right),
+            },
+            span: closure.span,
+            id: crate::ids::NodeId::DUMMY,
+        };
+    }
+    crate::formatter::render_expr(&c)
+}
+
+/// `Ordering.<variant>`, as an expression to render.
+fn ordering(variant: &str, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::Identifier(format!("Ordering.{variant}")),
+        span,
+        id: crate::ids::NodeId::DUMMY,
     }
 }
 
@@ -78,21 +156,49 @@ fn fresh(v: &Expr) -> &'static str {
 
 /// The pieces of a rewrite: `xs.partition_point(|y| y < v)` and the test
 /// that the index found holds `v`.
-fn search(xs: &Expr, v: &Expr, at: &str) -> (String, String) {
+fn search(xs: &Expr, by: By, at: &str) -> (String, String) {
     let r = crate::formatter::render_expr(xs);
-    let val = crate::formatter::render_expr(v);
-    let y = fresh(v);
-    (
-        format!("{r}.partition_point(|{y}| {y} < {val})"),
-        format!("{at} < {r}.len() and {r}[{at}] == {val}"),
-    )
+    match by {
+        By::Value(v) => {
+            let val = crate::formatter::render_expr(v);
+            let y = fresh(v);
+            (
+                format!("{r}.partition_point(|{y}| {y} < {val})"),
+                format!("{at} < {r}.len() and {r}[{at}] == {val}"),
+            )
+        }
+        By::Key(k, f) => (
+            format!(
+                "{r}.partition_point({})",
+                closure_with(f, BinOp::Lt, k.clone())
+            ),
+            format!(
+                "{at} < {r}.partition_point({})",
+                closure_with(f, BinOp::LtEq, k.clone())
+            ),
+        ),
+        By::Order(f) => (
+            format!(
+                "{r}.partition_point({})",
+                closure_with(f, BinOp::Eq, ordering("Less", f.span))
+            ),
+            format!(
+                "{at} < {r}.partition_point({})",
+                closure_with(f, BinOp::NotEq, ordering("Greater", f.span))
+            ),
+        ),
+    }
 }
 
-/// Why the rewrite cannot name `xs` and `v` again, if it cannot.
-fn not_mechanical(xs: &Expr, v: &Expr) -> Option<&'static str> {
+/// Why the rewrite cannot name `xs` and the value again, if it cannot.
+fn not_mechanical(xs: &Expr, by: By) -> Option<&'static str> {
+    let value = match by {
+        By::Value(v) | By::Key(v, _) => Some(v),
+        By::Order(_) => None,
+    };
     if !is_plain_place(xs) {
         Some("the rewrite names the sequence more than once, so bind it to a `let` first")
-    } else if !is_pure(v) {
+    } else if value.is_some_and(|v| !is_pure(v)) {
         Some("the rewrite names the value more than once, so bind it to a `let` first")
     } else {
         None
@@ -197,19 +303,20 @@ fn sides<'a>(e: &'a Expr) -> Option<(&'a Expr, Option<Side<'a>>, Option<Side<'a>
     }
 }
 
-/// The rewrite of a Rust match or `if let` over `xs.binary_search(v)`.
-fn rewrite_branches(e: &Expr) -> Option<Result<String, String>> {
+/// The rewrite of a Rust match or `if let` over `xs.binary_search(v)`,
+/// and the search it takes apart.
+fn rewrite_branches(e: &Expr) -> Option<(By<'_>, Result<String, String>)> {
     let (scrutinee, ok, err) = sides(e)?;
-    let (xs, v) = binary_search_call(scrutinee)?;
-    if let Some(why) = not_mechanical(xs, v) {
-        return Some(Err(why.to_string()));
+    let (xs, by) = binary_search_call(scrutinee)?;
+    if let Some(why) = not_mechanical(xs, by) {
+        return Some((by, Err(why.to_string())));
     }
     let at = ok
         .as_ref()
         .and_then(|s| s.0)
         .or(err.as_ref().and_then(|s| s.0))
         .unwrap_or("at");
-    let (find, holds) = search(xs, v, at);
+    let (find, holds) = search(xs, by, at);
     let text = |s: &Side| bound_branch(s.0, at, &s.1);
     let tail = match (ok.as_ref().map(text), err.as_ref().map(text)) {
         (Some(o), Some(r)) => format!("if {holds} {o} else {r}"),
@@ -217,11 +324,11 @@ fn rewrite_branches(e: &Expr) -> Option<Result<String, String>> {
         (None, Some(r)) => format!("if not ({holds}) {r}"),
         (None, None) => return None,
     };
-    Some(Ok(format!("{{ let {at} = {find}; {tail} }}")))
+    Some((by, Ok(format!("{{ let {at} = {find}; {tail} }}"))))
 }
 
 /// The rewrite of `xs.binary_search(v).unwrap_or_else(|i| f)`.
-fn rewrite_unwrap_or_else(xs: &Expr, v: &Expr, closure: &Expr) -> Option<Result<String, String>> {
+fn rewrite_unwrap_or_else(xs: &Expr, by: By, closure: &Expr) -> Option<Result<String, String>> {
     let ExprKind::Closure { params, body, .. } = &closure.kind else {
         return None;
     };
@@ -234,19 +341,19 @@ fn rewrite_unwrap_or_else(xs: &Expr, v: &Expr, closure: &Expr) -> Option<Result<
         _ => return None,
     };
     if matches!(&body.kind, ExprKind::Identifier(n) if n == name) {
-        if !is_pure(v) {
+        if matches!(by, By::Value(v) | By::Key(v, _) if !is_pure(v)) {
             return Some(Err(
                 "the predicate names the value once per probe, so bind it to a `let` first"
                     .to_string(),
             ));
         }
-        return Some(Ok(search(xs, v, name).0));
+        return Some(Ok(search(xs, by, name).0));
     }
-    if let Some(why) = not_mechanical(xs, v) {
+    if let Some(why) = not_mechanical(xs, by) {
         return Some(Err(why.to_string()));
     }
     let at = if name == "_" { "at" } else { name };
-    let (find, holds) = search(xs, v, at);
+    let (find, holds) = search(xs, by, at);
     Some(Ok(format!(
         "{{ let {at} = {find}; if {holds} {{ {at} }} else {} }}",
         block_text(body)
@@ -256,6 +363,21 @@ fn rewrite_unwrap_or_else(xs: &Expr, v: &Expr, closure: &Expr) -> Option<Result<
 const SHAPE: &str = "Kāra's `binary_search` returns `Option[i64]`, the index of an element \
                      equal to the value or `None`, not Rust's `Result` of an index or the \
                      insertion point; the insertion point is `partition_point(|y| y < v)`";
+
+/// What the message says of the search it rewrites.
+fn shape(by: By) -> String {
+    match by {
+        By::Value(_) => SHAPE.to_string(),
+        By::Key(..) => "Kāra has no `binary_search_by_key`; the insertion point of `k` is \
+                        `partition_point(|p| key < k)`, and it holds `k` when it lies below \
+                        `partition_point(|p| key <= k)`"
+            .to_string(),
+        By::Order(_) => "Kāra has no `binary_search_by`; the insertion point is \
+                         `partition_point(|p| order == Ordering.Less)`, and it holds a match \
+                         when it lies below `partition_point(|p| order != Ordering.Greater)`"
+            .to_string(),
+    }
+}
 
 /// `text` laid out by the formatter, its lines after the first indented
 /// to `column`, where the expression it replaces starts; as it is when it
@@ -298,7 +420,8 @@ impl TypeChecker<'_> {
         any
     }
 
-    fn report_binary_search(&mut self, at: Span, rewrite: Result<String, String>) {
+    fn report_binary_search(&mut self, at: Span, by: By, rewrite: Result<String, String>) {
+        let shape = shape(by);
         match rewrite {
             Ok(text) => {
                 let text = reflow(&text, at.column);
@@ -315,10 +438,10 @@ impl TypeChecker<'_> {
                 } else {
                     format!(": write `{text}`")
                 };
-                self.type_error(format!("{SHAPE}{write}"), at, TypeErrorKind::TypeMismatch);
+                self.type_error(format!("{shape}{write}"), at, TypeErrorKind::TypeMismatch);
             }
             Err(why) => self.type_error(
-                format!("{SHAPE}; this one is not rewritten, as {why}"),
+                format!("{shape}; this one is not rewritten, as {why}"),
                 at,
                 TypeErrorKind::TypeMismatch,
             ),
@@ -335,11 +458,11 @@ impl TypeChecker<'_> {
         whole: Span,
         before: usize,
     ) {
-        let Some((xs, v)) = binary_search_call(object) else {
+        let Some((xs, by)) = binary_search_call(object) else {
             return;
         };
         let rewrite = match (method, args) {
-            ("unwrap_or_else", [f]) => rewrite_unwrap_or_else(xs, v, &f.value),
+            ("unwrap_or_else", [f]) => rewrite_unwrap_or_else(xs, by, &f.value),
             (
                 "unwrap_err" | "expect_err" | "map_err" | "err" | "ok" | "is_ok_and" | "is_err_and",
                 _,
@@ -352,7 +475,7 @@ impl TypeChecker<'_> {
             return;
         };
         if self.retract_errors_within(before, whole) {
-            self.report_binary_search(whole, rewrite);
+            self.report_binary_search(whole, by, rewrite);
         }
     }
 
@@ -363,11 +486,11 @@ impl TypeChecker<'_> {
         if self.errors.len() <= before {
             return;
         }
-        let Some(rewrite) = rewrite_branches(e) else {
+        let Some((by, rewrite)) = rewrite_branches(e) else {
             return;
         };
         if self.retract_errors_within(before, e.span) {
-            self.report_binary_search(e.span, rewrite);
+            self.report_binary_search(e.span, by, rewrite);
         }
     }
 }

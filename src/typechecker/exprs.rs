@@ -11707,6 +11707,18 @@ impl<'a> super::TypeChecker<'a> {
         if self.check_assignable(&want, actual, arg.span) {
             self.check_int_widening_coercion(arg, &want, actual);
         }
+        // `lossless_cast` on a library argument that takes an `i64`
+        // (B-2026-11-13-7): `Vec.filled(n as i64, 0)` with `n: i32` widens
+        // `n` implicitly, as a user function's `i64` parameter would. The
+        // argument was inferred with no expected type, so its cast is in
+        // `operand_casts`, as an operator's operand is.
+        if let ExprKind::Cast { expr: inner, ty } = &arg.kind {
+            if let Some((from, to)) = self.operand_casts.get(&arg.id).cloned() {
+                if to == want && is_integer(&from) && int_coercion_is_widening(&from, &to) {
+                    self.lint_unneeded_cast(arg, inner, ty, &from, &to, Some(&want));
+                }
+            }
+        }
     }
 
     /// Whether `ty[i]` takes `i` as a position: a `Vec`, `VecDeque`,
