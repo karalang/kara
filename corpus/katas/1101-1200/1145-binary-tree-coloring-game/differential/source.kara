@@ -1,0 +1,464 @@
+// LeetCode #1145: Binary Tree Coloring Game -- a differential over the five
+// arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- btree_game_winning_move.kara ----
+
+// The size of `node`'s subtree; at the node valued `x`, the sizes of its
+// two subtrees go to `sides`.
+fn a0_count(node: Option[TreeNode], x: i64, sides: mut ref (i64, i64)) -> i64 {
+    let Some(t) = node else {
+        return 0;
+    };
+    let l = a0_count(t.left, x, mut sides);
+    let r = a0_count(t.right, x, mut sides);
+    if t.val == x {
+        *sides = (l, r);
+    }
+    l + r + 1
+}
+
+fn a0_btree_game_winning_move(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    let mut sides = (0, 0);
+    a0_count(root, x, mut sides);
+    let (l, r) = sides;
+    let above = n - 1 - l - r;
+    l.max(r).max(above) * 2 > n
+}
+
+// ---- btree_game_winning_move_find.kara ----
+
+fn a1_find(node: Option[TreeNode], x: i64) -> Option[TreeNode] {
+    let Some(t) = node else {
+        return None;
+    };
+    if t.val == x {
+        return Some(t);
+    }
+    match a1_find(t.left, x) {
+        Some(found) => Some(found),
+        None => a1_find(t.right, x),
+    }
+}
+
+fn a1_size(node: Option[TreeNode]) -> i64 {
+    match node {
+        Some(t) => 1 + a1_size(t.left) + a1_size(t.right),
+        None => 0,
+    }
+}
+
+fn a1_btree_game_winning_move(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    let red = a1_find(root, x).unwrap();
+    let left = a1_size(red.left);
+    let right = a1_size(red.right);
+    [left, right, n - 1 - left - right].iter().any(|part| part * 2 > n)
+}
+
+// ---- btree_game_winning_move_stack.kara ----
+
+fn a2_btree_game_winning_move(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    let mut order: Vec[TreeNode] = [];
+    let mut stack: Vec[TreeNode] = [];
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(t) = stack.pop() {
+        order.push(t);
+        if let Some(c) = t.left {
+            stack.push(c);
+        }
+        if let Some(c) = t.right {
+            stack.push(c);
+        }
+    }
+    let mut size: Map[i32, i64] = Map.new();
+    let mut parts = [0, 0, 0];
+    for t in order.iter().rev() {
+        let l = match t.left {
+            Some(c) => size[c.val],
+            None => 0,
+        };
+        let r = match t.right {
+            Some(c) => size[c.val],
+            None => 0,
+        };
+        size[t.val] = l + r + 1;
+        if t.val == x {
+            parts = [l, r, n - 1 - l - r];
+        }
+    }
+    parts.iter().any(|p| p * 2 > n)
+}
+
+// ---- btree_game_winning_move_flood.kara ----
+
+fn a3_link(node: Option[TreeNode], up: i64, next: mut ref Vec[Vec[i64]]) {
+    let Some(t) = node else {
+        return;
+    };
+    let v = t.val as i64;
+    if up > 0 {
+        next[v].push(up);
+        next[up].push(v);
+    }
+    a3_link(t.left, v, mut next);
+    a3_link(t.right, v, mut next);
+}
+
+fn a3_btree_game_winning_move(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    let mut next: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    a3_link(root, 0, mut next);
+    for start in next[x].iter() {
+        let mut seen = Vec.filled(n + 1, false);
+        seen[x] = true;
+        seen[*start] = true;
+        let mut queue: Vec[i64] = [*start];
+        let mut head = 0;
+        while head < queue.len() {
+            let v = queue[head];
+            head += 1;
+            for w in next[v].iter() {
+                if not seen[*w] {
+                    seen[*w] = true;
+                    queue.push(*w);
+                }
+            }
+        }
+        if queue.len() * 2 > n {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- btree_game_winning_move_solution.kara ----
+
+fn a4_count(node: Option[TreeNode], x: i32, left: mut ref i32, right: mut ref i32) -> i32 {
+    match node {
+        None => 0,
+        Some(rc) => {
+            let node = rc;
+            let l = a4_count(node.left, x, mut left, mut right);
+            let r = a4_count(node.right, x, mut left, mut right);
+            if node.val == x {
+                *left = l;
+                *right = r;
+            }
+            l + r + 1
+        }
+    }
+}
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_btree_game_winning_move(root: Option[TreeNode], n: i32, x: i32) -> bool {
+        let mut (left, right) = (0i32, 0i32);
+        a4_count(root, x, mut left, mut right);
+        let parent = n - left - right - 1;
+        let half = n / 2;
+        left > half or right > half or parent > half
+    }
+}
+
+fn a4_btree_game_winning_move(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    A4Solution.a4_btree_game_winning_move(root, n as i32, x as i32)
+}
+
+// ---- the differential -----------------------------------------------------
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn arm(which: i64, root: Option[TreeNode], n: i64, x: i64) -> bool {
+    match which {
+        0 => a0_btree_game_winning_move(root, n, x),
+        1 => a1_btree_game_winning_move(root, n, x),
+        2 => a2_btree_game_winning_move(root, n, x),
+        3 => a3_btree_game_winning_move(root, n, x),
+        _ => a4_btree_game_winning_move(root, n, x),
+    }
+}
+
+// Every node's neighbours, its parent and children, by value.
+fn edges(node: Option[TreeNode], up: i64, next: mut ref Vec[Vec[i64]]) {
+    let Some(t) = node else {
+        return;
+    };
+    let v = t.val as i64;
+    if up > 0 {
+        next[v].push(up);
+        next[up].push(v);
+    }
+    edges(t.left, v, mut next);
+    edges(t.right, v, mut next);
+}
+
+fn neighbours(root: Option[TreeNode], n: i64) -> Vec[Vec[i64]] {
+    let mut next: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    edges(root, 0, mut next);
+    next
+}
+
+// The uncoloured nodes next to a node of `mine`, the moves its player has.
+fn moves(next: Vec[Vec[i64]], mine: i64, taken: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = [];
+    for v in 1..next.len() {
+        if (mine >> v) & 1 == 1 {
+            for w in next[v].iter() {
+                if (taken >> *w) & 1 == 0 and not out.contains(*w) {
+                    out.push(*w);
+                }
+            }
+        }
+    }
+    out
+}
+
+// The game played out: whether blue ends with more nodes than red when
+// both play their best from these colours, red to move or blue. A player
+// with no uncoloured node next to one of theirs passes; when both must
+// pass the game is over.
+fn blue_wins(next: Vec[Vec[i64]], red: i64, blue: i64, red_to_move: bool, memo: mut ref Map[i64, bool]) -> bool {
+    let key = (red * 16384 + blue) * 2 + if red_to_move { 1 } else { 0 };
+    if let Some(known) = memo.get(key) {
+        return known;
+    }
+    let mine = if red_to_move { red } else { blue };
+    let theirs = if red_to_move { blue } else { red };
+    let options = moves(next, mine, red | blue);
+    let result = if options.is_empty() {
+        if moves(next, theirs, red | blue).is_empty() {
+            blue.count_ones() > red.count_ones()
+        } else {
+            blue_wins(next, red, blue, not red_to_move, mut memo)
+        }
+    } else if red_to_move {
+        let mut all = true;
+        for w in options.iter() {
+            if not blue_wins(next, red | (1 << *w), blue, false, mut memo) {
+                all = false;
+                break;
+            }
+        }
+        all
+    } else {
+        let mut some = false;
+        for w in options.iter() {
+            if blue_wins(next, red, blue | (1 << *w), true, mut memo) {
+                some = true;
+                break;
+            }
+        }
+        some
+    };
+    memo.insert(key, result);
+    result
+}
+
+// The statement read literally: some first node for blue, any but red's,
+// from which blue wins the game played out.
+fn literal(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    let next = neighbours(root, n);
+    let mut memo: Map[i64, bool] = Map.new();
+    for y in 1..n + 1 {
+        if y != x and blue_wins(next, 1 << x, 1 << y, true, mut memo) {
+            return true;
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A random tree of `count` nodes valued 1 to `count` in a random order,
+// each hung at a random free place below the ones before it; with `deep`,
+// below the newest node half the time.
+fn random_tree(seed: mut ref i64, count: i64, deep: bool) -> TreeNode {
+    let mut pool: Vec[i32] = (1..count + 1).map(|v| v as i32).collect();
+    for j in (1..pool.len()).rev() {
+        pool.swap(j, next_random(mut seed) % (j + 1));
+    }
+    let root = leaf(pool[0]);
+    let mut nodes: Vec[TreeNode] = [root];
+    for i in 1..count {
+        let c = leaf(pool[i]);
+        loop {
+            let at = if deep and next_random(mut seed) % 2 == 0 {
+                nodes[nodes.len() - 1]
+            } else {
+                nodes[next_random(mut seed) % nodes.len()]
+            };
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    at.left = Some(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                at.right = Some(c);
+                break;
+            }
+        }
+        nodes.push(c);
+    }
+    root
+}
+
+// A copy with every node's children swapped.
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    let Some(t) = node else {
+        return None;
+    };
+    Some(TreeNode { val: t.val, left: mirrored(t.right), right: mirrored(t.left) })
+}
+
+// A copy with the children swapped at the node valued `at` only.
+fn swapped_at(node: Option[TreeNode], at: i64) -> Option[TreeNode] {
+    let Some(t) = node else {
+        return None;
+    };
+    let (l, r) = (swapped_at(t.left, at), swapped_at(t.right, at));
+    if t.val == at {
+        Some(TreeNode { val: t.val, left: r, right: l })
+    } else {
+        Some(TreeNode { val: t.val, left: l, right: r })
+    }
+}
+
+// A copy with every value `v` renamed `names[v]`.
+fn renamed(node: Option[TreeNode], names: Vec[i64]) -> Option[TreeNode] {
+    let Some(t) = node else {
+        return None;
+    };
+    Some(TreeNode { val: names[t.val] as i32, left: renamed(t.left, names), right: renamed(t.right, names) })
+}
+
+// The same tree hung from the node valued `v`, reached from `from`: its
+// other neighbours become its children.
+fn hung_from(next: Vec[Vec[i64]], v: i64, from: i64) -> TreeNode {
+    let kids: Vec[i64] = next[v].iter().filter(|w| *w != from).collect();
+    let t = leaf(v as i32);
+    if kids.len() > 0 {
+        t.left = Some(hung_from(next, kids[0], v));
+    }
+    if kids.len() > 1 {
+        t.right = Some(hung_from(next, kids[1], v));
+    }
+    t
+}
+
+// 1 to 13 nodes, an odd count: random with red anywhere; grown deep with
+// red anywhere; random with red at the root; grown deep with red at a
+// leaf.
+fn problem(seed: mut ref i64, kind: i64) -> (TreeNode, i64, i64) {
+    let n = 2 * (next_random(mut seed) % 7) + 1;
+    let root = random_tree(mut seed, n, kind % 2 == 1);
+    let x = if kind == 2 {
+        root.val as i64
+    } else if kind == 3 {
+        let next = neighbours(Some(root), n);
+        let leaves: Vec[i64] = (1..n + 1).filter(|v| next[v].len() <= 1 and v != root.val as i64).collect();
+        if leaves.is_empty() { root.val as i64 } else { leaves[next_random(mut seed) % leaves.len()] }
+    } else {
+        next_random(mut seed) % n + 1
+    };
+    (root, n, x)
+}
+
+struct Choice {
+    names: Vec[i64],
+    top: i64,
+    flip: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, root: TreeNode, n: i64, x: i64, c: Choice) {
+    let tree = Some(root);
+    let want = literal(tree, n, x);
+    let next = neighbours(tree, n);
+    let mirror = mirrored(tree);
+    let swapped = swapped_at(tree, c.flip);
+    let names = renamed(tree, c.names);
+    let rehung = Some(hung_from(next, c.top, 0));
+    for w in 0..5 {
+        let answer = arm(w, tree, n, x);
+        let what = f"arm {w}, case {t.cases} n = {n} x = {x} -> {answer}";
+        // P1: the statement read literally
+        expect(mut t, 1, answer == want, f"P1 {what}, literally {want}");
+        // P2: every node's children swapped
+        let m = arm(w, mirror, n, x);
+        expect(mut t, 2, m == answer, f"P2 {what}, mirrored {m}");
+        // P3: every value renamed, red's with it
+        let r = arm(w, names, n, c.names[x]);
+        expect(mut t, 3, r == answer, f"P3 {what}, renamed {r}");
+        // P4: the same tree hung from a leaf
+        let h = arm(w, rehung, n, x);
+        expect(mut t, 4, h == answer, f"P4 {what}, hung from {c.top} {h}");
+        // P5: of every node red could take, exactly one leaves blue no win
+        let losing = (1..n + 1).filter(|v| not arm(w, tree, n, v)).count();
+        expect(mut t, 5, losing == 1, f"P5 {what}, blue loses at {losing} nodes");
+        // P6: the children swapped at one node
+        let s = arm(w, swapped, n, x);
+        expect(mut t, 6, s == answer, f"P6 {what}, swapped at {c.flip} {s}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + x + if want { 1 } else { 0 }) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 trees in four kinds, 500 each. Every choice, P3's names, P4's
+    // leaf and P6's node among them, is drawn before any arm answers.
+    let mut seed = 11451;
+    let mut problems: Vec[(TreeNode, i64, i64, Choice)] = [];
+    for i in 0..2000 {
+        let (root, n, x) = problem(mut seed, i % 4);
+        let mut names: Vec[i64] = (0..n + 1).collect();
+        for j in (2..n + 1).rev() {
+            names.swap(j, next_random(mut seed) % j + 1);
+        }
+        let next = neighbours(Some(root), n);
+        let leaves: Vec[i64] = (1..n + 1).filter(|v| next[v].len() <= 1).collect();
+        let top = leaves[next_random(mut seed) % leaves.len()];
+        let flip = next_random(mut seed) % n + 1;
+        problems.push((root, n, x, Choice { names, top, flip }));
+    }
+    for (root, n, x, c) in problems.iter() {
+        check_case(mut t, root, n, x, Choice { names: c.names.clone(), top: c.top, flip: c.flip });
+    }
+    println(f"{t.cases} trees: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

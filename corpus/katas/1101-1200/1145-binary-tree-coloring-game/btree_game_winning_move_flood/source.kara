@@ -1,0 +1,188 @@
+// LeetCode #1145: Binary Tree Coloring Game -- the tree as a graph: every
+// edge written both ways in lists by value, then from each neighbour of
+// the first player's node a breadth-first flood that never enters it,
+// counting what blue would own by starting there; blue wins when some
+// start owns more than half the nodes. O(n)
+
+fn link(node: Option[TreeNode], up: i64, next: mut ref Vec[Vec[i64]]) {
+    let Some(t) = node else {
+        return;
+    };
+    let v = t.val as i64;
+    if up > 0 {
+        next[v].push(up);
+        next[up].push(v);
+    }
+    link(t.left, v, mut next);
+    link(t.right, v, mut next);
+}
+
+fn btree_game_winning_move(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    let mut next: Vec[Vec[i64]] = Vec.filled(n + 1, []);
+    link(root, 0, mut next);
+    for start in next[x].iter() {
+        let mut seen = Vec.filled(n + 1, false);
+        seen[x] = true;
+        seen[*start] = true;
+        let mut queue: Vec[i64] = [*start];
+        let mut head = 0;
+        while head < queue.len() {
+            let v = queue[head];
+            head += 1;
+            for w in next[v].iter() {
+                if not seen[*w] {
+                    seen[*w] = true;
+                    queue.push(*w);
+                }
+            }
+        }
+        if queue.len() * 2 > n {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level-order form, "[1,2,null,4]": each node's two children
+// come next, in the order the nodes were met, "null" for none.
+fn parse(text: Str) -> Option[TreeNode] {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return None;
+    }
+    let items: Vec[Option[i32]] = inner.split(",").map(|s| if s == "null" { None } else { Some(i32.parse(s).unwrap()) }).collect();
+    let root = leaf(items[0].unwrap());
+    let mut queue: Vec[TreeNode] = [root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue[head];
+        head += 1;
+        if let Some(v) = items[i] {
+            let child = leaf(v);
+            node.left = Some(child);
+            queue.push(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = leaf(v);
+                node.right = Some(child);
+                queue.push(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A random tree of `count` nodes valued 1 to `count` in a random order,
+// each node hung at a random free place below the ones before it; with
+// `deep`, the place is below the newest node half the time, so the tree
+// grows long branches.
+fn random_tree(seed: mut ref i64, count: i64, deep: bool) -> TreeNode {
+    let mut pool: Vec[i32] = (1..count + 1).map(|v| v as i32).collect();
+    for j in (1..pool.len()).rev() {
+        pool.swap(j, next_random(mut seed) % (j + 1));
+    }
+    let root = leaf(pool[0]);
+    let mut nodes: Vec[TreeNode] = [root];
+    for i in 1..count {
+        let c = leaf(pool[i]);
+        loop {
+            let at = if deep and next_random(mut seed) % 2 == 0 {
+                nodes[nodes.len() - 1]
+            } else {
+                nodes[next_random(mut seed) % nodes.len()]
+            };
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    at.left = Some(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                at.right = Some(c);
+                break;
+            }
+        }
+        nodes.push(c);
+    }
+    root
+}
+
+// "[1,2,...,count]": every level full but the last.
+fn full_tree(count: i64) -> String {
+    let items: Vec[String] = (1..count + 1).map(|v| f"{v}").collect();
+    f"[{items.join(",")}]"
+}
+
+// A chain of `count` nodes down the left, valued 1 to `count` from the top.
+fn chain(count: i64) -> Option[TreeNode] {
+    let root = leaf(1);
+    let mut at = root;
+    for v in 2..count + 1 {
+        let c = leaf(v as i32);
+        at.left = Some(c);
+        at = c;
+    }
+    Some(root)
+}
+
+fn main() {
+    // LeetCode's two examples; one node; a chain of five with red in the
+    // middle and at the top; seven nodes full, red at the root and below
+    let cases = [
+        ("[1,2,3,4,5,6,7,8,9,10,11]", 11, 3),
+        ("[1,2,3]", 3, 1),
+        ("[1]", 1, 1),
+        ("[1,2,null,3,null,4,null,5]", 5, 3),
+        ("[1,2,null,3,null,4,null,5]", 5, 1),
+        ("[1,2,3,4,5,6,7]", 7, 1),
+        ("[1,2,3,4,5,6,7]", 7, 2),
+    ];
+    for (tree, n, x) in cases.iter() {
+        println(f"{tree} n = {n} x = {x} -> {btree_game_winning_move(parse(tree), n, x)}");
+    }
+    // 2000 random trees of an odd 1 to 99 nodes, red at a random node,
+    // every other tree grown deep: how many blue wins, and a checksum
+    let mut seed = 1145;
+    let mut wins = 0;
+    let mut check = 0;
+    for t in 0..2000 {
+        let n = 2 * (next_random(mut seed) % 50) + 1;
+        let root = random_tree(mut seed, n, t % 2 == 1);
+        let x = next_random(mut seed) % n + 1;
+        let answer = btree_game_winning_move(Some(root), n, x);
+        if answer {
+            wins += 1;
+        }
+        check = (check * 31 + x + if answer { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"2000 random trees: blue wins {wins}, checksum {check}");
+    // the largest odd tree the constraints allow, 99 nodes: full with red
+    // at the root and at its left child; a chain with red in the middle;
+    // and random, red at every node in turn
+    println(f"99 full, x = 1: {btree_game_winning_move(parse(full_tree(99)), 99, 1)}");
+    println(f"99 full, x = 2: {btree_game_winning_move(parse(full_tree(99)), 99, 2)}");
+    println(f"99 in a chain, x = 50: {btree_game_winning_move(chain(99), 99, 50)}");
+    let big = random_tree(mut seed, 99, false);
+    let losing: Vec[i64] = (1..100).filter(|x| not btree_game_winning_move(Some(big), 99, x)).collect();
+    println(f"99 random, x from 1 to 99: blue loses only at {losing}");
+}

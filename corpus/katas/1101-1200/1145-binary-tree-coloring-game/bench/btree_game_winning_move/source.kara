@@ -1,0 +1,97 @@
+// LeetCode #1145: Binary Tree Coloring Game -- the ★ arm, one walk from
+// the root counting every subtree: at the first player's node the sizes
+// of its two subtrees are kept, and the rest of the tree, above it, is
+// what is left of `n`. Blue can take any one of those three parts whole
+// by starting next to `x`, and wins when one holds more than half the
+// nodes. O(n)
+
+// The size of `node`'s subtree; at the node valued `x`, the sizes of its
+// two subtrees go to `sides`.
+fn count(node: Option[TreeNode], x: i64, sides: mut ref (i64, i64)) -> i64 {
+    let Some(t) = node else {
+        return 0;
+    };
+    let l = count(t.left, x, mut sides);
+    let r = count(t.right, x, mut sides);
+    if t.val == x {
+        *sides = (l, r);
+    }
+    l + r + 1
+}
+
+fn btree_game_winning_move(root: Option[TreeNode], n: i64, x: i64) -> bool {
+    let mut sides = (0, 0);
+    count(root, x, mut sides);
+    let (l, r) = sides;
+    let above = n - 1 - l - r;
+    l.max(r).max(above) * 2 > n
+}
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random tree of `count` nodes valued 1 to `count` in a random order,
+// each node hung at a random free place below the ones before it.
+fn random_tree(seed: mut ref i64, count: i64) -> TreeNode {
+    let mut pool: Vec[i32] = (1..count + 1).map(|v| v as i32).collect();
+    for j in (1..pool.len()).rev() {
+        pool.swap(j, next_random(mut seed) % (j + 1));
+    }
+    let root = leaf(pool[0]);
+    let mut nodes: Vec[TreeNode] = [root];
+    for i in 1..count {
+        let c = leaf(pool[i]);
+        loop {
+            let at = nodes[next_random(mut seed) % nodes.len()];
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    at.left = Some(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                at.right = Some(c);
+                break;
+            }
+        }
+        nodes.push(c);
+    }
+    root
+}
+
+fn main() {
+    // 20 trees of 99 nodes, the largest odd count LeetCode allows, built
+    // once. Each of 1000 rounds asks every tree about 99 first moves drawn
+    // at random.
+    let mut seed = 1145;
+    let mut trees: Vec[TreeNode] = [];
+    for _ in 0..20 {
+        trees.push(random_tree(mut seed, 99));
+    }
+    let mut wins = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        for t in trees.iter() {
+            for _ in 0..99 {
+                let x = next_random(mut seed) % 99 + 1;
+                let answer = btree_game_winning_move(Some(t), 99, x);
+                if answer {
+                    wins += 1;
+                }
+                check = (check * 31 + x + if answer { 1 } else { 0 }) % 1000000007;
+            }
+        }
+    }
+    println(f"1000 rounds over 20 trees of 99 nodes: blue wins {wins}, checksum {check}");
+}
