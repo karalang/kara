@@ -3721,6 +3721,10 @@ pub struct TypeChecker<'a> {
     /// `.to_string()` to it, a copy of text the place already holds
     /// (B-2026-11-03-28).
     pub(super) as_str_calls: FxHashMap<SpanKey, Span>,
+    /// Each `ref x` expression, by its span: the operand's span. Where a
+    /// `Str` is wanted outside a call argument, the fix writes `x.as_str()`
+    /// in its place (B-2026-11-13-74).
+    pub(super) ref_operand_spans: FxHashMap<SpanKey, Span>,
     /// While a method call's arguments are checked: the receiver's
     /// substitution (`Self` and the impl's parameters), which a
     /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
@@ -4576,6 +4580,7 @@ impl<'a> TypeChecker<'a> {
             unit_main_questions: Vec::new(),
             loose_expr_spans: FxHashSet::default(),
             as_str_calls: FxHashMap::default(),
+            ref_operand_spans: FxHashMap::default(),
             call_bound_receiver_subs: None,
             method_call_ends: Vec::new(),
             call_rigid_params: Vec::new(),
@@ -5778,6 +5783,73 @@ impl<'a> TypeChecker<'a> {
             },
             replacement: String::new(),
         })
+    }
+
+    /// `ref x` where a `Str` is wanted outside a call argument, with `x` a
+    /// `String`: the edits that write `x.as_str()` in its place. A `ref
+    /// String` is a `Str` only as a call argument (design.md § Strings,
+    /// B-2026-11-13-74). None for an operand that binds looser than `.`.
+    pub(super) fn ref_string_as_str_edits(
+        &self,
+        found: &Type,
+        span: Span,
+    ) -> Option<Vec<crate::resolver::TextEdit>> {
+        let found = inference::resolve_type_var_top(found, &self.env.substitutions);
+        let Type::Ref(inner) = &found else {
+            return None;
+        };
+        if inference::resolve_type_var_top(inner, &self.env.substitutions) != Type::Str {
+            return None;
+        }
+        let operand = *self.ref_operand_spans.get(&SpanKey::from_span(&span))?;
+        if self
+            .loose_expr_spans
+            .contains(&SpanKey::from_span(&operand))
+        {
+            return None;
+        }
+        Some(vec![
+            crate::resolver::TextEdit {
+                offset: span.offset,
+                length: operand.offset.checked_sub(span.offset)?,
+                replacement: String::new(),
+            },
+            crate::resolver::TextEdit {
+                offset: operand.offset + operand.length,
+                length: 0,
+                replacement: ".as_str()".to_string(),
+            },
+        ])
+    }
+
+    /// The branches of an `if` or `match` that do not join because some are
+    /// `ref x` over a `String` and the rest are `Str` views or string
+    /// literals: the edits that write each `ref x` as `x.as_str()`, after
+    /// which the literals join the views as `Str` (design.md §8,
+    /// B-2026-11-13-74).
+    pub(super) fn ref_string_branch_edits(
+        &self,
+        branches: &[(&Expr, &Type)],
+    ) -> Option<Vec<crate::resolver::TextEdit>> {
+        fn tail(e: &Expr) -> &Expr {
+            match &e.kind {
+                ExprKind::Block(b) => b.final_expr.as_deref().map_or(e, tail),
+                _ => e,
+            }
+        }
+        let mut edits = Vec::new();
+        for (e, t) in branches {
+            let t = inference::resolve_type_var_top(t, &self.env.substitutions);
+            if matches!(t, Type::Never | Type::Error) || exprs::is_str_view(&t) {
+                continue;
+            }
+            let e = tail(e);
+            if t == Type::Str && matches!(e.kind, ExprKind::StringLit(_)) {
+                continue;
+            }
+            edits.extend(self.ref_string_as_str_edits(&t, e.span)?);
+        }
+        (!edits.is_empty()).then_some(edits)
     }
 
     pub(super) fn type_error_with_fix_it(
@@ -8196,6 +8268,31 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        // `let s: Str = ref name`: outside a call argument a `ref String` is
+        // not a `Str`, and `name.as_str()` is (B-2026-11-13-74).
+        if exprs::is_str_view(&inference::resolve_type_var_top(
+            expected,
+            &self.env.substitutions,
+        )) && !types_compatible(expected, found)
+        {
+            if let Some(edits) = self.ref_string_as_str_edits(found, span) {
+                self.type_error_with_types(
+                    format!(
+                        "expected '{}', found '{}': a `ref String` is a `Str` only as a call \
+                         argument; `.as_str()` views the `String` as a `Str`",
+                        type_display(expected),
+                        type_display(found)
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    expected,
+                    found,
+                );
+                self.error_fix_diffs
+                    .insert(SpanKey::from_span(&span), edits);
+                return false;
+            }
+        }
         // An unannotated collection's element or key takes a `Copy`
         // reference's value (design.md §8, B-2026-11-08-19).
         if self.solve_collection_var_by_value(expected, found) {

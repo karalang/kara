@@ -965,6 +965,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   than offering `split`, which starts from the other end (B-2026-11-13-71).
 - `group.join()` on a `TaskGroup` says that dropping a group joins its
   tasks, and `karac fix` writes `drop(group)` (B-2026-11-13-72).
+- A `ref x` over a `String` beside a `Str` or a string-literal branch of an
+  `if` or `match`, or against a `Str` annotation, is refused with a fix that
+  writes `x.as_str()`: a `ref String` is a `Str` only as a call argument.
+  Rust's `if c { ".." } else { &arg }` used to stall the Mend loop at
+  `ref arg` (B-2026-11-13-74).
 - `unused_mut` honours `#[allow]`, `#[deny]` and `#[expect]` on the `let`
   statement or an enclosing block statement, innermost first, so a
   statement `allow` beats a function `deny`. A statement-level

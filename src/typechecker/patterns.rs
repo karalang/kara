@@ -857,23 +857,39 @@ impl<'a> super::TypeChecker<'a> {
                     if !reported {
                         // A borrowed arm beside owned ones moves out of a
                         // borrow (core semantics §3.7): say so, and clone.
-                        if let Some(owned) = self.reject_borrowed_arm_among_owned(
-                            &result_ty, arm_ty, i, arms, &arm_types, scrutinee,
-                        ) {
+                        let branches: Vec<(&Expr, &Type)> =
+                            arms.iter().map(|a| &a.body).zip(arm_types.iter()).collect();
+                        let as_str = self.ref_string_branch_edits(&branches);
+                        // A `ref String` arm among string literals takes the
+                        // join's error and its `.as_str()` edit instead.
+                        let borrowed = match as_str {
+                            Some(_) => None,
+                            None => self.reject_borrowed_arm_among_owned(
+                                &result_ty, arm_ty, i, arms, &arm_types, scrutinee,
+                            ),
+                        };
+                        if let Some(owned) = borrowed {
                             result_ty = owned;
                             reported = true;
                             continue;
                         }
+                        let hint = match as_str {
+                            Some(_) => super::exprs::REF_STRING_BRANCH_HINT.to_string(),
+                            None => Self::branch_unwrap_hint(&result_ty, arm_ty),
+                        };
                         self.type_error(
                             format!(
                                 "match arms have incompatible types: '{}' and '{}'{}",
                                 type_display(&result_ty),
                                 type_display(arm_ty),
-                                Self::branch_unwrap_hint(&result_ty, arm_ty)
+                                hint
                             ),
                             *span,
                             TypeErrorKind::BranchTypeMismatch,
                         );
+                        if let Some(edits) = as_str {
+                            self.error_fix_diffs.insert(SpanKey::from_span(span), edits);
+                        }
                         reported = true;
                     }
                 }

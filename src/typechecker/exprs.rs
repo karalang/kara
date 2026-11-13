@@ -11117,6 +11117,14 @@ impl<'a> super::TypeChecker<'a> {
                     .insert(SpanKey::from_span(&expr.span), object.span);
             }
         }
+        if let ExprKind::Unary {
+            op: UnaryOp::Ref,
+            operand,
+        } = &expr.kind
+        {
+            self.ref_operand_spans
+                .insert(SpanKey::from_span(&expr.span), operand.span);
+        }
         if matches!(
             expr.kind,
             ExprKind::Unary { .. }
@@ -15022,16 +15030,30 @@ impl<'a> super::TypeChecker<'a> {
                         Some(joined) => joined,
                         None => {
                             if then_ty != Type::Error && else_ty != Type::Error {
+                                let as_str = then_block.final_expr.as_deref().and_then(|t| {
+                                    self.ref_string_branch_edits(&[
+                                        (t, &then_ty),
+                                        (else_expr, &else_ty),
+                                    ])
+                                });
+                                let hint = match as_str {
+                                    Some(_) => REF_STRING_BRANCH_HINT.to_string(),
+                                    None => Self::branch_unwrap_hint(&then_ty, &else_ty),
+                                };
                                 self.type_error(
                                     format!(
                                         "if/else branches have incompatible types: '{}' and '{}'{}",
                                         type_display(&then_ty),
                                         type_display(&else_ty),
-                                        Self::branch_unwrap_hint(&then_ty, &else_ty)
+                                        hint
                                     ),
                                     expr.span,
                                     TypeErrorKind::BranchTypeMismatch,
                                 );
+                                if let Some(edits) = as_str {
+                                    self.error_fix_diffs
+                                        .insert(SpanKey::from_span(&expr.span), edits);
+                                }
                             }
                             then_ty
                         }
@@ -17015,6 +17037,12 @@ fn mentions_str_view(ty: &Type) -> bool {
         _ => false,
     }
 }
+
+/// The hint on a branch join refused because a `ref String` branch meets a
+/// `Str` or a string literal (B-2026-11-13-74).
+pub(super) const REF_STRING_BRANCH_HINT: &str =
+    ": a `ref String` is a `Str` only as a call argument; `.as_str()` views the `String` as \
+     a `Str`, and a string literal beside a `Str` is a `Str`";
 
 pub(super) fn is_str_view(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
