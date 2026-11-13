@@ -19,9 +19,10 @@ use crate::intern::Symbol;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
+use super::effect_vars::effect_text;
 use super::{
-    declared_admits, format_monomorphized_signature, verb_name, Effect, EffectError,
-    EffectErrorKind, EffectSubtypeTrace,
+    declared_admits, format_monomorphized_signature, Effect, EffectError, EffectErrorKind,
+    EffectSubtypeTrace,
 };
 
 /// The `subject` string for a binding's diagnostic. Shared so the `let`,
@@ -487,16 +488,13 @@ impl<'a> super::EffectChecker<'a> {
             // `slot_effects` is a `HashSet`, so a slot declaring two or more
             // effects rendered them in a per-process-random order and the
             // shipped message differed between runs of one binary.
-            let mut slot_str: Vec<String> = slot_effects
-                .iter()
-                .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
-                .collect();
+            let mut slot_str: Vec<String> = slot_effects.iter().map(effect_text).collect();
             slot_str.sort();
             let arg_str: Vec<String> = arg_effects
                 .effects
                 .iter()
                 .filter(|te| !self.is_slot_transparent(&te.effect))
-                .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
+                .map(|te| effect_text(&te.effect))
                 .collect();
             let offending_str: Vec<String> = arg_effects
                 .effects
@@ -505,7 +503,7 @@ impl<'a> super::EffectChecker<'a> {
                     !self.is_slot_transparent(&te.effect)
                         && !declared_admits(&slot_effects, &te.effect)
                 })
-                .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
+                .map(|te| effect_text(&te.effect))
                 .collect();
 
             // Render the monomorphized callee signature (Round 10.3 step 7).
@@ -527,8 +525,7 @@ impl<'a> super::EffectChecker<'a> {
             for te in &arg_effects.effects {
                 let is_transparent = self.is_slot_transparent(&te.effect);
                 if !declared_admits(&slot_effects, &te.effect) && !is_transparent {
-                    let effect_str =
-                        format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);
+                    let effect_str = effect_text(&te.effect);
                     let mut message = format!(
                         "argument {} has effect {} not declared in slot [{}]",
                         i + 1,
@@ -1094,16 +1091,13 @@ impl<'a> super::EffectChecker<'a> {
         // Sorted, not raw `HashSet` order: the rendered slot list is user-facing
         // text, and an unsorted set makes the message vary between runs of the
         // same binary once a slot declares two or more effects.
-        let mut slot_str: Vec<String> = slot_effects
-            .iter()
-            .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
-            .collect();
+        let mut slot_str: Vec<String> = slot_effects.iter().map(effect_text).collect();
         slot_str.sort();
         let value_str: Vec<String> = value_effects
             .effects
             .iter()
             .filter(|te| !self.is_slot_transparent(&te.effect))
-            .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
+            .map(|te| effect_text(&te.effect))
             .collect();
         let offending_str: Vec<String> = value_effects
             .effects
@@ -1111,14 +1105,14 @@ impl<'a> super::EffectChecker<'a> {
             .filter(|te| {
                 !self.is_slot_transparent(&te.effect) && !declared_admits(&slot_effects, &te.effect)
             })
-            .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
+            .map(|te| effect_text(&te.effect))
             .collect();
 
         for te in &value_effects.effects {
             if declared_admits(&slot_effects, &te.effect) || self.is_slot_transparent(&te.effect) {
                 continue;
             }
-            let effect_str = format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);
+            let effect_str = effect_text(&te.effect);
             let message = format!(
                 "{} has effect {} not declared in slot [{}]",
                 subject,

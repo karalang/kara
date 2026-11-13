@@ -47,7 +47,7 @@ pub(super) struct VarInstance {
 pub(super) type Instances = Vec<(String, VarInstance)>;
 
 /// `writes(Log)`, or a bare `blocks` for a verb that names no resource.
-fn effect_text(e: &Effect) -> String {
+pub(super) fn effect_text(e: &Effect) -> String {
     if e.resource.is_empty() {
         verb_name(&e.verb)
     } else {
