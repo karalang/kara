@@ -4,6 +4,12 @@
 //! while the MIR interpreter compared them. A DHCP server's cookie check
 //! `pkt[236..240] != COOKIE` dropped every datagram. Both sides are now
 //! compared as slices.
+//!
+//! B-2026-11-13-17 — `a == s` with the `Array` (or `Vec`) on the left was
+//! refused with an `.as_slice()` fix while `s == a` was accepted. The ruling
+//! (design.md § Slices, Comparison): `==` and `!=` between a `Slice`, a
+//! `Vec` and an `Array` of one element type compare elements in either
+//! order, and a length mismatch is `false`.
 
 mod common;
 
@@ -83,5 +89,35 @@ fn interp_compares_a_slice_with_an_array() {
 fn compiled_compares_a_slice_with_an_array() {
     if let Some(out) = compiled(SRC) {
         assert_eq!(out, OUT);
+    }
+}
+
+const ORDERS: &str = r#"fn main() {
+    let v: Vec[u8] = [1u8, 2].to_vec();
+    let a: Array[u8, 2] = [1, 2];
+    let b: Array[u8, 3] = [1, 2, 3];
+    let s: Slice[u8] = v[0..2];
+    let w: Vec[u8] = [1u8, 2, 3].to_vec();
+    println(f"{s == a} {a == s} {s == v} {v == s} {v == a} {a == v}");
+    println(f"{s != b} {b != s} {s == w} {w == s} {w == b} {b == w} {v == b} {b == v}");
+    let n: Vec[String] = ["x".to_string()].to_vec();
+    let na: Array[String, 1] = ["x".to_string()];
+    println(f"{n == na} {na == n} {na == n[..]} {n[..] == na}");
+}
+"#;
+
+const ORDERS_OUT: &str =
+    "true true true true true true\ntrue true false false true true false false\ntrue true true true\n";
+
+#[test]
+fn interp_compares_slice_vec_and_array_in_either_order() {
+    assert_eq!(run(ORDERS), ORDERS_OUT);
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn compiled_compares_slice_vec_and_array_in_either_order() {
+    if let Some(out) = compiled(ORDERS) {
+        assert_eq!(out, ORDERS_OUT);
     }
 }

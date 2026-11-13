@@ -11,7 +11,7 @@
 //! - a `let ... else` whose value runs a closure reading a binding may move
 //!   that binding in its `else` block;
 //! - `&v[a..b]` is fixed by dropping the `&`, since a range index is already
-//!   a view, and a `Vec` compared with a `Slice` is fixed with `.as_slice()`.
+//!   a view, and a `Vec` ordered against a `Slice` is fixed with `.as_slice()`.
 
 use std::process::{Command, Stdio};
 
@@ -217,7 +217,9 @@ fn karac_fix_drops_the_borrow_of_a_range_and_views_a_compared_vec() {
     let _ = std::fs::remove_file(&path);
     assert!(
         text.contains("let tail = out[1..];")
-            && text.contains("copy.as_slice() == tail")
+            // `==` between a `Vec` and a `Slice` needs no view
+            // (design.md § Slices, Comparison; B-2026-11-13-17).
+            && text.contains("{copy == tail}")
             && text.contains("copy.as_slice() < out[1..]"),
         "{text}"
     );

@@ -247,6 +247,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `==` and `!=` between a `Slice[T]`, a `Vec[T]` and an `Array[T, N]`
+  compare elements in either order, as Rust's do (design.md § Slices,
+  Comparison; B-2026-11-13-17). `a == s` and `v == a` were refused (the
+  first with an `.as_slice()` fix) while `s == a` was accepted, and an
+  `Array` against a `Slice` of another length is `false`. An ordering
+  comparison (`v < s`) still takes `.as_slice()`.
 - `set_read_timeout` on a socket a `Network` fake opened returns `Ok(())`
   and changes nothing, since a fake's read never waits; it was
   `Err(Unsupported)`, so a client that sets a timeout could not be tested

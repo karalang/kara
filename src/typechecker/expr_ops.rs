@@ -3646,11 +3646,31 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether `a == b` compares two sequences element by element: each a
+    /// `Slice[T]`, a `Vec[T]` or an `Array[T, N]` of one `T`, in either
+    /// order (design.md § Slices, Comparison; B-2026-11-13-17). An ordering
+    /// comparison is not one: `<` keeps the `.as_slice()` fix below.
+    fn seq_compare(&self, a: &Type, b: &Type) -> bool {
+        let resolve = |t: &Type| resolve_type_var_top(t, &self.env.substitutions);
+        let element = |t: &Type| match strip_refs_for_compare(&resolve(t)) {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                Some(resolve(&args[0]))
+            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => Some(resolve(element)),
+            _ => None,
+        };
+        match (element(a), element(b)) {
+            (Some(x), Some(y)) => types_compatible(&x, &y),
+            _ => false,
+        }
+    }
+
     /// The edit appending `.as_slice()` to `side` when `side_ty` is a
     /// `Vec[T]` or `Array[T, N]` (or a reference to one), `other_ty` a
     /// `Slice[T]` of the same `T`, and the end of `side` is known: the
     /// coercion that passes a `Vec` as a `Slice` runs only at call
-    /// boundaries (design.md § Slices), and a comparison is not one.
+    /// boundaries (design.md § Slices). Only an ordering comparison
+    /// reaches here: `==` and `!=` compare the two as they are.
     fn vec_slice_compare_fix(&self, side: &Expr, side_ty: &Type, other_ty: &Type) -> Option<FixIt> {
         let resolve = |t: &Type| resolve_type_var_top(t, &self.env.substitutions);
         let element = match strip_refs_for_compare(&resolve(side_ty)) {
@@ -5540,6 +5560,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if !types_compatible(cmp_left, cmp_right)
                     && !self.core_text_compare(cmp_left, cmp_right)
+                    && !self.seq_compare(cmp_left, cmp_right)
                 {
                     self.report_compare_mismatch((left, &left_ty), (right, &right_ty), *span);
                 } else if self.reject_mixed_signedness_compare(
