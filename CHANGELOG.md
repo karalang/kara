@@ -104,6 +104,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `String.normalize(form)` and `std.regex` build for `--target=wasm_wasi`. They
+  passed `karac check --targets=wasm_wasi` and then failed in wasm-ld on an
+  undefined `karac_unicode_normalize_mir` / `karac_regex_mir`. A wasm link now
+  takes the opt-in wasm archive the object's symbols name
+  (`libkarac_runtime_wasm_unicode.a`, `libkarac_runtime_wasm_regex.a`, and the
+  `_threads_` pair), as a native link takes the native ones, and a missing one
+  fails with its build recipe (B-2026-11-13-1).
 - `Duration` has units below a millisecond: `Duration.us(n)` and
   `Duration.ns(n)` build one, and `as_us()`, `as_ns()` and `as_secs()`
   read one (library/time-random-env.md; B-2026-11-11-33). `sleep` of

@@ -139,7 +139,8 @@ gpu = ["dep:wgpu", "dep:pollster"]
 
 # Regex backend — codegen support for `runtime/stdlib/regex.kara`'s
 # `Regex.compile` / `is_match` (B-2026-07-14-19). Opt-in ONLY, like `gpu`:
-# never in `default` / lean / wasm archives. Pulls the `regex` crate (+
+# never in `default` / lean / plain wasm archives; the wasm opt-ins
+# `libkarac_runtime_wasm[_threads]_regex.a` carry it (B-2026-11-13-1). Pulls the `regex` crate (+
 # regex-automata / regex-syntax / aho-corasick / memchr). Built into
 # `libkarac_runtime_regex.a`, which `karac` selects only when the emitted
 # object references a `karac_regex_*` symbol, so non-regex binaries never
@@ -163,7 +164,8 @@ arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:arrow-ipc"]
 
 # Unicode normalization backend for `String.normalize(form)` (design.md §
 # Strings, Equality; B-2026-08-20-41). Opt-in ONLY, like `gpu` / `regex` /
-# `arrow`: never in `default` / lean / wasm archives. Pulls `icu_normalizer`
+# `arrow`: never in `default` / lean / plain wasm archives (the wasm opt-ins
+# `libkarac_runtime_wasm[_threads]_unicode.a` carry it, B-2026-11-13-1). Pulls `icu_normalizer`
 # plus its compiled data tables (~100 KB in a stripped fat-LTO staticlib,
 # measured). Built into `libkarac_runtime_unicode.a`, which `karac` selects
 # only when the emitted object references a `karac_unicode_*` symbol, so

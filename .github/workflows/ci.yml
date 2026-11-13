@@ -337,6 +337,18 @@ jobs:
       - name: WASM E2E on MIR (cargo test --test mir_wasm)
         run: cargo test --features llvm --test mir_wasm
 
+      # `String.normalize` and `std.regex` on wasm_wasi link the wasm opt-in
+      # archives, run under node like the above (B-2026-11-13-1).
+      - name: WASM opt-in archives (cargo test --test mir_wasm_opt_in)
+        run: |
+          cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --features unicode --crate-type staticlib
+          cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm_unicode.a
+          cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --features regex --crate-type staticlib
+          cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm_regex.a
+          cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --crate-type staticlib
+          cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm.a
+          cargo test --features llvm --test mir_wasm_opt_in
+
       # A release bundle's karac links wasm with the bundle's own wasi-libc,
       # not the PATH rustc's (B-2026-11-05-12); run under node like the above.
       - name: WASM bundle link (cargo test --test build_wasm_bundle)

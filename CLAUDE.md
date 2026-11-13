@@ -71,6 +71,11 @@ cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-featu
 cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm.a
 cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads --no-default-features --features wasm-threads --crate-type staticlib
 cp target/wasm32-wasip1-threads/release/libkarac_runtime.a target/release/libkarac_runtime_wasm_threads.a
+# OPTIONAL, wasm opt-ins (`String.normalize`, `std.regex` on wasm_wasi), each renamed; then re-run the two plain wasm builds above:
+#   --target wasm32-wasip1 --features unicode|regex                       ->  libkarac_runtime_wasm_{unicode,regex}.a
+#   --target wasm32-wasip1-threads --features wasm-threads,unicode|regex  ->  libkarac_runtime_wasm_threads_{unicode,regex}.a
+cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --features unicode --crate-type staticlib
+cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm_unicode.a
 # OPTIONAL, one per feature, each built LAST and renamed, then the plain full build re-run:
 #   --features gpu|regex|arrow|unicode  ->  libkarac_runtime_{gpu,regex,arrow,unicode}.a
 cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
@@ -100,7 +105,8 @@ rm -rf target/tsan
 - The driver picks the archive from the emitted object's symbols: the lean one
   unless a TLS symbol is referenced, and an opt-in archive when a
   `karac_runtime_gpu_*` / `karac_arrow_*` / `karac_regex_*` / `karac_unicode_*`
-  symbol is, and the TSan one for a `-fsanitize=thread` link. A missing opt-in
+  symbol is, and the TSan one for a `-fsanitize=thread` link. A wasm link
+  picks `libkarac_runtime_wasm[_threads]_{regex,unicode}.a` the same way. A missing opt-in
   archive fails at link with the recipe. The TSan archive must be the
   instrumented one: TSan sees the order the pool's lock imposes only in
   instrumented code, and against the plain archive a clean task program

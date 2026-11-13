@@ -85,7 +85,7 @@ fn link_wasm_executable(
             ));
         }
     }
-    let runtime_path = resolve_wasm_runtime_path(false)?;
+    let runtime_path = resolve_wasm_runtime_path(false, wasm_special_archive(obj_path))?;
 
     let mut cmd = std::process::Command::new(&linker);
     cmd.args(&flavor_args);
@@ -200,7 +200,7 @@ pub fn link_wasm_executable_threaded(
             ));
         }
     }
-    let runtime_path = resolve_wasm_runtime_path(true)?;
+    let runtime_path = resolve_wasm_runtime_path(true, wasm_special_archive(obj_path))?;
 
     let mut cmd = std::process::Command::new(&linker);
     cmd.args(&flavor_args);
@@ -473,9 +473,12 @@ fn rustc_host_triple() -> Result<String, String> {
 /// interchangeable: wasm-ld rejects the sequential one under
 /// `--shared-memory` (no atomics features) and the threaded one without
 /// it (shared-memory objects need the threaded link).
-fn resolve_wasm_runtime_path(threaded: bool) -> Result<String, String> {
+fn resolve_wasm_runtime_path(threaded: bool, special: SpecialArchive) -> Result<String, String> {
     if let Ok(p) = std::env::var("KARAC_RUNTIME") {
         return Ok(p);
+    }
+    if special != SpecialArchive::None {
+        return resolve_wasm_opt_in_archive(threaded, special);
     }
     let (installed_name, dev_rels, recipe): (_, [&str; 2], _) = if threaded {
         (
@@ -522,6 +525,98 @@ fn resolve_wasm_runtime_path(threaded: bool) -> Result<String, String> {
         }
     }
     Err(recipe.to_string())
+}
+
+/// The opt-in family a wasm object needs, if any: `karac_regex_*` takes the
+/// regex archive and `karac_unicode_*` the Unicode one, first hit wins, as
+/// the native choice does. Both are pure computation, so they ship on
+/// `wasm_wasi` like the rest of the runtime (B-2026-11-13-1); the GPU and
+/// Arrow families have no wasm build and keep the plain archive.
+fn wasm_special_archive(obj_path: &str) -> SpecialArchive {
+    let nm = nm_listing(obj_path);
+    let nm = nm.as_deref();
+    if object_references_regex(nm) {
+        SpecialArchive::Regex
+    } else if object_references_unicode(nm) {
+        SpecialArchive::Unicode
+    } else {
+        SpecialArchive::None
+    }
+}
+
+/// The wasm opt-in archive's file name: `libkarac_runtime_wasm_<family>.a`,
+/// or `libkarac_runtime_wasm_threads_<family>.a` for the threaded build.
+fn wasm_opt_in_archive_name(threaded: bool, special: SpecialArchive) -> Option<String> {
+    let family = match special {
+        SpecialArchive::Regex => "regex",
+        SpecialArchive::Unicode => "unicode",
+        _ => return None,
+    };
+    let base = if threaded {
+        "libkarac_runtime_wasm_threads"
+    } else {
+        "libkarac_runtime_wasm"
+    };
+    Some(format!("{base}_{family}.a"))
+}
+
+/// Resolve a wasm opt-in archive: installed `<bin>/../lib/`, then dev
+/// `target/release/`. Only the renamed file counts: the cargo target dir's
+/// `libkarac_runtime.a` is whichever wasm build ran last. A missing one fails
+/// here with its recipe, as the native opt-ins do, instead of as a bare
+/// wasm-ld `undefined symbol`.
+fn resolve_wasm_opt_in_archive(threaded: bool, special: SpecialArchive) -> Result<String, String> {
+    let Some(name) = wasm_opt_in_archive_name(threaded, special) else {
+        return resolve_wasm_runtime_path(threaded, SpecialArchive::None);
+    };
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            let installed = bin_dir.join("../lib").join(&name);
+            if installed.exists() {
+                return Ok(installed.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/release")
+        .join(&name);
+    if dev.exists() {
+        return Ok(dev.to_string_lossy().into_owned());
+    }
+    Err(wasm_opt_in_recipe(threaded, special, &name))
+}
+
+fn wasm_opt_in_recipe(threaded: bool, special: SpecialArchive, name: &str) -> String {
+    let (what, feature, carries) = match special {
+        SpecialArchive::Regex => (
+            "uses `Regex.compile` / `is_match`",
+            "regex",
+            "the `regex` crate",
+        ),
+        _ => (
+            "calls `String.normalize(form)`",
+            "unicode",
+            "the ICU normalization tables",
+        ),
+    };
+    let (triple, features, plain) = if threaded {
+        (
+            "wasm32-wasip1-threads",
+            format!("wasm-threads,{feature}"),
+            " --features wasm-threads",
+        )
+    } else {
+        ("wasm32-wasip1", feature.to_string(), "")
+    };
+    format!(
+        "this program {what}, which on wasm needs the runtime archive `{name}` — not found. \
+         Build it with `cargo rustc -p karac-runtime --release --target {triple} \
+         --no-default-features --features {features} --crate-type staticlib` then `cp \
+         target/{triple}/release/libkarac_runtime.a target/release/{name}`, and re-run the \
+         plain `--target {triple} --no-default-features{plain}` build afterward so the cargo \
+         target dir holds the plain archive again. Or set KARAC_RUNTIME to an explicit archive \
+         path. It carries {carries}, so it is opt-in: only programs that use it link it."
+    )
 }
 
 /// Link like [`link_executable`], but prepend extra flags to the `cc` invocation
@@ -2274,8 +2369,65 @@ mod tests {
     use super::{
         default_cpu_and_features, format_wasm_link_error, parse_cpu_names_from_help_listing,
         parse_feature_names_from_help_listing, symbol_listing_references_gpu,
-        symbol_listing_references_tls,
+        symbol_listing_references_tls, wasm_opt_in_archive_name, wasm_opt_in_recipe,
+        SpecialArchive,
     };
+
+    /// B-2026-11-13-1: the wasm opt-in archives' names, and the recipe a
+    /// missing one fails with, which names the right triple and features.
+    #[test]
+    fn wasm_opt_in_archive_names_and_recipes() {
+        let cases = [
+            (
+                false,
+                SpecialArchive::Regex,
+                "libkarac_runtime_wasm_regex.a",
+            ),
+            (
+                false,
+                SpecialArchive::Unicode,
+                "libkarac_runtime_wasm_unicode.a",
+            ),
+            (
+                true,
+                SpecialArchive::Regex,
+                "libkarac_runtime_wasm_threads_regex.a",
+            ),
+            (
+                true,
+                SpecialArchive::Unicode,
+                "libkarac_runtime_wasm_threads_unicode.a",
+            ),
+        ];
+        for (threaded, special, want) in cases {
+            assert_eq!(
+                wasm_opt_in_archive_name(threaded, special).as_deref(),
+                Some(want)
+            );
+        }
+        for special in [
+            SpecialArchive::None,
+            SpecialArchive::Gpu,
+            SpecialArchive::Arrow,
+        ] {
+            assert_eq!(wasm_opt_in_archive_name(false, special), None);
+        }
+        let r = wasm_opt_in_recipe(
+            false,
+            SpecialArchive::Unicode,
+            "libkarac_runtime_wasm_unicode.a",
+        );
+        assert!(r.contains("`String.normalize(form)`"), "{r}");
+        assert!(r.contains("--target wasm32-wasip1 --no-default-features --features unicode --crate-type staticlib"), "{r}");
+        assert!(r.contains("target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm_unicode.a"), "{r}");
+        let r = wasm_opt_in_recipe(
+            true,
+            SpecialArchive::Regex,
+            "libkarac_runtime_wasm_threads_regex.a",
+        );
+        assert!(r.contains("`Regex.compile`"), "{r}");
+        assert!(r.contains("--target wasm32-wasip1-threads --no-default-features --features wasm-threads,regex"), "{r}");
+    }
 
     #[test]
     fn wasm_link_error_appends_version_drift_hint() {
