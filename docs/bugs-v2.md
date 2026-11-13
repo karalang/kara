@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 272 |
-| false-positive | 191 |
+| diagnostics | 273 |
+| false-positive | 193 |
 | perf | 157 |
-| missing-feature | 148 |
+| missing-feature | 149 |
 | soundness | 62 |
 | miscompile | 57 |
 | run-vs-build | 31 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 421 |
+| typecheck | 422 |
 | mir-llvm | 206 |
-| mir | 171 |
-| cli | 97 |
+| mir | 173 |
+| cli | 98 |
 | ownership | 74 |
 | parser | 74 |
 | interp | 51 |
@@ -113,11 +113,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-15 | 2026-11-12 | mir-llvm | low | `"U".repeat(n)` of a one-byte string is a call into `karac_mir_str_repeat`, an allocation through `karac_alloc_or_panic` and up to three `memcpy` calls where Rust's is inlined: kata 1138's bench runs 7.0G instructions to Rust's 4.6G (0.81 s to 0.59 s) | — |
 | B-2026-11-12-17 | 2026-11-12 | mir-llvm | low | `for i in (low..n).step_by(2)` over an `i64` range runs about 1.2x the same loop written `while i < n { ...; i += 2 }`: `IterStepBy[Range].next` takes the generic path (a `first` flag, `advance_by(step - 1)` through `step_forward_within` and an `Option`, then `next`), which Rust's `StepBy<Range>` specializes | — |
 | B-2026-11-13-1 | 2026-11-13 | mir-llvm+cli | medium | `String.normalize` and `std.regex` pass `karac check --targets=wasm_wasi` and then fail `karac build --target=wasm_wasi` with a bare wasm-ld `undefined symbol: karac_unicode_normalize_mir` / `karac_regex_mir` | — |
-| B-2026-11-13-2 | 2026-11-13 | typecheck | low | A list literal compared with `==` / `!=` against an `Array` is typed `Vec` instead of taking the other operand as its expected type: `m != [75u8, 82u8, 69u8, 67u8]` with `m: Array[u8, 4]` is refused | — |
 | B-2026-11-13-3 | 2026-11-13 | typecheck+ownership | medium | A `MutFn` stored in a struct field or a `Vec` can be called through shared access (a non-`mut` binding, a borrowed `self`, a bare parameter), which core-semantics §9.6 forbids; `unused_mut` even tells the user to drop the `mut` | — |
 | B-2026-11-13-4 | 2026-11-13 | typecheck+mir | medium | A `par for` whose body value is a tuple is refused at check with the internal `an expression with no recorded type is not lowered yet` | — |
 | B-2026-11-13-5 | 2026-11-13 | typecheck | low | `div_euclid` and `rem_euclid` exist only on `i64`: `i32`, `u8` and the other integer widths, and `f64`, have neither, although design.md names them as the Euclidean forms of `/` and `%` | — |
 | B-2026-11-13-17 | 2026-11-13 | typecheck | low | Comparing a `Slice` with an `Array` or `Vec` is accepted with the slice on the left and refused with it on the right; design.md § Slices does not say which a comparison is | — |
+| B-2026-11-13-18 | 2026-11-13 | typecheck | medium | In a generic fn with `it: own I` and `I: Iterator[Item = T]`, the item of `for x in it` is typed as `I` itself for method calls and annotations: `x.abs()` gets "no method 'abs' on type parameter 'I'" and `let y: i64 = x` gets "expected 'i64', found 'I'" | — |
+| B-2026-11-13-19 | 2026-11-13 | mir | low | A `par` or `par for` that calls an un-annotated local holding a returned function value is refused as "`unknown (a call through a value)`", even when the function's return type declares `with ()` | — |
+| B-2026-11-13-20 | 2026-11-13 | cli | low | 86 of the 96 symbolic `E_*` codes minted in src/ are unknown to `karac explain`, against design.md §17's "every code is catalogued" | — |
+| B-2026-11-13-21 | 2026-11-13 | mir | low | `ParseError` variants differ from core-types.md Parsing in two edge cases: `u8.parse("-0")` gives `Invalid` where `InvalidDigit` is specified, and whitespace-only input to `i64.parse` gives `InvalidDigit` where `Empty` is specified | — |
 
 ### Relocated
 
@@ -1114,6 +1117,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-14 | typecheck | medium | `(0..=n).map(\|_\| Set.new()).collect()` into a `Vec[Set[i64]]` is refused, `Vec[Set[i64]]` implements `FromIterator[Set[i64]]`, not `FromIterator[Set[… | d34854564c |
 | B-2026-11-12-16 | typecheck | low | A narrowing read of an element of an array of literals offers only `as i32`: LeetCode's `let mut res = [0, 0]; .. | 9049969b63 |
 | B-2026-11-12-18 | typecheck | low | `(1..10).filter(\|x\| *x % 2 == 0)` is accepted while `(1..n).filter(\|x\| *x % 2 == 0)` is refused with "drop the `*`": over a range of bare literals th… | 18ea960272 |
+| B-2026-11-13-2 | typecheck | low | A list literal compared with `==` / `!=` against an `Array` is typed `Vec` instead of taking the other operand as its expected type: `m != [75u8, 82u… | 16d2756e18 |
 | B-2026-11-13-6 | typecheck+cli | medium | Rust's `binary_search_by_key` and `binary_search_by` taken apart as a `Result` have no fix: `match h.binary_search_by_key(&snap_id, \|&(s, _)\| s) { Ok… | 4341008d1e |
 | B-2026-11-13-7 | typecheck | low | `Vec.filled(n as i64, 0)` with `n: i32` is not linted as a lossless cast, while `let x: i64 = n as i64` and `g(n as i64)` at a user function's `i64`… | 4341008d1e |
 | B-2026-11-13-15 | typecheck | medium | Rust's `dst.copy_from_slice(src)` is "no method 'copy_from_slice' on type 'Slice'" with no fix, and the error type sets off a borrow error at every l… | b4be496812 |
