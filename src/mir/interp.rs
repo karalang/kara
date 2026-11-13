@@ -11963,7 +11963,10 @@ impl<'a> Interp<'a> {
                     }
                 }
             }
-            ("abs_diff", [a, b]) => Ok(Value::Int((a - b).abs())),
+            // The distance as the unsigned type of the width, which an `i128`
+            // pair can exceed in `i128` arithmetic: `i128.MIN.abs_diff(3)` is
+            // `2^127 + 3`, held as its `u128` bits.
+            ("abs_diff", [a, b]) => Ok(Value::Int(a.abs_diff(*b) as i128)),
             ("rotate_left" | "rotate_right", [a, _]) => {
                 let x = raw(*a);
                 let n = if method == "rotate_left" {
@@ -12349,7 +12352,17 @@ impl<'a> Interp<'a> {
                     *a
                 }))
             }
-            ("abs", [Value::Int(a)]) => fit(self, a.abs()),
+            // `i128.MIN` has no `i128` magnitude: an overflow, as the
+            // narrower widths' `MIN` is through `fit`.
+            ("abs", [Value::Int(a)]) => match a.checked_abs() {
+                Some(v) => fit(self, v),
+                None => {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Overflow));
+                    }
+                    Err(Stop::Abort(AbortReason::Overflow))
+                }
+            },
             ("abs", [Value::Float(a)]) => Ok(Value::Float(a.abs())),
             ("signum", [Value::Int(a)]) => Ok(Value::Int(a.signum())),
             ("pow", [Value::Int(a), Value::Int(b)]) => {

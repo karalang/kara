@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 159 |
 | missing-feature | 150 |
 | soundness | 63 |
-| miscompile | 57 |
+| miscompile | 58 |
 | run-vs-build | 31 |
 | other | 30 |
 | codegen-gap | 30 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 99 |
 | ownership | 76 |
 | parser | 74 |
-| interp | 51 |
+| interp | 52 |
 | runtime | 40 |
 | effect | 31 |
 | resolver | 24 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-33 | 2026-11-13 | mir-llvm | low | `==` and `!=` on two `Slice[u8]` compile to a byte-by-byte loop where `Str` equality calls `memcmp`: kata 1147's greedy arm written over `text.bytes()` takes 1.32 s against 1.08 s over `Str`, and Rust's byte-slice mirror 0.75 s | — |
 | B-2026-11-13-34 | 2026-11-13 | mir-llvm | low | `partition_point` is the branching binary search (runtime/stdlib/source/collections.kara) where Rust's is branch-free: kata 1150's 10,000,000 searches of 1000 values take 0.76 s in Kāra (C's and Go's branching searches 0.75 and 0.80 s) against 0.37 s in overflow-checked Rust | — |
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
+| B-2026-11-13-24 | 2026-11-13 | interp | low | On the MIR interpreter `i128.MIN.abs()` returns `i128.MIN` instead of trapping as integer overflow, and `i128.MIN.abs_diff(3)` prints 2^127 - 3 (...105725) instead of 2^127 + 3 (...105731) | — |
 
 ### Relocated
 

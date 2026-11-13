@@ -344,7 +344,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Array[i64, SIZE]` with `const SIZE: i64 = 3;` was kept as an opaque name,
   so `[0; 3]` was refused as a mismatch with its own declared type
   (B-2026-11-13-22).
-
+- On the MIR interpreter (`karac repl`, comptime), `i128.MIN.abs()` traps as
+  integer overflow instead of returning `i128.MIN`, and `i128.abs_diff` returns
+  the whole `u128` distance (`i128.MIN.abs_diff(3)` is `2^127 + 3`) instead of
+  wrapping through `i128` (B-2026-11-13-24). The compiled backend was right.
 - A `Slice` compared with an `Array` (or a `Vec`) of the same element
   type, `pkt[236..240] != COOKIE`, was never equal in compiled code: the
   right side was read as a slice. The interpreter was right. Compiled code
