@@ -123,7 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-35 | 2026-11-13 | typecheck | medium | A `scan` closure whose next state is not computed from the state but whose item is, `data.iter().scan(0, |prev, x| Some((*x, (prev, *x))))` (each value with the one before it), is refused with two types that unify: "expected 'Option[(i64, _)]', found 'Option[(i64, (i64, i64))]'" | — |
 | B-2026-11-13-46 | 2026-11-13 | mir+mir-llvm | medium | Two non-generic traits with a method of one name, both implemented for a primitive (`impl A for i64 { fn m }`, `impl B for i64 { fn m }`): `A.m(n)` checks but fails at run with `call of unknown function i64.m` (LLVM: `native i64.m is not lowered yet`); on a struct receiver both calls are right | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
-| B-2026-11-13-60 | 2026-11-13 | cli | medium | Workspace members do not share one `kara.lock` and one output directory: each member resolves and writes its own, so two members can lock different versions of one dependency | — |
 
 ### Relocated
 
@@ -1146,6 +1145,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-44 | mir+mir-llvm | high | Two impls of one generic trait for a primitive (`impl Conv[String] for i64`, `impl Conv[f64] for i64`) run one impl for every call, whichever instanc… | ddc4a7ab43 |
 | B-2026-11-13-45 | typecheck | low | `#[derive(PartialEq)] struct Pair[T]` is accepted as PartialEq at an argument that is not (`Pair[NoEq] == Pair[NoEq]` checks and prints true), agains… | ddc4a7ab43 |
 | B-2026-11-13-50 | cli | low | A virtual workspace root (only `[workspace]` and `[workspace.dependencies]`) is refused, and a `path` in `[workspace.dependencies]` resolves against… | a36e3f7376 |
+| B-2026-11-13-60 | cli | medium | Workspace members do not share one `kara.lock` and one output directory: each member resolves and writes its own, so two members can lock different v… | 4061fcf76f |
 
 </details>
 
