@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 275 |
 | false-positive | 193 |
 | perf | 157 |
-| missing-feature | 149 |
+| missing-feature | 150 |
 | soundness | 62 |
 | miscompile | 57 |
 | run-vs-build | 31 |
@@ -78,13 +78,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 423 |
 | mir-llvm | 206 |
 | mir | 173 |
-| cli | 98 |
+| cli | 99 |
 | ownership | 75 |
 | parser | 74 |
 | interp | 51 |
 | runtime | 40 |
 | effect | 30 |
-| resolver | 23 |
+| resolver | 24 |
 | codegen | 22 |
 | other | 7 |
 | autopar | 4 |
@@ -121,6 +121,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-19 | 2026-11-13 | mir | low | A `par` or `par for` that calls an un-annotated local holding a returned function value is refused as "`unknown (a call through a value)`", even when the function's return type declares `with ()` | — |
 | B-2026-11-13-20 | 2026-11-13 | cli | low | 86 of the 96 symbolic `E_*` codes minted in src/ are unknown to `karac explain`, against design.md §17's "every code is catalogued" | — |
 | B-2026-11-13-21 | 2026-11-13 | mir | low | `ParseError` variants differ from core-types.md Parsing in two edge cases: `u8.parse("-0")` gives `Invalid` where `InvalidDigit` is specified, and whitespace-only input to `i64.parse` gives `InvalidDigit` where `Empty` is specified | — |
+| B-2026-11-13-30 | 2026-11-13 | cli+resolver | medium | A script inside a package but outside `src/` does not get the package's dependencies: `karac run app/scripts/s.kara` importing a path dependency is "this file belongs to no package" | — |
 
 ### Relocated
 

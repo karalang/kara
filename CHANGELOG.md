@@ -111,6 +111,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`libkarac_runtime_wasm_unicode.a`, `libkarac_runtime_wasm_regex.a`, and the
   `_threads_` pair), as a native link takes the native ones, and a missing one
   fails with its build recipe (B-2026-11-13-1).
+- A script inside a package but outside its `src/` (`app/scripts/s.kara`)
+  gets the package's dependencies under `karac run`, `check` and `build`,
+  wherever it is run from (design.md § 4, Finding the package;
+  B-2026-11-13-30). It was refused with "this file belongs to no package".
+  The package's own `src/` modules are not part of the script's program.
 - `Duration` has units below a millisecond: `Duration.us(n)` and
   `Duration.ns(n)` build one, and `as_us()`, `as_ns()` and `as_secs()`
   read one (library/time-random-env.md; B-2026-11-11-33). `sleep` of

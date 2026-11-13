@@ -1333,7 +1333,9 @@ pub(super) fn package_walk_refusal(
 
 /// The package `filename` belongs to, when `filename` is one of its modules:
 /// its root and module tree. `with_tests` merges each module's `_test.kara`
-/// companion into it.
+/// companion into it. A script inside the package but outside `src/` gets a
+/// tree of its own beside the package's dependencies (B-2026-11-13-30), and
+/// [`script_of`] tells such a tree apart.
 pub(super) fn package_tree(
     filename: &str,
     no_manifest: bool,
@@ -1344,15 +1346,24 @@ pub(super) fn package_tree(
     }
     let entry = std::fs::canonicalize(filename).ok()?;
     let root = manifest::discover_project_root(entry.parent()?)?;
-    let walked = walker::walk_project(
-        &root,
-        WalkerOpts {
-            include_tests: with_tests,
-            ..WalkerOpts::default()
-        },
-    )
-    .ok()?;
     let dep_walks = quiet_dep_package_walks(&root);
+    // A script outside `src/` is a program of its own that gets the
+    // package's dependencies (design.md § 4, Finding the package). With none
+    // it is a lone file, as before.
+    let walked = if entry.starts_with(root.join(walker::SRC_DIRNAME)) {
+        walker::walk_project(
+            &root,
+            WalkerOpts {
+                include_tests: with_tests,
+                ..WalkerOpts::default()
+            },
+        )
+        .ok()?
+    } else if dep_walks.is_empty() {
+        return None;
+    } else {
+        walker::walk_script(&entry)
+    };
     let built = module::build_program_tree_with_deps(
         &walked,
         &dep_walks,
@@ -1371,6 +1382,17 @@ pub(super) fn package_tree(
             .unwrap_or(false)
     });
     in_tree.then_some((root, tree))
+}
+
+/// The script a [`package_tree`] was built for, when it was built for one:
+/// the entry module, which lies outside the package's `src/`.
+pub(super) fn script_of(root: &std::path::Path, tree: &ProgramTree) -> Option<std::path::PathBuf> {
+    let src = std::fs::canonicalize(root.join(walker::SRC_DIRNAME)).ok();
+    tree.modules
+        .iter()
+        .filter(|m| !m.is_synthetic && m.path.is_empty())
+        .map(|m| std::fs::canonicalize(&m.file).unwrap_or_else(|_| m.file.clone()))
+        .find(|f| src.as_ref().is_none_or(|src| !f.starts_with(src)))
 }
 
 #[cfg(test)]

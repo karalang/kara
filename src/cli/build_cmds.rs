@@ -1714,12 +1714,39 @@ pub(super) fn package_check_with_buffer(
         ..WalkerOpts::default()
     };
     let walked = walker::walk_project(root, walk_opts).map_err(|e| format!("{e}"))?;
+    package_check_of_walk(root, lint_overrides, &walked, buffer)
+}
+
+/// The check of a script inside the package at `root` but outside its
+/// `src/`, beside the package's dependencies (B-2026-11-13-30): the program
+/// `karac run` builds for it, checked as [`package_check`] checks a package.
+pub(super) fn script_check(
+    root: &std::path::Path,
+    script: &std::path::Path,
+    lint_overrides: &crate::lints::CliLintOverrides,
+) -> Result<PackageCheck, String> {
+    let lint_overrides = &crate::lints::CliLintOverrides {
+        core_places: true,
+        strict_core: true,
+        ..lint_overrides.clone()
+    };
+    package_check_of_walk(root, lint_overrides, &walker::walk_script(script), None)
+}
+
+/// [`package_check_with_buffer`] past the walk: `walked` is the package's
+/// `src/`, or a script's walk.
+fn package_check_of_walk(
+    root: &std::path::Path,
+    lint_overrides: &crate::lints::CliLintOverrides,
+    walked: &walker::WalkResult,
+    buffer: Option<(&std::path::Path, &str)>,
+) -> Result<PackageCheck, String> {
     // Same lenient dep posture as the `karac run` super-program builder: a
     // dep-resolution failure proceeds without dependency modules rather than
     // failing the check of the local package.
     let dep_walks = super::run_check_cmds::quiet_dep_package_walks(root);
     let built = module::build_program_tree_with_overlay(
-        &walked,
+        walked,
         &dep_walks,
         module::BuildTreeOpts::default(),
         buffer,

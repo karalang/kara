@@ -177,6 +177,21 @@ pub(super) fn package_check_refusal(
     pc.has_errors().then_some(pc)
 }
 
+/// [`package_check_refusal`] for a script inside the package at `root` but
+/// outside its `src/`: the check of the script's own program, not of the
+/// package's modules (B-2026-11-13-30).
+pub(super) fn script_check_refusal(
+    root: &std::path::Path,
+    script: &std::path::Path,
+) -> Option<super::build_cmds::PackageCheck> {
+    let mut lints = crate::lints::CliLintOverrides::default();
+    if let Ok(mf) = manifest::load_from_root(root) {
+        lints.apply_manifest_lints(&mf.lints);
+    }
+    let pc = super::build_cmds::script_check(root, script, &lints).ok()?;
+    pc.has_errors().then_some(pc)
+}
+
 /// The files of a package's modules, as reports name them.
 pub(super) fn package_files(tree: &crate::module::ProgramTree) -> Vec<String> {
     tree.modules
@@ -1333,9 +1348,14 @@ fn render_package_check(
 /// them trades an incorrect answer for no answer. Widening the ANALYSIS while
 /// keeping the REPORT scoped to the file the caller named gives the correct
 /// answer to the question actually asked.
+///
+/// With `script`, `<file>` is a script inside the package but outside its
+/// `src/`, and the program checked is the script beside the package's
+/// dependencies (B-2026-11-13-30).
 fn cmd_check_package_member(
     filename: &str,
     root: &std::path::Path,
+    script: Option<&std::path::Path>,
     output: OutputMode,
     lint_overrides: &crate::lints::CliLintOverrides,
     platform: Option<crate::walker::Platform>,
@@ -1360,7 +1380,11 @@ fn cmd_check_package_member(
             }
         }
     }
-    let mut pc = match super::build_cmds::package_check_on(root, &lints, platform) {
+    let checked = match script {
+        Some(script) => super::build_cmds::script_check(root, script, &lints),
+        None => super::build_cmds::package_check_on(root, &lints, platform),
+    };
+    let mut pc = match checked {
         Ok(pc) => pc,
         Err(e) => {
             // No package VIEW could be formed at all — most often a directory
@@ -1603,8 +1627,25 @@ pub(super) fn cmd_check(
     // loop and every plain `karac check <file>` take, and the one that was
     // reporting invented type errors.
     if let Some(root) = package_root_of_member(filename) {
-        if cmd_check_package_member(filename, &root, output, &lint_overrides, platform) {
+        if cmd_check_package_member(filename, &root, None, output, &lint_overrides, platform) {
             return;
+        }
+    }
+    // A script inside a package but outside its `src/` is checked as
+    // `karac run` runs it: with the package's dependencies (design.md § 4,
+    // Finding the package, B-2026-11-13-30).
+    if let Some((root, tree)) = super::project_v2::package_tree(filename, false, false) {
+        if let Some(script) = super::project_v2::script_of(&root, &tree) {
+            if cmd_check_package_member(
+                filename,
+                &root,
+                Some(&script),
+                output,
+                &lint_overrides,
+                platform,
+            ) {
+                return;
+            }
         }
     }
 

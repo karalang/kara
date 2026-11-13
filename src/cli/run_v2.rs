@@ -245,7 +245,11 @@ pub(super) fn combine(
     // late-phase one the v2 check of the combined source makes as well, and
     // renders against the package's files with its snippets and fixes, so
     // that check reports it first (B-2026-10-25-4).
-    let refusal = match super::run_check_cmds::package_check_refusal(root) {
+    let refusal = match super::project_v2::script_of(root, tree) {
+        Some(script) => super::run_check_cmds::script_check_refusal(root, &script),
+        None => super::run_check_cmds::package_check_refusal(root),
+    };
+    let refusal = match refusal {
         Some(pc) if !pc.refuses_only_by_type() => {
             super::run_check_cmds::render_package_refusal(&pc, output)
         }

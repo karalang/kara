@@ -290,6 +290,23 @@ impl Default for WalkerOpts {
 
 // ── Entry point ──────────────────────────────────────────────────
 
+/// A script inside a package but outside its `src/` (`app/scripts/s.kara`),
+/// walked as a program of its own: the script is its only module and its
+/// entry. design.md § 4, Finding the package: such a script gets the
+/// package's dependencies, which the caller adds beside this walk.
+pub fn walk_script(file: &Path) -> WalkResult {
+    WalkResult {
+        src_dir: file.parent().map(Path::to_path_buf).unwrap_or_default(),
+        modules: vec![WalkedModule {
+            file: file.to_path_buf(),
+            path: Vec::new(),
+            role: ModuleRole::Entry,
+            platform: None,
+        }],
+        entry: EntryKind::Bin,
+    }
+}
+
 /// Walk `project_root/src/` and return every `.kara` file classified and
 /// filtered per [`WalkerOpts`]. See the module doc-comment for the rules.
 pub fn walk_project(project_root: &Path, opts: WalkerOpts) -> Result<WalkResult, WalkerError> {
