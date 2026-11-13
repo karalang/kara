@@ -1714,7 +1714,7 @@ pub(super) fn package_check_with_buffer(
         ..WalkerOpts::default()
     };
     let walked = walker::walk_project(root, walk_opts).map_err(|e| format!("{e}"))?;
-    package_check_of_walk(root, lint_overrides, &walked, buffer)
+    package_check_of_walk(root, lint_overrides, &walked, buffer, false)
 }
 
 /// The check of a script inside the package at `root` but outside its
@@ -1730,7 +1730,34 @@ pub(super) fn script_check(
         strict_core: true,
         ..lint_overrides.clone()
     };
-    package_check_of_walk(root, lint_overrides, &walker::walk_script(script), None)
+    package_check_of_walk(
+        root,
+        lint_overrides,
+        &walker::walk_script(script),
+        None,
+        false,
+    )
+}
+
+/// [`package_check_on`] with each module's `_test.kara` companion merged
+/// into it, as `karac test` builds them: what `karac fix` of a companion
+/// reads its import fixes from (B-2026-11-13-42).
+pub(super) fn package_check_with_tests(
+    root: &std::path::Path,
+    lint_overrides: &crate::lints::CliLintOverrides,
+    platform: walker::Platform,
+) -> Result<PackageCheck, String> {
+    let lint_overrides = &crate::lints::CliLintOverrides {
+        core_places: true,
+        strict_core: true,
+        ..lint_overrides.clone()
+    };
+    let walk_opts = WalkerOpts {
+        target: platform,
+        include_tests: true,
+    };
+    let walked = walker::walk_project(root, walk_opts).map_err(|e| format!("{e}"))?;
+    package_check_of_walk(root, lint_overrides, &walked, None, true)
 }
 
 /// [`package_check_with_buffer`] past the walk: `walked` is the package's
@@ -1740,6 +1767,7 @@ fn package_check_of_walk(
     lint_overrides: &crate::lints::CliLintOverrides,
     walked: &walker::WalkResult,
     buffer: Option<(&std::path::Path, &str)>,
+    merge_test_companions: bool,
 ) -> Result<PackageCheck, String> {
     // Same lenient dep posture as the `karac run` super-program builder: a
     // dep-resolution failure proceeds without dependency modules rather than
@@ -1748,7 +1776,9 @@ fn package_check_of_walk(
     let built = module::build_program_tree_with_overlay(
         walked,
         &dep_walks,
-        module::BuildTreeOpts::default(),
+        module::BuildTreeOpts {
+            merge_test_companions,
+        },
         buffer,
     )
     .map_err(|e| format!("{e}"))?;

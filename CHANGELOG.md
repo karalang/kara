@@ -398,6 +398,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `karac check src/x_test.kara` in a package reports the package's test
+  files' errors (B-2026-11-13-42). The named test file was left out of the
+  package check, so it printed "All checks passed." and exited 0. `karac fix`
+  of a test file now fixes its imports.
 - An error on an imported name in a package's `_test.kara` names that file,
   not its sibling's (B-2026-11-13-40), and `karac fix` of a mistyped module
   in an import of a package's non-entry module rewrites the module name. It

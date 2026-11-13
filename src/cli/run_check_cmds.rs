@@ -1389,6 +1389,12 @@ fn cmd_check_package_member(
     let platform = platform.unwrap_or_else(|| {
         super::build_cmds::walk_platform_for_target(crate::target::active_target())
     });
+    // A test companion is not part of the package check below, so naming one
+    // checks the package's tests as `karac test` builds them, once the
+    // package itself checks (B-2026-11-13-42). It reported a pass.
+    if script.is_none() && filename.ends_with("_test.kara") {
+        check_named_test_companion(root, &lints, platform, output);
+    }
     // The machine-readable reports are the ones `karac build` checks with:
     // the package as one source through every phase, its places named by
     // file, ids and the event stream included (design.md § 17,
@@ -1479,6 +1485,43 @@ fn cmd_check_package_member(
         process::exit(1);
     }
     true
+}
+
+/// `karac check <x_test.kara>` in a package: when the package's own modules
+/// check, its test files are checked as `karac check` with no file checks
+/// them (`test_v2::check_package_tests`), and an error there fails the
+/// command with that report (B-2026-11-13-42). Returns when there is none,
+/// for the package member check to report the named file.
+fn check_named_test_companion(
+    root: &std::path::Path,
+    lints: &crate::lints::CliLintOverrides,
+    platform: crate::walker::Platform,
+    output: OutputMode,
+) {
+    let clean =
+        super::build_cmds::package_check_on(root, lints, platform).is_ok_and(|pc| !pc.has_errors());
+    if !clean {
+        return;
+    }
+    // The test front reads the package from the working directory.
+    let cwd = std::env::current_dir().ok();
+    if std::env::set_current_dir(root).is_err() {
+        return;
+    }
+    let mut json = Vec::new();
+    let errors = super::test_v2::check_package_tests(root, lints, output, &mut json);
+    if let Some(cwd) = cwd {
+        let _ = std::env::set_current_dir(cwd);
+    }
+    if errors == 0 {
+        return;
+    }
+    match output {
+        OutputMode::Text => println!("\n{errors} error(s) found."),
+        OutputMode::Json => println!("{{\"diagnostics\":[{}]}}", json.join(",")),
+        OutputMode::Jsonl => {}
+    }
+    process::exit(1);
 }
 
 /// [`cmd_check_package_member`]'s `--output=json` / `jsonl`: the package's

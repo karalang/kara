@@ -555,11 +555,23 @@ fn package_member_fixes(filename: &str, source: &str) -> Option<FixSet> {
         lints.apply_manifest_lints(&m.lints);
     }
     let platform = super::build_cmds::walk_platform_for_target(crate::target::active_target());
+    let this = std::path::Path::new(filename);
+    // A test companion is not in the package check, so its import fixes come
+    // from the check with the companions merged in (B-2026-11-13-42).
+    if filename.ends_with("_test.kara") {
+        let pc = super::build_cmds::package_check_with_tests(&root, &lints, platform).ok()?;
+        let mut fixes = FixSet::default();
+        if pc.parse_errors.is_empty() && !pc.refuses_only_by_type() {
+            let (singles, groups) = pc.resolve_fixes_of(this);
+            fixes.singles(singles);
+            fixes.groups(groups.iter());
+        }
+        return Some(fixes);
+    }
     let pc = super::build_cmds::package_check_on(&root, &lints, platform).ok()?;
     if pc.lone_entry(&root).is_some() || !pc.parse_errors.is_empty() {
         return None;
     }
-    let this = std::path::Path::new(filename);
     let mut fixes = FixSet::default();
     if !pc.refuses_only_by_type() {
         let (singles, groups) = pc.resolve_fixes_of(this);

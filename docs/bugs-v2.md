@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 281 |
 | false-positive | 197 |
 | perf | 159 |
-| missing-feature | 151 |
+| missing-feature | 152 |
 | soundness | 64 |
 | miscompile | 59 |
 | run-vs-build | 31 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 429 |
 | mir-llvm | 210 |
 | mir | 176 |
-| cli | 104 |
+| cli | 105 |
 | ownership | 77 |
 | parser | 76 |
 | interp | 52 |
@@ -124,6 +124,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-42 | 2026-11-13 | cli | medium | `karac check src/x_test.kara` on a package's test companion reports "All checks passed" while the package check refuses that very file | — |
 | B-2026-11-13-46 | 2026-11-13 | mir+mir-llvm | medium | Two non-generic traits with a method of one name, both implemented for a primitive (`impl A for i64 { fn m }`, `impl B for i64 { fn m }`): `A.m(n)` checks but fails at run with `call of unknown function i64.m` (LLVM: `native i64.m is not lowered yet`); on a struct receiver both calls are right | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
+| B-2026-11-13-60 | 2026-11-13 | cli | medium | Workspace members do not share one `kara.lock` and one output directory: each member resolves and writes its own, so two members can lock different versions of one dependency | — |
 
 ### Relocated
 
