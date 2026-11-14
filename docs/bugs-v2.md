@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 303 |
-| false-positive | 202 |
+| diagnostics | 305 |
+| false-positive | 203 |
 | perf | 164 |
-| missing-feature | 158 |
-| soundness | 64 |
+| missing-feature | 160 |
+| soundness | 67 |
 | miscompile | 60 |
-| run-vs-build | 34 |
-| other | 30 |
+| run-vs-build | 35 |
+| other | 31 |
 | codegen-gap | 30 |
 | crash | 26 |
 | leak | 4 |
@@ -75,15 +75,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 451 |
-| mir-llvm | 216 |
-| mir | 184 |
-| cli | 112 |
-| ownership | 79 |
-| parser | 78 |
-| interp | 54 |
+| typecheck | 456 |
+| mir-llvm | 217 |
+| mir | 185 |
+| cli | 113 |
+| ownership | 80 |
+| parser | 79 |
+| interp | 55 |
 | runtime | 43 |
-| effect | 31 |
+| effect | 33 |
 | resolver | 26 |
 | codegen | 22 |
 | other | 7 |
@@ -1190,6 +1190,16 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-27 | interp | medium | The MIR interpreter refuses an array handed by value to a byte-reading native: `sock.send_to(b"STOP", to)` stops with "expected a sequence, found Agg… | bdba568e93 |
 | B-2026-11-14-29 | typecheck | low | A read-only view bound by `let mut s = str1.bytes()` and passed as `mut s` to a `mut ref Vec[u8]` parameter is refused with only the bare type mismat… | 6c99bc3328 |
 | B-2026-11-14-30 | mir+mir-llvm | low | `SendError`'s `Display` prints its derived Debug form on both MIR backends: after `tc.try_send(2)` on a full `channel(1)`, `e.to_string()`, `f"{e}"`… | eb69ab0c7d |
+| B-2026-11-14-31 | cli+typecheck | high | An `unsafe_op_in_unsafe_fn` error is printed and then ignored: `karac check` says "All checks passed." and exits 0, `karac run` executes a null deref… | 672a66f1f0 |
+| B-2026-11-14-32 | ownership | medium | `let mut x` whose only mutable use is `ptr.mut(x)` draws unused_mut, and applying its fix (deleting `mut`) makes `ptr.mut(x)` refused, so `karac fix`… | 672a66f1f0 |
+| B-2026-11-14-33 | effect | medium | An `extern` fn with no `with` clause had only its ABI default (`blocks`), not every effect as design.md § 15 says, so calling it passed `with reads(E… | 672a66f1f0 |
+| B-2026-11-14-34 | effect | medium | A call through a `dyn Trait` field or element whose type writes no clause had the union of the impls this program coerces into it (none when it coerc… | 672a66f1f0 |
+| B-2026-11-14-35 | parser | low | The empty effect clause on a `dyn` type, `dyn Sh with ()`, does not parse in a field or a return type | 672a66f1f0 |
+| B-2026-11-14-36 | interp+mir-llvm | low | `Vec.as_ptr()` (used in § 15's own example) passes check but __mir-run and the LLVM backends fail with "call of unknown function Vec[i64].as_ptr" | 672a66f1f0 |
+| B-2026-11-14-37 | typecheck | low | `Slice[T].get_unchecked(i)` and `Vec[T].get_unchecked(i)` return the element by value, but design.md § Bounds checks says `ref T`, so the spec's own… | 672a66f1f0 |
+| B-2026-11-14-38 | typecheck+mir | low | A C-like enum has no generated `.values()` (design.md § 15): `UsbClass.values()` is "no associated function 'values'" | 672a66f1f0 |
+| B-2026-11-14-39 | typecheck | low | `#[repr(...)]` arguments are not checked: `#[repr(frob)]`, `#[repr(u128)]` on a struct, and the deferred `packed` and `align(8)` all pass silently | 672a66f1f0 |
+| B-2026-11-14-40 | typecheck | low | An unsuffixed literal in `u128`'s upper half that nothing types, e.g | 672a66f1f0 |
 
 </details>
 
