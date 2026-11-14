@@ -1121,6 +1121,519 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     ("E_REQUIRE_SIMD", phased("simd_check", "SimdFinding")),
     ("E_COMPTIME", phased("comptime", "ComptimeError")),
+    // ── codes written into the message (B-2026-11-14-10) ────────
+    //
+    // A message that opens with `error[E_NAME]:` prints that code as its
+    // headline. Each row restates the kind the code is reported under; a
+    // code minted from two places names the one most sites use.
+    (
+        "E_AMBIGUOUS_ASSOC_TYPE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_ASSIGN_TARGET_NOT_PLACE",
+        ty("AssignTargetNotPlace", None),
+    ),
+    ("E_ATTRIBUTE_NOT_VALID_ON_STATEMENT", parse("Syntax")),
+    ("E_ATTR_ON_ASSOC_TYPE_DECL", parse("Syntax")),
+    (
+        "E_AT_BINDING_DOUBLE_CONSUME",
+        ty(
+            "AtBindingDoubleConsume",
+            Some(DiagnosticClass::OwnershipBorrowConflict),
+        ),
+    ),
+    (
+        "E_BARE_TRAIT_TYPE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_CHAR_AS_NARROW_INT",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    ("E_CODEGEN_HINT_ON_CLOSURE", parse("Syntax")),
+    ("E_COLD_INLINE_ALWAYS_CONFLICT", parse("Syntax")),
+    ("E_COMPTIME_ERROR", phased("comptime", "ComptimeError")),
+    (
+        "E_COMPTIME_ITER_LIMIT_EXCEEDED",
+        phased("comptime", "ComptimeError"),
+    ),
+    (
+        "E_COMPTIME_MODULE_AT_RUNTIME",
+        phased("comptime", "ComptimeError"),
+    ),
+    (
+        "E_COMPTIME_NON_FOLDABLE_RESULT",
+        phased("comptime", "ComptimeError"),
+    ),
+    ("E_COMPTIME_PANIC", phased("comptime", "ComptimeError")),
+    (
+        "E_CONSUMED_SELF_IN_ENSURES",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_CONTINUE_LABEL_BLOCK", res("ContinueOnBlockLabel", None)),
+    ("E_CONTRACT_IMPURE", eff("ForbiddenEffectInContract", None)),
+    (
+        "E_DEFAULT_MULTIPLE_VARIANTS",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_DEFAULT_NO_VARIANT_MARKED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_DEFAULT_VARIANT_HAS_PAYLOAD",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_DEPRECATED_DUPLICATE", parse("Syntax")),
+    ("E_DEPRECATED_FIELD_NOT_STRING", parse("Syntax")),
+    ("E_DEPRECATED_ON_FIELD", res("DeprecatedOnField", None)),
+    ("E_DEPRECATED_ON_IMPL", res("DeprecatedOnImpl", None)),
+    ("E_DEPRECATED_POSITIONAL_ARG", parse("Syntax")),
+    ("E_DEPRECATED_UNKNOWN_FIELD", parse("Syntax")),
+    (
+        "E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_DISCRIMINANT_OUT_OF_RANGE",
+        ty("DiscriminantInvalid", None),
+    ),
+    ("E_DROP_DUPLICATE_IMPL", ty("ConflictingImpl", None)),
+    (
+        "E_DROP_SIGNATURE_INVALID",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_DUPLICATE_DISCRIMINANT", ty("DiscriminantInvalid", None)),
+    (
+        "E_DUPLICATE_MODULE_BINDING",
+        res(
+            "DuplicateDefinition",
+            Some(DiagnosticClass::DuplicateDefinition),
+        ),
+    ),
+    (
+        "E_DYN_NOT_DISPATCHABLE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_DYN_REPLACE_THROUGH_VIEW",
+        ty("InvalidUnaryOp", Some(DiagnosticClass::InvalidUnaryOp)),
+    ),
+    ("E_DYN_SECOND_TRAIT", parse("Syntax")),
+    ("E_EMPTY_UNION", parse("Syntax")),
+    (
+        "E_ENUM_NESTED_ENUM_PAYLOAD",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_ESCAPING_CLOSURE_NOT_YET",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GAT_BOUND_NOT_SATISFIED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_GAT_EFFECT_PARAM", parse("Syntax")),
+    (
+        "E_GAT_PARAM_BOUND_NOT_SATISFIED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GAT_WHERE_CLAUSE_NOT_SATISFIED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_GPU_ARGS_NOT_PERMITTED", parse("Syntax")),
+    (
+        "E_GPU_DISPATCH_ARITY",
+        ty(
+            "WrongNumberOfArgs",
+            Some(DiagnosticClass::WrongNumberOfArgs),
+        ),
+    ),
+    (
+        "E_GPU_DISPATCH_BUFFER",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GPU_DISPATCH_KERNEL",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GPU_DISPATCH_UNIFORM",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GPU_DOWNLOAD_ARITY",
+        ty(
+            "WrongNumberOfArgs",
+            Some(DiagnosticClass::WrongNumberOfArgs),
+        ),
+    ),
+    (
+        "E_GPU_DOWNLOAD_BUFFER",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_GPU_INVALID_TARGET", res("GpuInvalidTarget", None)),
+    (
+        "E_GPU_REDUCE_ARITY",
+        ty(
+            "WrongNumberOfArgs",
+            Some(DiagnosticClass::WrongNumberOfArgs),
+        ),
+    ),
+    (
+        "E_GPU_REDUCE_BUFFER",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GPU_REDUCE_FIELD",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GPU_REDUCE_KERNEL",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_GPU_UPLOAD_ARITY",
+        ty(
+            "WrongNumberOfArgs",
+            Some(DiagnosticClass::WrongNumberOfArgs),
+        ),
+    ),
+    (
+        "E_GPU_UPLOAD_BUFFER",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_IMPL_TRAIT_ALIAS",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_IMPL_TRAIT_IN_NESTED_POSITION", parse("Syntax")),
+    ("E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG", parse("Syntax")),
+    ("E_INLINE_HINT_CONFLICT", parse("Syntax")),
+    (
+        "E_INSTALL_BIN_DIR_UNWRITABLE",
+        phased("install", "karac install"),
+    ),
+    ("E_INSTALL_BUILD_FAILED", phased("install", "karac install")),
+    (
+        "E_INSTALL_BUILD_SPAWN_FAILED",
+        phased("install", "karac install"),
+    ),
+    ("E_INSTALL_COPY_FAILED", phased("install", "karac install")),
+    (
+        "E_INSTALL_EXE_UNRESOLVABLE",
+        phased("install", "karac install"),
+    ),
+    (
+        "E_INSTALL_GIT_UNSUPPORTED",
+        phased("install", "karac install"),
+    ),
+    ("E_INSTALL_HOME_UNSET", phased("install", "karac install")),
+    (
+        "E_INSTALL_NO_EXECUTABLE",
+        phased("install", "karac install"),
+    ),
+    ("E_INSTALL_PATH_NOT_DIR", phased("install", "karac install")),
+    (
+        "E_INSTALL_PATH_NOT_FOUND",
+        phased("install", "karac install"),
+    ),
+    (
+        "E_INSTALL_REGISTRY_UNSUPPORTED",
+        phased("install", "karac install"),
+    ),
+    ("E_INTERIOR_NUL_IN_C_STRING", parse("Syntax")),
+    (
+        "E_INVALID_REFINEMENT_PREDICATE",
+        ty("InvalidRefinementPredicate", None),
+    ),
+    (
+        "E_LAYOUT_QUERY_TAKES_NO_ARGS",
+        ty(
+            "WrongNumberOfArgs",
+            Some(DiagnosticClass::WrongNumberOfArgs),
+        ),
+    ),
+    (
+        "E_LAYOUT_QUERY_TYPE_ARG_REQUIRED",
+        ty(
+            "WrongNumberOfArgs",
+            Some(DiagnosticClass::WrongNumberOfArgs),
+        ),
+    ),
+    (
+        "E_LAZYLOCK_RUNTIME_CAPTURE",
+        ty("LazyLockRuntimeCapture", None),
+    ),
+    ("E_LINT_LEVEL_NON_IDENT_ARG", parse("Syntax")),
+    ("E_LINT_LEVEL_NO_ARGS", parse("Syntax")),
+    ("E_LINT_LEVEL_ON_HARD_RULE", parse("Syntax")),
+    ("E_MAIN_ERR_NOT_DISPLAY", ty("MainErrNotDisplay", None)),
+    ("E_MAIN_RETURN_TYPE", ty("MainReturnType", None)),
+    ("E_MAIN_SIGNATURE", ty("MainSignature", None)),
+    (
+        "E_MARKER_IMPL_HAS_METHOD",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_MODULE_BINDING_EFFECTFUL_INIT",
+        ty("ModuleBindingEffectfulInit", None),
+    ),
+    (
+        "E_MODULE_BINDING_HEAP_TYPE",
+        ty("ModuleBindingHeapType", None),
+    ),
+    (
+        "E_MODULE_BINDING_NAMING",
+        res("UndefinedName", Some(DiagnosticClass::UndefinedName)),
+    ),
+    ("E_MULTIVERSION_EMPTY", parse("Syntax")),
+    ("E_MULTIVERSION_ON_ASSOC", parse("Syntax")),
+    (
+        "E_NON_CONSTANT_DISCRIMINANT",
+        ty("DiscriminantInvalid", None),
+    ),
+    (
+        "E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL",
+        ty("NonExhaustiveCrossPackageLiteral", None),
+    ),
+    (
+        "E_NON_EXHAUSTIVE_CROSS_PACKAGE_MATCH",
+        ty("NonExhaustiveCrossPackageMatch", None),
+    ),
+    (
+        "E_NON_EXHAUSTIVE_INVALID_TARGET",
+        res("NonExhaustiveInvalidTarget", None),
+    ),
+    ("E_NO_EFFECT_BAD_VERB", parse("Syntax")),
+    ("E_NO_EFFECT_EMPTY", parse("Syntax")),
+    (
+        "E_NO_EFFECT_INVALID_TARGET",
+        res("ProfileInvalidTarget", None),
+    ),
+    ("E_NO_EFFECT_STRING_VALUE", parse("Syntax")),
+    ("E_NO_EFFECT_VIOLATED", eff("NoEffectViolated", None)),
+    (
+        "E_OFFSET_OF_GENERIC_PARAM",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_OFFSET_OF_INVALID_PATH", parse("Syntax")),
+    (
+        "E_OFFSET_OF_NON_STRUCT_TARGET",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OFFSET_OF_OPAQUE_TYPE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OFFSET_OF_UNKNOWN_FIELD",
+        ty("UndefinedField", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OLD_NOT_CLONE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OLD_OUTSIDE_ENSURES",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OLD_RESULT",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_ONCE_CELL_AT_MODULE_SCOPE",
+        ty("CrossTaskUnsafeCapture", None),
+    ),
+    ("E_ONCE_CELL_IN_PAR_TYPE", ty("ParFieldNotConcurrent", None)),
+    (
+        "E_OPAQUE_TYPE_NO_FIELDS",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OPAQUE_TYPE_NO_KNOWN_SIZE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_OPAQUE_TYPE_NO_METHODS",
+        ty("NoMethodFound", Some(DiagnosticClass::NoMethodFound)),
+    ),
+    (
+        "E_OPAQUE_TYPE_REQUIRES_INDIRECTION",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_PARTIAL_EXPLICIT_DISCRIMINANTS",
+        ty("DiscriminantInvalid", None),
+    ),
+    (
+        "E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR",
+        ty("DiscriminantInvalid", None),
+    ),
+    (
+        "E_PROFILE_INCOMPATIBLE_EFFECT",
+        eff("ProfileIncompatibleEffect", None),
+    ),
+    (
+        "E_PROFILE_INVALID_TARGET",
+        res("ProfileInvalidTarget", None),
+    ),
+    ("E_PROFILE_NAMED_ARG", parse("Syntax")),
+    ("E_PROFILE_NON_IDENT_ARG", parse("Syntax")),
+    ("E_PROFILE_NO_PROFILES", parse("Syntax")),
+    ("E_PROFILE_STRING_VALUE", parse("Syntax")),
+    (
+        "E_PTR_MUT_REQUIRES_MUTABLE_PLACE",
+        ty("InvalidUnaryOp", Some(DiagnosticClass::InvalidUnaryOp)),
+    ),
+    ("E_RANGE_PATTERN_BOUND_NOT_SIMPLE", parse("Syntax")),
+    (
+        "E_RAW_POINTER_UNRESOLVED_POINTEE",
+        ty(
+            "CannotInferTypeParam",
+            Some(DiagnosticClass::CannotInferTypeParam),
+        ),
+    ),
+    (
+        "E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING",
+        ty("ReassignToImmutableModuleBinding", None),
+    ),
+    (
+        "E_REFINEMENT_IMPLICIT_NARROWING",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_REFINEMENT_PREDICATE_VIOLATION",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_REF_OPERAND_UNSUPPORTED",
+        ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT",
+        ty("ReprTransparentInvalid", None),
+    ),
+    (
+        "E_REPR_TRANSPARENT_EXCLUSIVE",
+        ty("ReprTransparentInvalid", None),
+    ),
+    (
+        "E_REPR_TRANSPARENT_REQUIRES_FIELD",
+        ty("ReprTransparentInvalid", None),
+    ),
+    (
+        "E_REPR_TRANSPARENT_REQUIRES_SINGLE_FIELD",
+        ty("ReprTransparentInvalid", None),
+    ),
+    (
+        "E_REPR_TRANSPARENT_REQUIRES_SIZED",
+        ty("ReprTransparentInvalid", None),
+    ),
+    (
+        "E_REPR_TRANSPARENT_UNION_FORBIDDEN",
+        ty("ReprTransparentInvalid", None),
+    ),
+    ("E_REST_PATTERN_DUPLICATE", parse("Syntax")),
+    ("E_REST_PATTERN_NOT_LAST", parse("Syntax")),
+    (
+        "E_RPITIT_INCOMPATIBLE_WITH_DYN",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_SECRET_TRAIT_FORBIDDEN",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_SHARED_FIELD_MOVE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_STRUCT_LITERAL_SPREAD_UNSUPPORTED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_TAIT_NOT_IMPLEMENTED_YET",
+        ty("NoMethodFound", Some(DiagnosticClass::NoMethodFound)),
+    ),
+    ("E_TARGET_FEATURE_EMPTY", parse("Syntax")),
+    ("E_TARGET_FEATURE_REQUIRES_UNSAFE", parse("Syntax")),
+    ("E_TRACK_CALLER_ARGS_NOT_PERMITTED", parse("Syntax")),
+    (
+        "E_TRACK_CALLER_INVALID_TARGET",
+        res("TrackCallerInvalidTarget", None),
+    ),
+    (
+        "E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_TRY_BLOCK_NOT_IMPLEMENTED_YET",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_TYPE_VALUE_AT_RUNTIME",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_UNION_BORROW_REQUIRES_UNSAFE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_UNION_DERIVE_FORBIDDEN",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_UNION_DROP_FORBIDDEN",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_UNION_FIELD_MUT_FORBIDDEN", parse("Syntax")),
+    (
+        "E_UNION_FIELD_NOT_COPY",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_UNION_GENERICS_FORBIDDEN", parse("Syntax")),
+    (
+        "E_UNION_LITERAL_REQUIRES_ONE_FIELD",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_UNION_READ_REQUIRES_UNSAFE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_UNION_REQUIRES_REPR",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_UNION_TUPLE_FORBIDDEN", parse("Syntax")),
+    ("E_UNION_WHERE_FORBIDDEN", parse("Syntax")),
+    (
+        "E_UNKNOWN_ASSOC_TYPE_BINDING",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_UNKNOWN_PROFILE", res("UnknownProfile", None)),
+    ("E_UNSTABLE_DUPLICATE", parse("Syntax")),
+    ("E_UNSTABLE_POSITIONAL_ARG", parse("Syntax")),
+    (
+        "E_VARIANCE_USER_DECL_NOT_YET",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    ("E_VENDOR_COPY_FAILED", phased("vendor", "karac vendor")),
+    (
+        "E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
     // The package manager. `phase` is what its JSON record carries.
     (
         "E_WORKSPACE_DEP_NOT_DECLARED",
@@ -1433,7 +1946,7 @@ const fn mf(kind: &'static str) -> CodeEntry {
 
 /// A row for a phase with no helper of its own: the package manager's
 /// (`dep_resolution`, `toolchain_pin`, `lockfile`, `cache`, `update`,
-/// `install`), `simd_check` and `comptime`. `phase` is what the emitted
+/// `install`, `vendor`), `simd_check` and `comptime`. `phase` is what the emitted
 /// record carries; `kind` names the error type or variant that mints the
 /// code. None is classified (B-2026-11-13-20).
 const fn phased(phase: &'static str, kind: &'static str) -> CodeEntry {
@@ -2895,7 +3408,7 @@ pub fn concept_for(
         "resolve" => "names/resolution",
         "module_graph" => "modules/imports",
         "manifest" | "walker" | "dep_resolution" | "toolchain_pin" | "lockfile" | "update"
-        | "cache" | "install" => "packages/manifests",
+        | "cache" | "install" | "vendor" => "packages/manifests",
         "effect" | "effects" => "effects/inference-boundaries",
         "ownership" => "ownership/move-semantics",
         "provider_escape" => "effects/providers",
@@ -4127,8 +4640,9 @@ mod tests {
     }
 
     /// The `E_*` codes the compiler's own code mints: every `"E_NAME"`
-    /// string literal under src/, outside `#[cfg(test)]` modules (whose
-    /// fixtures, `E_TEST` and the like, are not codes).
+    /// string literal under src/, and every `error[E_NAME]` a message opens
+    /// with (B-2026-11-14-10), outside comments and `#[cfg(test)]` modules
+    /// (whose fixtures, `E_TEST` and the like, are not codes).
     fn minted_symbolic_codes() -> Vec<(String, String)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -4158,27 +4672,33 @@ mod tests {
                 }
                 at = start + 1;
             }
-            let b = &text.as_bytes()[..end];
-            let mut i = 0;
-            while i + 3 < b.len() {
-                if &b[i..i + 3] != b"\"E_" {
-                    i += 1;
+            let file = path.strip_prefix(&root).unwrap().display().to_string();
+            for line in text[..end].lines() {
+                if line.trim_start().starts_with("//") {
                     continue;
                 }
-                let name_end = (i + 3..b.len())
-                    .find(|&j| {
-                        !(b[j].is_ascii_uppercase() || b[j].is_ascii_digit() || b[j] == b'_')
-                    })
-                    .unwrap_or(b.len());
-                if name_end > i + 3
-                    && name_end < b.len()
-                    && b[name_end] == b'"'
-                    && b[name_end - 1] != b'_'
-                {
-                    let file = path.strip_prefix(&root).unwrap().display().to_string();
-                    out.push((text[i + 1..name_end].to_string(), file));
+                for (open, close) in [("\"E_", b'"'), ("error[E_", b']')] {
+                    let b = line.as_bytes();
+                    let mut at = 0;
+                    while let Some(hit) = line[at..].find(open) {
+                        let name = at + hit + open.len() - 2;
+                        let name_end = (name + 2..b.len())
+                            .find(|&j| {
+                                !(b[j].is_ascii_uppercase()
+                                    || b[j].is_ascii_digit()
+                                    || b[j] == b'_')
+                            })
+                            .unwrap_or(b.len());
+                        if name_end > name + 2
+                            && name_end < b.len()
+                            && b[name_end] == close
+                            && b[name_end - 1] != b'_'
+                        {
+                            out.push((line[name..name_end].to_string(), file.clone()));
+                        }
+                        at = name_end;
+                    }
                 }
-                i = name_end;
             }
         }
         out
@@ -4186,12 +4706,13 @@ mod tests {
 
     /// design.md §2: every code is catalogued for `karac explain`. A symbolic
     /// code minted anywhere in src/ without a [`CODE_TABLE`] row fails here
-    /// (B-2026-11-13-20: 84 of them had none, and `explain` refused each).
+    /// (B-2026-11-13-20: 84 of them had none, and `explain` refused each;
+    /// B-2026-11-14-10: 166 more written only into their messages).
     #[test]
     fn every_minted_symbolic_code_is_catalogued() {
         let minted = minted_symbolic_codes();
         assert!(
-            minted.len() >= 80,
+            minted.len() >= 250,
             "the scan found only {} minted codes; it is not seeing src/",
             minted.len()
         );
@@ -4210,6 +4731,8 @@ mod tests {
             "E_DEPENDENCY_CYCLE",
             "E_CROSS_BORROW_CONFLICT",
             "E_TEST_BLOCK_NOT_TOP_LEVEL",
+            "E_CHAR_AS_NARROW_INT",
+            "E_INSTALL_HOME_UNSET",
         ] {
             assert!(is_symbolic_code(code), "{code}");
         }

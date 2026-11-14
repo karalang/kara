@@ -1030,10 +1030,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `E_LOCKFILE_*`, `E_TOOLCHAIN_*`, `E_PROXY_*` and `E_INSTALL_*` families),
   the ownership checker's (`E_CROSS_BORROW_CONFLICT`,
   `E_SLICE_BORROW_CONFLICT`, …), and the attribute, parser and FFI ones
-  such as `E_TEST_BLOCK_NOT_TOP_LEVEL` and `E_EXTERN_REF_PARAM`. 86 of them
-  were refused as unknown, against design.md §2's "every code is
-  catalogued", and a test now fails when a new one has no entry
-  (B-2026-11-13-20).
+  such as `E_TEST_BLOCK_NOT_TOP_LEVEL` and `E_EXTERN_REF_PARAM`, and the
+  codes a message opens with, which `karac check` prints as its headline
+  (`error[E_CHAR_AS_NARROW_INT]: …`). 86 of the first kind were refused as
+  unknown and 166 of the second read as a class name, against design.md
+  §2's "every code is catalogued"; a test now fails when a new one has no
+  entry (B-2026-11-13-20, B-2026-11-14-10).
 
 - A view stored where its borrow is not kept (an escaping closure, a
   `shared` value, a channel) names what it views, "a view of `t.s`",
