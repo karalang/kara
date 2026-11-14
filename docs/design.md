@@ -4635,7 +4635,8 @@ fn open_connection(addr: String) -> Result[Connection, AnyError] {
 `e` is a `ref` to the function's error type, because the error is still being returned; it is in scope only in the block. `errdefer(e)` requires a function returning `Result[T, E]`, because `None` carries no value: in a function returning `Option[T]` it is `errdefer with a binding requires Result return type; use errdefer { ... } for cleanup on None-propagation`.
 
 **Rules.**
-- **No `?` inside a `defer` or `errdefer` block.** Handle errors in the block: ignore them, log them, or panic.
+- **No early exit out of a `defer` or `errdefer` block.** A `?`, a `return`, or a `break` or `continue` whose loop encloses the cleanup block is an error, one diagnostic for all four: `a defer/errdefer block cannot leave its scope early (`?`, `return`, `break`, `continue`)`. The cleanup runs while the scope is already being left, so it may not start another exit. A loop written inside the block may use `break` and `continue` on itself. Handle errors in the block: ignore them, log them, or panic. (Review-thread ruling 2026-11-14, on the probe's §10 cells; Zig and Swift refuse the same.)
+- **An `errdefer` that can never run is a warning.** In a function whose return type is neither `Result` nor `Option` there is no failure exit, so an `errdefer` there is dead code: `warning[unreachable_errdefer]: this function cannot return an error, so the errdefer never runs`, with help to use `defer` if the cleanup should always run.
 - **No capture by move.** The bindings a cleanup block uses must stay valid until the scope ends; the ownership rules enforce this.
 - **Effects.** A cleanup block's effects are part of the enclosing function's effects, like any other expression's.
 - **Strict order.** Cleanup blocks run one at a time in LIFO order and are never reordered or run in parallel, even when their effects are disjoint, so resources are released in order (a child handle before its parent).
