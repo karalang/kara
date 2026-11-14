@@ -2140,23 +2140,45 @@ impl super::Parser {
             // body's start (kata 2008); `v: mut ref T`, which changes the
             // caller's value, would change the contract, so it stays advice.
             "mut" => {
+                // A scalar is copied in, so a bare `v: i32` is already the
+                // body's own value and `own` would say nothing (kata 2169's
+                // `mut num1: i32`).
+                let copied = matches!(
+                    self.tokens.get(name_at + 2).map(|t| &t.token),
+                    Some(Token::Identifier { name: ty, raw: false }) if matches!(
+                        ty.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16"
+                            | "u32" | "u64" | "u128" | "usize" | "f32" | "f64" | "bool" | "char"
+                    )
+                );
                 self.pattern_muts.push((
                     crate::resolver::SpanKey::from_span(&start),
                     crate::resolver::TextEdit {
                         offset: start.offset,
                         length: colon_end - start.offset,
-                        replacement: format!("{name}: own"),
+                        replacement: if copied {
+                            format!("{name}:")
+                        } else {
+                            format!("{name}: own")
+                        },
                     },
                     name.clone(),
                 ));
-                (
+                let advice = if copied {
+                    format!(
+                        "Rust's `mut {name}: T` is a copy the body changes: a scalar \
+                         parameter is already copied in, so write `{name}: T` and `let mut \
+                         {name} = {name};` at the body's start, or `{name}: mut ref T` to \
+                         change the caller's value"
+                    )
+                } else {
                     format!(
                         "Rust's `mut {name}: T` is an owned parameter the body changes: \
                          write `{name}: own T` and `let mut {name} = {name};` at the body's \
                          start, or `{name}: mut ref T` to change the caller's value"
-                    ),
-                    None,
-                )
+                    )
+                };
+                (advice, None)
             }
             _ => (
                 format!("write `{name}: {mode} T`"),
