@@ -127,9 +127,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-20 | 2026-11-14 | mir | medium | A by-move capture of a struct's field takes the whole struct in MIR, so design.md § Captures' disjoint capture holds only for ref and mut-ref captures: `let f = || eat(s.a); eat(s.b); f();` passes check and fails every run lane with `move check main: use of _1.1, which may have been moved`, and a returned `|| s.a.n` keeps `s.b` and `s.c` alive until the closure drops | — |
 | B-2026-11-14-21 | 2026-11-14 | cli | low | `karac fix`'s `redundant_ref_param` lint skips a method whose name is also a local variable read anywhere in the program: `functions_used_as_values` (src/style_lints.rs) collects every bare identifier that is not a callee by name alone, so a harness's `for _ in 0..count` keeps `Solution.count(grid: ref ..)`'s `ref` while the same impl's `dfs(grid: ref ..)` loses its own | — |
 | B-2026-11-14-22 | 2026-11-14 | mir | medium | An index whose base is a literal evaluates the index before the literal's elements: `[p(1), p(2)][p(0)]` prints e0 e1 e2 where design.md §8.1 gives e1 e2 e0 | — |
-| B-2026-11-14-25 | 2026-11-14 | parser | low | Rust lifetimes have no fix: `&'static str` stops the parse ("Expected type, found `'static`"), and `struct P<'a>`, `impl<'a>`, `fn f<'a, T>` stop it at the `'a` ("Expected identifier"), so the Mend loop stalls on the first one | — |
-| B-2026-11-14-26 | 2026-11-14 | typecheck | low | A closure whose tail is `*n`, with `n` lending a non-`Copy` value (`.iter().map(|(_, n)| *n)`, `.map(|n| *n)`), passes the check and is refused only by the MIR check's move-out error, which has no edit; `n.clone()` is the copy | — |
-| B-2026-11-14-27 | 2026-11-14 | interp | medium | The MIR interpreter refuses an array handed by value to a byte-reading native: `sock.send_to(b"STOP", to)` stops with "expected a sequence, found Agg([Int(83), ...])" where the compiled build sends it | — |
 | B-2026-11-14-23 | 2026-11-14 | typecheck+cli | low | Two fields of borrowed receivers put in a tuple to pick one by a test (`let (short, long) = if self.pairs.len() <= other.pairs.len() { (self.pairs, other.pairs) } else { (other.pairs, self.pairs) };`) get `borrow_projection_copy` with a machine-applicable `.clone()` on each, which `karac fix` applies, copying both collections on every call, though `(ref self.pairs, ref other.pairs)` checks and copies nothing | — |
 
 ### Relocated
@@ -1186,6 +1183,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-8 | cli | low | Five refusals name their rewrite but carry no edit, so `karac fix` leaves the program refused; `karac fix --help` describes the removed closure-prefi… | a72be5f5d1 |
 | B-2026-11-14-9 | typecheck | medium | `c.eq_ignore_ascii_case(d)` on a `char` (and on a `u8`) is refused with `no method 'eq_ignore_ascii_case' on type 'char'`, and `b.to_ascii_lowercase(… | 5a1b79539 |
 | B-2026-11-14-10 | cli | low | 168 symbolic codes written only into a diagnostic's message (`error[E_CHAR_AS_NARROW_INT]: …`) are unknown to `karac explain`, which reads each as a… | 15692a607a |
+| B-2026-11-14-25 | parser | low | Rust lifetimes have no fix: `&'static str` stops the parse ("Expected type, found `'static`"), and `struct P<'a>`, `impl<'a>`, `fn f<'a, T>` stop it… | bdba568e93 |
+| B-2026-11-14-26 | typecheck | low | A closure whose tail is `*n`, with `n` lending a non-`Copy` value (`.iter().map(\|(_, n)\| *n)`, `.map(\|n\| *n)`), passes the check and is refused only… | bdba568e93 |
+| B-2026-11-14-27 | interp | medium | The MIR interpreter refuses an array handed by value to a byte-reading native: `sock.send_to(b"STOP", to)` stops with "expected a sequence, found Agg… | bdba568e93 |
 
 </details>
 

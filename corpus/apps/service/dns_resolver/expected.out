@@ -1,0 +1,128 @@
+== www.example.test. A
+status NOERROR, flags qr rd ra, 3 answers, 0 authority
+  an www.example.test. 600 IN CNAME web.other.test.
+  an web.other.test. 300 IN A 198.51.100.80
+  an web.other.test. 300 IN A 198.51.100.81
+== www.example.test. A
+status NOERROR, flags qr rd ra, 3 answers, 0 authority
+  an www.example.test. 600 IN CNAME web.other.test.
+  an web.other.test. 300 IN A 198.51.100.80
+  an web.other.test. 300 IN A 198.51.100.81
+== control advance.100.clock. -> now=100
+== WWW.Example.TEST. A
+status NOERROR, flags qr rd ra, 3 answers, 0 authority
+  an www.example.test. 500 IN CNAME web.other.test.
+  an web.other.test. 200 IN A 198.51.100.80
+  an web.other.test. 200 IN A 198.51.100.81
+== example.test. MX
+status NOERROR, flags qr rd ra, 2 answers, 0 authority
+  an example.test. 3600 IN MX 10 mail.example.test.
+  an example.test. 3600 IN MX 20 backup.example.test.
+== big.example.test. TXT
+status NOERROR, flags qr rd ra, 1 answers, 0 authority
+  an big.example.test. 60 IN TXT "abcdefghij..."(100) "bcdefghijk..."(100) "cdefghijkl..."(100) "defghijklm..."(100) "efghijklmn..."(100) "fghijklmno..."(100)
+== nope.other.test. A
+status NXDOMAIN, flags qr rd ra, 0 answers, 1 authority
+  ns other.test. 120 IN SOA ns.example.test. admin.other.test. 1 3600 600 86400 120
+== nope.other.test. AAAA
+status NXDOMAIN, flags qr rd ra, 0 answers, 1 authority
+  ns other.test. 120 IN SOA ns.example.test. admin.other.test. 1 3600 600 86400 120
+== example.test. AAAA
+status NOERROR, flags qr rd ra, 0 answers, 1 authority
+  ns example.test. 300 IN SOA ns1.example.test. hostmaster.example.test. 7 3600 600 86400 300
+== foo.invalid. A
+status NXDOMAIN, flags qr rd ra, 0 answers, 1 authority
+  ns . 86400 IN SOA a.root.test. nstld.root.test. 2026111401 1800 900 604800 86400
+== loop.example.test. A
+status SERVFAIL, flags qr rd ra, 0 answers, 0 authority
+== example.test. MX (no recursion)
+status NOERROR, flags qr ra, 2 answers, 0 authority
+  an example.test. 3600 IN MX 10 mail.example.test.
+  an example.test. 3600 IN MX 20 backup.example.test.
+== uncached.example.test. A (no recursion)
+status REFUSED, flags qr ra, 0 answers, 0 authority
+== example.test. A
+status REFUSED, flags qr rd ra, 0 answers, 0 authority
+== a question cut short
+status FORMERR, flags qr rd ra, 0 answers, 0 authority
+== opcode STATUS
+status NOTIMP, flags qr rd ra, 0 answers, 0 authority
+== control advance.500.clock. -> now=600
+== www.example.test. A
+status NOERROR, flags qr rd ra, 3 answers, 0 authority
+  an www.example.test. 600 IN CNAME web.other.test.
+  an web.other.test. 300 IN A 198.51.100.80
+  an web.other.test. 300 IN A 198.51.100.81
+== nope.other.test. A
+status NXDOMAIN, flags qr rd ra, 0 answers, 1 authority
+  ns other.test. 120 IN SOA ns.example.test. admin.other.test. 1 3600 600 86400 120
+== control advance.400.clock. -> now=1000
+== mail.example.test. A
+status NOERROR, flags qr rd ra, 1 answers, 0 authority
+  an mail.example.test. 3600 IN A 198.51.100.25
+== backup.example.test. A
+status NXDOMAIN, flags qr rd ra, 0 answers, 1 authority
+  ns example.test. 300 IN SOA ns1.example.test. hostmaster.example.test. 7 3600 600 86400 300
+== control shutdown.control. -> bye
+== resolver log
+#1 www.example.test. A
+  192.0.2.1 www.example.test. A -> referral test. (1 NS, 1 glue)
+  192.0.2.10 www.example.test. A -> referral example.test. (2 NS, 2 glue)
+  192.0.2.21 www.example.test. A -> timeout, held off until 900
+  192.0.2.20 www.example.test. A -> CNAME web.other.test.
+  192.0.2.10 web.other.test. A -> referral other.test. (1 NS, 0 glue)
+  no glue for ns.example.test., resolving it
+    192.0.2.20 ns.example.test. A -> 1 A
+  192.0.2.30 web.other.test. A -> 2 A
+  = NOERROR, 3 answers, 7 upstream
+#2 www.example.test. A
+  = NOERROR, 3 answers, 0 upstream
+#3 www.example.test. A
+  = NOERROR, 3 answers, 0 upstream
+#4 example.test. MX
+  192.0.2.20 example.test. MX -> 2 MX
+  = NOERROR, 2 answers, 1 upstream
+#5 big.example.test. TXT
+  192.0.2.20 big.example.test. TXT -> truncated, again over TCP
+  192.0.2.20 big.example.test. TXT -> 1 TXT
+  = NOERROR, 1 answers, 1 upstream
+#6 nope.other.test. A
+  192.0.2.30 nope.other.test. A -> NXDOMAIN
+  = NXDOMAIN, 0 answers, 1 upstream
+#7 nope.other.test. AAAA
+  = NXDOMAIN, 0 answers, 0 upstream
+#8 example.test. AAAA
+  192.0.2.20 example.test. AAAA -> NODATA
+  = NOERROR, 0 answers, 1 upstream
+#9 foo.invalid. A
+  192.0.2.1 foo.invalid. A -> NXDOMAIN
+  = NXDOMAIN, 0 answers, 1 upstream
+#10 loop.example.test. A
+  192.0.2.20 loop.example.test. A -> CNAME loop2.example.test.
+  192.0.2.20 loop2.example.test. A -> CNAME loop.example.test.
+  CNAME chain longer than 8
+  = SERVFAIL, 0 answers, 2 upstream
+#11 example.test. MX (no recursion)
+  = NOERROR, 2 answers, 0 upstream
+#12 uncached.example.test. A (no recursion)
+  = REFUSED, 0 answers, 0 upstream
+#13 www.example.test. A
+  192.0.2.20 www.example.test. A -> CNAME web.other.test.
+  192.0.2.30 web.other.test. A -> 2 A
+  = NOERROR, 3 answers, 2 upstream
+#14 nope.other.test. A
+  192.0.2.30 nope.other.test. A -> NXDOMAIN
+  = NXDOMAIN, 0 answers, 1 upstream
+#15 mail.example.test. A
+  192.0.2.21 mail.example.test. A -> timeout, held off until 1900
+  192.0.2.20 mail.example.test. A -> 1 A
+  = NOERROR, 1 answers, 2 upstream
+#16 backup.example.test. A
+  192.0.2.20 backup.example.test. A -> NXDOMAIN
+  = NXDOMAIN, 0 answers, 1 upstream
+== resolver: 16 client queries, 20 upstream, 2 timeouts
+192.0.2.1 2 udp
+192.0.2.10 2 udp
+192.0.2.20 10 udp, 1 tcp
+192.0.2.21 2 udp
+192.0.2.30 4 udp

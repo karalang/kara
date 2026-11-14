@@ -1,0 +1,1119 @@
+// dns_resolver: an iterative DNS resolver over UDP, with the authoritative
+// servers it walks. TYPE_A root server delegates `test.` to a TLD server, which
+// delegates `example.test.` (with glue, its first server lame) and
+// `other.test.` (glueless, served by a name inside example.test). The
+// resolver answers stub queries from a TTL cache against a logical clock,
+// follows referrals and CNAME chains, resolves glueless nameservers, holds
+// off a server that timed out, caches NXDOMAIN and NODATA (RFC 2308),
+// retries a truncated answer over TCP, and stops a CNAME loop. Every socket
+// is bound to port 0; a lab table maps the servers' documentation addresses
+// (192.0.2.x) to the sockets they got.
+
+import std.sync.{TaskGroup, Mutex};
+import std.net.{UdpSocket, TcpListener, TcpStream};
+
+const TYPE_A: u16 = 1;
+const NS: u16 = 2;
+const CNAME: u16 = 5;
+const SOA: u16 = 6;
+const MX: u16 = 15;
+const TXT: u16 = 16;
+const AAAA: u16 = 28;
+const IN: u16 = 1;
+const CH: u16 = 3;
+
+const NOERROR: u16 = 0;
+const FORMERR: u16 = 1;
+const SERVFAIL: u16 = 2;
+const NXDOMAIN: u16 = 3;
+const NOTIMP: u16 = 4;
+const REFUSED: u16 = 5;
+
+const QR: u16 = 0x8000;
+const AA: u16 = 0x0400;
+const TC: u16 = 0x0200;
+const RD: u16 = 0x0100;
+const RA: u16 = 0x0080;
+
+const UDP_LIMIT: i64 = 512;
+const TIMEOUT_MS: i64 = 200;
+const LAME_HOLD: i64 = 900;
+const MAX_CHAIN: i64 = 8;
+
+fn type_name(t: u16) -> String {
+    match t {
+        TYPE_A => "A",
+        NS => "NS",
+        CNAME => "CNAME",
+        SOA => "SOA",
+        MX => "MX",
+        TXT => "TXT",
+        AAAA => "AAAA",
+        _ => f"TYPE{t}",
+    }
+}
+
+fn rcode_name(r: u16) -> Str {
+    match r {
+        NOERROR => "NOERROR",
+        FORMERR => "FORMERR",
+        SERVFAIL => "SERVFAIL",
+        NXDOMAIN => "NXDOMAIN",
+        NOTIMP => "NOTIMP",
+        _ => "REFUSED",
+    }
+}
+
+#[derive(Clone, PartialEq)]
+enum RData {
+    Addr(String),
+    Name(String),
+    Mx(u16, String),
+    Txt(Vec[String]),
+    Soa(String, String, u32, u32, u32, u32, u32),
+    Raw(Vec[u8]),
+}
+
+#[derive(Clone)]
+struct Rr {
+    name: String,
+    rtype: u16,
+    ttl: u32,
+    rdata: RData,
+}
+
+impl Rr {
+    fn new(name: Str, rtype: u16, ttl: u32, rdata: own RData) -> Rr {
+        Rr { name: name.to_string(), rtype, ttl, rdata }
+    }
+
+    fn with_ttl(self, ttl: u32) -> Rr {
+        Rr { name: self.name.clone(), rtype: self.rtype, ttl, rdata: self.rdata.clone() }
+    }
+
+    fn target(self) -> String {
+        match ref self.rdata {
+            RData.Addr(s) | RData.Name(s) => s.clone(),
+            _ => String.new(),
+        }
+    }
+
+    fn soa_minimum(self) -> u32 {
+        match ref self.rdata {
+            RData.Soa(_, _, _, _, _, _, min) => min,
+            _ => 0,
+        }
+    }
+
+    fn text(self) -> String {
+        f"{self.name} {self.ttl} IN {type_name(self.rtype)} {rdata_text(self.rdata)}"
+    }
+}
+
+fn rdata_text(rd: RData) -> String {
+    match rd {
+        RData.Addr(s) | RData.Name(s) => s.clone(),
+        RData.Mx(pref, host) => f"{pref} {host}",
+        RData.Soa(m, r, serial, refresh, retry, expire, min) => {
+            f"{m} {r} {serial} {refresh} {retry} {expire} {min}"
+        }
+        RData.Txt(parts) => {
+            let mut out = Vec.new();
+            for s in parts {
+                if s.len() > 40 {
+                    out.push(f"\"{s[..10]}...\"({s.len()})");
+                } else {
+                    out.push(f"\"{s}\"");
+                }
+            }
+            out.join(" ")
+        }
+        RData.Raw(bytes) => {
+            let hex: Vec[String] = bytes.iter().map(|b| f"{b:02x}").collect();
+            hex.join("")
+        }
+    }
+}
+
+// ------------------------------------------------------------ wire format
+
+fn put_u16(out: mut ref Vec[u8], v: u16) {
+    out.extend_from_slice(v.to_be_bytes());
+}
+
+fn put_u32(out: mut ref Vec[u8], v: u32) {
+    out.extend_from_slice(v.to_be_bytes());
+}
+
+fn enc_name(out: mut ref Vec[u8], n: Str) {
+    if n != "." {
+        for label in n.strip_suffix(".").unwrap_or(n).split(".") {
+            out.push(label.len() as u8);
+            out.extend_from_slice(label.bytes());
+        }
+    }
+    out.push(0);
+}
+
+fn enc_rdata(rd: RData) -> Vec[u8] {
+    let mut out = Vec.new();
+    match rd {
+        RData.Addr(s) => {
+            for part in s.split(".") {
+                out.push(u8.parse(part).unwrap());
+            }
+        }
+        RData.Name(n) => enc_name(mut out, n),
+        RData.Mx(pref, host) => {
+            put_u16(mut out, pref);
+            enc_name(mut out, host);
+        }
+        RData.Txt(parts) => {
+            for s in parts {
+                out.push(s.len() as u8);
+                out.extend_from_slice(s.bytes());
+            }
+        }
+        RData.Soa(m, r, serial, refresh, retry, expire, min) => {
+            enc_name(mut out, m);
+            enc_name(mut out, r);
+            for v in [serial, refresh, retry, expire, min] {
+                put_u32(mut out, v);
+            }
+        }
+        RData.Raw(bytes) => out.extend_from_slice(bytes),
+    }
+    out
+}
+
+fn enc_rr(out: mut ref Vec[u8], rr: Rr, qname: Option[Str]) {
+    if qname == Some(rr.name.as_str()) {
+        out.extend_from_slice([0xC0, 0x0C]);
+    } else {
+        enc_name(mut out, rr.name);
+    }
+    let rdata = enc_rdata(rr.rdata);
+    put_u16(mut out, rr.rtype);
+    put_u16(mut out, IN);
+    put_u32(mut out, rr.ttl);
+    put_u16(mut out, rdata.len() as u16);
+    out.extend_from_slice(rdata);
+}
+
+#[derive(Clone, PartialEq)]
+struct Question {
+    name: String,
+    qtype: u16,
+    class: u16,
+}
+
+fn question(name: Str, qtype: u16, class: u16) -> Question {
+    Question { name: name.to_string(), qtype, class }
+}
+
+fn build(id: u16, flags: u16, q: Option[ref Question], an: Slice[Rr], ns: Slice[Rr], ar: Slice[Rr], compress: bool) -> Vec[u8] {
+    let mut out = Vec.new();
+    put_u16(mut out, id);
+    put_u16(mut out, flags);
+    put_u16(mut out, if q.is_some() { 1 } else { 0 });
+    put_u16(mut out, an.len() as u16);
+    put_u16(mut out, ns.len() as u16);
+    put_u16(mut out, ar.len() as u16);
+    let mut qname = None;
+    if let Some(q) = q {
+        enc_name(mut out, q.name);
+        put_u16(mut out, q.qtype);
+        put_u16(mut out, q.class);
+        if compress {
+            qname = Some(q.name.as_str());
+        }
+    }
+    for rr in an.iter().chain(ns.iter()).chain(ar.iter()) {
+        enc_rr(mut out, rr, qname);
+    }
+    out
+}
+
+struct Msg {
+    id: u16,
+    flags: u16,
+    q: Vec[Question],
+    an: Vec[Rr],
+    ns: Vec[Rr],
+    ar: Vec[Rr],
+}
+
+fn get_u16(buf: Slice[u8], pos: i64) -> Result[u16, String] {
+    if pos + 2 > buf.len() {
+        return Err("cut short");
+    }
+    Ok(u16.from_be_bytes([buf[pos], buf[pos + 1]]))
+}
+
+fn get_u32(buf: Slice[u8], pos: i64) -> Result[u32, String] {
+    if pos + 4 > buf.len() {
+        return Err("cut short");
+    }
+    Ok(u32.from_be_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]))
+}
+
+fn read_name(buf: Slice[u8], start: i64) -> Result[(String, i64), String] {
+    let mut labels: Vec[String] = Vec.new();
+    let mut pos = start;
+    let mut jumps = 0;
+    let mut end: Option[i64] = None;
+    loop {
+        if pos >= buf.len() {
+            return Err("name runs past the end");
+        }
+        let n = buf[pos] as i64;
+        if n & 0xC0 == 0xC0 {
+            if pos + 1 >= buf.len() {
+                return Err("cut pointer");
+            }
+            let target = ((n & 0x3F) << 8) | buf[pos + 1];
+            if end.is_none() {
+                end = Some(pos + 2);
+            }
+            jumps += 1;
+            if jumps > 16 or target >= pos {
+                return Err("bad pointer");
+            }
+            pos = target;
+            continue;
+        }
+        if n == 0 {
+            if end.is_none() {
+                end = Some(pos + 1);
+            }
+            break;
+        }
+        if pos + 1 + n > buf.len() {
+            return Err("label runs past the end");
+        }
+        let label = String.from_utf8_lossy(buf[pos + 1..pos + 1 + n]).to_lowercase();
+        labels.push(label);
+        pos += 1 + n;
+    }
+    let name = if labels.is_empty() { "." } else { f"{labels.join(".")}." };
+    Ok((name, end.unwrap()))
+}
+
+fn read_rr(buf: Slice[u8], start: i64) -> Result[(Rr, i64), String] {
+    let mut (name, pos) = read_name(buf, start)?;
+    let rtype = get_u16(buf, pos)?;
+    let ttl = get_u32(buf, pos + 4)?;
+    let rdlen = get_u16(buf, pos + 8)? as i64;
+    pos += 10;
+    if pos + rdlen > buf.len() {
+        return Err("rdata cut short");
+    }
+    let raw = buf[pos..pos + rdlen];
+    let rdata = match rtype {
+        TYPE_A => {
+            let parts: Vec[String] = raw.iter().map(|b| b.to_string()).collect();
+            RData.Addr(parts.join("."))
+        }
+        NS | CNAME => RData.Name(read_name(buf, pos)?.0),
+        MX => RData.Mx(get_u16(buf, pos)?, read_name(buf, pos + 2)?.0),
+        TXT => {
+            let mut parts = Vec.new();
+            let mut i = 0;
+            while i < raw.len() {
+                let n = raw[i] as i64;
+                parts.push(String.from_utf8_lossy(raw[i + 1..i + 1 + n]).to_string());
+                i += 1 + n;
+            }
+            RData.Txt(parts)
+        }
+        SOA => {
+            let (m, p) = read_name(buf, pos)?;
+            let (r, p) = read_name(buf, p)?;
+            RData.Soa(m, r, get_u32(buf, p)?, get_u32(buf, p + 4)?, get_u32(buf, p + 8)?, get_u32(buf, p + 12)?, get_u32(buf, p + 16)?)
+        }
+        _ => RData.Raw(raw.to_vec()),
+    };
+    Ok((Rr { name, rtype, ttl, rdata }, pos + rdlen))
+}
+
+fn parse(buf: Slice[u8]) -> Result[Msg, String] {
+    let id = get_u16(buf, 0)?;
+    let flags = get_u16(buf, 2)?;
+    let qd = get_u16(buf, 4)?;
+    let counts = [get_u16(buf, 6)?, get_u16(buf, 8)?, get_u16(buf, 10)?];
+    let mut pos = 12;
+    let mut q = Vec.new();
+    for _ in 0..qd {
+        let (name, p) = read_name(buf, pos)?;
+        q.push(Question { name, qtype: get_u16(buf, p)?, class: get_u16(buf, p + 2)? });
+        pos = p + 4;
+    }
+    let mut sections: Vec[Vec[Rr]] = Vec.new();
+    for count in counts {
+        let mut rrs = Vec.new();
+        for _ in 0..count {
+            let (rr, p) = read_rr(buf, pos)?;
+            rrs.push(rr);
+            pos = p;
+        }
+        sections.push(rrs);
+    }
+    let ar = sections.pop().unwrap();
+    let ns = sections.pop().unwrap();
+    let an = sections.pop().unwrap();
+    Ok(Msg { id, flags, q, an, ns, ar })
+}
+
+fn under(n: Str, zone: Str) -> bool {
+    zone == "." or n == zone or n.ends_with(f".{zone}")
+}
+
+fn parent(n: Str) -> String {
+    match n.split_once(".") {
+        Some((_, rest)) if not rest.is_empty() => rest.to_string(),
+        _ => ".",
+    }
+}
+
+// ------------------------------------------------------------ authoritative servers
+
+struct Delegation {
+    child: String,
+    ns: Vec[Rr],
+    glue: Vec[Rr],
+}
+
+struct Zone {
+    origin: String,
+    records: Vec[Rr],
+    delegations: Vec[Delegation],
+}
+
+struct Answer {
+    flags: u16,
+    rcode: u16,
+    an: Vec[Rr],
+    ns: Vec[Rr],
+    ar: Vec[Rr],
+}
+
+impl Zone {
+    fn negative_soa(self) -> Rr {
+        let soa = self.records.iter().find(|r| r.rtype == SOA).unwrap();
+        soa.with_ttl(soa.ttl.min(soa.soa_minimum()))
+    }
+
+    fn answer(self, qname: Str, qtype: u16) -> Answer {
+        if not under(qname, self.origin) {
+            return Answer { flags: 0, rcode: REFUSED, an: Vec.new(), ns: Vec.new(), ar: Vec.new() };
+        }
+        for d in ref self.delegations {
+            if under(qname, d.child) {
+                return Answer { flags: 0, rcode: NOERROR, an: Vec.new(), ns: d.ns.clone(), ar: d.glue.clone() };
+            }
+        }
+        let here: Vec[Rr] = self.records.iter().filter(|r| r.name == qname).cloned().collect();
+        let matching: Vec[Rr] = here.iter().filter(|r| r.rtype == qtype).cloned().collect();
+        if not matching.is_empty() {
+            return Answer { flags: AA, rcode: NOERROR, an: matching, ns: Vec.new(), ar: Vec.new() };
+        }
+        let cname: Vec[Rr] = here.iter().filter(|r| r.rtype == CNAME).cloned().collect();
+        if not cname.is_empty() and qtype != CNAME {
+            return Answer { flags: AA, rcode: NOERROR, an: cname, ns: Vec.new(), ar: Vec.new() };
+        }
+        let rcode = if here.is_empty() { NXDOMAIN } else { NOERROR };
+        Answer { flags: AA, rcode, an: Vec.new(), ns: [self.negative_soa()], ar: Vec.new() }
+    }
+}
+
+fn addr(s: Str) -> RData {
+    RData.Addr(s.to_string())
+}
+
+fn name(s: Str) -> RData {
+    RData.Name(s.to_string())
+}
+
+fn soa(m: Str, r: Str, serial: u32, refresh: u32, retry: u32, expire: u32, min: u32) -> RData {
+    RData.Soa(m.to_string(), r.to_string(), serial, refresh, retry, expire, min)
+}
+
+fn root_zone() -> Zone {
+    Zone {
+        origin: ".",
+        records: [
+            Rr.new(".", SOA, 86400, soa("a.root.test.", "nstld.root.test.", 2026111401, 1800, 900, 604800, 86400)),
+            Rr.new(".", NS, 518400, name("a.root.test.")),
+        ],
+        delegations: [Delegation {
+            child: "test.",
+            ns: [Rr.new("test.", NS, 172800, name("ns1.nic.test."))],
+            glue: [Rr.new("ns1.nic.test.", TYPE_A, 172800, addr("192.0.2.10"))],
+        }],
+    }
+}
+
+fn tld_zone() -> Zone {
+    Zone {
+        origin: "test.",
+        records: [
+            Rr.new("test.", SOA, 3600, soa("ns1.nic.test.", "hostmaster.nic.test.", 41, 1800, 900, 604800, 900)),
+            Rr.new("test.", NS, 172800, name("ns1.nic.test.")),
+            Rr.new("ns1.nic.test.", TYPE_A, 172800, addr("192.0.2.10")),
+        ],
+        delegations: [
+            Delegation {
+                child: "example.test.",
+                ns: [
+                    Rr.new("example.test.", NS, 86400, name("ns2.example.test.")),
+                    Rr.new("example.test.", NS, 86400, name("ns1.example.test.")),
+                ],
+                glue: [
+                    Rr.new("ns2.example.test.", TYPE_A, 86400, addr("192.0.2.21")),
+                    Rr.new("ns1.example.test.", TYPE_A, 86400, addr("192.0.2.20")),
+                ],
+            },
+            Delegation {
+                child: "other.test.",
+                ns: [Rr.new("other.test.", NS, 86400, name("ns.example.test."))],
+                glue: Vec.new(),
+            },
+        ],
+    }
+}
+
+fn example_zone() -> Zone {
+    let mut big = Vec.new();
+    for i in 0..6 {
+        let s: String = (0..100).map(|j| (b'a' + ((i + j) % 26) as u8) as char).collect();
+        big.push(s);
+    }
+    Zone {
+        origin: "example.test.",
+        records: [
+            Rr.new("example.test.", SOA, 3600, soa("ns1.example.test.", "hostmaster.example.test.", 7, 3600, 600, 86400, 300)),
+            Rr.new("example.test.", NS, 86400, name("ns2.example.test.")),
+            Rr.new("example.test.", NS, 86400, name("ns1.example.test.")),
+            Rr.new("example.test.", MX, 3600, RData.Mx(10, "mail.example.test.")),
+            Rr.new("example.test.", MX, 3600, RData.Mx(20, "backup.example.test.")),
+            Rr.new("ns1.example.test.", TYPE_A, 86400, addr("192.0.2.20")),
+            Rr.new("ns2.example.test.", TYPE_A, 86400, addr("192.0.2.21")),
+            Rr.new("ns.example.test.", TYPE_A, 3600, addr("192.0.2.30")),
+            Rr.new("mail.example.test.", TYPE_A, 3600, addr("198.51.100.25")),
+            Rr.new("www.example.test.", CNAME, 600, name("web.other.test.")),
+            Rr.new("big.example.test.", TXT, 60, RData.Txt(big)),
+            Rr.new("loop.example.test.", CNAME, 60, name("loop2.example.test.")),
+            Rr.new("loop2.example.test.", CNAME, 60, name("loop.example.test.")),
+        ],
+        delegations: Vec.new(),
+    }
+}
+
+fn other_zone() -> Zone {
+    Zone {
+        origin: "other.test.",
+        records: [
+            Rr.new("other.test.", SOA, 3600, soa("ns.example.test.", "admin.other.test.", 1, 3600, 600, 86400, 120)),
+            Rr.new("other.test.", NS, 86400, name("ns.example.test.")),
+            Rr.new("web.other.test.", TYPE_A, 300, addr("198.51.100.80")),
+            Rr.new("web.other.test.", TYPE_A, 300, addr("198.51.100.81")),
+        ],
+        delegations: Vec.new(),
+    }
+}
+
+struct Counts {
+    udp: Map[String, i64],
+    tcp: Map[String, i64],
+}
+
+sync struct Lab {
+    counts: Mutex[Counts],
+    log: Mutex[Vec[String]],
+}
+
+fn respond(zone: Zone, data: Slice[u8]) -> Vec[u8] {
+    match parse(data) {
+        Ok(msg) => {
+            let q = ref msg.q[0];
+            let a = zone.answer(q.name, q.qtype);
+            build(msg.id, QR | a.flags | a.rcode, Some(q), a.an, a.ns, a.ar, false)
+        }
+        Err(_) => build(u16.from_be_bytes([data[0], data[1]]), QR | FORMERR, None, [], [], [], false),
+    }
+}
+
+fn serve_udp(lab: Lab, sock: UdpSocket, zone: Option[Zone], ip: String) {
+    let mut buf = Vec.filled(4096, 0u8);
+    loop {
+        let (n, peer) = sock.recv_from(mut buf).unwrap();
+        let data = buf[..n];
+        if data == b"STOP" {
+            break;
+        }
+        {
+            let mut c = lab.counts.lock();
+            *c.value.udp.entry(ip.clone()).or_insert(0) += 1;
+        }
+        let zone = match ref zone {
+            Some(z) => z,
+            None => continue, // a lame server: it takes queries and never answers
+        };
+        let mut out = respond(zone, data);
+        if out.len() > UDP_LIMIT {
+            let msg = parse(data).unwrap();
+            out = build(msg.id, QR | AA | TC, Some(ref msg.q[0]), [], [], [], false);
+        }
+        sock.send_to(out, peer).unwrap();
+    }
+}
+
+fn read_framed(conn: mut ref TcpStream) -> Option[Vec[u8]] {
+    let mut head = [0u8; 2];
+    if conn.read_exact(mut head).is_err() {
+        return None;
+    }
+    let n = u16.from_be_bytes(head) as i64;
+    let mut body = Vec.filled(n, 0u8);
+    if n > 0 and conn.read_exact(mut body).is_err() {
+        return None;
+    }
+    Some(body)
+}
+
+fn serve_tcp(lab: Lab, listener: TcpListener, zone: Zone, ip: String) {
+    loop {
+        let mut conn = listener.accept().unwrap();
+        let data = match read_framed(mut conn) {
+            Some(d) if not d.is_empty() => d,
+            _ => break,
+        };
+        {
+            let mut c = lab.counts.lock();
+            *c.value.tcp.entry(ip.clone()).or_insert(0) += 1;
+        }
+        let out = respond(zone, data);
+        let mut framed = (out.len() as u16).to_be_bytes().to_vec();
+        framed.extend_from_slice(out);
+        conn.write_all(framed).unwrap();
+    }
+}
+
+// ------------------------------------------------------------ the resolver
+
+#[derive(Clone)]
+struct Entry {
+    rrs: Vec[Rr],
+    at: i64,
+    permanent: bool,
+}
+
+#[derive(Clone)]
+struct NegEntry {
+    rcode: u16,
+    soa: Rr,
+    at: i64,
+}
+
+struct Resolver {
+    lab: Map[String, (String, String)],
+    up: UdpSocket,
+    now: i64,
+    cache: Map[(String, u16), Entry],
+    neg: Map[(String, u16), NegEntry],
+    lame: Map[String, i64],
+    next_id: u16,
+    log: Vec[String],
+    clients: i64,
+    upstream: i64,
+    timeouts: i64,
+}
+
+// The NXDOMAIN key: a name-wide negative entry, whatever the type.
+const ANY_TYPE: u16 = 0;
+
+struct Resolution {
+    rcode: u16,
+    an: Vec[Rr],
+    ns: Vec[Rr],
+}
+
+impl Resolver {
+    fn new(lab: own Map[String, (String, String)]) -> Resolver {
+        let up = UdpSocket.bind("127.0.0.1:0").unwrap();
+        up.set_read_timeout(Some(TIMEOUT_MS)).unwrap();
+        let mut cache = Map.new();
+        cache.insert((".", NS), Entry { rrs: [Rr.new(".", NS, 518400, name("a.root.test."))], at: 0, permanent: true });
+        cache.insert(("a.root.test.", TYPE_A), Entry { rrs: [Rr.new("a.root.test.", TYPE_A, 518400, addr("192.0.2.1"))], at: 0, permanent: true });
+        Resolver {
+            lab,
+            up,
+            now: 0,
+            cache,
+            neg: Map.new(),
+            lame: Map.new(),
+            next_id: 0x1000,
+            log: Vec.new(),
+            clients: 0,
+            upstream: 0,
+            timeouts: 0,
+        }
+    }
+
+    fn say(mut ref self, depth: i64, line: String) {
+        self.log.push(f"{"  ".repeat(depth + 1)}{line}");
+    }
+
+    // -- cache
+
+    fn get(mut ref self, name: Str, rtype: u16) -> Option[Vec[Rr]] {
+        let key = (name.to_string(), rtype);
+        let e = self.cache.get(key)?.clone();
+        if e.permanent {
+            return Some(e.rrs);
+        }
+        let ttl = e.rrs.iter().map(|r| r.ttl).min().unwrap() as i64;
+        let left = ttl - (self.now - e.at);
+        if left <= 0 {
+            self.cache.remove(key);
+            return None;
+        }
+        Some(e.rrs.iter().map(|r| r.with_ttl(left as u32)).collect())
+    }
+
+    fn put(mut ref self, rrs: Slice[Rr]) {
+        let mut sets: Vec[((String, u16), Vec[Rr])] = Vec.new();
+        for r in rrs {
+            let key = (r.name.clone(), r.rtype);
+            match sets.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, v)) => v.push(r.clone()),
+                None => sets.push((key, [r.clone()])),
+            }
+        }
+        for (key, rs) in sets.into_iter() {
+            self.cache.insert(key, Entry { rrs: rs, at: self.now, permanent: false });
+        }
+    }
+
+    fn neg_get(mut ref self, name: Str, rtype: u16) -> Option[(u16, Rr)] {
+        for key in [(name.to_string(), ANY_TYPE), (name.to_string(), rtype)] {
+            let e = match self.neg.get(key) {
+                Some(e) => e.clone(),
+                None => continue,
+            };
+            let left = e.soa.ttl - (self.now - e.at);
+            if left <= 0 {
+                self.neg.remove(key);
+                continue;
+            }
+            return Some((e.rcode, e.soa.with_ttl(left as u32)));
+        }
+        None
+    }
+
+    fn neg_put(mut ref self, name: Str, rtype: u16, rcode: u16, soa: Rr) {
+        let ttl = soa.ttl.min(soa.soa_minimum());
+        self.neg.insert((name.to_string(), rtype), NegEntry { rcode, soa: soa.with_ttl(ttl), at: self.now });
+    }
+
+    // -- upstream
+
+    fn query(mut ref self, ip: Str, qname: Str, rtype: u16, depth: i64) -> Option[Msg] {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.upstream += 1;
+        let q = question(qname, rtype, IN);
+        let pkt = build(id, 0, Some(ref q), [], [], [], false);
+        let (udp_addr, tcp_addr) = self.lab[ip].clone();
+        self.up.send_to(pkt, udp_addr).unwrap();
+        let mut buf = Vec.filled(4096, 0u8);
+        let msg = loop {
+            let n = match self.up.recv_from(mut buf) {
+                Ok((n, _)) => n,
+                Err(_) => return None,
+            };
+            if let Ok(msg) = parse(buf[..n]) {
+                if msg.id == id and msg.q.len() == 1 and msg.q[0] == q {
+                    break msg;
+                }
+            }
+        };
+        if msg.flags & TC == 0 {
+            return Some(msg);
+        }
+        self.say(depth, f"{ip} {qname} {type_name(rtype)} -> truncated, again over TCP");
+        let mut conn = TcpStream.connect(tcp_addr).unwrap();
+        let mut framed = (pkt.len() as u16).to_be_bytes().to_vec();
+        framed.extend_from_slice(pkt);
+        conn.write_all(framed).unwrap();
+        let body = read_framed(mut conn).unwrap();
+        Some(parse(body).unwrap())
+    }
+
+    fn closest_zone(mut ref self, qname: Str) -> String {
+        let mut n = qname.to_string();
+        while self.get(n, NS).is_none() {
+            n = parent(n);
+        }
+        n
+    }
+
+    fn addresses(mut ref self, zone: Str, depth: i64) -> Vec[String] {
+        let names: Vec[String] = self.get(zone, NS).unwrap().iter().map(|r| r.target()).collect();
+        let mut out = Vec.new();
+        for n in ref names {
+            if let Some(a) = self.get(n, TYPE_A) {
+                out.extend(a.iter().map(|r| r.target()));
+            }
+        }
+        if not out.is_empty() {
+            return out;
+        }
+        for n in ref names {
+            if under(n, zone) {
+                continue; // no glue for a name inside the zone: no way in
+            }
+            self.say(depth, f"no glue for {n}, resolving it");
+            let r = self.resolve(n, TYPE_A, depth + 1, true);
+            if r.rcode == NOERROR and not r.an.is_empty() {
+                let last = r.an.last().unwrap().name.clone();
+                out = r.an.iter().filter(|x| x.rtype == TYPE_A and x.name == last).map(|x| x.target()).collect();
+            }
+            if not out.is_empty() {
+                return out;
+            }
+        }
+        out
+    }
+
+    /// Asks servers until the answer is in the cache; false on SERVFAIL.
+    fn iterate(mut ref self, qname: Str, rtype: u16, depth: i64) -> bool {
+        if depth > 4 {
+            self.say(depth, "too deep");
+            return false;
+        }
+        loop {
+            let zone = self.closest_zone(qname);
+            let servers = self.addresses(zone, depth);
+            if servers.is_empty() {
+                self.say(depth, f"no usable server for {zone}");
+                return false;
+            }
+            let mut referred = false;
+            for ip in ref servers {
+                if *self.lame.get(ip).unwrap_or(-1) > self.now {
+                    continue;
+                }
+                let head = f"{ip} {qname} {type_name(rtype)} ->";
+                let msg = match self.query(ip, qname, rtype, depth) {
+                    Some(m) => m,
+                    None => {
+                        self.timeouts += 1;
+                        let until = self.now + LAME_HOLD;
+                        self.lame.insert(ip.clone(), until);
+                        self.say(depth, f"{head} timeout, held off until {until}");
+                        continue;
+                    }
+                };
+                let rcode = msg.flags & 0xF;
+                let soa: Vec[Rr] = msg.ns.iter().filter(|r| r.rtype == SOA).cloned().collect();
+                if rcode == NXDOMAIN and not soa.is_empty() {
+                    self.neg_put(qname, ANY_TYPE, NXDOMAIN, soa[0]);
+                    self.say(depth, f"{head} NXDOMAIN");
+                    return true;
+                }
+                if rcode != NOERROR {
+                    self.say(depth, f"{head} {rcode_name(rcode)}");
+                    continue;
+                }
+                let keep: Vec[Rr] = msg.an.iter().filter(|r| under(r.name, zone)).cloned().collect();
+                if not keep.is_empty() {
+                    self.put(keep);
+                    let first = ref keep[0];
+                    if first.rtype == CNAME and rtype != CNAME {
+                        self.say(depth, f"{head} CNAME {first.target()}");
+                    } else {
+                        self.say(depth, f"{head} {keep.len()} {type_name(first.rtype)}");
+                    }
+                    return true;
+                }
+                if msg.flags & AA != 0 {
+                    if not soa.is_empty() {
+                        self.neg_put(qname, rtype, NOERROR, soa[0]);
+                    }
+                    self.say(depth, f"{head} NODATA");
+                    return true;
+                }
+                let ns: Vec[Rr] = msg.ns.iter().filter(|r| r.rtype == NS).cloned().collect();
+                if not ns.is_empty() and under(qname, ns[0].name) and ns[0].name != zone and under(ns[0].name, zone) {
+                    let child = ns[0].name.clone();
+                    let glue: Vec[Rr] = msg.ar.iter().filter(|r| r.rtype == TYPE_A and under(r.name, zone)).cloned().collect();
+                    self.put(ns);
+                    self.put(glue);
+                    self.say(depth, f"{head} referral {child} ({ns.len()} NS, {glue.len()} glue)");
+                    referred = true;
+                    break;
+                }
+                self.say(depth, f"{head} lame answer");
+            }
+            if not referred {
+                self.say(depth, f"every server for {zone} failed");
+                return false;
+            }
+        }
+    }
+
+    fn resolve(mut ref self, qname: Str, rtype: u16, depth: i64, recurse: bool) -> Resolution {
+        let mut answers: Vec[Rr] = Vec.new();
+        let mut cur = qname.to_string();
+        let mut chain = 0;
+        loop {
+            if chain >= MAX_CHAIN {
+                self.say(depth, f"CNAME chain longer than {MAX_CHAIN}");
+                return Resolution { rcode: SERVFAIL, an: Vec.new(), ns: Vec.new() };
+            }
+            if let Some(hit) = self.get(cur, rtype) {
+                answers.extend(hit);
+                return Resolution { rcode: NOERROR, an: answers, ns: Vec.new() };
+            }
+            if rtype != CNAME {
+                if let Some(c) = self.get(cur, CNAME) {
+                    cur = c[0].target();
+                    answers.extend(c);
+                    chain += 1;
+                    continue;
+                }
+            }
+            if let Some((rcode, soa)) = self.neg_get(cur, rtype) {
+                return Resolution { rcode, an: answers, ns: [soa] };
+            }
+            if not recurse {
+                return Resolution { rcode: REFUSED, an: Vec.new(), ns: Vec.new() };
+            }
+            if not self.iterate(cur, rtype, depth) {
+                return Resolution { rcode: SERVFAIL, an: Vec.new(), ns: Vec.new() };
+            }
+        }
+    }
+
+    // -- serving stubs
+
+    fn control(mut ref self, id: u16, q: Question) -> (Vec[u8], bool) {
+        let labels: Vec[Str] = q.name.strip_suffix(".").unwrap_or(q.name).split(".").collect();
+        let text = if labels.len() == 3 and labels[0] == "advance" and labels[2] == "clock" {
+            self.now += i64.parse(labels[1]).unwrap();
+            f"now={self.now}"
+        } else if q.name == "shutdown.control." {
+            "bye"
+        } else {
+            return (build(id, QR | REFUSED, Some(q), [], [], [], false), false);
+        };
+        let rr = Rr.new(q.name, TXT, 0, RData.Txt([text]));
+        (build(id, QR | AA, Some(q), [rr], [], [], true), q.name == "shutdown.control.")
+    }
+
+    fn handle(mut ref self, data: Slice[u8]) -> (Option[Vec[u8]], bool) {
+        if data.len() < 12 {
+            return (None, false);
+        }
+        let id = u16.from_be_bytes([data[0], data[1]]);
+        let flags = u16.from_be_bytes([data[2], data[3]]);
+        let rd = flags & RD;
+        let msg = match parse(data) {
+            Ok(m) => m,
+            Err(_) => return (Some(build(id, QR | rd | RA | FORMERR, None, [], [], [], false)), false),
+        };
+        if (flags >> 11) & 0xF != 0 {
+            return (Some(build(id, QR | rd | RA | NOTIMP, msg.q.first(), [], [], [], false)), false);
+        }
+        if msg.q.len() != 1 {
+            return (Some(build(id, QR | rd | RA | FORMERR, None, [], [], [], false)), false);
+        }
+        let q = ref msg.q[0];
+        if q.class == CH and q.qtype == TXT {
+            let (out, stop) = self.control(id, q);
+            return (Some(out), stop);
+        }
+        if q.class != IN {
+            return (Some(build(id, QR | rd | RA | REFUSED, Some(q), [], [], [], false)), false);
+        }
+        self.clients += 1;
+        let before = self.upstream;
+        let note = if rd != 0 { "" } else { " (no recursion)" };
+        self.log.push(f"#{self.clients} {q.name} {type_name(q.qtype)}{note}");
+        let r = self.resolve(q.name, q.qtype, 0, rd != 0);
+        self.log.push(f"  = {rcode_name(r.rcode)}, {r.an.len()} answers, {self.upstream - before} upstream");
+        (Some(build(id, QR | rd | RA | r.rcode, Some(q), r.an, r.ns, [], true)), false)
+    }
+}
+
+fn serve_resolver(lab: Lab, sock: UdpSocket, resolver: own Resolver) {
+    let mut resolver = resolver;
+    let mut buf = Vec.filled(4096, 0u8);
+    loop {
+        let (n, peer) = sock.recv_from(mut buf).unwrap();
+        let (out, stop) = resolver.handle(buf[..n]);
+        if let Some(out) = out {
+            sock.send_to(out, peer).unwrap();
+        }
+        if stop {
+            break;
+        }
+    }
+    let mut log = lab.log.lock();
+    log.value.extend(resolver.log.drain(0..resolver.log.len()));
+    log.value.push(f"== resolver: {resolver.clients} client queries, {resolver.upstream} upstream, {resolver.timeouts} timeouts");
+}
+
+// ------------------------------------------------------------ the stub client
+
+struct Stub {
+    sock: UdpSocket,
+    resolver: String,
+    next_id: u16,
+}
+
+impl Stub {
+    fn exchange(self, pkt: Slice[u8]) -> Msg {
+        self.sock.send_to(pkt, self.resolver).unwrap();
+        let mut buf = Vec.filled(4096, 0u8);
+        let (n, _) = self.sock.recv_from(mut buf).unwrap();
+        parse(buf[..n]).unwrap()
+    }
+
+    fn show(self, msg: Msg) {
+        let f = msg.flags;
+        let names: Vec[String] = [(QR, "qr"), (AA, "aa"), (TC, "tc"), (RD, "rd"), (RA, "ra")]
+            .iter()
+            .filter(|(bit, _)| f & bit != 0)
+            .map(|(_, n)| n.clone())
+            .collect();
+        println(f"status {rcode_name(f & 0xF)}, flags {names.join(" ")}, {msg.an.len()} answers, {msg.ns.len()} authority");
+        for rr in ref msg.an {
+            println(f"  an {rr.text()}");
+        }
+        for rr in ref msg.ns {
+            println(f"  ns {rr.text()}");
+        }
+    }
+
+    fn ask(mut ref self, qname: Str, rtype: u16, rd: bool, class: u16) {
+        let id = self.next_id;
+        self.next_id += 1;
+        println(f"== {qname} {type_name(rtype)}{if rd { "" } else { " (no recursion)" }}");
+        let q = question(qname, rtype, class);
+        let msg = self.exchange(build(id, if rd { RD } else { 0 }, Some(ref q), [], [], [], false));
+        if msg.id != id {
+            println("  wrong id");
+        }
+        self.show(msg);
+    }
+
+    fn control(mut ref self, qname: Str) {
+        let q = question(qname, TXT, CH);
+        let msg = self.exchange(build(self.next_id, 0, Some(ref q), [], [], [], false));
+        self.next_id += 1;
+        let text = match ref msg.an[0].rdata {
+            RData.Txt(parts) => parts[0].clone(),
+            _ => String.new(),
+        };
+        println(f"== control {qname} -> {text}");
+    }
+
+    fn raw(self, label: Str, pkt: Slice[u8]) {
+        println(f"== {label}");
+        let msg = self.exchange(pkt);
+        self.show(msg);
+    }
+}
+
+fn main() {
+    let lab = Lab {
+        counts: Mutex.new(Counts { udp: Map.new(), tcp: Map.new() }),
+        log: Mutex.new(Vec.new()),
+    };
+    let ips = ["192.0.2.1", "192.0.2.10", "192.0.2.20", "192.0.2.21", "192.0.2.30"];
+    let mut table: Map[String, (String, String)] = Map.new();
+    let group = TaskGroup.new();
+    for ip in ips {
+        let sock = UdpSocket.bind("127.0.0.1:0").unwrap();
+        let mut tcp_addr = String.new();
+        let zone = match ip {
+            "192.0.2.1" => Some(root_zone()),
+            "192.0.2.10" => Some(tld_zone()),
+            "192.0.2.20" => Some(example_zone()),
+            "192.0.2.30" => Some(other_zone()),
+            _ => None,
+        };
+        if ip == "192.0.2.20" {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            tcp_addr = listener.local_addr().unwrap();
+            let name = ip.to_string();
+            group.spawn(|| serve_tcp(lab, listener, example_zone(), name));
+        }
+        table.insert(ip.to_string(), (sock.local_addr().unwrap(), tcp_addr));
+        let name = ip.to_string();
+        group.spawn(|| serve_udp(lab, sock, zone, name));
+    }
+    let rsock = UdpSocket.bind("127.0.0.1:0").unwrap();
+    let resolver_addr = rsock.local_addr().unwrap();
+    let resolver = Resolver.new(table.clone());
+    group.spawn(|| serve_resolver(lab, rsock, resolver));
+
+    let mut stub = Stub {
+        sock: UdpSocket.bind("127.0.0.1:0").unwrap(),
+        resolver: resolver_addr,
+        next_id: 1,
+    };
+    stub.ask("www.example.test.", TYPE_A, true, IN);
+    stub.ask("www.example.test.", TYPE_A, true, IN);
+    stub.control("advance.100.clock.");
+    stub.ask("WWW.Example.TEST.", TYPE_A, true, IN);
+    stub.ask("example.test.", MX, true, IN);
+    stub.ask("big.example.test.", TXT, true, IN);
+    stub.ask("nope.other.test.", TYPE_A, true, IN);
+    stub.ask("nope.other.test.", AAAA, true, IN);
+    stub.ask("example.test.", AAAA, true, IN);
+    stub.ask("foo.invalid.", TYPE_A, true, IN);
+    stub.ask("loop.example.test.", TYPE_A, true, IN);
+    stub.ask("example.test.", MX, false, IN);
+    stub.ask("uncached.example.test.", TYPE_A, false, IN);
+    stub.ask("example.test.", TYPE_A, true, CH);
+    let mut cut = Vec.new();
+    for v in [0x0BAD, RD, 1, 0, 0, 0] {
+        put_u16(mut cut, v);
+    }
+    cut.extend_from_slice(b"\x03ab");
+    stub.raw("a question cut short", cut);
+    let status = question("example.test.", TYPE_A, IN);
+    stub.raw("opcode STATUS", build(0x0BAE, (2 << 11) | RD, Some(ref status), [], [], [], false));
+    stub.control("advance.500.clock.");
+    stub.ask("www.example.test.", TYPE_A, true, IN);
+    stub.ask("nope.other.test.", TYPE_A, true, IN);
+    stub.control("advance.400.clock.");
+    stub.ask("mail.example.test.", TYPE_A, true, IN);
+    stub.ask("backup.example.test.", TYPE_A, true, IN);
+    stub.control("shutdown.control.");
+
+    let stopper = UdpSocket.bind("127.0.0.1:0").unwrap();
+    for ip in ips {
+        stopper.send_to(b"STOP", table[ip].0).unwrap();
+    }
+    let conn = TcpStream.connect(table["192.0.2.20"].1).unwrap();
+    conn.write_all([0, 0]).unwrap();
+    drop(conn);
+    drop(group);
+
+    println("== resolver log");
+    for line in lab.log.lock().value.iter() {
+        println(f"{line}");
+    }
+    let counts = lab.counts.lock();
+    for ip in ips {
+        let mut line = f"{ip} {counts.value.udp.get(ip).unwrap_or(0)} udp";
+        if let Some(t) = counts.value.tcp.get(ip) {
+            line.push_str(f", {t} tcp");
+        }
+        println(f"{line}");
+    }
+}
