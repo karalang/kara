@@ -4191,6 +4191,16 @@ impl super::Parser {
             .map(|i| &self.tokens[i])
             .filter(|t| t.token == Token::Dot)
             .map(|t| t.span.offset);
+        // Where the receiver's last token ends: a `from_iter` rewrite closes
+        // its call there, so the line break of a chain written
+        // `it\n    .collect::<T>()` is not left inside the parentheses
+        // (kata 2138).
+        let receiver_end = self
+            .pos
+            .checked_sub(3)
+            .map(|i| self.tokens[i].span)
+            .map(|s| s.offset + s.length)
+            .filter(|&e| dot.is_some_and(|d| e <= d));
         self.advance();
         let open = self.pos;
         // One depth counter for both bracket kinds: the list is a type, so
@@ -4244,8 +4254,8 @@ impl super::Parser {
                                 replacement: format!("{t}.from_iter("),
                             },
                             crate::resolver::TextEdit {
-                                offset: dot,
-                                length: close.offset + close.length - dot,
+                                offset: receiver_end.unwrap_or(dot),
+                                length: close.offset + close.length - receiver_end.unwrap_or(dot),
                                 replacement: ")".to_string(),
                             },
                         ],
@@ -4299,8 +4309,8 @@ impl super::Parser {
                             replacement: format!("{t}.from_iter("),
                         },
                         crate::resolver::TextEdit {
-                            offset: dot,
-                            length: close.offset + close.length - dot,
+                            offset: receiver_end.unwrap_or(dot),
+                            length: close.offset + close.length - receiver_end.unwrap_or(dot),
                             replacement: ")".to_string(),
                         },
                     ],
@@ -4350,8 +4360,8 @@ impl super::Parser {
                             replacement: format!("{t}.parse("),
                         },
                         crate::resolver::TextEdit {
-                            offset: dot,
-                            length: close.offset + close.length - dot,
+                            offset: receiver_end.unwrap_or(dot),
+                            length: close.offset + close.length - receiver_end.unwrap_or(dot),
                             replacement: ")".to_string(),
                         },
                     ],
