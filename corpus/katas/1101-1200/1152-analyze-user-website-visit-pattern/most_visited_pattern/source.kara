@@ -1,0 +1,121 @@
+// LeetCode #1152: Analyze User Website Visit Pattern -- the ★ arm, counted
+// in maps: each user's visits in time order, the set of three-site
+// patterns among them (a user counts once however many ways the pattern
+// appears), each pattern's score the number of users whose set holds it,
+// and the best the highest score, the smallest pattern among ties.
+// O(u * k^3) for u users of at most k visits
+
+fn most_visited_pattern(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    let mut order: Vec[i64] = (0..username.len()).collect();
+    order.sort_by_key(|i| timestamp[i]);
+    let mut by_user: Map[String, Vec[String]] = Map.new();
+    for i in order.iter() {
+        by_user.entry(username[i].clone()).or_insert_with(Vec.new).push(website[i].clone());
+    }
+    let mut score: Map[(String, String, String), i64] = Map.new();
+    for (_, sites) in by_user.iter() {
+        let n = sites.len();
+        let mut seen: Set[(String, String, String)] = Set.new();
+        for a in 0..n {
+            for b in a + 1..n {
+                for c in b + 1..n {
+                    seen.insert((sites[a].clone(), sites[b].clone(), sites[c].clone()));
+                }
+            }
+        }
+        for p in seen.into_iter() {
+            score[p.clone()] = score.get_or(p, 0) + 1;
+        }
+    }
+    let mut best: Option[((String, String, String), i64)] = None;
+    for (p, s) in score.iter() {
+        let better = match best {
+            None => true,
+            Some((ref q, t)) => s > t or (s == t and p < q),
+        };
+        if better {
+            best = Some((p.clone(), s));
+        }
+    }
+    let ((a, b, c), _) = best.unwrap();
+    [a, b, c]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn names(xs: Vec[Str]) -> Vec[String] {
+    xs.iter().map(|x| x.to_string()).collect()
+}
+
+fn show(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) {
+    println(f"{username} {timestamp} {website}  ->  {most_visited_pattern(username, timestamp, website)}");
+}
+
+// `n` visits by `users` users to `sites` sites at the times 1 to n in a
+// random order; the first three visits are the first user's, so that some
+// user has three.
+fn visits(seed: mut ref i64, n: i64, users: i64, sites: i64) -> (Vec[String], Vec[i64], Vec[String]) {
+    let mut username: Vec[String] = [];
+    let mut website: Vec[String] = [];
+    for i in 0..n {
+        let u = if i < 3 { 0 } else { next_random(mut seed) % users };
+        username.push(f"u{u}");
+        website.push(f"{(b'a' + (next_random(mut seed) % sites) as u8) as char}");
+    }
+    let mut timestamp: Vec[i64] = (1..n + 1).collect();
+    for j in (1..n).rev() {
+        timestamp.swap(j, next_random(mut seed) % (j + 1));
+    }
+    (username, timestamp, website)
+}
+
+fn main() {
+    show(
+        names(["joe", "joe", "joe", "james", "james", "james", "james", "mary", "mary", "mary"]),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        names(["home", "about", "career", "home", "cart", "maps", "home", "home", "about", "career"]),
+    );
+    show(names(["ua", "ua", "ua", "ub", "ub", "ub"]), [1, 2, 3, 4, 5, 6], names(["a", "b", "a", "a", "b", "c"]));
+    show(names(["x", "x", "x"]), [3, 1, 2], names(["c", "a", "b"]));
+    show(names(["x", "y", "x", "y", "x", "y"]), [6, 5, 4, 3, 2, 1], names(["p", "q", "r", "r", "q", "p"]));
+    show(names(["a", "a", "a", "a", "b", "b", "b"]), [1, 2, 3, 4, 5, 6, 7], names(["z", "y", "x", "w", "x", "y", "z"]));
+
+    // 2000 random problems of 3 to 50 visits by 1 to 6 users to 2 to 5
+    // sites.
+    let mut seed = 1152;
+    let mut check = 0;
+    let mut first: Vec[i64] = Vec.filled(5, 0);
+    for _ in 0..2000 {
+        let n = 3 + next_random(mut seed) % 48;
+        let users = 1 + next_random(mut seed) % 6;
+        let sites = 2 + next_random(mut seed) % 4;
+        let (username, timestamp, website) = visits(mut seed, n, users, sites);
+        let p = most_visited_pattern(username, timestamp, website);
+        for w in p.iter() {
+            for c in w.bytes().iter() {
+                check = (check * 31 + c) % 1000000007;
+            }
+        }
+        first[(p[0].bytes()[0] - b'a')] += 1;
+    }
+    println(f"2000 random problems: first sites {first}, checksum {check}");
+
+    // 50 visits, the most the constraints allow: one user to 50 sites in
+    // turn; and 16 users each to c, a and b in that order, then two more
+    // visits by the first to a.
+    let solo: Vec[String] = (0..50).map(|_| "solo").collect();
+    let many: Vec[String] = (0..50).map(|i| f"s{i + 10}").collect();
+    show(solo, (1..51).collect(), many);
+    let mut username: Vec[String] = (0..48).map(|i| f"u{i / 3}").collect();
+    let mut website: Vec[String] = (0..48).map(|i| ["c", "a", "b"][i % 3].to_string()).collect();
+    username.push("u0");
+    username.push("u0");
+    website.push("a");
+    website.push("a");
+    show(username, (1..51).collect(), website);
+}

@@ -1,0 +1,492 @@
+// LeetCode #1152: Analyze User Website Visit Pattern -- a
+// differential over the four arms. Each answer is checked against the
+// statement read literally and against nine properties that do not
+// compute the answer; see the README.
+
+// ---- most_visited_pattern.kara ----
+
+fn a0_most_visited_pattern(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    let mut order: Vec[i64] = (0..username.len()).collect();
+    order.sort_by_key(|i| timestamp[i]);
+    let mut by_user: Map[String, Vec[String]] = Map.new();
+    for i in order.iter() {
+        by_user.entry(username[i].clone()).or_insert_with(Vec.new).push(website[i].clone());
+    }
+    let mut score: Map[(String, String, String), i64] = Map.new();
+    for (_, sites) in by_user.iter() {
+        let n = sites.len();
+        let mut seen: Set[(String, String, String)] = Set.new();
+        for a in 0..n {
+            for b in a + 1..n {
+                for c in b + 1..n {
+                    seen.insert((sites[a].clone(), sites[b].clone(), sites[c].clone()));
+                }
+            }
+        }
+        for p in seen.into_iter() {
+            score[p.clone()] = score.get_or(p, 0) + 1;
+        }
+    }
+    let mut best: Option[((String, String, String), i64)] = None;
+    for (p, s) in score.iter() {
+        let better = match best {
+            None => true,
+            Some((ref q, t)) => s > t or (s == t and p < q),
+        };
+        if better {
+            best = Some((p.clone(), s));
+        }
+    }
+    let ((a, b, c), _) = best.unwrap();
+    [a, b, c]
+}
+
+// ---- most_visited_pattern_sorted.kara ----
+
+fn a1_most_visited_pattern(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    let mut visits: Vec[(String, i64, String)] = (0..username.len())
+        .map(|i| (username[i].clone(), timestamp[i], website[i].clone()))
+        .collect();
+    visits.sort();
+    let mut all: Vec[Vec[String]] = [];
+    let mut start = 0;
+    while start < visits.len() {
+        let mut end = start;
+        while end < visits.len() and visits[end].0 == visits[start].0 {
+            end += 1;
+        }
+        let mut mine: Vec[Vec[String]] = [];
+        for a in start..end {
+            for b in a + 1..end {
+                for c in b + 1..end {
+                    mine.push([visits[a].2.clone(), visits[b].2.clone(), visits[c].2.clone()]);
+                }
+            }
+        }
+        mine.sort();
+        mine.dedup();
+        all.extend(mine);
+        start = end;
+    }
+    all.sort();
+    let mut best = 0;
+    let mut answer: Vec[String] = [];
+    let mut i = 0;
+    while i < all.len() {
+        let mut j = i;
+        while j < all.len() and all[j] == all[i] {
+            j += 1;
+        }
+        if j - i > best {
+            best = j - i;
+            answer = all[i].clone();
+        }
+        i = j;
+    }
+    answer
+}
+
+// ---- most_visited_pattern_ordered.kara ----
+
+fn a2_most_visited_pattern(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    let mut by_user: SortedMap[String, SortedMap[i64, String]] = SortedMap.new();
+    for i in 0..username.len() {
+        by_user.entry(username[i].clone()).or_insert_with(SortedMap.new).insert(timestamp[i], website[i].clone());
+    }
+    let mut score: SortedMap[Vec[String], i64] = SortedMap.new();
+    for (_, visits) in by_user.iter() {
+        let sites: Vec[String] = visits.values().cloned().collect();
+        let mut seen: SortedSet[Vec[String]] = SortedSet.new();
+        for a in 0..sites.len() {
+            for b in a + 1..sites.len() {
+                for c in b + 1..sites.len() {
+                    seen.insert([sites[a].clone(), sites[b].clone(), sites[c].clone()]);
+                }
+            }
+        }
+        for p in seen.iter() {
+            *score.entry(p.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut answer: Vec[String] = [];
+    let mut best = 0;
+    for (p, s) in score.iter() {
+        if s > best {
+            best = s;
+            answer = p.clone();
+        }
+    }
+    answer
+}
+
+// ---- most_visited_pattern_solution.kara ----
+
+struct A3Solution {}
+
+impl A3Solution {
+    pub fn a3_most_visited_pattern(username: Vec[String], timestamp: Vec[i32], website: Vec[String]) -> Vec[String] {
+        let mut v: Vec[(i32, String, String)] = timestamp.clone()
+            .into_iter()
+            .zip(username.clone().into_iter())
+            .zip(website.clone().into_iter())
+            .map(|((t, u), w)| (t, u, w))
+            .collect();
+        v.sort();
+        let mut map: Map[String, Vec[String]] = Map.new();
+        for (_, u, w) in v.into_iter() {
+            map.entry(u).or_insert_with(Vec.new).push(w);
+        }
+        let mut count: Map[Vec[String], i32] = Map.new();
+        for (_, sites) in map.iter() {
+            let n = sites.len();
+            let mut set: Set[Vec[String]] = Set.new();
+            for i in 0..n {
+                for j in i + 1..n {
+                    for k in j + 1..n {
+                        set.insert([sites[i].clone(), sites[j].clone(), sites[k].clone()]);
+                    }
+                }
+            }
+            for p in set.into_iter() {
+                *count.entry(p).or_insert(0) += 1;
+            }
+        }
+        count
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+            .unwrap()
+            .0
+    }
+}
+
+fn a3_most_visited_pattern(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    A3Solution.a3_most_visited_pattern(username.clone(), timestamp.iter().map(|t| t as i32).collect(), website.clone())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    match which {
+        0 => a0_most_visited_pattern(username, timestamp, website),
+        1 => a1_most_visited_pattern(username, timestamp, website),
+        2 => a2_most_visited_pattern(username, timestamp, website),
+        _ => a3_most_visited_pattern(username, timestamp, website),
+    }
+}
+
+// The statement read literally: every pattern of three of the sites, in
+// order, scored by the users who visited its first site, then its second
+// later, then its third later still; the first of the highest scores.
+fn literal(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    let n = username.len();
+    let mut sites: Vec[String] = website.clone();
+    sites.sort();
+    sites.dedup();
+    let mut best = 0;
+    let mut answer: Vec[String] = [];
+    for x in sites.iter() {
+        for y in sites.iter() {
+            for z in sites.iter() {
+                let mut users: Vec[String] = [];
+                for i in 0..n {
+                    for j in 0..n {
+                        for k in 0..n {
+                            if website[i] == x and website[j] == y and website[k] == z
+                                and username[j] == username[i] and username[k] == username[i]
+                                and timestamp[i] < timestamp[j] and timestamp[j] < timestamp[k]
+                                and not users.contains(username[i])
+                            {
+                                users.push(username[i].clone());
+                            }
+                        }
+                    }
+                }
+                if users.len() > best {
+                    best = users.len();
+                    answer = [x.clone(), y.clone(), z.clone()];
+                }
+            }
+        }
+    }
+    answer
+}
+
+// How many users visited the pattern's first site, then its second later,
+// then its third later still.
+fn followers(username: Vec[String], timestamp: Vec[i64], website: Vec[String], p: Vec[String]) -> i64 {
+    let n = username.len();
+    let mut users: Vec[String] = [];
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                if website[i] == p[0] and website[j] == p[1] and website[k] == p[2]
+                    and username[j] == username[i] and username[k] == username[i]
+                    and timestamp[i] < timestamp[j] and timestamp[j] < timestamp[k]
+                    and not users.contains(username[i])
+                {
+                    users.push(username[i].clone());
+                }
+            }
+        }
+    }
+    users.len()
+}
+
+// A pattern some user followed: three of the visits of a user with three
+// or more, in time order.
+fn draw_pattern(seed: mut ref i64, username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    let n = username.len();
+    let mut who: Vec[String] = [];
+    for u in username.iter() {
+        if not who.contains(u) and username.iter().filter(|v| v == u).count() >= 3 {
+            who.push(u.clone());
+        }
+    }
+    let user = who[next_random(mut seed) % who.len()].clone();
+    let mut mine: Vec[(i64, String)] = (0..n).filter(|i| username[i] == user).map(|i| (timestamp[i], website[i].clone())).collect();
+    mine.sort();
+    let m = mine.len();
+    let mut at: Vec[i64] = (0..m).collect();
+    for j in 0..3 {
+        at.swap(j, j + next_random(mut seed) % (m - j));
+    }
+    let mut three: Vec[i64] = at[0..3].to_vec();
+    three.sort();
+    three.iter().map(|i| mine[i].1.clone()).collect()
+}
+
+// Visits given in time order, timed with gaps of 1 to `gap`, then dealt
+// out in a random order.
+fn deal(seed: mut ref i64, username: Vec[String], website: Vec[String], gap: i64) -> (Vec[String], Vec[i64], Vec[String]) {
+    let n = username.len();
+    let mut u = username.clone();
+    let mut w = website.clone();
+    let mut t: Vec[i64] = [];
+    let mut now = 0;
+    for _ in 0..n {
+        now += 1 + next_random(mut seed) % gap;
+        t.push(now);
+    }
+    for j in (1..n).rev() {
+        let k = next_random(mut seed) % (j + 1);
+        u.swap(j, k);
+        t.swap(j, k);
+        w.swap(j, k);
+    }
+    (u, t, w)
+}
+
+// A problem of at most 20 visits in four kinds: 1 to 4 users and 2 to 4
+// sites; 2 to 5 users and 2 sites, so that many patterns tie; 2 to 4 users
+// who each follow one route of 3 to 5 sites, half of them with one site
+// changed, so that scores run high; and 1 to 3 users named `user0`.. to 2
+// to 5 named sites at times up to 10^9. The first three visits in time
+// are the first user's, so some user has three.
+fn problem(seed: mut ref i64, kind: i64) -> (Vec[String], Vec[i64], Vec[String]) {
+    let words = ["home", "about", "cart", "maps", "career"];
+    let mut username: Vec[String] = [];
+    let mut website: Vec[String] = [];
+    if kind == 2 {
+        let len = 3 + next_random(mut seed) % 3;
+        let route: Vec[i64] = (0..len).map(|_| next_random(mut seed) % 3).collect();
+        let users = 2 + next_random(mut seed) % 3;
+        let mut routes: Vec[Vec[i64]] = [];
+        for _ in 0..users {
+            let mut r = route.clone();
+            if next_random(mut seed) % 2 == 0 {
+                let at = next_random(mut seed) % len;
+                r[at] = next_random(mut seed) % 3;
+            }
+            routes.push(r);
+        }
+        // The first user's first three visits first, then the rest of
+        // every route, interleaved at random.
+        let mut next: Vec[i64] = Vec.filled(users, 0);
+        let mut left = users * len;
+        while left > 0 {
+            let mut u = next_random(mut seed) % users;
+            if username.len() < 3 {
+                u = 0;
+            }
+            while next[u] == len {
+                u = (u + 1) % users;
+            }
+            username.push(f"u{u}");
+            website.push(f"{(b'a' + routes[u][next[u]] as u8) as char}");
+            next[u] += 1;
+            left -= 1;
+        }
+        return deal(mut seed, username, website, 3);
+    }
+    let n = 3 + next_random(mut seed) % 10;
+    let users = if kind == 1 { 2 + next_random(mut seed) % 4 } else if kind == 3 { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 4 };
+    let sites = if kind == 1 { 2 } else if kind == 3 { 2 + next_random(mut seed) % 4 } else { 2 + next_random(mut seed) % 3 };
+    for i in 0..n {
+        let u = if i < 3 { 0 } else { next_random(mut seed) % users };
+        let s = next_random(mut seed) % sites;
+        if kind == 3 {
+            username.push(f"user{u}");
+            website.push(words[s].to_string());
+        } else {
+            username.push(f"u{u}");
+            website.push(f"{(b'a' + s as u8) as char}");
+        }
+    }
+    deal(mut seed, username, website, if kind == 3 { 80000000 } else { 1 })
+}
+
+struct Case {
+    username: Vec[String],
+    timestamp: Vec[i64],
+    website: Vec[String],
+    // P2's order, P3's gap and offset, P4's shift, P5's offset and gap,
+    // P9's pattern
+    order: Vec[i64],
+    time_gap: i64,
+    time_offset: i64,
+    user_shift: i64,
+    site_offset: i64,
+    site_gap: i64,
+    drawn: Vec[String],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let n = c.username.len();
+    let want = literal(c.username, c.timestamp, c.website);
+    // P2: the visits in another order
+    let pu: Vec[String] = c.order.iter().map(|i| c.username[i].clone()).collect();
+    let pt: Vec[i64] = c.order.iter().map(|i| c.timestamp[i]).collect();
+    let pw: Vec[String] = c.order.iter().map(|i| c.website[i].clone()).collect();
+    // P3: each time replaced by its rank, spread by a gap from an offset
+    let ranked: Vec[i64] = c.timestamp.iter()
+        .map(|x| c.time_offset + c.time_gap * c.timestamp.iter().filter(|y| y < x).count())
+        .collect();
+    // P4: the users renamed, the k-th to appear to `n{(k + shift) % 11}`
+    let mut seen: Vec[String] = [];
+    for u in c.username.iter() {
+        if not seen.contains(u) {
+            seen.push(u.clone());
+        }
+    }
+    let renamed: Vec[String] = c.username.iter()
+        .map(|u| f"n{(seen.iter().position(|v| v == u).unwrap() + c.user_shift) % 11}")
+        .collect();
+    // P5: the sites renamed in order, the k-th smallest to `s{offset + gap * k}`
+    let mut sites: Vec[String] = c.website.clone();
+    sites.sort();
+    sites.dedup();
+    let site_name = |s: String| { f"s{c.site_offset + c.site_gap * sites.iter().position(|v| v == s).unwrap()}" };
+    let resited: Vec[String] = c.website.iter().map(|s| site_name(s)).collect();
+    let last = c.timestamp.iter().max().unwrap();
+    // P7: every user twice, the copies named `c..` and visiting later
+    let mut du = c.username.clone();
+    let mut dt = c.timestamp.clone();
+    let mut dw = c.website.clone();
+    for i in 0..n {
+        du.push(f"c{c.username[i]}");
+        dt.push(c.timestamp[i] + last);
+        dw.push(c.website[i].clone());
+    }
+    for w in 0..4 {
+        let got = arm(w, c.username, c.timestamp, c.website);
+        let what = f"arm {w}, case {t.cases} {c.username} {c.timestamp} {c.website} -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        let p = arm(w, pu, pt, pw);
+        expect(mut t, 2, p == got, f"P2 {what}, reordered {p}");
+        // P3
+        let r = arm(w, c.username, ranked, c.website);
+        expect(mut t, 3, r == got, f"P3 {what}, times {ranked} {r}");
+        // P4
+        let u = arm(w, renamed, c.timestamp, c.website);
+        expect(mut t, 4, u == got, f"P4 {what}, users {renamed} {u}");
+        // P5: the answer renamed with the sites
+        let s = arm(w, c.username, c.timestamp, resited);
+        let named: Vec[String] = got.iter().map(|x| if sites.contains(x) { site_name(x) } else { x.clone() }).collect();
+        expect(mut t, 5, s == named, f"P5 {what}, sites {resited} {s}");
+        // P6: one more user, visiting the answer's three sites after
+        // everyone, gives the same answer
+        let mut nu = c.username.clone();
+        let mut nt = c.timestamp.clone();
+        let mut nw = c.website.clone();
+        for k in 0..got.len() {
+            nu.push("new");
+            nt.push(last + 1 + k);
+            nw.push(got[k].clone());
+        }
+        let o = arm(w, nu, nt, nw);
+        expect(mut t, 6, o == got, f"P6 {what}, one more user {o}");
+        // P7
+        let d = arm(w, du, dt, dw);
+        expect(mut t, 7, d == got, f"P7 {what}, doubled {d}");
+        // P8: some user followed the answer
+        let f = if got.len() == 3 { followers(c.username, c.timestamp, c.website, got) } else { 0 };
+        expect(mut t, 8, f >= 1, f"P8 {what}, followed by {f}");
+        // P9: no fewer users followed the answer than a pattern some
+        // user followed
+        let g = followers(c.username, c.timestamp, c.website, c.drawn);
+        expect(mut t, 9, f >= g, f"P9 {what}, followed by {f}, {c.drawn} by {g}");
+    }
+    t.cases += 1;
+    for x in want.iter() {
+        for b in x.bytes().iter() {
+            t.check = (t.check * 31 + b) % 1000000007;
+        }
+    }
+    t.check = (t.check * 31 + n) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(10, 0) };
+    // 2000 problems in four kinds, 500 each. Every choice the properties
+    // make is drawn before any arm answers.
+    let mut seed = 11521;
+    let mut cases: Vec[Case] = [];
+    for i in 0..2000 {
+        let (username, timestamp, website) = problem(mut seed, i % 4);
+        let n = username.len();
+        let mut order: Vec[i64] = (0..n).collect();
+        for j in (1..n).rev() {
+            order.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let time_gap = 1 + next_random(mut seed) % 100;
+        let time_offset = next_random(mut seed) % 1000;
+        let user_shift = next_random(mut seed) % 11;
+        let site_offset = 100 + next_random(mut seed) % 400;
+        let site_gap = 1 + next_random(mut seed) % 50;
+        let drawn = draw_pattern(mut seed, username, timestamp, website);
+        cases.push(Case { username, timestamp, website, order, time_gap, time_offset, user_shift, site_offset, site_gap, drawn });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 4 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..10).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,88 @@
+// LeetCode #1152: Analyze User Website Visit Pattern -- the ★ arm, counted
+// in maps: each user's visits in time order, the set of three-site
+// patterns among them (a user counts once however many ways the pattern
+// appears), each pattern's score the number of users whose set holds it,
+// and the best the highest score, the smallest pattern among ties.
+// O(u * k^3) for u users of at most k visits
+
+fn most_visited_pattern(username: Vec[String], timestamp: Vec[i64], website: Vec[String]) -> Vec[String] {
+    let mut order: Vec[i64] = (0..username.len()).collect();
+    order.sort_by_key(|i| timestamp[i]);
+    let mut by_user: Map[String, Vec[String]] = Map.new();
+    for i in order.iter() {
+        by_user.entry(username[i].clone()).or_insert_with(Vec.new).push(website[i].clone());
+    }
+    let mut score: Map[(String, String, String), i64] = Map.new();
+    for (_, sites) in by_user.iter() {
+        let n = sites.len();
+        let mut seen: Set[(String, String, String)] = Set.new();
+        for a in 0..n {
+            for b in a + 1..n {
+                for c in b + 1..n {
+                    seen.insert((sites[a].clone(), sites[b].clone(), sites[c].clone()));
+                }
+            }
+        }
+        for p in seen.into_iter() {
+            score[p.clone()] = score.get_or(p, 0) + 1;
+        }
+    }
+    let mut best: Option[((String, String, String), i64)] = None;
+    for (p, s) in score.iter() {
+        let better = match best {
+            None => true,
+            Some((ref q, t)) => s > t or (s == t and p < q),
+        };
+        if better {
+            best = Some((p.clone(), s));
+        }
+    }
+    let ((a, b, c), _) = best.unwrap();
+    [a, b, c]
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 problems of 50 visits, LeetCode's most, by 5 users to 8 sites at
+    // the times 1 to 50 in a random order, built once. Each of 5000 rounds
+    // re-sites 4 visits of one problem, in turn, and answers it.
+    let rounds = 5000;
+    let site_names: Vec[String] = (0..8).map(|s| f"site{s}").collect();
+    let mut seed = 1152;
+    let mut problems: Vec[(Vec[String], Vec[i64], Vec[String])] = [];
+    for _ in 0..64 {
+        let username: Vec[String] = (0..50).map(|_| f"user{next_random(mut seed) % 5}").collect();
+        let website: Vec[String] = (0..50).map(|_| site_names[next_random(mut seed) % 8].clone()).collect();
+        let mut timestamp: Vec[i64] = (1..51).collect();
+        for j in (1..50).rev() {
+            timestamp.swap(j, next_random(mut seed) % (j + 1));
+        }
+        problems.push((username, timestamp, website));
+    }
+    let mut distinct = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let p = r % 64;
+        for _ in 0..4 {
+            let at = next_random(mut seed) % 50;
+            problems[p].2[at] = site_names[next_random(mut seed) % 8].clone();
+        }
+        let (username, timestamp, website) = ref problems[p];
+        let answer = most_visited_pattern(username, timestamp, website);
+        if answer[0] != answer[1] and answer[1] != answer[2] and answer[0] != answer[2] {
+            distinct += 1;
+        }
+        for w in answer.iter() {
+            for c in w.bytes().iter() {
+                check = (check * 31 + c) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over 64 problems of 50 visits: {distinct} patterns of three sites, checksum {check}");
+}
