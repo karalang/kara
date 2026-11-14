@@ -449,10 +449,10 @@ prec   := DIGIT+
 type   := 'x' | 'X' | 'o' | 'b' | 'd'
 ```
 
-- `align` places the value left (`<`), right (`>`) or centered (`^`) within `width`. `fill` is any single character and needs an explicit `align` after it, so a bare `0` stays the zero-pad flag.
+- `align` places the value left (`<`), right (`>`) or centered (`^`) within `width`. `fill` is any single character and needs an explicit `align` after it, so a bare `0` stays the zero-pad flag. With a `width` and no `align`, a number is right-aligned and every other value (`String`, `Str`, `char`, `bool`, a user type's `Display`) is left-aligned, as in Rust and Python, so a table of names and counts lines up the way authors from those languages expect (review-thread ruling 2026-11-14, probe f-string pass).
 - `+` prints a sign on non-negative numbers too. `0` pads numbers with zeros after the sign.
 - `.precision` sets the digits after the decimal point.
-- `type` prints an integer in hexadecimal (`x`, `X`), octal (`o`), binary (`b`) or decimal (`d`).
+- `type` prints an integer in hexadecimal (`x`, `X`), octal (`o`), binary (`b`) or decimal (`d`). Under `x`, `X`, `o` and `b` a negative value prints its two's complement at its own type's width, as Rust does: `-1i8` is `ff`, `-2i32` is `fffffffe`. A bit pattern has no sign, so `+` with one of these four types is a compile error at the hole; `+` with `d` is accepted (review-thread ruling 2026-11-14).
 - An unrecognized specifier is a compile error at the hole.
 - **Which parts apply to which values.** `fill`, `align` and `width` apply to every value: they pad its `Display` text, so `{flag:>6}` on a `bool`, `{c:^3}` on a `char` and `{x:>8}` on an `f64` are all accepted. `+` and `0` apply to numbers. `type` applies to integers. `.precision` applies to floats; on a string, truncation to `precision` characters is not in v1 and is refused with a diagnostic. A float without `.precision` prints its `Display` text (the shortest form that reads back to the same value), so `{x:+}` is `+1.5` and `{nan:>5}` is `  NaN`. A part that does not apply to the value's type is a compile error at the hole (review-thread ruling 2026-11-08, B-2026-11-08-74).
 
