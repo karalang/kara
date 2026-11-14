@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 291 |
 | false-positive | 202 |
-| perf | 160 |
+| perf | 161 |
 | missing-feature | 158 |
 | soundness | 64 |
 | miscompile | 59 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 441 |
-| mir-llvm | 211 |
+| mir-llvm | 212 |
 | mir | 180 |
 | cli | 108 |
 | ownership | 79 |
@@ -120,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-6 | 2026-11-14 | typecheck | low | `Array[i64, 26].filled(0)` is refused with `no method 'filled' on `Array[…]``: the type is elided, and nothing points to `[0; 26]`, Kāra's fixed-array fill, though `Vec.filled(n, v)` exists and invites the guess | — |
 | B-2026-11-14-7 | 2026-11-14 | autopar+runtime | medium | An auto-par loop whose body recurses deeply runs the recursion on a pool worker's 8 MiB stack, where the main thread has 1 GiB: a program that finishes with KARAC_AUTO_PAR=0 dies of SIGSEGV in a default build, depending on which worker takes the iteration, and with no 'stack overflow' note (kata 2127's struct arm, a pair's 999998-person tail found by a recursive `tail` method inside `for a in 0..n { pairs += .. office.tail(a, b) .. }`) | — |
 | B-2026-11-14-10 | 2026-11-14 | cli | low | 168 symbolic codes written only into a diagnostic's message (`error[E_CHAR_AS_NARROW_INT]: …`) are unknown to `karac explain`, which reads each as a class name | — |
+| B-2026-11-14-11 | 2026-11-14 | mir-llvm | low | Kata 1546's `Set[i64]` greedy (contains, insert, and a `clear` at every cut) runs 1.34x checked Rust's `HashSet` by median (0.876 s vs 0.653 s) and executes 1.37x its instructions (callgrind 9.68 G vs 7.05 G), both SipHash-1-3 | — |
 
 ### Relocated
 
