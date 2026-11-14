@@ -706,7 +706,23 @@ pub fn dyn_tables(typed: &crate::typechecker::TypeCheckResult) -> effectchecker:
             _ => None,
         })
         .collect();
-    effectchecker::DynTables { coercions, clauses }
+    let unclaused = typed
+        .node_types
+        .iter()
+        .filter_map(|(&node, (ty, _))| match peel(ty) {
+            Type::Dyn {
+                trait_name,
+                clause: crate::typechecker::types::DynClause(None),
+                ..
+            } => Some((node, last(trait_name))),
+            _ => None,
+        })
+        .collect();
+    effectchecker::DynTables {
+        coercions,
+        clauses,
+        unclaused,
+    }
 }
 
 /// The expressions the typechecker typed by a type parameter, or by a `ref` /

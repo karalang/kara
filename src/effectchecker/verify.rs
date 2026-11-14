@@ -432,7 +432,18 @@ impl<'a> super::EffectChecker<'a> {
                                 // with it is to drop the `pub`. Free functions
                                 // are keyed by bare name and methods dotted, so
                                 // `name == "main"` is the free `main` only.
+                                // An effect on `*` cannot be written in a clause:
+                                // the fix is at the callee that has every effect
+                                // (B-2026-11-14-33, B-2026-11-14-34), so name it instead.
+                                let every = non_transparent
+                                    .iter()
+                                    .find(|e| e.effect.resource == super::EVERY_RESOURCE)
+                                    .map(|e| self.format_effect_origin(sym, &e.effect));
                                 let advice = match self.fn_return_type(sym) {
+                                    _ if every.is_some() => format!(
+                                        "It calls something that has every effect{}",
+                                        every.clone().unwrap_or_default()
+                                    ),
                                     _ if &*name == "main" => "`main()` is never `pub` \
                                          (design.md § Entry Point): remove `pub` and \
                                          its effects are inferred like any other \
@@ -581,12 +592,21 @@ impl<'a> super::EffectChecker<'a> {
                     continue;
                 }
                 let origin_msg = self.format_effect_origin(sym, &te.effect);
+                // `*` cannot be written in a clause; the origin note names
+                // the fix (B-2026-11-14-33, B-2026-11-14-34).
+                let advice = if te.effect.resource == super::EVERY_RESOURCE {
+                    String::new()
+                } else {
+                    format!(
+                        "; add {}({}) to the clause or remove the call",
+                        verb_name(&te.effect.verb),
+                        te.effect.resource,
+                    )
+                };
                 new_errors.push(EffectError {
                     message: format!(
                         "{what} '{name}' performs {}({}){origin_msg} but its `with` clause does \
-                         not declare it; add {}({}) to the clause or remove the call",
-                        verb_name(&te.effect.verb),
-                        te.effect.resource,
+                         not declare it{advice}",
                         verb_name(&te.effect.verb),
                         te.effect.resource,
                     ),

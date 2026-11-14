@@ -434,15 +434,16 @@ fn test_mut_ref_self_method_call_serializes_with_self_read() {
 
 #[test]
 fn test_independent_blocking_calls_parallelize() {
-    // Two independent `blocks` statements (libc `usleep`, ABI "C" → default
-    // `blocks` effect). Before A1 the auto-par conflict model wrongly treated
+    // Two independent `blocks` statements (libc `usleep`, declared `with
+    // blocks`: with no clause an extern has every effect and the two would
+    // conflict, B-2026-11-14-33). Before A1 the auto-par conflict model wrongly treated
     // blocks+blocks as a conflict and serialized them; A1 lifts that
     // (design.md:5907 — execution verbs answer placement, not conflict), so
     // the runtime overlaps them on the blocking pool via the `par_run`
     // fan-out. See bench/auto_par_io/ for the wall-clock proof.
     let analysis = analyze(
         r#"
-        unsafe extern "C" { fn usleep(usecs: u32) -> i32; }
+        unsafe extern "C" { fn usleep(usecs: u32) -> i32 with blocks; }
         fn main() {
             usleep(100);
             usleep(100);

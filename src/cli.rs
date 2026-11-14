@@ -3089,6 +3089,34 @@ impl Pipeline {
             || self.has_fatal_comptime_errors()
             || self.has_fatal_effect_errors()
             || self.has_fatal_ownership_errors()
+            || self.lint_error_count() > 0
+    }
+
+    /// How many LINT diagnostics render at error severity: the
+    /// `unsafe_op_in_unsafe_fn` hard rule always, and any other compile-path
+    /// lint a `#[deny]` / `-D` raised to an error.
+    ///
+    /// B-2026-11-14-31: these were rendered as `error[...]` (E0259 on the
+    /// JSON feed) and then counted nowhere, so `karac check` printed the error
+    /// followed by "All checks passed." and exited 0, and `run` / `build` /
+    /// `test` went on to compile a raw-pointer dereference outside any
+    /// `unsafe { }`. The count is taken from the same list both renderers
+    /// iterate, so what prints as an error and what stops a build cannot
+    /// disagree.
+    fn lint_error_count(&self) -> usize {
+        let compile_path = crate::cli::diag_json::lint_entries_for_compile_path(self)
+            .iter()
+            .filter(|(_, is_error, _, _)| *is_error)
+            .count();
+        let must_use = crate::must_use_lint::check_implicit_must_use(
+            &self.parsed.program,
+            self.typed.as_ref(),
+            &self.lint_overrides,
+        )
+        .iter()
+        .filter(|d| d.level == crate::must_use_lint::LintLevel::Error)
+        .count();
+        compile_path + must_use
     }
 
     /// Whether any EFFECT diagnostic stops a build.
@@ -3264,7 +3292,7 @@ impl Pipeline {
         if let Some(ref c) = self.comptime_errors {
             n += c.len();
         }
-        n
+        n + self.lint_error_count()
     }
 }
 

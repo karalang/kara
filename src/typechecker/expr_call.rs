@@ -1724,6 +1724,58 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_expr_type(span, &ty);
                 return ty;
             }
+            // `E.values()`: every C-like enum's generated type-level function,
+            // its variants in declaration order as a `Slice[E]` view of static
+            // data (design.md § 15 `.values()`; B-2026-11-14-38). A user's
+            // own `values` on the type wins.
+            if segments.len() == 2 && segments[1] == "values" {
+                let name = segments[0].clone();
+                let user_defined = self
+                    .env
+                    .impls
+                    .iter()
+                    .any(|imp| imp.target_type == name && imp.methods.contains_key("values"))
+                    || self.env.functions.contains_key(&format!("{name}.values"));
+                let generic = self
+                    .env
+                    .enums
+                    .get(&name)
+                    .is_some_and(|e| !e.generic_params.is_empty());
+                if self.env.enums.contains_key(&name) && !user_defined && !generic {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    if !args.is_empty() {
+                        self.type_error(
+                            format!("{name}.values expects 0 arguments, got {}", args.len()),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        return Type::Error;
+                    }
+                    if !self.enum_discriminants.contains_key(&name) {
+                        self.type_error(
+                            format!(
+                                "'{name}' has payload-carrying variants, and `values()` is \
+                                 generated for C-like (payload-free) enums only: a payload \
+                                 enum has no finite set of values (design.md § 15)"
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                        );
+                        return Type::Error;
+                    }
+                    let ty = Type::Slice {
+                        element: Box::new(Type::Named {
+                            name,
+                            args: Vec::new(),
+                        }),
+                        mutable: false,
+                    };
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
+            }
         }
 
         // B-2026-07-13-4: a method called directly on an enum UNIT-VARIANT

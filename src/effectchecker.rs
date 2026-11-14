@@ -85,6 +85,75 @@ pub(crate) fn declared_admits(declared: &HashSet<Effect>, effect: &Effect) -> bo
             }))
 }
 
+/// The resource an effect of the every-effect set names: "any value of the
+/// verb's class". No source clause can write it, so no declaration admits it,
+/// and `#[no_effect(verb(R))]` forbids it for every `R` (`no_effect.rs`).
+pub(crate) const EVERY_RESOURCE: &str = "*";
+
+/// Every effect, as one set: what a callee the checker cannot see into has
+/// (design.md § 15, an `extern` function with no `with` clause; core-semantics
+/// § 12). Each resource verb on [`EVERY_RESOURCE`], `allocates(Heap)` named
+/// as well so the default-permitted check and `#[no_effect(allocates(Heap))]`
+/// both see it, and the capability verbs. `suspends` is left out: a foreign
+/// call cannot yield to the scheduler, and `blocks` already admits it.
+pub(crate) fn every_effect_set(origin: EffectOrigin) -> EffectSet {
+    let mut set = EffectSet::new();
+    for verb in [
+        EffectVerbKind::Reads,
+        EffectVerbKind::Writes,
+        EffectVerbKind::Sends,
+        EffectVerbKind::Receives,
+        EffectVerbKind::Allocates,
+    ] {
+        set.add(
+            Effect {
+                verb,
+                resource: EVERY_RESOURCE.to_string(),
+            },
+            origin.clone(),
+        );
+    }
+    set.add(
+        Effect {
+            verb: EffectVerbKind::Allocates,
+            resource: "Heap".to_string(),
+        },
+        origin.clone(),
+    );
+    for verb in [EffectVerbKind::Panics, EffectVerbKind::Blocks] {
+        set.add(
+            Effect {
+                verb,
+                resource: String::new(),
+            },
+            origin.clone(),
+        );
+    }
+    set
+}
+
+/// The origin note of an every-effect finding: which callee has every
+/// effect, why, and where the fix goes. Every message that carries it names
+/// [`EVERY_EFFECT_MARK`], so a function draws one finding per such call
+/// rather than one per verb.
+pub(crate) fn every_effect_origin(callee: &str, line: usize) -> String {
+    match callee.strip_prefix("__dyn_every.") {
+        Some(method) => format!(
+            " (via a call of `{method}` at line {line} through a `dyn` value whose type writes \
+             no `with` clause, which {EVERY_EFFECT_MARK}; write the clause on the type, \
+             `dyn {} with ...`, or `with ()` for none)",
+            method.split('.').next().unwrap_or(method)
+        ),
+        None => format!(
+            " (via call to '{callee}' at line {line}, an `extern` fn with no `with` clause, \
+             which {EVERY_EFFECT_MARK}; declare its effects on the extern, or `pure fn` for none)"
+        ),
+    }
+}
+
+/// The phrase that marks an every-effect finding (see [`every_effect_origin`]).
+pub(crate) const EVERY_EFFECT_MARK: &str = "has every effect";
+
 /// Where an effect originates (for diagnostic tracing).
 #[derive(Debug, Clone)]
 pub enum EffectOrigin {
@@ -859,6 +928,10 @@ pub struct DynTables {
     /// Each expression typed as a `dyn` value, or a view of one, whose type
     /// writes a `with` clause, by node.
     pub clauses: FxHashMap<crate::ids::NodeId, DynValue>,
+    /// Each expression typed as a `dyn` value, or a view of one, whose type
+    /// writes NO clause: a call through one has every effect (design.md §
+    /// `dyn Trait`, B-2026-11-14-34).
+    pub unclaused: FxHashMap<crate::ids::NodeId, String>,
 }
 
 /// A coercion to `dyn`: the trait, the concrete type's name when it has a
@@ -1106,6 +1179,8 @@ pub struct EffectChecker<'a> {
     /// Each expression typed as a `dyn` value whose type writes a `with`
     /// clause, by node ([`DynTables::clauses`]).
     pub(crate) dyn_clauses: FxHashMap<crate::ids::NodeId, DynValue>,
+    /// [`DynTables::unclaused`].
+    pub(crate) dyn_unclaused: FxHashMap<crate::ids::NodeId, String>,
     /// The seeded key a call through a `dyn` value with a clause is charged:
     /// by the clause as written and the trait method's key.
     pub(crate) dyn_clause_keys: FxHashMap<(String, Symbol), Symbol>,
@@ -1350,6 +1425,7 @@ impl<'a> EffectChecker<'a> {
             user_operator_calls: FxHashMap::default(),
             dyn_coercions: FxHashMap::default(),
             dyn_clauses: FxHashMap::default(),
+            dyn_unclaused: FxHashMap::default(),
             dyn_clause_keys: FxHashMap::default(),
             bound_ceiling_keys: FxHashMap::default(),
             dyn_clause_checked: FxHashSet::default(),
@@ -1456,6 +1532,7 @@ impl<'a> EffectChecker<'a> {
     pub fn with_dyn_tables(mut self, tables: DynTables) -> Self {
         self.dyn_coercions = tables.coercions;
         self.dyn_clauses = tables.clauses;
+        self.dyn_unclaused = tables.unclaused;
         self
     }
 
@@ -2398,6 +2475,17 @@ impl<'a> EffectChecker<'a> {
         self.verify_impl_trait_ceilings();
         self.verify_drop_bodies_are_panics_free();
         self.verify_trait_default_bodies();
+        // One every-effect finding per function and call (B-2026-11-14-33):
+        // the set holds five verbs on `*`, and a finding per verb repeats the
+        // same advice five times.
+        let mut seen: FxHashSet<(usize, String)> = FxHashSet::default();
+        self.errors.retain(|e| {
+            let Some(at) = e.message.find(EVERY_EFFECT_MARK) else {
+                return true;
+            };
+            let via = e.message[..at].rsplit(" (via ").next().unwrap_or("");
+            seen.insert((e.span.offset, via.to_string()))
+        });
         self.check_call_site_subtyping();
         self.check_remaining_dyn_coercions();
         self.check_with_e_unification();
@@ -3286,6 +3374,12 @@ impl<'a> EffectChecker<'a> {
                 if traced.effect == *effect {
                     match &traced.origin {
                         EffectOrigin::Direct(_) => return String::new(),
+                        EffectOrigin::Callee {
+                            fn_name: callee,
+                            span,
+                        } if effect.resource == EVERY_RESOURCE => {
+                            return every_effect_origin(callee, span.line);
+                        }
                         EffectOrigin::Callee {
                             fn_name: callee,
                             span,

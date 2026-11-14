@@ -1311,7 +1311,10 @@ impl<'a> super::EffectChecker<'a> {
                 // writes a clause is charged the clause, not the impls.
                 let through_dyn_param = self.is_dyn_param_receiver(object);
                 let clause_key = (!through_dyn_param)
-                    .then(|| self.stored_dyn_clause_key(object, method))
+                    .then(|| {
+                        self.stored_dyn_clause_key(object, method)
+                            .or_else(|| self.stored_dyn_every_key(object, method))
+                    })
                     .flatten();
                 if let Some(key) = clause_key {
                     calls.push((key, expr.span));

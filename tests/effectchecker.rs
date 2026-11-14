@@ -7576,9 +7576,10 @@ fn profile_slice3_kernel_rejects_panics() {
 #[test]
 fn profile_slice3_kernel_rejects_blocks() {
     // The `blocks` effect is inferred from a call to an `extern "C"` fn
-    // (the C ABI default trust-not-verify set is `{blocks}`).
+    // declaring it (with no clause it would have every effect, and the
+    // kernel profile would refuse more than `blocks`: B-2026-11-14-33).
     let errors = profile_compat_errors(
-        "unsafe extern \"C\" { fn sleep(secs: i64) -> i64; }\n\
+        "unsafe extern \"C\" { fn sleep(secs: i64) -> i64 with blocks; }\n\
          #[profile(kernel)]\n\
          pub fn waits() with blocks { unsafe { sleep(1) } }",
     );

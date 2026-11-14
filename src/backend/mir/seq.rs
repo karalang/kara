@@ -2059,6 +2059,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 let z = self.is_zero(n)?;
                 self.store_bool(dest, z)?;
             }
+            // `v.as_ptr()` / `v.as_mut_ptr()`: the data pointer, the address
+            // of element 0 (design.md § 15; B-2026-11-14-36). No bounds
+            // check: an empty sequence's pointer is valid to hold, not to
+            // read through.
+            ("as_ptr" | "as_mut_ptr", []) => {
+                let d = self.place_ptr(dest)?;
+                self.store(d, p.into())?;
+            }
             ("index" | "index_mut", [i]) => {
                 let i = self.int_arg(i)?;
                 let at = self.checked_elem(p, n, i, size)?;

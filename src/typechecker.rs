@@ -1234,6 +1234,11 @@ pub enum TypeErrorKind {
     /// The interpreter cannot call foreign functions at all, so there is no
     /// downgrade-and-run path to preserve.
     ExternSignatureInvalid,
+    /// A `#[repr(...)]` argument v1 does not have, or one the item kind does
+    /// not take (design.md § `#[repr]`: ABI layout): an unknown name, an
+    /// integer repr on a struct, or the deferred `packed` / `align(N)`
+    /// (B-2026-11-14-39). Before, every one of them was accepted silently.
+    ReprArgumentInvalid,
     /// A return-position `impl Trait` whose body yields two or more distinct
     /// concrete witness types (design.md § `impl Trait`: "one concrete return
     /// per monomorphization"). Codegen rejects it (no single type to
@@ -1893,6 +1898,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ReprTransparentInvalid
         | TypeErrorKind::DiscriminantInvalid
         | TypeErrorKind::ExternSignatureInvalid
+        | TypeErrorKind::ReprArgumentInvalid
         | TypeErrorKind::BindingNameClass => None,
     }
 }
@@ -10223,6 +10229,26 @@ impl<'a> TypeChecker<'a> {
                 .wide_int_literals_judged
                 .insert(SpanKey::from_span(&span))
             {
+                if self.is_unsuffixed_u128_literal(&span) {
+                    // design.md § 8: an unsuffixed literal nothing types takes
+                    // the `i64` default, so a magnitude in `u128`'s upper half
+                    // is a range error there (B-2026-11-14-40). The parser's
+                    // `u128` carrier only lets a `u128` context accept it.
+                    self.type_error(
+                        format!(
+                            "integer literal {} out of range for 'i64' (expected {}..={}); \
+                             help: an unsuffixed integer literal defaults to `i64`; \
+                             write `{}u128` or annotate the binding `: u128`",
+                            value as u128,
+                            i64::MIN,
+                            i64::MAX,
+                            value as u128
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    continue;
+                }
                 self.check_int_literal_fits(value, &Type::Int(IntSize::I64), &span, None);
             }
         }

@@ -712,6 +712,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),
     ("E0805", ty("ExternSignatureInvalid", None)),
+    ("E0806", ty("ReprArgumentInvalid", None)),
     // ── effect, minted outside the effect band ──────────────────
     //
     // These three are effect-checker diagnostics that do not carry an `E04xx`
@@ -1517,6 +1518,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E_REF_OPERAND_UNSUPPORTED",
         ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),
     ),
+    ("E_REPR_DEFERRED", ty("ReprArgumentInvalid", None)),
+    ("E_REPR_INT_ON_STRUCT", ty("ReprArgumentInvalid", None)),
     (
         "E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT",
         ty("ReprTransparentInvalid", None),
@@ -1541,6 +1544,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E_REPR_TRANSPARENT_UNION_FORBIDDEN",
         ty("ReprTransparentInvalid", None),
     ),
+    ("E_REPR_UNKNOWN", ty("ReprArgumentInvalid", None)),
     ("E_REST_PATTERN_DUPLICATE", parse("Syntax")),
     ("E_REST_PATTERN_NOT_LAST", parse("Syntax")),
     (
@@ -3539,6 +3543,7 @@ fn concept_for_kind(kind: &str) -> Option<&'static str> {
         | "ReprTransparentInvalid"
         | "DiscriminantInvalid"
         | "ExternSignatureInvalid"
+        | "ReprArgumentInvalid"
         | "FfiLintHint" => "unsafe/ffi-and-layout",
         "RemovedInCore"
         | "DeferredToM4a"

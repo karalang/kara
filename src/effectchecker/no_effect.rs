@@ -69,12 +69,28 @@ impl super::EffectChecker<'_> {
                 // A bare verb forbids the whole verb; a resource list narrows
                 // it to exactly those resources.
                 v.resources.is_empty()
+                    || tagged.effect.resource == super::EVERY_RESOURCE
                     || v.resources
                         .iter()
                         .any(|r| r.path.join(".") == tagged.effect.resource)
             }) else {
                 continue;
             };
+            // The every-effect set names `allocates(Heap)` beside
+            // `allocates(*)`; one finding per forbidden verb is enough.
+            if tagged.effect.resource == super::EVERY_RESOURCE
+                && effect_set.effects.iter().any(|o| {
+                    o.effect.verb == tagged.effect.verb
+                        && o.effect.resource != super::EVERY_RESOURCE
+                        && (forbidden.resources.is_empty()
+                            || forbidden
+                                .resources
+                                .iter()
+                                .any(|r| r.path.join(".") == o.effect.resource))
+                })
+            {
+                continue;
+            }
 
             let effect_str = if tagged.effect.resource.is_empty() {
                 verb_name(&tagged.effect.verb)
@@ -99,9 +115,17 @@ impl super::EffectChecker<'_> {
                         .join(", ")
                 )
             };
+            let origin = match &tagged.origin {
+                super::EffectOrigin::Callee { fn_name, span }
+                    if tagged.effect.resource == super::EVERY_RESOURCE =>
+                {
+                    super::every_effect_origin(fn_name, span.line)
+                }
+                _ => String::new(),
+            };
             let message = format!(
-                "error[E_NO_EFFECT_VIOLATED]: fn `{}` declares `#[no_effect({})]` but its effect set includes `{}`",
-                f.name, declared_str, effect_str,
+                "error[E_NO_EFFECT_VIOLATED]: fn `{}` declares `#[no_effect({})]` but its effect set includes `{}`{}",
+                f.name, declared_str, effect_str, origin,
             );
             self.errors.push(EffectError {
                 message,

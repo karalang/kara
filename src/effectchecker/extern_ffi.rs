@@ -82,6 +82,7 @@ impl<'a> super::EffectChecker<'a> {
             _ => {} // other ABIs: no defaults until implemented
         }
 
+        let abi_defaults_kept = abi_defaults.clone();
         // Parse programmer-supplied annotations, then union with ABI defaults.
         let programmer_decl = self.parse_signature_effects(&e.effects, &e.params, None);
         let final_decl = match &programmer_decl {
@@ -96,6 +97,25 @@ impl<'a> super::EffectChecker<'a> {
                 }
                 DeclaredEffects::Explicit(merged)
             }
+            // No `with` clause and not `pure`: the foreign body is invisible,
+            // so it has every effect (design.md § 15, "An `extern` function
+            // with neither has every effect"; core-semantics.md § 12). Before
+            // B-2026-11-14-33 it had only the ABI defaults, `blocks`, so
+            // `getpid()` passed in a `with reads(Env)` body and in a
+            // `#[no_effect(allocates(Heap))]` one. `@noblock` still takes
+            // `blocks` away, as it does from the defaults.
+            DeclaredEffects::None if !e.is_pure => {
+                let mut every = super::every_effect_set(EffectOrigin::Direct(builtin_span));
+                if has_noblock {
+                    every
+                        .effects
+                        .retain(|te| te.effect.verb != EffectVerbKind::Blocks);
+                }
+                for te in abi_defaults.effects {
+                    every.add(te.effect, te.origin);
+                }
+                DeclaredEffects::Explicit(every)
+            }
             DeclaredEffects::None => {
                 if abi_defaults.is_empty() {
                     DeclaredEffects::None
@@ -105,9 +125,22 @@ impl<'a> super::EffectChecker<'a> {
             }
         };
 
+        // What the declaration itself states, ABI defaults included: what
+        // the profile check and the linter hints read. With no clause that
+        // is only the defaults, so the hints still say what to declare.
+        let stated_decl = if e.effects.is_none() && !e.is_pure && !abi_defaults_kept.is_empty() {
+            DeclaredEffects::Explicit(abi_defaults_kept)
+        } else if e.effects.is_none() && !e.is_pure {
+            DeclaredEffects::None
+        } else {
+            final_decl.clone()
+        };
+
         // Profile-compatibility check: reject effects forbidden by the
-        // active compile profile at the extern declaration site.
-        if let DeclaredEffects::Explicit(ref set) = final_decl {
+        // active compile profile at the extern declaration site, among those
+        // it states (with no clause, the ABI defaults). The rest of an
+        // every-effect set is refused at each call the profile governs.
+        if let DeclaredEffects::Explicit(ref set) = stated_decl {
             for te in &set.effects {
                 if let Some(forbidden_reason) = self.profile_forbids(&te.effect, &e.name, &e.abi) {
                     self.errors.push(EffectError {
@@ -125,7 +158,7 @@ impl<'a> super::EffectChecker<'a> {
         // Advisory linter hints for commonly-omitted effects. A `pure`
         // declaration is the author saying there are none.
         if !e.is_pure {
-            self.check_ffi_linter_hints(&e.name, &e.span, &final_decl);
+            self.check_ffi_linter_hints(&e.name, &e.span, &stated_decl);
         }
 
         let sym = self.interner.intern(&e.name);

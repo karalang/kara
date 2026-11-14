@@ -790,6 +790,16 @@ impl<'a> super::OwnershipChecker<'a> {
                 args,
                 ..
             } => {
+                // `unused_mut`: `ptr.mut(place)` needs the place mutable (it is
+                // refused on a plain `let`), so taking it uses the root's
+                // `mut`, whether or not the pointer is then written. Without
+                // this the lint's fix deleted the `mut` and `karac fix` broke
+                // a working program (B-2026-11-14-32).
+                if method == "mut" && crate::ownership::is_ptr_place_call(expr) {
+                    if let Some(root) = args.first().and_then(|a| Self::root_identifier(&a.value)) {
+                        self.mark_mut_let_written(&root);
+                    }
+                }
                 // Step 1 (consume-predicate): receiver mode comes from the
                 // resolved method's `self_param`, not from a name heuristic.
                 // `bare self` → consume the receiver; `ref self` /

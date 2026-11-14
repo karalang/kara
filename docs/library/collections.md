@@ -46,6 +46,7 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `len` | `fn len(self) -> i64` | Number of elements |
 | `is_empty` | `fn is_empty(self) -> bool` | `self.len() == 0` |
 | `get` | `fn get(self, idx: i64) -> Option[ref T]` | `None` if `idx` is out of bounds. `v[i]` panics instead |
+| `get_unchecked` | `unsafe fn get_unchecked(self, idx: i64) -> ref T` | No bounds check: the caller ensures `0 <= idx < self.len()`, and an index outside is undefined behaviour. Called inside `unsafe { }`; `*xs.get_unchecked(i)` reads the element ([design.md § Bounds checks and `get_unchecked`](../design.md#bounds-checks-and-get_unchecked)) |
 | `first` | `fn first(self) -> Option[ref T]` | `None` if empty |
 | `last` | `fn last(self) -> Option[ref T]` | `None` if empty |
 | `contains` | `fn contains(self, val: T) -> bool where T: PartialEq` | Linear search |
@@ -90,6 +91,7 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `filled` | `fn filled(n: i64, val: T) -> Vec[T] where T: Clone` | `n` copies of `val`. `n < 0` counts as 0 |
 | `from_fn` | `fn from_fn(n: i64, f: own MutFn(i64) -> T) -> Vec[T]` | `n` elements computed from their index. `n < 0` counts as 0, as in `resize` |
 | `as_slice` | `fn as_slice(self) -> Slice[T]` | The whole vector as a `Slice[T]` value |
+| `as_ptr` | `fn as_ptr(self) -> *const T` | The address of element 0, for FFI ([design.md §15](../design.md#15-unsafe-ffi-and-layout-control)); `as_mut_ptr` gives `*mut T`. Also on `Array[T, N]`. Valid to hold for an empty vector, never to read through. The pointer holds no borrow, so the vector must outlive every use, and a push may move its buffer |
 | `push` | `fn push(mut ref self, val: own T)` | Appends |
 | `pop` | `fn pop(mut ref self) -> Option[T]` | Removes the last element |
 | `insert` | `fn insert(mut ref self, idx: i64, val: own T)` | Inserts at `idx`, shifting the rest. Panics if `idx > self.len()` |

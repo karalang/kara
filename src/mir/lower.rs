@@ -513,6 +513,8 @@ fn lower_program_inner<'a>(
         comptime_eval: roots.is_some(),
         literal_statics: FxHashMap::default(),
         literal_queue: Vec::new(),
+        values_statics: FxHashMap::default(),
+        values_queue: Vec::new(),
         eq_queue: Vec::new(),
         eq_queued: FxHashSet::default(),
         hash_queue: Vec::new(),
@@ -771,6 +773,8 @@ fn lower_program_inner<'a>(
             lcx.lower_static(def, &name);
         } else if let Some((e, t, name)) = lcx.literal_queue.pop() {
             lcx.lower_literal_static(e, t, &name);
+        } else if let Some((et, at, name)) = lcx.values_queue.pop() {
+            lcx.lower_values_static(et, at, &name);
         } else if let Some((e, t, name)) = lcx.default_queue.pop() {
             lcx.lower_default_static(e, t, &name);
         } else if let Some((t, name)) = lcx.eq_queue.pop() {
@@ -1422,6 +1426,12 @@ struct Lcx<'a> {
     literal_statics: FxHashMap<(Ty, String), u32>,
     /// Literal statics whose initializer is still to be built.
     literal_queue: Vec<(&'a Expr, Ty, String)>,
+    /// The static holding a C-like enum's variants in declaration order,
+    /// what `E.values()` views (design.md § 15), by enum type.
+    values_statics: FxHashMap<Ty, u32>,
+    /// `values` statics whose initializer is still to be built: the enum,
+    /// the array type, the initializer's name.
+    values_queue: Vec<(Ty, Ty, String)>,
     /// Derived `==` bodies to build, for types whose comparison reaches
     /// itself (`shared struct Node { next: Option[Node] }`).
     eq_queue: Vec<(Ty, String)>,
@@ -2639,6 +2649,59 @@ impl<'a> Lcx<'a> {
         self.literal_statics.insert(key, i);
         self.literal_queue.push((e, t, init));
         i
+    }
+
+    /// The static holding every variant of the C-like enum `et`, in
+    /// declaration order, as an `Array[et, n]` (`at`): one per enum, its
+    /// value computed before `main` like a module binding's. `E.values()`
+    /// is a view of it, which borrows nothing (B-2026-11-14-38).
+    fn values_static(&mut self, et: Ty, at: Ty) -> u32 {
+        if let Some(&i) = self.values_statics.get(&et) {
+            return i;
+        }
+        let i = self.program.statics.len() as u32;
+        let name = format!("values.{}", self.tys.display(et));
+        let init = format!("static.{name}");
+        self.program.statics.push(StaticDef {
+            name,
+            ty: at,
+            mutable: false,
+            init: init.clone(),
+        });
+        self.values_statics.insert(et, i);
+        self.values_queue.push((et, at, init));
+        i
+    }
+
+    fn lower_values_static(&mut self, et: Ty, at: Ty, name: &str) {
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let n = self
+            .tys
+            .tcx()
+            .adt_of(et)
+            .map_or(0, |(res, _)| res.variants.len() as u32);
+        let mut bx = Bx::new(self, instance, at, Vec::new());
+        let mut ops = Vec::new();
+        for idx in 0..n {
+            let v = bx.temp(et);
+            bx.build_variant(et, idx, Vec::new(), Place::local(v));
+            ops.push(Operand::Move(Place::local(v)));
+        }
+        bx.assign(
+            Place::local(Local::RETURN_PLACE),
+            Rvalue::Aggregate(AggregateKind::Array(et), ops),
+        );
+        let _ = bx.return_exit();
+        bx.scopes.clear();
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
     }
 
     fn lower_literal_static(&mut self, e: &'a Expr, t: Ty, name: &str) {
@@ -19329,6 +19392,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                         return self.refinement_try_from(e, tp, &a.value, dest);
                     }
                 }
+                // `E.values()` of a C-like enum: a view of the static
+                // holding its variants (design.md § 15, B-2026-11-14-38).
+                if let ("values", [], true) = (
+                    m.as_str(),
+                    args,
+                    rc.is_none_or(|rc| matches!(rc.callee, Callee::Builtin(_))),
+                ) {
+                    if self.lcx.tc.enum_discriminants.contains_key(tp.as_str()) {
+                        return self.enum_values(e, dest);
+                    }
+                }
                 if let ("try_from", [a]) = (m.as_str(), args) {
                     let declared = self
                         .lcx
@@ -20001,6 +20075,31 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `E.try_from(raw)` of a `#[repr(intN)]` enum: `Ok` of the variant
     /// that declares `raw`, else `Err(DiscriminantError.OutOfRange { value:
     /// raw })`.
+    /// `E.values()`: the `Slice[E]` view of `E`'s `values` static.
+    fn enum_values(&mut self, e: &'a Expr, dest: Place) -> R<()> {
+        let st = self.expr_ty(e)?;
+        let (_, st) = self.strip_ty_full(st);
+        let HK::Slice { elem, .. } = self.tys().tcx().kind(st) else {
+            return self.unsupported(e.span, "this `values()`");
+        };
+        let n = match self.tys().tcx().adt_of(elem) {
+            Some((res, _)) => res.variants.len() as u64,
+            None => return self.unsupported(e.span, "this `values()`"),
+        };
+        let at = self.tys().tcx().intern(HK::Array {
+            elem,
+            len: crate::ty::ArrayLen::Known(n),
+        });
+        let i = self.lcx.values_static(elem, at);
+        let r = Operand::Const(Const {
+            ty: self.tys().tcx().reference(at, false),
+            kind: ConstKind::Static(i),
+        });
+        let name = self.tys().display(at);
+        self.call_native(&format!("{name}.as_slice"), vec![r], dest);
+        Ok(())
+    }
+
     fn enum_try_from(&mut self, e: &'a Expr, name: &str, raw: &'a Expr, dest: Place) -> R<()> {
         let rt = self.expr_ty(e)?;
         let tcx = self.tys().tcx();

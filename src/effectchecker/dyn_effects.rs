@@ -45,6 +45,9 @@ use super::{
 
 /// A clause as written, for keys and messages: its items in order.
 fn clause_text(list: &EffectList) -> String {
+    if list.items.is_empty() {
+        return "()".to_string();
+    }
     list.items
         .iter()
         .map(|i| match i {
@@ -238,7 +241,58 @@ impl<'a> super::EffectChecker<'a> {
         self.dyn_impl_methods = impl_methods;
         self.dyn_supertraits = supertraits;
         self.seed_dyn_clause_keys();
+        self.seed_dyn_every_keys();
         self.seed_bound_ceiling_keys();
+    }
+
+    /// One seeded key per trait method a `dyn` value with NO clause may be
+    /// called through: the method's ceiling when the trait declares one, and
+    /// otherwise every effect (design.md § `dyn Trait`: "A type with neither
+    /// a clause nor a ceiling has every effect").
+    ///
+    /// B-2026-11-14-34: such a call was charged the union of the impls
+    /// THIS program coerces into the type, and nothing when it coerces none,
+    /// so `#[no_effect(writes(Stdout))]` over `h.s.area()` passed whenever the
+    /// printing impl lived in another package.
+    fn seed_dyn_every_keys(&mut self) {
+        let mut seeds: Vec<(String, EffectSet)> = Vec::new();
+        for item in &self.program.items {
+            let Item::TraitDef(t) = item else { continue };
+            for it in &t.items {
+                let TraitItem::Method(m) = it else { continue };
+                let ceiling = self
+                    .interner
+                    .get(&format!("{}.{}", t.name, m.name))
+                    .and_then(|k| match self.declared_effects.get(&k) {
+                        Some(DeclaredEffects::Explicit(set)) => Some(set.clone()),
+                        _ => None,
+                    });
+                let set = ceiling
+                    .unwrap_or_else(|| super::every_effect_set(EffectOrigin::Direct(m.span)));
+                seeds.push((format!("__dyn_every.{}.{}", t.name, m.name), set));
+            }
+        }
+        for (name, set) in seeds {
+            let key = self.interner.intern(&name);
+            self.inferred_effects.insert(key, set);
+        }
+    }
+
+    /// The seeded key a call of `method` through `object` is charged, when
+    /// `object` is a `dyn` value whose type writes no clause.
+    pub(crate) fn stored_dyn_every_key(&self, object: &Expr, method: &str) -> Option<Symbol> {
+        let mut e = object;
+        while let ExprKind::Unary {
+            op: UnaryOp::Deref,
+            operand,
+        } = &e.kind
+        {
+            e = operand;
+        }
+        let trait_name = self.dyn_unclaused.get(&e.id)?;
+        self.trait_closure(trait_name)
+            .iter()
+            .find_map(|t| self.interner.get(&format!("__dyn_every.{t}.{method}")))
     }
 
     /// One seeded key per trait method that writes its clause, holding the

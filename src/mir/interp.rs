@@ -2903,9 +2903,11 @@ impl<'a> Interp<'a> {
             // `==` of two runs of bitwise elements (B-2026-11-13-33).
             ("Vec", "__bits_eq") => self.view_method(name, method, args, ret),
             // B-2026-10-14-15: `chunks` and `windows` too, as on a `Slice`.
-            ("Vec", "get_unchecked" | "split_at" | "split_at_mut" | "chunks" | "windows") => {
-                self.view_method(name, method, args, ret)
-            }
+            (
+                "Vec",
+                "get_unchecked" | "split_at" | "split_at_mut" | "chunks" | "windows" | "as_ptr"
+                | "as_mut_ptr",
+            ) => self.view_method(name, method, args, ret),
             (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut")
             | ("Slice", _)
             | ("Array", _)
@@ -8779,6 +8781,8 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Bool(true))
             }
+            // The data pointer: element 0's address (B-2026-11-14-36).
+            ("as_ptr" | "as_mut_ptr", []) => Ok(Value::Ref(base.child(lo))),
             ("first" | "last" | "get", rest) => {
                 let i = match (method, rest) {
                     ("first", []) => 0,

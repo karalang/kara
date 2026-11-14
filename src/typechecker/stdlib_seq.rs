@@ -1343,8 +1343,11 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 option_elem
             }
-            // `Slice[T].get_unchecked(i: i64) -> T` — unsafe direct-index read,
-            // returns `T` by value (no `Option` wrap, no bounds check). The
+            // `Slice[T].get_unchecked(i: i64) -> ref T` — unsafe direct-index
+            // read (design.md § Bounds checks and `get_unchecked`), a view of
+            // the element (no `Option` wrap, no bounds check). It returned `T`
+            // by value until B-2026-11-14-37, so the spec's own
+            // `*xs.get_unchecked(k * stride)` was refused. The
             // escape hatch for hot scanners (e.g. KMP `needle[j]`, where `j`
             // rewinds via the LPS table — provably in-range but not
             // compiler-provable). UB on out-of-range; must be called in an
@@ -1356,7 +1359,7 @@ impl<'a> super::TypeChecker<'a> {
                     let at = self.infer_expr(&arg.value);
                     self.check_i64_arg(&arg.value, &at);
                 }
-                elem
+                Type::Ref(Box::new(elem))
             }
             "contains" => {
                 for arg in args {

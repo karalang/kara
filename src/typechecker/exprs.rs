@@ -599,6 +599,16 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         for item in items {
+            // An unsuffixed literal past `i128::MAX` is judged by the element
+            // type, as the `u128` default would not (B-2026-11-14-40).
+            if let ExprKind::Integer(n, Some(crate::token::IntSuffix::U128)) = &item.kind {
+                if self.is_unsuffixed_u128_literal(&item.span)
+                    && matches!(element, Type::Int(_) | Type::UInt(_))
+                {
+                    self.check_int_literal_fits(*n, &element, &item.span, None);
+                }
+                continue;
+            }
             if !matches!(item.kind, ExprKind::Identifier(_)) {
                 continue;
             }
@@ -1361,6 +1371,24 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        // An unsuffixed literal past `i128::MAX` is judged by the integer
+        // type its slot gives it, as any unsuffixed literal is; its carrier's
+        // `u128` suffix does not judge it (B-2026-11-14-40).
+        if let ExprKind::Integer(n, Some(crate::token::IntSuffix::U128)) = &expr.kind {
+            if self.is_unsuffixed_u128_literal(&expr.span) {
+                let want = resolve_type_var_top(expected, &self.env.substitutions);
+                let want = match want {
+                    Type::Ref(inner) | Type::MutRef(inner) => *inner,
+                    other => other,
+                };
+                if matches!(want, Type::Int(_) | Type::UInt(_))
+                    && !self.check_int_literal_fits(*n, &want, &expr.span, None)
+                {
+                    self.record_expr_type(&expr.span, &Type::Error);
+                    return Type::Error;
+                }
+            }
+        }
         // As in `infer_expr`; and a `match`/`if let` over `v.last_mut()` is
         // noted here too, where a checked one never reaches the infer arm
         // (B-2026-11-08-46).
@@ -13475,7 +13503,18 @@ impl<'a> super::TypeChecker<'a> {
                 let neg_validated = self
                     .neg_validated_suffixed_literal
                     .is_some_and(|k| k == (expr.span.offset, expr.span.length));
-                if sfx.is_some() && !neg_validated {
+                // An unsuffixed literal past `i128::MAX` rides the `u128`
+                // suffix's carrier (B-2026-11-13-28) but is an unsuffixed
+                // literal: a `u128` context judges it, and where nothing does
+                // it takes the `i64` default and is out of range there
+                // (design.md §8, literal typing "looks at types only, never at
+                // the literal's value"; B-2026-11-14-40). So its own carrier
+                // suffix does not judge it.
+                let marked = self.is_unsuffixed_u128_literal(&expr.span);
+                if marked {
+                    self.wide_int_literals.push((expr.span, *n));
+                }
+                if sfx.is_some() && !neg_validated && !marked {
                     self.check_int_literal_fits(
                         Self::literal_as_i128(*n, *sfx),
                         &ty,

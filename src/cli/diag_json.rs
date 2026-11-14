@@ -1979,6 +1979,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // symbolic code is in the message.
                 crate::typechecker::TypeErrorKind::ReprTransparentInvalid => "E0803",
                 crate::typechecker::TypeErrorKind::ExternSignatureInvalid => "E0805",
+                crate::typechecker::TypeErrorKind::ReprArgumentInvalid => "E0806",
                 crate::typechecker::TypeErrorKind::DiscriminantInvalid => "E0804",
                 // Phase 8 `@` bindings slice 4 — owned scrutinee, outer
                 // `@` alias and an inner sub-pattern binding both claim

@@ -1083,6 +1083,21 @@ impl super::Parser {
         kw_span: &Span,
         return_tail: bool,
     ) -> Option<Option<EffectList>> {
+        // `dyn Trait with ()`: the empty set, declared, as on a function type
+        // (design.md § `dyn Trait`). It was refused as "Expected effect verb"
+        // in a field and a return type (B-2026-11-14-35). Taken in a return
+        // tail too, for the same reason `Fn(..) with ()` is: `with ()` is
+        // never a declaration's clause.
+        if self.at_empty_effect_clause() {
+            let at = self.current_span();
+            self.advance(); // with
+            self.advance(); // (
+            self.advance(); // )
+            return Some(Some(EffectList {
+                items: Vec::new(),
+                span: self.span_from(&at),
+            }));
+        }
         if return_tail || !self.at_kw("with") {
             return Some(None);
         }

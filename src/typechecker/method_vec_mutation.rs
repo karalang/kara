@@ -628,7 +628,9 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `Vec[T].get_unchecked(i: i64) -> T` — unsafe direct-index read.
+        // `Vec[T].get_unchecked(i: i64) -> ref T` — unsafe direct-index read,
+        // a view of the element as `Slice[T]`'s is (design.md § Bounds checks
+        // and `get_unchecked`; by value until B-2026-11-14-37).
         // Skips the bounds check that `vec[i]` and `Vec.get(i)` emit; UB on
         // out-of-range index. Must be called inside `unsafe { ... }`; the
         // enforcement is hardcoded in `unsafe_lint::build_unsafe_fn_registry`
@@ -641,8 +643,7 @@ impl<'a> super::TypeChecker<'a> {
             // `infer_slice_method`; this arm covers `Vec[T]` and
             // `ref`/`mut ref` of Vec/Slice.
             // Accepts `Vec[T]` and `Slice[T]` (and `ref`/`mut ref` of either),
-            // returning `T` by value — sound for the Copy element types hot
-            // scanners use (i64/u8). The `Slice.get_unchecked` escape mirrors
+            // returning `ref T`, a view of the element. The `Slice.get_unchecked` escape mirrors
             // the landed `Vec.get_unchecked` so a `Slice[T]` / `mut Slice[T]`
             // param can skip the bounds check the source-level dominator pass
             // can't reach (e.g. KMP's `needle[j]`, where `j` rewinds via the
@@ -670,7 +671,10 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);
                 self.check_i64_arg(&args[0].value, &arg_ty);
-                return Some(resolve_type_var_top(&elem, &self.env.substitutions));
+                return Some(Type::Ref(Box::new(resolve_type_var_top(
+                    &elem,
+                    &self.env.substitutions,
+                ))));
             }
         }
 

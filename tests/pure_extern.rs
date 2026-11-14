@@ -71,7 +71,10 @@ fn pure_extern_has_no_effects() {
     assert!(ok, "pure extern should need no `with`: {err}");
     let (ok, err) = check("");
     assert!(!ok);
-    assert!(err.contains("performs effects [blocks]"), "{err}");
+    // With no clause the extern has every effect (B-2026-11-14-33), and the
+    // finding names it rather than asking `f` to declare `*` resources.
+    assert!(err.contains("has every effect"), "{err}");
+    assert!(err.contains("'abs'"), "{err}");
 }
 
 #[test]

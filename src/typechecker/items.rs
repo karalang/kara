@@ -395,6 +395,9 @@ impl<'a> super::TypeChecker<'a> {
                     // explicit-marker lint + structural verifier.
                     self.check_struct_variance(s);
                     self.check_struct_invariants(s, &gp);
+                    if !s.stdlib_origin {
+                        self.check_repr_arguments("struct", &s.attributes, &s.span);
+                    }
                     self.check_repr_transparent_struct(s, &gp);
                     if !s.stdlib_origin {
                         self.check_weak_field_targets(&s.fields, &gp);
@@ -419,6 +422,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.warn_prelude_shadow(&e.name, e.stdlib_origin, e.span, &e.lint_overrides);
                     self.validate_all_bounds(&e.generic_params, &e.where_clause, &gp);
                     self.check_enum_variance(e);
+                    if !e.stdlib_origin {
+                        self.check_repr_arguments("enum", &e.attributes, &e.span);
+                    }
                     self.check_repr_transparent_enum(e);
                     self.check_enum_discriminants(e);
                     self.record_enum_discriminant_surface(e);
@@ -3410,6 +3416,84 @@ impl<'a> super::TypeChecker<'a> {
                     "borrow_projection_copy",
                     None,
                 );
+            }
+        }
+    }
+
+    /// Each `#[repr(...)]` argument on a struct or enum is one v1 has, for
+    /// that kind of item (design.md § `#[repr]`: ABI layout): `C` and
+    /// `transparent` on both, an integer type (`u8` .. `u64`, `i8` .. `i64`)
+    /// on an enum only. `packed` and `align(N)` are deferred to the systems
+    /// track and say so. B-2026-11-14-39: `#[repr(frob)]`, `#[repr(u128)]`
+    /// on a struct, `packed` and `align(8)` all passed silently, so a layout
+    /// the program asked for was quietly not the one it got.
+    fn check_repr_arguments(&mut self, kind: &str, attributes: &[Attribute], span: &Span) {
+        const INTS: &[&str] = &["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"];
+        for attr in attributes {
+            if !attr.is_bare("repr") {
+                continue;
+            }
+            for arg in &attr.args {
+                let (name, call) = match arg.value.as_ref().map(|e| &e.kind) {
+                    Some(ExprKind::Identifier(n)) => (n.clone(), false),
+                    Some(ExprKind::Call { callee, .. }) => match &callee.kind {
+                        ExprKind::Identifier(n) => (n.clone(), true),
+                        _ => (String::new(), true),
+                    },
+                    _ => (String::new(), false),
+                };
+                let at = arg.value.as_ref().map_or(*span, |e| e.span);
+                let message = match name.as_str() {
+                    "C" | "transparent" if !call => continue,
+                    n if INTS.contains(&n) && !call && kind == "enum" => continue,
+                    "packed" | "align" => format!(
+                        "error[E_REPR_DEFERRED]: `#[repr({name}{})]` is not in v1: `packed` and \
+                         `align(N)` are deferred to the systems track (design.md § `#[repr]`: \
+                         ABI layout). v1's forms are `C`, an integer type on an enum, and \
+                         `transparent`",
+                        if name == "align" { "(N)" } else { "" }
+                    ),
+                    n if INTS.contains(&n)
+                        || n == "u128"
+                        || n == "i128"
+                        || n == "usize"
+                        || n == "isize" =>
+                    {
+                        if kind == "enum" {
+                            format!(
+                                "error[E_REPR_UNKNOWN]: `#[repr({n})]` is not a discriminant \
+                                 representation v1 has; an enum's is one of `u8`, `u16`, \
+                                 `u32`, `u64`, `i8`, `i16`, `i32` or `i64` (design.md § \
+                                 `#[repr]`: ABI layout)"
+                            )
+                        } else {
+                            format!(
+                                "error[E_REPR_INT_ON_STRUCT]: `#[repr({n})]` fixes an enum's \
+                                 discriminant, and a {kind} has none; a {kind} takes \
+                                 `#[repr(C)]` or `#[repr(transparent)]` (design.md § `#[repr]`: \
+                                 ABI layout)"
+                            )
+                        }
+                    }
+                    _ => {
+                        let shown = if name.is_empty() {
+                            "this argument".to_string()
+                        } else {
+                            format!("`{name}`")
+                        };
+                        let ints = if kind == "enum" {
+                            ", an integer type (`u8` .. `u64`, `i8` .. `i64`)"
+                        } else {
+                            ""
+                        };
+                        format!(
+                            "error[E_REPR_UNKNOWN]: {shown} is not a `#[repr]` form; a {kind} \
+                             takes `C`{ints} or `transparent` (design.md § `#[repr]`: ABI \
+                             layout)"
+                        )
+                    }
+                };
+                self.type_error(message, at, TypeErrorKind::ReprArgumentInvalid);
             }
         }
     }
