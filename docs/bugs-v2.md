@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 300 |
+| diagnostics | 301 |
 | false-positive | 202 |
 | perf | 163 |
 | missing-feature | 158 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 449 |
+| typecheck | 450 |
 | mir-llvm | 214 |
 | mir | 183 |
 | cli | 112 |
@@ -128,6 +128,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-21 | 2026-11-14 | cli | low | `karac fix`'s `redundant_ref_param` lint skips a method whose name is also a local variable read anywhere in the program: `functions_used_as_values` (src/style_lints.rs) collects every bare identifier that is not a callee by name alone, so a harness's `for _ in 0..count` keeps `Solution.count(grid: ref ..)`'s `ref` while the same impl's `dfs(grid: ref ..)` loses its own | — |
 | B-2026-11-14-22 | 2026-11-14 | mir | medium | An index whose base is a literal evaluates the index before the literal's elements: `[p(1), p(2)][p(0)]` prints e0 e1 e2 where design.md §8.1 gives e1 e2 e0 | — |
 | B-2026-11-14-23 | 2026-11-14 | typecheck+cli | low | Two fields of borrowed receivers put in a tuple to pick one by a test (`let (short, long) = if self.pairs.len() <= other.pairs.len() { (self.pairs, other.pairs) } else { (other.pairs, self.pairs) };`) get `borrow_projection_copy` with a machine-applicable `.clone()` on each, which `karac fix` applies, copying both collections on every call, though `(ref self.pairs, ref other.pairs)` checks and copies nothing | — |
+| B-2026-11-14-24 | 2026-11-14 | typecheck | low | A struct field written `Map[usize, i32]` (Rust's `HashMap<usize, i32>` as `karac fix` carries it) filled from `enumerate()`'s `i64` index is refused with a bare "expected 'Map[usize, i32]', found 'Map[i64, i32]'" and no fix, so `karac fix` stops the template; the same field as `Vec[usize]` gets the nested-number message and the pointer-int fix to `i64` (src/typechecker/pointer_ints.rs) | — |
 
 ### Relocated
 
