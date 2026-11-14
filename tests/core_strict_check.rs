@@ -625,7 +625,8 @@ fn a_for_over_a_temporary_collection_binds_refs() {
 #[test]
 fn a_field_read_through_a_ref_binding_or_a_handle_is_a_borrow() {
     // A `ref`-mode pattern binding is a borrow, so its fields are too.
-    rejected_then_fixed(
+    // `ps` is only read afterwards, so the fix borrows it (kata 2121).
+    rejected_then_fixed_by(
         "ref-binding-field",
         "struct F { name: String, ps: Vec[i64] }\n\
          enum It { Fu(F), Other }\n\
@@ -634,6 +635,7 @@ fn a_field_read_through_a_ref_binding_or_a_handle_is_a_borrow() {
          }\n\
          fn main() { println(f(It.Other)); }\n",
         "out of a borrowed place",
+        "let ps = ref x.ps;",
     );
     // A field of a `shared` value is reached through a handle (§4.6).
     rejected_then_fixed(

@@ -5646,6 +5646,10 @@ impl<'a> super::TypeChecker<'a> {
                 // ref String`); the comparison only reads through the borrow.
                 let cmp_left = strip_refs_for_compare(&left_ty);
                 let cmp_right = strip_refs_for_compare(&right_ty);
+                if types_compatible(cmp_left, cmp_right) {
+                    let (l, r) = (cmp_left.clone(), cmp_right.clone());
+                    self.lint_compare_casts(left, right, &l, &r);
+                }
                 // `meters == 3` under `impl PartialEq[i64] for Meters`
                 // (B-2026-11-06-25).
                 if let Type::Named { name, .. } | Type::Shared(name) = cmp_left {
@@ -5753,6 +5757,10 @@ impl<'a> super::TypeChecker<'a> {
                 // See `Eq` arm: reference operands auto-deref for comparison.
                 let cmp_left = strip_refs_for_compare(&left_ty);
                 let cmp_right = strip_refs_for_compare(&right_ty);
+                if types_compatible(cmp_left, cmp_right) {
+                    let (l, r) = (cmp_left.clone(), cmp_right.clone());
+                    self.lint_compare_casts(left, right, &l, &r);
+                }
                 if !types_compatible(cmp_left, cmp_right)
                     && !self.core_text_compare(cmp_left, cmp_right)
                 {
@@ -5981,6 +5989,25 @@ impl<'a> super::TypeChecker<'a> {
     /// itself: in `(a as i64) * (b as i64)` deleting both would multiply in
     /// the narrow type.
     fn lint_operand_casts(&mut self, left: &Expr, right: &Expr, left_ty: &Type, right_ty: &Type) {
+        self.lint_operand_casts_in(left, right, left_ty, right_ty, false);
+    }
+
+    /// `lint_operand_casts` for a comparison (kata 2126: `m < a as i64`
+    /// with `m: i64`, `a: i32`). A comparison refuses mixed signedness
+    /// outright, so there only a cast within one signedness, or `f32` to
+    /// `f64`, is one the operator would make itself.
+    fn lint_compare_casts(&mut self, left: &Expr, right: &Expr, left_ty: &Type, right_ty: &Type) {
+        self.lint_operand_casts_in(left, right, left_ty, right_ty, true);
+    }
+
+    fn lint_operand_casts_in(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        left_ty: &Type,
+        right_ty: &Type,
+        compare: bool,
+    ) {
         for (side, other, other_ty) in [(left, right, right_ty), (right, left, left_ty)] {
             let ExprKind::Cast { expr: inner, ty } = &side.kind else {
                 continue;
@@ -5996,6 +6023,14 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             };
             if &to != other_ty {
+                continue;
+            }
+            if compare
+                && matches!(
+                    (&from, &to),
+                    (Type::Int(_), Type::UInt(_)) | (Type::UInt(_), Type::Int(_))
+                )
+            {
                 continue;
             }
             let widens_here = int_cast_preserves_all_values(&from, &to)

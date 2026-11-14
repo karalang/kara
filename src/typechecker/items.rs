@@ -2933,6 +2933,7 @@ impl<'a> super::TypeChecker<'a> {
         self.offer_unit_main_result_fix(f, self_type.is_none());
         self.offer_iter_let_fixes();
         self.offer_for_into_iter_fixes(f);
+        self.offer_let_ref_fixes(f);
         self.offer_ref_list_annotations(f, errors_before_body);
         self.iter_lets = saved_iter_lets;
         self.explain_str_lit_lets();
@@ -9632,6 +9633,8 @@ impl<'a> super::TypeChecker<'a> {
         if has_clone {
             if let Some(at) = self.core_for_into_iter_fix(value) {
                 self.core_clone_or_into_iter.push((value.span, at));
+            } else if let (Some(n), None) = (&self.core_let_ref_name, let_mut_init) {
+                self.core_clone_or_let_ref.push((value.span, n.clone()));
             }
         }
         self.type_lint_warning_with_fix(
@@ -9656,6 +9659,43 @@ impl<'a> super::TypeChecker<'a> {
         (self.local_scope.depth_of(n) == Some(depth)
             && (self.local_scope.is_view(n) || self.core_for_into_iter_aliases.contains(n)))
         .then_some(at)
+    }
+
+    /// Kata 2121: `let p = self.positions;` over a borrowed `self`, with `p`
+    /// only read afterwards, is fixed by borrowing the field (`let p = ref
+    /// self.positions;`, §5.1) rather than by copying it with `.clone()`:
+    /// both are the spec's fixes, and the copy duplicates the heap for
+    /// nothing when no use needs a value of its own.
+    fn offer_let_ref_fixes(&mut self, f: &Function) {
+        let sites = std::mem::take(&mut self.core_clone_or_let_ref);
+        for (span, name) in sites {
+            if !only_read_after(&f.body, &name, span.offset + span.length) {
+                continue;
+            }
+            for e in self.errors.iter_mut().chain(self.warnings.iter_mut()) {
+                if e.span != span
+                    || e.lint_name.as_deref() != Some("borrow_projection_copy")
+                    || !e
+                        .fix_it
+                        .as_ref()
+                        .is_some_and(|x| x.replacement == ".clone()")
+                {
+                    continue;
+                }
+                e.message = e.message.replace(
+                    ". Write `.clone()` to take a copy, or keep using it in place",
+                    &format!(
+                        ". `{name}` is only read after this, so the fix borrows the place \
+                         (`let {name} = ref <place>;`) rather than copying it with \
+                         `.clone()`"
+                    ),
+                );
+                e.fix_it = Some(crate::typechecker::FixIt {
+                    span: Span { length: 0, ..span },
+                    replacement: "ref ".to_string(),
+                });
+            }
+        }
     }
 
     /// B-2026-11-07-30: a move out of a bare `for` element over an owned
@@ -11686,8 +11726,17 @@ impl<'a> super::TypeChecker<'a> {
                         && ty.is_none()
                         && !matches!(value.kind, ExprKind::Identifier(_))
                         && super::expr_ops::is_named_place_projection(value);
+                    // Kata 2121: an immutable `let` may take the borrow
+                    // rather than the copy when its binding is only read.
+                    self.core_let_ref_name = match &pattern.kind {
+                        PatternKind::Binding(n) if self.core_let_ref_fix && !*is_mut => {
+                            Some(n.clone())
+                        }
+                        _ => None,
+                    };
                     self.warn_borrow_projection_copy(value, &expected_ty);
                     self.core_let_ref_fix = false;
+                    self.core_let_ref_name = None;
                 }
                 self.warn_partial_move_of_drop_struct(value, &expected_ty);
                 // B-2026-09-04-15 — the RC-owner spelling of the same shape.
@@ -13373,4 +13422,113 @@ fn list_lets(
         for_each_child_public(e, &mut |ch| child(ch, lets, idents));
     }
     block(body, lets, idents);
+}
+
+/// Kata 2121: whether `name`, bound once in `body`, is used after `from`
+/// only where a reference serves as well as a value: as the receiver of a
+/// method that does not consume it (`into_*`), a field, tuple-field or
+/// index base, an operand of an operator, an interpolation hole, or a
+/// bare `for`'s collection. Any other use (an argument, a `let` or
+/// assignment source, a block's value, a closure capture) answers no, as
+/// does a second binding of the same name anywhere in the body.
+fn only_read_after(body: &Block, name: &str, from: usize) -> bool {
+    use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
+    struct Scan<'a> {
+        name: &'a str,
+        from: usize,
+        binders: usize,
+        uses: usize,
+        reads: usize,
+    }
+    fn is_name(e: &Expr, s: &Scan<'_>) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n) if n == s.name) && e.span.offset >= s.from
+    }
+    fn binds(p: &Pattern, s: &mut Scan<'_>) {
+        s.binders += p.binding_names().iter().filter(|n| *n == s.name).count();
+    }
+    fn block(b: &Block, s: &mut Scan<'_>) {
+        for stmt in &b.stmts {
+            if let StmtKind::Let { pattern, .. } = &stmt.kind {
+                binds(pattern, s);
+            }
+        }
+        for_each_block_child(b, &mut |ch| child(ch, s));
+    }
+    fn child(ch: Child<'_>, s: &mut Scan<'_>) {
+        let e = match ch {
+            Child::Block(b) => return block(b, s),
+            Child::Expr(e) => e,
+        };
+        if is_name(e, s) {
+            s.uses += 1;
+        }
+        match &e.kind {
+            ExprKind::For { pattern, .. } | ExprKind::WhileLet { pattern, .. } => binds(pattern, s),
+            ExprKind::IfLet { pattern, .. } => binds(pattern, s),
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    binds(&arm.pattern, s);
+                }
+            }
+            ExprKind::Closure { .. } => {
+                // A capture by a closure is not judged here.
+                let mut inside = false;
+                for_each_child_public(e, &mut |c| {
+                    if let Child::Expr(c) = c {
+                        inside |= mentions(c, s.name);
+                    }
+                });
+                if inside {
+                    s.binders += 2;
+                }
+            }
+            _ => {}
+        }
+        let read = |c: &Expr| is_name(c, s);
+        let reads = match &e.kind {
+            ExprKind::MethodCall { object, method, .. }
+                if read(object) && !method.starts_with("into") =>
+            {
+                1
+            }
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => usize::from(read(object)),
+            ExprKind::Binary { left, right, .. } => {
+                usize::from(read(left)) + usize::from(read(right))
+            }
+            ExprKind::For { iterable, .. } => usize::from(read(iterable)),
+            ExprKind::InterpolatedStringLit(parts) => parts
+                .iter()
+                .filter(|p| matches!(p, ParsedInterpolationPart::Expr(x, _) if read(x)))
+                .count(),
+            _ => 0,
+        };
+        s.reads += reads;
+        for_each_child_public(e, &mut |c| child(c, s));
+    }
+    fn mentions(e: &Expr, name: &str) -> bool {
+        if matches!(&e.kind, ExprKind::Identifier(n) if n == name) {
+            return true;
+        }
+        let mut found = false;
+        for_each_child_public(e, &mut |c| match c {
+            Child::Expr(c) => found |= mentions(c, name),
+            Child::Block(b) => for_each_block_child(b, &mut |c| {
+                if let Child::Expr(c) = c {
+                    found |= mentions(c, name);
+                }
+            }),
+        });
+        found
+    }
+    let mut s = Scan {
+        name,
+        from,
+        binders: 0,
+        uses: 0,
+        reads: 0,
+    };
+    block(body, &mut s);
+    s.binders == 1 && s.uses == s.reads
 }

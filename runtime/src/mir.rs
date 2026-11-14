@@ -973,7 +973,8 @@ extern "C" {
     fn memchr(s: *const std::ffi::c_void, c: std::ffi::c_int, n: usize) -> *mut std::ffi::c_void;
 }
 
-/// Whether `needle` is in `hay`. Each place `memchr` finds the needle's
+/// Whether `needle` is in `hay`. A needle of two bytes goes to
+/// [`find_pair`]. Otherwise each place `memchr` finds the needle's
 /// first byte is compared byte by byte, which on ordinary text ends after a
 /// byte or two; once those comparisons have cost twice the haystack, the
 /// rest goes to Rust's two-way search, so the worst case stays linear. A
@@ -988,6 +989,9 @@ fn contains(hay: &str, needle: &str) -> bool {
     let m = n.len();
     if m > h.len() {
         return false;
+    }
+    if m == 2 {
+        return find_pair(h, n[0], n[1]);
     }
     // A needle of up to 256 bytes whose first byte keeps turning up goes to
     // the shift-table search, which calls nothing per window
@@ -1023,6 +1027,46 @@ fn contains(hay: &str, needle: &str) -> bool {
         i = at + 1;
     }
     false
+}
+
+/// Whether the two bytes `a` then `b` occur together in `h`, 32 places at a
+/// time, by a loop with no branch that the compiler vectorizes. The memchr
+/// scan below stops at every place a needle's first byte occurs, so a
+/// two-byte needle whose first byte is frequent paid a call for each: kata
+/// 2124's `contains("ba")` over 100 a's and b's cost about 75 ns, 8x Rust's
+/// `str::contains`, which pairs bytes the same way. A longer needle keeps
+/// the memchr scan, which hands a small alphabet to [`find_short`] (kata
+/// 796's rotations, kata 1016's bit strings), where pairing its end bytes
+/// measured slower.
+fn find_pair(h: &[u8], a: u8, b: u8) -> bool {
+    const W: usize = 32;
+    // The places the pair can start.
+    let Some(starts) = h.len().checked_sub(1) else {
+        return false;
+    };
+    if starts < W {
+        return h.windows(2).any(|w| w[0] == a && w[1] == b);
+    }
+    // Whether the pair starts at any of the `W` places from `i`.
+    let any = |i: usize| {
+        let (x, y) = (&h[i..i + W], &h[i + 1..i + 1 + W]);
+        let mut any = 0u8;
+        for k in 0..W {
+            any |= u8::from(x[k] == a) & u8::from(y[k] == b);
+        }
+        any != 0
+    };
+    let mut i = 0;
+    loop {
+        if any(i) {
+            return true;
+        }
+        if i + W == starts {
+            return false;
+        }
+        // The last block overlaps the one before rather than run short.
+        i = (i + W).min(starts - W);
+    }
 }
 
 /// The hash of the byte pair that ends at `p`, which [`find_short`]'s shift
@@ -5018,6 +5062,41 @@ mod tests {
             let naive = hn >= nn && h.windows(nn).any(|w| w == &n[..]);
             let want = naive && nn <= 256;
             assert_eq!(super::find_short(&h, &n), want, "{h:?} {n:?}");
+        }
+    }
+
+    /// `find_pair` agrees with a naive search, on small alphabets and all
+    /// 256 bytes, over haystacks shorter than one block, one block, and a
+    /// few with an overlapping last block; and on kata 2124's shape.
+    #[test]
+    fn find_pair_agrees_with_a_naive_search() {
+        let mut seed = 2124u64;
+        let mut next = |k: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) % k
+        };
+        for round in 0..40000 {
+            let letters = [1, 2, 3, 4, 256][round % 5];
+            let hn = next(150) as usize;
+            let h: Vec<u8> = (0..hn).map(|_| next(letters) as u8).collect();
+            let (a, b) = if hn >= 2 && next(3) == 0 {
+                let at = next(hn as u64 - 1) as usize;
+                (h[at], h[at + 1])
+            } else {
+                (next(letters) as u8, next(letters) as u8)
+            };
+            let want = h.windows(2).any(|w| w == [a, b]);
+            assert_eq!(super::find_pair(&h, a, b), want, "{h:?} {a} {b}");
+        }
+        for split in 0..=100 {
+            let mut h: Vec<u8> = (0..100)
+                .map(|i| if i < split { b'a' } else { b'b' })
+                .collect();
+            assert!(!super::find_pair(&h, b'b', b'a'));
+            h.push(b'a');
+            assert_eq!(super::find_pair(&h, b'b', b'a'), split < 100);
         }
     }
 

@@ -3185,6 +3185,11 @@ pub struct TypeChecker<'a> {
     /// function, once its later uses of the collection are known
     /// (B-2026-11-07-30).
     pub(super) core_clone_or_into_iter: Vec<(Span, Span)>,
+    /// Kata 2121: `.clone()` fixes on an immutable `let` of a place, with
+    /// the binding's name, that a `ref` may replace (`offer_let_ref_fixes`).
+    pub(super) core_clone_or_let_ref: Vec<(Span, String)>,
+    /// The name an immutable `let` binds while its initializer is judged.
+    pub(super) core_let_ref_name: Option<String>,
     /// Every call under the strict commands: its node, its span, and the
     /// callee's name when it is a plain free-function call.
     pub(super) core_call_sites: Vec<(crate::ids::NodeId, Span, Option<String>)>,
@@ -4472,6 +4477,8 @@ impl<'a> TypeChecker<'a> {
             core_let_mut_views: FxHashMap::default(),
             core_into_iter_loops: FxHashMap::default(),
             core_clone_or_into_iter: Vec::new(),
+            core_clone_or_let_ref: Vec::new(),
+            core_let_ref_name: None,
             core_call_sites: Vec::new(),
             core_pattern_moves: Vec::new(),
             errors: Vec::new(),
