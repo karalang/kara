@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 292 |
+| diagnostics | 293 |
 | false-positive | 202 |
 | perf | 161 |
 | missing-feature | 158 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 442 |
+| typecheck | 443 |
 | mir-llvm | 212 |
 | mir | 180 |
 | cli | 108 |
@@ -120,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-10 | 2026-11-14 | cli | low | 168 symbolic codes written only into a diagnostic's message (`error[E_CHAR_AS_NARROW_INT]: …`) are unknown to `karac explain`, which reads each as a class name | — |
 | B-2026-11-14-11 | 2026-11-14 | mir-llvm | low | Kata 1546's `Set[i64]` greedy (contains, insert, and a `clear` at every cut) runs 1.34x checked Rust's `HashSet` by median (0.876 s vs 0.653 s) and executes 1.37x its instructions (callgrind 9.68 G vs 7.05 G), both SipHash-1-3 | — |
 | B-2026-11-14-12 | 2026-11-14 | typecheck | low | `w.bytes().iter().map(|b| b - 96).collect()` into a `Vec[i64]` is refused with a bare `C: FromIterator[u8]` trait-bound error that names no remedy, though a `u8` widens to `i64` on its own at a binding (`let n: i64 = w.bytes()[0]` checks) and `b as i64 - 96` in the closure is the whole fix | — |
+| B-2026-11-14-13 | 2026-11-14 | typecheck | low | `vec![false; n as usize]` checks with only a deprecation warning, but the warning's own fix, `Vec.filled(n as usize, false)`, is refused (`usize` mixes with `i64`), so one round of `karac fix` turns a checking program into a refused one | — |
 
 ### Relocated
 
