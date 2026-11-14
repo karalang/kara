@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 163 |
 | missing-feature | 158 |
 | soundness | 64 |
-| miscompile | 59 |
+| miscompile | 60 |
 | run-vs-build | 33 |
 | other | 30 |
 | codegen-gap | 30 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 447 |
 | mir-llvm | 214 |
-| mir | 182 |
+| mir | 183 |
 | cli | 111 |
 | ownership | 79 |
 | parser | 77 |
@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-3 | 2026-11-14 | typecheck | low | `f(x.clone())` where `f`'s parameter only borrows copies `x` for nothing, and no lint flags it: a LeetCode Rust template's adapter keeps `Solution.number_of_beams(bank.clone())` after `karac fix` carries it (kata 2125), because Rust's by-value `Vec<String>` parameter became Kāra's borrowing `Vec[String]` | — |
 | B-2026-11-14-6 | 2026-11-14 | typecheck | low | `Array[i64, 26].filled(0)` is refused with `no method 'filled' on `Array[…]``: the type is elided, and nothing points to `[0; 26]`, Kāra's fixed-array fill, though `Vec.filled(n, v)` exists and invites the guess | — |
 | B-2026-11-14-7 | 2026-11-14 | autopar+runtime | medium | An auto-par loop whose body recurses deeply runs the recursion on a pool worker's 8 MiB stack, where the main thread has 1 GiB: a program that finishes with KARAC_AUTO_PAR=0 dies of SIGSEGV in a default build, depending on which worker takes the iteration, and with no 'stack overflow' note (kata 2127's struct arm, a pair's 999998-person tail found by a recursive `tail` method inside `for a in 0..n { pairs += .. office.tail(a, b) .. }`) | — |
-| B-2026-11-14-10 | 2026-11-14 | cli | low | 168 symbolic codes written only into a diagnostic's message (`error[E_CHAR_AS_NARROW_INT]: …`) are unknown to `karac explain`, which reads each as a class name | — |
 | B-2026-11-14-11 | 2026-11-14 | mir-llvm | low | Kata 1546's `Set[i64]` greedy (contains, insert, and a `clear` at every cut) runs 1.34x checked Rust's `HashSet` by median (0.876 s vs 0.653 s) and executes 1.37x its instructions (callgrind 9.68 G vs 7.05 G), both SipHash-1-3 | — |
 | B-2026-11-14-12 | 2026-11-14 | typecheck | low | `w.bytes().iter().map(|b| b - 96).collect()` into a `Vec[i64]` is refused with a bare `C: FromIterator[u8]` trait-bound error that names no remedy, though a `u8` widens to `i64` on its own at a binding (`let n: i64 = w.bytes()[0]` checks) and `b as i64 - 96` in the closure is the whole fix | — |
 | B-2026-11-14-13 | 2026-11-14 | typecheck | low | `vec![false; n as usize]` checks with only a deprecation warning, but the warning's own fix, `Vec.filled(n as usize, false)`, is refused (`usize` mixes with `i64`), so one round of `karac fix` turns a checking program into a refused one | — |
@@ -127,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-19 | 2026-11-14 | typecheck+mir | medium | An early exit inside a cleanup block crashes the compiler: `loop { defer { break; } }`, `defer { continue; }`, `defer { return 3; }` and `?` inside a `defer` each die in `karac check` and `build` with `fatal runtime error: stack overflow`, and `errdefer { return Ok(1); }` passes check and fails `__mir-run` with `assignment overwrites _0, which still owns a value` | — |
 | B-2026-11-14-20 | 2026-11-14 | mir | medium | A by-move capture of a struct's field takes the whole struct in MIR, so design.md § Captures' disjoint capture holds only for ref and mut-ref captures: `let f = || eat(s.a); eat(s.b); f();` passes check and fails every run lane with `move check main: use of _1.1, which may have been moved`, and a returned `|| s.a.n` keeps `s.b` and `s.c` alive until the closure drops | — |
 | B-2026-11-14-21 | 2026-11-14 | cli | low | `karac fix`'s `redundant_ref_param` lint skips a method whose name is also a local variable read anywhere in the program: `functions_used_as_values` (src/style_lints.rs) collects every bare identifier that is not a callee by name alone, so a harness's `for _ in 0..count` keeps `Solution.count(grid: ref ..)`'s `ref` while the same impl's `dfs(grid: ref ..)` loses its own | — |
+| B-2026-11-14-22 | 2026-11-14 | mir | medium | An index whose base is a literal evaluates the index before the literal's elements: `[p(1), p(2)][p(0)]` prints e0 e1 e2 where design.md §8.1 gives e1 e2 e0 | — |
 
 ### Relocated
 
@@ -1181,6 +1181,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-5 | ownership | medium | A range view made in a `match` / `if let` scrutinee stays borrowed through the arms even when the scrutinee's value holds no borrow: `match v[1..].it… | 3d1fc8e26 |
 | B-2026-11-14-8 | cli | low | Five refusals name their rewrite but carry no edit, so `karac fix` leaves the program refused; `karac fix --help` describes the removed closure-prefi… | a72be5f5d1 |
 | B-2026-11-14-9 | typecheck | medium | `c.eq_ignore_ascii_case(d)` on a `char` (and on a `u8`) is refused with `no method 'eq_ignore_ascii_case' on type 'char'`, and `b.to_ascii_lowercase(… | 5a1b79539 |
+| B-2026-11-14-10 | cli | low | 168 symbolic codes written only into a diagnostic's message (`error[E_CHAR_AS_NARROW_INT]: …`) are unknown to `karac explain`, which reads each as a… | 15692a607a |
 
 </details>
 
