@@ -21,9 +21,10 @@
 //!
 //! `fill` is any single char and requires an explicit `align` after it (so a
 //! bare `0` stays the zero-pad flag, not a fill char). `+` prints a sign on a
-//! non-negative number too, as in Rust and Python (B-2026-10-02-42); like
-//! Rust, it also signs a non-decimal radix (`{255:+x}` is `+ff`), and a NaN
-//! stays unsigned. Unrecognized specs are a
+//! non-negative number too, as in Rust and Python (B-2026-10-02-42), and a
+//! NaN stays unsigned. A non-decimal radix prints a bit pattern, which has no
+//! sign, so the checker refuses `+` with x/X/o/b (B-2026-11-14-41); this renderer
+//! still signs one (`{255:+x}` is `+ff`) for the runtime's own tests. Unrecognized specs are a
 //! hard parse error surfaced at the interpolation site rather than silently
 //! ignored — a silently-dropped specifier is the exact surprise this feature
 //! removes.
@@ -263,8 +264,8 @@ impl FormatSpec {
             || self.plus
     }
 
-    /// Pad `body` to `width` honoring `align` (default: right for the numeric
-    /// path, which passes `default_left = false`; left for strings). `fill` is
+    /// Pad `body` to `width` honoring `align` (default: right for a number,
+    /// which passes `default_left = false`; left for any other value). `fill` is
     /// the pad char (default space). Zero-pad is handled by the numeric callers
     /// before this (it inserts zeros after the sign), so this only does
     /// space/fill padding.
@@ -428,6 +429,28 @@ impl FormatSpec {
         self.write_magnitude(neg, u128::from(mag), out);
     }
 
+    /// [`Self::write_int64`] for a value of `bits` (8, 16, 32 or 64) held
+    /// sign- or zero-extended in `v`. Under `x`, `X`, `o` and `b` a negative
+    /// signed value prints its two's complement at its OWN width, as Rust
+    /// does: `-1i8` is `ff`, `-2i32` is `fffffffe` (design.md §3 Format
+    /// specifiers, review-thread ruling 2026-11-14). `bits` of 0 or 64 is
+    /// the 64-bit rendering.
+    pub fn write_int_bits(&self, v: u64, signed: bool, bits: u32, out: &mut impl Out) {
+        if signed && self.radix != Radix::Dec && (1..64).contains(&bits) && (v as i64) < 0 {
+            let mask = (1u64 << bits) - 1;
+            self.write_magnitude(false, u128::from(v & mask), out);
+        } else {
+            self.write_int64(v, signed, out);
+        }
+    }
+
+    /// [`Self::write_int_bits`] for a signed `v`, as a `String`.
+    pub fn apply_int_bits(&self, v: i64, bits: u32) -> String {
+        let mut out = Vec::new();
+        self.write_int_bits(v as u64, true, bits, &mut out);
+        String::from_utf8(out).unwrap_or_default()
+    }
+
     /// Format a signed integer AT 128-BIT WIDTH — the `i128` twin of
     /// [`Self::apply_int`], reinterpreting as `u128` under a non-decimal radix
     /// so `{-1:x}` is thirty-two f's rather than sixteen.
@@ -542,17 +565,20 @@ impl FormatSpec {
 
     /// Format a string: width padding + align. Precision (truncation) on a
     /// string is a deferred follow-up (byte-vs-char parity with printf `%.*s`
-    /// on multibyte UTF-8), rejected at format time, so this ignores it. Width
-    /// default is right-align (matching printf `%Ns` and the numeric path — one
-    /// consistent default across all value kinds).
+    /// on multibyte UTF-8), rejected at format time, so this ignores it. With
+    /// a width and no align the text is LEFT-aligned, where a number is
+    /// right-aligned, as in Rust and Python: every value that is not a
+    /// number (`String`, `Str`, `char`, `bool`, a user type's `Display`)
+    /// pads its text through here (design.md §3 Format specifiers,
+    /// review-thread ruling 2026-11-14).
     pub fn apply_str(&self, s: &str) -> String {
-        self.pad(s, false)
+        self.pad(s, true)
     }
 
     /// [`Self::apply_str`] on the UTF-8 `s`, appended to `out`.
     pub fn write_str(&self, s: &[u8], out: &mut impl Out) {
         let chars = s.iter().filter(|b| **b & 0xc0 != 0x80).count();
-        let (left, right) = self.pad_amounts(chars, false);
+        let (left, right) = self.pad_amounts(chars, true);
         self.write_fill(out, left);
         out.put(s);
         self.write_fill(out, right);
@@ -1334,9 +1360,23 @@ mod tests {
 
     #[test]
     fn string_width_and_align() {
-        assert_eq!(spec("5").apply_str("hi"), "   hi");
+        assert_eq!(spec("5").apply_str("hi"), "hi   ");
         assert_eq!(spec(">5").apply_str("hi"), "   hi");
         assert_eq!(spec("<5").apply_str("hi"), "hi   ");
+    }
+
+    #[test]
+    fn negative_radix_is_two_s_complement_at_the_value_s_own_width() {
+        assert_eq!(spec("x").apply_int_bits(-1, 8), "ff");
+        assert_eq!(spec("x").apply_int_bits(-2, 32), "fffffffe");
+        assert_eq!(spec("b").apply_int_bits(-1, 8), "11111111");
+        assert_eq!(spec("o").apply_int_bits(-1, 16), "177777");
+        assert_eq!(spec("X").apply_int_bits(-128, 8), "80");
+        assert_eq!(spec("x").apply_int_bits(-1, 64), "ffffffffffffffff");
+        assert_eq!(spec("x").apply_int_bits(-1, 0), "ffffffffffffffff");
+        assert_eq!(spec("d").apply_int_bits(-1, 8), "-1");
+        assert_eq!(spec("04x").apply_int_bits(-1, 8), "00ff");
+        assert_eq!(spec("x").apply_int_bits(127, 8), "7f");
     }
 
     #[test]

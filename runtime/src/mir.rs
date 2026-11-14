@@ -525,7 +525,8 @@ pub unsafe extern "C" fn karac_mir_fmt_end_string(out: *mut RawVec) {
 }
 
 /// One f-string hole with a spec (`{x:.3}`, `{n:04}`, `{s:>10}`): the
-/// value, rendered by `kind` (0 a signed integer `lo`, 1 an unsigned one,
+/// value, rendered by `kind` (0 a signed integer `lo`, sign-extended, whose
+/// own width in bits is `hi` when it is narrower than 64, 1 an unsigned one,
 /// 2 a 128-bit signed `hi:lo`, 3 an unsigned one, 4 the float `f`, 5 the
 /// text the innermost format buffer holds, which is popped) through the
 /// interpreter's own `FormatSpec`, as a `String` at `out`. The spec is
@@ -596,7 +597,7 @@ fn spec_number(
 ) {
     let mut t = DynOut(t);
     match kind {
-        0 | 1 => fs.write_int64(wide as u64, kind == 0, &mut t),
+        0 | 1 => fs.write_int_bits(wide as u64, kind == 0, (wide >> 64) as u32, &mut t),
         2 | 3 => fs.write_int128(wide, kind == 2, &mut t),
         6 => fs.write_float32(f as f32, &mut t),
         _ => fs.write_float(f, &mut t),

@@ -50562,11 +50562,20 @@ fn nested_tuple_annotation_still_reports_a_wrong_array_length() {
 
 /// B-2026-10-02-42: the `+` sign flag type-checks on an integer and a float
 /// hole and is rejected on a string, as Python rejects it (Rust ignores it,
-/// which would make `{s:+}` a spec that silently does nothing).
+/// which would make `{s:+}` a spec that silently does nothing). With a
+/// radix type it is refused too: x/X/o/b print a bit pattern, which has no
+/// sign (design.md §3, review-thread ruling 2026-11-14, B-2026-11-14-41).
 #[test]
 fn format_spec_plus_flag_is_numeric_only() {
     typecheck_ok(
-        "fn main() { let d: i64 = 3; let f: f64 = 1.5; println(f\"{d:+} {d:+05x} {f:+.2}\"); }",
+        "fn main() { let d: i64 = 3; let f: f64 = 1.5; println(f\"{d:+} {d:+05} {d:+d} {f:+.2}\"); }",
+    );
+    let errs = typecheck_errors("fn main() { let d: i64 = 3; println(f\"{d:+05x}\"); }");
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("sign flag (`+`) is not valid with a radix type")),
+        "expected the radix rejection: {errs:?}"
     );
     let errs = typecheck_errors("fn main() { let s = \"hi\"; println(f\"{s:+}\"); }");
     assert!(

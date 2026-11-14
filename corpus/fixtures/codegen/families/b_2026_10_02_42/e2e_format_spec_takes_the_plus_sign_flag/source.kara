@@ -5,7 +5,7 @@ fn twelve() -> i64 {
 fn main() {
     let xs: Vec[i64] = vec![5, 0, -3];
     for d in xs.iter() {
-        println(f"[{d:+}] [{d:+05}] [{d:<+5}] [{d:*^+7}] [{d:+x}]");
+        println(f"[{d:+}] [{d:+05}] [{d:<+5}] [{d:*^+7}] [{d:x}]");
     }
     let u: u64 = 7;
     let w: i32 = -9;

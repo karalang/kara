@@ -27,6 +27,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `build` died of a stack overflow on every one but `errdefer { return .. }`,
   which passed check and failed in the compiler's MIR stage. A loop or
   labeled block written inside the block still exits itself.
+- `+` with a radix type in an f-string hole (`{n:+x}`, `{n:+08b}`) is an
+  error at the hole: x/X/o/b print a bit pattern, which has no sign
+  (design.md §3 Format specifiers, B-2026-11-14-41). `+` with `d` or no
+  type is unchanged.
 
 - A `test "..." { }` block in a package file that is not a `_test.kara`
   file is an error, `E_TEST_OUTSIDE_TEST_FILE`, naming the companion file
@@ -343,6 +347,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- With a width and no align, an f-string hole holding anything but a
+  number (`String`, `Str`, `char`, `bool`, a user type's `Display`) is
+  left-aligned, as in Rust and Python: `f"[{s:6}]"` with `s = "hi"` prints
+  `[hi    ]`, where it printed `[    hi]`. Numbers stay right-aligned, and
+  an explicit `<`, `>` or `^` is unchanged (design.md §3 Format specifiers,
+  B-2026-11-14-42). No kata or app in the corpus changes output.
+
 - `s.push_str(x.repeat(n))` and `s += x.repeat(n)`, with `x` a literal or
   an owned `String` other than `s`, append the copies to `s` in place,
   where they built a `String` of the repeat and freed it once appended
@@ -460,6 +471,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Vec[ref i64]` keeps its references (B-2026-11-08-19).
 
 ### Wrong behaviour fixed
+
+- `x`, `X`, `o` and `b` print a negative integer narrower than 64 bits as
+  its two's complement at its own width, as Rust does: `-1i8` under `x` is
+  `ff` and `-2i32` is `fffffffe`, where both MIR backends printed the 64-bit
+  pattern (B-2026-11-14-41).
 
 - An index evaluates its base before its index when the base is a literal,
   as it already did for a call or a name (design.md §8.1): with `p(n)`

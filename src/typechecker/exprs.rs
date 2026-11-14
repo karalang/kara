@@ -63,6 +63,16 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
                 "format spec `{spec_raw}`: precision (`.N`) is not valid for an integer"
             ));
         }
+        // A bit pattern has no sign: x/X/o/b print a negative value's two's
+        // complement, so `+` has nothing to mark (design.md §3, review-thread
+        // ruling 2026-11-14). `+` with `d` is accepted.
+        if fs.plus && fs.radix != crate::format_spec::Radix::Dec {
+            return Err(format!(
+                "format spec `{spec_raw}`: the sign flag (`+`) is not valid with a radix \
+                 type (x/X/o/b), which prints a bit pattern with no sign; use `+` with \
+                 `d` or no type"
+            ));
+        }
         return Ok(());
     }
     if is_float {

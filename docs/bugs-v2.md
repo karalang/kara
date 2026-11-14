@@ -63,9 +63,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 164 |
 | missing-feature | 160 |
 | soundness | 67 |
-| miscompile | 60 |
+| miscompile | 61 |
 | run-vs-build | 35 |
-| other | 31 |
+| other | 32 |
 | codegen-gap | 30 |
 | crash | 26 |
 | leak | 4 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 456 |
-| mir-llvm | 217 |
-| mir | 185 |
+| mir-llvm | 219 |
+| mir | 187 |
 | cli | 113 |
 | ownership | 80 |
 | parser | 79 |
@@ -118,6 +118,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-18 | 2026-11-14 | typecheck+cli | low | Three counters bound to literals that feed one another (`best = best.max(positive)`, `positive = negative + 1`) and reach an `i32` return take three rounds of `karac fix`, one literal each: the checker reports only the binding the return reads, and the next one surfaces only after that one is `0i32`, so the literal-default fix walks the chain one binding per round | — |
 | B-2026-11-14-23 | 2026-11-14 | typecheck+cli | low | Two fields of borrowed receivers put in a tuple to pick one by a test (`let (short, long) = if self.pairs.len() <= other.pairs.len() { (self.pairs, other.pairs) } else { (other.pairs, self.pairs) };`) get `borrow_projection_copy` with a machine-applicable `.clone()` on each, which `karac fix` applies, copying both collections on every call, though `(ref self.pairs, ref other.pairs)` checks and copies nothing | — |
 | B-2026-11-14-28 | 2026-11-14 | mir-llvm | low | A two-pointer merge over two receivers' `Vec` fields (`while i < self.pairs.len() and j < other.pairs.len() { let (a, x) = self.pairs[i]; let (b, y) = other.pairs[j]; .. }`) keeps both bounds checks in the loop, since guard_bounds.rs (B-2026-11-08-61) proves only indexes into a local vector written once; kata 1570's bench runs 1.47x Rust's instructions (1.20x its time under overflow checks) | — |
+| B-2026-11-14-41 | 2026-11-14 | mir+mir-llvm | low | x/X/o/b on a negative narrow integer prints the 64-bit two's complement on both MIR backends: with `m: i8 = -1` and `k: i32 = -2`, `f"{m:x}|{k:x}|{m:b}"` prints `ffffffffffffffff|fffffffffffffffe|1111…` (64 ones) where design.md §3 says `ff|fffffffe|11111111`; and `+` with a radix type is accepted | — |
+| B-2026-11-14-42 | 2026-11-14 | mir+mir-llvm | low | With a width and no align, a non-number (String, Str, char, bool, a user Display) right-aligns on both MIR backends, where design.md §3 now says it left-aligns as in Rust and Python (`f"[{s:6}]"` with `s = "hi"` is `[hi    ]`); numbers keep right-aligning | — |
 
 ### Relocated
 

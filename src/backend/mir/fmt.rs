@@ -334,6 +334,16 @@ impl<'ctx> Cx<'ctx, '_> {
                         .builder
                         .build_int_cast_sign_flag(x, i64t, signed, "")
                         .map_err(e)?;
+                    // A narrow signed value's own width rides in `hi`, so
+                    // x/X/o/b print its two's complement at that width
+                    // (design.md §3 Format specifiers).
+                    let bits = match it {
+                        IntTy::I8 => 8,
+                        IntTy::I16 => 16,
+                        IntTy::I32 => 32,
+                        _ => 0,
+                    };
+                    hi = i64t.const_int(bits, false);
                     if matches!(it, IntTy::U64 | IntTy::Usize) {
                         1
                     } else {

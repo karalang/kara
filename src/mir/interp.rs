@@ -2951,6 +2951,11 @@ impl<'a> Interp<'a> {
                     }
                     (TyKind::Int(IntTy::I128), Value::Int(i)) => fs.apply_int128(*i),
                     (TyKind::Int(IntTy::U128), Value::Int(i)) => fs.apply_uint128(*i as u128),
+                    // A negative narrow value under x/X/o/b is its two's
+                    // complement at its own width (design.md §3).
+                    (TyKind::Int(IntTy::I8), Value::Int(i)) => fs.apply_int_bits(*i as i64, 8),
+                    (TyKind::Int(IntTy::I16), Value::Int(i)) => fs.apply_int_bits(*i as i64, 16),
+                    (TyKind::Int(IntTy::I32), Value::Int(i)) => fs.apply_int_bits(*i as i64, 32),
                     (_, Value::Int(i)) => fs.apply_int(*i as i64),
                     (TyKind::Float(FloatTy::F32), Value::Float(f)) => fs.apply_float32(*f as f32),
                     (_, Value::Float(f)) => fs.apply_float(*f),
