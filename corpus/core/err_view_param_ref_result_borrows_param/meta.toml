@@ -1,0 +1,10 @@
+source = "B-2026-11-13-79"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-13-79: core semantics §5.4, results borrow what a view parameter views. A `ref` written in the signature keeps the signature rule: `pos_ref(c: mut ref Cursor) -> ref i64` borrows `c`, so reading `c.pos` while `r` is live is a conflict. The expected.out wording of an error pin is guidance, not a byte oracle."

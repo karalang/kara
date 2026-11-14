@@ -1,0 +1,10 @@
+source = "B-2026-11-13-79"
+dedup_of = []
+expect = "error:E0509"
+exit = 1
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-13-79: core semantics §5.4, results borrow what a view parameter views. The body check: `grab` returns a view of `c.buf`, a `String` the parameter owns, not of what one of its `ref`, `Str` or `Slice` fields views, so it is an error at the return. The expected.out wording of an error pin is guidance, not a byte oracle."

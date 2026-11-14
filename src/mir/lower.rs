@@ -216,6 +216,11 @@ pub struct Lowered {
     /// The views whose result borrows through their receiver's references
     /// ([`through_ref_fields`]).
     pub pointee_views: FxHashSet<String>,
+    /// The functions whose result borrows what a view parameter's value
+    /// views, not the parameter place (core semantics §5.4, "Results borrow
+    /// what a view parameter views"; [`view_param`]): by instance, a mask
+    /// of those parameters' positions.
+    pub view_args: FxHashMap<String, u64>,
     /// The closure bodies that return a closure. A returned closure owns
     /// its captures (core semantics §9.3), so a call's result borrows what
     /// the environment holds, never the closure value that lent it
@@ -674,6 +679,7 @@ fn lower_program_inner<'a>(
     }
     let mut receivers = FxHashSet::default();
     let mut views = FxHashSet::default();
+    let mut view_args = FxHashMap::default();
     let mut closure_results = FxHashSet::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
@@ -723,11 +729,31 @@ fn lower_program_inner<'a>(
                         HK::Ref(_) | HK::MutRef(_)
                     )
             });
+            // The view parameters, when the result's reference comes only
+            // through view types and not a `ref` written in the signature
+            // (core semantics §5.4, "Results borrow what a view parameter
+            // views"; B-2026-11-13-79).
+            let unwritten = lcx.fns.get(&def).is_some_and(|i| {
+                i.f.return_type.as_ref().is_some_and(|t| !writes_ref(t))
+                    && !receiver_view(&name, &i.f.name)
+            });
+            let mask = lcx
+                .program
+                .bodies
+                .get(&name)
+                .filter(|b| unwritten && views_only_as_text(lcx.tys.tcx(), b.locals[0].ty))
+                .map_or(0u64, |b| {
+                    (0..b.arg_count.min(64))
+                        .filter(|i| view_param(lcx.tys.tcx(), b.locals[i + 1].ty))
+                        .fold(0, |m, i| m | 1 << i)
+                });
             if has_self && borrows {
-                if view {
+                if view || mask & 1 != 0 {
                     views.insert(name.clone());
                 }
                 receivers.insert(name.clone());
+            } else if !has_self && mask != 0 {
+                view_args.insert(name.clone(), mask);
             }
         } else if let Some(job) = lcx.closure_queue.pop() {
             let name = job.name.clone();
@@ -777,6 +803,7 @@ fn lower_program_inner<'a>(
         receivers,
         views,
         pointee_views,
+        view_args,
         closure_results,
         effects: None,
         auto_par_tasks: lcx.auto_par_done,
@@ -829,6 +856,66 @@ fn receiver_view(instance: &str, method: &str) -> bool {
         "as_deref" => instance.starts_with("Option["),
         _ => false,
     }
+}
+
+/// Whether a parameter of MIR type `ty` is a view parameter (core
+/// semantics §5.4): a `ref` or `mut ref` (a bare parameter borrows, D5) to
+/// a struct or enum that declares a `ref`, `Str` or `Slice` field, such as
+/// `struct Cursor { src: Str, pos: i64 }`. A field of a type parameter
+/// (`Option[T]`'s) is not declared a view, whatever fills it.
+fn view_param(tcx: &crate::ty::TyCtxt, ty: crate::ty::Ty) -> bool {
+    let (HK::Ref(t) | HK::MutRef(t)) = tcx.kind(ty) else {
+        return false;
+    };
+    tcx.adt_of(t).is_some_and(|(adt, _)| {
+        adt.variants.iter().any(|v| {
+            v.fields.iter().any(|(_, f)| {
+                matches!(
+                    tcx.kind(*f),
+                    HK::Ref(_) | HK::MutRef(_) | HK::StaticStr | HK::Slice { .. }
+                )
+            })
+        })
+    })
+}
+
+/// Whether a result of MIR type `ty` holds its views only as `Str` or
+/// `Slice` values, through `Option`, tuples, arrays and structs or enums
+/// with such fields (`Str`, `Option[Str]`, a `Cursor`). Only then does a
+/// view parameter lend its value and not its place (core semantics §5.4):
+/// a result with a `ref` in it (`IterByRef { inner: mut ref I }` from
+/// `by_ref`) may hold the parameter's own reference, which the body check
+/// at the return does not see, so it keeps the borrow of the parameter.
+fn views_only_as_text(tcx: &crate::ty::TyCtxt, ty: crate::ty::Ty) -> bool {
+    fn go(tcx: &crate::ty::TyCtxt, ty: crate::ty::Ty, seen: &mut Vec<crate::ty::Ty>) -> bool {
+        if seen.contains(&ty) {
+            return true;
+        }
+        seen.push(ty);
+        match tcx.kind(ty) {
+            HK::Int(_)
+            | HK::UInt(_)
+            | HK::Float(_)
+            | HK::Bool
+            | HK::Char
+            | HK::Str
+            | HK::Unit
+            | HK::Never
+            | HK::StaticStr => true,
+            HK::Slice { elem, .. } | HK::Array { elem, .. } => go(tcx, elem, seen),
+            HK::Tuple(l) => tcx.list(l).iter().all(|t| go(tcx, *t, seen)),
+            HK::Adt { .. } => tcx.adt_of(ty).is_some_and(|(adt, _)| {
+                adt.variants.iter().enumerate().all(|(v, var)| {
+                    (0..var.fields.len() as u32).all(|f| {
+                        tcx.field_ty(ty, adt.is_enum.then_some(v as u32), f)
+                            .is_some_and(|t| go(tcx, t, seen))
+                    })
+                })
+            }),
+            _ => false,
+        }
+    }
+    go(tcx, ty, &mut Vec::new())
 }
 
 fn writes_ref(t: &ast::TypeExpr) -> bool {
@@ -29349,6 +29436,7 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
                 &lowered.receivers,
                 &lowered.views,
                 &lowered.pointee_views,
+                &lowered.view_args,
                 &lowered.closure_results,
                 i,
             )
@@ -29410,11 +29498,15 @@ fn result_borrows(
     receivers: &FxHashSet<String>,
     views: &FxHashSet<String>,
     pointee_views: &FxHashSet<String>,
+    view_args: &FxHashMap<String, u64>,
     closure_results: &FxHashSet<String>,
     i: &InstanceId,
 ) -> crate::mir::ResultBorrows {
     if closure_results.contains(&i.name) {
         return crate::mir::ResultBorrows::EnvAndArgs;
+    }
+    if let Some(&mask) = view_args.get(&i.name) {
+        return crate::mir::ResultBorrows::ViewArgs(mask);
     }
     if pointee_views.contains(&i.name) {
         return crate::mir::ResultBorrows::ReceiverPointeeValue;
@@ -29471,6 +29563,7 @@ pub struct BorrowSummary {
     pub receivers: FxHashSet<String>,
     pub views: FxHashSet<String>,
     pub pointee_views: FxHashSet<String>,
+    pub view_args: FxHashMap<String, u64>,
     pub closure_results: FxHashSet<String>,
 }
 
@@ -29486,6 +29579,7 @@ impl BorrowSummary {
             &self.receivers,
             &self.views,
             &self.pointee_views,
+            &self.view_args,
             &self.closure_results,
             i,
         )
@@ -30047,6 +30141,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         receivers: lowered.receivers.clone(),
         views: lowered.views.clone(),
         pointee_views: lowered.pointee_views.clone(),
+        view_args: lowered.view_args.clone(),
         closure_results: lowered.closure_results.clone(),
     }));
     let borrowck = std::env::var("KARAC_MIR_BORROWCK").as_deref() != Ok("0");
@@ -30128,9 +30223,18 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         let receivers = &lowered.receivers;
         let views = &lowered.views;
         let pointee_views = &lowered.pointee_views;
+        let view_args = &lowered.view_args;
         let closure_results = &lowered.closure_results;
         let has_receiver = |i: &InstanceId| {
-            result_borrows(&names, receivers, views, pointee_views, closure_results, i)
+            result_borrows(
+                &names,
+                receivers,
+                views,
+                pointee_views,
+                view_args,
+                closure_results,
+                i,
+            )
         };
         if borrowck {
             crate::mir::check_borrows(body, &lowered.tys, &has_receiver)

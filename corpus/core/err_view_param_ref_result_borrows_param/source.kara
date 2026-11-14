@@ -1,0 +1,9 @@
+struct Cursor { src: Str, pos: i64 }
+fn pos_ref(c: mut ref Cursor) -> ref i64 { ref c.pos }
+fn main() {
+    let text = "ab".to_string();
+    let mut c = Cursor { src: text.as_str(), pos: 0 };
+    let r = pos_ref(mut c);
+    c.pos += 1;
+    println(r);
+}

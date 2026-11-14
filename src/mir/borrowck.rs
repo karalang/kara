@@ -221,6 +221,12 @@ pub enum ResultBorrows {
     /// hold, never the environment itself, since the returned closure
     /// owns its captures (core semantics §9.3; B-2026-10-24-9).
     EnvAndArgs,
+    /// What every argument holds, except that each argument whose position
+    /// is set in the mask, a view parameter, gives what its value views,
+    /// not its place: `fn parse_until(c: mut ref Cursor, stop: char) ->
+    /// Str` returns a view of the text `c.src` views (core semantics §5.4,
+    /// "Results borrow what a view parameter views"; B-2026-11-13-79).
+    ViewArgs(u64),
 }
 
 /// Checks `body`; the errors name each conflicting access by block and
@@ -321,6 +327,13 @@ pub fn borrow_errors(
             has_receiver(&body.instance),
             ResultBorrows::ReceiverValue | ResultBorrows::ReceiverPointeeValue
         );
+    // The view parameters whose value the result may view (§5.4).
+    let view_params = match has_receiver(&body.instance) {
+        ResultBorrows::ViewArgs(mask) => mask,
+        _ => 0,
+    };
+    let view_param =
+        |l: usize| (1..=body.arg_count.min(64)).contains(&l) && view_params >> (l - 1) & 1 != 0;
 
     for (bi, block) in body.blocks.iter().enumerate() {
         let Some(mut o) = origins[bi].clone() else {
@@ -448,6 +461,8 @@ pub fn borrow_errors(
                         "this function owns"
                     } else if view && derefs == 1 && loan.place.local.index() == 1 {
                         "the receiver owns; an item may borrow only what its `ref` fields borrow"
+                    } else if derefs == 1 && view_param(loan.place.local.index()) {
+                        "the parameter owns; a view result may borrow only what its `ref`, `Str` or `Slice` fields view"
                     } else {
                         continue;
                     };
@@ -1432,6 +1447,15 @@ impl Cx<'_> {
                 }
             }
             ResultBorrows::ReceiverValue => self.pointee_origins(o, &args[0], &mut val),
+            ResultBorrows::ViewArgs(mask) => {
+                for (i, a) in args.iter().enumerate() {
+                    if i < 64 && mask >> i & 1 != 0 {
+                        self.pointee_origins(o, a, &mut val);
+                    } else {
+                        self.arg_origins(o, a, dest, &mut val);
+                    }
+                }
+            }
             ResultBorrows::ReceiverPointeeValue => {
                 let mut held = LoanSet::default();
                 self.pointee_origins(o, &args[0], &mut held);
@@ -1468,10 +1492,19 @@ fn clear_moved<'o>(o: &mut Origins, ops: impl IntoIterator<Item = &'o Operand>) 
 /// Whether dropping `place` may read a borrow its value holds, so the drop
 /// keeps those borrows live. Freeing a `Vec[Str]`, a `String` or a tuple of
 /// references reads no view it holds (Rust's `#[may_dangle]` case,
-/// B-2026-10-19-6); anything with a struct or enum in it may run a user
-/// `Drop` and is taken to.
+/// B-2026-10-19-6), nor does a struct or enum with no `Drop` body of its
+/// own whose parts read none; one with a `Drop` body, a `shared` handle or
+/// a type MIR cannot see into is taken to read.
 fn drop_reads_borrows(body: &Body, tys: &TyInterner, place: &Place) -> bool {
     fn go(tys: &TyInterner, ty: Ty) -> bool {
+        go_seen(tys, ty, &mut Vec::new())
+    }
+    fn go_seen(tys: &TyInterner, ty: Ty, seen: &mut Vec<Ty>) -> bool {
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        let go = |tys: &TyInterner, t: Ty| go_seen(tys, t, &mut seen.clone());
         match tys.kind(ty) {
             TyKind::Int(_)
             | TyKind::Float(_)
@@ -1486,6 +1519,20 @@ fn drop_reads_borrows(body: &Body, tys: &TyInterner, place: &Place) -> bool {
             TyKind::Tuple(ts) => ts.iter().any(|t| go(tys, *t)),
             TyKind::Array(t, _)
             | TyKind::Intrinsic(IntrinsicTy::Vec(t) | IntrinsicTy::VecDeque(t)) => go(tys, t),
+            // A struct or enum with no `Drop` body of its own runs no code
+            // when it is freed: it frees its parts, so it reads a view only
+            // where a part's drop does. `StrSplit` (a `Str` and its own
+            // `String` pattern) dropped after the loop that walked it reads
+            // nothing it borrows (B-2026-11-13-82).
+            TyKind::Adt(a) if !tys.has_drop_impl(ty) && !is_task_group(tys, ty) => {
+                let adt = tys.adt(a);
+                adt.variants.iter().enumerate().any(|(v, var)| {
+                    (0..var.fields.len() as u32).any(|f| {
+                        tys.field_ty(ty, adt.is_enum.then_some(v as u32), f)
+                            .is_none_or(|t| go(tys, t))
+                    })
+                })
+            }
             _ => true,
         }
     }
@@ -2980,6 +3027,13 @@ fn main() -> () {
             // spells out, and `collect` are the library's (B-2026-11-10-7).
             "ok_spelled_item_type_borrows_like_self_item",
             "err_spelled_item_type_lends_from_receiver",
+            // A view parameter's result (§5.4) is told by the build's own
+            // `result_borrows`, and `String.as_str` is the library's
+            // (B-2026-11-13-79).
+            "err_view_param_returns_owned_field",
+            "ok_view_param_results_live_together",
+            "ok_view_param_through_struct_field",
+            "ok_view_receiver_results_live_together",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

@@ -1,0 +1,1 @@
+error[typecheck]: cannot write to `c.pos` while `h` still holds a borrow of it [E0516]

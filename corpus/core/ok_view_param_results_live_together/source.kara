@@ -1,0 +1,20 @@
+struct Cursor { src: Str, pos: i64 }
+
+fn parse_until(c: mut ref Cursor, stop: char) -> Str {
+    let start = c.pos;
+    let n = c.src.len();
+    while c.pos < n and c.src.char_at(c.pos) != Some(stop) {
+        c.pos += 1;
+    }
+    let out = c.src.slice(start, c.pos);
+    if c.pos < n { c.pos += 1; }
+    out
+}
+
+fn main() {
+    let text = "ab,cd,ef".to_string();
+    let mut c = Cursor { src: text.as_str(), pos: 0 };
+    let a = parse_until(mut c, ',');
+    let b = parse_until(mut c, ',');
+    println(f"{a} {b} {c.pos}");
+}

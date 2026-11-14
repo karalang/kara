@@ -1,0 +1,18 @@
+struct Cursor { src: Str, pos: i64 }
+impl Cursor {
+    fn word(mut ref self) -> Str {
+        let start = self.pos;
+        let n = self.src.len();
+        while self.pos < n and self.src.char_at(self.pos) != Some(' ') { self.pos += 1; }
+        let out = self.src.slice(start, self.pos);
+        if self.pos < n { self.pos += 1; }
+        out
+    }
+}
+fn main() {
+    let text = "ab cd ef".to_string();
+    let mut c = Cursor { src: text.as_str(), pos: 0 };
+    let a = c.word();
+    let b = c.word();
+    println(f"{a} {b} {c.pos}");
+}

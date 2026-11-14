@@ -1,0 +1,1 @@
+error[typecheck]: the result borrows `c.buf`, which the parameter owns; a view result may borrow only what its `ref`, `Str` or `Slice` fields view (core-semantics.md §5.4) [E0509]

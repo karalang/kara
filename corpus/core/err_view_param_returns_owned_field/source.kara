@@ -1,0 +1,7 @@
+struct Cursor { src: Str, buf: String, pos: i64 }
+fn grab(c: mut ref Cursor) -> Str { c.buf.as_str() }
+fn main() {
+    let text = "ab".to_string();
+    let mut c = Cursor { src: text.as_str(), buf: "xy".to_string(), pos: 0 };
+    println(grab(mut c));
+}

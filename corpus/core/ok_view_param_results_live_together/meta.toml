@@ -1,0 +1,10 @@
+source = "B-2026-11-13-79"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-13-79: core semantics §5.4, results borrow what a view parameter views. `parse_until(c: mut ref Cursor, stop: char) -> Str` returns a view of the text `c.src` views, not a borrow of `c`, so `a` and `b` are live together while `c` advances. Before the fix the second call was E0516. Expected output worked by hand."

@@ -1,0 +1,13 @@
+fn find(path: own String) -> Result[i64, String] {
+    let mut n = 0;
+    for seg in path.split("/") {
+        if seg == "x" {
+            return Err(path);
+        }
+        n += 1;
+    }
+    Ok(n)
+}
+fn main() {
+    println(find("a/b".to_string()).unwrap_or(-1));
+}

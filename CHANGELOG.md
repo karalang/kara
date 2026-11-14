@@ -160,6 +160,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   written `Buf[3]`, `Buf[2 + 1]` or `Buf[SIZE]`, one type per value, served
   by `impl[const N: i64] Buf[N]`, where `N` is a value. Every argument on a
   user type was refused as "not yet supported in this slice".
+- A function's result borrows what a view parameter views (core-semantics.md
+  §5.4; B-2026-11-13-79): with `struct Cursor { src: Str, pos: i64 }`,
+  `fn parse_until(c: mut ref Cursor, stop: char) -> Str` returns a view of
+  the text `c.src` views, so two results can be live while `c` advances, a
+  method on `Cursor` likewise. The second call was E0516. Returning a view of
+  a field the parameter owns (a `String`) is now E0509 at the return; a
+  `ref` written in the result keeps the borrow of the parameter.
 - `TcpStream.read_to_end` and `TlsStream.read_to_end` append everything up
   to the end of the stream and return the count (docs/library/io.md;
   B-2026-11-13-73). A connection that carries one payload and closes, such as
@@ -422,6 +429,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `pickv(V { s: t.as_str() })` were refused as "a reference to a temporary
   outlives its statement", though the result borrows `t`, not the literal
   (core-semantics §5.3; B-2026-11-13-81).
+- A loop over `s.split(..)` may move `s` on a `return` inside it again:
+  since the split iterator keeps its own `String` pattern
+  (B-2026-11-13-43), its drop after the return read as a use of `s`, so
+  `return Err(path)` was E0516 (apps/graph/doc_tree). A struct or enum
+  with no `Drop` body of its own now reads a borrow at its drop only where
+  a part's drop does (B-2026-11-13-82).
 - A compiled program that ends through a foreign `exit()` writes what it
   printed first: standard output to a pipe or a file was buffered and
   lost, though the interpreter printed it (B-2026-11-13-75).

@@ -1,0 +1,10 @@
+source = "B-2026-11-13-82"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "drops"]
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "B-2026-11-13-82: core semantics §5.6, a drop keeps a borrow live only where it reads it. `StrSplit` holds a `Str` of `path` and its own `String` pattern and has no `Drop` body, so freeing it after the `return` reads nothing it borrows, and moving `path` into the error is not a conflict. Refused as E0516 after the pattern became a `String` (0afc89e2e8, B-2026-11-13-43), which made apps/graph/doc_tree fail. Expected output worked by hand."

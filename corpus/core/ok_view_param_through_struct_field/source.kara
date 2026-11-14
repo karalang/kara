@@ -1,0 +1,23 @@
+struct Cursor { src: Str, pos: i64 }
+fn word(c: mut ref Cursor) -> Str {
+    let start = c.pos;
+    let n = c.src.len();
+    while c.pos < n and c.src.char_at(c.pos) != Some(' ') { c.pos += 1; }
+    let out = c.src.slice(start, c.pos);
+    if c.pos < n { c.pos += 1; }
+    out
+}
+fn two(c: mut ref Cursor) -> Str {
+    let a = word(mut c);
+    let b = word(mut c);
+    if a.len() > b.len() { a } else { b }
+}
+struct Parser { cur: Cursor, count: i64 }
+fn main() {
+    let text = "a bbb cc dddd".to_string();
+    let mut p = Parser { cur: Cursor { src: text.as_str(), pos: 0 }, count: 0 };
+    let x = two(mut p.cur);
+    p.count += 1;
+    let y = two(mut p.cur);
+    println(f"{x} {y} {p.count} {p.cur.pos}");
+}

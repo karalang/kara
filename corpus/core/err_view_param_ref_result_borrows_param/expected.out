@@ -1,0 +1,1 @@
+error[typecheck]: cannot read `c.pos` while `r` still holds a borrow of it [E0516]

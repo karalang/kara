@@ -1,0 +1,10 @@
+source = "B-2026-11-13-79"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-13-79: core semantics §5.4, results borrow what a view parameter views. The result still borrows what `c` views: it may not outlive `text`, dropped at the end of the block. The expected.out wording of an error pin is guidance, not a byte oracle."

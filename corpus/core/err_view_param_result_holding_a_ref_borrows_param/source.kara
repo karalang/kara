@@ -1,0 +1,11 @@
+struct Cursor { src: Str, pos: i64 }
+struct Hold { c: mut ref Cursor }
+fn hold(c: mut ref Cursor) -> Hold { Hold { c: c } }
+fn main() {
+    let text = "ab".to_string();
+    let mut c = Cursor { src: text.as_str(), pos: 0 };
+    let h = hold(mut c);
+    c.pos = 3;
+    h.c.pos += 1;
+    println(c.pos);
+}

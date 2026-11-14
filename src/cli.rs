@@ -4300,6 +4300,12 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
             "the result borrows {place}, which this function owns, so it would outlive \
              it (core-semantics.md §5.4) [E0509]"
         ),
+        // A view parameter's own field, named as the program writes it
+        // (B-2026-11-13-79).
+        ("E0509", Some(place)) if e.text.contains("which the parameter owns") => format!(
+            "the result borrows {place}, which the parameter owns; a view result may borrow \
+             only what its `ref`, `Str` or `Slice` fields view (core-semantics.md §5.4) [E0509]"
+        ),
         _ => mir_check_text(&e.text),
     }
 }

@@ -1,0 +1,10 @@
+source = "B-2026-11-13-79"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-13-79: core semantics §5.4, results borrow what a view parameter views. The receiver form: `Cursor.word(mut ref self) -> Str` returns a view of what `self.src` views, so two results are live together. Expected output worked by hand."
