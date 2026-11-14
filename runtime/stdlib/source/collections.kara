@@ -690,22 +690,11 @@ impl[T: Ord] SortedSet[T] {
         SortedSetIter { s: self, front, back: if back < front { front } else { back } }
     }
 
-    /// The index of the first element `>= x` (`> x` when `past` is set),
-    /// by binary search: the elements are in order.
+    /// The index of the first element `>= x` (`> x` when `past` is set):
+    /// one search of the tree, where a binary search over positions paid a
+    /// walk per probe (B-2026-11-14-16).
     fn bound_index(ref self, x: T, past: bool) -> i64 {
-        let mut lo = 0;
-        let mut hi = self.len();
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            let e = self.entry_at(mid);
-            let before = if past { e <= x } else { e < x };
-            if before {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+        self.bound_at(x, past)
     }
 }
 
@@ -1052,22 +1041,10 @@ impl[K: Ord, V] SortedMap[K, V] {
         SortedMapIter { m: self, front, back: if back < front { front } else { back } }
     }
 
-    /// The index of the first key `>= key` (`> key` when `past` is set),
-    /// by binary search: the keys are in order.
+    /// The index of the first key `>= key` (`> key` when `past` is set):
+    /// one search of the tree (B-2026-11-14-16).
     fn bound_index(ref self, key: K, past: bool) -> i64 {
-        let mut lo = 0;
-        let mut hi = self.len();
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            let (k, _) = self.entry_at(mid);
-            let before = if past { k <= key } else { k < key };
-            if before {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+        self.bound_at(key, past)
     }
 }
 

@@ -9366,6 +9366,16 @@ impl<'a> Interp<'a> {
                     path: Path::from_slice(&[i as u64, 1]),
                 }))
             }
+            // The position of the first key `>= k` (`> k` when `past`), the
+            // bounds of the library's `range` (B-2026-11-14-16).
+            ("bound_at", [k, Value::Bool(past)]) if sorted => {
+                let mut k = k.clone();
+                while let Value::Ref(a) = &k {
+                    k = self.slot(a)?;
+                }
+                let i = self.sorted_bound(id, is_map, key_ty, &k, *past)?;
+                Ok(Value::Int(i as i128))
+            }
             ("entry_at", [Value::Int(i)]) => {
                 // The `i`th entry in iteration order, for a borrowing `for`:
                 // a `ref (K, V)` into a Map, a `ref T` into a Set.

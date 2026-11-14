@@ -158,6 +158,30 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 (name.clone(), 1, ret)
             }
+            // `bound_at(k, past)`: the position of the first key `>= k`
+            // (`> k` when `past`) of a sorted set or map, one tree descent;
+            // the library's `range` bounds (B-2026-11-14-16).
+            (Type::Named { name, args: targs }, "bound_at")
+                if matches!(name.as_str(), "SortedSet" | "SortedMap") =>
+            {
+                let key = crate::typechecker::types::element_args(name, targs)
+                    .first()
+                    .cloned()?;
+                if args.len() != 2 {
+                    self.type_error(
+                        format!("'{method}' takes 2 argument(s)"),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                if let [k, past] = args {
+                    // The key comes borrowed, as `contains` takes it.
+                    self.check_expr(&k.value, &Type::Ref(Box::new(key)));
+                    self.check_expr(&past.value, &Type::Bool);
+                }
+                self.record_method_callee(SpanKey::from_span(span), format!("{name}.{method}"));
+                return Some(Type::Int(IntSize::I64));
+            }
             (Type::Str, "char_at_byte" | "char_before_byte") => {
                 ("String".to_string(), 1, Type::Char)
             }

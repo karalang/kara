@@ -979,6 +979,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- **A sorted set's or map's `range` finds its bounds by searching the
+  tree.** `SortedSet.range` / `range_inclusive` and SortedMap's found where
+  a range starts and ends by walking the elements from the front, so a
+  range over a large table cost time linear in its size. Each bound is now
+  one search on both backends. Kata 1562 (`latest_back`) went from 6.24 G
+  to 2.69 G instructions and from 0.82 s to 0.52 s (B-2026-11-14-16).
 - **A char's `to_string()` that is only lent does not allocate.** When the
   `String` is only borrowed, as in `"aeiou".contains(c.to_string())` (the
   form the char-pattern fix-it writes), a compiled build keeps the char's

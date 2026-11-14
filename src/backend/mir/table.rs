@@ -999,6 +999,25 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.lend_value(d, v, t)?;
                 self.drop_moved(&args[1..])?;
             }
+            // The position of the first key `>= k` (`> k` when `past`): one
+            // tree descent, the library `range`'s bound (B-2026-11-14-16).
+            ("bound_at", [k, past]) if t.sorted => {
+                let h = self.load_ptr(hp)?;
+                let kp = self.key_arg(k, t.key)?;
+                let past = self.operand_scalar(past)?.into_int_value();
+                let past = self
+                    .builder
+                    .build_int_z_extend(past, self.llcx.i64_type(), "")
+                    .map_err(e)?;
+                let op = self
+                    .builder
+                    .build_int_add(self.i64(4), past, "")
+                    .map_err(e)?;
+                let i = self.pick_op(h, kp, t, op)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, i.into())?;
+                self.drop_moved(&args[1..])?;
+            }
             ("entry_at", [i]) => {
                 let h = self.load_ptr(hp)?;
                 let i = self.int_arg(i)?;
@@ -1641,18 +1660,24 @@ impl<'ctx> Cx<'ctx, '_> {
         t: Table,
         op: u64,
     ) -> R<IntValue<'ctx>> {
+        let op = self.i64(op);
+        self.pick_op(h, key, t, op)
+    }
+
+    /// [`Self::pick`] with the op computed at run time.
+    fn pick_op(
+        &mut self,
+        h: PointerValue<'ctx>,
+        key: PointerValue<'ctx>,
+        t: Table,
+        op: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
         let cmp = self.key_fn(self.own_order(t.key), t.key);
         let cmp = cmp.as_global_value().as_pointer_value();
         let sorted = self.llcx.bool_type().const_int(u64::from(t.sorted), false);
         self.mrt_i64(
             "map_pick",
-            &[
-                h.into(),
-                key.into(),
-                cmp.into(),
-                sorted.into(),
-                self.i64(op).into(),
-            ],
+            &[h.into(), key.into(), cmp.into(), sorted.into(), op.into()],
         )
     }
 
