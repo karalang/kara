@@ -985,6 +985,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   range over a large table cost time linear in its size. Each bound is now
   one search on both backends. Kata 1562 (`latest_back`) went from 6.24 G
   to 2.69 G instructions and from 0.82 s to 0.52 s (B-2026-11-14-16).
+- **A cleared `Map` or `Set` keeps its index.** `clear()` empties the
+  hash index in place, as it already kept the entries' room, so a table
+  cleared and refilled no longer rebuilds its index at each doubling of
+  every refill. A word-sized entry is also stored with one move. Kata
+  1546's bench, a `Set[i64]` cleared about 2.6 million times, went from
+  0.99 s to 0.77 s, against checked Rust's `HashSet` at 0.73 s
+  (B-2026-11-14-11).
 - **A char's `to_string()` that is only lent does not allocate.** When the
   `String` is only borrowed, as in `"aeiou".contains(c.to_string())` (the
   form the char-pattern fix-it writes), a compiled build keeps the char's

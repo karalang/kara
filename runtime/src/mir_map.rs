@@ -1013,7 +1013,19 @@ unsafe fn insert(
         if at < m.slots {
             std::ptr::copy(m.slot_ptr(at), m.slot_ptr(at + 1), (m.slots - at) * es);
         }
-        std::ptr::copy_nonoverlapping(entry, m.slot_ptr(at), es);
+        // A word-sized entry (an `i64` set's) as one move rather than a
+        // `memcpy` call of a size the compiler cannot see (B-2026-11-14-11).
+        match es {
+            8 => m
+                .slot_ptr(at)
+                .cast::<u64>()
+                .write_unaligned(entry.cast::<u64>().read_unaligned()),
+            16 => m
+                .slot_ptr(at)
+                .cast::<u128>()
+                .write_unaligned(entry.cast::<u128>().read_unaligned()),
+            _ => std::ptr::copy_nonoverlapping(entry, m.slot_ptr(at), es),
+        }
     }
     m.slots += 1;
     if !m.dead.is_empty() {
@@ -1281,7 +1293,16 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
         m.header_room();
     }
     m.slots = 0;
-    m.free_cells();
+    // The index keeps its cells, emptied, as the entries keep their room:
+    // a table cleared and refilled, such as kata 1546's set of prefix sums
+    // cleared at every cut, otherwise rebuilt its index at each doubling
+    // of every refill, an allocation and a rehash of the live slots each
+    // (B-2026-11-14-11). Rust's `HashSet::clear` keeps its capacity too.
+    if m.ncells != 0 {
+        // SAFETY: the block holds `ncells + GROUP` control bytes.
+        unsafe { std::slice::from_raw_parts_mut(m.cells.cast_mut(), m.ncells + GROUP) }
+            .fill(CTRL_EMPTY);
+    }
     m.index_used = 0;
     m.dead.clear();
     m.holes = 0;
