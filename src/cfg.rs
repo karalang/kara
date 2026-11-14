@@ -797,6 +797,11 @@ impl<'a> CfgBuilder<'a> {
         // `self.defer_stack` before recursing into `lower_block` (which
         // mutates the stack).
         let frame = self.defer_stack[frame_idx].items.clone();
+        // The scope is being left, so its cleanup bodies lower without it
+        // and the frames inside it: an exit written in one (refused by the
+        // typechecker, design.md §10) then cannot run the same cleanup
+        // again, which recursed without end.
+        let left = self.defer_stack.split_off(frame_idx);
         let mut cur = cur;
         // Each body lowers into a fresh block so its uses are not
         // recorded into the caller's `cur` (which would conflate the
@@ -822,6 +827,7 @@ impl<'a> CfgBuilder<'a> {
                 self.pop_cleanup_rename_frame();
             }
         }
+        self.defer_stack.extend(left);
         cur
     }
 

@@ -12042,6 +12042,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.in_defer = true;
                 self.infer_block(body);
                 self.in_defer = prev;
+                self.reject_cleanup_exits(body);
             }
             StmtKind::ErrDefer { binding, body } => {
                 let prev = self.in_defer;
@@ -12087,6 +12088,25 @@ impl<'a> super::TypeChecker<'a> {
                     self.local_scope.pop();
                 }
                 self.in_defer = prev;
+                self.reject_cleanup_exits(body);
+                // design.md §10 Rules: with no failure exit, an `errdefer`
+                // never runs. A closure's own return type is not tracked
+                // here, so one inside a closure is left alone.
+                let fails = match &self.current_return_type {
+                    Some(Type::Named { name, .. }) => name == "Result" || name == "Option",
+                    Some(Type::Error) => true,
+                    _ => false,
+                };
+                if !fails && self.closure_return_types.is_empty() {
+                    self.type_lint_warning(
+                        "this function cannot return an error, so the errdefer never runs\n\
+                         help: use `defer` if the cleanup should always run"
+                            .to_string(),
+                        stmt.span,
+                        TypeErrorKind::StyleLint,
+                        "unreachable_errdefer",
+                    );
+                }
             }
             StmtKind::Assign { target, value } => {
                 self.note_last_mut_write(target);
@@ -13541,4 +13561,68 @@ fn only_read_after(body: &Block, name: &str, from: usize) -> bool {
     };
     block(body, &mut s);
     s.binders == 1 && s.uses == s.reads
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// design.md §10 Rules: a `defer` or `errdefer` block runs while its
+    /// scope is being left, so it may not start another exit. Each `?`,
+    /// `return`, and `break` or `continue` whose loop (or labeled block)
+    /// is not written inside the block is refused, one diagnostic for the
+    /// four. A closure in the block exits only itself; a cleanup block
+    /// nested in this one reports its own exits. The control-flow graph
+    /// and MIR builders lowered such an exit by running the cleanup again,
+    /// without end (a stack overflow in `karac check`).
+    pub(super) fn reject_cleanup_exits(&mut self, body: &Block) {
+        let within = |inner: &Span, outer: &Span| {
+            inner.offset >= outer.offset && inner.offset < outer.offset + outer.length.max(1)
+        };
+        // Where an exit may go: the bodies of loops (unlabeled `break` and
+        // `continue`, or their label) and of labeled blocks.
+        let mut loops: Vec<(Span, Option<String>)> = Vec::new();
+        let mut labeled: Vec<(Span, String)> = Vec::new();
+        let mut apart: Vec<Span> = Vec::new();
+        let mut exits: Vec<(Span, Option<Option<String>>)> = Vec::new();
+        crate::span_visitor::for_each_expr_in_block(body, &mut |e: &Expr| match &e.kind {
+            ExprKind::While { label, body, .. }
+            | ExprKind::WhileLet { label, body, .. }
+            | ExprKind::For { label, body, .. }
+            | ExprKind::Loop { label, body, .. } => loops.push((body.span, label.clone())),
+            ExprKind::LabeledBlock { label, body, .. } => labeled.push((body.span, label.clone())),
+            ExprKind::Closure { body, .. } => apart.push(body.span),
+            ExprKind::Return(_) | ExprKind::Question(_) => exits.push((e.span, None)),
+            ExprKind::Break { label, .. } | ExprKind::Continue { label, .. } => {
+                exits.push((e.span, Some(label.clone())))
+            }
+            _ => {}
+        });
+        crate::span_visitor::for_each_stmt_in_block(body, &mut |st: &Stmt| {
+            if let StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } = &st.kind {
+                apart.push(body.span);
+            }
+        });
+        for (at, target) in exits {
+            if apart.iter().any(|a| within(&at, a)) {
+                continue;
+            }
+            let inside = match &target {
+                None => false,
+                Some(None) => loops.iter().any(|(s, _)| within(&at, s)),
+                Some(Some(l)) => {
+                    loops
+                        .iter()
+                        .any(|(s, ll)| ll.as_deref() == Some(l.as_str()) && within(&at, s))
+                        || labeled.iter().any(|(s, ll)| ll == l && within(&at, s))
+                }
+            };
+            if !inside {
+                self.type_error(
+                    "a defer/errdefer block cannot leave its scope early \
+                     (`?`, `return`, `break`, `continue`)"
+                        .to_string(),
+                    at,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+    }
 }

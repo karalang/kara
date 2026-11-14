@@ -2997,13 +2997,6 @@ impl<'a> super::TypeChecker<'a> {
         // propagation check on the pinned operand.
         if let ExprKind::Question(inner) = &expr.kind {
             if Self::is_try_with_capacity_call(inner) {
-                if self.in_defer {
-                    self.type_error(
-                        "'?' operator is not allowed inside defer/errdefer blocks".to_string(),
-                        expr.span,
-                        TypeErrorKind::TypeMismatch,
-                    );
-                }
                 let wrapped = self.result_alloc_error_type(expected.clone());
                 let inner_ty = self.check_expr(inner, &wrapped);
                 if inner_ty == Type::Error {
@@ -13946,13 +13939,7 @@ impl<'a> super::TypeChecker<'a> {
 
             // Postfix
             ExprKind::Question(inner) => {
-                if self.in_defer {
-                    self.type_error(
-                        "'?' operator is not allowed inside defer/errdefer blocks".to_string(),
-                        expr.span,
-                        TypeErrorKind::TypeMismatch,
-                    );
-                }
+                // In a cleanup block, refused by `reject_cleanup_exits`.
                 self.infer_question(inner, &expr.span)
             }
 

@@ -20,6 +20,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A `?`, a `return`, or a `break` or `continue` whose loop encloses the
+  block is an error in a `defer` or `errdefer` block, one diagnostic for the
+  four: `a defer/errdefer block cannot leave its scope early (`?`, `return`,
+  `break`, `continue`)` (design.md §10 Rules, B-2026-11-14-19). `karac check` and
+  `build` died of a stack overflow on every one but `errdefer { return .. }`,
+  which passed check and failed in the compiler's MIR stage. A loop or
+  labeled block written inside the block still exits itself.
+
 - A `test "..." { }` block in a package file that is not a `_test.kara`
   file is an error, `E_TEST_OUTSIDE_TEST_FILE`, naming the companion file
   to move it to: `karac test` runs only the blocks in `_test.kara` files,
@@ -470,6 +478,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `e.to_string()` and a `?` into `AnyError` on both MIR backends, as
   concurrency.md says; it printed the derived `Full(2)` / `Closed(3)`
   (B-2026-11-14-30).
+- A closure that captures a struct by move and uses it only through its
+  fields moves just those fields, as a borrowing capture borrows just its
+  fields (core semantics §3.6, §9.1; B-2026-11-14-20). It moved the whole value: a
+  later use of another field (`let f = || eat(s.a); eat(s.b);`) passed
+  check and failed every run with the compiler's internal move check, and
+  a returned `|| s.a.n` kept `s.b` and `s.c` alive until the closure
+  dropped. A struct with a `Drop` body still moves whole.
 - `parse` reports the `ParseError` its documentation gives at the edges.
   A whitespace-only input is `Empty`, as `""` is (it was `InvalidDigit`
   for an integer and `Invalid` for a float), and whitespace around a
@@ -1050,6 +1065,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   into an `i32` names that literal, and `karac fix` writes its suffix
   (`0i32`), which types that position of every tuple pushed (kata 1129,
   B-2026-11-12-2).
+- An `errdefer` in a function returning neither `Result` nor `Option` is
+  `warning[unreachable_errdefer]`: there is no failure exit, so it never
+  runs; the help points to `defer` (design.md §10 Rules, B-2026-11-14-19).
 - `karac fix` writes five rewrites its messages already named: an unknown
   method's "did you mean 'len'?", `{x:?}` to `{x}`, `-> escaping Fn(..)` to
   `-> Fn(..)`, a nested `fn` that shares its line with other code moved above

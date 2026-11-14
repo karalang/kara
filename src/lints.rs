@@ -168,6 +168,12 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              from the item. The text is discarded.",
     },
     LintInfo {
+        name: "unreachable_errdefer",
+        default_level: LintLevel::Warn,
+        description: "An `errdefer` in a function whose return type is neither `Result` nor \
+             `Option` (design.md §10 Rules): there is no failure exit, so it never runs.",
+    },
+    LintInfo {
         name: "redundant_suffix",
         default_level: LintLevel::Warn,
         description: "A numeric literal's explicit suffix matches the context's inferred type.",
