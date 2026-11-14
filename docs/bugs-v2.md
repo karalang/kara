@@ -121,8 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-1 | 2026-11-14 | typecheck | low | Whether a let-bound literal compared with an `i32` can still be fixed to `i32` by a later argument depends on statement order: `let i = 0; take_i32(i); if i < n {..}` checks, `let i = 0; if i < n { take_i32(i) }` is refused as narrowing | — |
 | B-2026-11-14-2 | 2026-11-14 | ownership | low | The ownership-cycle help on a recursive plain enum offers `Box[T]`, which Kāra does not have, instead of design.md's `shared enum` | — |
 | B-2026-11-14-3 | 2026-11-14 | typecheck | low | `f(x.clone())` where `f`'s parameter only borrows copies `x` for nothing, and no lint flags it: a LeetCode Rust template's adapter keeps `Solution.number_of_beams(bank.clone())` after `karac fix` carries it (kata 2125), because Rust's by-value `Vec<String>` parameter became Kāra's borrowing `Vec[String]` | — |
-| B-2026-11-14-4 | 2026-11-14 | interp | medium | A `VecDeque` worked from the front (`pop_front`, `pop_front`, `push_front`, `push_back` a round) runs in quadratic time under the MIR interpreter: `pop_front` drops the front's empty slots as soon as they outnumber the elements, and the next `push_front` opens as many again | — |
-| B-2026-11-14-5 | 2026-11-14 | ownership | medium | A range view made in a `match` / `if let` scrutinee stays borrowed through the arms even when the scrutinee's value holds no borrow: `match v[1..].iter().position(..) { Some(at) => { v.remove(at + 1); } .. }` is refused, though `let found = v[1..].iter().position(..);` then the same `match` on `found` checks, and so does `match v.iter().position(..)` | — |
 
 ### Relocated
 
@@ -1165,6 +1163,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-80 | typecheck | medium | A struct or enum's `const` parameter could not be given an argument: design.md § Const generic parameters gives user types `const` parameters (`struc… | 5a2e3d6aa6 |
 | B-2026-11-13-81 | typecheck | low | A view literal built in place at an `own` parameter is taken for a temporary the result borrows: `pick([t.as_str()])` with `fn pick(other: own Vec[St… | 222b88e109 |
 | B-2026-11-13-82 | mir | medium | Moving a `String` on a `return` inside a loop over its `split(..)` is refused (E0516) since the split iterator keeps its own `String` pattern (0afc89… | 7bf1787ef8 |
+| B-2026-11-14-4 | interp | medium | A `VecDeque` worked from the front (`pop_front`, `pop_front`, `push_front`, `push_back` a round) runs in quadratic time under the MIR interpreter: `p… | 3d1fc8e26 |
+| B-2026-11-14-5 | ownership | medium | A range view made in a `match` / `if let` scrutinee stays borrowed through the arms even when the scrutinee's value holds no borrow: `match v[1..].it… | 3d1fc8e26 |
 
 </details>
 
