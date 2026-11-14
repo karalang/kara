@@ -335,6 +335,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `s.push_str(x.repeat(n))` and `s += x.repeat(n)`, with `x` a literal or
+  an owned `String` other than `s`, append the copies to `s` in place,
+  where they built a `String` of the repeat and freed it once appended
+  (B-2026-11-12-15). Kata 1138's bench runs in 0.22 s where it took
+  0.83 s; Rust's, which builds the repeat, takes 0.60 s.
 - `for i in (a..b).step_by(k)` over `i64` (and `..=`) is a counting loop,
   where it called the library's `IterStepBy.next` per item, through a
   `first` flag, `advance_by` and two `Option`s (B-2026-11-12-17). Kata

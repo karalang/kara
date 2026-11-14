@@ -7235,6 +7235,67 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok((place, t))
     }
 
+    /// `x.repeat(n)` appended by `s.push_str(..)` (or `s += ..`), as the
+    /// text and count operands of the native `String.__push_repeat`, which
+    /// appends the copies with no `String` of their own between them
+    /// (B-2026-11-12-15): kata 1138's four `path.push_str("U".repeat(k))`
+    /// per letter each allocated and freed one. Only when `x` is a literal,
+    /// or an owned `String` local other than the one `s` is reached from,
+    /// so nothing `x` borrows can be `s`, which the call lends mutably
+    /// while it reads `x`.
+    fn repeat_to_push(
+        &mut self,
+        value: &'a Expr,
+        target: &'a Expr,
+    ) -> R<Option<(Operand, Operand)>> {
+        let ExprKind::MethodCall {
+            object: x,
+            method,
+            args,
+            turbofish: None,
+            ..
+        } = &value.kind
+        else {
+            return Ok(None);
+        };
+        let [n] = args.as_slice() else {
+            return Ok(None);
+        };
+        if method != "repeat" || n.label.is_some() || n.mut_marker {
+            return Ok(None);
+        }
+        let xt = self.expr_ty(x)?;
+        let nt = self.expr_ty(&n.value)?;
+        let i64t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let tcx = self.tys().tcx();
+        let count_ok = match tcx.kind(nt) {
+            HK::Ref(t) | HK::MutRef(t) => t == i64t,
+            _ => nt == i64t,
+        };
+        let mut root = target;
+        while let ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::MethodCall { object, .. } = &root.kind
+        {
+            root = object;
+        }
+        let apart = match (&x.kind, &root.kind) {
+            (ExprKind::StringLit(_), _) => true,
+            (ExprKind::Identifier(a), ExprKind::Identifier(b)) => {
+                a != b && matches!(tcx.kind(xt), HK::Str)
+            }
+            (ExprKind::Identifier(_), _) => matches!(tcx.kind(xt), HK::Str),
+            _ => false,
+        };
+        if !count_ok || !apart {
+            return Ok(None);
+        }
+        let text = self.lib_arg(x, !self.is_copy(xt))?;
+        let count = self.owned_operand(&n.value, i64t)?;
+        Ok(Some((text, count)))
+    }
+
     fn compound_assign(&mut self, target: &'a Expr, op: CompoundOp, value: &'a Expr) -> R<()> {
         // `s += x` on a `String` appends, as `s.push_str(x)` (or `push` of
         // a `char`) does.
@@ -7247,7 +7308,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 } else {
                     "push_str"
                 };
-                let arg = self.lib_arg(value, !self.is_copy(vt))?;
+                let fused = if method == "push_str" {
+                    self.repeat_to_push(value, target)?
+                } else {
+                    None
+                };
+                let (method, rest) = match fused {
+                    Some((text, count)) => ("__push_repeat", vec![text, count]),
+                    None => (method, vec![self.lib_arg(value, !self.is_copy(vt))?]),
+                };
                 let mut place = self.expr_place(target, true)?;
                 while let HK::Ref(_) | HK::MutRef(_) =
                     self.tys().tcx().kind(self.place_type(&place))
@@ -7259,11 +7328,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let r = self.temp(rt);
                 self.assign(r, Rvalue::Ref(BorrowKind::Mut, place));
                 let u = self.temp(self.unit());
-                self.call_native(
-                    &format!("String.{method}"),
-                    vec![Operand::Move(Place::local(r)), arg],
-                    Place::local(u),
-                );
+                let mut ops = vec![Operand::Move(Place::local(r))];
+                ops.extend(rest);
+                self.call_native(&format!("String.{method}"), ops, Place::local(u));
                 return Ok(());
             }
         }
@@ -27255,6 +27322,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.queue_nested_displays(base);
                 }
                 self.queue_key_eq(base);
+                if method == "push_str" && matches!(self.tys().tcx().kind(base), HK::Str) {
+                    if let [a] = args {
+                        if let Some((text, count)) = self.repeat_to_push(&a.value, object)? {
+                            let mut rest = vec![text, count];
+                            let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+                            ops.extend(rest);
+                            self.call_native("String.__push_repeat", ops, dest);
+                            return Ok(());
+                        }
+                    }
+                }
                 let mut rest = Vec::with_capacity(args.len());
                 self.hint_lib_args(base, method, args);
                 // Stored values and closures move in; other non-Copy

@@ -199,6 +199,135 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(lenp, need.into())
     }
 
+    /// `s.repeat(n)` (`n` below 0 taken as 0) appended to the `String` at
+    /// `v`, with no `String` of its own between them (`mir::lower`'s
+    /// `push_str` of a `repeat`, B-2026-11-12-15): one reservation, then a
+    /// `memset` of a one-byte `s`, else a copy of `s` doubled in place.
+    /// A length past `i64::MAX` panics with `repeat`'s capacity overflow.
+    pub(super) fn string_push_repeat(
+        &mut self,
+        v: PointerValue<'ctx>,
+        s: PointerValue<'ctx>,
+        sn: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> R<()> {
+        let i64t = self.llcx.i64_type();
+        let neg = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, n, self.i64(0), "")
+            .map_err(e)?;
+        let n = self
+            .builder
+            .build_select(neg, self.i64(0), n, "")
+            .map_err(e)?
+            .into_int_value();
+        let (total, over) = self.with_overflow("mul", false, sn, n)?;
+        let huge = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, total, self.i64(0), "")
+            .map_err(e)?;
+        let bad = self.builder.build_or(over, huge, "").map_err(e)?;
+        let f = self.cur_fn()?;
+        let fail = self.llcx.append_basic_block(f, "repeat.overflow");
+        let ok = self.llcx.append_basic_block(f, "repeat.ok");
+        self.builder
+            .build_conditional_branch(bad, fail, ok)
+            .map_err(e)?;
+        self.builder.position_at_end(fail);
+        self.abort_with("capacity overflow")?;
+        self.builder.position_at_end(ok);
+        let any = self
+            .builder
+            .build_int_compare(IntPredicate::NE, total, self.i64(0), "")
+            .map_err(e)?;
+        self.if_then(any, |cx| {
+            let lenp = cx.offset(v, 8)?;
+            let len = cx.load_i64(lenp)?;
+            let cap = cx.load_i64(cx.offset(v, 16)?)?;
+            let need = cx.builder.build_int_add(len, total, "need").map_err(e)?;
+            let short = cx
+                .builder
+                .build_int_compare(IntPredicate::ULT, cap, need, "short")
+                .map_err(e)?;
+            cx.if_then(short, |cx| {
+                let ptr = cx.load_ptr(v)?;
+                let grow = cx.shim_fn(Shim::StrReserve);
+                let words = cx
+                    .builder
+                    .build_call(
+                        grow,
+                        &[ptr.into(), len.into(), cap.into(), total.into()],
+                        "grown",
+                    )
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_struct_value();
+                let buf = cx.builder.build_extract_value(words, 0, "").map_err(e)?;
+                let cap = cx.builder.build_extract_value(words, 1, "").map_err(e)?;
+                cx.store(v, buf)?;
+                cx.store(cx.offset(v, 16)?, cap)
+            })?;
+            let buf = cx.load_ptr(v)?;
+            let at = cx.elem_ptr(buf, len, 1)?;
+            let one = cx
+                .builder
+                .build_int_compare(IntPredicate::EQ, sn, cx.i64(1), "")
+                .map_err(e)?;
+            let f = cx.cur_fn()?;
+            let fill = cx.llcx.append_basic_block(f, "repeat.fill");
+            let copy = cx.llcx.append_basic_block(f, "repeat.copy");
+            let head = cx.llcx.append_basic_block(f, "repeat.head");
+            let body = cx.llcx.append_basic_block(f, "repeat.double");
+            let done = cx.llcx.append_basic_block(f, "repeat.done");
+            cx.builder
+                .build_conditional_branch(one, fill, copy)
+                .map_err(e)?;
+            cx.builder.position_at_end(fill);
+            let i8t = cx.llcx.i8_type();
+            let byte = cx
+                .builder
+                .build_load(i8t, s, "")
+                .map_err(e)?
+                .into_int_value();
+            cx.builder.build_memset(at, 1, byte, total).map_err(e)?;
+            cx.builder.build_unconditional_branch(done).map_err(e)?;
+            // Each round copies what is written so far after itself, so
+            // `total` bytes take about log2(n) copies.
+            cx.builder.position_at_end(copy);
+            cx.builder.build_memcpy(at, 1, s, 1, sn).map_err(e)?;
+            cx.builder.build_unconditional_branch(head).map_err(e)?;
+            cx.builder.position_at_end(head);
+            let filled = cx.builder.build_phi(i64t, "filled").map_err(e)?;
+            let fv = filled.as_basic_value().into_int_value();
+            let more = cx
+                .builder
+                .build_int_compare(IntPredicate::ULT, fv, total, "")
+                .map_err(e)?;
+            cx.builder
+                .build_conditional_branch(more, body, done)
+                .map_err(e)?;
+            cx.builder.position_at_end(body);
+            let left = cx.builder.build_int_sub(total, fv, "").map_err(e)?;
+            let lt = cx
+                .builder
+                .build_int_compare(IntPredicate::ULT, fv, left, "")
+                .map_err(e)?;
+            let c = cx
+                .builder
+                .build_select(lt, fv, left, "")
+                .map_err(e)?
+                .into_int_value();
+            let to = cx.elem_ptr(at, fv, 1)?;
+            cx.builder.build_memcpy(to, 1, at, 1, c).map_err(e)?;
+            let next = cx.builder.build_int_add(fv, c, "").map_err(e)?;
+            cx.builder.build_unconditional_branch(head).map_err(e)?;
+            filled.add_incoming(&[(&sn, copy), (&next, body)]);
+            cx.builder.position_at_end(done);
+            cx.store(lenp, need.into())
+        })
+    }
+
     /// Grow the `Vec` or `String` at `v` (holding `len` of `cap`) by one
     /// `size`-byte element: [`Self::reserve_via_copy`] with the header
     /// already loaded.

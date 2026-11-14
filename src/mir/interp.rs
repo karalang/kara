@@ -3656,6 +3656,17 @@ impl<'a> Interp<'a> {
                 let a = self.string_at(a)?;
                 Ok(Value::Bool(self.str_ref(b)? == a))
             }
+            // `s.push_str(x.repeat(n))` with no `String` between them
+            // (B-2026-11-12-15).
+            (false, "__push_repeat", [s, x, Value::Int(n)]) => {
+                let tail = self.string_at(x)?.repeat((*n).max(0) as usize);
+                let id = self.box_behind(s)?;
+                match &mut self.live(id)?.value {
+                    Value::Str(text) => text.push_str(&tail),
+                    other => return err(format!("{name} of {other:?}")),
+                }
+                Ok(Value::Unit)
+            }
             (false, "push_str" | "push" | "clear", [s, rest @ ..]) => {
                 let tail = match rest {
                     [Value::Char(c)] => c.to_string(),

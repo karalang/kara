@@ -1653,6 +1653,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.string_append(v, s, n)?;
                 self.drop_moved(&args[1..])
             }
+            ("String", "__push_repeat") => {
+                let v = self.ref_arg(&args[0])?;
+                let (s, sn) = self.str_parts(&args[1])?;
+                let n = self.int_arg(&args[2])?;
+                self.string_push_repeat(v, s, sn, n)?;
+                self.drop_moved(&args[1..2])
+            }
             ("String", "push") => {
                 // An ASCII char in line, as a byte push; any other through
                 // the runtime.
