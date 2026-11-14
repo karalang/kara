@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | run-vs-build | 32 |
 | other | 30 |
 | codegen-gap | 30 |
-| crash | 24 |
+| crash | 25 |
 | leak | 4 |
 | use-after-free | 3 |
 
@@ -82,12 +82,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 79 |
 | parser | 77 |
 | interp | 53 |
-| runtime | 42 |
+| runtime | 43 |
 | effect | 31 |
 | resolver | 26 |
 | codegen | 22 |
 | other | 7 |
-| autopar | 4 |
+| autopar | 5 |
 | lexer | 1 |
 ## Current state
 
@@ -121,6 +121,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-2 | 2026-11-14 | ownership | low | The ownership-cycle help on a recursive plain enum offers `Box[T]`, which Kāra does not have, instead of design.md's `shared enum` | — |
 | B-2026-11-14-3 | 2026-11-14 | typecheck | low | `f(x.clone())` where `f`'s parameter only borrows copies `x` for nothing, and no lint flags it: a LeetCode Rust template's adapter keeps `Solution.number_of_beams(bank.clone())` after `karac fix` carries it (kata 2125), because Rust's by-value `Vec<String>` parameter became Kāra's borrowing `Vec[String]` | — |
 | B-2026-11-14-6 | 2026-11-14 | typecheck | low | `Array[i64, 26].filled(0)` is refused with `no method 'filled' on `Array[…]``: the type is elided, and nothing points to `[0; 26]`, Kāra's fixed-array fill, though `Vec.filled(n, v)` exists and invites the guess | — |
+| B-2026-11-14-7 | 2026-11-14 | autopar+runtime | medium | An auto-par loop whose body recurses deeply runs the recursion on a pool worker's 8 MiB stack, where the main thread has 1 GiB: a program that finishes with KARAC_AUTO_PAR=0 dies of SIGSEGV in a default build, depending on which worker takes the iteration, and with no 'stack overflow' note (kata 2127's struct arm, a pair's 999998-person tail found by a recursive `tail` method inside `for a in 0..n { pairs += .. office.tail(a, b) .. }`) | — |
 
 ### Relocated
 
