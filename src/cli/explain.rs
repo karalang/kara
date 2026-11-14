@@ -1008,6 +1008,329 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     ("W0278", lint("must_use")),
     ("E0278", lint("must_use")),
+    // ── symbolic codes (B-2026-11-13-20) ────────────────────────
+    //
+    // Every `E_*` code minted in src/ has a row, held there by
+    // `every_minted_symbolic_code_is_catalogued`. Front-end codes restate
+    // the error kind they are reported under.
+    ("E_FN_ANONYMOUS_PARAM", parse("Syntax")),
+    ("E_TRAIT_METHOD_ANONYMOUS_PARAM", parse("Syntax")),
+    ("E_MARKER_TRAIT_HAS_ITEM", parse("Syntax")),
+    ("E_MARKER_TRAIT_HAS_METHOD", parse("Syntax")),
+    ("E_TEST_BLOCK_NOT_TOP_LEVEL", parse("Syntax")),
+    (
+        "E_CODEGEN_HINT_INVALID_POSITION",
+        res("CodegenHintInvalidTarget", None),
+    ),
+    (
+        "E_CODEGEN_HINT_ON_EXTERN_DECL",
+        res("CodegenHintOnExternDecl", None),
+    ),
+    (
+        "E_QUERY_RESOLUTION_CONFLICT",
+        res("QueryResolutionConflict", None),
+    ),
+    (
+        "E_UNION_NON_EXHAUSTIVE_FORBIDDEN",
+        res("UnionNonExhaustiveForbidden", None),
+    ),
+    (
+        "E_DEFAULT_ATTRIBUTE_INVALID_POSITION",
+        res("DefaultAttributeInvalidPosition", None),
+    ),
+    (
+        "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE",
+        res("DefaultAttributeWithoutDerive", None),
+    ),
+    (
+        "E_HELPER_ATTRIBUTE_INVALID_POSITION",
+        res("HelperAttributeInvalidPosition", None),
+    ),
+    ("E_PANIC_HANDLER", res("PanicHandlerInvalid", None)),
+    ("E_TEST_OUTSIDE_TEST_FILE", res("TestOutsideTestFile", None)),
+    (
+        "E_MALFORMED_ATTRIBUTE_ARGS",
+        res("MalformedAttributeArgs", None),
+    ),
+    ("E_EXTERN_REF_PARAM", ty("ExternSignatureInvalid", None)),
+    ("E_EXTERN_REF_RETURN", ty("ExternSignatureInvalid", None)),
+    (
+        "E_PTR_CONST_REQUIRES_PLACE",
+        ty("InvalidUnaryOp", Some(DiagnosticClass::InvalidUnaryOp)),
+    ),
+    (
+        "E_PTR_MUT_REQUIRES_PLACE",
+        ty("InvalidUnaryOp", Some(DiagnosticClass::InvalidUnaryOp)),
+    ),
+    (
+        "E_STDLIB_VARIANCE_IMPLICIT",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_VARIANCE_DECLARATION_INCONSISTENT",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN",
+        ty("NonExhaustiveCrossPackagePattern", None),
+    ),
+    (
+        "E_SLICE_FROM_TEMPORARY_ESCAPES",
+        own("SliceFromTemporaryEscapes", None),
+    ),
+    (
+        "E_SLICE_BORROW_CONFLICT",
+        own(
+            "SliceBorrowConflict",
+            Some(DiagnosticClass::OwnershipBorrowConflict),
+        ),
+    ),
+    (
+        "E_CROSS_BORROW_CONFLICT",
+        own(
+            "CrossBorrowConflict",
+            Some(DiagnosticClass::OwnershipBorrowConflict),
+        ),
+    ),
+    (
+        "E_CLOSURE_CAPTURE_BORROW_CONFLICT",
+        own(
+            "ClosureCaptureBorrowConflict",
+            Some(DiagnosticClass::OwnershipBorrowConflict),
+        ),
+    ),
+    ("E_RC_BUDGET_EXCEEDED", own("RcBudgetExceeded", None)),
+    (
+        "E_CONCURRENT_SHARED_STRUCT",
+        own("ConcurrentSharedStruct", None),
+    ),
+    (
+        "E_CONCURRENT_PLAIN_STRUCT",
+        own("ConcurrentPlainStruct", None),
+    ),
+    (
+        "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE",
+        own("RcFallbackAllocatesUnderFallibleProfile", None),
+    ),
+    (
+        "E_EXCLUSIVE_BORROW_ALIASED_ARGS",
+        own(
+            "ExclusiveBorrowAliasedArgs",
+            Some(DiagnosticClass::OwnershipBorrowConflict),
+        ),
+    ),
+    ("E_REQUIRE_SIMD", phased("simd_check", "SimdFinding")),
+    ("E_COMPTIME", phased("comptime", "ComptimeError")),
+    // The package manager. `phase` is what its JSON record carries.
+    (
+        "E_WORKSPACE_DEP_NOT_DECLARED",
+        phased("dep_resolution", "DepGraphError::WorkspaceDepNotDeclared"),
+    ),
+    (
+        "E_WORKSPACE_DEP_OUTSIDE_WORKSPACE",
+        phased(
+            "dep_resolution",
+            "DepGraphError::WorkspaceDepOutsideWorkspace",
+        ),
+    ),
+    (
+        "E_DEPENDENCY_CYCLE",
+        phased("dep_resolution", "DepGraphError::DependencyCycle"),
+    ),
+    (
+        "E_PATH_DEP_NOT_FOUND",
+        phased("dep_resolution", "DepGraphError::PathDepNotFound"),
+    ),
+    (
+        "E_OFFLINE_VENDOR_ENTRY_MISSING",
+        phased("dep_resolution", "DepGraphError::OfflineVendorEntryMissing"),
+    ),
+    (
+        "E_PATH_DEP_MANIFEST_INVALID",
+        phased("dep_resolution", "DepGraphError::PathDepManifestInvalid"),
+    ),
+    (
+        "E_REGISTRY_FETCH_FAILED",
+        phased("dep_resolution", "DepGraphError::RegistryFetchFailed"),
+    ),
+    (
+        "E_GIT_FETCH_FAILED",
+        phased("dep_resolution", "DepGraphError::GitFetchFailed"),
+    ),
+    (
+        "E_GIT_UNAVAILABLE",
+        phased("dep_resolution", "GitFetchError::GitUnavailable"),
+    ),
+    (
+        "E_GIT_NO_MANIFEST",
+        phased("dep_resolution", "GitFetchError::NoManifest"),
+    ),
+    (
+        "E_REGISTRY_DEP_UNSUPPORTED",
+        phased("dep_resolution", "ResolverError::RegistryDepUnsupported"),
+    ),
+    (
+        "E_GIT_DEP_UNSUPPORTED",
+        phased("dep_resolution", "ResolverError::GitDepUnsupported"),
+    ),
+    (
+        "E_DEPENDENCY_VERSION_CONFLICT",
+        phased("dep_resolution", "ResolverError::VersionConflict"),
+    ),
+    (
+        "E_DEPENDENCY_SOURCE_CONFLICT",
+        phased("dep_resolution", "ResolverError::SourceConflict"),
+    ),
+    (
+        "E_TOOLCHAIN_TOO_OLD",
+        phased("dep_resolution", "ResolverError::ToolchainTooOld"),
+    ),
+    (
+        "E_DEPENDENCY_UNSATISFIABLE",
+        phased("dep_resolution", "ResolverError::UnsatisfiableGraph"),
+    ),
+    (
+        "E_OFFLINE_NO_VENDOR_DIR",
+        phased("dep_resolution", "OfflineNoVendorDir"),
+    ),
+    (
+        "E_PROXY_DISABLED",
+        phased("dep_resolution", "ProxyClientError::Disabled"),
+    ),
+    (
+        "E_PROXY_UNREACHABLE",
+        phased("dep_resolution", "ProxyClientError::Unreachable"),
+    ),
+    (
+        "E_PROXY_UNAUTHORIZED",
+        phased("dep_resolution", "ProxyClientError::Unauthorized"),
+    ),
+    (
+        "E_PROXY_PACKAGE_NOT_FOUND",
+        phased("dep_resolution", "ProxyClientError::PackageNotFound"),
+    ),
+    (
+        "E_PROXY_VERSION_NOT_FOUND",
+        phased("dep_resolution", "ProxyClientError::VersionNotFound"),
+    ),
+    (
+        "E_PROXY_MALFORMED_RESPONSE",
+        phased("dep_resolution", "ProxyClientError::MalformedResponse"),
+    ),
+    (
+        "E_PROXY_NOT_IMPLEMENTED",
+        phased("dep_resolution", "ProxyClientError::NotImplemented"),
+    ),
+    (
+        "E_REGISTRY_NO_MATCHING_VERSION",
+        phased("dep_resolution", "RegistryFetchError::NoMatchingVersion"),
+    ),
+    (
+        "E_REGISTRY_ONLY_YANKED",
+        phased("dep_resolution", "RegistryFetchError::OnlyYankedMatches"),
+    ),
+    (
+        "E_REGISTRY_EXTRACT_FAILED",
+        phased("dep_resolution", "RegistryExtractError"),
+    ),
+    (
+        "E_TOOLCHAIN_FILE_READ",
+        phased("toolchain_pin", "ToolchainError::FileRead"),
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_TOML",
+        phased("toolchain_pin", "ToolchainError::InvalidToml"),
+    ),
+    (
+        "E_TOOLCHAIN_MISSING_VERSION",
+        phased("toolchain_pin", "ToolchainError::MissingVersion"),
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_VERSION_TYPE",
+        phased("toolchain_pin", "ToolchainError::InvalidVersionType"),
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_VERSION_CONSTRAINT",
+        phased("toolchain_pin", "ToolchainError::InvalidVersionConstraint"),
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_TARGETS_TYPE",
+        phased("toolchain_pin", "ToolchainError::InvalidTargetsType"),
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_TARGET_ENTRY",
+        phased("toolchain_pin", "ToolchainError::InvalidTargetEntry"),
+    ),
+    (
+        "E_TOOLCHAIN_EMPTY_TARGET_ENTRY",
+        phased("toolchain_pin", "ToolchainError::EmptyTargetEntry"),
+    ),
+    (
+        "E_TOOLCHAIN_VERSION_MISMATCH",
+        phased("toolchain_pin", "ToolchainVersionMismatch"),
+    ),
+    ("E_LOCKFILE_IO", phased("lockfile", "LockfileError::Io")),
+    (
+        "E_LOCKFILE_PARSE",
+        phased("lockfile", "LockfileError::Parse"),
+    ),
+    (
+        "E_LOCKFILE_SCHEMA_VERSION",
+        phased("lockfile", "LockfileError::SchemaVersion"),
+    ),
+    (
+        "E_LOCKFILE_INVALID_SOURCE",
+        phased("lockfile", "LockfileError::InvalidSource"),
+    ),
+    (
+        "E_LOCKFILE_INVALID_FIELD",
+        phased("lockfile", "LockfileError::InvalidField"),
+    ),
+    (
+        "E_CACHE_HOME_UNSET",
+        phased("cache", "CacheError::HomeUnset"),
+    ),
+    (
+        "E_CACHE_UNREADABLE",
+        phased("cache", "CacheError::Unreadable"),
+    ),
+    (
+        "E_CACHE_MALFORMED_METADATA",
+        phased("cache", "CacheError::MalformedMetadata"),
+    ),
+    (
+        "E_CACHE_WRITE_FAILED",
+        phased("cache", "CacheError::WriteFailed"),
+    ),
+    (
+        "E_UPDATE_UNKNOWN_PACKAGE",
+        phased("update", "UnknownPackage"),
+    ),
+    ("E_UPDATE_ROOT_PACKAGE", phased("update", "RootPackage")),
+    (
+        "E_INSTALL_EMPTY_SPEC",
+        phased("install", "InstallSpecError::EmptySpec"),
+    ),
+    (
+        "E_INSTALL_MISSING_VALUE",
+        phased("install", "InstallSpecError::MissingValue"),
+    ),
+    (
+        "E_INSTALL_EMPTY_VERSION",
+        phased("install", "InstallSpecError::EmptyVersion"),
+    ),
+    (
+        "E_INSTALL_INVALID_VERSION",
+        phased("install", "InstallSpecError::InvalidVersion"),
+    ),
+    (
+        "E_INSTALL_INVALID_NAME",
+        phased("install", "InstallSpecError::InvalidPackageName"),
+    ),
+    (
+        "E_INSTALL_RESERVED_NAME",
+        phased("install", "InstallSpecError::ReservedKeyword"),
+    ),
 ];
 
 const fn ty(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
@@ -1103,6 +1426,19 @@ const fn mg(kind: &'static str) -> CodeEntry {
 const fn mf(kind: &'static str) -> CodeEntry {
     CodeEntry {
         phase: "manifest",
+        kind,
+        class: None,
+    }
+}
+
+/// A row for a phase with no helper of its own: the package manager's
+/// (`dep_resolution`, `toolchain_pin`, `lockfile`, `cache`, `update`,
+/// `install`), `simd_check` and `comptime`. `phase` is what the emitted
+/// record carries; `kind` names the error type or variant that mints the
+/// code. None is classified (B-2026-11-13-20).
+const fn phased(phase: &'static str, kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase,
         kind,
         class: None,
     }
@@ -2559,7 +2895,7 @@ pub fn concept_for(
         "resolve" => "names/resolution",
         "module_graph" => "modules/imports",
         "manifest" | "walker" | "dep_resolution" | "toolchain_pin" | "lockfile" | "update"
-        | "cache" => "packages/manifests",
+        | "cache" | "install" => "packages/manifests",
         "effect" | "effects" => "effects/inference-boundaries",
         "ownership" => "ownership/move-semantics",
         "provider_escape" => "effects/providers",
@@ -2972,7 +3308,8 @@ mod tests {
     /// WHOLE numeric space since B-2026-08-20-31, so every numbered code the
     /// emitter mints must have a row, full stop — nothing to keep in sync.
     /// Symbolic codes (`E_SLICE_BORROW_CONFLICT`, `E_UNKNOWN_ATTRIBUTE`, …)
-    /// are outside the numbering by design and are reached by class instead.
+    /// are outside the numbering by design; their own guard is
+    /// [`every_minted_symbolic_code_is_catalogued`].
     ///
     /// [`emitted_codes`] above cannot serve here: it keys off the
     /// `ResolveErrorKind::` / `TypeErrorKind::` text on the line, so it sees
@@ -3162,6 +3499,30 @@ mod tests {
             ("E0514", O::RcFallbackOfDropType),
             ("E0515", O::MoveOutOfPlace),
             ("E0522", O::MoveInCleanupBlock),
+            (
+                "E_SLICE_FROM_TEMPORARY_ESCAPES",
+                O::SliceFromTemporaryEscapes,
+            ),
+            ("E_CROSS_BORROW_CONFLICT", O::CrossBorrowConflict),
+            (
+                "E_CLOSURE_CAPTURE_BORROW_CONFLICT",
+                O::ClosureCaptureBorrowConflict,
+            ),
+            (
+                "E_CONCURRENT_SHARED_STRUCT",
+                O::ConcurrentSharedStruct {
+                    type_name: String::new(),
+                    binding: String::new(),
+                },
+            ),
+            (
+                "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE",
+                O::RcFallbackAllocatesUnderFallibleProfile,
+            ),
+            (
+                "E_EXCLUSIVE_BORROW_ALIASED_ARGS",
+                O::ExclusiveBorrowAliasedArgs,
+            ),
         ];
         for (code, kind) in ownerships {
             let want = crate::ownership::class_for_ownership_error_kind(kind);
@@ -3762,6 +4123,95 @@ mod tests {
         );
         for phase in ["no-such-phase", "build", "test"] {
             assert!(concept_id(concept_for(phase, "", None, None)).is_some());
+        }
+    }
+
+    /// The `E_*` codes the compiler's own code mints: every `"E_NAME"`
+    /// string literal under src/, outside `#[cfg(test)]` modules (whose
+    /// fixtures, `E_TEST` and the like, are not codes).
+    fn minted_symbolic_codes() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|e| e == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        let mut out = Vec::new();
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap();
+            // Cut at the first test module.
+            let mut end = text.len();
+            let mut at = 0;
+            while let Some(hit) = text[at..].find("#[cfg(test)]") {
+                let start = at + hit;
+                let rest = text[start + "#[cfg(test)]".len()..].trim_start();
+                if rest.starts_with("mod ") || rest.starts_with("pub mod ") {
+                    end = start;
+                    break;
+                }
+                at = start + 1;
+            }
+            let b = &text.as_bytes()[..end];
+            let mut i = 0;
+            while i + 3 < b.len() {
+                if &b[i..i + 3] != b"\"E_" {
+                    i += 1;
+                    continue;
+                }
+                let name_end = (i + 3..b.len())
+                    .find(|&j| {
+                        !(b[j].is_ascii_uppercase() || b[j].is_ascii_digit() || b[j] == b'_')
+                    })
+                    .unwrap_or(b.len());
+                if name_end > i + 3
+                    && name_end < b.len()
+                    && b[name_end] == b'"'
+                    && b[name_end - 1] != b'_'
+                {
+                    let file = path.strip_prefix(&root).unwrap().display().to_string();
+                    out.push((text[i + 1..name_end].to_string(), file));
+                }
+                i = name_end;
+            }
+        }
+        out
+    }
+
+    /// design.md §2: every code is catalogued for `karac explain`. A symbolic
+    /// code minted anywhere in src/ without a [`CODE_TABLE`] row fails here
+    /// (B-2026-11-13-20: 84 of them had none, and `explain` refused each).
+    #[test]
+    fn every_minted_symbolic_code_is_catalogued() {
+        let minted = minted_symbolic_codes();
+        assert!(
+            minted.len() >= 80,
+            "the scan found only {} minted codes; it is not seeing src/",
+            minted.len()
+        );
+        let mut missing: Vec<String> = minted
+            .into_iter()
+            .filter(|(code, _)| lookup_code(code).is_empty())
+            .map(|(code, file)| format!("{code} ({file})"))
+            .collect();
+        missing.sort();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "symbolic codes minted in src/ with no CODE_TABLE row: {missing:?}"
+        );
+        for code in [
+            "E_DEPENDENCY_CYCLE",
+            "E_CROSS_BORROW_CONFLICT",
+            "E_TEST_BLOCK_NOT_TOP_LEVEL",
+        ] {
+            assert!(is_symbolic_code(code), "{code}");
         }
     }
 

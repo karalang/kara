@@ -45,7 +45,7 @@ fn parse_result_float[T](o: own Option[T], s: Str) -> Result[T, ParseError] {
     match o {
         Some(n) => Ok(n),
         None => {
-            if s.is_empty() {
+            if parse_blank(s) {
                 Err(ParseError.Empty)
             } else {
                 Err(ParseError.Invalid)
@@ -55,39 +55,76 @@ fn parse_result_float[T](o: own Option[T], s: Str) -> Result[T, ParseError] {
 }
 
 /// Why `s` holds no integer of a type that fits: an empty input, a
-/// character that is not a digit, or digits past the type's range.
+/// character that is not a digit, or digits past the type's range. The
+/// whitespace `parse` ignores around the number is ignored here too, so
+/// `"   "` is `Empty` and `" -1 "` for an unsigned type is `Underflow`
+/// (B-2026-11-13-21). One pass over the chars, testing with `parse_space`
+/// rather than `s.trim()` or `c.is_whitespace()`: their natives would link
+/// std's panic hook into every program that parses
+/// (tests/mir_panic_free_natives.rs).
 fn parse_int_error(s: Str, signed: bool) -> ParseError {
-    if s.is_empty() {
-        return ParseError.Empty;
-    }
     let mut negative = false;
     let mut digits = 0;
-    let mut first = true;
+    let mut nonzero = false;
+    let mut started = false;
+    let mut ended = false;
     for c in s.chars() {
-        if first and (c == '+' or c == '-') {
+        if parse_space(c) {
+            if started {
+                ended = true;
+            }
+        } else if ended {
+            return ParseError.InvalidDigit;
+        } else if not started and (c == '+' or c == '-') {
+            started = true;
             negative = c == '-';
         } else if c < '0' or c > '9' {
             return ParseError.InvalidDigit;
         } else {
+            started = true;
             digits += 1;
-        }
-        first = false;
-    }
-    if digits == 0 {
-        ParseError.InvalidDigit
-    } else if negative {
-        if signed {
-            ParseError.Underflow
-        } else {
-            let mut zero = true;
-            for c in s.chars() {
-                if c >= '1' and c <= '9' {
-                    zero = false;
-                }
+            if c != '0' {
+                nonzero = true;
             }
-            if zero { ParseError.Invalid } else { ParseError.Underflow }
         }
+    }
+    if not started {
+        ParseError.Empty
+    } else if digits == 0 {
+        ParseError.InvalidDigit
+    } else if negative and (signed or nonzero) {
+        ParseError.Underflow
+    } else if negative {
+        // `-0` is no value below the minimum, and an integer never reports
+        // `Invalid`: the `-` is the character that cannot appear.
+        ParseError.InvalidDigit
     } else {
         ParseError.Overflow
     }
+}
+
+/// `s` holds nothing but whitespace (or nothing at all).
+fn parse_blank(s: Str) -> bool {
+    for c in s.chars() {
+        if not parse_space(c) {
+            return false;
+        }
+    }
+    true
+}
+
+/// `c` has Unicode's White_Space property, the set Rust's `str::trim` strips
+/// and so the set the parse natives ignore around a number.
+fn parse_space(c: char) -> bool {
+    (c >= '\u{9}' and c <= '\u{d}')
+        or c == ' '
+        or c == '\u{85}'
+        or c == '\u{a0}'
+        or c == '\u{1680}'
+        or (c >= '\u{2000}' and c <= '\u{200a}')
+        or c == '\u{2028}'
+        or c == '\u{2029}'
+        or c == '\u{202f}'
+        or c == '\u{205f}'
+        or c == '\u{3000}'
 }

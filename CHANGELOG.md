@@ -433,6 +433,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `parse` reports the `ParseError` its documentation gives at the edges.
+  A whitespace-only input is `Empty`, as `""` is (it was `InvalidDigit`
+  for an integer and `Invalid` for a float), and whitespace around a
+  number no longer changes the error, so `u8.parse(" -1 ")` is
+  `Underflow`. `u8.parse("-0")` and `"-00"` are `InvalidDigit`, not
+  `Invalid`, which an integer never reports (B-2026-11-13-21).
 - A view literal built in place at an `own` parameter moves in with what
   it borrows: `pick([t.as_str()])` with `fn pick(other: own Vec[Str])` and
   `pickv(V { s: t.as_str() })` were refused as "a reference to a temporary
@@ -998,6 +1004,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   fix` writes, or to wrap the recursive field in `Vec`, as design.md does. It
   offered `Box[T]`, which Kāra does not have, and `ref`. A cycle with no case
   that ends it names `Option[T]` or `Vec[T]` (B-2026-11-14-2).
+
+- `karac explain` knows every symbolic code the compiler mints as a code:
+  the package manager's (`E_DEPENDENCY_CYCLE`, `E_PATH_DEP_NOT_FOUND`, the
+  `E_LOCKFILE_*`, `E_TOOLCHAIN_*`, `E_PROXY_*` and `E_INSTALL_*` families),
+  the ownership checker's (`E_CROSS_BORROW_CONFLICT`,
+  `E_SLICE_BORROW_CONFLICT`, …), and the attribute, parser and FFI ones
+  such as `E_TEST_BLOCK_NOT_TOP_LEVEL` and `E_EXTERN_REF_PARAM`. 86 of them
+  were refused as unknown, against design.md §2's "every code is
+  catalogued", and a test now fails when a new one has no entry
+  (B-2026-11-13-20).
+
 - A view stored where its borrow is not kept (an escaping closure, a
   `shared` value, a channel) names what it views, "a view of `t.s`",
   rather than "a view of a temporary value", and a view stored in a
