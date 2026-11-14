@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-3 | 2026-11-14 | typecheck | low | `f(x.clone())` where `f`'s parameter only borrows copies `x` for nothing, and no lint flags it: a LeetCode Rust template's adapter keeps `Solution.number_of_beams(bank.clone())` after `karac fix` carries it (kata 2125), because Rust's by-value `Vec<String>` parameter became Kāra's borrowing `Vec[String]` | — |
 | B-2026-11-14-6 | 2026-11-14 | typecheck | low | `Array[i64, 26].filled(0)` is refused with `no method 'filled' on `Array[…]``: the type is elided, and nothing points to `[0; 26]`, Kāra's fixed-array fill, though `Vec.filled(n, v)` exists and invites the guess | — |
 | B-2026-11-14-7 | 2026-11-14 | autopar+runtime | medium | An auto-par loop whose body recurses deeply runs the recursion on a pool worker's 8 MiB stack, where the main thread has 1 GiB: a program that finishes with KARAC_AUTO_PAR=0 dies of SIGSEGV in a default build, depending on which worker takes the iteration, and with no 'stack overflow' note (kata 2127's struct arm, a pair's 999998-person tail found by a recursive `tail` method inside `for a in 0..n { pairs += .. office.tail(a, b) .. }`) | — |
-| B-2026-11-14-8 | 2026-11-14 | cli | low | Five refusals name their rewrite but carry no edit, so `karac fix` leaves the program refused; `karac fix --help` describes the removed closure-prefix rewrites | — |
 
 ### Relocated
 
@@ -1168,6 +1167,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-2 | ownership | low | The ownership-cycle help on a recursive plain enum offers `Box[T]`, which Kāra does not have, instead of design.md's `shared enum` | c1fddd8097 |
 | B-2026-11-14-4 | interp | medium | A `VecDeque` worked from the front (`pop_front`, `pop_front`, `push_front`, `push_back` a round) runs in quadratic time under the MIR interpreter: `p… | 3d1fc8e26 |
 | B-2026-11-14-5 | ownership | medium | A range view made in a `match` / `if let` scrutinee stays borrowed through the arms even when the scrutinee's value holds no borrow: `match v[1..].it… | 3d1fc8e26 |
+| B-2026-11-14-8 | cli | low | Five refusals name their rewrite but carry no edit, so `karac fix` leaves the program refused; `karac fix --help` describes the removed closure-prefi… | a72be5f5d1 |
 
 </details>
 
