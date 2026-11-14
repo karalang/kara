@@ -1783,6 +1783,9 @@ impl<'a> super::TypeChecker<'a> {
             self.explain_rust_scan(args, errors_before);
         }
         if self.errors.len() > errors_before {
+            self.fix_method_typo(object, method, args, args_close_span, errors_before);
+        }
+        if self.errors.len() > errors_before {
             let end = args_close_span.offset + args_close_span.length;
             let whole = Span {
                 length: end.saturating_sub(object.span.offset),
@@ -1791,6 +1794,57 @@ impl<'a> super::TypeChecker<'a> {
             self.explain_rust_binary_search_call(object, method, args, whole, errors_before);
         }
         ty
+    }
+
+    /// An unknown method's "did you mean 'len'?" carries the rename, as a
+    /// name's or a type's does (B-2026-11-14-8). The edit rewrites `.lenn(` to
+    /// `.len(`, and is offered only when the text between the receiver and
+    /// the first argument (or the closing `)`) is exactly that, so a call
+    /// split over lines or written `?.` keeps its layout and gets no edit.
+    fn fix_method_typo(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        args_close_span: &Span,
+        errors_before: usize,
+    ) {
+        let from = object.span.offset + object.span.length;
+        let to = args
+            .first()
+            .map_or(args_close_span.offset, |a| a.value.span.offset);
+        if to != from + method.len() + 2 {
+            return;
+        }
+        let head = format!("no method '{method}' on type '");
+        for err in &mut self.errors[errors_before..] {
+            if err.fix_it.is_some()
+                || !matches!(err.kind, TypeErrorKind::NoMethodFound)
+                || !err.message.starts_with(&head)
+            {
+                continue;
+            }
+            let Some(rest) = err.message.split("did you mean '").nth(1) else {
+                continue;
+            };
+            let Some(suggestion) = rest.split('\'').next() else {
+                continue;
+            };
+            if suggestion.is_empty() || !suggestion.chars().all(|c| c.is_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            err.fix_it = Some(super::FixIt {
+                span: Span {
+                    offset: from,
+                    length: to - from,
+                    line: object.span.line,
+                    column: object.span.column,
+                },
+                replacement: format!(".{suggestion}("),
+            });
+            return;
+        }
     }
 
     fn infer_method_call_inner(

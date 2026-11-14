@@ -218,6 +218,29 @@ impl super::Parser {
             message: msg.to_string(),
             span,
         });
+        // `{x:?}` / `{x:#?}` is Debug, which is reserved: the Display form
+        // `{x}` is the fix the message names, and a width before the `?`
+        // stays (`{x:>5?}` is `{x:>5}`) (B-2026-11-14-8).
+        if let Some(kept) = spec.strip_suffix('?') {
+            let kept = kept.strip_suffix('#').unwrap_or(kept);
+            let edit = if kept.is_empty() {
+                crate::resolver::TextEdit {
+                    offset: span.offset - 1,
+                    length: span.length + 1,
+                    replacement: String::new(),
+                }
+            } else if crate::format_spec::FormatSpec::parse(kept).is_ok() {
+                crate::resolver::TextEdit {
+                    offset: span.offset,
+                    length: span.length,
+                    replacement: kept.to_string(),
+                }
+            } else {
+                return;
+            };
+            self.fix_edits
+                .insert(crate::resolver::SpanKey::from_span(&span), edit);
+        }
     }
 
     // ── Expressions (Pratt Parser) ───────────────────────────────
@@ -1920,6 +1943,21 @@ impl super::Parser {
                             }
                             for k in &result.program.unsuffixed_u128_literals {
                                 self.unsuffixed_u128_literals.insert(shift_key(*k));
+                            }
+                            // `Box.new(e)` in a hole is fixed to `e` as it is
+                            // outside one (B-2026-11-14-8).
+                            for (at, edit) in &result.program.rust_box_new {
+                                let at = shift_key(crate::resolver::SpanKey(*at, 0)).0;
+                                let moved =
+                                    shift_key(crate::resolver::SpanKey(edit.offset, edit.length));
+                                self.rust_box_new.insert(
+                                    at,
+                                    crate::resolver::TextEdit {
+                                        offset: moved.0,
+                                        length: moved.1,
+                                        replacement: edit.replacement.clone(),
+                                    },
+                                );
                             }
                             for (k, at) in &result.program.ref_binding_keywords {
                                 let key = shift_key(*k);

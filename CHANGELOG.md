@@ -999,6 +999,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `karac fix` writes five rewrites its messages already named: an unknown
+  method's "did you mean 'len'?", `{x:?}` to `{x}`, `-> escaping Fn(..)` to
+  `-> Fn(..)`, a nested `fn` that shares its line with other code moved above
+  its item, and `Box.new(e)` to `e` inside an f-string hole. `karac fix --help`
+  lists what it covers today (B-2026-11-14-8).
 - The ownership cycle on a recursive plain enum (`enum Tree { Leaf(i64),
   Node(Tree, Tree) }`) says to declare it `shared enum Tree`, which `karac
   fix` writes, or to wrap the recursive field in `Vec`, as design.md does. It

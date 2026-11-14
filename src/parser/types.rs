@@ -355,6 +355,19 @@ impl super::Parser {
                          type",
                         kw_span,
                     );
+                    // A returned function value needs no mark: delete the
+                    // word and the space after it (B-2026-11-14-8).
+                    let next = self.current_span().offset;
+                    if next > kw_span.offset {
+                        self.fix_edits.insert(
+                            crate::resolver::SpanKey::from_span(&kw_span),
+                            crate::resolver::TextEdit {
+                                offset: kw_span.offset,
+                                length: next - kw_span.offset,
+                                replacement: String::new(),
+                            },
+                        );
+                    }
                 }
                 let inner = self.parse_type()?;
                 if escaping_ok {

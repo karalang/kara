@@ -579,10 +579,17 @@ DETAILS:
     Runs the full single-file pipeline (resolve → typecheck → lower →
     ownership → ...) and applies every diagnostic that carries a precise
     byte-range replacement. Coverage today:
+      - Parser: Rust spellings rewritten to Kāra's (`::` paths, `&&` /
+        `||` / `!`, macros such as `println!` and `vec![..]`, `<..>`
+        generics, `Box`, `{x:?}`, a nested `fn`).
       - Resolver: `did you mean` corrections on undefined names /
         undefined types / unknown imports / unknown items.
-      - Ownership: closure prefix rewrites (e.g. `mut ref` → `ref` when
-        the closure body never mutates the capture; N0507 perf note).
+      - Typechecker: `did you mean` on an unknown method, and rewrites
+        such as `.to_string()` for a kept `Str` view.
+      - Ownership: `let mut` for a written binding, `mut ref` for a
+        written parameter, `shared enum` for a recursive enum.
+    A fix can expose the next diagnostic, so run it again until it
+    reports nothing to apply.
     Each `TextEdit { offset, length, replacement }` is applied in
     reverse byte-offset order so earlier edits don't invalidate later
     offsets. Other diagnostic kinds carry descriptive (sentence)

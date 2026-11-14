@@ -3152,10 +3152,32 @@ impl Parser {
         let at = whole.offset.checked_sub(*base)?;
         let line_start = source.get(..at)?.rfind('\n').map_or(0, |i| i + 1);
         let indent = source.get(line_start..at)?;
-        if !indent.chars().all(|c| c == ' ' || c == '\t') || item >= whole.offset {
+        let text = source.get(at..at + whole.length)?;
+        if item >= whole.offset {
             return None;
         }
-        let text = source.get(at..at + whole.length)?;
+        // A one-line `fn` after other code on its line (`fn main() { fn
+        // add(..) -> i64 { .. } .. }`) moves as it is, with the spaces after
+        // it (B-2026-11-14-8).
+        if !indent.chars().all(|c| c == ' ' || c == '\t') {
+            if text.contains('\n') {
+                return None;
+            }
+            let rest = source.get(at + whole.length..)?;
+            let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+            return Some(vec![
+                crate::resolver::TextEdit {
+                    offset: item,
+                    length: 0,
+                    replacement: format!("{text}\n\n"),
+                },
+                crate::resolver::TextEdit {
+                    offset: whole.offset,
+                    length: whole.length + spaces,
+                    replacement: String::new(),
+                },
+            ]);
+        }
         let mut moved = String::new();
         for (i, line) in text.split('\n').enumerate() {
             if i > 0 {
