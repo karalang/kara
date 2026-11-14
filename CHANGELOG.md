@@ -335,6 +335,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `for i in (a..b).step_by(k)` over `i64` (and `..=`) is a counting loop,
+  where it called the library's `IterStepBy.next` per item, through a
+  `first` flag, `advance_by` and two `Option`s (B-2026-11-12-17). Kata
+  1144's bench runs in 0.47 s where it took 0.58 s, beside 0.45 s for the
+  same loop written with `while` and 0.46 s for Rust's.
 - `partition_point` is the halving binary search Rust's is: `base` moves
   to `mid` or stays through a select marked unpredictable, which stays a
   `cmov` on x86, where it branched on every step and mispredicted half of

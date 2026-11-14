@@ -15118,6 +15118,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
+        if let Some((left, right, inclusive, step)) = self.i64_range_step_by(iterable)? {
+            if matches!(
+                pattern.kind,
+                PatternKind::Binding(_) | PatternKind::Wildcard
+            ) {
+                self.push_scope();
+                let (start, end, t) = self.range_bounds(left, Some(right))?;
+                let end = end.ok_or(())?;
+                let step = self.owned_operand(step, t)?;
+                self.step_range_loop(label, pattern, body, start, end, step, inclusive, t)?;
+                self.pop_scope()?;
+                self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+                return Ok(());
+            }
+        }
         let (left, right, inclusive): (&'a Expr, Option<&'a Expr>, bool) = match &iterable.kind {
             ExprKind::Binary {
                 op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
@@ -15148,6 +15163,197 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.range_loop(label, pattern, body, start, end, inclusive, t)?;
         self.pop_scope()?;
         self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+        Ok(())
+    }
+
+    /// `(start..end).step_by(step)` (or `..=`) over `i64`: its start, end,
+    /// whether the end is inclusive, and the step, for a counting loop in
+    /// place of the library's `IterStepBy[Range[i64]]` stepping through a
+    /// `first` flag, `advance_by` and two `Option`s (B-2026-11-12-17).
+    #[allow(clippy::type_complexity)]
+    fn i64_range_step_by(
+        &mut self,
+        iterable: &'a Expr,
+    ) -> R<Option<(&'a Expr, &'a Expr, bool, &'a Expr)>> {
+        // The call is known by what it returns, the library's
+        // `IterStepBy` over the range, which only `step_by` makes; naming
+        // the method would keep it in every program (`library_prune`).
+        let ExprKind::MethodCall {
+            object,
+            args,
+            turbofish: None,
+            ..
+        } = &iterable.kind
+        else {
+            return Ok(None);
+        };
+        let [arg] = args.as_slice() else {
+            return Ok(None);
+        };
+        if arg.label.is_some() {
+            return Ok(None);
+        }
+        let (left, right, inclusive): (&'a Expr, &'a Expr, bool) = match &object.kind {
+            ExprKind::Binary {
+                op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
+                left,
+                right,
+            } => (left, right, *op == AstBinOp::RangeInclusive),
+            ExprKind::Range {
+                start: Some(left),
+                end: Some(right),
+                inclusive,
+            } => (left, right, *inclusive),
+            _ => return Ok(None),
+        };
+        let it = self.expr_ty(iterable)?;
+        let range = self.expr_ty(object)?;
+        let tcx = self.tys().tcx();
+        let stepped = tcx
+            .adt_of(it)
+            .is_some_and(|(a, args)| a.name == "IterStepBy" && args.first() == Some(&range));
+        let of_i64 = tcx.adt_of(range).is_some_and(|(a, args)| {
+            matches!(a.name.as_str(), "Range" | "RangeInclusive")
+                && matches!(args.as_slice(), [t] if matches!(tcx.kind(*t), HK::Int(IntSize::I64)))
+        });
+        Ok((stepped && of_i64).then_some((left, right, inclusive, &arg.value)))
+    }
+
+    /// `for pattern in (start..end).step_by(step)` (`..=` when
+    /// `inclusive`) over `i64`, with the bounds and the step evaluated: the
+    /// values `start`, `start + step`, ... below (or up to) `end`, as the
+    /// library's `IterStepBy` yields them. A step below 1 steps by 1, as
+    /// its `advance_by(step - 1)` does. The step is taken only while the
+    /// distance left to `end` exceeds it (or reaches it, inclusive), so
+    /// the counter never steps past `end` or overflows.
+    #[allow(clippy::too_many_arguments)]
+    fn step_range_loop(
+        &mut self,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        body: &'a Block,
+        start: Operand,
+        end: Operand,
+        step: Operand,
+        inclusive: bool,
+        t: Ty,
+    ) -> R<()> {
+        let name = match &pattern.kind {
+            PatternKind::Binding(name) => Some(name),
+            _ => None,
+        };
+        let bool_t = self.tys().bool();
+        let ut = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
+        let end_t = self.temp(t);
+        self.assign(end_t, Rvalue::Use(end));
+        let step_t = self.temp(t);
+        self.assign(step_t, Rvalue::Use(step));
+        let one = Operand::Const(Const {
+            ty: t,
+            kind: ConstKind::Scalar(1),
+        });
+        let small = self.temp(bool_t);
+        self.assign(
+            small,
+            Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(Place::local(step_t)), one.clone()),
+        );
+        self.when(small, |b| b.assign(step_t, Rvalue::Use(one)));
+        let step_u = self.temp(ut);
+        self.assign(
+            step_u,
+            Rvalue::Cast(CastKind::IntToInt, Operand::Copy(Place::local(step_t)), ut),
+        );
+        // A counter flipped at its sign bit orders as unsigned as it does
+        // as signed, so `end - i` of the flipped values is the distance
+        // left without overflowing, which no `i64` difference can hold.
+        let flip = Operand::Const(Const {
+            ty: ut,
+            kind: ConstKind::Scalar(1 << 63),
+        });
+        let unsigned = |me: &mut Self, v: Local| {
+            let u = me.temp(ut);
+            me.assign(
+                u,
+                Rvalue::Cast(CastKind::IntToInt, Operand::Copy(Place::local(v)), ut),
+            );
+            me.assign(
+                u,
+                Rvalue::BinaryOp(BinOp::BitXor, Operand::Copy(Place::local(u)), flip.clone()),
+            );
+            u
+        };
+        let end_u = unsigned(self, end_t);
+        let i = self.temp(t);
+        self.assign(i, Rvalue::Use(start));
+        let var = name.map(|n| self.user_local(n, t, pattern.id));
+        let head = self.b.new_block();
+        let body_bb = self.b.new_block();
+        let step_bb = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        let c = self.temp(bool_t);
+        let cmp = if inclusive { BinOp::Le } else { BinOp::Lt };
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                cmp,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(end_t)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(body_bb, exit),
+            },
+            body_bb,
+        );
+        if let Some(v) = var {
+            self.assign(v, Rvalue::Use(Operand::Copy(Place::local(i))));
+        }
+        self.loop_body(label, body, step_bb, exit, None)?;
+        self.cur = step_bb;
+        // `i` is at most `end` here, so the flipped difference is the
+        // distance left.
+        let i_u = unsigned(self, i);
+        let left_u = self.temp(ut);
+        self.assign(
+            left_u,
+            Rvalue::BinaryOp(
+                BinOp::Sub,
+                Operand::Copy(Place::local(end_u)),
+                Operand::Copy(Place::local(i_u)),
+            ),
+        );
+        let more = self.temp(bool_t);
+        let fits = if inclusive { BinOp::Ge } else { BinOp::Gt };
+        self.assign(
+            more,
+            Rvalue::BinaryOp(
+                fits,
+                Operand::Copy(Place::local(left_u)),
+                Operand::Copy(Place::local(step_u)),
+            ),
+        );
+        let bump = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(more)),
+                targets: SwitchTargets::if_else(bump, exit),
+            },
+            bump,
+        );
+        self.assign(
+            i,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(step_t)),
+            ),
+        );
+        self.goto(head);
+        self.cur = exit;
         Ok(())
     }
 
