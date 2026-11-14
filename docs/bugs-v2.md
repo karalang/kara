@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 294 |
+| diagnostics | 295 |
 | false-positive | 202 |
 | perf | 163 |
 | missing-feature | 158 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 444 |
+| typecheck | 445 |
 | mir-llvm | 214 |
 | mir | 180 |
-| cli | 108 |
+| cli | 109 |
 | ownership | 79 |
 | parser | 77 |
 | interp | 53 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-14 | 2026-11-14 | typecheck | low | A bit count (`count_ones`, `leading_zeros`, `i64` by the 10-30 ruling) going into a Rust port's `u32` (`ones += x.count_ones()`, `max_bits.max(32 - x.leading_zeros())`) is refused with no fix-it: one refusal names `as u32` as a truncation to acknowledge, the other names nothing, though a bit count always fits and `as u32` is the edit that keeps the port's meaning | — |
 | B-2026-11-14-15 | 2026-11-14 | mir-llvm | low | `(1..=end).chain(start..=n).collect()` into a `Vec[i64]` grows the vector by realloc instead of sizing it once from the two ranges' exact lengths: kata 1560's ★ arm runs 1.53x checked Rust by median (0.250 s vs 0.163 s) and 2.77x its instructions, 26% of them in `karac_realloc_or_panic` and memcpy | — |
 | B-2026-11-14-16 | 2026-11-14 | mir-llvm | medium | `SortedSet.range` / `range_inclusive` (and `SortedMap`'s) find their bounds by a binary search over positions in the library source (`bound_index`, runtime/stdlib/source/collections.kara), each probe an `entry_at`, which on a tree-backed table is `karac_mir_map_at`, itself an O(log n) walk: a bound costs O(log^2 n) where `karac_mir_map_pick` op 4/5 (a tree `find`) costs O(log n); kata 1562's backward arm runs 3.0x Rust's `BTreeSet`, 70% of its instructions in `karac_mir_map_at` | — |
+| B-2026-11-14-17 | 2026-11-14 | typecheck+cli | low | A prefix table that `karac fix` carried from `vec![0; n + 1]` to `Vec.filled(n + 1, 0)` takes `i64` from its literal, and a read of it passed to an `i32` `max` (`dp[i][j].max(l + dp[i][k])`, `l = pre[k + 1] - pre[i]`) is refused as "`max` expects an argument of type `i32`, got `i64`" with no fix-it, though the literal-default fix (`0i32`) is offered for the same table's literal when the read reaches a return or a `collect` | — |
 
 ### Relocated
 
