@@ -1385,14 +1385,42 @@ impl Cx<'_> {
                 _ => None,
             };
             let closure_free = pointee.is_some_and(|t| !may_hold_closure(self.tys, t));
+            // A written pointee whose every slot `contains_ty` can see: a
+            // collection, a tuple, an array or a declared type.
+            let slotted = match self.tys.kind(pt.ty) {
+                TyKind::MutRef(t)
+                    if matches!(
+                        self.tys.kind(t),
+                        TyKind::Intrinsic(
+                            IntrinsicTy::Vec(_)
+                                | IntrinsicTy::Set(_)
+                                | IntrinsicTy::VecDeque(_)
+                                | IntrinsicTy::SortedSet(_)
+                                | IntrinsicTy::Map(..)
+                                | IntrinsicTy::SortedMap(..)
+                        ) | TyKind::Tuple(_)
+                            | TyKind::Array(..)
+                            | TyKind::Adt(_)
+                    ) =>
+                {
+                    Some(t)
+                }
+                _ => None,
+            };
             let mut others = LoanSet::default();
             let rest = args.iter().enumerate().filter(|(j, _)| *j != i);
             for a in std::iter::once(func).chain(rest.map(|(_, a)| a)) {
                 let behind_ref = a.place().is_some_and(|q| {
                     place_ty(self.body, self.tys, q).is_ok_and(|qt| match self.tys.kind(qt.ty) {
+                        // A reference argument the pointee has no slot for,
+                        // the key of `m.get_mut(k)` on a `Map[Str, i64]`, can
+                        // only leave what its referent holds there, the
+                        // `Str`'s own origin, never the reference to `k`
+                        // (kata 2115).
                         TyKind::Ref(t) | TyKind::MutRef(t) => {
                             fn_slot
                                 || (closure_free && matches!(self.tys.kind(t), TyKind::Closure(..)))
+                                || slotted.is_some_and(|s| !contains_ty(self.tys, s, qt.ty))
                         }
                         _ => false,
                     })

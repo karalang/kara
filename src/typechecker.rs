@@ -9433,6 +9433,30 @@ impl<'a> TypeChecker<'a> {
             self.type_error_with_types(msg, span, TypeErrorKind::TypeMismatch, expected, found);
             return false;
         }
+        // An owned `String` where a `Str` view is wanted outside a call
+        // boundary (`let mut kept: Str = digits;`): `as_str()` is the
+        // conversion strings.md names for those places (kata 2117).
+        if matches!(expected, Type::Named { name, args } if (name == "StringSlice" || name == "Str") && args.is_empty())
+            && matches!(found, Type::Str)
+            && !self.loose_expr_spans.contains(&SpanKey::from_span(&span))
+        {
+            self.type_error_with_fix_it(
+                "expected 'Str', found 'String': a `String` is passed as a `Str` only at a \
+                 call; elsewhere take the view with `.as_str()` (library/strings.md)"
+                    .to_string(),
+                span,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: Span {
+                        offset: span.offset + span.length,
+                        length: 0,
+                        ..span
+                    },
+                    replacement: ".as_str()".to_string(),
+                },
+            );
+            return false;
+        }
         // Canonical assignment-mismatch site. Use the typed-fields
         // helper so the JSON consumer gets `expected` / `got` as
         // structured fields rather than having to parse the prose

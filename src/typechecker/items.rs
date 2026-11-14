@@ -7651,6 +7651,9 @@ impl<'a> super::TypeChecker<'a> {
             .chain(["Self"])
             .collect();
         let mut found: Option<(Span, String, Type)> = None;
+        // `it.collect() == v` with `v`'s type known: the collection named
+        // at the call, `Vec[i64].from_iter(it) == v` (kata 2113).
+        let mut from_iter: Option<(String, Vec<crate::resolver::TextEdit>)> = None;
         crate::span_visitor::for_each_expr_in_block(body, &mut |e| {
             if found.is_some() {
                 return;
@@ -7690,6 +7693,58 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if let Some(name) = find_unbound_type_param(t, &in_scope) {
                     found = Some((operand.span, name.to_string(), t.clone()));
+                    if let (
+                        ExprKind::Binary {
+                            op: BinOp::Eq | BinOp::NotEq,
+                            left,
+                            right,
+                        },
+                        ExprKind::MethodCall {
+                            object,
+                            method,
+                            args,
+                            ..
+                        },
+                    ) = (&e.kind, &operand.kind)
+                    {
+                        let other = if std::ptr::eq(left.as_ref(), operand) {
+                            right
+                        } else {
+                            left
+                        };
+                        let other_ty = self.expr_types.get(&SpanKey::from_span(&other.span)).map(
+                            |t| match t {
+                                Type::Ref(t) | Type::MutRef(t) => t.as_ref().clone(),
+                                t => t.clone(),
+                            },
+                        );
+                        let end = operand.span.offset + operand.span.length;
+                        let from = object.span.offset + object.span.length;
+                        if let Some(o) = other_ty.filter(|o| {
+                            (matches!(o, Type::Named { .. } | Type::Str))
+                                && type_is_fully_concrete(o)
+                                && method == "collect"
+                                && args.is_empty()
+                                && end > from
+                        }) {
+                            let shown = type_display(&o);
+                            from_iter = Some((
+                                shown.clone(),
+                                vec![
+                                    crate::resolver::TextEdit {
+                                        offset: object.span.offset,
+                                        length: 0,
+                                        replacement: format!("{shown}.from_iter("),
+                                    },
+                                    crate::resolver::TextEdit {
+                                        offset: from,
+                                        length: end - from,
+                                        replacement: ")".to_string(),
+                                    },
+                                ],
+                            ));
+                        }
+                    }
                     return;
                 }
             }
@@ -7741,15 +7796,26 @@ impl<'a> super::TypeChecker<'a> {
             } else {
                 format!(" of `{}`", type_display(&ty))
             };
+            let advice = match &from_iter {
+                Some((t, _)) => format!(
+                    "a comparison does not fix what `collect` builds -- name the \
+                     collection at the call, as the other side has it: \
+                     `{t}.from_iter(it)`"
+                ),
+                None => "bind the result with a type annotation".to_string(),
+            };
             self.type_error(
                 format!(
                     "cannot infer type parameter '{name}'{of}, this call's result: \
-                     nothing in the body fixes it (design.md § Type inference); bind \
-                     the result with a type annotation"
+                     nothing in the body fixes it (design.md § Type inference); {advice}"
                 ),
                 span,
                 TypeErrorKind::CannotInferTypeParam,
             );
+            if let Some((_, edits)) = from_iter {
+                self.error_fix_diffs
+                    .insert(SpanKey::from_span(&span), edits);
+            }
         }
     }
 

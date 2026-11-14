@@ -471,12 +471,24 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
                 .filter_map(|e| Some((e.span.offset, e.replacement.as_deref().cloned()?))),
         );
     }
+    // A typecheck fix-it that inserts after an expression comes first at its
+    // spot: an ownership edit inserting there answers a move the type error
+    // itself caused (`let kept: Str = digits;` read as a move of `digits`,
+    // whose `.clone()` would leave a view of a temporary, kata 2117).
+    let typed_inserts: std::collections::HashSet<usize> = pipeline
+        .typed
+        .iter()
+        .flat_map(|t| t.errors.iter())
+        .filter_map(|e| e.fix_it.as_ref())
+        .filter(|f| f.span.length == 0)
+        .map(|f| f.span.offset)
+        .collect();
     if let Some(ref o) = pipeline.ownership {
-        fixes.anchored(
-            o.errors
-                .iter()
-                .filter_map(|e| Some((e.span.offset, e.replacement.as_deref().cloned()?))),
-        );
+        fixes.anchored(o.errors.iter().filter_map(|e| {
+            let edit = e.replacement.as_deref().cloned()?;
+            (edit.length != 0 || !typed_inserts.contains(&edit.offset))
+                .then_some((e.span.offset, edit))
+        }));
         fixes.anchored(
             o.notes
                 .iter()

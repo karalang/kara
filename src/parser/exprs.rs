@@ -4212,6 +4212,7 @@ impl super::Parser {
                             },
                         ],
                     );
+                    self.from_iter_ends.push(close.offset + close.length);
                     self.turbofishes.push((start, method, self.pos, None));
                     return;
                 }
@@ -4274,6 +4275,22 @@ impl super::Parser {
         // Kāra names it as the receiver of an associated call, so the fix
         // writes `i64.parse(s)` (B-2026-10-29-39).
         if let (true, Some(t), Some(dot)) = (method == "parse", &ty, dot) {
+            // On a `collect::<T>()` whose `from_iter` rewrite is offered this
+            // round, the two edits would insert at one offset; the `parse`
+            // edit waits, or the `collect` it moved into its argument would
+            // lose its type (kata 2119).
+            if self.from_iter_ends.contains(&dot) {
+                self.error_at(
+                    &format!(
+                        "`::<..>` after a method name is Rust's turbofish; Kāra has no \
+                         call-site type arguments -- the type to parse to is named before \
+                         the call: `{t}.parse(s)`"
+                    ),
+                    start,
+                );
+                self.turbofishes.push((start, method, self.pos, None));
+                return;
+            }
             if self.check(&Token::LeftParen)
                 && matches!(self.peek_token_ref_at(1), Token::RightParen)
             {

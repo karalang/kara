@@ -632,6 +632,10 @@ pub struct Parser {
     /// annotation can carry. A `let` whose whole initializer is that call
     /// moves the type onto its binding (B-2026-10-24-13).
     pub(crate) turbofishes: Vec<(Span, String, usize, Option<String>)>,
+    /// Where each `collect::<T>()` rewritten to `T.from_iter(..)` ends: a
+    /// `.parse::<U>()` on it waits a round, since both insert at the one
+    /// receiver offset (kata 2119).
+    pub(crate) from_iter_ends: Vec<usize>,
     /// Each closure written with Rust's return type (`|x: i64| -> T`): where
     /// its `|` starts, the arrow's span (its diagnostic's key) and `T`'s
     /// text. A `let` whose whole initializer is that closure moves the type
@@ -767,6 +771,7 @@ impl Parser {
             source: None,
             item_start: None,
             turbofishes: Vec::new(),
+            from_iter_ends: Vec::new(),
             closure_returns: Vec::new(),
         }
     }
