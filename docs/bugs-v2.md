@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 296 |
+| diagnostics | 297 |
 | false-positive | 202 |
 | perf | 163 |
 | missing-feature | 158 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 447 |
 | mir-llvm | 214 |
 | mir | 182 |
-| cli | 110 |
+| cli | 111 |
 | ownership | 79 |
 | parser | 77 |
 | interp | 53 |
@@ -126,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-18 | 2026-11-14 | typecheck+cli | low | Three counters bound to literals that feed one another (`best = best.max(positive)`, `positive = negative + 1`) and reach an `i32` return take three rounds of `karac fix`, one literal each: the checker reports only the binding the return reads, and the next one surfaces only after that one is `0i32`, so the literal-default fix walks the chain one binding per round | — |
 | B-2026-11-14-19 | 2026-11-14 | typecheck+mir | medium | An early exit inside a cleanup block crashes the compiler: `loop { defer { break; } }`, `defer { continue; }`, `defer { return 3; }` and `?` inside a `defer` each die in `karac check` and `build` with `fatal runtime error: stack overflow`, and `errdefer { return Ok(1); }` passes check and fails `__mir-run` with `assignment overwrites _0, which still owns a value` | — |
 | B-2026-11-14-20 | 2026-11-14 | mir | medium | A by-move capture of a struct's field takes the whole struct in MIR, so design.md § Captures' disjoint capture holds only for ref and mut-ref captures: `let f = || eat(s.a); eat(s.b); f();` passes check and fails every run lane with `move check main: use of _1.1, which may have been moved`, and a returned `|| s.a.n` keeps `s.b` and `s.c` alive until the closure drops | — |
+| B-2026-11-14-21 | 2026-11-14 | cli | low | `karac fix`'s `redundant_ref_param` lint skips a method whose name is also a local variable read anywhere in the program: `functions_used_as_values` (src/style_lints.rs) collects every bare identifier that is not a callee by name alone, so a harness's `for _ in 0..count` keeps `Solution.count(grid: ref ..)`'s `ref` while the same impl's `dfs(grid: ref ..)` loses its own | — |
 
 ### Relocated
 
