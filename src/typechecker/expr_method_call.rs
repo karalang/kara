@@ -2317,6 +2317,53 @@ impl<'a> super::TypeChecker<'a> {
             }
             return Type::Error;
         }
+        // Kata 2129: Rust's `c.to_uppercase()` is an iterator, collected into
+        // a `String`; here it is a `char` (the one-scalar mapping), and the
+        // full mapping Rust collects is `c.to_string().to_uppercase()`
+        // (method_numeric.rs), so that rewrite is the fix.
+        if method == "collect"
+            && args.is_empty()
+            && matches!(Self::peel_borrow(&obj_ty), Type::Char)
+        {
+            if let ExprKind::MethodCall {
+                object: letter,
+                method: case,
+                args: case_args,
+                ..
+            } = &object.kind
+            {
+                if case_args.is_empty() && matches!(case.as_str(), "to_uppercase" | "to_lowercase")
+                {
+                    let rendered = crate::formatter::render_expr(letter);
+                    let receiver = match letter.kind {
+                        ExprKind::Identifier(_)
+                        | ExprKind::Call { .. }
+                        | ExprKind::MethodCall { .. }
+                        | ExprKind::FieldAccess { .. } => rendered,
+                        _ => format!("({rendered})"),
+                    };
+                    self.type_error_with_fix_it(
+                        format!(
+                            "no method 'collect' on type 'char': a char's `{case}()` is \
+                             a `char` here, and the `String` Rust collects from it is \
+                             `c.to_string().{case}()`"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span: Span {
+                                offset: object.span.offset,
+                                length: args_close_span.offset + args_close_span.length
+                                    - object.span.offset,
+                                ..*args_close_span
+                            },
+                            replacement: format!("{receiver}.to_string().{case}()"),
+                        },
+                    );
+                    return Type::Str;
+                }
+            }
+        }
         // A call through a `dyn` value is its trait's method.
         if let Some(ty) = self.try_dyn_receiver_method(&obj_ty, method, args, span) {
             return ty;

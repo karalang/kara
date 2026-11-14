@@ -767,6 +767,29 @@ impl<'a> super::TypeChecker<'a> {
                             Type::Float(FloatSize::F32)
                         });
                     }
+                    // Kata 2129: Rust's `char::from_u32(n)` is an `Option`;
+                    // `char.try_from(n).ok()` is the same value here, so the
+                    // rewrite is the fix wherever the call stands.
+                    if type_name == "char" && method == "from_u32" && args.len() == 1 {
+                        let rendered = crate::formatter::render_expr(&args[0].value);
+                        self.type_error_with_fix_it(
+                            "no associated function 'from_u32' on type 'char'; write \
+                             `char.try_from(n)`, which takes a `u32` code point and returns \
+                             a `Result`, and `.ok()` makes it the `Option` Rust's \
+                             `from_u32` returns"
+                                .to_string(),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                            FixIt {
+                                span: *span,
+                                replacement: format!("char.try_from({rendered}).ok()"),
+                            },
+                        );
+                        return Some(Type::Named {
+                            name: "Option".to_string(),
+                            args: vec![Type::Char],
+                        });
+                    }
                     let is_int = type_name.starts_with('i') || type_name.starts_with('u');
                     let hint = match (type_name.as_str(), method) {
                         (_, "max_value") if is_int => format!("; write `{type_name}.MAX`"),

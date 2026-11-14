@@ -119,6 +119,7 @@ const ALWAYS_KEPT: &[&str] = &[
     // desugaring rather than by the program's text.
     "and",
     "or",
+    "as_str",
     "chars",
     "clear",
     "concat",

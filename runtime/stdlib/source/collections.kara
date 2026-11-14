@@ -1155,6 +1155,14 @@ impl DoubleEndedIterator for StrChars {
     }
 }
 
+impl StrChars {
+    /// The text not yet read, as Rust's `Chars::as_str`: a view into the
+    /// string, empty once every char has been read (kata 2129).
+    fn as_str(ref self) -> Str {
+        self.s[self.pos..self.back]
+    }
+}
+
 impl String {
     /// The chars, front to back; `rev()` walks them back to front.
     fn chars(ref self) -> StrChars {
@@ -1198,6 +1206,13 @@ impl DoubleEndedIterator for StrViewChars {
         let c = self.s.char_before_byte(self.back);
         self.back = self.back - c.len_utf8();
         Some(c)
+    }
+}
+
+impl StrViewChars {
+    /// The text not yet read, as Rust's `Chars::as_str` (kata 2129).
+    fn as_str(ref self) -> Str {
+        self.s[self.pos..self.back]
     }
 }
 

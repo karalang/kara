@@ -167,6 +167,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- The iterator `chars()` returns has `as_str()`, the text it has not yet
+  read, as Rust's `Chars::as_str` (library/strings.md; kata 2129).
+
 - A struct or enum takes `const` parameters (design.md § Const generic
   parameters; B-2026-11-13-80): `struct Buf[const N: i64] { a: Array[i64, N] }`,
   written `Buf[3]`, `Buf[2 + 1]` or `Buf[SIZE]`, one type per value, served
@@ -1107,11 +1110,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   and says a fixed array is built with the repeat literal `[0; 26]`, which
   `karac fix` writes when the element and the length are literals or scalar
   names. `Array.filled(n, v)` gets the same pointer (B-2026-11-14-6).
+- Rust's `char::from_u32(n)` is rewritten by `karac fix` to
+  `char.try_from(n).ok()`, the same `Option`, and a char's
+  `c.to_uppercase().collect()` (or `to_lowercase`) to
+  `c.to_string().to_uppercase()`, the full mapping Rust collects, since a
+  char's own `to_uppercase()` is a `char` here (kata 2129).
+
 - `karac fix` writes five rewrites its messages already named: an unknown
   method's "did you mean 'len'?", `{x:?}` to `{x}`, `-> escaping Fn(..)` to
   `-> Fn(..)`, a nested `fn` that shares its line with other code moved above
   its item, and `Box.new(e)` to `e` inside an f-string hole. `karac fix --help`
   lists what it covers today (B-2026-11-14-8).
+
 - The ownership cycle on a recursive plain enum (`enum Tree { Leaf(i64),
   Node(Tree, Tree) }`) says to declare it `shared enum Tree`, which `karac
   fix` writes, or to wrap the recursive field in `Vec`, as design.md does. It
