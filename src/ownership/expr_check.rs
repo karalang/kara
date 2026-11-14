@@ -1073,11 +1073,13 @@ impl<'a> super::OwnershipChecker<'a> {
                 // matched and bound (core-semantics.md §4.6; B-2026-10-15-32).
                 let on_match = moves && crate::ownership::is_place_projection(value);
                 let errors = self.errors.len();
+                let before_value = self.snapshot_active_borrow_lens();
                 if moves && !on_match {
                     self.check_expr_consuming(value, states, param_types, param_usage);
                 } else {
                     self.check_expr_reading(value, states, param_types, param_usage);
                 }
+                self.end_scrutinee_views_copied_out(value, &before_value);
                 self.report_mut_ref_pattern_write(pattern, value);
                 let mut then_states = states.clone();
                 if on_match && self.errors.len() == errors {
@@ -1133,11 +1135,13 @@ impl<'a> super::OwnershipChecker<'a> {
                     && !scrut_is_borrow
                     && crate::ownership::is_place_projection(scrutinee);
                 let errors = self.errors.len();
+                let before_scrutinee = self.snapshot_active_borrow_lens();
                 if any_arm_binds && !scrut_is_borrow && !per_arm {
                     self.check_expr_consuming(scrutinee, states, param_types, param_usage);
                 } else {
                     self.check_expr_reading(scrutinee, states, param_types, param_usage);
                 }
+                self.end_scrutinee_views_copied_out(scrutinee, &before_scrutinee);
                 let per_arm = per_arm && self.errors.len() == errors;
                 let mut all_arm_states: Vec<HashMap<String, ValueState>> = Vec::new();
                 for arm in arms {

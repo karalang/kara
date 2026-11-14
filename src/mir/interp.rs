@@ -9927,8 +9927,14 @@ impl<'a> Interp<'a> {
                 if off == n {
                     elems.clear();
                     off = 0;
-                } else if off >= 8 && off * 2 > n {
-                    // The empty slots outnumber the elements: drop them.
+                } else if off >= 8 && off > 2 * (n - off) {
+                    // The empty slots are more than twice the elements:
+                    // drop them. Twice, not once: `push_front` at the
+                    // start opens as many slots as there are elements, and
+                    // dropping them as soon as they outnumber the elements
+                    // made a `pop_front`, `pop_front`, `push_front`,
+                    // `push_back` round cost a drain and a splice of the
+                    // whole deque each time (kata 1535).
                     elems.drain(..off);
                     off = 0;
                 }

@@ -729,6 +729,36 @@ impl<'a> super::OwnershipChecker<'a> {
     /// lets the conflict matrix fire mid-call (the push side-effect emits
     /// the diagnostic before the drain), so persistent slice + transient
     /// coerced slice still conflicts. Sequential calls do not stack up.
+    /// A `match` / `if let` scrutinee that made a slice view on its way to
+    /// a value holding no borrow (`zeros[i..].iter().position(..)`, an
+    /// `Option[i64]`) leaves nothing borrowed in the arms: the view's last
+    /// use was inside the scrutinee. End the views it created, as a `let`
+    /// with a deeply owned value does (B-2026-11-14-5). A scrutinee whose
+    /// value still borrows (a `Slice`, a `ref`) keeps them for the arms.
+    pub(crate) fn end_scrutinee_views_copied_out(
+        &mut self,
+        scrutinee: &Expr,
+        before: &HashMap<String, usize>,
+    ) {
+        if !self
+            .typecheck_result
+            .expr_type(scrutinee)
+            .is_some_and(crate::ownership::type_is_deeply_owned)
+        {
+            return;
+        }
+        let views: Vec<SpanKey> = self
+            .active_borrows
+            .iter()
+            .flat_map(|(root, bs)| bs.iter().skip(before.get(root).copied().unwrap_or(0)))
+            .filter(|b| b.kind.is_slice())
+            .map(|b| SpanKey::from_span(&b.span))
+            .collect();
+        for key in &views {
+            self.end_copied_out_slice_borrow(key);
+        }
+    }
+
     pub(crate) fn snapshot_active_borrow_lens(&self) -> HashMap<String, usize> {
         self.active_borrows
             .iter()
