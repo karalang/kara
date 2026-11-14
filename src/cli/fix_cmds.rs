@@ -532,7 +532,28 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
         // warning's fix is by definition optional-but-safe (the code
         // already compiles and is correct), which is exactly what `fix` is
         // for.
+        //
+        // `redundant_clone` is the exception that needs the code to compile:
+        // it reads a bare parameter as a borrow, and an error's fix in this
+        // same pass may write `own` on that parameter, so its fix waits for
+        // a pass with no error (B-2026-11-14-3).
+        let refused = !t.errors.is_empty()
+            || pipeline
+                .ownership
+                .as_ref()
+                .is_some_and(|o| !o.errors.is_empty() || !o.core_errors.is_empty())
+            || pipeline
+                .resolved
+                .as_ref()
+                .is_some_and(|r| !r.errors.is_empty())
+            || pipeline
+                .effects
+                .as_ref()
+                .is_some_and(|e| !e.errors.is_empty());
         fixes.anchored(t.warnings.iter().filter_map(|e| {
+            if refused && e.lint_name.as_deref() == Some("redundant_clone") {
+                return None;
+            }
             e.fix_it.as_ref().map(|f| {
                 let edit = crate::resolver::TextEdit {
                     offset: f.span.offset,

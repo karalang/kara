@@ -5289,7 +5289,111 @@ impl<'a> super::TypeChecker<'a> {
             discharge_span,
         );
         self.held_open_literals.truncate(held);
+        self.lint_redundant_clones(args, params);
         t
+    }
+
+    /// `redundant_clone` (B-2026-11-14-3): `f(x.clone())` where `f`'s parameter only
+    /// borrows copies `x` for nothing, since a bare parameter borrows (D5,
+    /// core-semantics.md §4.1) and could borrow `x` itself. Reported, with a
+    /// fix that deletes `.clone()`, only where that is plainly the same
+    /// program: `x` is a named place (`bank`, `self.rows`), the parameter is
+    /// a borrow (not `own`, not `mut ref`), no other argument and no receiver
+    /// of the call names `x`'s root, and `x`'s type has no hand-written
+    /// `impl Clone`, whose body might do more than copy.
+    fn lint_redundant_clones(&mut self, args: &[CallArg], params: &[Type]) {
+        let receiver = self.call_receiver_roots.last().cloned().flatten();
+        for (i, (arg, param)) in args.iter().zip(params).enumerate() {
+            if !matches!(param, Type::Ref(_)) || arg.mut_marker {
+                continue;
+            }
+            let ExprKind::MethodCall {
+                object,
+                method,
+                args: clone_args,
+                args_close_span,
+                ..
+            } = &arg.value.kind
+            else {
+                continue;
+            };
+            if method != "clone" || !clone_args.is_empty() {
+                continue;
+            }
+            let Some(root) = clone_place_root(object) else {
+                continue;
+            };
+            if receiver.as_deref() == Some(root)
+                || args
+                    .iter()
+                    .enumerate()
+                    .any(|(j, a)| j != i && Self::expr_references_name(&a.value, root))
+            {
+                continue;
+            }
+            let from = object.span.offset + object.span.length;
+            let end = args_close_span.offset + args_close_span.length;
+            if end != from + ".clone()".len() {
+                continue;
+            }
+            // The clone must hand back the place's own type: `Str.clone()`
+            // is a `String`, and dropping it would pass the view to a
+            // `ref String`.
+            let strip = |t: &Type| -> Type {
+                let mut t = t.clone();
+                while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                    t = *inner;
+                }
+                t
+            };
+            let same_type = match (
+                self.expr_types.get(&SpanKey::from_span(&object.span)),
+                self.expr_types.get(&SpanKey::from_span(&arg.value.span)),
+            ) {
+                (Some(place), Some(copy)) => strip(place) == strip(copy),
+                _ => false,
+            };
+            if !same_type {
+                continue;
+            }
+            let hand_written = match self.expr_types.get(&SpanKey::from_span(&object.span)) {
+                Some(Type::Named { name, .. }) => self.program.items.iter().any(|it| {
+                    matches!(it, Item::ImplBlock(b)
+                        if b.trait_name.as_ref().and_then(|t| t.segments.last()).map(String::as_str)
+                            == Some("Clone")
+                            && matches!(&b.target_type.kind,
+                                TypeKind::Path(p) if p.segments.last() == Some(name)))
+                }),
+                _ => false,
+            };
+            if hand_written
+                || !self
+                    .clone_lints_reported
+                    .insert(SpanKey::from_span(&arg.value.span))
+            {
+                continue;
+            }
+            let shown = clone_place_text(object).unwrap_or_else(|| root.to_string());
+            self.type_lint_warning_with_fix(
+                format!(
+                    "`{shown}.clone()` copies `{shown}` for a parameter that only borrows it: \
+                     pass `{shown}`, which the call borrows (a bare parameter borrows, \
+                     core-semantics.md §4.1)"
+                ),
+                arg.value.span,
+                TypeErrorKind::StyleLint,
+                "redundant_clone",
+                Some(FixIt {
+                    span: Span {
+                        offset: from,
+                        length: end - from,
+                        line: object.span.line,
+                        column: object.span.column,
+                    },
+                    replacement: String::new(),
+                }),
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -17314,4 +17418,32 @@ pub(super) fn buf_source_refusal(ty: &Type, reader: bool) -> Option<String> {
         "`{wrapper}` wraps {list} (library/io.md § Buffered I/O), not a `{}`",
         type_display(ty)
     ))
+}
+
+/// The root name of a named place (`bank`, `self.rows.0`), for
+/// `redundant_clone`; `None` for anything else.
+pub(super) fn clone_place_root(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        ExprKind::Identifier(n) => Some(n),
+        ExprKind::SelfValue => Some("self"),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            clone_place_root(object)
+        }
+        _ => None,
+    }
+}
+
+/// A named place written out (`self.rows.0`), for messages.
+fn clone_place_text(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::SelfValue => Some("self".to_string()),
+        ExprKind::FieldAccess { object, field } => {
+            Some(format!("{}.{field}", clone_place_text(object)?))
+        }
+        ExprKind::TupleIndex { object, index } => {
+            Some(format!("{}.{index}", clone_place_text(object)?))
+        }
+        _ => None,
+    }
 }

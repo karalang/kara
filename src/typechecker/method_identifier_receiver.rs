@@ -1383,11 +1383,58 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return Some(ret);
                 }
-                self.type_error(
-                    format!("no method '{}' on `{}[…]`", method, type_name),
-                    *span,
-                    TypeErrorKind::NoMethodFound,
-                );
+                // B-2026-11-14-6 — name the receiver as written, and point a
+                // `Vec` constructor on `Array[T, N]` at the repeat literal.
+                let receiver = receiver_as_written(&type_name, generic_args, &target_args);
+                let mut message = format!("no method '{method}' on `{receiver}`");
+                let mut fix_it = None;
+                if type_name == "Array" && matches!(method, "filled" | "new" | "with_capacity") {
+                    // The length as written; only a literal one is fixed,
+                    // since a named constant may not be in scope as a value.
+                    let (len, len_literal) = match generic_args.get(1) {
+                        Some(GenericArg::Const(e)) => match &e.kind {
+                            ExprKind::Integer(n, _) => (Some(n.to_string()), true),
+                            ExprKind::Identifier(n) => (Some(n.clone()), false),
+                            _ => (None, false),
+                        },
+                        // A named constant parses in type position.
+                        Some(GenericArg::Type(t)) => match &t.kind {
+                            TypeKind::Path(p) if p.segments.len() == 1 => {
+                                (Some(p.segments[0].clone()), false)
+                            }
+                            _ => (None, false),
+                        },
+                        _ => (None, false),
+                    };
+                    let elem = (method == "filled" && args.len() == 1)
+                        .then(|| target_args.first())
+                        .flatten()
+                        .and_then(|t| repeat_element_text(&args[0].value, t));
+                    let shown = format!(
+                        "[{}; {}]",
+                        elem.as_deref().unwrap_or("v"),
+                        len.as_deref().unwrap_or("N")
+                    );
+                    message.push_str(&format!(
+                        ": `{receiver}` is a fixed array, built with the repeat literal \
+                         `[v; N]` (here `{shown}`); `Vec.filled(n, v)` is the growable form"
+                    ));
+                    if elem.is_some() && len_literal {
+                        fix_it = Some(FixIt {
+                            span: *span,
+                            replacement: shown,
+                        });
+                    }
+                }
+                match fix_it {
+                    Some(fix) => self.type_error_with_fix_it(
+                        message,
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        fix,
+                    ),
+                    None => self.type_error(message, *span, TypeErrorKind::NoMethodFound),
+                }
                 for arg in args {
                     self.infer_expr(&arg.value);
                 }
@@ -1460,4 +1507,49 @@ fn ordered_free_type_vars(ty: &Type) -> Vec<Type> {
     let mut out = Vec::new();
     walk(ty, &mut out);
     out
+}
+
+/// `Array[i64, 26]` as the user wrote it: type arguments through
+/// `type_display`, a literal or named constant argument verbatim.
+fn receiver_as_written(type_name: &str, generic_args: &[GenericArg], types: &[Type]) -> String {
+    let mut types = types.iter();
+    let parts: Vec<String> = generic_args
+        .iter()
+        .map(|a| match a {
+            GenericArg::Type(_) => types.next().map_or_else(|| "_".to_string(), type_display),
+            GenericArg::Const(e) => match &e.kind {
+                ExprKind::Integer(n, _) => n.to_string(),
+                ExprKind::Identifier(n) => n.clone(),
+                _ => "…".to_string(),
+            },
+            GenericArg::Shape(_) => "[…]".to_string(),
+        })
+        .collect();
+    format!("{type_name}[{}]", parts.join(", "))
+}
+
+/// The element of the `[v; N]` that replaces `Array[T, N].filled(v)`, when it
+/// can be rendered from the AST and keeps the element type `T`: an unsuffixed
+/// integer literal takes `T`'s suffix unless `T` is the default `i64`.
+fn repeat_element_text(arg: &Expr, elem: &Type) -> Option<String> {
+    match &arg.kind {
+        ExprKind::Integer(v, Some(s)) => Some(format!("{v}{}", format!("{s:?}").to_lowercase())),
+        ExprKind::Integer(v, None) => match elem {
+            Type::Int(IntSize::I64) => Some(v.to_string()),
+            Type::Int(_) | Type::UInt(_) => Some(format!("{v}{}", type_display(elem))),
+            _ => None,
+        },
+        ExprKind::Bool(b) if matches!(elem, Type::Bool) => Some(b.to_string()),
+        // A named value is repeated by copy, so only a scalar element is
+        // offered; `[s; 3]` of a `String` would be refused.
+        ExprKind::Identifier(n)
+            if matches!(
+                elem,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+            ) =>
+        {
+            Some(n.clone())
+        }
+        _ => None,
+    }
 }

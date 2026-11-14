@@ -3585,6 +3585,14 @@ pub struct TypeChecker<'a> {
     /// Casts `redundant_cast` / `lossless_cast` already reported, for the
     /// same reason.
     pub(super) cast_lints_reported: FxHashSet<SpanKey>,
+    /// The `x.clone()` arguments `redundant_clone` already reported, for the
+    /// same reason (B-2026-11-14-3).
+    pub(super) clone_lints_reported: FxHashSet<SpanKey>,
+    /// The root name of each method call's receiver being inferred,
+    /// innermost last (`None` for a receiver that is no named place):
+    /// `redundant_clone` leaves `v.m(v.clone())` alone, since the call may
+    /// write `v` while the argument borrows it.
+    pub(super) call_receiver_roots: Vec<Option<String>>,
     /// The type `check_expr` wants of each `as` cast being checked, by span,
     /// so the cast can tell a lossless widening that happens implicitly
     /// there. A stack: a cast inside the operand of another (`f(c as i32)
@@ -4569,6 +4577,8 @@ impl<'a> TypeChecker<'a> {
             vec_macro_reported: rustc_hash::FxHashSet::default(),
             option_result_predicates_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
+            clone_lints_reported: FxHashSet::default(),
+            call_receiver_roots: Vec::new(),
             pending_cast_expected: Vec::new(),
             operand_casts: FxHashMap::default(),
             assoc_binding_typos_reported: rustc_hash::FxHashSet::default(),

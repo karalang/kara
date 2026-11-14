@@ -189,6 +189,11 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "An `as` cast to the type its operand already has.",
     },
     LintInfo {
+        name: "redundant_clone",
+        default_level: LintLevel::Warn,
+        description: "`f(x.clone())` where `f`'s parameter only borrows: the call can borrow `x` itself.",
+    },
+    LintInfo {
         name: "redundant_alias_bound",
         default_level: LintLevel::Warn,
         description: "A bound on a type alias's parameter that the aliased type already requires (`type Sk[T: Ord] = SortedMap[T, i32]`).",

@@ -5,6 +5,9 @@
 //! the qualified call picks the one it names, and a bare `x.conv()` is
 //! ambiguous, naming both.
 
+#[cfg(feature = "llvm")]
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -66,5 +69,36 @@ fn bare_call_on_two_instances_of_a_bound_is_ambiguous() {
     assert!(
         err.contains("ambiguous method 'conv'") && err.contains("`Conv[String]`, `Conv[f64]`"),
         "{err}"
+    );
+}
+
+/// The MIR builder takes the instance from the checker's choice, so the
+/// compiled program runs `Conv[f64]`'s impl too.
+#[cfg(feature = "llvm")]
+#[test]
+fn qualified_call_runs_the_named_instance_compiled() {
+    let src = format!(
+        "{CONV}fn both[X: Conv[String] + Conv[f64]](x: X) -> String {{\n    \
+         let s: String = Conv[String].conv(x);\n    \
+         let f: f64 = Conv[f64].conv(x);\n    \
+         f\"{{s}} {{f}}\"\n}}\n\
+         fn main() {{ println(both(5)); }}\n"
+    );
+    let (dir, path) = fixture("compiled", &src);
+    let run = karac().arg("run").arg(&path).output().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let linked = if run.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&run.stderr).into_owned())
+    };
+    if common::link_or_skip(linked).is_none() {
+        return;
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "n5 5.0\n",
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
     );
 }

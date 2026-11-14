@@ -1776,9 +1776,19 @@ impl<'a> super::TypeChecker<'a> {
                 // open, so don't claim the function is missing.
                 && !self.type_has_comptime_derive(type_name)
             {
+                // B-2026-11-14-6 — `Array.filled(n, v)` guessed from
+                // `Vec.filled(n, v)`: a fixed array is the repeat literal.
+                let hint = if type_name == "Array"
+                    && matches!(member.as_str(), "filled" | "new" | "with_capacity")
+                {
+                    ": a fixed array is built with the repeat literal `[v; N]`, N a \
+                     constant; `Vec.filled(n, v)` is the growable form"
+                } else {
+                    ""
+                };
                 self.type_error(
                     format!(
-                        "no associated function '{}' on type '{}'",
+                        "no associated function '{}' on type '{}'{hint}",
                         member, type_name
                     ),
                     *span,

@@ -1068,6 +1068,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - An `errdefer` in a function returning neither `Result` nor `Option` is
   `warning[unreachable_errdefer]`: there is no failure exit, so it never
   runs; the help points to `defer` (design.md §10 Rules, B-2026-11-14-19).
+- A new `redundant_clone` lint warns on `f(x.clone())` when `f`'s parameter
+  is bare and so only borrows `x`, and `karac fix` drops the `.clone()`. It
+  stays quiet where the copy is needed: an `own` parameter, a sibling argument
+  that names the same value (`f(v.clone(), mut v)`), the method's own receiver,
+  a type with a hand-written `Clone`, and a clone that changes the type (a
+  string view cloned to a `String`) (B-2026-11-14-3).
+- `Array[i64, 26].filled(0)` names the receiver as written, not `Array[…]`,
+  and says a fixed array is built with the repeat literal `[0; 26]`, which
+  `karac fix` writes when the element and the length are literals or scalar
+  names. `Array.filled(n, v)` gets the same pointer (B-2026-11-14-6).
 - `karac fix` writes five rewrites its messages already named: an unknown
   method's "did you mean 'len'?", `{x:?}` to `{x}`, `-> escaping Fn(..)` to
   `-> Fn(..)`, a nested `fn` that shares its line with other code moved above

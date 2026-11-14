@@ -1812,7 +1812,10 @@ impl<'a> super::TypeChecker<'a> {
         self.method_call_ends.push(ends);
         self.note_literal_push(object, method, args);
         let errors_before = self.errors.len();
+        self.call_receiver_roots
+            .push(super::exprs::clone_place_root(object).map(str::to_string));
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
+        self.call_receiver_roots.pop();
         self.method_call_ends.pop();
         if method == "collect" && args.is_empty() {
             let item = self
