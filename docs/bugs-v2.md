@@ -64,10 +64,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 158 |
 | soundness | 64 |
 | miscompile | 59 |
-| run-vs-build | 32 |
+| run-vs-build | 33 |
 | other | 30 |
 | codegen-gap | 30 |
-| crash | 25 |
+| crash | 26 |
 | leak | 4 |
 | use-after-free | 3 |
 
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 446 |
+| typecheck | 447 |
 | mir-llvm | 214 |
-| mir | 180 |
+| mir | 182 |
 | cli | 110 |
 | ownership | 79 |
 | parser | 77 |
@@ -110,7 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-12-2 | 2026-11-12 | typecheck | low | A number read out of a tuple a literal was pushed into, then kept `i64` by a comparison, narrows into an `i32` slot with no machine fix: kata 1129's solution arm needs a hand `as i32` | — |
 | B-2026-11-12-12 | 2026-11-12 | typecheck | low | A literal stored into an element of an open fill settles the fill's literal: `let mut t = Vec.filled(3, 0); t[1] = 4; let r: i32 = t[1];` is refused (narrowing i64 to i32), though without `t[1] = 4` it is accepted and `t[1] = 4` after the typed read is too | — |
-| B-2026-11-12-15 | 2026-11-12 | mir-llvm | low | `"U".repeat(n)` of a one-byte string is a call into `karac_mir_str_repeat`, an allocation through `karac_alloc_or_panic` and up to three `memcpy` calls where Rust's is inlined: kata 1138's bench runs 7.0G instructions to Rust's 4.6G (0.81 s to 0.59 s) | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
 | B-2026-11-14-1 | 2026-11-14 | typecheck | low | Whether a let-bound literal compared with an `i32` can still be fixed to `i32` by a later argument depends on statement order: `let i = 0; take_i32(i); if i < n {..}` checks, `let i = 0; if i < n { take_i32(i) }` is refused as narrowing | — |
 | B-2026-11-14-3 | 2026-11-14 | typecheck | low | `f(x.clone())` where `f`'s parameter only borrows copies `x` for nothing, and no lint flags it: a LeetCode Rust template's adapter keeps `Solution.number_of_beams(bank.clone())` after `karac fix` carries it (kata 2125), because Rust's by-value `Vec<String>` parameter became Kāra's borrowing `Vec[String]` | — |
@@ -125,6 +124,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-16 | 2026-11-14 | mir-llvm | medium | `SortedSet.range` / `range_inclusive` (and `SortedMap`'s) find their bounds by a binary search over positions in the library source (`bound_index`, runtime/stdlib/source/collections.kara), each probe an `entry_at`, which on a tree-backed table is `karac_mir_map_at`, itself an O(log n) walk: a bound costs O(log^2 n) where `karac_mir_map_pick` op 4/5 (a tree `find`) costs O(log n); kata 1562's backward arm runs 3.0x Rust's `BTreeSet`, 70% of its instructions in `karac_mir_map_at` | — |
 | B-2026-11-14-17 | 2026-11-14 | typecheck+cli | low | A prefix table that `karac fix` carried from `vec![0; n + 1]` to `Vec.filled(n + 1, 0)` takes `i64` from its literal, and a read of it passed to an `i32` `max` (`dp[i][j].max(l + dp[i][k])`, `l = pre[k + 1] - pre[i]`) is refused as "`max` expects an argument of type `i32`, got `i64`" with no fix-it, though the literal-default fix (`0i32`) is offered for the same table's literal when the read reaches a return or a `collect` | — |
 | B-2026-11-14-18 | 2026-11-14 | typecheck+cli | low | Three counters bound to literals that feed one another (`best = best.max(positive)`, `positive = negative + 1`) and reach an `i32` return take three rounds of `karac fix`, one literal each: the checker reports only the binding the return reads, and the next one surfaces only after that one is `0i32`, so the literal-default fix walks the chain one binding per round | — |
+| B-2026-11-14-19 | 2026-11-14 | typecheck+mir | medium | An early exit inside a cleanup block crashes the compiler: `loop { defer { break; } }`, `defer { continue; }`, `defer { return 3; }` and `?` inside a `defer` each die in `karac check` and `build` with `fatal runtime error: stack overflow`, and `errdefer { return Ok(1); }` passes check and fails `__mir-run` with `assignment overwrites _0, which still owns a value` | — |
+| B-2026-11-14-20 | 2026-11-14 | mir | medium | A by-move capture of a struct's field takes the whole struct in MIR, so design.md § Captures' disjoint capture holds only for ref and mut-ref captures: `let f = || eat(s.a); eat(s.b); f();` passes check and fails every run lane with `move check main: use of _1.1, which may have been moved`, and a returned `|| s.a.n` keeps `s.b` and `s.c` alive until the closure drops | — |
 
 ### Relocated
 
@@ -1119,6 +1120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-12-11 | typecheck | low | A narrowing refused at a binding that holds an element of a fill offers only `as i32`: LeetCode's `let max_k = min(left[i][j], up[i][j]); for k in (1… | 032df1a4c2 |
 | B-2026-11-12-13 | typecheck | medium | A `fold` seed read as an index in its closure is refused, `index must be an integer or range, found 'i64'`: the seed is held open while the closure i… | d34854564c |
 | B-2026-11-12-14 | typecheck | medium | `(0..=n).map(\|_\| Set.new()).collect()` into a `Vec[Set[i64]]` is refused, `Vec[Set[i64]]` implements `FromIterator[Set[i64]]`, not `FromIterator[Set[… | d34854564c |
+| B-2026-11-12-15 | mir-llvm | low | `"U".repeat(n)` of a one-byte string is a call into `karac_mir_str_repeat`, an allocation through `karac_alloc_or_panic` and up to three `memcpy` cal… | 3f394d9182 |
 | B-2026-11-12-16 | typecheck | low | A narrowing read of an element of an array of literals offers only `as i32`: LeetCode's `let mut res = [0, 0]; .. | 9049969b63 |
 | B-2026-11-12-17 | mir-llvm | low | `for i in (low..n).step_by(2)` over an `i64` range runs about 1.2x the same loop written `while i < n { ...; i += 2 }`: `IterStepBy[Range].next` take… | ad30c70d4e |
 | B-2026-11-12-18 | typecheck | low | `(1..10).filter(\|x\| *x % 2 == 0)` is accepted while `(1..n).filter(\|x\| *x % 2 == 0)` is refused with "drop the `*`": over a range of bare literals th… | 18ea960272 |
