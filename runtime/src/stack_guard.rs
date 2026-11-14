@@ -79,7 +79,15 @@ note: raise the limit with `ulimit -s`, or make the recursion iterative.\n";
             };
             let lo = STACK_LO.load(Ordering::Relaxed);
             let hi = STACK_HI.load(Ordering::Relaxed);
-            if hi != 0 && fault < hi && fault >= lo.saturating_sub(GUARD_SLACK) {
+            let on = |lo: usize, hi: usize| {
+                hi != 0 && fault < hi && fault >= lo.saturating_sub(GUARD_SLACK)
+            };
+            // A pool worker's stack counts as well (B-2026-11-14-7).
+            let workers = WORKERS_SEEN.load(Ordering::Acquire).min(WORKER_SLOTS);
+            let on_worker = WORKER_BOUNDS[..workers]
+                .iter()
+                .any(|(l, h)| on(l.load(Ordering::Relaxed), h.load(Ordering::Relaxed)));
+            if on(lo, hi) || on_worker {
                 let _ = libc::write(2, MSG.as_ptr().cast(), MSG.len());
                 // 134 == 128 + SIGABRT, the shell's convention for an aborted
                 // process, and what a Rust binary exits with on the same
@@ -97,6 +105,63 @@ note: raise the limit with `ulimit -s`, or make the recursion iterative.\n";
         install_for(None);
     }
 
+    /// The pool workers whose stacks the handler knows, by `[lo, hi)`. A
+    /// worker past the last slot keeps the plain `SIGSEGV`.
+    const WORKER_SLOTS: usize = 1024;
+    #[allow(clippy::declare_interior_mutable_const)]
+    const UNSET: (AtomicUsize, AtomicUsize) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    static WORKER_BOUNDS: [(AtomicUsize, AtomicUsize); WORKER_SLOTS] = [UNSET; WORKER_SLOTS];
+    static WORKERS_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+    /// Extends the guard to the calling thread, a pool worker: its stack's
+    /// bounds join the main thread's, and it gets an alternate signal stack
+    /// of its own (one is per thread) for the handler to run on. A no-op
+    /// when the program installed no guard (a sanitizer lane, which reports
+    /// an overflow itself).
+    pub(crate) fn guard_this_thread() {
+        if !INSTALLED.load(Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: reads the calling thread's own attributes.
+        let Some((lo, hi)) = (unsafe { main_stack_bounds() }) else {
+            return;
+        };
+        let i = WORKERS_SEEN.fetch_add(1, Ordering::AcqRel);
+        if i >= WORKER_SLOTS {
+            return;
+        }
+        WORKER_BOUNDS[i].0.store(lo, Ordering::Relaxed);
+        WORKER_BOUNDS[i].1.store(hi, Ordering::Release);
+        // SAFETY: an anonymous mapping handed to this thread's sigaltstack;
+        // the thread lives as long as the process, so it is never unmapped.
+        unsafe { alt_stack() };
+    }
+
+    /// Gives the calling thread an alternate signal stack; `false` when none
+    /// could be made.
+    unsafe fn alt_stack() -> bool {
+        unsafe {
+            let size = std::cmp::max(libc::SIGSTKSZ, 32 * 1024);
+            let mem = libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            );
+            if mem == libc::MAP_FAILED {
+                return false;
+            }
+            let ss = libc::stack_t {
+                ss_sp: mem,
+                ss_flags: 0,
+                ss_size: size,
+            };
+            libc::sigaltstack(&ss, std::ptr::null_mut()) == 0
+        }
+    }
+
     /// Installs the guard for the stack `[lo, hi)`, or the main thread's
     /// when `None`.
     pub(crate) fn install_for(bounds: Option<(usize, usize)>) {
@@ -111,24 +176,7 @@ note: raise the limit with `ulimit -s`, or make the recursion iterative.\n";
             // The alternate stack is the whole point: when the fault is
             // "no stack left", a handler running on the normal stack faults
             // again and the process dies silently anyway.
-            let size = std::cmp::max(libc::SIGSTKSZ, 32 * 1024);
-            let mem = libc::mmap(
-                std::ptr::null_mut(),
-                size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANON,
-                -1,
-                0,
-            );
-            if mem == libc::MAP_FAILED {
-                return;
-            }
-            let ss = libc::stack_t {
-                ss_sp: mem,
-                ss_flags: 0,
-                ss_size: size,
-            };
-            if libc::sigaltstack(&ss, std::ptr::null_mut()) != 0 {
+            if !alt_stack() {
                 return;
             }
             let mut act: libc::sigaction = std::mem::zeroed();
@@ -140,9 +188,9 @@ note: raise the limit with `ulimit -s`, or make the recursion iterative.\n";
         }
     }
 
-    /// Bounds of the MAIN thread's stack. Spawned tasks run on pool threads
-    /// with their own stacks; this guard deliberately covers the main thread,
-    /// which is where a deep user recursion runs.
+    /// Bounds of the calling thread's stack: the main thread's at install,
+    /// and a pool worker's from `guard_this_thread`, since an auto-par loop
+    /// runs a deep recursion on a worker too (B-2026-11-14-7).
     #[cfg(target_os = "linux")]
     unsafe fn main_stack_bounds() -> Option<(usize, usize)> {
         unsafe {

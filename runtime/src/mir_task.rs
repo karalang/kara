@@ -2012,17 +2012,37 @@ fn spawn_worker(w: usize) {
     if w >= threads() {
         return;
     }
-    // A failed start leaves the pool with the workers it has.
-    let _ = std::thread::Builder::new()
-        .name(format!("karac-worker-{w}"))
-        // As deep as the main thread's: a poll runs the task's whole
-        // call chain.
-        .stack_size(8 << 20)
-        .spawn(move || {
-            spawn_worker(w + 1);
-            worker_loop(w)
-        });
+    // As deep as the main thread's (`big_stack`, 1 GiB on a 64-bit target):
+    // a poll runs the task's whole call chain, and an auto-par loop's body
+    // recurses as deep on a worker as it would on the caller
+    // (B-2026-11-14-7). The stack is reserved, and committed only as it is
+    // touched. Where so large a reservation is refused (a strict overcommit
+    // policy), the worker starts on 8 MiB rather than not at all; a failed
+    // start leaves the pool with the workers it has.
+    let start = |stack: usize| {
+        std::thread::Builder::new()
+            .name(format!("karac-worker-{w}"))
+            .stack_size(stack)
+            .spawn(move || {
+                // An overflow on this stack is reported as one, as on the
+                // main thread's, not as a bare SIGSEGV.
+                #[cfg(all(unix, feature = "net"))]
+                crate::stack_guard::imp::guard_this_thread();
+                spawn_worker(w + 1);
+                worker_loop(w)
+            })
+    };
+    if start(WORKER_STACK).is_err() && WORKER_STACK > 8 << 20 {
+        let _ = start(8 << 20);
+    }
 }
+
+/// A pool worker's stack: the main thread's depth where the address space
+/// has room for it.
+#[cfg(target_pointer_width = "64")]
+const WORKER_STACK: usize = 1 << 30;
+#[cfg(not(target_pointer_width = "64"))]
+const WORKER_STACK: usize = 8 << 20;
 
 /// A task this worker polled is settled: it no longer counts as running.
 #[inline(always)]
