@@ -163,6 +163,38 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A `s.parse()` a closure's tail gives, checked against a return type
+    /// the callee leaves open (`map`'s `OutV`), took that parameter as its
+    /// target; the tail is then opened to a variable for a later use to fix
+    /// (`collect()` into a `Vec[i32]`), and the parse follows it, so its
+    /// error can name the type (`i32.parse(s)`) as it does after a `let`
+    /// (kata 1154's Rust arm).
+    pub(super) fn reopen_closure_parses(&mut self, from: usize, closed: &Type, opened: &Type) {
+        let Type::TypeParam(param) = self.resolved_now(closed) else {
+            return;
+        };
+        let Type::TypeVar(open) = self.resolved_now(opened) else {
+            return;
+        };
+        for (_, target) in self.untargeted_parses.iter().skip(from) {
+            let mut last = None;
+            let mut cur = target.clone();
+            while let Type::TypeVar(id) = cur {
+                last = Some(id);
+                match self.env.substitutions.get(&id) {
+                    Some(next) => cur = next.clone(),
+                    None => break,
+                }
+            }
+            match (last, cur) {
+                (Some(id), Type::TypeParam(p)) if p == param && id != open => {
+                    self.env.substitutions.insert(id, Type::TypeVar(open));
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// The error for each `s.parse()` nothing named the target of where it
     /// was written: with the fix `T.parse(s)` when a later use fixed the
     /// target to a number type `T.parse` reads, and as the plain "name the

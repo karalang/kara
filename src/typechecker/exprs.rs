@@ -4292,11 +4292,14 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     Vec::new()
                 };
+                let parses_before = self.untargeted_parses.len();
                 let mut body_ty = self.check_expr(body, &ret_now);
                 for id in opened_values {
                     self.open_closure_values.remove(&id);
                 }
+                let body_ty_closed = body_ty.clone();
                 let body_ty_opened = self.open_unsolved_closure_tail(expected_ret, body_ty, body);
+                self.reopen_closure_parses(parses_before, &body_ty_closed, &body_ty_opened);
                 body_ty = body_ty_opened;
                 // An expression body is the closure's tail: `|p: S| p.t` moves
                 // out of `p` as a fn's tail does. A block body's tail is
@@ -12637,11 +12640,29 @@ impl<'a> super::TypeChecker<'a> {
             let mut at = e;
             let mut walked = false;
             while let ExprKind::MethodCall { object, method, .. } = &at.kind {
+                // `days[..m].iter()`: a range of the collection walks its
+                // elements as the whole does (kata 1154's Rust arm).
+                let ranged = match &object.kind {
+                    ExprKind::Index {
+                        object: whole,
+                        index,
+                    } if matches!(index.kind, ExprKind::Range { .. })
+                        && matches!(whole.kind, ExprKind::Identifier(_)) =>
+                    {
+                        Some(whole.as_ref())
+                    }
+                    _ => None,
+                };
                 match method.as_str() {
                     "iter" | "into_iter" | "first" | "last" | "get"
                         if matches!(object.kind, ExprKind::Identifier(_)) =>
                     {
                         walked = true
+                    }
+                    "iter" | "into_iter" if ranged.is_some() => {
+                        walked = true;
+                        at = ranged.unwrap_or(object);
+                        continue;
                     }
                     m if PICK.contains(&m) => {}
                     _ => return None,
