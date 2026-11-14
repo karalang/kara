@@ -7725,6 +7725,25 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.pinned.insert(e.id, p);
                 Ok(())
             }
+            // So does any other value a place is rooted in: an array or
+            // `vec!` literal, a struct literal, a block. Built later, by
+            // `index_place`, it ran after the index (`[p(1), p(2)][p(0)]`
+            // printed e0 e1 e2; B-2026-11-14-22). A name is not built.
+            ExprKind::ArrayLiteral(_)
+            | ExprKind::PrefixCollectionLiteral { .. }
+            | ExprKind::RepeatLiteral { .. }
+            | ExprKind::MapLiteral { .. }
+            | ExprKind::StructLiteral { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::Block(_)
+            | ExprKind::If { .. }
+            | ExprKind::Match { .. }
+                if !self.pinned.contains_key(&e.id) =>
+            {
+                let p = self.temp_place(e)?;
+                self.pinned.insert(e.id, p);
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

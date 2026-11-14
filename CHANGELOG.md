@@ -443,6 +443,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- An index evaluates its base before its index when the base is a literal,
+  as it already did for a call or a name (design.md §8.1): with `p(n)`
+  printing `e{n}`, `[p(1), p(2)][p(0)]` prints `e1 e2 e0`, where it printed
+  `e0 e1 e2`, and so do a `vec!` and a struct literal's field. The value was
+  right; the order of output, a panic or a drop was not (B-2026-11-14-22).
 - A type parameter bounded by two instances of one generic trait
   (`X: Conv[String] + Conv[f64]`) can call either: `Conv[f64].conv(x)` was
   typed by the first bound and refused with "expected 'f64', found
