@@ -1179,6 +1179,59 @@ impl<'a> super::TypeChecker<'a> {
         {
             return Some(Type::Char);
         }
+        // The same on a `u8`, Rust's `u8::to_ascii_*case` -> u8: a byte
+        // stack or `bytes()` scan folds case without going through `char`
+        // (B-2026-11-14-9, met in kata 1544's mutation of its byte arm).
+        if args.is_empty()
+            && matches!(receiver_for_lookup, Type::UInt(UIntSize::U8))
+            && matches!(method, "to_ascii_uppercase" | "to_ascii_lowercase")
+        {
+            return Some(Type::UInt(UIntSize::U8));
+        }
+        // `eq_ignore_ascii_case(other) -> bool` on a `char` or a `u8`, Rust's
+        // `char::eq_ignore_ascii_case` / `u8::eq_ignore_ascii_case`: equal once
+        // both are put in ASCII lower case. Rust takes `&Self`; the scalar is
+        // passed here, as every other scalar argument is (B-2026-11-14-9,
+        // kata 1544's `top.eq_ignore_ascii_case(c)`).
+        if method == "eq_ignore_ascii_case"
+            && matches!(receiver_for_lookup, Type::Char | Type::UInt(UIntSize::U8))
+        {
+            if args.len() != 1 {
+                self.type_error(
+                    format!(
+                        "eq_ignore_ascii_case expects 1 argument, got {}",
+                        args.len()
+                    ),
+                    *span,
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Some(Type::Error);
+            }
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            let byte = matches!(receiver_for_lookup, Type::UInt(_));
+            if byte && Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+                self.record_promoted_literal(arg, receiver_for_lookup);
+            } else if !matches!(arg_ty, Type::Error)
+                && (if byte {
+                    self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup)
+                } else {
+                    arg_ty != Type::Char
+                })
+            {
+                self.type_error(
+                    format!(
+                        "eq_ignore_ascii_case expects an argument of type `{}`, got `{}`",
+                        type_display(receiver_for_lookup),
+                        type_display(&arg_ty)
+                    ),
+                    arg.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Some(Type::Error);
+            }
+            return Some(Type::Bool);
+        }
         // Unicode case folding on a `char` — `to_lowercase` / `to_uppercase`
         // -> char (B-2026-08-12-25). These are the names a writer reaches for
         // first (`to_ascii_lowercase` reads as the narrowing special case), so

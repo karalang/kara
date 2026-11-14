@@ -174,6 +174,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             _ => {}
         }
+        if method == "eq_ignore_ascii_case" {
+            return self.eq_ignore_ascii_case(args, dest);
+        }
         let Some(first) = args.first() else {
             return Ok(None);
         };
@@ -191,6 +194,8 @@ impl<'ctx> Cx<'ctx, '_> {
                         | "is_ascii_punctuation"
                         | "is_ascii_whitespace"
                         | "is_ascii_hexdigit"
+                        | "to_ascii_lowercase"
+                        | "to_ascii_uppercase"
                 ) =>
             {
                 let _ = it;
@@ -200,6 +205,43 @@ impl<'ctx> Cx<'ctx, '_> {
             TyKind::Float(ft) => self.float_op(ft, method, args, dest),
             _ => Ok(None),
         }
+    }
+
+    /// `a.eq_ignore_ascii_case(b)` of two chars or two bytes, in line: each
+    /// side is mapped to lower case when it is `A`..`Z` (`| 32`), then the
+    /// two are compared (B-2026-11-14-9).
+    fn eq_ignore_ascii_case(&mut self, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let [x, y] = args else {
+            return Ok(None);
+        };
+        let t = self.operand_type(x)?;
+        if !matches!(self.tys.kind(t), TyKind::Char | TyKind::Int(_)) {
+            return Ok(None);
+        }
+        let mut lowered = Vec::with_capacity(2);
+        for op in [x, y] {
+            let v = self.operand_scalar(op)?.into_int_value();
+            let b = &self.builder;
+            let v = b
+                .build_int_cast_sign_flag(v, self.llcx.i64_type(), false, "")
+                .map_err(e)?;
+            let off = b.build_int_sub(v, self.i64(65), "").map_err(e)?;
+            let upper = b
+                .build_int_compare(IntPredicate::ULT, off, self.i64(26), "")
+                .map_err(e)?;
+            let down = b.build_or(v, self.i64(32), "").map_err(e)?;
+            lowered.push(
+                b.build_select(upper, down, v, "")
+                    .map_err(e)?
+                    .into_int_value(),
+            );
+        }
+        let same = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, lowered[0], lowered[1], "")
+            .map_err(e)?;
+        self.store_bool(dest, same)?;
+        Ok(Some(()))
     }
 
     /// A char method through `karac_mir_char`; `byte` reads an integer

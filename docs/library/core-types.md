@@ -117,6 +117,8 @@ What the plain operators do on overflow, and the other numeric rules, are in [de
 
 **Char digits.** As Rust's: `c.to_digit(radix) -> Option[u32]` is the digit `c` stands for below the radix, `c.is_digit(radix) -> bool` whether it stands for one, and `char.from_digit(num: u32, radix: u32) -> Option[char]` the inverse, `0`..`9` then `a`..`z` for a `num` below the radix and `None` from the radix up. A radix outside 2..=36 panics in all three.
 
+**ASCII case.** As Rust's: `a.eq_ignore_ascii_case(b) -> bool` on two `char`s or two `u8`s is whether they are equal once each is put in ASCII lower case, so `'a'` and `'A'` are, and `'é'` and `'É'` are not. Rust takes `&Self`; the scalar is passed here. `b.to_ascii_lowercase()` and `b.to_ascii_uppercase()` map a `u8` as they map a `char`, and return a `u8`.
+
 **Float methods.** `f32` and `f64` have these methods, each returning `Self` unless noted. Kāra's power method is `pow`, not Rust's `powf`.
 
 | Group | Methods |

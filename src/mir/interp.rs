@@ -3113,6 +3113,31 @@ impl<'a> Interp<'a> {
                 [Value::Char(c)] => Ok(Value::Int(c.len_utf8() as i128)),
                 _ => err(format!("{name} takes a char")),
             },
+            // B-2026-11-14-9: equal once both are in ASCII lower case; a
+            // byte receiver compares as a byte.
+            ("char", "eq_ignore_ascii_case") => match args.as_slice() {
+                [Value::Char(a), Value::Char(b)] => Ok(Value::Bool(a.eq_ignore_ascii_case(b))),
+                _ => err(format!("{name} takes two chars")),
+            },
+            (t, "to_ascii_lowercase" | "to_ascii_uppercase") if int_width(t).is_some() => {
+                match args.as_slice() {
+                    [Value::Int(b)] => Ok(Value::Int(match u8::try_from(*b) {
+                        Ok(b) if method == "to_ascii_lowercase" => b.to_ascii_lowercase() as i128,
+                        Ok(b) => b.to_ascii_uppercase() as i128,
+                        Err(_) => *b,
+                    })),
+                    _ => err(format!("{name} takes an integer")),
+                }
+            }
+            (t, "eq_ignore_ascii_case") if int_width(t).is_some() => match args.as_slice() {
+                [Value::Int(a), Value::Int(b)] => {
+                    Ok(Value::Bool(match (u8::try_from(*a), u8::try_from(*b)) {
+                        (Ok(a), Ok(b)) => a.eq_ignore_ascii_case(&b),
+                        _ => a == b,
+                    }))
+                }
+                _ => err(format!("{name} takes two integers")),
+            },
             ("char", _) if CHAR_METHODS.contains(&method) => {
                 self.char_method(name, method, &args, ret)
             }
