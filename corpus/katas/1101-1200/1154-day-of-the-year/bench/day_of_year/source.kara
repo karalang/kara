@@ -1,0 +1,50 @@
+// LeetCode #1154: Day of the Year -- the ★ arm: the days before the
+// month, from a table of running totals, plus the day of the month, plus
+// one from March on in a leap year. O(1)
+
+fn is_leap(year: i64) -> bool {
+    year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+}
+
+fn day_of_year(date: Str) -> i64 {
+    let year = i64.parse(date[0..4]).unwrap();
+    let month = i64.parse(date[5..7]).unwrap();
+    let day = i64.parse(date[8..10]).unwrap();
+    let before = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let leap_day = if month > 2 and is_leap(year) { 1 } else { 0 };
+    before[month - 1] + day + leap_day
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn days_in(year: i64, month: i64) -> i64 {
+    if month == 2 {
+        if year % 400 == 0 or (year % 4 == 0 and year % 100 != 0) { 29 } else { 28 }
+    } else {
+        31 - (month - 1) % 7 % 2
+    }
+}
+
+fn main() {
+    // Every date the constraints allow, 1900-01-01 to 2019-12-31, built
+    // once as strings; each of 1000 passes answers all 43829 in turn.
+    let passes = 1000;
+    let mut dates: Vec[String] = [];
+    for year in 1900..2020 {
+        for month in 1..13 {
+            for day in 1..days_in(year, month) + 1 {
+                dates.push(f"{year}-{month:02}-{day:02}");
+            }
+        }
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for p in 0..passes {
+        for date in dates.iter() {
+            let n = day_of_year(date);
+            total += n;
+            check = (check * 31 + n + p) % 1000000007;
+        }
+    }
+    println(f"{passes} passes over {dates.len()} dates: total {total}, checksum {check}");
+}

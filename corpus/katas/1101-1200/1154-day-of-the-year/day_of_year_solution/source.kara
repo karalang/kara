@@ -1,0 +1,81 @@
+// LeetCode #1154: Day of the Year -- a Rust solution as LeetCode's Rust
+// users write it (`impl Solution`, `date: String`, the fields parsed by
+// `split('-').map(|s| s.parse().unwrap())`, and the month lengths before
+// the date summed over a slice with `iter().sum::<i32>()`), carried to
+// Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn day_of_year(date: String) -> i32 {
+        let v: Vec[i32] = date.split("-").map(|s| i32.parse(s).unwrap()).collect();
+        let (y, m, d) = (v[0], v[1], v[2]);
+        let mut days = [31i32, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        if (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 {
+            days[1] = 29;
+        }
+        days[..(m - 1) as usize].iter().sum() + d
+    }
+}
+
+fn day_of_year(date: Str) -> i64 {
+    Solution.day_of_year(date.to_string())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(date: Str) {
+    println(f"{date}  ->  {day_of_year(date)}");
+}
+
+// The harness's own month lengths: 31 less the parity of `(month - 1) % 7`,
+// February apart.
+fn days_in(year: i64, month: i64) -> i64 {
+    if month == 2 {
+        if year % 400 == 0 or (year % 4 == 0 and year % 100 != 0) { 29 } else { 28 }
+    } else {
+        31 - (month - 1) % 7 % 2
+    }
+}
+
+fn main() {
+    show("2019-01-09");
+    show("2019-02-10");
+    show("2003-03-01");
+    show("2004-03-01");
+    show("1900-01-01");
+    show("1900-02-28");
+    show("1900-03-01");
+    show("1900-12-31");
+    show("2000-02-29");
+    show("2000-03-01");
+    show("2000-12-31");
+    show("2016-02-29");
+    show("2019-12-31");
+
+    // Every date the constraints allow, 1900-01-01 to 2019-12-31, in
+    // order: each answer is checked against a running count that starts
+    // again at 1 each first of January.
+    let mut dates = 0;
+    let mut wrong = 0;
+    let mut check = 0;
+    let mut longest = 0;
+    for year in 1900..2020 {
+        let mut count = 0;
+        for month in 1..13 {
+            for day in 1..days_in(year, month) + 1 {
+                count += 1;
+                dates += 1;
+                let got = day_of_year(f"{year}-{month:02}-{day:02}");
+                if got != count {
+                    wrong += 1;
+                }
+                check = (check * 31 + got) % 1000000007;
+            }
+        }
+        if count > longest {
+            longest = count;
+        }
+    }
+    println(f"{dates} dates: {wrong} wrong, longest year {longest} days, checksum {check}");
+}
