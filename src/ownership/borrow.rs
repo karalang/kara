@@ -87,6 +87,35 @@ impl<'a> super::OwnershipChecker<'a> {
             .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
     }
 
+    /// A call through a local function value (a closure binding or a
+    /// `Fn`-typed parameter): whether argument `arg_index` lands in a
+    /// borrowed slot of the value's type. The twin of the use classifier's
+    /// `modes_of_fn_params`, which reads the modes the same way; without it
+    /// every argument of such a call counted as a move here, so a field
+    /// handed to a closure that only borrows it was reported as consumed
+    /// under another closure's capture of it (B-2026-11-14-60).
+    pub(crate) fn local_fn_value_arg_is_borrow(
+        &self,
+        callee: &Expr,
+        arg_index: usize,
+        param_types: &HashMap<String, Type>,
+    ) -> bool {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return false;
+        };
+        let ty = param_types
+            .get(name.as_str())
+            .or_else(|| self.binding_types.get(name.as_str()));
+        let Some(Type::Function { params, .. } | Type::OnceFunction { params, .. }) = ty else {
+            return false;
+        };
+        match params.get(arg_index) {
+            Some(Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }) => true,
+            Some(Type::Named { name, .. }) => name == "StringSlice",
+            _ => false,
+        }
+    }
+
     /// `MethodCall` analogue of `arg_is_borrow_position`: whether call-arg
     /// `arg_index` of a method call lands in a borrow position (the resolved
     /// method's NON-self param `arg_index` is `ref`/`mut ref`/`mut Slice`).

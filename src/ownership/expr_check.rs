@@ -451,8 +451,12 @@ impl<'a> super::OwnershipChecker<'a> {
                     // Bare-T slots consume per the existing rule. Unknown
                     // callees (function-typed values, etc.) fall back to
                     // the prior consume-on-no-marker default.
-                    let is_borrow =
-                        arg.mut_marker || (!local_callee && self.arg_is_borrow_position(callee, i));
+                    let is_borrow = arg.mut_marker
+                        || if local_callee {
+                            self.local_fn_value_arg_is_borrow(callee, i, param_types)
+                        } else {
+                            self.arg_is_borrow_position(callee, i)
+                        };
                     if is_borrow {
                         self.check_expr_reading(&arg.value, states, param_types, param_usage);
                     } else {
@@ -740,8 +744,12 @@ impl<'a> super::OwnershipChecker<'a> {
                 for (i, arg) in args.iter().enumerate() {
                     // Step 2 (consume-predicate): see the analogous arm in
                     // `check_expr_consuming` for the rationale.
-                    let is_borrow =
-                        arg.mut_marker || (!local_callee && self.arg_is_borrow_position(callee, i));
+                    let is_borrow = arg.mut_marker
+                        || if local_callee {
+                            self.local_fn_value_arg_is_borrow(callee, i, param_types)
+                        } else {
+                            self.arg_is_borrow_position(callee, i)
+                        };
                     if is_borrow {
                         self.check_expr_reading(&arg.value, states, param_types, param_usage);
                     } else {
@@ -988,6 +996,33 @@ impl<'a> super::OwnershipChecker<'a> {
                         if matches!(arg.value.kind, ExprKind::Closure { .. }) {
                             self.release_closure_capture_borrows(&arg.value.span);
                         }
+                    }
+                }
+                // B-2026-11-14-60: a closure literal handed to a lazy adaptor
+                // lives in the iterator the adaptor makes, and that iterator
+                // is a temporary when a call that drains it (`collect`,
+                // `sum`, `any`, ..) sits on the end of the chain. The
+                // closure is gone when that call returns, so its captures
+                // stop borrowing there: `(0..n).map(|i| f(p.v)).collect()`
+                // leaves `p.v` free for the next statement.
+                if crate::ownership::method_drops_iterator_chain(method) {
+                    let mut link: &Expr = object;
+                    while let ExprKind::MethodCall {
+                        object: inner,
+                        method: adaptor,
+                        args: adaptor_args,
+                        ..
+                    } = &link.kind
+                    {
+                        if !crate::ownership::method_is_lazy_adaptor(adaptor) {
+                            break;
+                        }
+                        for arg in adaptor_args {
+                            if matches!(arg.value.kind, ExprKind::Closure { .. }) {
+                                self.release_closure_capture_borrows(&arg.value.span);
+                            }
+                        }
+                        link = inner;
                     }
                 }
                 // Slice 2 — drop the receiver-side ref borrow + any call-

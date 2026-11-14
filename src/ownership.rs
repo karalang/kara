@@ -133,6 +133,56 @@ pub(crate) fn method_runs_closure_without_keeping_it(method: &str) -> bool {
     )
 }
 
+/// An iterator adaptor that keeps the closure it is handed inside the
+/// iterator it returns (`map`, `filter`, ..), or passes one through
+/// (`rev`, `take`, ..). See [`method_drops_iterator_chain`].
+pub(crate) fn method_is_lazy_adaptor(method: &str) -> bool {
+    matches!(
+        method,
+        "map"
+            | "filter"
+            | "filter_map"
+            | "flat_map"
+            | "map_while"
+            | "take_while"
+            | "skip_while"
+            | "inspect"
+            | "scan"
+            | "enumerate"
+            | "rev"
+            | "take"
+            | "skip"
+            | "step_by"
+            | "peekable"
+            | "cloned"
+            | "copied"
+            | "flatten"
+            | "fuse"
+    )
+}
+
+/// A method that drains an iterator into a value that is not one
+/// (`collect`, `sum`, ..), or runs a closure without keeping it. Called
+/// on a chain of [`method_is_lazy_adaptor`] calls, it is the chain's last
+/// use: the chain is a temporary, so the closures its adaptors were
+/// handed are dropped when the call returns.
+pub(crate) fn method_drops_iterator_chain(method: &str) -> bool {
+    method_runs_closure_without_keeping_it(method)
+        || matches!(
+            method,
+            "collect"
+                | "sum"
+                | "product"
+                | "count"
+                | "min"
+                | "max"
+                | "last"
+                | "nth"
+                | "unzip"
+                | "partition"
+        )
+}
+
 /// The lowercase aliases of the ambient resources (design.md § I/O):
 /// `fs.write(p, c)` calls `FileSystem.write`. Mirrors the typechecker's
 /// identifier-receiver dispatch and codegen's `ambient_resource_for_alias`.
