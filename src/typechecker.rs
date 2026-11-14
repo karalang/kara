@@ -9565,7 +9565,23 @@ impl<'a> TypeChecker<'a> {
         }
         // B-2026-10-23-12 — the two types differ only in a number nested in
         // them, which nothing converts: say where the type has to be given.
-        if let Some(msg) = nested_numeric_mismatch_message(expected, found) {
+        // The types are read as they display: variables resolved, and a
+        // `Map` / `Set` hasher left off when it is the default. A
+        // `Map.new()` carries `SipHash13BuildHasher` as a third argument a
+        // written `Map[usize, i32]` field does not, and with it the two never
+        // looked like one shape, so the field's `usize` got no fix (kata
+        // 1570, B-2026-11-14-24).
+        let resolved = |t: &Type| {
+            types::without_hidden_hashers(&inference::resolve_type_vars(
+                t,
+                &self.env.substitutions,
+                &std::collections::HashMap::new(),
+                &self.env.const_substitutions,
+                &std::collections::HashMap::new(),
+            ))
+        };
+        let (want_now, found_now) = (resolved(expected), resolved(found));
+        if let Some(msg) = nested_numeric_mismatch_message(&want_now, &found_now) {
             // `Vec[Vec[usize]]` for a `Vec[Vec[i64]]` is a `usize` meeting
             // the `i64` an index is: the written `usize` gets its fix to
             // `i64` (kata 2049's Rust arm, `children: &Vec<Vec<usize>>`).
@@ -9573,7 +9589,7 @@ impl<'a> TypeChecker<'a> {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref().clone(),
                 t => t.clone(),
             };
-            self.note_pointer_int_mix_within(&peel(expected), &peel(found));
+            self.note_pointer_int_mix_within(&peel(&want_now), &peel(&found_now));
             self.type_error_with_types(msg, span, TypeErrorKind::TypeMismatch, expected, found);
             return false;
         }
