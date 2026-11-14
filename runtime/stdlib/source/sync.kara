@@ -86,6 +86,19 @@ impl[T] Display for SendTimeoutError[T] {
 
 impl[T] Error for SendTimeoutError[T] { }
 
+// `SendError`'s `Display`, as Kāra, for the MIR pipeline (concurrency.md,
+// B-2026-11-14-30): the baked `../channel.kara` states the same impl for
+// the checker, and the MIR builder lowers no baked impl, so `f"{e}"`,
+// `e.to_string()` and a `?` into `AnyError` printed the derived `Full(2)`.
+impl[T] Display for SendError[T] {
+    fn to_string(ref self) -> String {
+        match self {
+            SendError.Full(_) => "channel full",
+            SendError.Closed(_) => "channel closed",
+        }
+    }
+}
+
 // What a `select` stands for (core-semantics §11.11): `select_desugar.rs`
 // writes the calls.
 
