@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1155-number-of-dice-rolls-with-target-sum/bench/num_rolls_to_target.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1155 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "84104230e"
+extracted_src = "cc9e0a40"

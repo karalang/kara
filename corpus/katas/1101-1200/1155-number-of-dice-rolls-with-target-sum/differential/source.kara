@@ -1,0 +1,289 @@
+// LeetCode #1155: Number of Dice Rolls With Target Sum -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against five properties that do not compute the answer;
+// see the README.
+
+// ---- num_rolls_to_target.kara ----
+
+fn a0_num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    let modulus = 1_000_000_007;
+    let mut ways: Vec[i64] = Vec.filled(target + 1, 0);
+    ways[0] = 1;
+    for _ in 0..n {
+        let mut next: Vec[i64] = Vec.filled(target + 1, 0);
+        for s in 0..target + 1 {
+            if ways[s] != 0 {
+                for face in 1..k + 1 {
+                    if s + face > target {
+                        break;
+                    }
+                    next[s + face] = (next[s + face] + ways[s]) % modulus;
+                }
+            }
+        }
+        ways = next;
+    }
+    ways[target]
+}
+
+// ---- num_rolls_to_target_prefix.kara ----
+
+fn a1_num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    let modulus = 1_000_000_007;
+    let mut row: Vec[i64] = Vec.filled(target + 1, 0);
+    row[0] = 1;
+    for _ in 0..n {
+        // prefix[s] is row[0] + ... + row[s - 1]
+        let mut prefix: Vec[i64] = Vec.filled(target + 2, 0);
+        for s in 0..target + 1 {
+            prefix[s + 1] = (prefix[s] + row[s]) % modulus;
+        }
+        for s in 0..target + 1 {
+            let low = if s > k { s - k } else { 0 };
+            row[s] = (prefix[s] - prefix[low] + modulus) % modulus;
+        }
+    }
+    row[target]
+}
+
+// ---- num_rolls_to_target_memo.kara ----
+
+fn a2_ways(dice: i64, left: i64, k: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if dice == 0 {
+        return if left == 0 { 1 } else { 0 };
+    }
+    if left < dice or left > dice * k {
+        return 0;
+    }
+    if let Some(known) = memo.get((dice, left)) {
+        return known;
+    }
+    let mut total = 0;
+    for face in 1..k + 1 {
+        if face > left {
+            break;
+        }
+        total = (total + a2_ways(dice - 1, left - face, k, mut memo)) % 1_000_000_007;
+    }
+    memo.insert((dice, left), total);
+    total
+}
+
+fn a2_num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    a2_ways(n, target, k, mut memo)
+}
+
+// ---- num_rolls_to_target_count.kara ----
+
+fn a3_num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    let modulus = 1_000_000_007;
+    // choose[a][b] = C(a, b) for a < target, b < n + 1
+    let rows = if target > n { target } else { n + 1 };
+    let mut choose: Vec[Vec[i64]] = [];
+    for a in 0..rows {
+        let mut row: Vec[i64] = Vec.filled(n + 1, 0);
+        row[0] = 1;
+        for b in 1..n + 1 {
+            if b <= a {
+                row[b] = (choose[a - 1][b - 1] + choose[a - 1][b]) % modulus;
+            }
+        }
+        choose.push(row);
+    }
+    let mut total = 0;
+    let mut j = 0;
+    while j <= n and target - j * k - 1 >= n - 1 {
+        let term = choose[n][j] * choose[target - j * k - 1][n - 1] % modulus;
+        total = if j % 2 == 0 { (total + term) % modulus } else { (total - term + modulus) % modulus };
+        j += 1;
+    }
+    total
+}
+
+// ---- num_rolls_to_target_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_num_rolls_to_target(n: i32, k: i32, target: i32) -> i32 {
+        const MOD: i64 = 1_000_000_007;
+        let (n, k, t) = (n as i64, k as i64, target as i64);
+        let mut dp = Vec.filled(n + 1, Vec.filled(t + 1, 0));
+        dp[0][0] = 1;
+        for i in 1..=n {
+            for s in 1..=t {
+                for f in 1..=k.min(s) {
+                    dp[i][s] = (dp[i][s] + dp[i - 1][s - f]) % MOD;
+                }
+            }
+        }
+        dp[n][t] as i32
+    }
+}
+
+fn a4_num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    A4Solution.a4_num_rolls_to_target(n as i32, k as i32, target as i32)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, n: i64, k: i64, target: i64) -> i64 {
+    match which {
+        0 => a0_num_rolls_to_target(n, k, target),
+        1 => a1_num_rolls_to_target(n, k, target),
+        2 => a2_num_rolls_to_target(n, k, target),
+        3 => a3_num_rolls_to_target(n, k, target),
+        _ => a4_num_rolls_to_target(n, k, target),
+    }
+}
+
+// The statement read literally: every one of the k^n rolls, the dice
+// turned over like an odometer, counted when its faces sum to `target`.
+fn literal(n: i64, k: i64, target: i64) -> i64 {
+    let mut faces: Vec[i64] = Vec.filled(n, 1);
+    let mut count = 0;
+    loop {
+        let mut sum = 0;
+        for f in faces.iter() {
+            sum += f;
+        }
+        if sum == target {
+            count += 1;
+        }
+        let mut d = 0;
+        while d < n and faces[d] == k {
+            faces[d] = 1;
+            d += 1;
+        }
+        if d == n {
+            return count;
+        }
+        faces[d] += 1;
+    }
+}
+
+// A problem in four kinds: 1 to 4 dice of 1 to 6 faces, where the literal
+// count runs, the target anywhere from 1 to two past the most; 1 to 30
+// dice of 1 to 30 faces and a target of 1 to 1000; the target within
+// three of the fewest or the most the dice can make; and one die, dice of
+// one face, or faces too many for the cap to bind.
+fn problem(seed: mut ref i64, kind: i64) -> (i64, i64, i64) {
+    if kind == 0 {
+        let n = 1 + next_random(mut seed) % 4;
+        let k = 1 + next_random(mut seed) % 6;
+        return (n, k, 1 + next_random(mut seed) % (n * k + 2));
+    }
+    let n = 1 + next_random(mut seed) % 30;
+    let k = 1 + next_random(mut seed) % 30;
+    if kind == 1 {
+        return (n, k, 1 + next_random(mut seed) % 1000);
+    }
+    if kind == 2 {
+        let near = next_random(mut seed) % 4;
+        let target = if next_random(mut seed) % 2 == 0 { n + near } else { n * k - near };
+        return (n, k, if target < 1 { 1 } else { target });
+    }
+    match next_random(mut seed) % 3 {
+        0 => (1, k, 1 + next_random(mut seed) % (k + 2)),
+        1 => (n, 1, n + next_random(mut seed) % 3 - if n > 1 { 1 } else { 0 }),
+        _ => {
+            let target = n + next_random(mut seed) % 30;
+            (n, target - n + 1 + next_random(mut seed) % 5, target)
+        }
+    }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, kind: i64, n: i64, k: i64, target: i64, extra: i64) {
+    let modulus = 1_000_000_007;
+    let want = if kind == 0 { literal(n, k, target) } else { -1 };
+    let mirrored = n * (k + 1) - target;
+    let small = n * k * target <= 20000;
+    for w in 0..5 {
+        let got = arm(w, n, k, target);
+        let what = f"arm {w}, case {t.cases} n {n} k {k} target {target} -> {got}";
+        // P1: the statement read literally
+        if kind == 0 {
+            expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        }
+        // P2: an answer is reduced modulo 10^9 + 7, and none outside the
+        // fewest and the most the dice make
+        let outside = target < n or target > n * k;
+        expect(mut t, 2, got >= 0 and got < modulus and (not outside or got == 0), f"P2 {what}");
+        // P3: each face turned over (f to k + 1 - f) mirrors the target
+        if mirrored >= 1 {
+            let m = arm(w, n, k, mirrored);
+            expect(mut t, 3, m == got, f"P3 {what}, mirrored {mirrored} -> {m}");
+        }
+        // P4: the fewest and the most are made one way each
+        if target == n or target == n * k {
+            expect(mut t, 4, got == 1, f"P4 {what}");
+        }
+        // P5: faces past target - n + 1 cannot be rolled, so more of them
+        // change nothing
+        if k >= target - n + 1 {
+            let e = arm(w, n, k + extra, target);
+            expect(mut t, 5, e == got, f"P5 {what}, {extra} more faces -> {e}");
+        }
+        // P6: the last die shows one of its faces: the answer is the sum,
+        // over the faces, of the ways for one die fewer
+        if n >= 2 and small {
+            let mut sum = 0;
+            for f in 1..k + 1 {
+                if f < target {
+                    sum = (sum + arm(w, n - 1, k, target - f)) % modulus;
+                }
+            }
+            expect(mut t, 6, sum == got, f"P6 {what}, by the last die {sum}");
+        }
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + arm(0, n, k, target)) % modulus;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 1000 problems in four kinds: 500 small enough for the literal count,
+    // 100 over the whole range, 200 near an end, 200 at an edge. Every
+    // choice the properties make is drawn before any arm answers.
+    let mut seed = 11551;
+    let mut cases: Vec[(i64, i64, i64, i64, i64)] = [];
+    for i in 0..1000 {
+        let kind = [0, 0, 0, 0, 0, 1, 2, 2, 3, 3][i % 10];
+        let (n, k, target) = problem(mut seed, kind);
+        let extra = 1 + next_random(mut seed) % 5;
+        cases.push((kind, n, k, target, extra));
+    }
+    for (kind, n, k, target, extra) in cases.iter() {
+        check_case(mut t, kind, n, k, target, extra);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,77 @@
+// LeetCode #1155: Number of Dice Rolls With Target Sum, top down: the ways
+// for `dice` dice to make `left` are the ways for one die fewer to make
+// what is left after each face, remembered in a `Map` keyed by the pair.
+// O(n · target · k)
+
+fn ways(dice: i64, left: i64, k: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if dice == 0 {
+        return if left == 0 { 1 } else { 0 };
+    }
+    if left < dice or left > dice * k {
+        return 0;
+    }
+    if let Some(known) = memo.get((dice, left)) {
+        return known;
+    }
+    let mut total = 0;
+    for face in 1..k + 1 {
+        if face > left {
+            break;
+        }
+        total = (total + ways(dice - 1, left - face, k, mut memo)) % 1_000_000_007;
+    }
+    memo.insert((dice, left), total);
+    total
+}
+
+fn num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    ways(n, target, k, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64, target: i64) {
+    println(f"n = {n}, k = {k}, target = {target}  ->  {num_rolls_to_target(n, k, target)}");
+}
+
+fn main() {
+    show(1, 6, 3);
+    show(2, 6, 7);
+    show(30, 30, 500);
+    show(1, 1, 1);
+    show(1, 1, 2);
+    show(2, 5, 1);
+    show(3, 4, 12);
+    show(3, 4, 13);
+    show(30, 1, 30);
+    show(30, 30, 30);
+    show(30, 30, 900);
+    show(30, 30, 1000);
+    show(30, 30, 465);
+    show(10, 30, 1000);
+
+    // 500 random problems over the whole range: 1 to 30 dice of 1 to 30
+    // faces and a target of 1 to 1000; and 500 with the target drawn
+    // between the fewest and the most the dice can make, where the
+    // answer is not 0.
+    let mut seed = 1155;
+    let mut nonzero = 0;
+    let mut check = 0;
+    for i in 0..1000 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % 30;
+        let target = if i < 500 { 1 + next_random(mut seed) % 1000 } else { n + next_random(mut seed) % (n * k - n + 1) };
+        let ways = num_rolls_to_target(n, k, target);
+        if ways != 0 {
+            nonzero += 1;
+        }
+        check = (check * 31 + ways) % 1000000007;
+    }
+    println(f"1000 random problems: {nonzero} with a roll, checksum {check}");
+}

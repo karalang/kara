@@ -1,0 +1,15 @@
+n = 1, k = 6, target = 3  ->  1
+n = 2, k = 6, target = 7  ->  6
+n = 30, k = 30, target = 500  ->  222616187
+n = 1, k = 1, target = 1  ->  1
+n = 1, k = 1, target = 2  ->  0
+n = 2, k = 5, target = 1  ->  0
+n = 3, k = 4, target = 12  ->  1
+n = 3, k = 4, target = 13  ->  0
+n = 30, k = 1, target = 30  ->  1
+n = 30, k = 30, target = 30  ->  1
+n = 30, k = 30, target = 900  ->  1
+n = 30, k = 30, target = 1000  ->  0
+n = 30, k = 30, target = 465  ->  252370474
+n = 10, k = 30, target = 1000  ->  0
+1000 random problems: 611 with a roll, checksum 623518084

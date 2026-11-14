@@ -1,0 +1,79 @@
+// LeetCode #1155: Number of Dice Rolls With Target Sum, counted by
+// inclusion and exclusion. Rolls of `n` dice with faces 1 to `k` summing
+// to `target` are the ways to write `target - n` as `n` parts of 0 to
+// `k - 1`; without the cap there are C(target - 1, n - 1) of them, and
+// for each `j` dice forced past the cap the count is taken away or put
+// back: the sum over `j` of (-1)^j C(n, j) C(target - j·k - 1, n - 1).
+// The binomials come from Pascal's triangle modulo 10^9 + 7. O(target · n)
+
+fn num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    let modulus = 1_000_000_007;
+    // choose[a][b] = C(a, b) for a < target, b < n + 1
+    let rows = if target > n { target } else { n + 1 };
+    let mut choose: Vec[Vec[i64]] = [];
+    for a in 0..rows {
+        let mut row: Vec[i64] = Vec.filled(n + 1, 0);
+        row[0] = 1;
+        for b in 1..n + 1 {
+            if b <= a {
+                row[b] = (choose[a - 1][b - 1] + choose[a - 1][b]) % modulus;
+            }
+        }
+        choose.push(row);
+    }
+    let mut total = 0;
+    let mut j = 0;
+    while j <= n and target - j * k - 1 >= n - 1 {
+        let term = choose[n][j] * choose[target - j * k - 1][n - 1] % modulus;
+        total = if j % 2 == 0 { (total + term) % modulus } else { (total - term + modulus) % modulus };
+        j += 1;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64, target: i64) {
+    println(f"n = {n}, k = {k}, target = {target}  ->  {num_rolls_to_target(n, k, target)}");
+}
+
+fn main() {
+    show(1, 6, 3);
+    show(2, 6, 7);
+    show(30, 30, 500);
+    show(1, 1, 1);
+    show(1, 1, 2);
+    show(2, 5, 1);
+    show(3, 4, 12);
+    show(3, 4, 13);
+    show(30, 1, 30);
+    show(30, 30, 30);
+    show(30, 30, 900);
+    show(30, 30, 1000);
+    show(30, 30, 465);
+    show(10, 30, 1000);
+
+    // 500 random problems over the whole range: 1 to 30 dice of 1 to 30
+    // faces and a target of 1 to 1000; and 500 with the target drawn
+    // between the fewest and the most the dice can make, where the
+    // answer is not 0.
+    let mut seed = 1155;
+    let mut nonzero = 0;
+    let mut check = 0;
+    for i in 0..1000 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % 30;
+        let target = if i < 500 { 1 + next_random(mut seed) % 1000 } else { n + next_random(mut seed) % (n * k - n + 1) };
+        let ways = num_rolls_to_target(n, k, target);
+        if ways != 0 {
+            nonzero += 1;
+        }
+        check = (check * 31 + ways) % 1000000007;
+    }
+    println(f"1000 random problems: {nonzero} with a roll, checksum {check}");
+}

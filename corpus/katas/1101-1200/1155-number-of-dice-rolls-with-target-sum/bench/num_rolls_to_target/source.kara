@@ -1,0 +1,54 @@
+// LeetCode #1155: Number of Dice Rolls With Target Sum -- the ★ arm: dice
+// added one at a time, `ways[s]` counting the rolls of the dice so far
+// that sum to `s`, each new die moving each count up by each of its
+// faces. O(n · target · k)
+
+fn num_rolls_to_target(n: i64, k: i64, target: i64) -> i64 {
+    let modulus = 1_000_000_007;
+    let mut ways: Vec[i64] = Vec.filled(target + 1, 0);
+    ways[0] = 1;
+    for _ in 0..n {
+        let mut next: Vec[i64] = Vec.filled(target + 1, 0);
+        for s in 0..target + 1 {
+            if ways[s] != 0 {
+                for face in 1..k + 1 {
+                    if s + face > target {
+                        break;
+                    }
+                    next[s + face] = (next[s + face] + ways[s]) % modulus;
+                }
+            }
+        }
+        ways = next;
+    }
+    ways[target]
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 problems drawn once: 1 to 30 dice of 1 to 30 faces, the target
+    // between the fewest and the most the dice make, at most 1000. Each of
+    // 250 passes answers all 64 in turn.
+    let passes = 250;
+    let mut seed = 1155;
+    let mut problems: Vec[(i64, i64, i64)] = [];
+    for _ in 0..64 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % 30;
+        let most = if n * k < 1000 { n * k } else { 1000 };
+        problems.push((n, k, n + next_random(mut seed) % (most - n + 1)));
+    }
+    let mut check = 0;
+    for p in 0..passes {
+        for (n, k, target) in problems.iter() {
+            check = (check * 31 + num_rolls_to_target(n, k, target) + p) % 1000000007;
+        }
+    }
+    println(f"{passes} passes over 64 problems: checksum {check}");
+}
