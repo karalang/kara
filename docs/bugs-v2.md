@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 289 |
+| diagnostics | 290 |
 | false-positive | 202 |
 | perf | 160 |
 | missing-feature | 156 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 439 |
+| typecheck | 440 |
 | mir-llvm | 211 |
 | mir | 180 |
 | cli | 106 |
@@ -121,6 +121,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-1 | 2026-11-14 | typecheck | low | Whether a let-bound literal compared with an `i32` can still be fixed to `i32` by a later argument depends on statement order: `let i = 0; take_i32(i); if i < n {..}` checks, `let i = 0; if i < n { take_i32(i) }` is refused as narrowing | — |
 | B-2026-11-14-2 | 2026-11-14 | ownership | low | The ownership-cycle help on a recursive plain enum offers `Box[T]`, which Kāra does not have, instead of design.md's `shared enum` | — |
 | B-2026-11-14-3 | 2026-11-14 | typecheck | low | `f(x.clone())` where `f`'s parameter only borrows copies `x` for nothing, and no lint flags it: a LeetCode Rust template's adapter keeps `Solution.number_of_beams(bank.clone())` after `karac fix` carries it (kata 2125), because Rust's by-value `Vec<String>` parameter became Kāra's borrowing `Vec[String]` | — |
+| B-2026-11-14-6 | 2026-11-14 | typecheck | low | `Array[i64, 26].filled(0)` is refused with `no method 'filled' on `Array[…]``: the type is elided, and nothing points to `[0; 26]`, Kāra's fixed-array fill, though `Vec.filled(n, v)` exists and invites the guess | — |
 
 ### Relocated
 
