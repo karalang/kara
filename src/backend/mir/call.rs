@@ -109,7 +109,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ConstKind::FnDef(inst) = &c.kind else {
                     return Err("MIR to LLVM: a call to a constant that is not a function".into());
                 };
-                if program.bodies.contains_key(&inst.name) {
+                if is_select_unpredictable(&inst.name) && self.select_unpredictable(args, dest)? {
+                } else if program.bodies.contains_key(&inst.name) {
                     self.call_body(&inst.name, args, dest)?;
                 } else if let Some(sig) = program.externs.get(&inst.name) {
                     self.foreign_call(&inst.name, sig, args, dest)?;
@@ -169,6 +170,44 @@ impl<'ctx> Cx<'ctx, '_> {
     pub(super) fn temp(&self, ty: Ty, name: &str) -> R<PointerValue<'ctx>> {
         let size = self.layout(ty)?.size;
         self.entry_slot(size.max(1) as u32, name)
+    }
+
+    /// The library's `__select_unpredictable(c, a, b)` on a scalar `T`: a
+    /// `select` marked `!unpredictable`, which x86's cmov conversion and
+    /// the other branch-forming passes leave as a select (B-2026-11-13-34).
+    /// Any other `T` returns false and the body is called, which drops
+    /// the side not taken.
+    fn select_unpredictable(&mut self, args: &[Operand], dest: &Place) -> R<bool> {
+        let [c, a, b] = args else {
+            return Ok(false);
+        };
+        let ty = self.operand_type(a)?;
+        if !matches!(
+            self.tys.kind(ty),
+            TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_)
+        ) {
+            return Ok(false);
+        }
+        let c = self.operand_scalar(c)?.into_int_value();
+        let c = if c.get_type().get_bit_width() == 1 {
+            c
+        } else {
+            self.builder
+                .build_int_compare(IntPredicate::NE, c, c.get_type().const_zero(), "")
+                .map_err(e)?
+        };
+        let a = self.operand_scalar(a)?;
+        let b = self.operand_scalar(b)?;
+        let v = self.builder.build_select(c, a, b, "").map_err(e)?;
+        if let Some(i) = v.as_instruction_value() {
+            let _ = i.set_metadata(
+                self.llcx.metadata_node(&[]),
+                self.llcx.get_kind_id("unpredictable"),
+            );
+        }
+        let d = self.place_ptr(dest)?;
+        self.store(d, v)?;
+        Ok(true)
     }
 
     fn call_body(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
@@ -2584,4 +2623,10 @@ fn only_borrowed(body: &crate::mir::Body, l: crate::mir::Local) -> bool {
         }
     }
     defs == 1
+}
+
+/// The library's `__select_unpredictable` or an instance of it.
+fn is_select_unpredictable(name: &str) -> bool {
+    name.strip_prefix("__select_unpredictable")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('['))
 }

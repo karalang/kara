@@ -335,6 +335,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `partition_point` is the halving binary search Rust's is: `base` moves
+  to `mid` or stays through a select marked unpredictable, which stays a
+  `cmov` on x86, where it branched on every step and mispredicted half of
+  them on a random target (B-2026-11-13-34). Kata 1150 runs in 0.35 s
+  where it took 0.73 s; Rust's takes 0.37 s.
 - `==` and `!=` on two `Vec`s or slices of integers, `bool` or `char`
   compare lengths and then the bytes in one `memcmp`, as `Str` equality
   does; they compared one element per step (B-2026-11-13-33). Kata 1147's

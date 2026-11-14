@@ -28810,6 +28810,7 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "parse_result_float",
     "vec_contains_str",
     "vec_contains_slice",
+    "__select_unpredictable",
     "vec_concat_vecs",
     "slice_concat_vecs",
     "deque_contains_str",

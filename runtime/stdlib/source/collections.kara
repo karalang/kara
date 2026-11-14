@@ -237,18 +237,30 @@ impl[T] Slice[T] {
     /// search: the slice must hold every element `pred` accepts before every
     /// one it rejects, and `self.len()` comes back when it accepts them all
     /// (docs/library/collections.md).
+    ///
+    /// The halving form Rust's `slice::partition_point` takes: `base`
+    /// moves to `mid` or stays, a select rather than a branch the CPU
+    /// mispredicts half the time on a random target (B-2026-11-13-34).
     fn partition_point(self, pred: own MutFn(T) -> bool) -> i64 {
-        let mut lo = 0;
-        let mut hi = self.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if pred(self[mid]) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
+        let mut size = self.len();
+        if size == 0 {
+            return 0;
         }
-        lo
+        let mut base = 0;
+        while size > 1 {
+            let half = size / 2;
+            // `base + size <= len` throughout, so `mid < len` and the sum
+            // cannot overflow.
+            let mid = base.wrapping_add(half);
+            // Safety: `mid < self.len()`, as the loop keeps
+            // `base + size <= self.len()` and `half < size`.
+            let at = unsafe { self.get_unchecked(mid) };
+            base = __select_unpredictable(pred(at), mid, base);
+            size = size.wrapping_sub(half);
+        }
+        // Safety: `size` is 1, so `base < self.len()`.
+        let last = unsafe { self.get_unchecked(base) };
+        if pred(last) { base + 1 } else { base }
     }
 
     /// The runs between the elements `pred` accepts, which are dropped:
@@ -2041,6 +2053,15 @@ impl Extend[String] for String {
 // elements, with the element's view as `x`: the MIR builder calls one of
 // these (docs/library/collections.md, "Lookup by view"; B-2026-11-08-55).
 // The needle is borrowed and nothing is allocated.
+
+/// `if c { a } else { b }`, which code generation emits as a select the
+/// target keeps branch-free (LLVM's `!unpredictable`): for a condition
+/// that is right half the time, such as a binary search's step, a branch
+/// the CPU mispredicts costs more than computing both sides
+/// (B-2026-11-13-34). Rust's `bool::select_unpredictable`.
+fn __select_unpredictable[T](c: bool, a: own T, b: own T) -> T {
+    if c { a } else { b }
+}
 
 fn vec_contains_str(v: ref Vec[String], x: Str) -> bool {
     for e in v.iter() {
