@@ -12607,6 +12607,30 @@ impl<'a> super::TypeChecker<'a> {
     /// element, whose literal is inline, the literal's suffix
     /// (B-2026-11-08-53). Returns the binding's name, the fix, and the
     /// advice for the message.
+    /// Whether `e` is an item read out of a `PriorityQueue`: `q.pop()` or
+    /// `q.peek()`, under any `.unwrap()` or `.expect(..)`.
+    fn reads_priority_queue_item(&self, e: &Expr) -> bool {
+        let mut e = e;
+        loop {
+            let ExprKind::MethodCall { object, method, .. } = &e.kind else {
+                return false;
+            };
+            match method.as_str() {
+                "unwrap" | "expect" => e = object,
+                "pop" | "peek" => {
+                    let Some(mut t) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
+                        return false;
+                    };
+                    while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                        t = inner;
+                    }
+                    return matches!(t, Type::Named { name, .. } if name == "PriorityQueue");
+                }
+                _ => return false,
+            }
+        }
+    }
+
     pub(super) fn literal_let_annotation(
         &self,
         expr: &Expr,
@@ -14338,6 +14362,34 @@ impl<'a> super::TypeChecker<'a> {
                         );
                         Type::Error
                     }
+                    // Rust's `heap.pop().unwrap().0`: the `.0` reads the item
+                    // out of the `Reverse` its heap was pushed. `karac fix`
+                    // drops `Reverse` from the pushes, since a `PriorityQueue`
+                    // pops the smallest first, so the item is the queue's own
+                    // and the `.0` goes too (kata 2163).
+                    _ if *index == 0 && self.reads_priority_queue_item(object) => {
+                        let from = object.span.offset + object.span.length;
+                        let to = expr.span.offset + expr.span.length;
+                        self.type_error_with_fix_it(
+                            format!(
+                                "tuple index on non-tuple type '{}': a `PriorityQueue` holds its \
+                                 items themselves, not in Rust's `Reverse`, so what `pop` or \
+                                 `peek` gives is the item and takes no `.0`",
+                                type_display(&obj_ty)
+                            ),
+                            expr.span,
+                            TypeErrorKind::InvalidTupleIndex,
+                            FixIt {
+                                span: Span {
+                                    offset: from,
+                                    length: to.saturating_sub(from),
+                                    ..expr.span
+                                },
+                                replacement: String::new(),
+                            },
+                        );
+                        Type::Error
+                    }
                     _ => {
                         self.type_error(
                             format!("tuple index on non-tuple type '{}'", type_display(&obj_ty)),
@@ -15926,6 +15978,42 @@ impl<'a> super::TypeChecker<'a> {
                         _ if tail_literal.is_some() => None,
                         ref t => Some(t.clone()),
                     };
+                    // A tail reading a binding whose literal kept the
+                    // default `i64` (`let mut total = 0; .. total +=
+                    // move_cost; .. total`) beside a `return` of a narrower
+                    // integer (`return i32.MAX`): Rust typed `total` from
+                    // the closure's `-> i32`, which `karac fix` drops. The
+                    // annotation that makes it that type is the fix, as at
+                    // a fn's tail (B-2026-11-08-20), and the closure takes
+                    // the narrower type, so nothing downstream is refused
+                    // for it again.
+                    if let (Some(t), None, Type::Int(IntSize::I64)) = (tail, tail_literal, &body_ty)
+                    {
+                        let narrower = collected
+                            .returns
+                            .iter()
+                            .map(|(r, _)| resolve_type_var_top(r, &self.env.substitutions))
+                            .find(|r| {
+                                matches!(r, Type::Int(_) | Type::UInt(_))
+                                    && *r != Type::Int(IntSize::I64)
+                            });
+                        if let Some(target) = narrower {
+                            if let Some((_, fix, why)) =
+                                self.literal_let_annotation(t, &body_ty, &target)
+                            {
+                                self.type_error_with_fix_it(
+                                    format!(
+                                        "closure returns conflicting types: 'i64' vs '{}': {why}",
+                                        type_display(&target)
+                                    ),
+                                    t.span,
+                                    TypeErrorKind::ReturnTypeMismatch,
+                                    fix,
+                                );
+                                ret_ty = Some(target);
+                            }
+                        }
+                    }
                     let mut deferred: Vec<Type> = Vec::new();
                     for (i, (t, _span)) in collected.returns.iter().enumerate() {
                         let t = resolve_type_var_top(t, &self.env.substitutions);

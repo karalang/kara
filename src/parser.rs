@@ -1214,35 +1214,30 @@ impl Parser {
             _ => None,
         };
         let opens = |i: usize| matches!(tok(i), Some(Token::LeftBracket | Token::LessThan));
-        let mut reversed: rustc_hash::FxHashSet<&str> = Default::default();
-        let mut plain: rustc_hash::FxHashSet<&str> = Default::default();
-        let mut pushed_bare: rustc_hash::FxHashSet<&str> = Default::default();
+        // Each piece of evidence: its token, the name it is about, and
+        // whether it says the heap's items are wrapped in `Reverse`.
+        let mut annotated: Vec<(usize, &str, bool)> = Vec::new();
+        let mut pushed: Vec<(usize, &str, bool)> = Vec::new();
         for i in 0..self.tokens.len() {
             let Some(name) = name_at(i) else { continue };
             if matches!(tok(i + 1), Some(Token::Colon))
                 && name_at(i + 2) == Some("BinaryHeap")
                 && opens(i + 3)
             {
-                if name_at(i + 4) == Some("Reverse") && opens(i + 5) {
-                    reversed.insert(name);
-                } else {
-                    plain.insert(name);
-                }
+                annotated.push((i, name, name_at(i + 4) == Some("Reverse") && opens(i + 5)));
             }
             if matches!(tok(i + 1), Some(Token::Dot))
                 && name_at(i + 2) == Some("push")
                 && matches!(tok(i + 3), Some(Token::LeftParen))
             {
-                if name_at(i + 4) == Some("Reverse") && matches!(tok(i + 5), Some(Token::LeftParen))
-                {
-                    reversed.insert(name);
-                } else {
-                    pushed_bare.insert(name);
-                }
+                let wrapped = name_at(i + 4) == Some("Reverse")
+                    && matches!(tok(i + 5), Some(Token::LeftParen));
+                pushed.push((i, name, wrapped));
             }
         }
-        // The binding each constructor initializes.
-        let mut named: Vec<(usize, Option<&str>)> = Vec::new();
+        // The binding each constructor initializes, with the constructor's
+        // token.
+        let mut named: Vec<(usize, usize, Option<&str>)> = Vec::new();
         for (k, t) in self.tokens.iter().enumerate() {
             if !self.rust_heap_ctor.contains_key(&t.span.offset) {
                 continue;
@@ -1273,26 +1268,62 @@ impl Parser {
                 }
                 _ => None,
             };
-            named.push((t.span.offset, name));
+            named.push((t.span.offset, k, name));
         }
-        let side = |name: Option<&str>| -> Option<bool> {
-            let name = name?;
-            let rev = reversed.contains(name);
-            let pl = plain.contains(name) || pushed_bare.contains(name);
-            match (rev, pl) {
+        // Which constructors a piece of evidence at token `at` about `name`
+        // speaks for. A name bound by several constructors (`let mut heap =
+        // BinaryHeap::new()` twice, the second shadowing the first, kata
+        // 2163) is one heap from each constructor to the next: a push
+        // belongs to the latest constructor of its name before it, and a
+        // `let`'s annotation to the constructor in its own statement.
+        // Evidence before every constructor of its name (a field pushed in a
+        // method written above `new`) speaks for all of them.
+        let owners = |at: usize, name: &str, annotation: bool| -> Vec<usize> {
+            let of_name: Vec<usize> = named
+                .iter()
+                .filter(|(_, _, n)| *n == Some(name))
+                .map(|(_, k, _)| *k)
+                .collect();
+            if annotation {
+                let own = of_name.iter().copied().find(|&k| {
+                    k > at && !(at..k).any(|j| matches!(tok(j), Some(Token::Semicolon)))
+                });
+                if let Some(k) = own {
+                    return vec![k];
+                }
+                return of_name;
+            }
+            match of_name.iter().copied().filter(|&k| k < at).max() {
+                Some(k) => vec![k],
+                None => of_name,
+            }
+        };
+        // Per constructor: (some evidence wraps its items, some does not).
+        let mut seen: rustc_hash::FxHashMap<usize, (bool, bool)> = Default::default();
+        let any_wrapped = annotated.iter().chain(pushed.iter()).any(|e| e.2);
+        for (evidence, annotation) in [(&annotated, true), (&pushed, false)] {
+            for &(at, name, wrapped) in evidence {
+                for k in owners(at, name, annotation) {
+                    let e = seen.entry(k).or_default();
+                    if wrapped {
+                        e.0 = true;
+                    } else {
+                        e.1 = true;
+                    }
+                }
+            }
+        }
+        let side = |k: usize| -> Option<bool> {
+            match seen.get(&k).copied().unwrap_or_default() {
                 (true, false) => Some(true),
                 (false, true) => Some(false),
                 _ => None,
             }
         };
-        let any_plain = named.iter().any(|(_, n)| side(*n) == Some(false));
-        let any_wrapped = !reversed.is_empty();
-        for (offset, name) in named {
-            let known = side(name);
-            let both = name.is_some_and(|n| {
-                reversed.contains(n) && (plain.contains(n) || pushed_bare.contains(n))
-            });
-            match known {
+        let any_plain = named.iter().any(|(_, k, _)| side(*k) == Some(false));
+        for (offset, k, _) in named.iter().copied() {
+            let both = seen.get(&k).is_some_and(|&(w, p)| w && p);
+            match side(k) {
                 Some(true) => {
                     sides.smallest.insert(offset);
                 }

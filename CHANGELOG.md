@@ -1115,6 +1115,20 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `c.to_uppercase().collect()` (or `to_lowercase`) to
   `c.to_string().to_uppercase()`, the full mapping Rust collects, since a
   char's own `to_uppercase()` is a `char` here (kata 2129).
+- A closure's tail that reads a binding whose literal kept its default
+  `i64` (`let mut total = 0; .. total += cost; .. total`) beside a `return`
+  of a narrower integer (`return i32.MAX`) names the binding, and `karac fix`
+  annotates it (`let mut total: i32 = 0`), as at a `fn`'s tail. It was a
+  bare "closure returns conflicting types" with no fix once `karac fix` had
+  dropped Rust's `-> i32` from the closure (kata 2162).
+- Rust's heaps are told apart per constructor, not per name: a `heap`
+  shadowed by a second `let mut heap = BinaryHeap::new()`, or one name used
+  in two functions, is two heaps, so a plain one and a `Reverse` one each get
+  their `PriorityQueue` constructor. The shared name used to make every
+  heap in the program unsure, with no fix (kata 2163).
+- `.0` on what a `PriorityQueue`'s `pop` or `peek` gives (Rust's
+  `heap.pop().unwrap().0` once `Reverse` is gone from the pushes) is refused
+  with the fix that deletes it (kata 2163).
 
 - `karac fix` writes five rewrites its messages already named: an unknown
   method's "did you mean 'len'?", `{x:?}` to `{x}`, `-> escaping Fn(..)` to
