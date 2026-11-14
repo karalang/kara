@@ -1115,6 +1115,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `c.to_uppercase().collect()` (or `to_lowercase`) to
   `c.to_string().to_uppercase()`, the full mapping Rust collects, since a
   char's own `to_uppercase()` is a `char` here (kata 2129).
+- Rust's `VecDeque::from(v)`, `dq.drain(..)`, a `String`'s `remove(i)` and
+  `insert(i, c)`, and a slice's or array's `rotate_left` / `rotate_right`
+  are refused with the Kāra spelling named, not a bare "no method"
+  (B-2026-11-14-63). Rust's `scan` that writes its state through an index
+  (`counts[d] += 1`) is rewritten by `karac fix` as a `*acc` write is
+  (B-2026-11-14-64).
+- `karac fix` carries Rust's `mut x: i32` parameter to `x: i32` and `let mut
+  x = x;`, not to `x: own i32` (B-2026-11-14-65).
+- A `fold(Map.new(), ..)` or `fold(Set.new(), ..)` over an adaptor
+  (`iter().skip(1)`) into an annotated `Map` or `Set` is accepted; the open
+  hasher on both sides had kept the closure's type from meeting its slot
+  (B-2026-11-14-66).
 - A closure's tail that reads a binding whose literal kept its default
   `i64` (`let mut total = 0; .. total += cost; .. total`) beside a `return`
   of a narrower integer (`return i32.MAX`) names the binding, and `karac fix`

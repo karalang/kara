@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 307 |
-| false-positive | 203 |
-| perf | 165 |
+| diagnostics | 310 |
+| false-positive | 205 |
+| perf | 167 |
 | missing-feature | 160 |
 | soundness | 67 |
 | miscompile | 61 |
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 458 |
+| typecheck | 461 |
 | mir-llvm | 220 |
 | mir | 187 |
 | cli | 113 |
-| ownership | 80 |
-| parser | 79 |
-| interp | 55 |
+| ownership | 81 |
+| parser | 80 |
+| interp | 57 |
 | runtime | 43 |
 | effect | 33 |
 | resolver | 26 |
@@ -117,6 +117,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-23 | 2026-11-14 | typecheck+cli | low | Two fields of borrowed receivers put in a tuple to pick one by a test (`let (short, long) = if self.pairs.len() <= other.pairs.len() { (self.pairs, other.pairs) } else { (other.pairs, self.pairs) };`) get `borrow_projection_copy` with a machine-applicable `.clone()` on each, which `karac fix` applies, copying both collections on every call, though `(ref self.pairs, ref other.pairs)` checks and copies nothing | — |
 | B-2026-11-14-28 | 2026-11-14 | mir-llvm | low | A two-pointer merge over two receivers' `Vec` fields (`while i < self.pairs.len() and j < other.pairs.len() { let (a, x) = self.pairs[i]; let (b, y) = other.pairs[j]; .. }`) keeps both bounds checks in the loop, since guard_bounds.rs (B-2026-11-08-61) proves only indexes into a local vector written once; kata 1570's bench runs 1.47x Rust's instructions (1.20x its time under overflow checks) | — |
 | B-2026-11-14-43 | 2026-11-14 | mir-llvm | low | `i64.parse(date[5..7]).unwrap()` costs about 70 instructions per call on a two-to-four-digit slice, against about 13 for a hand-written digit loop: kata 1154's ★ arm, three parses a call, runs 2.4x overflow-checked Rust | — |
+| B-2026-11-14-60 | 2026-11-14 | ownership | medium | A field captured by a closure passed to a lazy adaptor stays borrowed after the chain is drained, and a call through a local closure binding counts as consuming its argument: `(0..6).map(|arm| answer(arm, p.starts, p.targets)).collect()` then `turn(p.starts)` with `let turn = |list: Vec[String]| ..` is refused with "cannot consume `p.starts` while closure at .. captures `p.starts` by `ref` (borrow still live)" | — |
+| B-2026-11-14-61 | 2026-11-14 | interp | low | The MIR interpreter walks a plain (non-`shared`) linked list in quadratic time: a `ref` cursor or a recursion over `next: Option[ListNode]` takes 0.8 s at 5000 nodes, 4.2 s at 10000 and 18 s at 20000, where the compiled program takes 0.15 s; each reference into the list is an `Addr` whose path grows by a field and a variant step per node (kata 2130's Rust-template arm, 1299 s under __mir-run at 100000 nodes) | — |
+| B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
+| B-2026-11-14-63 | 2026-11-14 | typecheck | low | Rust's `VecDeque::from(v)`, `dq.drain(..)`, a `String`'s `remove(i)` / `insert(i, c)` and a slice's or array's `rotate_left` / `rotate_right` are refused with a bare "no method" or "no associated function", which reads as if the operation did not exist in Kāra | — |
+| B-2026-11-14-64 | 2026-11-14 | typecheck | low | Rust's `scan` writing its state through an index (`counts[d] += 1` with no `*`) is not rewritten by `karac fix`, though a `*acc` write is: it drew a bare "expected 'Option[(Array[i64, 10], _)]', found 'Option[bool]'" and four errors after it | — |
+| B-2026-11-14-65 | 2026-11-14 | parser | low | `karac fix` carries Rust's `mut num1: i32` parameter to `num1: own i32`, which takes nothing a plain `i32` does not; a scalar's `mut` parameter is a copy the body changes, so the carried form should be `num1: i32` and `let mut num1 = num1;` | — |
+| B-2026-11-14-66 | 2026-11-14 | typecheck | medium | `nums.iter().skip(1).fold(Map.new(), |m, x| { let mut m = m; m.insert(x, ..); m })` into an annotated `Map[i64, i64]` (and the same with `Set.new()`) is refused: "expected 'Fn(Map[?T1, ?T2], ref i64) -> Map[?T1, ?T2]', found 'Fn(Map[?T1, ?T2], ref i64) -> Map[i64, i64]'" | — |
 
 ### Relocated
 
