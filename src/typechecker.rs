@@ -4242,6 +4242,11 @@ pub struct TypeChecker<'a> {
     /// `.to_vec()` makes `x` a `Vec` of its own when a method that changes
     /// a slice in place is called on it (B-2026-11-08-64).
     pub(super) read_only_slice_lets: FxHashMap<String, Span>,
+    /// The spans of identifiers that read a binding in
+    /// `read_only_slice_lets`, by span: a `mut` argument naming one where
+    /// a `mut ref Vec[T]` is wanted is offered `.to_vec()` on the binding's
+    /// initializer (B-2026-11-14-29).
+    pub(super) read_only_slice_let_uses: FxHashMap<SpanKey, String>,
     /// The value of the unannotated `let` being inferred, when it is a
     /// repeat literal (`[0; 26]`) or `Vec.filled(n, 0)`: its element's
     /// number literal stays open for a later use to fix (B-2026-11-08-57).
@@ -4704,6 +4709,7 @@ impl<'a> TypeChecker<'a> {
             literal_lets: FxHashMap::default(),
             literal_pushes: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
+            read_only_slice_let_uses: FxHashMap::default(),
             open_collection_let: None,
             array_element_hint: None,
             literal_collection_uses: FxHashMap::default(),
@@ -9198,6 +9204,57 @@ impl<'a> TypeChecker<'a> {
                     },
                 );
                 return false;
+            }
+        }
+        // A read-only `Slice[T]` binding passed where a `mut ref Vec[T]` is
+        // wanted (`let mut s = str1.bytes(); convert(mut s)`): `let mut`
+        // does not make a view writable, and `.to_vec()` at the argument
+        // would hand the callee a temporary whose changes are lost, so the
+        // fix copies the elements where the binding is made
+        // (B-2026-11-14-29).
+        if let Type::MutRef(want) = expected {
+            if let (
+                Type::Named { name, args },
+                Type::Slice {
+                    element,
+                    mutable: false,
+                },
+            ) = (
+                want.as_ref(),
+                inference::resolve_type_var_top(found, &self.env.substitutions),
+            ) {
+                if name == "Vec" && args.len() == 1 && args[0] == *element {
+                    let binding = self
+                        .read_only_slice_let_uses
+                        .get(&SpanKey::from_span(&span))
+                        .cloned();
+                    let init = binding
+                        .as_ref()
+                        .and_then(|b| self.read_only_slice_lets.get(b.as_str()).copied());
+                    if let (Some(binding), Some(init)) = (binding, init) {
+                        self.type_error_with_fix_it(
+                            format!(
+                                "expected '{}', found '{}': `{binding}` is a read-only \
+                                 `Slice`, a view of another value's elements, and `let mut` \
+                                 does not make a view writable; `.to_vec()` where `{binding}` \
+                                 is bound gives it a `Vec` of its own",
+                                type_display(expected),
+                                type_display(found),
+                            ),
+                            span,
+                            TypeErrorKind::TypeMismatch,
+                            FixIt {
+                                span: Span {
+                                    offset: init.offset + init.length,
+                                    length: 0,
+                                    ..init
+                                },
+                                replacement: ".to_vec()".to_string(),
+                            },
+                        );
+                        return false;
+                    }
+                }
             }
         }
         // A `Slice[T]` where a `Vec[T]` is wanted (`total(s.bytes())`,
