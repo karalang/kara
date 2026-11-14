@@ -19456,26 +19456,11 @@ fn http_timed_out(t: &ureq::Transport) -> bool {
 }
 
 /// `loc`, a redirect's `Location`, against the URL `current` it answered, as
-/// the compiled client resolves it (runtime/src/lib.rs
-/// `http_resolve_location`): an absolute URL as it is, `//authority/...` in
-/// the current scheme, a rooted path at the current authority, and anything
-/// else beside the current path's last segment.
+/// the compiled client resolves it: RFC 3986 §5.2, in the resolver both
+/// backends share (`src/http_proxy.rs`, B-2026-11-14-46).
 #[cfg(not(target_arch = "wasm32"))]
 fn http_resolve_location(current: &str, loc: &str) -> String {
-    if loc.starts_with("http://") || loc.starts_with("https://") {
-        return loc.to_string();
-    }
-    let (scheme, rest) = current.split_once("://").unwrap_or(("http", current));
-    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
-    if let Some(rest) = loc.strip_prefix("//") {
-        return format!("{scheme}://{rest}");
-    }
-    if loc.starts_with('/') {
-        return format!("{scheme}://{authority}{loc}");
-    }
-    let path = tail.split(['?', '#']).next().unwrap_or_default();
-    let dir = path.rfind('/').map_or("/", |i| &path[..=i]);
-    format!("{scheme}://{authority}{dir}{loc}")
+    crate::http_proxy::resolve_location(current, loc)
 }
 
 /// The HTTP client's agent, trusting what the compiled program's client

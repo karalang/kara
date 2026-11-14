@@ -233,6 +233,121 @@ pub fn redirect_keeps_credentials(first: &str, next: &str) -> bool {
     origin.is_some() && origin == url_origin(next)
 }
 
+/// A redirect's `Location`, `loc`, resolved against the URL `current` it
+/// answered, as RFC 3986 §5.2 resolves a reference: an absolute URL as it is,
+/// `//authority/...` in the current scheme, `/path` at the current authority,
+/// `?query` on the current path, and any other path beside the current
+/// path's last segment, with `.` and `..` segments removed in every case
+/// (`../login` from `/a/b/c` is `/a/login`). A fragment is dropped, since a
+/// request never carries one. Shared by both backends (B-2026-11-14-46).
+pub fn resolve_location(current: &str, loc: &str) -> String {
+    let loc = loc.trim();
+    let loc = loc.split('#').next().unwrap_or_default();
+    let split = |u: &str| -> (String, String, String, Option<String>) {
+        // scheme, authority, path, query
+        let (scheme, rest) = u.split_once("://").unwrap_or(("http", u));
+        let auth_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (auth, tail) = rest.split_at(auth_end);
+        let tail = tail.split('#').next().unwrap_or_default();
+        let (path, query) = match tail.split_once('?') {
+            Some((p, q)) => (p, Some(q.to_string())),
+            None => (tail, None),
+        };
+        (
+            scheme.to_string(),
+            auth.to_string(),
+            path.to_string(),
+            query,
+        )
+    };
+    let join = |scheme: &str, auth: &str, path: &str, query: Option<String>| {
+        let path = remove_dot_segments(path);
+        let path = if path.is_empty() {
+            "/".to_string()
+        } else {
+            path
+        };
+        match query {
+            Some(q) => format!("{scheme}://{auth}{path}?{q}"),
+            None => format!("{scheme}://{auth}{path}"),
+        }
+    };
+    let has_scheme = loc.find(':').is_some_and(|i| {
+        !loc[..i].contains(['/', '?', '#'])
+            && i > 0
+            && loc[..i]
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+    });
+    if has_scheme {
+        let (scheme, auth, path, query) = split(loc);
+        return join(&scheme.to_ascii_lowercase(), &auth, &path, query);
+    }
+    let (scheme, auth, base_path, base_query) = split(current);
+    if let Some(rest) = loc.strip_prefix("//") {
+        let (_, auth, path, query) = split(&format!("{scheme}://{rest}"));
+        return join(&scheme, &auth, &path, query);
+    }
+    let (ref_path, ref_query) = match loc.split_once('?') {
+        Some((p, q)) => (p, Some(q.to_string())),
+        None => (loc, None),
+    };
+    if ref_path.is_empty() {
+        let query = if ref_query.is_some() {
+            ref_query
+        } else {
+            base_query
+        };
+        return join(&scheme, &auth, &base_path, query);
+    }
+    if ref_path.starts_with('/') {
+        return join(&scheme, &auth, ref_path, ref_query);
+    }
+    let merged = match base_path.rfind('/') {
+        Some(i) => format!("{}{ref_path}", &base_path[..=i]),
+        None => format!("/{ref_path}"),
+    };
+    join(&scheme, &auth, &merged, ref_query)
+}
+
+/// RFC 3986 §5.2.4: `path` with its `.` and `..` segments removed.
+fn remove_dot_segments(path: &str) -> String {
+    // Drops the output's last segment and the `/` before it.
+    fn pop_last(output: &mut String) {
+        match output.rfind('/') {
+            Some(i) => output.truncate(i),
+            None => output.clear(),
+        }
+    }
+    let mut input = path.to_string();
+    let mut output = String::new();
+    while !input.is_empty() {
+        if input.starts_with("../") {
+            input.drain(..3);
+        } else if input.starts_with("./") {
+            input.drain(..2);
+        } else if input.starts_with("/./") {
+            input.replace_range(..3, "/");
+        } else if input == "/." {
+            input = "/".to_string();
+        } else if input.starts_with("/../") {
+            input.replace_range(..4, "/");
+            pop_last(&mut output);
+        } else if input == "/.." {
+            input = "/".to_string();
+            pop_last(&mut output);
+        } else if input == "." || input == ".." {
+            input.clear();
+        } else {
+            let start = usize::from(input.starts_with('/'));
+            let end = input[start..].find('/').map_or(input.len(), |i| i + start);
+            output.push_str(&input[..end]);
+            input.drain(..end);
+        }
+    }
+    output
+}
+
 /// Whether `name` is a header a redirect off the origin drops.
 pub fn is_credential_header(name: &str) -> bool {
     name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("cookie")
@@ -322,6 +437,33 @@ fn base64(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_redirect_location_resolves_as_rfc_3986_says() {
+        let base = "http://h:8/a/b/c?x=1";
+        for (loc, want) in [
+            ("../d", "http://h:8/a/d"),
+            ("./d", "http://h:8/a/b/d"),
+            ("d", "http://h:8/a/b/d"),
+            ("../../../d", "http://h:8/d"),
+            ("?page=2", "http://h:8/a/b/c?page=2"),
+            ("", "http://h:8/a/b/c?x=1"),
+            ("#frag", "http://h:8/a/b/c?x=1"),
+            ("/x/../echo", "http://h:8/echo"),
+            ("/x/./y/", "http://h:8/x/y/"),
+            ("/", "http://h:8/"),
+            ("//other:9/p/../q", "http://other:9/q"),
+            ("https://o/a/./b/../c?q#f", "https://o/a/c?q"),
+            ("HTTPS://o", "https://o/"),
+            ("d?y=2#f", "http://h:8/a/b/d?y=2"),
+            ("..", "http://h:8/a/"),
+            (".", "http://h:8/a/b/"),
+        ] {
+            assert_eq!(resolve_location(base, loc), want, "{loc}");
+        }
+        assert_eq!(resolve_location("http://h", "p"), "http://h/p");
+        assert_eq!(resolve_location("http://h/", "p"), "http://h/p");
+    }
+
     use super::*;
 
     fn route(

@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 160 |
 | soundness | 67 |
 | miscompile | 61 |
-| run-vs-build | 35 |
+| run-vs-build | 39 |
 | other | 32 |
 | codegen-gap | 30 |
 | crash | 26 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 461 |
-| mir-llvm | 220 |
-| mir | 187 |
+| mir-llvm | 222 |
+| mir | 191 |
 | cli | 113 |
 | ownership | 81 |
 | parser | 80 |
@@ -117,6 +117,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-43 | 2026-11-14 | mir-llvm | low | `i64.parse(date[5..7]).unwrap()` costs about 70 instructions per call on a two-to-four-digit slice, against about 13 for a hand-written digit loop: kata 1154's ★ arm, three parses a call, runs 2.4x overflow-checked Rust | — |
 | B-2026-11-14-61 | 2026-11-14 | interp | low | The MIR interpreter walks a plain (non-`shared`) linked list in quadratic time: a `ref` cursor or a recursion over `next: Option[ListNode]` takes 0.8 s at 5000 nodes, 4.2 s at 10000 and 18 s at 20000, where the compiled program takes 0.15 s; each reference into the list is an `Addr` whose path grows by a field and a variant step per node (kata 2130's Rust-template arm, 1299 s under __mir-run at 100000 nodes) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
+| B-2026-11-14-46 | 2026-11-14 | mir+mir-llvm | medium | A redirect's `Location` is not resolved as RFC 3986 says: `?page=2` from `/q` goes to `/?page=2` on both backends, and the compiled client sends `../d` from `/a/b/c` as `/a/b/../d` (a 404 on a server that does not normalize) where the interpreter's URL parser removes the dot segments and reaches `/a/d` | — |
+| B-2026-11-14-47 | 2026-11-14 | mir | medium | The interpreter's HTTP client returns a cut-short body as a whole answer: a body shorter than its Content-Length, a chunked body with no last chunk, and one still arriving when the builder's timeout passes are each `Ok` with the bytes so far (`200 [hello]`, `200 [xx]`), where the compiled client returns `Err` (`reading response body failed`, `request timed out after 500 ms`) | — |
+| B-2026-11-14-48 | 2026-11-14 | mir | low | The interpreter's HTTP client returns an interim 1xx response as the answer: a server that sends `100 Continue` before its `200` gives `status() == 100` with the 200's status line and headers inside `body()`, where the compiled client skips the 1xx and returns the 200 | — |
+| B-2026-11-14-49 | 2026-11-14 | mir+mir-llvm | medium | The two HTTP clients send different requests: the interpreter adds `User-Agent: ureq/2.12.1`, `Accept: */*` and `accept-encoding: gzip` and decodes a gzip body, the compiled client sends only `host` and returns a gzip body undecoded; a server that requires a User-Agent (GitHub's API answers 403 without one) refuses only the compiled program | — |
 
 ### Relocated
 

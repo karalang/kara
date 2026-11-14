@@ -7192,33 +7192,12 @@ async fn http_fetch_redirects(
     Err(format!("{url}: too many redirects"))
 }
 
-/// Resolve a `Location` header against the current request URL:
-/// absolute URLs pass through; `//authority/...`, `/rooted`, and
-/// bare-relative forms resolve against the current scheme/authority/
-/// path per RFC 3986's common cases.
+/// Resolve a `Location` header against the current request URL, as RFC
+/// 3986 §5.2 resolves a reference, dot segments removed; shared with the
+/// interpreter (`src/http_proxy.rs`, B-2026-11-14-46).
 #[cfg(feature = "tls")]
 fn http_resolve_location(current: &str, loc: &str) -> Result<String, String> {
-    if loc.starts_with("http://") || loc.starts_with("https://") {
-        return Ok(loc.to_string());
-    }
-    let cur: hyper::Uri = current
-        .parse()
-        .map_err(|e| format!("{current}: bad url: {e}"))?;
-    let scheme = cur.scheme_str().unwrap_or("http");
-    let auth = cur
-        .authority()
-        .map(|a| a.as_str().to_string())
-        .ok_or_else(|| format!("{current}: url has no authority"))?;
-    if let Some(rest) = loc.strip_prefix("//") {
-        return Ok(format!("{scheme}://{rest}"));
-    }
-    if loc.starts_with('/') {
-        return Ok(format!("{scheme}://{auth}{loc}"));
-    }
-    let path = cur.path();
-    let dir_end = path.rfind('/').map(|i| i + 1).unwrap_or(0);
-    let dir = if dir_end == 0 { "/" } else { &path[..dir_end] };
-    Ok(format!("{scheme}://{auth}{dir}{loc}"))
+    Ok(http_proxy::resolve_location(current, loc))
 }
 
 // Which proxy a request goes through (docs/library/io.md § HTTP client),

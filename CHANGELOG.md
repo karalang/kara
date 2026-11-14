@@ -475,6 +475,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A redirect's `Location` is resolved as RFC 3986 says, on both backends:
+  `?page=2` keeps the current path (it went to `/?page=2`), and `.` and
+  `..` segments are removed, so `../login` from `/a/b/c` is `/a/login`;
+  the compiled client sent `/a/b/../login` as written (B-2026-11-14-46).
+
 - `x`, `X`, `o` and `b` print a negative integer narrower than 64 bits as
   its two's complement at its own width, as Rust does: `-1i8` under `x` is
   `ff` and `-2i32` is `fffffffe`, where both MIR backends printed the 64-bit
