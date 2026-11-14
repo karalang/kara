@@ -8710,6 +8710,13 @@ impl<'a> TypeChecker<'a> {
         let same_shape = match (&expected_now, &found_now) {
             (Type::Named { name: a, .. }, Type::Named { name: b, .. }) => a == b,
             (Type::Tuple(a), Type::Tuple(b)) => a.len() == b.len(),
+            // A closure checked against a slot of an open accumulator:
+            // `fold(Set.new(), |m, x| ..)` leaves the set's hasher open on
+            // both sides, so the tail's `Set[i64, ?H]` solves the slot's
+            // `Set[?T, ?H]` as the two whole types do.
+            (Type::Function { params: a, .. }, Type::Function { params: b, .. }) => {
+                a.len() == b.len()
+            }
             _ => false,
         };
         if same_shape
