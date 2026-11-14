@@ -4250,6 +4250,11 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-08-53). A copy, `let y = x`, is
     /// noted with `x`'s entry, whose `root` names `x` as the binding to fix.
     pub(super) literal_lets: FxHashMap<String, LiteralLet>,
+    /// The literal bindings an assignment to a literal binding reads, by the
+    /// assigned binding's fix offset: `best = best.max(positive)` notes
+    /// `positive` under `best`. Typing `best` makes each of them refused in
+    /// turn, so one fix carries them all (B-2026-11-14-18).
+    pub(super) literal_feeds: FxHashMap<usize, Vec<LiteralLet>>,
     /// A collection a `literal_lets` binding was pushed into, by the name of
     /// the collection's root binding (`left` of `left[k].push(a)`): `a`'s
     /// entry, so a `for x in left[k]` that reads it back as `x` names `a`
@@ -4736,6 +4741,7 @@ impl<'a> TypeChecker<'a> {
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
             literal_lets: FxHashMap::default(),
+            literal_feeds: FxHashMap::default(),
             literal_pushes: FxHashMap::default(),
             literal_tuple_pushes: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),

@@ -877,16 +877,21 @@ impl<'a> super::TypeChecker<'a> {
                 // (kata 2035).
                 let annotation = self
                     .literal_let_annotation(object, receiver_for_lookup, &resolved_arg)
+                    .map(|a| (a, resolved_arg.clone()))
                     .or_else(|| {
                         self.literal_let_annotation(arg, &resolved_arg, receiver_for_lookup)
+                            .map(|a| (a, receiver_for_lookup.clone()))
                     });
                 match annotation {
-                    Some((_, fix, why)) => self.type_error_with_fix_it(
-                        format!("{message}: {why}"),
-                        arg.span,
-                        TypeErrorKind::TypeMismatch,
-                        fix,
-                    ),
+                    Some(((_, fix, why), target)) => {
+                        self.literal_chain_fix(&arg.span, &fix, &target);
+                        self.type_error_with_fix_it(
+                            format!("{message}: {why}"),
+                            arg.span,
+                            TypeErrorKind::TypeMismatch,
+                            fix,
+                        )
+                    }
                     None => self.type_error(message, arg.span, TypeErrorKind::TypeMismatch),
                 }
                 return Some(Type::Error);

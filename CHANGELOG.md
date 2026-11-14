@@ -1083,6 +1083,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A value computed from a fill's elements, `let l = pre[k + 1] - pre[i]`,
+  refused at an `i32` `max` names the fill's literal and `karac fix` writes
+  `0i32` there, as it already did for a read of the fill itself
+  (B-2026-11-14-17). Literal-bound counters that feed one another
+  (`best = best.max(positive)`, `positive = negative + 1`) are typed in one
+  `karac fix` round rather than one per round (B-2026-11-14-18).
 - Rust lifetimes are fixed away: `&'static str` becomes `Str` and `&'a mut T`
   becomes `mut ref T`, as `&str` and `&mut T` do, and a lifetime in a generic
   list (`struct P<'a>`, `impl<'a>`, `fn f<'a, T>`) is deleted with its comma,

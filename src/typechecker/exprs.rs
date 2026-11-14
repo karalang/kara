@@ -12131,6 +12131,40 @@ impl<'a> super::TypeChecker<'a> {
             } if matches!(method.as_str(), "min" | "max") => self
                 .element_copy_source(object)
                 .or_else(|| args.iter().find_map(|a| self.element_copy_source(&a.value))),
+            // `let l = pre[k + 1] - pre[i]`: arithmetic over such reads,
+            // unsuffixed literals and narrower integers is an `i64` only
+            // because of the fill's literal (kata 1563, B-2026-11-14-17).
+            ExprKind::Binary {
+                op:
+                    BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Div
+                    | BinOp::Mod
+                    | BinOp::BitAnd
+                    | BinOp::BitOr
+                    | BinOp::BitXor,
+                left,
+                right,
+            } => {
+                let mut entry = None;
+                for side in [left, right] {
+                    if matches!(side.kind, ExprKind::Integer(_, None)) {
+                        continue;
+                    }
+                    if let Some(e) = self.element_copy_source(side) {
+                        entry.get_or_insert(e);
+                        continue;
+                    }
+                    let t = self.expr_types.get(&SpanKey::from_span(&side.span))?;
+                    match self.resolved_now(t) {
+                        Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32)
+                        | Type::UInt(UIntSize::U8 | UIntSize::U16 | UIntSize::U32) => {}
+                        _ => return None,
+                    }
+                }
+                entry
+            }
             _ => None,
         }
     }
@@ -12787,6 +12821,139 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// Note the literal bindings `value` reads when it is assigned to the
+    /// literal binding `target` (see `TypeChecker::literal_feeds`).
+    pub(super) fn note_literal_feeds(&mut self, target: &Expr, value: &Expr) {
+        fn reads<'e>(e: &'e Expr, out: &mut Vec<&'e str>) {
+            match &e.kind {
+                ExprKind::Identifier(n) => out.push(n.as_str()),
+                ExprKind::Unary { operand, .. } => reads(operand, out),
+                ExprKind::Binary {
+                    op:
+                        BinOp::Add
+                        | BinOp::Sub
+                        | BinOp::Mul
+                        | BinOp::Div
+                        | BinOp::Mod
+                        | BinOp::BitAnd
+                        | BinOp::BitOr
+                        | BinOp::BitXor,
+                    left,
+                    right,
+                } => {
+                    reads(left, out);
+                    reads(right, out);
+                }
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    if let Some(t) = &then_block.final_expr {
+                        reads(t, out);
+                    }
+                    if let Some(e) = else_branch {
+                        reads(e, out);
+                    }
+                }
+                ExprKind::Block(b) => {
+                    if let Some(t) = &b.final_expr {
+                        reads(t, out);
+                    }
+                }
+                ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                } if matches!(method.as_str(), "min" | "max") => {
+                    reads(object, out);
+                    for a in args {
+                        reads(&a.value, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let ExprKind::Identifier(t) = &target.kind else {
+            return;
+        };
+        let plain = |e: &&super::LiteralLet| e.depth == 0 && !e.element;
+        let Some(key) = self
+            .literal_lets
+            .get(t.as_str())
+            .filter(plain)
+            .map(|e| e.at.offset)
+        else {
+            return;
+        };
+        let mut names = Vec::new();
+        reads(value, &mut names);
+        for n in names {
+            let Some(e) = self.literal_lets.get(n).filter(plain).cloned() else {
+                continue;
+            };
+            let feeds = self.literal_feeds.entry(key).or_default();
+            if e.at.offset != key && !feeds.iter().any(|f| f.at.offset == e.at.offset) {
+                feeds.push(e);
+            }
+        }
+    }
+
+    /// The fix of a literal binding refused as an `i64` where `target` is
+    /// wanted, with the bindings that feed it (`literal_feeds`) typed in
+    /// the same edit: each would be refused next, one per round
+    /// (B-2026-11-14-18). Recorded as a multi-edit fix at `at`; the single
+    /// fix stays the error's own.
+    pub(super) fn literal_chain_fix(&mut self, at: &Span, fix: &FixIt, target: &Type) {
+        let t = type_display(target);
+        let range = Self::int_literal_range(target);
+        let mut seen = vec![fix.span.offset];
+        let mut queue = vec![fix.span.offset];
+        let mut edits = Vec::new();
+        while let Some(k) = queue.pop() {
+            for e in self.literal_feeds.get(&k).into_iter().flatten() {
+                if seen.contains(&e.at.offset) {
+                    continue;
+                }
+                seen.push(e.at.offset);
+                let fits = match (e.value, range) {
+                    (Some(v), Some((lo, hi))) => v >= lo && v <= hi,
+                    _ => true,
+                };
+                if !fits
+                    || e.var.is_some_and(|v| {
+                        self.resolved_now(&Type::TypeVar(v)) != Type::Int(IntSize::I64)
+                    })
+                {
+                    continue;
+                }
+                queue.push(e.at.offset);
+                edits.push(crate::resolver::TextEdit {
+                    offset: e.at.offset,
+                    length: 0,
+                    replacement: if e.suffix {
+                        t.clone()
+                    } else {
+                        format!(": {t}")
+                    },
+                });
+            }
+        }
+        if edits.is_empty() {
+            return;
+        }
+        edits.insert(
+            0,
+            crate::resolver::TextEdit {
+                offset: fix.span.offset,
+                length: fix.span.length,
+                replacement: fix.replacement.clone(),
+            },
+        );
+        self.error_fix_diffs.insert(SpanKey::from_span(at), edits);
+    }
+
     /// B-2026-07-09-7 variable half (design decision (B)): reject an implicit
     /// NARROWING or SIGN-CHANGING integer coercion at a check-mode boundary
     /// (`let`/arg/return/struct-field — every position funnels through
@@ -12929,6 +13096,7 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         if let Some((_, fix, why)) = self.literal_let_annotation(expr, &source, &target) {
+            self.literal_chain_fix(&expr.span, &fix, &target);
             self.type_error_with_fix_it(
                 format!(
                     "implicit coercion from '{}' to '{}' would narrow or change sign: {why}",
