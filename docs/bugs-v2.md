@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 302 |
+| diagnostics | 303 |
 | false-positive | 202 |
 | perf | 164 |
 | missing-feature | 158 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 451 |
-| mir-llvm | 215 |
-| mir | 183 |
+| mir-llvm | 216 |
+| mir | 184 |
 | cli | 112 |
 | ownership | 79 |
 | parser | 78 |
@@ -129,6 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-23 | 2026-11-14 | typecheck+cli | low | Two fields of borrowed receivers put in a tuple to pick one by a test (`let (short, long) = if self.pairs.len() <= other.pairs.len() { (self.pairs, other.pairs) } else { (other.pairs, self.pairs) };`) get `borrow_projection_copy` with a machine-applicable `.clone()` on each, which `karac fix` applies, copying both collections on every call, though `(ref self.pairs, ref other.pairs)` checks and copies nothing | — |
 | B-2026-11-14-24 | 2026-11-14 | typecheck | low | A struct field written `Map[usize, i32]` (Rust's `HashMap<usize, i32>` as `karac fix` carries it) filled from `enumerate()`'s `i64` index is refused with a bare "expected 'Map[usize, i32]', found 'Map[i64, i32]'" and no fix, so `karac fix` stops the template; the same field as `Vec[usize]` gets the nested-number message and the pointer-int fix to `i64` (src/typechecker/pointer_ints.rs) | — |
 | B-2026-11-14-28 | 2026-11-14 | mir-llvm | low | A two-pointer merge over two receivers' `Vec` fields (`while i < self.pairs.len() and j < other.pairs.len() { let (a, x) = self.pairs[i]; let (b, y) = other.pairs[j]; .. }`) keeps both bounds checks in the loop, since guard_bounds.rs (B-2026-11-08-61) proves only indexes into a local vector written once; kata 1570's bench runs 1.47x Rust's instructions (1.20x its time under overflow checks) | — |
+| B-2026-11-14-30 | 2026-11-14 | mir+mir-llvm | low | `SendError`'s `Display` prints its derived Debug form on both MIR backends: after `tc.try_send(2)` on a full `channel(1)`, `e.to_string()`, `f"{e}"` and a `?` into `AnyError` all print `Full(2)` (and `Closed(3)` once the Receiver drops) where concurrency.md says `channel full` / `channel closed` | — |
 
 ### Relocated
 

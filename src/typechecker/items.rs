@@ -2827,6 +2827,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
         let saved_list_lit_lets = std::mem::take(&mut self.list_lit_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
+        let saved_literal_tuple_pushes = std::mem::take(&mut self.literal_tuple_pushes);
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_closure_lets = std::mem::take(&mut self.current_fn_closure_lets);
@@ -2941,6 +2942,7 @@ impl<'a> super::TypeChecker<'a> {
         self.explain_list_lit_lets();
         self.list_lit_lets = saved_list_lit_lets;
         self.literal_lets = saved_literal_lets;
+        self.literal_tuple_pushes = saved_literal_tuple_pushes;
         self.read_only_slice_lets = saved_read_only_slice_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
@@ -12187,6 +12189,14 @@ impl<'a> super::TypeChecker<'a> {
                     let t = self.infer_expr_open(target);
                     open_target = self.unbound_literal_var(&t).is_some();
                     self.fix_literal_from_assigned(target, &t, value)
+                } else if self.index_set_target.is_some() {
+                    // An element of an open fill (`Vec.filled(3, 0)`) is a
+                    // slot of its literal's variable: the value stored into
+                    // it joins that variable, as `t[1] += 4` does, and does
+                    // not settle it at the default, so a later
+                    // `let r: i32 = t[1]` still fixes it (design.md §8
+                    // Literals, B-2026-11-12-12).
+                    self.infer_expr_open(target)
                 } else {
                     self.infer_expr(target)
                 };

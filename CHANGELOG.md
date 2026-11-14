@@ -340,6 +340,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   where they built a `String` of the repeat and freed it once appended
   (B-2026-11-12-15). Kata 1138's bench runs in 0.22 s where it took
   0.83 s; Rust's, which builds the repeat, takes 0.60 s.
+- An open literal is fixed by its uses whatever order they come in. A
+  comparison beside a type that widens into the default (`i < n` with
+  `n: i32`) fixes nothing and no longer settles the literal at `i64` where it
+  stands, so `let i = 0; if i < n { take_i32(i) }` is accepted as
+  `take_i32(i); if i < n {..}` was (B-2026-11-14-1). A value stored into an
+  element of an open fill joins its literal, so `let mut t = Vec.filled(3, 0);
+  t[1] = 4; let r: i32 = t[1];` is accepted as the other order was, and a
+  stored `i32` fixes the fill as `x = nums[0]` fixes a binding, so
+  `dist[i] = time[i] * 2` makes `Vec.filled(n, 0)` a `Vec[i32]` with no
+  suffix (B-2026-11-12-12). A literal no use fixes still ends at `i64`.
 - `for i in (a..b).step_by(k)` over `i64` (and `..=`) is a counting loop,
   where it called the library's `IterStepBy.next` per item, through a
   `first` flag, `advance_by` and two `Option`s (B-2026-11-12-17). Kata
@@ -456,6 +466,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - The interpreter sends an array handed by value, such as a byte string
   literal in `sock.send_to(b"STOP", to)`; it stopped with "expected a
   sequence", where the compiled build sent it (B-2026-11-14-27).
+- `SendError` prints "channel full" / "channel closed" through `f"{e}"`,
+  `e.to_string()` and a `?` into `AnyError` on both MIR backends, as
+  concurrency.md says; it printed the derived `Full(2)` / `Closed(3)`
+  (B-2026-11-14-30).
 - `parse` reports the `ParseError` its documentation gives at the edges.
   A whitespace-only input is `Empty`, as `""` is (it was `InvalidDigit`
   for an integer and `Invalid` for a float), and whitespace around a
@@ -1031,6 +1045,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`.iter().map(|(_, n)| *n)`), is refused by the check with a fix that writes
   `n.clone()`, or a tuple's parts one by one. Only the build refused it, with
   no fix (B-2026-11-14-26).
+- A value read out of a tuple a literal was pushed into
+  (`graph[a].push((b, 0))`, then `for (next, color) in graph[n]`) and narrowed
+  into an `i32` names that literal, and `karac fix` writes its suffix
+  (`0i32`), which types that position of every tuple pushed (kata 1129,
+  B-2026-11-12-2).
 - `karac fix` writes five rewrites its messages already named: an unknown
   method's "did you mean 'len'?", `{x:?}` to `{x}`, `-> escaping Fn(..)` to
   `-> Fn(..)`, a nested `fn` that shares its line with other code moved above

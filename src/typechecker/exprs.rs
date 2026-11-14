@@ -12040,7 +12040,28 @@ impl<'a> super::TypeChecker<'a> {
     /// `left[k].push(a)` with `a` a [`LiteralLet`]: remembered against
     /// `left`, so a value read back out of it names `a` (B-2026-11-09-15).
     pub(super) fn note_literal_push(&mut self, object: &Expr, method: &str, args: &[CallArg]) {
-        if method != "push" || args.len() != 1 {
+        if !matches!(method, "push" | "push_back") || args.len() != 1 {
+            return;
+        }
+        if let ExprKind::Tuple(xs) = &args[0].value.kind {
+            let Some(root) = Self::collection_root_name(object) else {
+                return;
+            };
+            let slots = self
+                .literal_tuple_pushes
+                .entry(root.to_string())
+                .or_default();
+            if slots.len() < xs.len() {
+                slots.resize(xs.len(), None);
+            }
+            for (slot, x) in slots.iter_mut().zip(xs) {
+                let bare = matches!(x.kind, ExprKind::Integer(_, None))
+                    || matches!(&x.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
+                        if matches!(operand.kind, ExprKind::Integer(_, None)));
+                if slot.is_none() && bare {
+                    *slot = Some(x.clone());
+                }
+            }
             return;
         }
         let ExprKind::Identifier(n) = &args[0].value.kind else {
@@ -12102,25 +12123,35 @@ impl<'a> super::TypeChecker<'a> {
                 .collect(),
             _ => None,
         };
+        // A collection tuples were pushed into (B-2026-11-12-2).
+        let pushed: Option<Vec<Option<Expr>>> = Self::collection_root_name(iterable)
+            .and_then(|root| self.literal_tuple_pushes.get(root))
+            .filter(|slots| slots.len() == pats.len())
+            .cloned();
         let mut saved = Vec::new();
         for (i, p) in pats.iter().enumerate() {
             let PatternKind::Binding(name) = &p.kind else {
                 continue;
             };
-            let entry = rows.as_ref().and_then(|rows| {
-                let lit = rows.iter().map(|r| &r[i]).find(|e| {
-                    matches!(e.kind, ExprKind::Integer(_, None))
-                        || matches!(&e.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
-                            if matches!(operand.kind, ExprKind::Integer(_, None)))
-                })?;
-                let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?.clone();
-                let at = Span {
-                    offset: lit.span.offset + lit.span.length,
-                    length: 0,
-                    ..lit.span
-                };
-                self.literal_entry(lit, &ty, at, true, false, name)
-            });
+            let entry = rows
+                .as_ref()
+                .and_then(|rows| {
+                    rows.iter().map(|r| &r[i]).find(|e| {
+                        matches!(e.kind, ExprKind::Integer(_, None))
+                            || matches!(&e.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
+                                if matches!(operand.kind, ExprKind::Integer(_, None)))
+                    })
+                })
+                .or_else(|| pushed.as_ref().and_then(|slots| slots[i].as_ref()))
+                .and_then(|lit| {
+                    let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?.clone();
+                    let at = Span {
+                        offset: lit.span.offset + lit.span.length,
+                        length: 0,
+                        ..lit.span
+                    };
+                    self.literal_entry(lit, &ty, at, true, false, name)
+                });
             let prev = match entry {
                 Some(e) => self.literal_lets.insert(name.clone(), e),
                 None => self.literal_lets.remove(name.as_str()),

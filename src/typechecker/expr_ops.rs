@@ -41,7 +41,7 @@ use super::{FixIt, TypeErrorKind};
 /// type (`String == ref String`) is well-formed because the comparison
 /// only reads through the borrow. Recurses through nested `ref` / `mut ref`
 /// (mirrors `stdlib_seq::is_str_like`).
-fn strip_refs_for_compare(ty: &Type) -> &Type {
+pub(super) fn strip_refs_for_compare(ty: &Type) -> &Type {
     match ty {
         Type::Ref(inner) | Type::MutRef(inner) => strip_refs_for_compare(inner),
         _ => ty,
@@ -343,7 +343,7 @@ impl<'a> super::TypeChecker<'a> {
     /// unstripped type, so it still carries its default `i64` here. It is
     /// exempt as long as promotion would have accepted it at the stripped
     /// type; a negated literal out of the peer's range (`b > -1`) is not.
-    fn reject_mixed_signedness_compare(
+    pub(super) fn reject_mixed_signedness_compare(
         &mut self,
         (left_e, left): (&Expr, &Type),
         (right_e, right): (&Expr, &Type),
@@ -4504,6 +4504,7 @@ impl<'a> super::TypeChecker<'a> {
         right_ty: &mut Type,
         left: &Expr,
         right: &Expr,
+        span: &Span,
     ) -> Option<Type> {
         use super::inference::LiteralKind;
         // An operand inferred before the other one fixed its literal reads
@@ -4624,6 +4625,26 @@ impl<'a> super::TypeChecker<'a> {
                         self.record_expr_type(&lit_side.span, ty);
                         self.record_node_type(lit_side.id, ty);
                         return None;
+                    }
+                    // A binding's integer literal compared with a type that
+                    // widens into the default fixes nothing and is not
+                    // settled where it stands: a comparison has no result
+                    // type to choose, so a later use may still fix it, and
+                    // with none it ends at the default as the rule wants
+                    // (design.md §8 Literals, B-2026-11-14-1). Signedness is
+                    // judged at the type it ends with. A tree of literal
+                    // operators (`1 << b`) is not a binding: it takes its
+                    // peer's type below (B-2026-10-29-28).
+                    if compares
+                        && !unfit
+                        && !is_literal_tree(lit_side)
+                        && !Self::is_int_literal_operator_tree(lit_side)
+                        && lit_kind == Some(LiteralKind::Int)
+                        && is_integer(&other)
+                    {
+                        self.deferred_literal_compares
+                            .push((left.clone(), right.clone(), *span));
+                        return Some(Type::Bool);
                     }
                     if !is_literal_tree(lit_side) || unfit {
                         let ty = if ll.is_some() {
@@ -4789,7 +4810,7 @@ impl<'a> super::TypeChecker<'a> {
                 left_ty = r;
             }
         }
-        if let Some(t) = self.literal_binary(op, &mut left_ty, &mut right_ty, left, right) {
+        if let Some(t) = self.literal_binary(op, &mut left_ty, &mut right_ty, left, right, span) {
             return t;
         }
         // design.md § Type inference: an operand whose type is still a

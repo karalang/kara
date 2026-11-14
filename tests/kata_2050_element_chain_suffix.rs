@@ -26,9 +26,42 @@ fn write(name: &str, src: &str) -> String {
 }
 
 #[test]
-fn kata_2050_max_of_a_filled_vec_returned_narrower_gets_the_fill_suffix() {
+fn kata_2050_max_of_a_filled_vec_fixed_by_its_store_checks_as_written() {
+    // `dist[i] = time[i] * 2` stores an `i32`, which fixes the fill's open
+    // literal as an assignment fixes a binding's (B-2026-11-12-12; this
+    // shape was refused while the store settled the literal at `i64`).
     let src = "fn latest(n: i64, time: Vec[i32]) -> i32 {
     let mut dist = Vec.filled(n, 0);
+    for i in 0..n {
+        dist[i] = time[i] * 2;
+    }
+    *dist.iter().max().unwrap()
+}
+
+fn main() {
+    println(latest(3, [4, 9, 1]));
+}
+";
+    let file = write("k2050-stored", src);
+    let check = karac(&["check", &file]);
+    let _ = std::fs::remove_file(&file);
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let out = karac::mir::lower::run_source(src)
+        .expect("MIR interpreter")
+        .output;
+    assert_eq!(out, "18\n");
+}
+
+#[test]
+fn kata_2050_max_of_a_filled_vec_returned_narrower_gets_the_fill_suffix() {
+    // A print before the store reads the literal at its default.
+    let src = "fn latest(n: i64, time: Vec[i32]) -> i32 {
+    let mut dist = Vec.filled(n, 0);
+    println(dist[0] + 0);
     for i in 0..n {
         dist[i] = time[i] * 2;
     }
@@ -59,7 +92,7 @@ fn main() {
     let out = karac::mir::lower::run_source(&fixed)
         .expect("MIR interpreter")
         .output;
-    assert_eq!(out, "18\n");
+    assert_eq!(out, "0\n18\n");
 }
 
 #[test]

@@ -107,15 +107,30 @@ fn kata_2024_array_fill_literal_narrowed_gets_its_suffix() {
 
 #[test]
 fn kata_2024_vec_filled_literal_under_max_gets_its_suffix() {
-    let src = "fn peaks(nums: Vec[i32]) -> i32 {\n    let n = nums.len();\n    let mut pre = Vec.filled(n, 0);\n    pre[0] = nums[0];\n    for i in 1..n {\n        pre[i] = pre[i - 1].max(nums[i]);\n    }\n    pre[n - 1] as i32\n}\n\nfn main() {\n    println(peaks([3, 9, 4]));\n}";
-    let (first, text, clean, out) = mend(&scratch("vec_filled"), src);
+    // The store `pre[0] = nums[0]` is an assignment to an element, so its
+    // `i32` value fixes the fill's open literal, as `x = nums[0]` fixes a
+    // binding's, and the kata checks as written (B-2026-11-12-12; this pin
+    // held the refusal the store's early settling caused).
+    let src = "fn peaks(nums: Vec[i32]) -> i32 {\n    let n = nums.len();\n    let mut pre = Vec.filled(n, 0);\n    pre[0] = nums[0];\n    for i in 1..n {\n        pre[i] = pre[i - 1].max(nums[i]);\n    }\n    pre[n - 1]\n}\n\nfn main() {\n    println(peaks([3, 9, 4]));\n}";
+    let (first, text, clean, out) = mend(&scratch("vec_filled_stored"), src);
+    assert!(!first.contains("error"), "{first}");
+    assert!(text.contains("let mut pre = Vec.filled(n, 0);"), "{text}");
+    assert!(clean, "{text}");
+    assert_eq!(out, "9\n");
+    // A print before the store reads the literal at its default, so `max`
+    // meets an `i64` and the fill gets its suffix.
+    let src = src.replace(
+        "    pre[0] = nums[0];",
+        "    println(pre[0] + 0);\n    pre[0] = nums[0];",
+    );
+    let (first, text, clean, out) = mend(&scratch("vec_filled"), &src);
     assert!(first.contains("write that literal `0i32`"), "{first}");
     assert!(
         text.contains("let mut pre = Vec.filled(n, 0i32);"),
         "{text}"
     );
     assert!(clean, "{text}");
-    assert_eq!(out, "9\n");
+    assert_eq!(out, "0\n9\n");
 }
 
 #[test]

@@ -3532,6 +3532,11 @@ pub struct TypeChecker<'a> {
     /// The `expr_types` spans recorded with a literal's variable in their
     /// type, re-read by [`Self::default_literal_vars`].
     pub(super) literal_typed_spans: Vec<SpanKey>,
+    /// Comparisons that left a binding's literal open beside a narrower
+    /// integer (`i < n` with `let i = 0;` and `n: i32`): judged for mixed
+    /// signedness once the body's literals are settled (design.md §8
+    /// Literals, B-2026-11-14-1). Left operand, right operand, operator span.
+    pub(super) deferred_literal_compares: Vec<(Expr, Expr, Span)>,
     /// The expression whose literal variable [`Self::infer_expr`] leaves
     /// open ([`Self::infer_expr_open`]).
     pub(super) open_literal_expr: Option<crate::ids::NodeId>,
@@ -4236,6 +4241,13 @@ pub struct TypeChecker<'a> {
     /// entry, so a `for x in left[k]` that reads it back as `x` names `a`
     /// as the binding to fix (B-2026-11-09-15).
     pub(super) literal_pushes: FxHashMap<String, LiteralLet>,
+    /// A tuple literal pushed into a collection, by the collection's root
+    /// binding: for each position, the first unsuffixed integer literal
+    /// written there (`graph[a].push((b, 0))`). A `for (next, color) in
+    /// graph[n]` reads the position back, so a refusal at a use of `color`
+    /// offers that literal's suffix, which types the position of every
+    /// tuple pushed (kata 1129, B-2026-11-12-2).
+    pub(super) literal_tuple_pushes: FxHashMap<String, Vec<Option<Expr>>>,
     /// `let x = <view>` with no annotation whose value is a read-only
     /// `Slice[T]` written as a postfix expression other than a range
     /// subscript (`s.bytes()`), by name: the initializer's span, where
@@ -4538,6 +4550,7 @@ impl<'a> TypeChecker<'a> {
             wide_int_literals: Vec::new(),
             body_literal_vars: Vec::new(),
             literal_typed_spans: Vec::new(),
+            deferred_literal_compares: Vec::new(),
             open_literal_expr: None,
             held_open_literals: Vec::new(),
             open_tuple_literal: None,
@@ -4708,6 +4721,7 @@ impl<'a> TypeChecker<'a> {
             str_lit_lets: FxHashMap::default(),
             literal_lets: FxHashMap::default(),
             literal_pushes: FxHashMap::default(),
+            literal_tuple_pushes: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
             read_only_slice_let_uses: FxHashMap::default(),
             open_collection_let: None,
@@ -10152,6 +10166,18 @@ impl<'a> TypeChecker<'a> {
                         let t = resolve(self, t);
                         self.expr_types.insert(key, t);
                     }
+                }
+            }
+            // A comparison that left its literal open is judged at the type
+            // the literal ended with (B-2026-11-14-1).
+            for (left, right, span) in std::mem::take(&mut self.deferred_literal_compares) {
+                let side = |this: &Self, e: &Expr| {
+                    this.expr_types
+                        .get(&SpanKey::from_span(&e.span))
+                        .map(|t| expr_ops::strip_refs_for_compare(&resolve(this, t)).clone())
+                };
+                if let (Some(l), Some(r)) = (side(self, &left), side(self, &right)) {
+                    self.reject_mixed_signedness_compare((&left, &l), (&right, &r), &span);
                 }
             }
         }
