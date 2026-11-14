@@ -438,6 +438,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A type parameter bounded by two instances of one generic trait
+  (`X: Conv[String] + Conv[f64]`) can call either: `Conv[f64].conv(x)` was
+  typed by the first bound and refused with "expected 'f64', found
+  'String'". A bare `x.conv()` there is ambiguous and names both
+  (B-2026-11-13-47).
 - `parse` reports the `ParseError` its documentation gives at the edges.
   A whitespace-only input is `Empty`, as `""` is (it was `InvalidDigit`
   for an integer and `Invalid` for a float), and whitespace around a

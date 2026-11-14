@@ -644,7 +644,7 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        let mut candidates: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
+        let candidates: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
             .iter()
             .filter_map(|b| {
                 let trait_name = b.path.last()?;
@@ -674,16 +674,59 @@ impl<'a> super::TypeChecker<'a> {
                 None
             })
             .collect();
-        // Two bounds can reach one trait (`I: Iterator + DoubleEndedIterator`).
-        let mut seen = std::collections::HashSet::new();
-        candidates.retain(|(b, _)| seen.insert(b.path.last().cloned()));
-        // `A.m(x)` names the trait: of `T: A + B`, only `A`'s `m`
-        // (B-2026-11-04-8).
-        if let Some((t, m)) = &self.env.ufcs_trait {
-            if m == method {
-                candidates.retain(|(b, _)| b.path.last() == Some(t));
+        // Two bounds can reach one trait (`I: Iterator + DoubleEndedIterator`),
+        // while two instances of one generic trait are two candidates
+        // (`X: Conv[String] + Conv[f64]`, B-2026-11-13-47).
+        let instance_args: Vec<Vec<Type>> = candidates
+            .iter()
+            .map(|(b, _)| {
+                self.trait_bound_arg_subs(b)
+                    .into_iter()
+                    .map(|(_, t)| t)
+                    .collect()
+            })
+            .collect();
+        let mut seen: Vec<(Option<String>, Vec<Type>)> = Vec::new();
+        let mut keep = Vec::with_capacity(candidates.len());
+        for ((b, _), args) in candidates.iter().zip(&instance_args) {
+            let key = (b.path.last().cloned(), args.clone());
+            keep.push(!seen.contains(&key));
+            if !seen.contains(&key) {
+                seen.push(key);
             }
         }
+        let mut candidates: Vec<_> = candidates
+            .into_iter()
+            .zip(instance_args)
+            .zip(keep)
+            .filter_map(|(c, k)| k.then_some(c))
+            .collect();
+        // `A.m(x)` names the trait: of `T: A + B`, only `A`'s `m`
+        // (B-2026-11-04-8), and `Conv[f64].m(x)` names its instance.
+        if let Some((t, m)) = &self.env.ufcs_trait {
+            if m == method {
+                let ufcs_args = self.env.ufcs_trait_args.clone();
+                candidates.retain(|((b, _), args)| {
+                    b.path.last() == Some(t)
+                        && ufcs_args
+                            .as_ref()
+                            .is_none_or(|u| args.is_empty() || args == u)
+                });
+            }
+        }
+        let instance_names: Vec<String> = candidates
+            .iter()
+            .map(|((b, _), args)| {
+                let name = b.path.last().cloned().unwrap_or_default();
+                if args.is_empty() {
+                    name
+                } else {
+                    let shown: Vec<String> = args.iter().map(type_display).collect();
+                    format!("{name}[{}]", shown.join(", "))
+                }
+            })
+            .collect();
+        let candidates: Vec<_> = candidates.into_iter().map(|(c, _)| c).collect();
 
         match candidates.len() {
             0 => {
@@ -780,9 +823,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             _ => {
-                let trait_list = candidates
+                let trait_list = instance_names
                     .iter()
-                    .map(|(b, _)| format!("`{}`", b.path.last().cloned().unwrap_or_default()))
+                    .map(|n| format!("`{n}`"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 for arg in args {
@@ -791,8 +834,15 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "ambiguous method '{}' on type parameter '{}': declared by {}. \
-                         Use UFCS `Trait.{}(receiver, ...)` to disambiguate.",
-                        method, type_param_name, trait_list, method,
+                         Use UFCS `{}.{}(receiver, ...)` to disambiguate.",
+                        method,
+                        type_param_name,
+                        trait_list,
+                        instance_names
+                            .iter()
+                            .find(|n| n.contains('['))
+                            .map_or("Trait", String::as_str),
+                        method,
                     ),
                     *span,
                     TypeErrorKind::AmbiguousAssocFn,
