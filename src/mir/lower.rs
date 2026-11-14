@@ -11472,6 +11472,33 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (lr, rr) = (self.temp(rt), self.temp(rt));
         self.assign(lr, Rvalue::Ref(BorrowKind::Shared, l));
         self.assign(rr, Rvalue::Ref(BorrowKind::Shared, r));
+        // Elements whose equality is their bits (the integers, `bool`,
+        // `char`) in one contiguous run, a `Vec` or a slice: lengths, then
+        // one `memcmp` in compiled code, as `Str` equality does. The loop
+        // below compared a byte at a time (B-2026-11-13-33).
+        let contiguous = matches!(
+            self.tys().tcx().kind(t),
+            HK::Slice { .. }
+                | HK::Intrinsic {
+                    kind: IntrinsicKind::Vec,
+                    ..
+                }
+        );
+        let bitwise = matches!(
+            self.tys().tcx().kind(elem),
+            HK::Int(_) | HK::UInt(_) | HK::Bool | HK::Char
+        );
+        if contiguous && bitwise {
+            self.call_native(
+                &format!("{ty_name}.__bits_eq"),
+                vec![
+                    Operand::Copy(Place::local(lr)),
+                    Operand::Copy(Place::local(rr)),
+                ],
+                dest,
+            );
+            return Ok(());
+        }
         let (nl, nr) = (self.temp(usize_t), self.temp(usize_t));
         let len = format!("{ty_name}.len");
         self.call_native(

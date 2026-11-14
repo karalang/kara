@@ -2900,6 +2900,8 @@ impl<'a> Interp<'a> {
                 ))
             }
             (_, "as_slice_mut") => self.view_method(name, "as_mut_slice", args, ret),
+            // `==` of two runs of bitwise elements (B-2026-11-13-33).
+            ("Vec", "__bits_eq") => self.view_method(name, method, args, ret),
             // B-2026-10-14-15: `chunks` and `windows` too, as on a `Slice`.
             ("Vec", "get_unchecked" | "split_at" | "split_at_mut" | "chunks" | "windows") => {
                 self.view_method(name, method, args, ret)
@@ -8727,6 +8729,20 @@ impl<'a> Interp<'a> {
             }
             ("len", []) => Ok(Value::Int(len as i128)),
             ("is_empty", []) => Ok(Value::Bool(len == 0)),
+            // `==` of two runs whose elements compare by their bits
+            // (B-2026-11-13-33): the lowering's element loop, in one step.
+            ("__bits_eq", [other]) => {
+                let (obase, olo, olen) = self.view_of(other)?;
+                if olen != len {
+                    return Ok(Value::Bool(false));
+                }
+                for i in 0..len {
+                    if self.slot(&base.child(lo + i))? != self.slot(&obase.child(olo + i))? {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
             ("first" | "last" | "get", rest) => {
                 let i = match (method, rest) {
                     ("first", []) => 0,

@@ -1905,6 +1905,18 @@ impl<'ctx> Cx<'ctx, '_> {
         let size = self.layout(el)?.size;
         let dty = self.place_type(dest)?;
         match (method, &args[1..]) {
+            // `==` of two runs of bitwise elements: equal lengths, then one
+            // `memcmp` of their bytes, as `Str` equality (B-2026-11-13-33).
+            ("__bits_eq", [other]) => {
+                let (q, m, _) = self.view_parts(other)?;
+                let bytes = self.i64(size);
+                let (nb, mb) = (
+                    self.builder.build_int_mul(n, bytes, "").map_err(e)?,
+                    self.builder.build_int_mul(m, bytes, "").map_err(e)?,
+                );
+                let d = self.place_ptr(dest)?;
+                self.str_eq(d, (p, nb), (q, mb))?;
+            }
             ("len", []) => {
                 let d = self.place_ptr(dest)?;
                 let it = self.llvm_ty(dty)?.into_int_type();

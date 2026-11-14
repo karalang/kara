@@ -335,6 +335,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `==` and `!=` on two `Vec`s or slices of integers, `bool` or `char`
+  compare lengths and then the bytes in one `memcmp`, as `Str` equality
+  does; they compared one element per step (B-2026-11-13-33). Kata 1147's
+  arm over `text.bytes()` runs in 0.60 s where it took 1.19 s.
 - `==` and `!=` between a `Slice[T]`, a `Vec[T]` and an `Array[T, N]`
   compare elements in either order, as Rust's do (design.md § Slices,
   Comparison; B-2026-11-13-17). `a == s` and `v == a` were refused (the
