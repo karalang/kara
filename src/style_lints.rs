@@ -75,7 +75,7 @@ pub fn style_hits(program: &Program, typed: &TypeCheckResult, src: &str) -> Vec<
             Item::Function(f) => {
                 // A function used as a value has its parameter modes in its
                 // type (`Fn(ref i64) -> String`), which a caller matches.
-                let params: &[Param] = if cx.fn_values.contains(&f.name) {
+                let params: &[Param] = if cx.fn_values.function(&f.name) {
                     &[]
                 } else {
                     &f.params
@@ -88,7 +88,7 @@ pub fn style_hits(program: &Program, typed: &TypeCheckResult, src: &str) -> Vec<
                 for it in &imp.items {
                     if let ImplItem::Method(m) = it {
                         let params: &[Param] =
-                            if imp.trait_name.is_some() || cx.fn_values.contains(&m.name) {
+                            if imp.trait_name.is_some() || cx.fn_values.method(&m.name) {
                                 &[]
                             } else {
                                 &m.params
@@ -117,24 +117,59 @@ struct Cx<'a> {
     out: Vec<StyleHit>,
     /// Names written as a value rather than called (`list_repr(v, int_repr)`,
     /// `xs.map(Item.size)`): a path's last segment, or a bare name.
-    fn_values: std::collections::HashSet<String>,
+    fn_values: FnValues,
     /// Where an explicit `ref name` / `mut ref name` pattern binding starts.
     ref_bindings: Vec<usize>,
 }
 
-/// The names `items` use other than as the callee of a call.
-fn functions_used_as_values(items: &[Item]) -> std::collections::HashSet<String> {
+/// The names `items` use other than as the callee of a call, kept apart by
+/// how they are written: a bare identifier can name only a free function,
+/// and a method is named by a path (`Item.size`, `Self.size`).
+#[derive(Default)]
+struct FnValues {
+    bare: std::collections::HashSet<String>,
+    paths: std::collections::HashSet<String>,
+}
+
+impl FnValues {
+    /// Whether a free function of this name may be used as a value.
+    fn function(&self, name: &str) -> bool {
+        self.bare.contains(name) || self.paths.contains(name)
+    }
+
+    /// Whether a method of this name may be used as a value.
+    fn method(&self, name: &str) -> bool {
+        self.paths.contains(name)
+    }
+}
+
+/// The names of a function's own parameters: a bare identifier with one of
+/// these names in its body reads the parameter, not a function
+/// (B-2026-11-14-21, a harness's `for _ in 0..count` beside a method `count`).
+fn param_names(params: &[Param]) -> std::collections::HashSet<String> {
+    params
+        .iter()
+        .filter_map(|p| match &p.pattern.kind {
+            PatternKind::Binding(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn functions_used_as_values(items: &[Item]) -> FnValues {
     let mut callees = std::collections::HashSet::new();
-    let mut named = Vec::new();
-    let mut visit = |b: &Block| {
+    let mut bare = Vec::new();
+    let mut paths = Vec::new();
+    let mut visit = |params: &[Param], b: &Block| {
+        let own = param_names(params);
         crate::span_visitor::for_each_expr_in_block(b, &mut |e| match &e.kind {
             ExprKind::Call { callee, .. } => {
                 callees.insert((callee.span.offset, callee.span.length));
             }
-            ExprKind::Identifier(n) => named.push((e.span, n.clone())),
+            ExprKind::Identifier(n) if !own.contains(n) => bare.push((e.span, n.clone())),
             ExprKind::Path { segments, .. } => {
                 if let Some(last) = segments.last() {
-                    named.push((e.span, last.clone()));
+                    paths.push((e.span, last.clone()));
                 }
             }
             _ => {}
@@ -142,11 +177,11 @@ fn functions_used_as_values(items: &[Item]) -> std::collections::HashSet<String>
     };
     for item in items {
         match item {
-            Item::Function(f) => visit(&f.body),
+            Item::Function(f) => visit(&f.params, &f.body),
             Item::ImplBlock(imp) => {
                 for it in &imp.items {
                     if let ImplItem::Method(m) = it {
-                        visit(&m.body);
+                        visit(&m.params, &m.body);
                     }
                 }
             }
@@ -154,7 +189,7 @@ fn functions_used_as_values(items: &[Item]) -> std::collections::HashSet<String>
                 for it in &t.items {
                     if let TraitItem::Method(m) = it {
                         if let Some(b) = &m.body {
-                            visit(b);
+                            visit(&m.params, b);
                         }
                     }
                 }
@@ -162,11 +197,17 @@ fn functions_used_as_values(items: &[Item]) -> std::collections::HashSet<String>
             _ => {}
         }
     }
-    named
-        .into_iter()
-        .filter(|(span, _)| !callees.contains(&(span.offset, span.length)))
-        .map(|(_, n)| n)
-        .collect()
+    let values = |named: Vec<(Span, String)>| {
+        named
+            .into_iter()
+            .filter(|(span, _)| !callees.contains(&(span.offset, span.length)))
+            .map(|(_, n)| n)
+            .collect()
+    };
+    FnValues {
+        bare: values(bare),
+        paths: values(paths),
+    }
 }
 
 fn end(span: &Span) -> usize {
