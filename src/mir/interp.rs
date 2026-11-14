@@ -8914,6 +8914,18 @@ impl<'a> Interp<'a> {
     /// behind a reference), an array place behind a reference, or a slice.
     /// The bytes of the `u8` view `v` (`name` the native reading it).
     fn bytes_of_view(&mut self, v: &Value, name: &str) -> R<Vec<u8>> {
+        // An array handed by value (`sock.send_to(b"STOP", to)`, a byte
+        // string literal) has no place to view: its bytes are its fields
+        // (B-2026-11-14-27).
+        if let Value::Agg(fs) = v {
+            return fs
+                .iter()
+                .map(|f| match f {
+                    Value::Int(b) => Ok(*b as u8),
+                    other => err(format!("{name} of a byte holding {other:?}")),
+                })
+                .collect();
+        }
         let (at, lo, len) = self.view_of(v)?;
         let mut bytes = Vec::with_capacity(len as usize);
         for i in 0..len {

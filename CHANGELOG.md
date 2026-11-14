@@ -448,6 +448,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   typed by the first bound and refused with "expected 'f64', found
   'String'". A bare `x.conv()` there is ambiguous and names both
   (B-2026-11-13-47).
+- The interpreter sends an array handed by value, such as a byte string
+  literal in `sock.send_to(b"STOP", to)`; it stopped with "expected a
+  sequence", where the compiled build sent it (B-2026-11-14-27).
 - `parse` reports the `ParseError` its documentation gives at the edges.
   A whitespace-only input is `Empty`, as `""` is (it was `InvalidDigit`
   for an integer and `Invalid` for a float), and whitespace around a
@@ -1014,6 +1017,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Rust lifetimes are fixed away: `&'static str` becomes `Str` and `&'a mut T`
+  becomes `mut ref T`, as `&str` and `&mut T` do, and a lifetime in a generic
+  list (`struct P<'a>`, `impl<'a>`, `fn f<'a, T>`) is deleted with its comma,
+  or with the list when it holds nothing else. The parse used to stop at the
+  first one (B-2026-11-14-25).
+- A closure whose result is `*n`, with `n` lending a non-`Copy` value
+  (`.iter().map(|(_, n)| *n)`), is refused by the check with a fix that writes
+  `n.clone()`, or a tuple's parts one by one. Only the build refused it, with
+  no fix (B-2026-11-14-26).
 - `karac fix` writes five rewrites its messages already named: an unknown
   method's "did you mean 'len'?", `{x:?}` to `{x}`, `-> escaping Fn(..)` to
   `-> Fn(..)`, a nested `fn` that shares its line with other code moved above

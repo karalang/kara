@@ -472,6 +472,12 @@ impl super::Parser {
             Token::Amp => {
                 let amp_at = self.pos;
                 self.advance();
+                // `&'static str`, `&'a mut T`: Kāra has no lifetimes, so the
+                // edit below covers the lifetime with the sigil and writes
+                // the same type as for `&str` / `&mut T` (B-2026-11-14-25).
+                if matches!(self.peek_token_ref(), Token::Label(_)) {
+                    self.advance();
+                }
                 let is_mut = self.eat(&Token::Mut);
                 let inner_at = self.current_span().offset;
                 let sigil = Span {

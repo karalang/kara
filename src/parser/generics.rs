@@ -37,8 +37,127 @@ impl super::Parser {
         self.parse_generic_params()
     }
 
+    /// Rust lifetimes in a bracketed list, the current token being its `[`
+    /// (`fn f['a](..)`, `Parser['a]`, `impl['a, T]` after the `<..>`
+    /// rewrite): Kāra has none, a borrow being checked without one. Reported
+    /// once, at the first, with the edits that delete each lifetime and its
+    /// separator, or the whole list when it holds nothing else; the tokens
+    /// go too, so the list parses without them (B-2026-11-14-25).
+    /// Returns whether the whole list went.
+    pub(crate) fn drop_lifetime_entries(&mut self) -> bool {
+        let open = self.pos;
+        if !matches!(
+            self.tokens.get(open).map(|t| &t.token),
+            Some(Token::LeftBracket)
+        ) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut entries: Vec<(usize, usize)> = Vec::new();
+        let mut entry_start = open + 1;
+        let mut close = None;
+        for i in open..self.tokens.len() {
+            match self.tokens[i].token {
+                Token::LeftBracket | Token::LeftParen => depth += 1,
+                Token::RightBracket | Token::RightParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        entries.push((entry_start, i));
+                        close = Some(i);
+                        break;
+                    }
+                }
+                Token::Comma if depth == 1 => {
+                    entries.push((entry_start, i));
+                    entry_start = i + 1;
+                }
+                Token::EOF | Token::LeftBrace | Token::RightBrace | Token::Semicolon => {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            return false;
+        };
+        // A trailing comma leaves an empty last entry.
+        entries.retain(|(s, e)| e > s);
+        fn is_lifetime(tokens: &[crate::token::SpannedToken], (s, e): (usize, usize)) -> bool {
+            matches!(tokens[s].token, Token::Label(_))
+                && tokens[s + 1..e]
+                    .iter()
+                    .all(|t| matches!(t.token, Token::Label(_) | Token::Colon | Token::Plus))
+        }
+        let lifetimes: Vec<usize> = (0..entries.len())
+            .filter(|&k| is_lifetime(&self.tokens, entries[k]))
+            .collect();
+        let Some(&first) = lifetimes.first() else {
+            return false;
+        };
+        let at = self.tokens[entries[first].0].span;
+        self.error_at(
+            "`'a` is a Rust lifetime: Kāra has none (a borrow is checked without one), \
+             so it goes",
+            at,
+        );
+        let offset = |p: &Self, i: usize| p.tokens[i].span.offset;
+        let end_of = |p: &Self, i: usize| p.tokens[i].span.offset + p.tokens[i].span.length;
+        // Token ranges to delete, as [from, to).
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        let mut edits = Vec::new();
+        let all = lifetimes.len() == entries.len();
+        if all {
+            ranges.push((open, close + 1));
+            edits.push(crate::resolver::TextEdit {
+                offset: offset(self, open),
+                length: end_of(self, close) - offset(self, open),
+                replacement: String::new(),
+            });
+        } else {
+            // The lifetimes that end the list go with the comma before them;
+            // any other goes with the comma after it.
+            let mut tail = entries.len();
+            while tail > 0 && is_lifetime(&self.tokens, entries[tail - 1]) {
+                tail -= 1;
+            }
+            for &k in lifetimes.iter().filter(|&&k| k < tail) {
+                let (s, e) = entries[k];
+                ranges.push((s, e + 1));
+                edits.push(crate::resolver::TextEdit {
+                    offset: offset(self, s),
+                    length: offset(self, e + 1) - offset(self, s),
+                    replacement: String::new(),
+                });
+            }
+            if tail < entries.len() {
+                let from = entries[tail].0 - 1;
+                let to = entries[entries.len() - 1].1;
+                ranges.push((from, to));
+                edits.push(crate::resolver::TextEdit {
+                    offset: offset(self, from),
+                    length: end_of(self, to - 1) - offset(self, from),
+                    replacement: String::new(),
+                });
+            }
+        }
+        self.fix_diffs
+            .insert(crate::resolver::SpanKey::from_span(&at), edits);
+        ranges.sort();
+        for (from, to) in ranges.into_iter().rev() {
+            self.tokens.drain(from..to);
+        }
+        all
+    }
+
     pub(crate) fn parse_generic_params(&mut self) -> Option<GenericParams> {
         let start = self.current_span();
+        if self.drop_lifetime_entries() {
+            return Some(GenericParams {
+                params: Vec::new(),
+                effect_params: Vec::new(),
+                span: start,
+            });
+        }
         self.expect(&Token::LeftBracket)?;
 
         let mut params = Vec::new();
@@ -640,6 +759,10 @@ impl super::Parser {
         // Only the list a type path opens may end in an effect argument; a
         // list nested inside one (a trait bound's) clears the flag here.
         let effect_args_allowed = std::mem::replace(&mut self.effect_args_allowed, false);
+        if self.drop_lifetime_entries() {
+            self.effect_args_allowed = effect_args_allowed;
+            return Some(Vec::new());
+        }
         self.expect(&Token::LeftBracket)?;
         let mut args = Vec::new();
         loop {

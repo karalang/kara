@@ -10119,6 +10119,60 @@ impl<'a> super::TypeChecker<'a> {
 
     /// A closure's tail value moves out: report a borrowed part it copies,
     /// looking into a tuple literal's elements (`|p| (p.0, p.1)`).
+    /// A closure whose tail is `*n`, `n` a parameter lending a non-`Copy`
+    /// value: reported with the edit that writes `n.clone()`.
+    fn warn_closure_tail_deref_move(&mut self, body: &Expr, operand: &Expr) {
+        let ExprKind::Identifier(n) = &operand.kind else {
+            return;
+        };
+        let Some(Type::Ref(inner) | Type::MutRef(inner)) = self
+            .expr_types
+            .get(&SpanKey::from_span(&operand.span))
+            .map(|t| resolve_type_var_top(t, &self.env.substitutions))
+        else {
+            return;
+        };
+        if self.is_copy_type_during_check(&inner) || self.is_shared_handle(&inner) {
+            return;
+        }
+        // A tuple's parts one by one, as `warn_closure_tail_copy` writes
+        // them (§5.10).
+        let copy = match &*inner {
+            Type::Tuple(tys) => {
+                let parts: Vec<String> = tys
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        let t = resolve_type_var_top(t, &self.env.substitutions);
+                        if self.reads_as_value(&t) || self.copy_is_only_an_rc_retain(&t) {
+                            format!("{n}.{i}")
+                        } else {
+                            format!("{n}.{i}.clone()")
+                        }
+                    })
+                    .collect();
+                format!("({})", parts.join(", "))
+            }
+            _ => format!("{n}.clone()"),
+        };
+        let fix = self.type_supports_clone(&inner).then(|| FixIt {
+            span: body.span,
+            replacement: copy.clone(),
+        });
+        self.type_lint_warning_with_fix(
+            format!(
+                "cannot move a non-`Copy` value out of a borrow with `*`: `{n}` lends the \
+                 '{}', and the closure's result would move it out (core semantics §3.7); \
+                 `{copy}` takes a copy",
+                type_display(&inner)
+            ),
+            body.span,
+            TypeErrorKind::InvalidUnaryOp,
+            "borrow_projection_copy",
+            fix,
+        );
+    }
+
     fn warn_closure_tail_copy(&mut self, body: &Expr, body_ty: &Type) {
         if let (ExprKind::Tuple(elems), Type::Tuple(tys)) = (&body.kind, body_ty) {
             if elems.len() == tys.len() {
@@ -10133,6 +10187,18 @@ impl<'a> super::TypeChecker<'a> {
         if self.errors.iter().any(|e| {
             e.span == body.span && e.lint_name.as_deref() == Some("borrow_projection_copy")
         }) {
+            return;
+        }
+        // `|n| *n` over lent items (Rust's `.map(|(_, n)| *n)`): the result
+        // moves a non-`Copy` value out of the borrow `n` reads it through.
+        // Only the MIR check caught it, with no edit; `n.clone()` is the copy
+        // (B-2026-11-14-26).
+        if let ExprKind::Unary {
+            op: UnaryOp::Deref,
+            operand,
+        } = &body.kind
+        {
+            self.warn_closure_tail_deref_move(body, operand);
             return;
         }
         let before = self.errors.len();
