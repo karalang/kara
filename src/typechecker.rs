@@ -6881,7 +6881,12 @@ impl<'a> TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        let twin = method_user_impl::rust_sequence_method_twin(type_name, method);
         let msg = match crate::edit_distance::suggest_method(method, known_methods) {
+            _ if twin.is_some() => format!(
+                "no method '{method}' on type '{type_name}': {}",
+                twin.unwrap_or_default()
+            ),
             Some(suggestion) => format!(
                 "no method '{}' on type '{}', did you mean '{}'?",
                 method, type_name, suggestion

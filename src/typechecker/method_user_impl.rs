@@ -941,6 +941,10 @@ impl<'a> super::TypeChecker<'a> {
                         ));
                         self.iter_hint_error(object, msg, *span);
                     } else {
+                        if let Some(twin) = rust_sequence_method_twin("Array", method) {
+                            msg.push_str(": ");
+                            msg.push_str(twin);
+                        }
                         self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                     }
                     return Type::Error;
@@ -2196,6 +2200,9 @@ impl<'a> super::TypeChecker<'a> {
                                 );
                                 self.error_fix_diffs.insert(SpanKey::from_span(span), edits);
                             }
+                        } else if let Some(twin) = rust_sequence_method_twin(&type_name, method) {
+                            msg.push_str(": ");
+                            msg.push_str(twin);
                         } else if let Some(suggestion) =
                             crate::edit_distance::suggest_method(method, &candidate_refs)
                         {
@@ -2445,4 +2452,24 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
     }
+}
+
+/// Rust's methods of a sequence that Kāra keeps on another sequence, as the
+/// rest of the sentence after "no method 'X' on type 'T'": edit distance
+/// offers nothing near, and the bare refusal reads as if the operation did
+/// not exist (katas 2164 and 2165).
+pub(super) fn rust_sequence_method_twin(type_name: &str, method: &str) -> Option<&'static str> {
+    Some(match (type_name, method) {
+        ("Slice" | "Array", "rotate_left" | "rotate_right") => {
+            "turning the elements is a `Vec` method; on part of one, \
+             `remove` the element and `insert` it at its new place, or turn \
+             a `Vec` of that part (library/collections.md)"
+        }
+        ("VecDeque", "drain") => {
+            "a `VecDeque` is emptied into a `Vec` by `mem.take(mut dq)` \
+             and `into_iter().collect()`, or one element at a time by \
+             `pop_front` (library/collections.md)"
+        }
+        _ => return None,
+    })
 }

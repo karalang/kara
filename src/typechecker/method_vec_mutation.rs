@@ -1259,6 +1259,10 @@ impl<'a> super::TypeChecker<'a> {
             "max" | "min" | "sum" | "product" | "join" | "concat"
         ) {
             format!("{msg}: aggregate its iterator (`dq.iter().{method}()`)")
+        } else if let Some(twin) =
+            super::method_user_impl::rust_sequence_method_twin("VecDeque", method)
+        {
+            format!("{msg}: {twin}")
         } else {
             msg
         };

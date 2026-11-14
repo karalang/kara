@@ -33,6 +33,8 @@ use super::{TypeChecker, TypeErrorKind};
 struct RustScan {
     state: String,
     rewrite: Option<Expr>,
+    /// Written through an index (`m[k]`) rather than through `*m`.
+    indexed: bool,
 }
 
 fn is_deref_of(e: &Expr, name: &str) -> bool {
@@ -85,6 +87,32 @@ fn writes_field_of(body: &Expr, name: &str) -> bool {
             }
             found |=
                 !std::ptr::eq(t, target) && matches!(&t.kind, ExprKind::Identifier(n) if n == name);
+        }
+    });
+    found
+}
+
+/// Whether a statement of `body`, at any depth, writes an element of
+/// `name`, `m[k] += 1`: Rust writes a lent array or `Vec` state through its
+/// index with no `*`, as kata 2168's `|counts, b| { counts[d] += 1; .. }`
+/// does.
+fn writes_index_of(body: &Expr, name: &str) -> bool {
+    let ExprKind::Block(b) = &body.kind else {
+        return false;
+    };
+    let mut found = false;
+    crate::span_visitor::for_each_stmt_in_block(b, &mut |s| {
+        if let StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } = &s.kind {
+            let mut t = target;
+            let mut indexed = false;
+            while let ExprKind::Index { object, .. }
+            | ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. } = &t.kind
+            {
+                indexed |= matches!(t.kind, ExprKind::Index { .. });
+                t = object;
+            }
+            found |= indexed && matches!(&t.kind, ExprKind::Identifier(n) if n == name);
         }
     });
     found
@@ -156,7 +184,11 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         return None;
     };
     let (deref, bare) = uses(body, name);
-    if !deref || bare || writes_field_of(body, name) {
+    // A state written through its index reads bare too (`counts.iter()`),
+    // as Rust reads through the reference; the rewrite copies it, so every
+    // read and write below meets the copy.
+    let indexed = !deref && writes_index_of(body, name);
+    if !(deref || indexed) || (bare && !indexed) || writes_field_of(body, name) {
         return None;
     }
     let tail = match &body.kind {
@@ -169,13 +201,14 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
     let mut found = RustScan {
         state: name.clone(),
         rewrite: None,
+        indexed,
     };
     // A `return` has no mechanical rewrite. `return None` is the
     // exception: it ends the iteration and carries no state, so it reads
     // the same in Kāra's shape (kata 1103's guard, `if *left <= 0 {
     // return None; }`). A write of the state below the block's own
     // statements makes the state a `let mut` copy (kata 1111).
-    let mut nested_write = false;
+    let mut nested_write = indexed;
     let top: Vec<Span> = match &body.kind {
         ExprKind::Block(b) => b.stmts.iter().map(|s| s.span).collect(),
         _ => Vec::new(),
@@ -326,6 +359,11 @@ impl TypeChecker<'_> {
             }
         }
         let name = &found.state;
+        let through = if found.indexed {
+            format!("`{name}[..]`")
+        } else {
+            format!("`*{name}`")
+        };
         let shape = "Kāra's `scan` closure takes the state by value and returns \
                      `Some((next_state, item))`, where Rust's lends it to be written in place";
         let how =
@@ -379,7 +417,7 @@ impl TypeChecker<'_> {
                 };
                 self.type_error(
                     format!(
-                        "this closure writes the state `{name}` through `*{name}`, as Rust's \
+                        "this closure writes the state `{name}` through {through}, as Rust's \
                          `scan` does; {shape}: {write}"
                     ),
                     closure.span,
@@ -388,7 +426,7 @@ impl TypeChecker<'_> {
             }
             None => self.type_error(
                 format!(
-                    "this closure writes the state `{name}` through `*{name}`, as Rust's \
+                    "this closure writes the state `{name}` through {through}, as Rust's \
                      `scan` does; {shape}: {how}"
                 ),
                 closure.span,

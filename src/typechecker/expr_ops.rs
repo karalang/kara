@@ -1778,13 +1778,19 @@ impl<'a> super::TypeChecker<'a> {
             {
                 // B-2026-11-14-6 — `Array.filled(n, v)` guessed from
                 // `Vec.filled(n, v)`: a fixed array is the repeat literal.
-                let hint = if type_name == "Array"
-                    && matches!(member.as_str(), "filled" | "new" | "with_capacity")
-                {
-                    ": a fixed array is built with the repeat literal `[v; N]`, N a \
-                     constant; `Vec.filled(n, v)` is the growable form"
-                } else {
-                    ""
+                // Kata 2164: Rust's `VecDeque::from(v)`, which Kāra builds by
+                // `collect`, named instead of a bare refusal.
+                let hint = match (type_name.as_str(), member.as_str()) {
+                    ("Array", "filled" | "new" | "with_capacity") => {
+                        ": a fixed array is built with the repeat literal `[v; N]`, N a \
+                         constant; `Vec.filled(n, v)` is the growable form"
+                    }
+                    ("VecDeque", "from") => {
+                        ": a `VecDeque` is built from a list by `collect` \
+                         (`let dq: VecDeque[T] = v.into_iter().collect();`), or by \
+                         `VecDeque.new()` and `push_back` (library/collections.md)"
+                    }
+                    _ => "",
                 };
                 self.type_error(
                     format!(

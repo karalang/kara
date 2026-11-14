@@ -6840,6 +6840,13 @@ fn rust_string_method_twin(method: &str) -> Option<&'static str> {
             "the text is already owned (`String.from_utf8_lossy` returns a \
              `String`, not Rust's `Cow`), and an owned copy is `to_string()`"
         }
+        // Kata 2165: Rust edits a `String` by byte position; Kāra's text has
+        // no such edit, and a `Vec[char]` has both.
+        "remove" | "insert" => {
+            "a `String` is not edited by position; collect its characters into a \
+             `Vec[char]` (`s.chars().collect()`), whose `remove(i)` and \
+             `insert(i, c)` do, and `collect` them back into a `String`"
+        }
         // B-2026-11-11-71.
         "into_bytes" => {
             "a string's UTF-8 bytes are `.bytes()`, a `Slice[u8]`, and an owned \
