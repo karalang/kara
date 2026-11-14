@@ -3033,6 +3033,7 @@ impl<'a> OwnershipChecker<'a> {
                     if breakable {
                         continue;
                     }
+                    let mut replacement = None;
                     let (message, suggestion) = if *via_tuple {
                         // A tuple-mediated cycle is UNINHABITABLE, not merely
                         // leak-prone, so it gets its own message: every value
@@ -3071,13 +3072,49 @@ impl<'a> OwnershipChecker<'a> {
                             ),
                         )
                     } else {
+                        // design.md § Recursive enums: the remedy is a
+                        // `shared enum`, whose recursive fields are counted
+                        // handles, or a `Vec` for spine-only recursion. Kāra
+                        // has no `Box`, so the help never offers one (B-2026-11-14-2).
+                        let program = self.program;
+                        let enum_def = if self.cycle_has_base_escape(&cycle) {
+                            std::iter::once(node)
+                                .chain(cycle.iter().copied())
+                                .find_map(|n| {
+                                    program.items.iter().find_map(|it| match it {
+                                        Item::EnumDef(e)
+                                            if e.name == n && !e.is_shared && !e.is_par =>
+                                        {
+                                            Some(e)
+                                        }
+                                        _ => None,
+                                    })
+                                })
+                        } else {
+                            None
+                        };
+                        let help = match enum_def {
+                            Some(e) => {
+                                replacement = Some(Box::new(crate::resolver::TextEdit {
+                                    offset: e.span.offset,
+                                    length: 0,
+                                    replacement: "shared ".to_string(),
+                                }));
+                                format!(
+                                    "declare it `shared enum {}`, whose recursive fields are counted handles (design.md § Recursive enums require `shared enum`), or wrap the recursive field in 'Vec[T]' for spine-only recursion",
+                                    e.name
+                                )
+                            }
+                            None => "wrap the recursive field in a type that can end the recursion, such as 'Option[T]' or 'Vec[T]', or make it a `shared` type with a case that does not recurse"
+                                .to_string(),
+                        };
                         (
                             format!(
                                 "ownership cycle detected: {} → {}. A non-shared type cannot transitively contain itself.",
                                 cycle.join(" → "),
                                 neighbor,
                             ),
-                            Some("use 'ref', 'Box[T]', or mark the type as 'shared'".to_string()),
+                            Some(help),
                         )
                     };
                     self.errors.push(OwnershipError {
@@ -3085,7 +3122,7 @@ impl<'a> OwnershipChecker<'a> {
                         span,
                         kind: OwnershipErrorKind::OwnershipCycle,
                         suggestion,
-                        replacement: None,
+                        replacement,
                         consume_span: None,
                     });
                 }

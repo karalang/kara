@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 287 |
+| diagnostics | 288 |
 | false-positive | 201 |
 | perf | 159 |
 | missing-feature | 156 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 211 |
 | mir | 180 |
 | cli | 106 |
-| ownership | 77 |
+| ownership | 78 |
 | parser | 77 |
 | interp | 52 |
 | runtime | 42 |
@@ -119,6 +119,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-13-46 | 2026-11-13 | mir+mir-llvm | medium | Two non-generic traits with a method of one name, both implemented for a primitive (`impl A for i64 { fn m }`, `impl B for i64 { fn m }`): `A.m(n)` checks but fails at run with `call of unknown function i64.m` (LLVM: `native i64.m is not lowered yet`); on a struct receiver both calls are right | — |
 | B-2026-11-13-47 | 2026-11-13 | typecheck | low | A type parameter bounded by two instances of one generic trait (`X: Conv[String] + Conv[f64]`) cannot call the second: `let f: f64 = Conv[f64].conv(x)` is refused with "expected 'f64', found 'String'" | — |
 | B-2026-11-14-1 | 2026-11-14 | typecheck | low | Whether a let-bound literal compared with an `i32` can still be fixed to `i32` by a later argument depends on statement order: `let i = 0; take_i32(i); if i < n {..}` checks, `let i = 0; if i < n { take_i32(i) }` is refused as narrowing | — |
+| B-2026-11-14-2 | 2026-11-14 | ownership | low | The ownership-cycle help on a recursive plain enum offers `Box[T]`, which Kāra does not have, instead of design.md's `shared enum` | — |
 
 ### Relocated
 

@@ -988,6 +988,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- The ownership cycle on a recursive plain enum (`enum Tree { Leaf(i64),
+  Node(Tree, Tree) }`) says to declare it `shared enum Tree`, which `karac
+  fix` writes, or to wrap the recursive field in `Vec`, as design.md does. It
+  offered `Box[T]`, which Kāra does not have, and `ref`. A cycle with no case
+  that ends it names `Option[T]` or `Vec[T]` (B-2026-11-14-2).
 - A view stored where its borrow is not kept (an escaping closure, a
   `shared` value, a channel) names what it views, "a view of `t.s`",
   rather than "a view of a temporary value", and a view stored in a
