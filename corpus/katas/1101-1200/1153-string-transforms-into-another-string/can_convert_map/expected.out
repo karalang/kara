@@ -1,0 +1,15 @@
+aabcc ccdee  ->  true
+leetcode codeleet  ->  false
+ab ba  ->  true
+aa ab  ->  false
+abc abc  ->  true
+abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz  ->  true
+abcdefghijklmnopqrstuvwxyz bcdefghijklmnopqrstuvwxyza  ->  false
+abcdefghijklmnopqrstuvwxy bcdefghijklmnopqrstuvwxya  ->  true
+abcdefghijklmnopqrstuvwxyz bbcdefghijklmnopqrstuvwxyz  ->  true
+abcdefghijklmnopqrstuvwxyza bcdefghijklmnopqrstuvwxyzab  ->  false
+2000 random pairs: 1322 convertible, checksum 243053464
+26 letters in turn, sent one on: false
+26 letters in turn, sent one on, z and y onto a: true
+random over 26 sent onto 25: true
+the same with one place broken: false

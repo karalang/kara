@@ -1,0 +1,77 @@
+// LeetCode #1153: String Transforms Into Another String -- the ★ arm, in
+// arrays: each letter of `str1` must go to one letter of `str2`, so the
+// letter each goes to is kept and a second, different one refuses; and
+// unless the strings are already equal, `str2` must leave some letter
+// unused, a place to park a letter while a cycle of conversions turns.
+// O(n)
+
+fn can_convert(str1: Str, str2: Str) -> bool {
+    if str1 == str2 {
+        return true;
+    }
+    let a = str1.bytes();
+    let b = str2.bytes();
+    let mut to: Vec[i64] = Vec.filled(26, -1);
+    let mut used: Vec[bool] = Vec.filled(26, false);
+    let mut letters = 0;
+    for i in 0..a.len() {
+        let x = (a[i] - b'a') as i64;
+        let y = (b[i] - b'a') as i64;
+        if to[x] == -1 {
+            to[x] = y;
+        } else if to[x] != y {
+            return false;
+        }
+        if not used[y] {
+            used[y] = true;
+            letters += 1;
+        }
+    }
+    letters < 26
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 pairs of 10000 letters, LeetCode's longest, built once, four
+    // kinds in turn: the first string random over 26 letters sent through
+    // a random map onto 25 (true); the same with one place then changed
+    // (false); sent through a random permutation of the 26 (false); and
+    // the string with itself (true). Each of 100000 rounds answers one
+    // pair, in turn.
+    let rounds = 100000;
+    let mut seed = 1153;
+    let mut pairs: Vec[(String, String)] = [];
+    for p in 0..64 {
+        let a: Vec[u8] = (0..10000).map(|_| b'a' + (next_random(mut seed) % 26) as u8).collect();
+        let mut map: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+        for j in (1..26).rev() {
+            map.swap(j, next_random(mut seed) % (j + 1));
+        }
+        if p % 4 < 2 {
+            map[next_random(mut seed) % 26] = map[25];
+        }
+        let mut b: Vec[u8] = if p % 4 == 3 { a.clone() } else { a.iter().map(|x| map[(x - b'a')]).collect() };
+        if p % 4 == 1 {
+            let at = next_random(mut seed) % 10000;
+            b[at] = if b[at] == b'z' { b'a' } else { b[at] + 1 };
+        }
+        pairs.push((String.from_utf8(a).unwrap(), String.from_utf8(b).unwrap()));
+    }
+    let mut yes = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let (a, b) = ref pairs[r % 64];
+        let ok = can_convert(a, b);
+        if ok {
+            yes += 1;
+        }
+        check = (check * 31 + if ok { 2 } else { 1 } + r % 64) % 1000000007;
+    }
+    println(f"{rounds} rounds over 64 pairs of 10000 letters: {yes} convertible, checksum {check}");
+}

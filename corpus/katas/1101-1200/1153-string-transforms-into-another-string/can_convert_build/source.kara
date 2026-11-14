@@ -1,0 +1,165 @@
+// LeetCode #1153: String Transforms Into Another String -- by doing it:
+// the letter each letter of `str1` must become, read off the places, then
+// conversions carried out on the string itself until no letter waits. A
+// letter waits while it is in the string and must become another. It is
+// converted once its target does not wait, so nothing it becomes moves
+// again; two waiting letters with one target are merged; and when only
+// cycles wait, one letter of a cycle is parked on a letter the string
+// does not hold and `str2` never uses. The answer is whether the string
+// comes out as `str2`. O(26 n)
+
+fn can_convert(str1: Str, str2: Str) -> bool {
+    let mut s = str1.bytes().to_vec();
+    let b = str2.bytes();
+    let mut to: Vec[i64] = Vec.filled(26, -1);
+    for i in 0..s.len() {
+        let x = (s[i] - b'a') as i64;
+        if to[x] == -1 {
+            to[x] = (b[i] - b'a');
+        }
+    }
+    loop {
+        // a letter whose target does not wait
+        match (0..26).find(|x| waits(to, x) and not waits(to, to[x])) {
+            Some(x) => {
+                let y = to[x];
+                convert(mut s, x, y);
+                to[x] = -1;
+                if to[y] == -1 {
+                    to[y] = y;
+                }
+                continue;
+            }
+            None => {}
+        }
+        // two waiting letters with one target
+        let mut merged = false;
+        for x in 0..26 {
+            for z in x + 1..26 {
+                if not merged and waits(to, x) and waits(to, z) and to[x] == to[z] {
+                    convert(mut s, x, z);
+                    to[x] = -1;
+                    merged = true;
+                }
+            }
+        }
+        if merged {
+            continue;
+        }
+        // only cycles wait, or nothing does
+        let mut c = match (0..26).find(|x| waits(to, x)) {
+            Some(x) => x,
+            None => break,
+        };
+        for _ in 0..26 {
+            c = to[c];
+        }
+        match (0..26).find(|y| to[y] == -1 and not b.contains(b'a' + y as u8)) {
+            Some(y) => {
+                convert(mut s, c, y);
+                to[y] = to[c];
+                to[c] = -1;
+            }
+            None => return false,
+        }
+    }
+    s == b
+}
+
+// Whether `x` is in the string and must become another letter.
+fn waits(to: Vec[i64], x: i64) -> bool {
+    to[x] != -1 and to[x] != x
+}
+
+// Every `x` in the string becomes `y`.
+fn convert(s: mut ref Vec[u8], x: i64, y: i64) {
+    for i in 0..s.len() {
+        if s[i] == b'a' + x as u8 {
+            s[i] = b'a' + y as u8;
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(str1: Str, str2: Str) {
+    println(f"{str1} {str2}  ->  {can_convert(str1, str2)}");
+}
+
+// `n` letters drawn from the first `k`, then a second string: each letter
+// of the first sent through a random map onto the first `m` letters, and
+// with chance `noise` in 8 one place changed afterwards.
+fn pair(seed: mut ref i64, n: i64, k: i64, m: i64, noise: i64) -> (String, String) {
+    let mut to: Vec[i64] = [];
+    for _ in 0..k {
+        to.push(next_random(mut seed) % m);
+    }
+    let mut a: Vec[u8] = [];
+    let mut b: Vec[u8] = [];
+    for _ in 0..n {
+        let x = next_random(mut seed) % k;
+        a.push(b'a' + x as u8);
+        b.push(b'a' + to[x] as u8);
+    }
+    if next_random(mut seed) % 8 < noise {
+        let at = next_random(mut seed) % n;
+        b[at] = b'a' + (next_random(mut seed) % 26) as u8;
+    }
+    (String.from_utf8(a).unwrap(), String.from_utf8(b).unwrap())
+}
+
+fn main() {
+    show("aabcc", "ccdee");
+    show("leetcode", "codeleet");
+    show("ab", "ba");
+    show("aa", "ab");
+    show("abc", "abc");
+    show("abcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvwxyz");
+    show("abcdefghijklmnopqrstuvwxyz", "bcdefghijklmnopqrstuvwxyza");
+    show("abcdefghijklmnopqrstuvwxy", "bcdefghijklmnopqrstuvwxya");
+    show("abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz");
+    show("abcdefghijklmnopqrstuvwxyza", "bcdefghijklmnopqrstuvwxyzab");
+
+    // 2000 random pairs of 1 to 60 letters, the first from 1 to 26
+    // letters, sent onto 1 to 26 letters, with chance 0 to 7 in 8 of one
+    // place changed.
+    let mut seed = 1153;
+    let mut yes = 0;
+    let mut check = 0;
+    for i in 0..2000 {
+        let n = 1 + next_random(mut seed) % 60;
+        let k = 1 + next_random(mut seed) % 26;
+        let m = 1 + next_random(mut seed) % 26;
+        let (a, b) = pair(mut seed, n, k, m, i % 8);
+        let ok = can_convert(a, b);
+        if ok {
+            yes += 1;
+        }
+        check = (check * 31 + if ok { 2 } else { 1 } + n) % 1000000007;
+    }
+    println(f"2000 random pairs: {yes} convertible, checksum {check}");
+
+    // 10000 letters, the most the constraints allow: all 26 letters in
+    // turn, sent one letter on (false), and sent one letter on with `z`
+    // sent to `a` too, so that `z` is free (true); then the first string
+    // random over 26 letters, sent through a random map onto 25 (true),
+    // and the same with one place broken (false).
+    let all: Vec[u8] = (0..10000).map(|i| b'a' + (i % 26) as u8).collect();
+    let rot: Vec[u8] = (0..10000).map(|i| b'a' + ((i + 1) % 26) as u8).collect();
+    let free: Vec[u8] = (0..10000).map(|i| b'a' + ((i + 1) % 26 % 25) as u8).collect();
+    let all = String.from_utf8(all).unwrap();
+    println(f"26 letters in turn, sent one on: {can_convert(all, String.from_utf8(rot).unwrap())}");
+    println(f"26 letters in turn, sent one on, z and y onto a: {can_convert(all, String.from_utf8(free).unwrap())}");
+    let (a, b) = pair(mut seed, 10000, 26, 25, 0);
+    println(f"random over 26 sent onto 25: {can_convert(a, b)}");
+    let first = a.bytes();
+    let at = (1..10000).find(|i| first[i] == first[0]).unwrap();
+    let mut broken: Vec[u8] = b.bytes().to_vec();
+    broken[at] = if broken[at] == b'a' { b'b' } else { b'a' };
+    println(f"the same with one place broken: {can_convert(a, String.from_utf8(broken).unwrap())}");
+}

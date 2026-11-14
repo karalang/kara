@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1153-string-transforms-into-another-string/bench/can_convert.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1153 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "984d558f0"
+extracted_src = "f0edd0cb"

@@ -1,0 +1,470 @@
+// LeetCode #1153: String Transforms Into Another String -- a
+// differential over the five arms. Each answer is checked against the
+// statement read literally and against nine properties that do not
+// compute the answer; see the README.
+
+// ---- can_convert.kara ----
+
+fn a0_can_convert(str1: Str, str2: Str) -> bool {
+    if str1 == str2 {
+        return true;
+    }
+    let a = str1.bytes();
+    let b = str2.bytes();
+    let mut to: Vec[i64] = Vec.filled(26, -1);
+    let mut used: Vec[bool] = Vec.filled(26, false);
+    let mut letters = 0;
+    for i in 0..a.len() {
+        let x = (a[i] - b'a') as i64;
+        let y = (b[i] - b'a') as i64;
+        if to[x] == -1 {
+            to[x] = y;
+        } else if to[x] != y {
+            return false;
+        }
+        if not used[y] {
+            used[y] = true;
+            letters += 1;
+        }
+    }
+    letters < 26
+}
+
+// ---- can_convert_map.kara ----
+
+fn a1_can_convert(str1: Str, str2: Str) -> bool {
+    if str1 == str2 {
+        return true;
+    }
+    let mut to: Map[char, char] = Map.new();
+    for (x, y) in str1.chars().zip(str2.chars()) {
+        match to.get(x) {
+            Some(z) => {
+                if z != y {
+                    return false;
+                }
+            }
+            None => {
+                to.insert(x, y);
+            }
+        }
+    }
+    let letters: Set[char] = str2.chars().collect();
+    letters.len() < 26
+}
+
+// ---- can_convert_sorted.kara ----
+
+fn a2_can_convert(str1: Str, str2: Str) -> bool {
+    if str1 == str2 {
+        return true;
+    }
+    let mut pairs: Vec[(u8, u8)] = str1.bytes().iter().zip(str2.bytes().iter()).collect();
+    pairs.sort();
+    pairs.dedup();
+    for i in 1..pairs.len() {
+        if pairs[i].0 == pairs[i - 1].0 {
+            return false;
+        }
+    }
+    let mut letters = str2.bytes().to_vec();
+    letters.sort();
+    letters.dedup();
+    letters.len() < 26
+}
+
+// ---- can_convert_build.kara ----
+
+fn a3_can_convert(str1: Str, str2: Str) -> bool {
+    let mut s = str1.bytes().to_vec();
+    let b = str2.bytes();
+    let mut to: Vec[i64] = Vec.filled(26, -1);
+    for i in 0..s.len() {
+        let x = (s[i] - b'a') as i64;
+        if to[x] == -1 {
+            to[x] = (b[i] - b'a');
+        }
+    }
+    loop {
+        // a letter whose target does not wait
+        match (0..26).find(|x| a3_waits(to, x) and not a3_waits(to, to[x])) {
+            Some(x) => {
+                let y = to[x];
+                a3_convert(mut s, x, y);
+                to[x] = -1;
+                if to[y] == -1 {
+                    to[y] = y;
+                }
+                continue;
+            }
+            None => {}
+        }
+        // two waiting letters with one target
+        let mut merged = false;
+        for x in 0..26 {
+            for z in x + 1..26 {
+                if not merged and a3_waits(to, x) and a3_waits(to, z) and to[x] == to[z] {
+                    a3_convert(mut s, x, z);
+                    to[x] = -1;
+                    merged = true;
+                }
+            }
+        }
+        if merged {
+            continue;
+        }
+        // only cycles wait, or nothing does
+        let mut c = match (0..26).find(|x| a3_waits(to, x)) {
+            Some(x) => x,
+            None => break,
+        };
+        for _ in 0..26 {
+            c = to[c];
+        }
+        match (0..26).find(|y| to[y] == -1 and not b.contains(b'a' + y as u8)) {
+            Some(y) => {
+                a3_convert(mut s, c, y);
+                to[y] = to[c];
+                to[c] = -1;
+            }
+            None => return false,
+        }
+    }
+    s == b
+}
+
+// Whether `x` is in the string and must become another letter.
+fn a3_waits(to: Vec[i64], x: i64) -> bool {
+    to[x] != -1 and to[x] != x
+}
+
+// Every `x` in the string becomes `y`.
+fn a3_convert(s: mut ref Vec[u8], x: i64, y: i64) {
+    for i in 0..s.len() {
+        if s[i] == b'a' + x as u8 {
+            s[i] = b'a' + y as u8;
+        }
+    }
+}
+
+// ---- can_convert_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_can_convert(str1: String, str2: String) -> bool {
+        if str1 == str2 {
+            return true;
+        }
+        let mut map: Map[char, char] = Map.new();
+        for (a, b) in str1.chars().zip(str2.chars()) {
+            if *map.entry(a).or_insert(b) != b {
+                return false;
+            }
+        }
+        Set[char].from_iter(str2.chars()).len() < 26
+    }
+}
+
+fn a4_can_convert(str1: Str, str2: Str) -> bool {
+    A4Solution.a4_can_convert(str1.to_string(), str2.to_string())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, str1: Str, str2: Str) -> bool {
+    match which {
+        0 => a0_can_convert(str1, str2),
+        1 => a1_can_convert(str1, str2),
+        2 => a2_can_convert(str1, str2),
+        3 => a3_can_convert(str1, str2),
+        _ => a4_can_convert(str1, str2),
+    }
+}
+
+fn text(bytes: Vec[u8]) -> String {
+    String.from_utf8(bytes).unwrap()
+}
+
+// The letters of `s`, sorted, once each.
+fn letters(s: Str) -> Vec[u8] {
+    let mut l = s.bytes().to_vec();
+    l.sort();
+    l.dedup();
+    l
+}
+
+// The statement read literally: a breadth-first search over the strings
+// `str1` can become, one conversion of all of one letter to another at a
+// time. A letter neither in the string nor in `str2` is as good as any
+// other such letter, so the search converts to the letters of the string
+// and of `str2` and to the first letter outside both.
+fn literal(str1: Str, str2: Str) -> bool {
+    if str1.len() != str2.len() {
+        return false;
+    }
+    let goal = str2.to_string();
+    let wanted = letters(str2);
+    let mut seen: Set[String] = Set.new();
+    seen.insert(str1.to_string());
+    let mut queue: Vec[String] = [str1.to_string()];
+    let mut head = 0;
+    while head < queue.len() {
+        let s = queue[head].clone();
+        head += 1;
+        if s == goal {
+            return true;
+        }
+        let here = letters(s);
+        let mut targets: Vec[u8] = here.clone();
+        targets.extend(wanted.iter());
+        match (0..26).map(|i| b'a' + i as u8).find(|t| not here.contains(t) and not wanted.contains(t)) {
+            Some(t) => targets.push(t),
+            None => {}
+        }
+        targets.sort();
+        targets.dedup();
+        let bytes = s.bytes();
+        for c in here.iter() {
+            for t in targets.iter() {
+                if t != c {
+                    let next = text(bytes.iter().map(|x| if x == c { t } else { x }).collect());
+                    if not seen.contains(next) {
+                        seen.insert(next.clone());
+                        queue.push(next);
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+// A random map of the 26 letters onto the first `m`.
+fn random_map(seed: mut ref i64, m: i64) -> Vec[u8] {
+    (0..26).map(|_| b'a' + (next_random(mut seed) % m) as u8).collect()
+}
+
+// A random permutation of the 26 letters.
+fn random_permutation(seed: mut ref i64) -> Vec[u8] {
+    let mut p: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+    for j in (1..26).rev() {
+        p.swap(j, next_random(mut seed) % (j + 1));
+    }
+    p
+}
+
+fn apply(map: Vec[u8], s: Str) -> String {
+    text(s.bytes().iter().map(|x| map[(x - b'a')]).collect())
+}
+
+// A problem in four kinds. Short strings of 1 to 8 letters over 1 to 4
+// letters, sent through a random map onto 1 to 6 letters, a place changed
+// in half; short strings sent through a permutation of their letters,
+// cycles and all, a place changed in a quarter; strings of 26 to 60
+// letters holding all 26, sent through the identity, a permutation, a
+// permutation with two letters sent to one, or one of these with a place
+// changed; and strings of 10 to 60 letters over 5 to 26 letters sent
+// onto 5 to 26. The literal search runs on the first two kinds. The
+// third value says whether the second string was made from the first by a
+// map that leaves a letter free, with no place changed.
+fn problem(seed: mut ref i64, kind: i64) -> (String, String, bool) {
+    let alphabet = [b'a', b'b', b'c', b'd', b'e', b'f'];
+    if kind < 2 {
+        let n = 1 + next_random(mut seed) % 8;
+        let k = 1 + next_random(mut seed) % 4;
+        let a: Vec[u8] = (0..n).map(|_| alphabet[next_random(mut seed) % k]).collect();
+        let map = if kind == 0 {
+            random_map(mut seed, 1 + next_random(mut seed) % 6)
+        } else {
+            let mut p: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+            for j in (1..k).rev() {
+                p.swap(j, next_random(mut seed) % (j + 1));
+            }
+            p
+        };
+        let mut b: Vec[u8] = a.iter().map(|x| map[(x - b'a')]).collect();
+        let mut made = true;
+        if next_random(mut seed) % (2 + 2 * kind) == 0 {
+            let at = next_random(mut seed) % n;
+            b[at] = alphabet[next_random(mut seed) % 6];
+            made = false;
+        }
+        return (text(a), text(b), made);
+    }
+    if kind == 2 {
+        let n = 26 + next_random(mut seed) % 35;
+        let mut a: Vec[u8] = random_permutation(mut seed);
+        while a.len() < n {
+            a.push(b'a' + (next_random(mut seed) % 26) as u8);
+        }
+        for j in (1..n).rev() {
+            a.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let how = next_random(mut seed) % 4;
+        let mut map: Vec[u8] = if how == 0 { (0..26).map(|i| b'a' + i as u8).collect() } else { random_permutation(mut seed) };
+        if how == 2 {
+            let x = next_random(mut seed) % 26;
+            map[x] = map[(x + 1) % 26];
+        }
+        let mut b: Vec[u8] = a.iter().map(|x| map[(x - b'a')]).collect();
+        let mut made = how == 2;
+        if how == 3 or next_random(mut seed) % 4 == 0 {
+            let at = next_random(mut seed) % n;
+            b[at] = b'a' + (next_random(mut seed) % 26) as u8;
+            made = false;
+        }
+        return (text(a), text(b), made);
+    }
+    let n = 10 + next_random(mut seed) % 51;
+    let k = 5 + next_random(mut seed) % 22;
+    let a: Vec[u8] = (0..n).map(|_| b'a' + (next_random(mut seed) % k) as u8).collect();
+    let map = random_map(mut seed, 5 + next_random(mut seed) % 22);
+    let mut b: Vec[u8] = a.iter().map(|x| map[(x - b'a')]).collect();
+    let mut made = letters(text(map)).len() < 26;
+    if next_random(mut seed) % 2 == 0 {
+        let at = next_random(mut seed) % n;
+        b[at] = b'a' + (next_random(mut seed) % 26) as u8;
+        made = false;
+    }
+    (text(a), text(b), made)
+}
+
+struct Case {
+    kind: i64,
+    str1: String,
+    str2: String,
+    made: bool,
+    // P2's order, P3's and P4's permutations, P7's map, P9's map
+    order: Vec[i64],
+    both: Vec[u8],
+    first: Vec[u8],
+    third: Vec[u8],
+    merge: Vec[u8],
+}
+
+struct Tally {
+    cases: i64,
+    yes: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let s1 = c.str1.clone();
+    let s2 = c.str2.clone();
+    let n = s1.len();
+    let want = if c.kind < 2 { literal(s1, s2) } else { false };
+    if want {
+        t.yes += 1;
+    }
+    let reordered1 = text(c.order.iter().map(|i| s1.bytes()[i]).collect());
+    let reordered2 = text(c.order.iter().map(|i| s2.bytes()[i]).collect());
+    let renamed1 = apply(c.both, s1);
+    let renamed2 = apply(c.both, s2);
+    let firsts = apply(c.first, s1);
+    let full = letters(s2).len() == 26;
+    let doubled1 = f"{s1}{s1}";
+    let doubled2 = f"{s2}{s2}";
+    let longer1 = f"{s1}{s1.slice(0, 1)}";
+    let longer2 = f"{s2}{s2.slice(0, 1)}";
+    let s3 = apply(c.third, s2);
+    let merged = apply(c.merge, s2);
+    for w in 0..5 {
+        let got = arm(w, s1, s2);
+        let what = f"arm {w}, case {t.cases} {s1} {s2} -> {got}";
+        // P1: the statement read literally
+        if c.kind < 2 {
+            expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        }
+        // P2: the places reordered alike
+        let r = arm(w, reordered1, reordered2);
+        expect(mut t, 2, r == got, f"P2 {what}, reordered {r}");
+        // P3: the letters of both renamed alike
+        let b = arm(w, renamed1, renamed2);
+        expect(mut t, 3, b == got, f"P3 {what}, renamed {b}");
+        // P4: the letters of `str1` alone renamed, while `str2` leaves a
+        // letter free
+        if not full {
+            let f = arm(w, firsts, s2);
+            expect(mut t, 4, f == got, f"P4 {what}, {firsts} {f}");
+        }
+        // P5: each string twice
+        let d = arm(w, doubled1, doubled2);
+        expect(mut t, 5, d == got, f"P5 {what}, doubled {d}");
+        // P6: the first place repeated at the end
+        let l = arm(w, longer1, longer2);
+        expect(mut t, 6, l == got, f"P6 {what}, longer {l}");
+        // P7: a conversion of `str2` onward follows a conversion to it
+        let onward = arm(w, s2, s3);
+        let through = arm(w, s1, s3);
+        expect(mut t, 7, not (got and onward) or through, f"P7 {what}, {s3}: onward {onward}, through {through}");
+        // P8: letters never split, so a `str2` of all 26 letters is
+        // reached only when it is `str1`
+        if full {
+            expect(mut t, 8, got == (s1 == s2), f"P8 {what}");
+        }
+        // P9: a true answer stays true when `str2` is sent onto 25
+        // letters or fewer
+        let m = arm(w, s1, merged);
+        expect(mut t, 9, not got or m, f"P9 {what}, {merged} {m}");
+        // P10: a second string made from the first by a map that leaves a
+        // letter free is reached: each letter is converted once its target
+        // no longer waits, and one letter of each cycle is parked on the
+        // free letter first
+        if c.made {
+            expect(mut t, 10, got, f"P10 {what}");
+        }
+    }
+    t.cases += 1;
+    let answer = arm(0, s1, s2);
+    t.check = (t.check * 31 + if answer { 2 } else { 1 } + n) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, yes: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(11, 0) };
+    // 2000 problems in four kinds, 500 each. Every choice the properties
+    // make is drawn before any arm answers.
+    let mut seed = 11531;
+    let mut cases: Vec[Case] = [];
+    for i in 0..2000 {
+        let kind = i % 4;
+        let (str1, str2, made) = problem(mut seed, kind);
+        let n = str1.len();
+        let mut order: Vec[i64] = (0..n).collect();
+        for j in (1..n).rev() {
+            order.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let both = random_permutation(mut seed);
+        let first = random_permutation(mut seed);
+        let third = random_map(mut seed, 1 + next_random(mut seed) % 26);
+        let merge = random_map(mut seed, 1 + next_random(mut seed) % 25);
+        cases.push(Case { kind, str1, str2, made, order, both, first, third, merge });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} problems ({t.yes} of the 1000 short ones convertible): checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..11).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
