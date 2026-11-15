@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 344 |
-| false-positive | 218 |
+| diagnostics | 345 |
+| false-positive | 220 |
 | missing-feature | 171 |
 | perf | 169 |
 | soundness | 69 |
@@ -78,10 +78,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 490 |
 | mir-llvm | 238 |
-| mir | 207 |
+| mir | 209 |
 | cli | 141 |
 | parser | 88 |
-| ownership | 84 |
+| ownership | 85 |
 | interp | 62 |
 | runtime | 47 |
 | effect | 35 |
@@ -123,6 +123,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
 | B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
 | B-2026-11-15-86 | 2026-11-15 | resolver | high | `karac fix` turns Rust's smallest-first `let mut heap: BinaryHeap<Reverse<i32>> = v.into_iter().map(Reverse).collect();` into a largest-first `PriorityQueue[Reverse[i32]]`: with no constructor to rewrite, the type is renamed and `Reverse` kept, so the mended program pops in the opposite order and answers wrong (kata 1167: 16 for [2,4,3], not 14) | — |
+| B-2026-11-15-126 | 2026-11-15 | mir | medium | A `par` branch or `TaskGroup` task that reads `p.a` and writes `p.b` is charged a mutable borrow of `p.a`: `par { { p.a }, { let t = p.a; p.b = 2; t } }` gives "read of p.0 and mutable borrow of p.0", and `g.spawn(|| p.a)` beside `g.spawn(|| { let t = p.a; p.b = 5; t })` "captures p by mut ref" | — |
+| B-2026-11-15-127 | 2026-11-15 | mir | medium | A move inside a `par` branch inside a closure is refused: `run(|| { let (x, y) = par { eat(s), 1 }; x + y })` with `run(f: own OnceFn() -> i64)` gives "cannot move a non-Copy value out of a borrowed place"; a plain tuple instead of `par` prints 4 | — |
+| B-2026-11-15-128 | 2026-11-15 | ownership | low | A move in an earlier `par` branch and a read in a later one is reported as a sequential use after move: `par { { eat(s1) }, { s1.len() } }` gives "value s1 moved here, used again here"; with the branches swapped it is the right E0418 "branches 1 and 2 conflict: read of s1 and move of s1" | — |
 
 ### Relocated
 
