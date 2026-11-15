@@ -326,7 +326,12 @@ impl<'a> super::TypeChecker<'a> {
         let formal_generic_params = sig.generic_params.clone();
         let where_clause = sig.where_clause.clone();
         self.call_borrowed_fn_params = self.d5_borrowed_fn_params(name);
-        self.check_call_args_with_substitution_full(
+        // A free function has no receiver: the substitution of an enclosing
+        // method call whose closure argument this call sits in is not its
+        // own (an `apply[T, F: Fn(ref T) -> T]` inside `.map(|v| ..)` read
+        // its `T` as the iterator's).
+        let saved_receiver = self.call_bound_receiver_subs.take();
+        let ret = self.check_call_args_with_substitution_full(
             args,
             &sig.params,
             &sig.return_type,
@@ -336,7 +341,9 @@ impl<'a> super::TypeChecker<'a> {
             Some(&formal_generic_params),
             where_clause.as_ref(),
             span,
-        )
+        );
+        self.call_bound_receiver_subs = saved_receiver;
+        ret
     }
 
     /// Type-check a `Vector[T, N](lane0, …, lane{N-1})` construction.
@@ -3438,6 +3445,10 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => Vec::new(),
                 };
+                // No receiver of its own: an enclosing method call's
+                // substitution is not this call's (see the free-function
+                // path above).
+                let saved_receiver = self.call_bound_receiver_subs.take();
                 let ret = self.check_call_args_with_substitution_full(
                     args,
                     &params,
@@ -3449,6 +3460,7 @@ impl<'a> super::TypeChecker<'a> {
                     callee_where_clause.as_ref(),
                     span,
                 );
+                self.call_bound_receiver_subs = saved_receiver;
                 // B-2026-09-02-47 — discharge the IMPL BLOCK's bounds. Runs
                 // AFTER the line above, because that is what types the
                 // arguments, and the impl's type arguments are recoverable

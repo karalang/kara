@@ -125,7 +125,10 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         return Some(sig.return_type);
                     }
-                    return Some(self.check_call_args_with_substitution_full(
+                    // A module function has no receiver: an enclosing method
+                    // call's substitution is not its own.
+                    let saved_receiver = self.call_bound_receiver_subs.take();
+                    let ret = self.check_call_args_with_substitution_full(
                         args,
                         &sig.params,
                         &sig.return_type,
@@ -135,7 +138,9 @@ impl<'a> super::TypeChecker<'a> {
                         Some(&sig.generic_params),
                         sig.where_clause.as_ref(),
                         span,
-                    ));
+                    );
+                    self.call_bound_receiver_subs = saved_receiver;
+                    return Some(ret);
                 }
             }
         }
