@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 345 |
+| diagnostics | 348 |
 | false-positive | 220 |
 | missing-feature | 171 |
 | perf | 169 |
+| miscompile | 69 |
 | soundness | 69 |
-| miscompile | 68 |
-| other | 47 |
+| other | 49 |
 | run-vs-build | 42 |
 | codegen-gap | 32 |
 | crash | 31 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 491 |
+| typecheck | 492 |
 | mir-llvm | 238 |
 | mir | 210 |
-| cli | 141 |
+| cli | 144 |
 | parser | 88 |
-| ownership | 85 |
+| ownership | 86 |
 | interp | 62 |
-| runtime | 47 |
+| runtime | 50 |
 | effect | 35 |
 | resolver | 30 |
 | codegen | 22 |
@@ -121,7 +121,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-38 | 2026-11-15 | typecheck | medium | A list literal returned by a closure (`d.iter().map(|e| [e[0], e[1], 1 - e[2]]).collect()` into a `Vec[Array[i64, 3]]`) is a `Vec`, so the `collect` fails ("`Vec[Array[i64, 3]]` implements `FromIterator[Array[i64, 3]]`, not `FromIterator[Vec[i64]]`") with no fix, and a closure cannot declare its return type (`|e| -> Array[i64, 3] { .. }` is refused as Rust syntax), so the only spelling is a typed `let` inside the closure | — |
 | B-2026-11-15-40 | 2026-11-15 | typecheck+cli | medium | `println(f"{v} -> {total(v)}")` with `v` owned and `total(v: own Vec[i64])` is refused with E0516 ("cannot move `v` while it is still borrowed") and no machine fix, though the message names `.clone()`; in kata 2202 it is where `karac fix`'s own `own` edits end, three rounds after a bare parameter was stored in a struct field | — |
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
-| B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
+| B-2026-11-15-131 | 2026-11-15 | cli | low | karac fix is not idempotent on a file that checks clean: manual_compound_assign turns `i = i + 1` into `i += 1`, and counter_while_loop only sees the loop on the next run, so a second `karac fix` still rewrites the while into `for i in a..b` (30 of 1072 corpus source.orig.kara files) | — |
+| B-2026-11-15-132 | 2026-11-15 | ownership+cli | medium | karac fix applies two fixes on one span and produces a refused program: `let hop = hs[0].inner.word;` with `word` in a `shared struct` gets both ownership's `ref ` and borrow_projection_copy's `.clone()`, giving `ref hs[0].inner.word.clone()` (E_REF_OPERAND_UNSUPPORTED, no further fix) | — |
+| B-2026-11-15-133 | 2026-11-15 | typecheck+cli | low | A match on a temporary whose arm yields a `ref` binding gets a fixless typecheck error as a call argument, where the same match in a `let` gets borrow_projection_copy with a `.clone()` fix, so karac fix's `ref s` remedy for a Drop-enum partial move ends on a failing file | — |
+| B-2026-11-15-134 | 2026-11-15 | runtime | medium | The HTTP client returns Ok for a 3xx it does not follow (300, 304, a 302 with no Location), where io.md makes every status outside 2xx an Err that keeps the response | — |
+| B-2026-11-15-135 | 2026-11-15 | runtime | medium | Past five redirects the HTTP client's Err drops the response that arrived and names the unfollowed Location instead of the URL asked for | — |
+| B-2026-11-15-136 | 2026-11-15 | runtime | medium | RequestBuilder.timeout(0) or a negative timeout silently means no timeout; io.md now refuses a timeout below 1 ms with an Err from send | — |
 
 ### Relocated
 
@@ -1284,6 +1289,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-74 | typecheck | low | Rust's `let (sock, _) = listener.accept().unwrap();` is refused ("tuple pattern used but type is `TcpStream`") with no fix | 3e72c72f48 |
 | B-2026-11-15-75 | typecheck+interp+mir-llvm | medium | `Mutex` has no `into_inner` ("no method 'into_inner' on type 'Mutex'"), and the natives both backends kept for it crash the LLVM backend on a struct… | 3e72c72f48 |
 | B-2026-11-15-76 | typecheck | low | `self.take(2)?.try_into().unwrap()` for `u16.from_le_bytes(..)` is refused as "no method 'try_into' on type 'Slice'" with nothing about what to write | 3e72c72f48 |
+| B-2026-11-15-77 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice… | 3751c0d9be |
 | B-2026-11-15-78 | mir | medium | `PriorityQueue[Reverse[F64]]` passes `karac check` and then the MIR builder refuses it: `Reverse`'s generic `T.cmp` under `T: Ord` at `T = F64` had n… | ee3c8ec9c4 |
 | B-2026-11-15-79 | mir+mir-llvm | medium | `let Reverse { value: top } = heap.pop().unwrap();` over `Reverse[i64]` reads `top` as moved after one use: a field of a generic struct bound by a `l… | ee3c8ec9c4 |
 | B-2026-11-15-80 | mir | high | `karac fix` renamed `let mut heap: BinaryHeap<i64> = it.collect();` to a plain `PriorityQueue[i64]`, which pops the smallest first where Rust's heap… | ee3c8ec9c4 |
