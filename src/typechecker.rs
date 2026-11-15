@@ -9720,6 +9720,24 @@ impl<'a> TypeChecker<'a> {
             );
             return false;
         }
+        // An `Option[ref T]` where an `Option[T]` is wanted (`return
+        // nodes.get(v);` from a `-> Option[TreeNode]`): `.cloned()` copies
+        // the item out (library/core-types.md), the edit the comparison
+        // operators already offer (kata 2196, B-2026-11-15-37).
+        if let Some(fix) = self.option_ref_value_fix(&want_now, &found_now, span) {
+            self.type_error_with_fix_it(
+                format!(
+                    "expected '{}', found '{}': the `Option` views its item rather than \
+                     holding one; `.cloned()` copies the item out (library/core-types.md)",
+                    type_display(&want_now),
+                    type_display(&found_now)
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+                fix,
+            );
+            return false;
+        }
         // Canonical assignment-mismatch site. Use the typed-fields
         // helper so the JSON consumer gets `expected` / `got` as
         // structured fields rather than having to parse the prose

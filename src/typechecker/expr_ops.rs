@@ -3765,6 +3765,44 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// The edit appending `.cloned()` to a value at `span` of type
+    /// `Option[ref T]` checked against an `Option[T]` (B-2026-11-15-37). A
+    /// value whose expression binds looser than a postfix `.` is
+    /// parenthesized by `parenthesize_suffix_fixes`.
+    pub(super) fn option_ref_value_fix(
+        &self,
+        expected: &Type,
+        found: &Type,
+        span: Span,
+    ) -> Option<FixIt> {
+        let item = |t: &Type| -> Option<Type> {
+            match t {
+                Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                    Some(resolve_type_var_top(&args[0], &self.env.substitutions))
+                }
+                _ => None,
+            }
+        };
+        let owned = item(expected)?;
+        let Type::Ref(inner) = item(found)? else {
+            return None;
+        };
+        if matches!(owned, Type::Ref(_) | Type::MutRef(_) | Type::TypeVar(_))
+            || !types_compatible(&inner, &owned)
+            || !self.type_supports_clone(&owned)
+        {
+            return None;
+        }
+        Some(FixIt {
+            span: Span {
+                offset: span.offset + span.length,
+                length: 0,
+                ..span
+            },
+            replacement: ".cloned()".to_string(),
+        })
+    }
+
     /// The edit inserting `.cloned()` after `side`, when `side_ty` is
     /// `Option[ref T]` with `T` `Copy` (any `T` when `any_item`),
     /// `other_ty` is `Option[T]`, and the end of `side` is known.
