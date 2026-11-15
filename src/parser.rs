@@ -237,6 +237,96 @@ fn format_arg_fits_hole(arg: &str) -> bool {
     if arg.contains('\n') || arg.contains("!(") || arg.contains("![") {
         return false;
     }
+    format_arg_fits_hole_inner(arg)
+}
+
+/// A format argument's Rust `vec![a, b]` and `vec![x; n]`, written as the
+/// list literal `[a, b]` and `Vec.filled(n, x)` its own fix gives, so the
+/// argument can go into a hole: `println!("{}", g(vec![1, 2]))`, a
+/// LeetCode harness line, had no fix at all, since a hole refuses a macro
+/// (MD1, the remainder of B-2026-11-15-9's probe; B-2026-11-17-118). Text
+/// inside a literal is left alone, and an unbalanced `vec![` gives `None`.
+fn vec_macros_as_literals(arg: &str) -> Option<String> {
+    let chars: Vec<char> = arg.chars().collect();
+    let mut out = String::with_capacity(arg.len());
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            out.push(c);
+            if c == '\\' && i + 1 < chars.len() {
+                out.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let starts_word = i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+        if starts_word && chars[i..].starts_with(&['v', 'e', 'c', '!', '[']) {
+            // The matching `]`, and the depth-0 `;` of a `vec![x; n]`.
+            let open = i + 4;
+            let mut depth = 0usize;
+            let mut semi: Option<usize> = None;
+            let mut close: Option<usize> = None;
+            let mut inner_quote: Option<char> = None;
+            let mut j = open + 1;
+            while j < chars.len() {
+                let d = chars[j];
+                match inner_quote {
+                    Some(_) if d == '\\' => j += 1,
+                    Some(q) if d == q => inner_quote = None,
+                    Some(_) => {}
+                    None => match d {
+                        '"' | '\'' => inner_quote = Some(d),
+                        '(' | '[' | '{' => depth += 1,
+                        ')' | ']' | '}' if depth > 0 => depth -= 1,
+                        ']' => {
+                            close = Some(j);
+                            break;
+                        }
+                        ';' if depth == 0 => semi = Some(j),
+                        _ => {}
+                    },
+                }
+                j += 1;
+            }
+            let close = close?;
+            match semi {
+                Some(k) => {
+                    let elem: String = chars[open + 1..k].iter().collect();
+                    let count: String = chars[k + 1..close].iter().collect();
+                    let elem = vec_macros_as_literals(elem.trim())?;
+                    let count = vec_macros_as_literals(count.trim())?;
+                    out.push_str(&format!("Vec.filled({count}, {elem})"));
+                }
+                None => {
+                    let items: String = chars[open + 1..close].iter().collect();
+                    out.push('[');
+                    out.push_str(&vec_macros_as_literals(&items)?);
+                    out.push(']');
+                }
+            }
+            i = close + 1;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    Some(out)
+}
+
+fn format_arg_fits_hole_inner(arg: &str) -> bool {
     let mut depth = 0usize;
     let mut quote: Option<char> = None;
     let mut prev = ' ';
@@ -2369,7 +2459,8 @@ impl Parser {
         let mut args = args.into_iter().map(|(f, l)| {
             let start = f.offset.checked_sub(*base)?;
             let arg = source.get(start..l.offset - base + l.length)?;
-            format_arg_fits_hole(arg).then(|| path_colons_as_dots(arg))
+            let arg = vec_macros_as_literals(arg)?;
+            format_arg_fits_hole(&arg).then(|| path_colons_as_dots(&arg))
         });
         let mut out = String::from("f\"");
         let mut chars = body.chars().peekable();
