@@ -3389,6 +3389,10 @@ rather than silently falling back to `"C"`.
 
 ### FFI unions and exported C ABI
 
+#### C function-pointer types (callbacks)
+
+A parameter or field typed `extern "C" fn(..) -> ..` (what `qsort`, `signal`, `atexit` and event-loop C libraries take) is not in v1: it is a parse error today. A later design gives Kāra a C function-pointer type, lets a non-capturing `extern "C" fn` definition coerce to it, and keeps a capturing closure out (C has no environment slot; libraries that take a `void *user_data` pair it with a raw pointer). Found by the spec probe's FFI pass (probe-core/ffi/f06_qsort, 2026-11-15). No committed design.
+
 #### FFI Unions: `union Foo { ... }`
 
 C unions — the type whose storage is shared by every named field rather than partitioned among them — exist in Kāra solely as an FFI shape. They are spelled with the `union` keyword as a top-level item, take `#[repr(C)]` for C-ABI compatibility, and require `unsafe { }` at every field *read*.
