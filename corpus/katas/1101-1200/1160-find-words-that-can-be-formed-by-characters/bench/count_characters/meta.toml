@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1160-find-words-that-can-be-formed-by-characters/bench/count_characters.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1160 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "3a789ba60"
+extracted_src = "62c73d8a"

@@ -1,0 +1,11 @@
+["cat", "bt", "hat", "tree"], "atach" -> 6
+["hello", "world", "leetcode"], "welldonehoneyr" -> 10
+["aa", "a"], "ab" -> 1
+["abc", "cba", "abcd"], "abc" -> 6
+["z"], "a" -> 0
+["z"], "z" -> 1
+["ab", "ba", "ab"], "ab" -> 6
+2000 random problems: total 57400, checksum 375665263
+1000 words, chars of 100 letters: 1272
+1000 words, chars of 100 letters: 38271
+1000 words, chars of 100 letters: 100000

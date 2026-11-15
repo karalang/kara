@@ -1,0 +1,88 @@
+// LeetCode #1160: Find Words That Can Be Formed by Characters -- a Rust
+// solution as LeetCode's Rust users write it (`impl Solution`, `[i32;
+// 26]` counts indexed by `(b - b'a') as usize`, `as_bytes()`, a labelled
+// `continue`, and the lengths summed as `i32`), carried to Kāra by
+// `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn count_characters(words: Vec[String], chars: String) -> i32 {
+        let mut cnt = [0i32; 26];
+        for b in chars.bytes() {
+            cnt[(b - b'a') as usize] += 1;
+        }
+        let mut ans: i32 = 0;
+        'outer: for w in words.iter() {
+            let mut c = [0i32; 26];
+            for b in w.bytes() {
+                let i = (b - b'a') as usize;
+                c[i] += 1;
+                if c[i] > cnt[i] {
+                    continue 'outer;
+                }
+            }
+            ans += w.len() as i32;
+        }
+        ans
+    }
+}
+
+fn count_characters(words: Vec[String], chars: Str) -> i64 {
+    Solution.count_characters(words, chars.to_string())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A word of `len` letters over the first `k`.
+fn word(seed: mut ref i64, len: i64, k: i64) -> String {
+    let b: Vec[u8] = (0..len).map(|_| b'a' + (next_random(mut seed) % k) as u8).collect();
+    String.from_utf8(b).unwrap()
+}
+
+fn show(words: Vec[String], chars: Str) {
+    let quoted: Vec[String] = words.iter().map(|w| f"\"{w}\"").collect();
+    println(f"[{quoted.join(", ")}], \"{chars}\" -> {count_characters(words, chars)}");
+}
+
+fn main() {
+    // LeetCode's examples
+    show(["cat", "bt", "hat", "tree"].iter().map(|w| w.to_string()).collect(), "atach");
+    show(["hello", "world", "leetcode"].iter().map(|w| w.to_string()).collect(), "welldonehoneyr");
+    // a word needing a letter twice that `chars` holds once; a word equal
+    // to `chars`; a word longer than `chars`; one letter; every word good;
+    // a word repeated, each use counted
+    show(["aa", "a"].iter().map(|w| w.to_string()).collect(), "ab");
+    show(["abc", "cba", "abcd"].iter().map(|w| w.to_string()).collect(), "abc");
+    show(["z"].iter().map(|w| w.to_string()).collect(), "a");
+    show(["z"].iter().map(|w| w.to_string()).collect(), "z");
+    show(["ab", "ba", "ab"].iter().map(|w| w.to_string()).collect(), "ab");
+    // 2000 random problems: 1 to 20 words of 1 to 10 letters and `chars`
+    // of 1 to 30, over the first 1 to 6 letters or all 26
+    let mut seed = 1160;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let k = [1, 2, 3, 4, 5, 6, 26][next_random(mut seed) % 7];
+        let n = 1 + next_random(mut seed) % 20;
+        let words: Vec[String] = (0..n).map(|_| word(mut seed, 1 + next_random(mut seed) % 10, k)).collect();
+        let chars = word(mut seed, 1 + next_random(mut seed) % 30, k);
+        let got = count_characters(words, chars);
+        total += got;
+        check = (check * 31 + got + 1) % 1000000007;
+    }
+    println(f"2000 random problems: total {total}, checksum {check}");
+    // 1000 words and `chars` of 100 letters, the most the constraints
+    // allow: words of 1 to 100 letters over 26 letters and over 3, and
+    // every word `chars` itself
+    for k in [26, 3, 0] {
+        let chars = word(mut seed, 100, if k == 0 { 26 } else { k });
+        let words: Vec[String] = (0..1000).map(|_| if k == 0 { chars.clone() } else { word(mut seed, 1 + next_random(mut seed) % 100, k) }).collect();
+        println(f"1000 words, chars of 100 letters: {count_characters(words, chars)}");
+    }
+}

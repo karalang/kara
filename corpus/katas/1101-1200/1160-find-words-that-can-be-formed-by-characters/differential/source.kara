@@ -1,0 +1,355 @@
+// LeetCode #1160: Find Words That Can Be Formed by Characters -- a
+// differential over the five arms. Each answer is checked against the
+// statement read literally and against seven properties that do not
+// compute it; see the README.
+
+// ---- count_characters.kara ----
+
+fn a0_count_characters(words: Vec[String], chars: Str) -> i64 {
+    let mut have = [0; 26];
+    for c in chars.bytes().iter() {
+        have[c - b'a'] += 1;
+    }
+    let mut total = 0;
+    for w in words.iter() {
+        let mut need = [0; 26];
+        let mut good = true;
+        for c in w.bytes().iter() {
+            need[c - b'a'] += 1;
+            if need[c - b'a'] > have[c - b'a'] {
+                good = false;
+                break;
+            }
+        }
+        if good {
+            total += w.len();
+        }
+    }
+    total
+}
+
+// ---- count_characters_take.kara ----
+
+fn a1_count_characters(words: Vec[String], chars: Str) -> i64 {
+    let mut have: Vec[i64] = Vec.filled(26, 0);
+    for c in chars.chars() {
+        have[(c as i64) - ('a' as i64)] += 1;
+    }
+    words.iter().filter(|w| {
+        let mut left = have.clone();
+        w.chars().all(|c| {
+            let i = (c as i64) - ('a' as i64);
+            left[i] -= 1;
+            left[i] >= 0
+        })
+    }).map(|w| w.len()).sum()
+}
+
+// ---- count_characters_sorted.kara ----
+
+fn a2_count_characters(words: Vec[String], chars: Str) -> i64 {
+    let mut have = chars.bytes().to_vec();
+    have.sort();
+    let mut total = 0;
+    for w in words.iter() {
+        let mut need = w.bytes().to_vec();
+        need.sort();
+        let mut j = 0;
+        let mut good = true;
+        for c in need.iter() {
+            while j < have.len() and have[j] < c {
+                j += 1;
+            }
+            if j == have.len() or have[j] != c {
+                good = false;
+                break;
+            }
+            j += 1;
+        }
+        if good {
+            total += w.len();
+        }
+    }
+    total
+}
+
+// ---- count_characters_map.kara ----
+
+fn a3_tally(s: Str) -> Map[char, i64] {
+    let mut m: Map[char, i64] = Map.new();
+    for c in s.chars() {
+        *m.entry(c).or_insert(0) += 1;
+    }
+    m
+}
+
+fn a3_count_characters(words: Vec[String], chars: Str) -> i64 {
+    let have = a3_tally(chars);
+    let mut total = 0;
+    for w in words.iter() {
+        if a3_tally(w).iter().all(|(c, n)| n <= have.get(c).cloned().unwrap_or(0)) {
+            total += w.len();
+        }
+    }
+    total
+}
+
+// ---- count_characters_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_count_characters(words: Vec[String], chars: String) -> i32 {
+        let mut cnt = [0i32; 26];
+        for b in chars.bytes() {
+            cnt[(b - b'a') as usize] += 1;
+        }
+        let mut ans: i32 = 0;
+        'outer: for w in words.iter() {
+            let mut c = [0i32; 26];
+            for b in w.bytes() {
+                let i = (b - b'a') as usize;
+                c[i] += 1;
+                if c[i] > cnt[i] {
+                    continue 'outer;
+                }
+            }
+            ans += w.len() as i32;
+        }
+        ans
+    }
+}
+
+fn a4_count_characters(words: Vec[String], chars: Str) -> i64 {
+    A4Solution.a4_count_characters(words, chars.to_string())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, words: Vec[String], chars: Str) -> i64 {
+    match w {
+        0 => a0_count_characters(words, chars),
+        1 => a1_count_characters(words, chars),
+        2 => a2_count_characters(words, chars),
+        3 => a3_count_characters(words, chars),
+        _ => a4_count_characters(words, chars),
+    }
+}
+
+fn text(b: Vec[u8]) -> String {
+    String.from_utf8(b).unwrap()
+}
+
+fn word(seed: mut ref i64, len: i64, k: i64) -> String {
+    text((0..len).map(|_| b'a' + (next_random(mut seed) % k) as u8).collect())
+}
+
+// The statement read literally: each letter of a word matched to a place
+// of `chars` not yet used, the first such place, one by one.
+fn literal(words: Vec[String], chars: Str) -> i64 {
+    let mut total = 0;
+    for w in words.iter() {
+        let mut used: Vec[bool] = Vec.filled(chars.len(), false);
+        let mut ok = true;
+        for c in w.bytes().iter() {
+            let mut found = false;
+            for j in 0..chars.len() {
+                if not used[j] and chars.bytes()[j] == c {
+                    used[j] = true;
+                    found = true;
+                    break;
+                }
+            }
+            if not found {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            total += w.len();
+        }
+    }
+    total
+}
+
+// A random part of `chars`: each place kept with odds one in two, the
+// kept letters shuffled; with `extra`, one more of a letter it took.
+fn part(seed: mut ref i64, chars: Str, extra: bool) -> String {
+    let mut b: Vec[u8] = chars.bytes().iter().filter(|_| next_random(mut seed) % 2 == 0).collect();
+    if b.len() == 0 {
+        b.push(chars.bytes()[next_random(mut seed) % chars.len()]);
+    }
+    if extra {
+        b.push(b[next_random(mut seed) % b.len()]);
+    }
+    for j in (1..b.len()).rev() {
+        b.swap(j, next_random(mut seed) % (j + 1));
+    }
+    text(b)
+}
+
+// A problem in four kinds: 1 to 8 words of 1 to 6 letters and `chars` of
+// 1 to 12, over the first 1 to 4 letters; words over the first 2 to 6
+// letters of 1 to 10, `chars` of 1 to 30; 1 to 12 words each a random
+// part of `chars` (1 to 30 letters over 1 to 26), half of them with one
+// letter too many; and 10 to 40 words of 1 to 100 letters over 26, a
+// third of them parts of `chars` of 100. The literal reading runs on the
+// first three kinds.
+fn problem(seed: mut ref i64, kind: i64) -> (Vec[String], String) {
+    if kind < 2 {
+        let k = if kind == 0 { 1 + next_random(mut seed) % 4 } else { 2 + next_random(mut seed) % 5 };
+        let n = if kind == 0 { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 20 };
+        let longest = if kind == 0 { 6 } else { 10 };
+        let words: Vec[String] = (0..n).map(|_| word(mut seed, 1 + next_random(mut seed) % longest, k)).collect();
+        let chars = word(mut seed, 1 + next_random(mut seed) % (if kind == 0 { 12 } else { 30 }), k);
+        return (words, chars);
+    }
+    if kind == 2 {
+        let k = 1 + next_random(mut seed) % 26;
+        let chars = word(mut seed, 1 + next_random(mut seed) % 30, k);
+        let n = 1 + next_random(mut seed) % 12;
+        let words: Vec[String] = (0..n).map(|_| part(mut seed, chars, next_random(mut seed) % 2 == 0)).collect();
+        return (words, chars);
+    }
+    let chars = word(mut seed, 100, 26);
+    let n = 10 + next_random(mut seed) % 31;
+    let words: Vec[String] = (0..n).map(|_| if next_random(mut seed) % 3 == 0 { part(mut seed, chars, next_random(mut seed) % 2 == 0) } else { word(mut seed, 1 + next_random(mut seed) % 100, 26) }).collect();
+    (words, chars)
+}
+
+struct Case {
+    kind: i64,
+    words: Vec[String],
+    chars: String,
+    // P2's order, P3's renaming, P4's order of `chars`, P5's split, P6's
+    // added letter, P8's appended letter
+    order: Vec[i64],
+    rename: Vec[u8],
+    shuffle: Vec[i64],
+    split: i64,
+    added: u8,
+    missing: Option[u8],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn renamed(map: Vec[u8], s: Str) -> String {
+    text(s.bytes().iter().map(|x| map[x - b'a']).collect())
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let words = c.words.clone();
+    let chars = c.chars.clone();
+    let want = if c.kind < 3 { literal(words, chars) } else { -1 };
+    let reordered: Vec[String] = c.order.iter().map(|i| words[i].clone()).collect();
+    let renamed_words: Vec[String] = words.iter().map(|w| renamed(c.rename, w)).collect();
+    let renamed_chars = renamed(c.rename, chars);
+    let shuffled = text(c.shuffle.iter().map(|i| chars.bytes()[i]).collect());
+    let front: Vec[String] = words[0..c.split].iter().map(|w| w.clone()).collect();
+    let back: Vec[String] = words[c.split..words.len()].iter().map(|w| w.clone()).collect();
+    let more = f"{chars}{text([c.added])}";
+    let mut with_chars = words.clone();
+    with_chars.push(chars.clone());
+    for w in 0..5 {
+        let got = arm(w, words, chars);
+        let what = f"arm {w}, case {t.cases} {words} {chars} -> {got}";
+        // P1: the statement read literally
+        if c.kind < 3 {
+            expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        }
+        // P2: the words reordered
+        let r = arm(w, reordered, chars);
+        expect(mut t, 2, r == got, f"P2 {what}, reordered {r}");
+        // P3: the letters of every word and of `chars` renamed alike
+        let n = arm(w, renamed_words, renamed_chars);
+        expect(mut t, 3, n == got, f"P3 {what}, renamed {n}");
+        // P4: `chars` shuffled
+        let s = arm(w, words, shuffled);
+        expect(mut t, 4, s == got, f"P4 {what}, {shuffled} {s}");
+        // P5: the words split in two, each part's total adding to the whole
+        let f = arm(w, front, chars);
+        let b = arm(w, back, chars);
+        expect(mut t, 5, f + b == got, f"P5 {what}, at {c.split}: {f} + {b}");
+        // P6: a letter added to `chars` never lowers the total
+        let m = arm(w, words, more);
+        expect(mut t, 6, m >= got, f"P6 {what}, {more} {m}");
+        // P7: `chars` itself as one more word adds its length
+        let x = arm(w, with_chars, chars);
+        expect(mut t, 7, x == got + chars.len(), f"P7 {what}, with chars {x}");
+        // P8: a letter `chars` lacks, appended to each word in turn, takes
+        // exactly that word's length away
+        match c.missing {
+            Some(z) => {
+                let i = c.split.min(words.len() - 1);
+                let mut spoiled = words.clone();
+                spoiled[i] = f"{words[i]}{text([z])}";
+                let p = arm(w, spoiled, chars);
+                let alone = arm(w, [words[i].clone()], chars);
+                expect(mut t, 8, p == got - alone, f"P8 {what}, word {i} spoiled {p}, alone {alone}");
+            }
+            None => {}
+        }
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + arm(0, words, chars) + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(9, 0) };
+    // 1600 problems in four kinds, 400 each. Every choice the properties
+    // make is drawn before any arm answers.
+    let mut seed = 11601;
+    let mut cases: Vec[Case] = [];
+    for i in 0..1600 {
+        let kind = i % 4;
+        let (words, chars) = problem(mut seed, kind);
+        let n = words.len();
+        let mut order: Vec[i64] = (0..n).collect();
+        for j in (1..n).rev() {
+            order.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let mut rename: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+        for j in (1..26).rev() {
+            rename.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let mut shuffle: Vec[i64] = (0..chars.len()).collect();
+        for j in (1..chars.len()).rev() {
+            shuffle.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let split = next_random(mut seed) % (n + 1);
+        let added = b'a' + (next_random(mut seed) % 26) as u8;
+        let absent: Vec[u8] = (0..26).map(|i| b'a' + i as u8).filter(|x| not chars.bytes().contains(x)).collect();
+        let missing = if absent.len() == 0 { None } else { Some(absent[next_random(mut seed) % absent.len()]) };
+        cases.push(Case { kind, words, chars, order, rename, shuffle, split, added, missing });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..9).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
