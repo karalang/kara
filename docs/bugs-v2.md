@@ -63,11 +63,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 168 |
 | missing-feature | 160 |
 | soundness | 67 |
-| miscompile | 61 |
+| miscompile | 64 |
 | run-vs-build | 39 |
 | other | 32 |
 | codegen-gap | 30 |
-| crash | 26 |
+| crash | 28 |
 | leak | 4 |
 | use-after-free | 3 |
 
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 462 |
-| mir-llvm | 223 |
+| mir-llvm | 227 |
 | mir | 191 |
 | cli | 114 |
 | ownership | 81 |
 | parser | 80 |
-| interp | 57 |
-| runtime | 43 |
+| interp | 58 |
+| runtime | 45 |
 | effect | 33 |
 | resolver | 26 |
 | codegen | 22 |
@@ -111,7 +111,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-12 | 2026-11-14 | typecheck | low | `w.bytes().iter().map(|b| b - 96).collect()` into a `Vec[i64]` is refused with a bare `C: FromIterator[u8]` trait-bound error that names no remedy, though a `u8` widens to `i64` on its own at a binding (`let n: i64 = w.bytes()[0]` checks) and `b as i64 - 96` in the closure is the whole fix | — |
 | B-2026-11-14-13 | 2026-11-14 | typecheck | low | `vec![false; n as usize]` checks with only a deprecation warning, but the warning's own fix, `Vec.filled(n as usize, false)`, is refused (`usize` mixes with `i64`), so one round of `karac fix` turns a checking program into a refused one | — |
 | B-2026-11-14-14 | 2026-11-14 | typecheck | low | A bit count (`count_ones`, `leading_zeros`, `i64` by the 10-30 ruling) going into a Rust port's `u32` (`ones += x.count_ones()`, `max_bits.max(32 - x.leading_zeros())`) is refused with no fix-it: one refusal names `as u32` as a truncation to acknowledge, the other names nothing, though a bit count always fits and `as u32` is the edit that keeps the port's meaning | — |
-| B-2026-11-14-28 | 2026-11-14 | mir-llvm | low | A two-pointer merge over two receivers' `Vec` fields (`while i < self.pairs.len() and j < other.pairs.len() { let (a, x) = self.pairs[i]; let (b, y) = other.pairs[j]; .. }`) keeps both bounds checks in the loop, since guard_bounds.rs (B-2026-11-08-61) proves only indexes into a local vector written once; kata 1570's bench runs 1.47x Rust's instructions (1.20x its time under overflow checks) | — |
 | B-2026-11-14-43 | 2026-11-14 | mir-llvm | low | `i64.parse(date[5..7]).unwrap()` costs about 70 instructions per call on a two-to-four-digit slice, against about 13 for a hand-written digit loop: kata 1154's ★ arm, three parses a call, runs 2.4x overflow-checked Rust | — |
 | B-2026-11-14-61 | 2026-11-14 | interp | low | The MIR interpreter walks a plain (non-`shared`) linked list in quadratic time: a `ref` cursor or a recursion over `next: Option[ListNode]` takes 0.8 s at 5000 nodes, 4.2 s at 10000 and 18 s at 20000, where the compiled program takes 0.15 s; each reference into the list is an `Addr` whose path grows by a field and a variant step per node (kata 2130's Rust-template arm, 1299 s under __mir-run at 100000 nodes) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
@@ -120,6 +119,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-49 | 2026-11-14 | mir+mir-llvm | medium | The two HTTP clients send different requests: the interpreter adds `User-Agent: ureq/2.12.1`, `Accept: */*` and `accept-encoding: gzip` and decodes a gzip body, the compiled client sends only `host` and returns a gzip body undecoded; a server that requires a User-Agent (GitHub's API answers 403 without one) refuses only the compiled program | — |
 | B-2026-11-15-1 | 2026-11-15 | typecheck+cli | low | A tuple `let` slot whose binding is read only inside a closure still gets `.clone()` from `karac fix` where `ref` would do: `let (small, large) = if .. { (self.values, other.values) } else { (other.values, self.values) }; small.iter().map(|(i, x)| x * large.get(i).cloned().unwrap_or(0)).sum()` becomes `(ref self.values, other.values.clone())`, copying the larger map on every call | — |
 | B-2026-11-15-2 | 2026-11-15 | mir-llvm | low | Walking a `String`'s chars costs 2x to 2.8x Rust's `chars()` in a `karac build` binary: kata 1573's `s.chars().enumerate().filter(|(_, c)| c == '1').map(|(i, _)| i).collect()` over 200 strings of 500000 ASCII characters takes 0.21 s against Rust's 0.076 s, while the same chain over `s.bytes().iter()` takes 0.083 s | — |
+| B-2026-11-15-3 | 2026-11-15 | mir-llvm | high | Every `dyn` call traps on wasm_wasi ("unreachable", or "null function or function signature mismatch" in the callee): the vtable is `{ptr drop, i64 size, i64 align, ptr clone, ptr slot_0, ...}` and the slot offsets were constants for 8-byte pointers, so on wasm32 a slot was read two pointers past where it is | — |
+| B-2026-11-15-4 | 2026-11-15 | mir-llvm | high | `zip` then `map` reads zeros or garbage on wasm_wasi: a `(ref A, ref B)` pair handed to a closure went as LLVM `{ptr, ptr}`, which puts the second pointer at offset 4 on wasm32 where the MIR layout has it at 8 | — |
+| B-2026-11-15-5 | 2026-11-15 | mir-llvm+runtime | medium | Every `std.log` program fails to link on wasm_wasi, wasm-ld refusing `karac_mir_log_dispatch` (declared `(i32, i64, i32)` by the module, defined `(i32, i32, i32)` by the archive): the runtime took the call's size as `usize`, every other `karac_mir_*` size is `u64` | — |
+| B-2026-11-15-6 | 2026-11-15 | runtime | medium | `CString.to_str()` returns an empty `Str` on wasm_wasi while `to_string()` and `len()` are right: `karac_mir_cstr_to_string` wrote the view's two words as `usize`, so on wasm32 the length went into the pointer's upper half and the length word stayed zero | — |
+| B-2026-11-15-7 | 2026-11-15 | interp+mir-llvm | low | `VecDeque.truncate` drops the removed elements back to front, where collections.md says it drops them from index `len` to the back and every other element drop runs front to back: `[1, 2, 3].truncate(0)` drops 3, 2, 1 | — |
 
 ### Relocated
 
@@ -1196,6 +1200,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-27 | interp | medium | The MIR interpreter refuses an array handed by value to a byte-reading native: `sock.send_to(b"STOP", to)` stops with "expected a sequence, found Agg… | bdba568e93 |
 | B-2026-11-14-23 | typecheck+cli | low | Two fields of borrowed receivers put in a tuple to pick one by a test (`let (short, long) = if self.pairs.len() <= other.pairs.len() { (self.pairs, o… | 572956a03 |
 | B-2026-11-14-24 | typecheck | low | A struct field written `Map[usize, i32]` (Rust's `HashMap<usize, i32>` as `karac fix` carries it) filled from `enumerate()`'s `i64` index is refused… | 9c19e5e6b |
+| B-2026-11-14-28 | mir-llvm | low | A two-pointer merge over two receivers' `Vec` fields (`while i < self.pairs.len() and j < other.pairs.len() { let (a, x) = self.pairs[i]; let (b, y)… | a63659722a |
 | B-2026-11-14-29 | typecheck | low | A read-only view bound by `let mut s = str1.bytes()` and passed as `mut s` to a `mut ref Vec[u8]` parameter is refused with only the bare type mismat… | 6c99bc3328 |
 | B-2026-11-14-30 | mir+mir-llvm | low | `SendError`'s `Display` prints its derived Debug form on both MIR backends: after `tc.try_send(2)` on a full `channel(1)`, `e.to_string()`, `f"{e}"`… | eb69ab0c7d |
 | B-2026-11-14-31 | cli+typecheck | high | An `unsafe_op_in_unsafe_fn` error is printed and then ignored: `karac check` says "All checks passed." and exits 0, `karac run` executes a null deref… | 672a66f1f0 |
