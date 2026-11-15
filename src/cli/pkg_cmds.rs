@@ -516,8 +516,8 @@ pub(super) fn validate_update_target(
         if let OutputMode::Text = output {
             eprintln!(
                 "note: `{pkg}` is a path-dep; its version is pinned by the on-disk manifest. \
-                 `karac update {pkg}` re-derives the lockfile entry but cannot bump versions: \
-                 registry dependencies are not in 0.8."
+                 `karac update {pkg}` re-derives the lockfile entry but cannot bump versions; \
+                 a registry dependency (fetched through `KARAC_REGISTRY_PROXY`) can."
             );
         }
     }

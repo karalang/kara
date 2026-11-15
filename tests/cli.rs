@@ -12,6 +12,8 @@ use std::process::{Command, Output};
 
 #[path = "cli/dev_deps_check.rs"]
 mod dev_deps_check;
+#[path = "cli/registry_proxy_help.rs"]
+mod registry_proxy_help;
 
 /// Wrapper around `Command` that routes `.output()` through the
 /// shared `output_with_hang_watchdog` helper (15 s timeout per call)

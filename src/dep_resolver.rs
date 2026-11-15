@@ -187,7 +187,7 @@ impl std::fmt::Display for ResolverError {
                 declared_in,
             } => write!(
                 f,
-                "registry dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: registry dependencies are not in 0.8",
+                "registry dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: no registry proxy is configured (set `KARAC_REGISTRY_PROXY`, or use a `path` dependency)",
                 package,
                 declared_in.display(),
             ),

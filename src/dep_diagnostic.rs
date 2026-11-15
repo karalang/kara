@@ -67,7 +67,7 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
                 declared_in.display()
             )],
             help: Some(
-                "registry dependencies are not in 0.8; switch to a `path = \"...\"` dependency".to_string()
+                "set `KARAC_REGISTRY_PROXY` to a registry proxy to fetch it, or switch to a `path = \"...\"` dependency on a local checkout".to_string()
             ),
         },
         ResolverError::GitDepUnsupported {
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(diag.code, "E_REGISTRY_DEP_UNSUPPORTED");
         assert!(diag.primary.contains("http"));
         assert!(diag.notes.iter().any(|n| n.contains("/proj")));
-        assert!(diag.help.as_ref().unwrap().contains("not in 0.8"));
+        assert!(diag.help.as_ref().unwrap().contains("KARAC_REGISTRY_PROXY"));
     }
 
     #[test]
