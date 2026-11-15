@@ -16875,16 +16875,21 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<Option<((&'a Expr, &'a Expr, bool), &'a Expr)>> {
         let ExprKind::MethodCall {
             object: range,
-            method,
             args,
             ..
         } = &object.kind
         else {
             return Ok(None);
         };
-        if method != "map"
-            || args.len() != 1
-            || !matches!(args[0].value.kind, ExprKind::Closure { .. })
+        if args.len() != 1 || !matches!(args[0].value.kind, ExprKind::Closure { .. }) {
+            return Ok(None);
+        }
+        // The library method of a range that answers an `IterMap` is its
+        // `map`. Judged by that type rather than by the method's name, which
+        // as a literal here would pin every library `map` against pruning
+        // (library_prune's ALWAYS_KEPT test) though this never calls one.
+        let ot = self.expr_ty(object)?;
+        if !matches!(self.tys().tcx().kind(ot), HK::Adt { def, .. } if self.lcx.def_name(def) == "IterMap")
         {
             return Ok(None);
         }
