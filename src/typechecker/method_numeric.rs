@@ -884,6 +884,23 @@ impl<'a> super::TypeChecker<'a> {
                         self.literal_let_annotation(arg, &resolved_arg, receiver_for_lookup)
                             .map(|a| (a, receiver_for_lookup.clone()))
                     });
+                if annotation.is_none() {
+                    if let Some(edits) = self.bit_count_casts(arg, receiver_for_lookup) {
+                        let t = type_display(receiver_for_lookup);
+                        self.error_fix_diffs
+                            .insert(crate::resolver::SpanKey::from_span(&arg.span), edits);
+                        self.type_error(
+                            format!(
+                                "{message}: a bit count is `i64` in Kāra (Rust's is `u32`), \
+                                 and it never exceeds its receiver's width, so `as {t}` on \
+                                 the call keeps every value"
+                            ),
+                            arg.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Some(Type::Error);
+                    }
+                }
                 match annotation {
                     Some(((_, fix, why), target)) => {
                         self.literal_chain_fix(&arg.span, &fix, &target);

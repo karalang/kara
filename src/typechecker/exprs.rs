@@ -13096,6 +13096,72 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-14-14: a bit count (`count_ones`, `leading_zeros`, ...) is
+    /// `i64` in Kāra (docs/library/core-types.md, Bit counts), where Rust's
+    /// is `u32`, so a Rust port keeping counts in a `u32` meets an `i64`.
+    /// A count never exceeds its receiver's width, so `as T` on the call
+    /// cannot truncate whenever `T` holds that width. `expr` is the call
+    /// itself, or `+` / `-` / `*` over such calls and integer literals
+    /// (`32 - x.leading_zeros()`, where the literal then takes `T`). The
+    /// edits put `as T` after each call; `None` when any part is
+    /// something else, or a count might not fit `T`.
+    pub(super) fn bit_count_casts(
+        &self,
+        expr: &Expr,
+        target: &Type,
+    ) -> Option<Vec<crate::resolver::TextEdit>> {
+        let (_, max) = Self::int_literal_range(target)?;
+        let t = type_display(target);
+        fn walk(
+            tc: &super::TypeChecker<'_>,
+            e: &Expr,
+            max: i128,
+            t: &str,
+            out: &mut Vec<crate::resolver::TextEdit>,
+        ) -> bool {
+            match &e.kind {
+                ExprKind::MethodCall {
+                    method,
+                    args,
+                    args_close_span,
+                    ..
+                } if args.is_empty()
+                    && matches!(
+                        method.as_str(),
+                        "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+                    ) =>
+                {
+                    let width = tc
+                        .expr_types
+                        .get(&SpanKey::from_span(args_close_span))
+                        .and_then(super::expr_ops::int_width_range)
+                        .map(|(_, hi)| hi);
+                    let Some(width) = width else {
+                        return false;
+                    };
+                    out.push(crate::resolver::TextEdit {
+                        offset: args_close_span.offset + args_close_span.length,
+                        length: 0,
+                        replacement: format!(" as {t}"),
+                    });
+                    i128::from(width) <= max
+                }
+                ExprKind::Binary { left, op, right }
+                    if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) =>
+                {
+                    let lit =
+                        |x: &Expr| super::TypeChecker::unsuffixed_int_literal_value(x).is_some();
+                    let l = lit(left) || walk(tc, left, max, t, out);
+                    let r = lit(right) || walk(tc, right, max, t, out);
+                    l && r
+                }
+                _ => false,
+            }
+        }
+        let mut out = Vec::new();
+        (walk(self, expr, max, &t, &mut out) && !out.is_empty()).then_some(out)
+    }
+
     /// The fix of a literal binding refused as an `i64` where `target` is
     /// wanted, with the bindings that feed it (`literal_feeds`) typed in
     /// the same edit: each would be refused next, one per round
@@ -13290,6 +13356,22 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 return;
             }
+        }
+        if let Some(edits) = self.bit_count_casts(expr, &target) {
+            let t = type_display(&target);
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&expr.span), edits);
+            self.type_error(
+                format!(
+                    "implicit coercion from '{}' to '{t}': a bit count is `i64` in Kāra \
+                     (Rust's is `u32`), and it never exceeds its receiver's width, so \
+                     `as {t}` on the call keeps every value",
+                    type_display(&source),
+                ),
+                expr.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return;
         }
         if let Some((_, fix, why)) = self.literal_let_annotation(expr, &source, &target) {
             self.literal_chain_fix(&expr.span, &fix, &target);

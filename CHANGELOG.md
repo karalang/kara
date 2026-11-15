@@ -1211,6 +1211,20 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `karac build --help` says `--no-proxy` fetches git and registry
   dependencies straight from their source; it said they were not in 0.8
   (B-2026-11-15-55).
+- **A bit count going into a `u32` is fixed with `as u32`.** A Rust port
+  that keeps `count_ones` or `leading_zeros` in a `u32`
+  (`ones += x.count_ones()`, `max_bits.max(32 - x.leading_zeros())`) was
+  refused twice with no fix-it, because Kāra's bit counts are `i64`. A
+  count never exceeds its receiver's width, so `karac fix` now writes
+  `as u32` on the call, and the refusal says why (B-2026-11-14-14).
+- **A tuple `let` slot read only inside a closure is borrowed, not
+  copied.** In `let (small, large) = if .. { (self.values, other.values) }
+  else { .. }; small.iter().map(|(i, x)| x * large.get(i)..)`, `karac fix`
+  wrote `ref` for `small` but `.clone()` for `large`, copying the larger
+  map on every call. A closure passed straight to a call that only reads
+  the binding now counts as a read, so both slots get `ref`; a closure
+  bound to a name or taking its captures `own` keeps the copy
+  (B-2026-11-15-1).
 - **A `collect` of narrower integers into a wider collection says how to
   widen them.** `w.bytes().iter().map(|b| b - 96).collect()` into a
   `Vec[i64]` was refused with only `FromIterator[u8]` is not satisfied,

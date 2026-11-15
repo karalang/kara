@@ -52,7 +52,7 @@ pub(super) fn strip_refs_for_compare(ty: &Type) -> &Type {
 /// targets (B-2026-08-17-11). Concrete widths are a point; `usize` spans
 /// `[32, 64]` because wasm32 is a first-class target (`--target=wasm_wasi`),
 /// so any repair the compiler names must preserve values on BOTH widths.
-fn int_width_range(ty: &Type) -> Option<(u32, u32)> {
+pub(super) fn int_width_range(ty: &Type) -> Option<(u32, u32)> {
     match ty {
         Type::Int(s) => {
             let b = match s {

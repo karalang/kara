@@ -13635,8 +13635,9 @@ fn list_lets(
 /// method that does not consume it (`into_*`), a field, tuple-field or
 /// index base, an operand of an operator, an interpolation hole, or a
 /// bare `for`'s collection. Any other use (an argument, a `let` or
-/// assignment source, a block's value, a closure capture) answers no, as
-/// does a second binding of the same name anywhere in the body.
+/// assignment source, a block's value, a capture by a closure that is not
+/// a borrowing call argument) answers no, as does a second binding of the
+/// same name anywhere in the body.
 fn only_read_after(body: &Block, name: &str, from: usize) -> bool {
     use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
     struct Scan<'a> {
@@ -13645,6 +13646,7 @@ fn only_read_after(body: &Block, name: &str, from: usize) -> bool {
         binders: usize,
         uses: usize,
         reads: usize,
+        arg_closures: Vec<usize>,
     }
     fn is_name(e: &Expr, s: &Scan<'_>) -> bool {
         matches!(&e.kind, ExprKind::Identifier(n) if n == s.name) && e.span.offset >= s.from
@@ -13676,19 +13678,44 @@ fn only_read_after(body: &Block, name: &str, from: usize) -> bool {
                     binds(&arm.pattern, s);
                 }
             }
-            ExprKind::Closure { .. } => {
-                // A capture by a closure is not judged here.
-                let mut inside = false;
-                for_each_child_public(e, &mut |c| {
-                    if let Child::Expr(c) = c {
-                        inside |= mentions(c, s.name);
+            ExprKind::Closure {
+                params,
+                capture_mode,
+                ..
+            } => {
+                // B-2026-11-15-1: a closure passed straight to a call
+                // (`small.iter().map(|x| large.get(x))`) whose capture is
+                // inferred or `ref` borrows what it only reads, so its uses
+                // are judged like any other (its parameters count as
+                // binders, so a shadowing one answers no). A closure that
+                // could outlive the call (bound, returned, stored) or takes
+                // its captures `own` / `mut ref` answers no.
+                let borrowing = matches!(capture_mode, None | Some(CaptureMode::Ref))
+                    && s.arg_closures.contains(&e.span.offset);
+                if borrowing {
+                    for p in params {
+                        binds(&p.pattern, s);
                     }
-                });
-                if inside {
-                    s.binders += 2;
+                } else {
+                    let mut inside = false;
+                    for_each_child_public(e, &mut |c| {
+                        if let Child::Expr(c) = c {
+                            inside |= mentions(c, s.name);
+                        }
+                    });
+                    if inside {
+                        s.binders += 2;
+                    }
                 }
             }
             _ => {}
+        }
+        if let ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } = &e.kind {
+            for a in args {
+                if matches!(a.value.kind, ExprKind::Closure { .. }) {
+                    s.arg_closures.push(a.value.span.offset);
+                }
+            }
         }
         let read = |c: &Expr| is_name(c, s);
         let reads = match &e.kind {
@@ -13734,6 +13761,7 @@ fn only_read_after(body: &Block, name: &str, from: usize) -> bool {
         binders: 0,
         uses: 0,
         reads: 0,
+        arg_closures: Vec::new(),
     };
     block(body, &mut s);
     s.binders == 1 && s.uses == s.reads
