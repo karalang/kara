@@ -367,6 +367,15 @@ pub enum Value {
     /// A library collection (`String`, `Vec[T]`): the sole owner of its
     /// heap allocation, which holds a `Str` or the elements as an `Agg`.
     Box(AllocId),
+    /// The value of a boxed field ([`crate::mir::layout::boxed_field`],
+    /// `next` in `struct Node { next: Option[Node] }`), in a heap slot of
+    /// its own as compiled code keeps it in a box: a reference into a
+    /// recursive value then starts at the node it reaches, where an inline
+    /// one walked down from the root each time, so a list's walk was
+    /// quadratic (B-2026-11-14-61). It sole-owns the slot, and is found
+    /// only in the field's own place: moving the field out unboxes it.
+    /// A field built some other way may hold its value inline instead.
+    Boxed(AllocId),
     Ref(Addr),
     /// A `Slice[T]` view: `len` elements of the sequence at `base` (a
     /// `Vec`'s allocation or an array place), starting at `lo`.
@@ -827,6 +836,8 @@ fn run_with(
         trace,
         stream,
         needs_drop: Default::default(),
+        boxed_fields: Vec::new(),
+        holds_str: Vec::new(),
         output: String::new(),
         stderr: String::new(),
         steps: 0,
@@ -1249,6 +1260,12 @@ struct Interp<'a> {
     /// walks the type each time.
     /// By type index: 0 unknown, 1 no, 2 yes.
     needs_drop: std::cell::RefCell<Vec<u8>>,
+    /// The boxed fields ([`crate::mir::layout::boxed_field`]) of each
+    /// plain ADT type and variant (0 for a struct), asked when one is
+    /// built: by type index, an empty entry for a type with none.
+    boxed_fields: Vec<Option<std::rc::Rc<[Vec<u32>]>>>,
+    /// [`Interp::holds_str`] by type index: 0 unknown, 1 no, 2 yes.
+    holds_str: Vec<u8>,
     output: String,
     stderr: String,
     steps: u64,
@@ -10587,6 +10604,10 @@ impl<'a> Interp<'a> {
     fn key_bytes(&self, v: &Value, out: &mut Vec<u8>, float: &mut bool) -> R<()> {
         match v {
             Value::Ref(addr) => self.key_bytes(self.slot_ref(addr)?, out, float)?,
+            Value::Boxed(id) => match self.heap.get(id.0 as usize) {
+                Some(Some(obj)) => self.key_bytes(&obj.value, out, float)?,
+                _ => return err(format!("use of {id} after it was freed")),
+            },
             Value::Box(id) | Value::Shared(id) => match self.heap.get(id.0 as usize) {
                 // A table with holes compares by its entries alone.
                 Some(Some(obj)) => match (&obj.value, self.table_holes.get(id)) {
@@ -10994,11 +11015,14 @@ impl<'a> Interp<'a> {
             return Ok(cmp_key(&self.order_form(a, ty)?, &self.order_form(b, ty)?));
         }
         let (mut a, mut b) = (a.clone(), b.clone());
-        while let Value::Ref(at) = &a {
-            a = self.slot(at)?;
-        }
-        while let Value::Ref(at) = &b {
-            b = self.slot(at)?;
+        for x in [&mut a, &mut b] {
+            loop {
+                *x = match &*x {
+                    Value::Ref(at) => self.slot(at)?,
+                    Value::Boxed(id) => self.live(*id)?.value.clone(),
+                    _ => break,
+                };
+            }
         }
         // The parts in order, each with its type; the first unequal decides.
         let parts: Vec<(Ty, Value, Value)> = match (self.tys.kind(ty), &a, &b) {
@@ -11238,6 +11262,10 @@ impl<'a> Interp<'a> {
     /// through its own `Hash` body where it has one, else the bytes
     /// collections.md § "What the built-in types feed" gives.
     fn feed_key(&mut self, th: &TableHash, sref: &Value, v: &Value, t: Ty) -> R<()> {
+        if let Value::Boxed(a) = v {
+            let inner = self.live(*a)?.value.clone();
+            return self.feed_key(th, sref, &inner, t);
+        }
         if let Value::Ref(addr) = v {
             let inner = self.slot(addr)?;
             let t = match self.tys.kind(t) {
@@ -11443,6 +11471,10 @@ impl<'a> Interp<'a> {
                 let inner = self.slot(addr)?;
                 self.key_form(&inner)?
             }
+            Value::Boxed(id) => {
+                let inner = self.live(*id)?.value.clone();
+                self.key_form(&inner)?
+            }
             Value::Box(id) | Value::Shared(id) => {
                 // A `shared` key compares by what it holds, as legacy's does;
                 // a table with holes by its entries alone.
@@ -11548,6 +11580,17 @@ impl<'a> Interp<'a> {
     }
 
     fn clone_value(&mut self, v: &Value, ty: Ty) -> R<Value> {
+        // A boxed field's copy has a box of its own.
+        if let Value::Boxed(a) = v {
+            let inner = self.live(*a)?.value.clone();
+            let value = self.clone_value(&inner, ty)?;
+            let b = self.alloc(HeapObj {
+                count: 1,
+                weak: 0,
+                value,
+            });
+            return Ok(Value::Boxed(b));
+        }
         if self.tys.is_copy(ty) {
             return Ok(v.clone());
         }
@@ -12843,10 +12886,14 @@ impl<'a> Interp<'a> {
     /// `v`, or what it refers to when it is a reference.
     fn through_refs(&mut self, v: &Value) -> R<Value> {
         let mut v = v.clone();
-        while let Value::Ref(a) = v {
-            v = self.slot(&a)?;
+        loop {
+            v = match v {
+                Value::Ref(a) => self.slot(&a)?,
+                // A reference made field by field can reach a boxed field.
+                Value::Boxed(a) => self.live(a)?.value.clone(),
+                v => return Ok(v),
+            };
         }
-        Ok(v)
     }
 
     /// `Some(v)` or `None` in the `Option` type `ret`, by variant name.
@@ -12939,6 +12986,10 @@ impl<'a> Interp<'a> {
     /// its variant's name with its fields in parentheses. A struct needs
     /// its `Display` body, which is a call in MIR.
     fn display_typed(&mut self, v: &Value, ty: Ty) -> R<String> {
+        if let Value::Boxed(a) = v {
+            let inner = self.live(*a)?.value.clone();
+            return self.display_typed(&inner, ty);
+        }
         let list = |me: &mut Self, items: &[Value], tys: &[Ty]| -> R<Vec<String>> {
             items
                 .iter()
@@ -13272,6 +13323,10 @@ impl<'a> Interp<'a> {
     /// `None` for a value that cannot be written so (a function, a
     /// `shared` handle, a file).
     fn source_of(&mut self, v: &Value, ty: Ty) -> Option<String> {
+        if let Value::Boxed(a) = v {
+            let inner = self.live(*a).ok()?.value.clone();
+            return self.source_of(&inner, ty);
+        }
         self.source_ty(ty)?;
         let list = |me: &mut Self, items: &[Value], tys: &[Ty]| -> Option<Vec<String>> {
             items
@@ -13736,6 +13791,11 @@ impl<'a> Interp<'a> {
                     }
                 }
                 Value::Uninit => return err("projection into an uninitialized value"),
+                // `resolve` starts a place below a boxed field at its box;
+                // a path made field by field (`Addr::child`) must too.
+                Value::Boxed(a) => {
+                    return err(format!("a path runs through the boxed field holding {a}"))
+                }
                 other => return err(format!("projection into non-aggregate {other:?}")),
             };
         }
@@ -13791,6 +13851,15 @@ impl<'a> Interp<'a> {
     fn slot_ref(&self, addr: &Addr) -> R<&Value> {
         let mut v = self.root_ref(&addr.root)?;
         for &i in &addr.path {
+            // A path made field by field (`Addr::child`) can run through a
+            // boxed field, which reads through as `resolve` would start at
+            // its box ([`Interp::slot_mut`] refuses it).
+            if let Value::Boxed(a) = *v {
+                v = match self.heap.get(a.0 as usize) {
+                    Some(Some(obj)) => &obj.value,
+                    _ => return err(format!("use of {a} after it was freed")),
+                };
+            }
             v = match v {
                 Value::Agg(fs) | Value::Variant(_, fs) => {
                     let n = fs.len();
@@ -13822,6 +13891,24 @@ impl<'a> Interp<'a> {
 
     /// The address and type of `place` in the current frame.
     fn resolve(&mut self, body: &Body, place: &Place, mode: Mode) -> R<Option<(Addr, Ty)>> {
+        Ok(self
+            .resolve_boxed(body, place, mode)?
+            .map(|(addr, ty, _)| (addr, ty)))
+    }
+
+    /// [`Interp::resolve`], and the place of the boxed field whose slot the
+    /// address starts in when the place's last step is into one
+    /// (`(*n).next`): moving that field out, or dropping it, frees its box,
+    /// as compiled code does. A field step into a box starts the address
+    /// at the box, so a reference into a recursive value is as short as
+    /// the steps below its node (B-2026-11-14-61). A write to a boxed
+    /// field with nothing in it gives it a box.
+    fn resolve_boxed(
+        &mut self,
+        body: &Body,
+        place: &Place,
+        mode: Mode,
+    ) -> R<Option<(Addr, Ty, Option<Addr>)>> {
         let fi = self.frames.len() - 1;
         let mut addr = Addr {
             root: Root::Local {
@@ -13837,7 +13924,8 @@ impl<'a> Interp<'a> {
         // type, so the field after it must not follow it again.
         let mut behind_handle = false;
         let tys = self.tys;
-        let uninit = |what: &str| -> R<Option<(Addr, Ty)>> {
+        let mut boxed_at: Option<Addr> = None;
+        let uninit = |what: &str| -> R<Option<(Addr, Ty, Option<Addr>)>> {
             if mode == Mode::Probe {
                 Ok(None)
             } else {
@@ -13848,6 +13936,7 @@ impl<'a> Interp<'a> {
             }
         };
         for elem in &place.projection {
+            boxed_at = None;
             if matches!(elem, ProjElem::Field(..) | ProjElem::Downcast(_))
                 && !behind_handle
                 && matches!(self.tys.tcx().kind(ty), crate::ty::TyKind::Shared { .. })
@@ -13866,14 +13955,49 @@ impl<'a> Interp<'a> {
             }
             match *elem {
                 ProjElem::Field(f, fty) => {
-                    if matches!(self.slot_mut(&addr)?, Value::Uninit) {
-                        if mode != Mode::Write || variant.is_some() {
-                            return uninit("field access");
+                    // What the field holds, when it is a box or nothing.
+                    let peek = |fs: &[Value]| match fs.get(f.0 as usize) {
+                        Some(Value::Boxed(a)) => Some(Some(*a)),
+                        Some(Value::Uninit) => Some(None),
+                        _ => None,
+                    };
+                    let mut held = match self.slot_mut(&addr)? {
+                        Value::Uninit => {
+                            if mode != Mode::Write || variant.is_some() {
+                                return uninit("field access");
+                            }
+                            let n = self.n_fields(ty, variant);
+                            *self.slot_mut(&addr)? = Value::Agg(vec![Value::Uninit; n]);
+                            Some(None)
                         }
-                        let n = self.n_fields(ty, variant);
-                        *self.slot_mut(&addr)? = Value::Agg(vec![Value::Uninit; n]);
+                        Value::Agg(fs) | Value::Variant(_, fs) => peek(fs),
+                        _ => None,
+                    };
+                    if held == Some(None) {
+                        held = None;
+                        if mode == Mode::Write && self.is_boxed_field(ty, variant, f.0) {
+                            let a = self.alloc(HeapObj {
+                                count: 1,
+                                weak: 0,
+                                value: Value::Uninit,
+                            });
+                            let mut field = addr.clone();
+                            field.path.push(f.0 as u64);
+                            *self.slot_mut(&field)? = Value::Boxed(a);
+                            held = Some(Some(a));
+                        }
                     }
                     addr.path.push(f.0 as u64);
+                    if let Some(Some(a)) = held {
+                        let field = std::mem::replace(
+                            &mut addr,
+                            Addr {
+                                root: Root::Heap(a),
+                                path: Path::new(),
+                            },
+                        );
+                        boxed_at = Some(field);
+                    }
                     ty = fty;
                     variant = None;
                     behind_handle = false;
@@ -13937,7 +14061,89 @@ impl<'a> Interp<'a> {
                 }
             }
         }
-        Ok(Some((addr, ty)))
+        Ok(Some((addr, ty, boxed_at)))
+    }
+
+    /// Whether field `f` of the plain ADT `ty` (seen as `variant`) is a
+    /// boxed one ([`crate::mir::layout::boxed_field`]).
+    fn is_boxed_field(&mut self, ty: Ty, variant: Option<u32>, f: u32) -> bool {
+        self.boxed_fields_of(ty)
+            .and_then(|vs| vs.get(variant.unwrap_or(0) as usize).cloned())
+            .is_some_and(|fs| fs.contains(&f))
+    }
+
+    /// The boxed fields of the plain ADT `ty`, by variant (one entry for a
+    /// struct), or `None` when it has none.
+    fn boxed_fields_of(&mut self, ty: Ty) -> Option<std::rc::Rc<[Vec<u32>]>> {
+        let i = ty.index();
+        if let Some(Some(known)) = self.boxed_fields.get(i) {
+            return (!known.is_empty()).then(|| known.clone());
+        }
+        let found: std::rc::Rc<[Vec<u32>]> = match self.tys.kind(ty) {
+            TyKind::Adt(a) => {
+                let adt = self.tys.adt(a);
+                let per: Vec<Vec<u32>> = (0..adt.variants.len())
+                    .map(|v| {
+                        let var = adt.is_enum.then_some(v as u32);
+                        (0..adt.variants[v].fields.len() as u32)
+                            .filter(|&f| crate::mir::layout::boxed_field(self.tys, ty, var, f))
+                            .collect()
+                    })
+                    .collect();
+                if per.iter().all(Vec::is_empty) {
+                    Vec::new().into()
+                } else {
+                    per.into()
+                }
+            }
+            _ => Vec::new().into(),
+        };
+        if self.boxed_fields.len() <= i {
+            self.boxed_fields.resize(i + 1, None);
+        }
+        self.boxed_fields[i] = Some(found.clone());
+        (!found.is_empty()).then_some(found)
+    }
+
+    /// `v`, a value of the plain ADT `ty` just built, with each boxed
+    /// field's value moved to a box of its own.
+    fn box_fields(&mut self, ty: Ty, v: Value) -> Value {
+        let Some(per) = self.boxed_fields_of(ty) else {
+            return v;
+        };
+        let (k, mut fs) = match v {
+            Value::Variant(k, fs) => (Some(k), fs),
+            Value::Agg(fs) => (None, fs),
+            v => return v,
+        };
+        for &f in per.get(k.unwrap_or(0) as usize).map_or(&[][..], |x| &x[..]) {
+            let Some(slot) = fs.get_mut(f as usize) else {
+                continue;
+            };
+            if matches!(slot, Value::Uninit | Value::Boxed(_)) {
+                continue;
+            }
+            let value = std::mem::replace(slot, Value::Uninit);
+            let a = self.alloc(HeapObj {
+                count: 1,
+                weak: 0,
+                value,
+            });
+            *slot = Value::Boxed(a);
+        }
+        match k {
+            Some(k) => Value::Variant(k, fs),
+            None => Value::Agg(fs),
+        }
+    }
+
+    /// Takes the value out of the box at `a`, held by the boxed field at
+    /// `field`, and frees the box: the field is left empty.
+    fn unbox(&mut self, field: &Addr, a: AllocId) -> R<Value> {
+        let v = std::mem::replace(&mut self.live(a)?.value, Value::Uninit);
+        self.free_slot(a);
+        *self.slot_mut(field)? = Value::Uninit;
+        Ok(v)
     }
 
     /// A field path straight down a local's aggregates (`_23.1`), or down
@@ -13994,6 +14200,10 @@ impl<'a> Interp<'a> {
                 _ => return None,
             };
             ty = fty;
+        }
+        // A boxed field's value is in its box, where `resolve` starts.
+        if matches!(v, Value::Boxed(_)) {
+            return None;
         }
         Some((v, ty))
     }
@@ -14153,8 +14363,24 @@ impl<'a> Interp<'a> {
                 Ok(())
             }
             StatementKind::BorrowFlag(op) => self.borrow_flag(body, op, span),
-            // Nothing here is boxed.
-            StatementKind::FreeBox(_) | StatementKind::Nop => Ok(()),
+            // The box of a boxed field, if it still has one, once what is
+            // left of its value was dropped.
+            StatementKind::FreeBox(p) => {
+                if let Some((
+                    Addr {
+                        root: Root::Heap(a),
+                        ..
+                    },
+                    _,
+                    Some(field),
+                )) = self.resolve_boxed(body, p, Mode::Probe)?
+                {
+                    self.free_slot(a);
+                    *self.slot_mut(&field)? = Value::Uninit;
+                }
+                Ok(())
+            }
+            StatementKind::Nop => Ok(()),
         }
     }
 
@@ -14352,17 +14578,22 @@ impl<'a> Interp<'a> {
                     };
                     (v, ty)
                 } else {
-                    let (addr, ty) = self.resolve_read(body, p)?;
+                    let (addr, ty, boxed) = self
+                        .resolve_boxed(body, p, Mode::Read)?
+                        .expect("read mode never probes");
                     let slot = self.slot_mut(&addr)?;
                     if !slot.init_for_read() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
-                    let v = if is_move {
-                        std::mem::replace(slot, Value::Uninit)
-                    } else if fill_plain(&mut buf, slot) {
-                        Value::Agg(std::mem::take(&mut buf))
-                    } else {
-                        slot.copy()
+                    let v = match (is_move, &boxed, &addr.root) {
+                        // Moving a boxed field out frees its box.
+                        (true, Some(field), Root::Heap(a)) => {
+                            let (field, a) = (field.clone(), *a);
+                            self.unbox(&field, a)?
+                        }
+                        (true, ..) => std::mem::replace(slot, Value::Uninit),
+                        _ if fill_plain(&mut buf, slot) => Value::Agg(std::mem::take(&mut buf)),
+                        _ => slot.copy(),
                     };
                     (v, ty)
                 };
@@ -14600,7 +14831,10 @@ impl<'a> Interp<'a> {
                     AggregateKind::Tuple
                     | AggregateKind::Array(_)
                     | AggregateKind::Closure { .. } => Value::Agg(vals),
-                    AggregateKind::Adt { ty, variant } => self.adt_value(*ty, *variant, vals),
+                    AggregateKind::Adt { ty, variant } => {
+                        let v = self.adt_value(*ty, *variant, vals);
+                        self.box_fields(*ty, v)
+                    }
                     AggregateKind::Shared { ty, variant } => {
                         let value = self.adt_value(*ty, *variant, vals);
                         let a = self.alloc(HeapObj {
@@ -14995,7 +15229,7 @@ impl<'a> Interp<'a> {
                 target,
                 unwind: UnwindAction::Abort,
             } => {
-                let Some((addr, ty)) = self.resolve(body, place, Mode::Probe)? else {
+                let Some((addr, ty, boxed)) = self.resolve_boxed(body, place, Mode::Probe)? else {
                     if strict {
                         return err(format!(
                             "drop of {}, which is not initialized",
@@ -15004,6 +15238,20 @@ impl<'a> Interp<'a> {
                     }
                     return Ok(Some(*target));
                 };
+                // A boxed field's box goes with its value.
+                if let (Some(field), Root::Heap(a)) = (boxed, &addr.root) {
+                    let a = *a;
+                    if self.trace {
+                        let what = self.place_str(body, place);
+                        self.events.push(Event::Drop(what, self.tys.display(ty)));
+                    }
+                    if self.live(a)?.value.any_init() {
+                        self.drop_at(&addr, ty)?;
+                    }
+                    self.free_slot(a);
+                    *self.slot_mut(&field)? = Value::Uninit;
+                    return Ok(Some(*target));
+                }
                 let v = self.slot_ref(&addr)?;
                 let (any, all) = (v.any_init(), v.fully_init());
                 if !any {
@@ -15046,6 +15294,17 @@ impl<'a> Interp<'a> {
             return Ok(());
         }
         let v = self.slot_ref(addr)?;
+        // A boxed field: its value, then its box.
+        if let Value::Boxed(a) = *v {
+            let inner = Addr {
+                root: Root::Heap(a),
+                path: Path::new(),
+            };
+            self.drop_at(&inner, ty)?;
+            self.free_slot(a);
+            *self.slot_mut(addr)? = Value::Uninit;
+            return Ok(());
+        }
         if !v.any_init() {
             return Ok(());
         }
@@ -15502,12 +15761,59 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// Whether a value of `ty` can hold a `str` view in an enum's payload,
+    /// at any depth: what [`Interp::inline_str`] looks for.
+    fn holds_str(&mut self, ty: Ty) -> bool {
+        let i = ty.index();
+        match self.holds_str.get(i) {
+            Some(1) => return false,
+            Some(2) => return true,
+            _ => {}
+        }
+        let mut seen = Vec::new();
+        let r = self.holds_str_in(ty, &mut seen);
+        if self.holds_str.len() <= i {
+            self.holds_str.resize(i + 1, 0);
+        }
+        self.holds_str[i] = if r { 2 } else { 1 };
+        r
+    }
+
+    fn holds_str_in(&self, ty: Ty, seen: &mut Vec<Ty>) -> bool {
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        match self.tys.kind(ty) {
+            TyKind::Str => true,
+            TyKind::Adt(a) => {
+                let adt = self.tys.adt(a);
+                (0..adt.variants.len()).any(|v| {
+                    let var = adt.is_enum.then_some(v as u32);
+                    (0..adt.variants[v].fields.len() as u32).any(|f| {
+                        self.tys
+                            .field_ty(ty, var, f)
+                            .is_none_or(|t| self.holds_str_in(t, seen))
+                    })
+                })
+            }
+            // Anything else `inline_str` does not look inside.
+            _ => false,
+        }
+    }
+
     /// A native's result as a `str` view when that is its type: the text
     /// of a `String` it made, held in place, its allocation freed.
     fn inline_str(&mut self, v: Value, ty: Ty) -> R<Value> {
         // Only a box or a variant can hold a `str`; anything else passes
         // without its type being looked at.
         if !matches!(v, Value::Box(_) | Value::Variant(..)) {
+            return Ok(v);
+        }
+        // A variant whose type holds no `str` anywhere is passed as it is:
+        // walking its fields, a type lookup each, cost an iterator's
+        // `Option.take` more than the rest of the native (B-2026-11-14-62).
+        if matches!(v, Value::Variant(..)) && !self.holds_str(ty) {
             return Ok(v);
         }
         match (self.tys.kind(ty), v) {
@@ -15735,7 +16041,7 @@ impl<'a> Interp<'a> {
     fn owns(&self, v: &Value, ty: Ty) -> bool {
         match v {
             Value::Uninit => false,
-            Value::Box(_) | Value::Shared(_) | Value::Weak(_) => true,
+            Value::Box(_) | Value::Boxed(_) | Value::Shared(_) | Value::Weak(_) => true,
             Value::Erased { env, .. } => env.is_some(),
             Value::Dyn { .. } => true,
             Value::Agg(fs) | Value::Variant(_, fs) => {
@@ -18448,6 +18754,7 @@ impl<'a> Interp<'a> {
             match v {
                 Value::Agg(fs) | Value::Variant(_, fs) => todo.extend(fs),
                 Value::Box(a)
+                | Value::Boxed(a)
                 | Value::Shared(a)
                 | Value::Weak(a)
                 | Value::Dyn { data: a, .. }
@@ -18491,7 +18798,7 @@ impl<'a> Interp<'a> {
             while let Some(v) = todo.pop() {
                 match v {
                     Value::Agg(fs) | Value::Variant(_, fs) => todo.extend(fs),
-                    Value::Box(h) | Value::Shared(h) => out.push((*h, true)),
+                    Value::Box(h) | Value::Boxed(h) | Value::Shared(h) => out.push((*h, true)),
                     Value::Weak(h) if *h != EMPTY_WEAK => out.push((*h, false)),
                     Value::Erased {
                         env: Some((h, _)), ..
@@ -19308,14 +19615,20 @@ struct Chan {
 }
 
 pub(crate) fn split_method(name: &str) -> (&str, &str) {
-    // The delimiters are ASCII, so a byte scan finds them.
-    let mut depth = 0;
+    // The delimiters are ASCII, so a byte scan finds them. The last dot
+    // outside brackets is found from the end, past only the method's own
+    // name: from the front the scan read the whole type, every native
+    // call (B-2026-11-14-62).
+    let mut depth = 0i32;
     let mut dot = None;
-    for (i, c) in name.bytes().enumerate() {
+    for (i, c) in name.bytes().enumerate().rev() {
         match c {
-            b'[' => depth += 1,
-            b']' => depth -= 1,
-            b'.' if depth == 0 => dot = Some(i),
+            b']' => depth += 1,
+            b'[' => depth -= 1,
+            b'.' if depth == 0 => {
+                dot = Some(i);
+                break;
+            }
             _ => {}
         }
     }

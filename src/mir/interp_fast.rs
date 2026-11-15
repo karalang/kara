@@ -245,6 +245,31 @@ pub(super) enum Term {
         dst: u32,
         target: BasicBlock,
     },
+    /// `dst = {int}.wrapping_add(a, b) -> target` (or `wrapping_sub`,
+    /// `wrapping_mul`) on scalar operands: the library native's
+    /// arithmetic without its dispatch by name, which cost more than the
+    /// rest of an iterator's `count` step (B-2026-11-14-62).
+    WrapInt {
+        dst: u32,
+        op: BinOp,
+        a: Src,
+        b: Src,
+        int: IntTy,
+        target: BasicBlock,
+    },
+    /// `dst = Range[{int}].next(recv) -> target`, the library body
+    /// (`if self.start >= self.end { return None; } ...`) run in place:
+    /// with the counting `for` loop's step, it is most of what an
+    /// iterator chain over a range does per item (B-2026-11-14-62).
+    RangeNext {
+        dst: u32,
+        recv: u32,
+        moved: bool,
+        int: IntTy,
+        target: BasicBlock,
+        some: u32,
+        none: u32,
+    },
     /// `dst = Vec[T].get(recv, index) -> target` with an `Option[ref T]`
     /// result whose variants are `some` and `none`: a reference to the
     /// element, or `None`.
@@ -1103,6 +1128,74 @@ impl<'a> Interp<'a> {
                         kind: ConstKind::FnDef(inst),
                         ..
                     }),
+                args,
+                destination,
+                target: Some(target),
+                unwind: UnwindAction::Abort,
+            } if destination.projection.is_empty()
+                && inst.name.starts_with("Range[")
+                && inst.name.ends_with("].next") =>
+            {
+                let [arg @ (Operand::Copy(r) | Operand::Move(r))] = args.as_slice() else {
+                    return None;
+                };
+                let (int, some, none) = self.range_next(
+                    &inst.name,
+                    body.local(r.local).ty,
+                    body.local(destination.local).ty,
+                )?;
+                if !r.projection.is_empty() {
+                    return None;
+                }
+                Term::RangeNext {
+                    dst: destination.local.0,
+                    recv: r.local.0,
+                    moved: matches!(arg, Operand::Move(_)),
+                    int,
+                    target: *target,
+                    some,
+                    none,
+                }
+            }
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                args,
+                destination,
+                target: Some(target),
+                unwind: UnwindAction::Abort,
+            } if destination.projection.is_empty()
+                && !self.program.bodies.contains_key(&inst.name)
+                && self
+                    .wrap_op(&inst.name, body.local(destination.local).ty)
+                    .is_some() =>
+            {
+                let (op, int) = self.wrap_op(&inst.name, body.local(destination.local).ty)?;
+                let [a, b] = args.as_slice() else {
+                    return None;
+                };
+                let ((a, at), (b, bt)) = (self.decode_src(body, a)?, self.decode_src(body, b)?);
+                if self.tys.int_ty(at) != Some(int) || self.tys.int_ty(bt) != Some(int) {
+                    return None;
+                }
+                Term::WrapInt {
+                    dst: destination.local.0,
+                    op,
+                    a,
+                    b,
+                    int,
+                    target: *target,
+                }
+            }
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
                 destination,
                 target: Some(_),
                 unwind: UnwindAction::Abort,
@@ -1118,6 +1211,59 @@ impl<'a> Interp<'a> {
             }
             _ => return None,
         })
+    }
+
+    /// The operation and integer type of a library `wrapping_add`,
+    /// `wrapping_sub` or `wrapping_mul` of `ret`'s integer type, named
+    /// for that type (`i64.wrapping_add`).
+    fn wrap_op(&self, name: &str, ret: Ty) -> Option<(BinOp, IntTy)> {
+        let int = self.tys.int_ty(ret)?;
+        let (ty, method) = name.split_once('.')?;
+        if ty != int.name() {
+            return None;
+        }
+        let op = match method {
+            "wrapping_add" => BinOp::Add,
+            "wrapping_sub" => BinOp::Sub,
+            "wrapping_mul" => BinOp::Mul,
+            _ => return None,
+        };
+        Some((op, int))
+    }
+
+    /// The integer type and `Option` variants of a call of the library's
+    /// `Range[{int}].next` on a reference to a range, returning `ret`.
+    /// `u128` is left to the general call: an `Int` holds an `i128`.
+    fn range_next(&self, name: &str, recv: Ty, ret: Ty) -> Option<(IntTy, u32, u32)> {
+        let range = self.tys.pointee(recv)?;
+        let TyKind::Adt(a) = self.tys.kind(range) else {
+            return None;
+        };
+        let def = self.tys.adt(a);
+        if def.user || def.is_enum || def.name != "Range" {
+            return None;
+        }
+        let int = self.tys.int_ty(self.tys.field_ty(range, None, 0)?)?;
+        if int == IntTy::U128
+            || self.tys.int_ty(self.tys.field_ty(range, None, 1)?) != Some(int)
+            || name != format!("Range[{}].next", int.name())
+            || !self.program.bodies.contains_key(name)
+        {
+            return None;
+        }
+        let TyKind::Adt(o) = self.tys.kind(ret) else {
+            return None;
+        };
+        let opt = self.tys.adt(o);
+        let at = |n: &str| opt.variants.iter().position(|v| v.name == n);
+        let (some, none) = (at("Some")? as u32, at("None")? as u32);
+        if opt.user
+            || opt.name != "Option"
+            || self.tys.int_ty(self.tys.field_ty(ret, Some(some), 0)?) != Some(int)
+        {
+            return None;
+        }
+        Some((int, some, none))
     }
 
     /// A decoded native call: the general call's steps for a function
@@ -1477,11 +1623,18 @@ impl<'a> Interp<'a> {
                     return false;
                 };
                 // The general step walks to an aggregate that has the field.
-                match self.slot_ref(a) {
-                    Ok(Value::Agg(fs)) if (field as usize) < fs.len() => {}
+                // A boxed field's value is in its box (B-2026-11-14-61).
+                let r = match self.slot_ref(a) {
+                    Ok(Value::Agg(fs)) => match fs.get(field as usize) {
+                        Some(Value::Boxed(b)) => Value::Ref(Addr {
+                            root: Root::Heap(*b),
+                            path: Path::new(),
+                        }),
+                        Some(_) => Value::Ref(a.child(u64::from(field))),
+                        None => return false,
+                    },
                     _ => return false,
-                }
-                let r = Value::Ref(a.child(u64::from(field)));
+                };
                 self.set_local(dst, r);
                 true
             }
@@ -1626,6 +1779,31 @@ impl<'a> Interp<'a> {
                 Some(ok)
             }
             (
+                &Term::WrapInt {
+                    dst,
+                    op,
+                    a,
+                    b,
+                    int,
+                    target,
+                },
+                _,
+            ) => {
+                let (x, y) = (self.peek_int(a)?, self.peek_int(b)?);
+                let r = match op {
+                    BinOp::Add => x.wrapping_add(y),
+                    BinOp::Sub => x.wrapping_sub(y),
+                    _ => x.wrapping_mul(y),
+                };
+                if !self.locals()[dst as usize].is_plain() {
+                    return None;
+                }
+                self.take(a);
+                self.take(b);
+                Value::overwrite(&mut self.locals()[dst as usize], Value::Int(wrap(r, int)));
+                Some(target)
+            }
+            (
                 &Term::VecIndex {
                     dst,
                     recv,
@@ -1670,6 +1848,47 @@ impl<'a> Interp<'a> {
                     root: Root::Heap(id),
                     path: Path::from_slice(&[i as u64]),
                 });
+                Some(target)
+            }
+            (
+                &Term::RangeNext {
+                    dst,
+                    recv,
+                    moved,
+                    int,
+                    target,
+                    some,
+                    none,
+                },
+                _,
+            ) => {
+                let Value::Ref(at) = self.frames.last()?.locals.get(recv as usize)? else {
+                    return None;
+                };
+                let at = at.clone();
+                let (start, end) = match self.slot_ref(&at).ok()? {
+                    Value::Agg(fs) => match fs.as_slice() {
+                        [Value::Int(s), Value::Int(e)] => (*s, *e),
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                let v = if start >= end {
+                    Value::Variant(none, Vec::new())
+                } else {
+                    let Value::Agg(fs) = self.slot_mut(&at).ok()? else {
+                        return None;
+                    };
+                    // `start < end`, so the step cannot overflow.
+                    fs[0] = Value::Int(wrap(start + 1, int));
+                    let mut payload = self.small_buf();
+                    payload.push(Value::Int(start));
+                    Value::Variant(some, payload)
+                };
+                if moved {
+                    self.locals()[recv as usize] = Value::Uninit;
+                }
+                self.set_local(dst, v);
                 Some(target)
             }
             (
