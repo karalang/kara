@@ -335,7 +335,7 @@ jobs:
       # `build --mir --target=wasm_wasi`: the MIR backend's wasm32 module,
       # run under node's WASI against the native output (B-2026-10-22-23).
       - name: WASM E2E on MIR (cargo test --test mir_wasm)
-        run: cargo test --features llvm --test mir_wasm --test mir_wasm_probe_rows
+        run: cargo test --features llvm --test mir_wasm --test mir_wasm_probe_rows --test mir_wasm_core_corpus
 
       # `String.normalize` and `std.regex` on wasm_wasi link the wasm opt-in
       # archives, run under node like the above (B-2026-11-13-1).
