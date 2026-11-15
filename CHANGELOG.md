@@ -1159,6 +1159,28 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   generic method's name in one pass. Kata 2151's iterator arm went from
   101 s to 85 s; the rest of B-2026-11-14-62, the cost of each
   interpreted call, is still open.
+- **`(a..b).map(|i| ..).collect()` into a `Vec` runs as the loop it
+  stands for.** The closure literal is called on each value of the range
+  and its result pushed, so the library's `map` adaptor and `collect` no
+  longer run. A pure fill went from about 28 instructions an item to 4.4
+  (LLVM now vectorizes it), and a closure that writes a captured variable
+  from 30 to 12, against Rust's 13. Kata 1582's bench went from 1.55x
+  overflow-checked Rust to parity (0.80 G instructions against Rust's
+  0.84 G) (B-2026-11-15-16).
+- **`i64.parse(date[5..7]).unwrap()` costs about what a digit loop
+  costs.** A number's `Result` is built in line, so the library's error
+  path is called only for text that holds none; the inline digit loop
+  starts at a constant for each sign, so a constant length unrolls; and
+  `s[lo..hi]`'s refused range ends in its panic instead of rejoining the
+  view, so `date[5..7]`'s length is the constant 2. Kata 1154's three
+  parses a call went from 318 instructions to 155 (checked Rust 125), and
+  its bench from 2.4x checked Rust to 1.1x (B-2026-11-14-43).
+- **A `chars()` walk falls through on an ASCII char.** The ASCII and
+  in-range tests of `next` and `next_back` are weighted toward the ASCII
+  path, so block placement lays the multi-byte path out of line instead
+  of jumping over it on every char. A walk over ASCII text went from
+  220 ms to 86 ms (Rust 79 ms), and kata 1573's bench from 1.77 G
+  instructions to 1.68 G (B-2026-11-15-2).
 - **Collecting a `chain` of integer ranges allocates once.**
   `(1..=end).chain(start..=n).collect()` into a `Vec` of the ranges' type
   fills each range in turn into a vector created at the sum of their

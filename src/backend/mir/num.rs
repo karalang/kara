@@ -825,8 +825,6 @@ impl<'ctx> Cx<'ctx, '_> {
         let i64t = self.llcx.i64_type();
         let f = self.cur_fn()?;
         let sign = self.llcx.append_basic_block(f, "dec.sign");
-        let head = self.llcx.append_basic_block(f, "dec");
-        let body = self.llcx.append_basic_block(f, "dec.digit");
         let fast = self.llcx.append_basic_block(f, "dec.done");
         let slow = self.llcx.append_basic_block(f, "dec.slow");
         let join = self.llcx.append_basic_block(f, "dec.join");
@@ -841,75 +839,104 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_conditional_branch(short, sign, slow)
             .map_err(e)?;
         // A leading `-` of a signed type, then 1 to 18 digits after it.
+        // Each sign has its own copy of the digit loop, starting at a
+        // constant, so a length the slice makes constant (`date[5..7]`)
+        // unrolls whole (B-2026-11-14-43).
         self.builder.position_at_end(sign);
-        let neg = if it.signed() {
+        let entries = if it.signed() {
             let b0 = self
                 .builder
                 .build_load(i8t, s, "")
                 .map_err(e)?
                 .into_int_value();
-            self.builder
+            let neg = self
+                .builder
                 .build_int_compare(
                     IntPredicate::EQ,
                     b0,
                     i8t.const_int(u64::from(b'-'), false),
                     "neg",
                 )
-                .map_err(e)?
+                .map_err(e)?;
+            let pos = self.llcx.append_basic_block(f, "dec.pos");
+            let minus = self.llcx.append_basic_block(f, "dec.neg");
+            self.builder
+                .build_conditional_branch(neg, minus, pos)
+                .map_err(e)?;
+            vec![(0, pos), (1, minus)]
         } else {
-            self.llcx.bool_type().const_zero()
+            vec![(0, sign)]
         };
-        let start = self.builder.build_int_z_extend(neg, i64t, "").map_err(e)?;
-        let digits = self.builder.build_int_sub(n1, start, "").map_err(e)?;
-        let some = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, digits, self.i64(18), "")
-            .map_err(e)?;
-        self.builder
-            .build_conditional_branch(some, head, slow)
-            .map_err(e)?;
-        self.builder.position_at_end(head);
-        let i = self.builder.build_phi(i64t, "i").map_err(e)?;
-        let acc = self.builder.build_phi(i64t, "acc").map_err(e)?;
-        i.add_incoming(&[(&start, sign)]);
-        acc.add_incoming(&[(&self.i64(0), sign)]);
-        let iv = i.as_basic_value().into_int_value();
-        let av = acc.as_basic_value().into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, iv, n, "")
-            .map_err(e)?;
-        self.builder
-            .build_conditional_branch(more, body, fast)
-            .map_err(e)?;
-        self.builder.position_at_end(body);
-        // SAFETY of the read: i < n, the slice's length.
-        let at = unsafe { self.builder.build_in_bounds_gep(i8t, s, &[iv], "") }.map_err(e)?;
-        let b = self
-            .builder
-            .build_load(i8t, at, "")
-            .map_err(e)?
-            .into_int_value();
-        let b = self.builder.build_int_z_extend(b, i64t, "").map_err(e)?;
-        let d = self.builder.build_int_sub(b, self.i64(48), "").map_err(e)?;
-        let digit = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, d, self.i64(10), "")
-            .map_err(e)?;
-        let ten = self
-            .builder
-            .build_int_mul(av, self.i64(10), "")
-            .map_err(e)?;
-        let next_acc = self.builder.build_int_add(ten, d, "").map_err(e)?;
-        let next_i = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
-        i.add_incoming(&[(&next_i, body)]);
-        acc.add_incoming(&[(&next_acc, body)]);
-        self.builder
-            .build_conditional_branch(digit, head, slow)
-            .map_err(e)?;
+        let mut done = Vec::new();
+        for (k, entry) in entries {
+            self.builder.position_at_end(entry);
+            let start = self.i64(k);
+            let head = self.llcx.append_basic_block(f, "dec");
+            let body = self.llcx.append_basic_block(f, "dec.digit");
+            let digits = self.builder.build_int_sub(n1, start, "").map_err(e)?;
+            let some = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, digits, self.i64(18), "")
+                .map_err(e)?;
+            self.builder
+                .build_conditional_branch(some, head, slow)
+                .map_err(e)?;
+            self.builder.position_at_end(head);
+            let i = self.builder.build_phi(i64t, "i").map_err(e)?;
+            let acc = self.builder.build_phi(i64t, "acc").map_err(e)?;
+            i.add_incoming(&[(&start, entry)]);
+            acc.add_incoming(&[(&self.i64(0), entry)]);
+            let iv = i.as_basic_value().into_int_value();
+            let av = acc.as_basic_value().into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, iv, n, "")
+                .map_err(e)?;
+            self.builder
+                .build_conditional_branch(more, body, fast)
+                .map_err(e)?;
+            self.builder.position_at_end(body);
+            // SAFETY of the read: i < n, the slice's length.
+            let at = unsafe { self.builder.build_in_bounds_gep(i8t, s, &[iv], "") }.map_err(e)?;
+            let b = self
+                .builder
+                .build_load(i8t, at, "")
+                .map_err(e)?
+                .into_int_value();
+            let b = self.builder.build_int_z_extend(b, i64t, "").map_err(e)?;
+            let d = self.builder.build_int_sub(b, self.i64(48), "").map_err(e)?;
+            let digit = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, d, self.i64(10), "")
+                .map_err(e)?;
+            let ten = self
+                .builder
+                .build_int_mul(av, self.i64(10), "")
+                .map_err(e)?;
+            let next_acc = self.builder.build_int_add(ten, d, "").map_err(e)?;
+            let next_i = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
+            i.add_incoming(&[(&next_i, body)]);
+            acc.add_incoming(&[(&next_acc, body)]);
+            self.builder
+                .build_conditional_branch(digit, head, slow)
+                .map_err(e)?;
+            done.push((start, av, head));
+        }
         // All digits: the magnitude is below 10^18, negated after a `-`,
         // which reaches one further (`-128` for an `i8`).
         self.builder.position_at_end(fast);
+        let start = self.builder.build_phi(i64t, "start").map_err(e)?;
+        let acc = self.builder.build_phi(i64t, "acc").map_err(e)?;
+        for (k, av, head) in &done {
+            start.add_incoming(&[(k, *head)]);
+            acc.add_incoming(&[(av, *head)]);
+        }
+        let start = start.as_basic_value().into_int_value();
+        let av = acc.as_basic_value().into_int_value();
+        let neg = self
+            .builder
+            .build_int_compare(IntPredicate::NE, start, self.i64(0), "neg")
+            .map_err(e)?;
         let fits = match (it.bits(), it.signed()) {
             (64, _) => i8t.const_int(1, false),
             (bits, signed) => {

@@ -16860,6 +16860,197 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.pop_scope()
     }
 
+    /// `(a..b).map(f).collect()` (or `a..=b`) into a `Vec`, `f` a closure
+    /// literal taking the range's integer: the range and the closure, for
+    /// [`Self::collect_mapped_range`]. Through the library each item paid
+    /// `Range.next`, `IterMap.next` and a call through the erased closure,
+    /// whose heap environment kept LLVM reloading the captures beside the
+    /// vector's stores: 28 instructions an item where the push loop over
+    /// the same closure is 4.3 (B-2026-11-15-16).
+    #[allow(clippy::type_complexity)]
+    fn collects_mapped_range(
+        &mut self,
+        e: &'a Expr,
+        object: &'a Expr,
+    ) -> R<Option<((&'a Expr, &'a Expr, bool), &'a Expr)>> {
+        let ExprKind::MethodCall {
+            object: range,
+            method,
+            args,
+            ..
+        } = &object.kind
+        else {
+            return Ok(None);
+        };
+        if method != "map"
+            || args.len() != 1
+            || !matches!(args[0].value.kind, ExprKind::Closure { .. })
+        {
+            return Ok(None);
+        }
+        // The library's own `map` and `collect`; a program's method of
+        // either name may do anything.
+        let library = |this: &Self, id: NodeId| {
+            matches!(this.lcx.calls.get(&id), Some(rc) if matches!(&rc.callee, Callee::Def(d)
+                if this.lcx.fns.get(d).is_some_and(|i| this.lcx.user_len.is_some_and(|n| i.f.span.offset >= n))))
+        };
+        if !library(self, object.id) || !library(self, e.id) {
+            return Ok(None);
+        }
+        let vt = self.expr_ty(e)?;
+        if !matches!(
+            self.tys().tcx().kind(vt),
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                ..
+            }
+        ) {
+            return Ok(None);
+        }
+        let (left, right, inclusive): (&'a Expr, &'a Expr, bool) = match &range.kind {
+            ExprKind::Binary {
+                op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
+                left,
+                right,
+            } => (left, right, *op == AstBinOp::RangeInclusive),
+            ExprKind::Range {
+                start: Some(left),
+                end: Some(right),
+                inclusive,
+            } => (left, right, *inclusive),
+            _ => return Ok(None),
+        };
+        let lt = self.expr_ty(left)?;
+        if lt != self.expr_ty(right)?
+            || !matches!(self.tys().tcx().kind(lt), HK::Int(_) | HK::UInt(_))
+        {
+            return Ok(None);
+        }
+        Ok(Some(((left, right, inclusive), &args[0].value)))
+    }
+
+    /// Lowers what [`Self::collects_mapped_range`] matched: the bounds, then
+    /// the closure into a local, as the call evaluates them; `v` from
+    /// `Vec.new()`; and one round per value, in order, of `x = f(i)` and
+    /// `v.push(x)`. An inclusive range tests for its last value after the
+    /// push, so `a..=MAX` ends without stepping past it. The closure
+    /// borrows what it captures, as it does through the library, and is
+    /// dropped with the loop's scope, where the library's `collect` drops
+    /// its `IterMap`.
+    fn collect_mapped_range(
+        &mut self,
+        (left, right, inclusive): (&'a Expr, &'a Expr, bool),
+        f: &'a Expr,
+        dest: Place,
+    ) -> R<()> {
+        let vt = self.place_type(&dest);
+        let name = self.tys().display(vt);
+        let HK::Intrinsic { args: va, .. } = self.tys().tcx().kind(vt) else {
+            return self.unsupported(f.span, "this collect");
+        };
+        let ut = self.tys().tcx().list(va)[0];
+        self.push_scope();
+        let (start, end, t) = self.range_bounds(left, Some(right))?;
+        let end = end.expect("a bounded range");
+        let i = self.temp(t);
+        self.assign(i, Rvalue::Use(start));
+        let end_t = self.temp(t);
+        self.assign(end_t, Rvalue::Use(end));
+        let (fop, ct) = self.closure_value(f)?;
+        let fl = self.scoped_temp(ct);
+        self.assign(fl, Rvalue::Use(fop));
+        let HK::Closure { def, .. } = self.tys().tcx().kind(ct) else {
+            return self.unsupported(f.span, "this closure");
+        };
+        let Some(params) = self.closure_param_tys(def) else {
+            return self.unsupported(f.span, "a call to this closure");
+        };
+        if params != [t] {
+            return self.unsupported(f.span, "a closure over this range");
+        }
+        let v = self.scoped_temp(vt);
+        self.call_native(&format!("{name}.new"), vec![], Place::local(v));
+        let bool_t = self.tys().bool();
+        let (head, body_bb, exit) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto(head);
+        self.cur = head;
+        let c = self.temp(bool_t);
+        let op = if inclusive { BinOp::Le } else { BinOp::Lt };
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                op,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(end_t)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(body_bb, exit),
+            },
+            body_bb,
+        );
+        let (env, _, cname) = self.env_operand(f.span, Place::local(fl), ct)?;
+        let func = self.fn_operand(&cname, def, self.args.clone());
+        let x = self.temp(ut);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: vec![env, Operand::Copy(Place::local(i))],
+                destination: Place::local(x),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        let mt = self.tys().tcx().reference(vt, true);
+        let r = self.temp(mt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
+        let unit_t = self.unit();
+        let u = self.temp(unit_t);
+        self.call_native(
+            &format!("{name}.push"),
+            vec![
+                Operand::Move(Place::local(r)),
+                Operand::Move(Place::local(x)),
+            ],
+            Place::local(u),
+        );
+        if inclusive {
+            let last = self.temp(bool_t);
+            self.assign(
+                last,
+                Rvalue::BinaryOp(
+                    BinOp::Eq,
+                    Operand::Copy(Place::local(i)),
+                    Operand::Copy(Place::local(end_t)),
+                ),
+            );
+            let step = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(last)),
+                    targets: SwitchTargets::if_else(exit, step),
+                },
+                step,
+            );
+        }
+        let one = Operand::Const(Const {
+            ty: t,
+            kind: ConstKind::Scalar(1),
+        });
+        self.assign(
+            i,
+            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), one),
+        );
+        self.goto(head);
+        self.cur = exit;
+        self.assign(dest, Rvalue::Use(Operand::Move(Place::local(v))));
+        self.pop_scope()
+    }
+
     /// The number of values the ranges in `parts` (`start`, end, whether
     /// the end is included) yield, as an `i64` local: the
     /// capacity a chain of them is collected into. Each length is taken
@@ -23414,6 +23605,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.collect_range(e, ranges, dest);
             }
         }
+        // `(a..b).map(|i| ..).collect()` into a `Vec`, as the push loop
+        // `for i in a..b { v.push(f(i)) }` over the closure held in a local.
+        if method == "collect" && args.is_empty() {
+            if let Some((range, f)) = self.collects_mapped_range(e, object)? {
+                return self.collect_mapped_range(range, f, dest);
+            }
+        }
         // One of several impls for single instantiations of one type
         // (`impl Bx[String]`, `impl Bx[i64]`): the one the checker resolved
         // for this call site, by its dispatch name. The recorded callee names
@@ -27630,6 +27828,56 @@ impl<'l, 'a> Bx<'l, 'a> {
             vec![Operand::Copy(Place::local(sl))],
             Place::local(o),
         );
+        // A number answers `Ok` here, and only text that is none goes to
+        // the helper, whose error walk keeps it out of line: called on
+        // every parse, it cost a call frame of about 21 instructions
+        // (B-2026-11-14-43).
+        let some = self
+            .tys()
+            .tcx()
+            .adt_of(opt_t)
+            .and_then(|(a, _)| a.variants.iter().position(|v| v.name == "Some"));
+        let join = self.b.new_block();
+        if let Some(some) = some {
+            let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+            let tag = self.temp(isize_t);
+            self.assign(tag, Rvalue::Discriminant(Place::local(o)));
+            let is_some = self.temp(self.tys().bool());
+            self.assign(
+                is_some,
+                Rvalue::BinaryOp(
+                    BinOp::Eq,
+                    Operand::Copy(Place::local(tag)),
+                    Operand::Const(Const {
+                        ty: isize_t,
+                        kind: ConstKind::Scalar(some as u128),
+                    }),
+                ),
+            );
+            let (yes, no) = (self.b.new_block(), self.b.new_block());
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(is_some)),
+                    targets: SwitchTargets::if_else(yes, no),
+                },
+                yes,
+            );
+            let n = Place::local(o)
+                .project(ProjElem::Downcast(VariantIdx(some as u32)))
+                .field(0, nt);
+            self.assign(
+                dest.clone(),
+                Rvalue::Aggregate(
+                    AggregateKind::Adt {
+                        ty: rt,
+                        variant: VariantIdx(ok as u32),
+                    },
+                    vec![Operand::Copy(n)],
+                ),
+            );
+            self.goto(join);
+            self.cur = no;
+        }
         let mut ops = vec![
             Operand::Move(Place::local(o)),
             Operand::Copy(Place::local(sl)),
@@ -27639,16 +27887,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let name = self.lcx.instance(d, inst_args.clone());
         let func = self.fn_operand(&name, d, inst_args);
-        let next = self.b.new_block();
         self.goto_with(
             TerminatorKind::Call {
                 func,
                 args: ops,
                 destination: dest,
-                target: Some(next),
+                target: Some(join),
                 unwind: UnwindAction::Abort,
             },
-            next,
+            join,
         );
         Ok(true)
     }

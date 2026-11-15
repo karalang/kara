@@ -655,9 +655,11 @@ impl<'ctx> Cx<'ctx, '_> {
             .builder
             .build_int_compare(IntPredicate::ULT, i, n, "")
             .map_err(e)?;
-        self.builder
+        let br = self
+            .builder
             .build_conditional_branch(inside, look, slow)
             .map_err(e)?;
+        self.likely_first(br)?;
         self.builder.position_at_end(look);
         let bp = self.elem_ptr(p, i, 1)?;
         let b = self
@@ -674,9 +676,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 "",
             )
             .map_err(e)?;
-        self.builder
+        let br = self
+            .builder
             .build_conditional_branch(ascii, fast, slow)
             .map_err(e)?;
+        self.likely_first(br)?;
         self.builder.position_at_end(fast);
         let a = self.builder.build_int_z_extend(b, i32t, "").map_err(e)?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
@@ -722,9 +726,11 @@ impl<'ctx> Cx<'ctx, '_> {
             .builder
             .build_int_compare(IntPredicate::ULT, last, n, "")
             .map_err(e)?;
-        self.builder
+        let br = self
+            .builder
             .build_conditional_branch(inside, look, slow)
             .map_err(e)?;
+        self.likely_first(br)?;
         self.builder.position_at_end(look);
         let bp = self.elem_ptr(p, last, 1)?;
         let b = self
@@ -741,9 +747,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 "",
             )
             .map_err(e)?;
-        self.builder
+        let br = self
+            .builder
             .build_conditional_branch(ascii, fast, slow)
             .map_err(e)?;
+        self.likely_first(br)?;
         self.builder.position_at_end(fast);
         let c = self
             .builder
@@ -1702,9 +1710,17 @@ impl<'ctx> Cx<'ctx, '_> {
             8,
         )?;
         if mode == 1 {
-            self.abort_on(r, "index out of bounds")?;
+            // The tests above are the runtime's own for `s[lo..hi]`, so a
+            // range they refuse is one it refuses too: the path ends in
+            // the panic, and the view the loop after reads has only the
+            // inline length, which a constant range makes a constant
+            // (B-2026-11-14-43: `i64.parse(date[5..7])`'s digit loop then
+            // unrolls).
+            let _ = r;
+            self.abort_with("index out of bounds")?;
+        } else {
+            self.builder.build_unconditional_branch(join).map_err(e)?;
         }
-        self.builder.build_unconditional_branch(join).map_err(e)?;
         self.builder.position_at_end(join);
         Ok(())
     }
@@ -3001,6 +3017,22 @@ impl<'ctx> Cx<'ctx, '_> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_float_value())
+    }
+
+    /// Weights the conditional branch `br` toward its first target, as
+    /// `len_utf8`'s ASCII test is: block placement then lays the second
+    /// target out of line, so the likely path falls through rather than
+    /// jumping over it (B-2026-11-15-2: a `chars()` walk's ASCII char took
+    /// a jump over the runtime call on every char).
+    pub(super) fn likely_first(&self, br: inkwell::values::InstructionValue<'ctx>) -> R<()> {
+        let i32t = self.llcx.i32_type();
+        let weights = self.llcx.metadata_node(&[
+            self.llcx.metadata_string("branch_weights").into(),
+            i32t.const_int(2000, false).into(),
+            i32t.const_int(1, false).into(),
+        ]);
+        br.set_metadata(weights, self.llcx.get_kind_id("prof"))
+            .map_err(|_| "branch weights".to_string())
     }
 
     /// The UTF-8 width of char `c`, as an `i64`. ASCII takes a branch of
