@@ -13,10 +13,12 @@ impl super::Parser {
     /// `use std::thread;` / `use std::thread::sleep;` (also
     /// `::{sleep}`, and the `import std.thread;` an earlier fix made), with
     /// the cursor at the keyword: the diagnostic, its fix to
-    /// `import std.time.sleep;`, and the statement skipped. Returns `false`,
+    /// `import std.time.sleep;` (or to nothing when the program does not
+    /// sleep: `thread::spawn` has its own diagnostic, and a `TaskGroup`
+    /// needs no import), and the statement skipped. Returns `false`,
     /// consuming nothing, for any other statement, and for `std::thread`
-    /// when the program reaches through it for anything but `sleep`
-    /// (`thread::spawn` has its own diagnostic, and the line stays for it).
+    /// when the program reaches through it for anything but `sleep` and
+    /// `spawn`.
     pub(crate) fn reject_rust_thread_import(&mut self) -> bool {
         let at = self.pos;
         let token = |i: usize| self.tokens.get(i).map(|t| &t.token);
@@ -44,14 +46,20 @@ impl super::Parser {
             }
             semi += 1;
         }
-        if !leaves.iter().all(|n| *n == "sleep") {
+        if !leaves.iter().all(|n| matches!(*n, "sleep" | "spawn")) {
             return false;
         }
-        // The module itself: every `thread::x` / `thread.x` in the program
-        // must be `sleep`.
-        if leaves.is_empty() && self.thread_reaches_beyond_sleep() {
-            return false;
-        }
+        // The module itself: what the program reaches through it. Anything
+        // but `sleep` and `spawn` keeps the line for its own diagnostic.
+        let reached = if leaves.is_empty() {
+            match self.thread_reaches() {
+                Some(r) => r,
+                None => return false,
+            }
+        } else {
+            leaves.iter().map(|n| n.to_string()).collect()
+        };
+        let sleeps = reached.iter().any(|n| n == "sleep");
         let first = self.tokens[at].span;
         let end = self.tokens[semi].span;
         let whole = crate::token::Span {
@@ -67,6 +75,28 @@ impl super::Parser {
             .source_at(path_start, path_end - path_start)
             .unwrap_or("std::thread")
             .to_string();
+        // `thread::spawn`, or nothing at all once a hand edit moved the
+        // spawn into a group: `TaskGroup` is in the prelude, so the line
+        // goes, or keeps only the pause (B-2026-11-15-152).
+        if !sleeps {
+            let message = format!(
+                "`{written}` is Rust's standard library -- Kāra starts a task in a \
+                 `TaskGroup`, which needs no import, and has no `std.thread` module: \
+                 delete the line"
+            );
+            self.error_at(&message, whole);
+            let length = self.rust_use_line_length(whole);
+            self.fix_diffs.insert(
+                crate::resolver::SpanKey::from_span(&whole),
+                vec![TextEdit {
+                    offset: whole.offset,
+                    length,
+                    replacement: String::new(),
+                }],
+            );
+            self.pos = semi + 1;
+            return true;
+        }
         let message = format!(
             "`{written}` is Rust's standard library -- Kāra's pause is `std.time.sleep`, \
              which takes the same `Duration`: `import std.time.sleep;`"
@@ -84,15 +114,32 @@ impl super::Parser {
         true
     }
 
-    /// Whether some `thread::x` / `thread.x` in the program names
-    /// anything but `sleep`.
-    fn thread_reaches_beyond_sleep(&self) -> bool {
-        self.tokens.windows(3).any(|w| {
-            matches!(&w[0].token, Token::Identifier { name, .. } if name == "thread")
-                && matches!(w[1].token, Token::ColonColon | Token::Dot)
-                && !matches!(&w[2].token, Token::Identifier { name, .. } if name == "sleep")
-                && !matches!(&w[2].token, Token::Semicolon)
-        })
+    /// The names the program reaches through `thread::x` / `thread.x`
+    /// outside import lines, or `None` when one is not `sleep` or `spawn`.
+    fn thread_reaches(&self) -> Option<Vec<String>> {
+        let mut out = Vec::new();
+        for (i, w) in self.tokens.windows(3).enumerate() {
+            if !matches!(&w[0].token, Token::Identifier { name, .. } if name == "thread")
+                || !matches!(w[1].token, Token::ColonColon | Token::Dot)
+                || matches!(w[2].token, Token::Semicolon)
+            {
+                continue;
+            }
+            // `std::thread::x` in an import line is the line itself.
+            if i >= 2
+                && matches!(self.tokens[i - 1].token, Token::ColonColon | Token::Dot)
+                && matches!(&self.tokens[i - 2].token, Token::Identifier { name, .. } if name == "std" || name == "core")
+            {
+                continue;
+            }
+            match &w[2].token {
+                Token::Identifier { name, .. } if name == "sleep" || name == "spawn" => {
+                    out.push(name.clone())
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
     }
 
     /// The edit that imports `std.time.sleep` for a `thread::sleep` path:

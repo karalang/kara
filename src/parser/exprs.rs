@@ -4334,7 +4334,13 @@ impl super::Parser {
             // `from_iter` names the type at the call and keeps the order of
             // evaluation, so the fix writes `Vec[Str].from_iter(it).join(..)`
             // (B-2026-11-10-42).
-            let target = ty.as_deref().and_then(collect_target_type);
+            // `it.collect::<Vec<_>>().join(..)`: the holes leave the element
+            // to `from_iter`, which infers it from the iterator, so the fix
+            // names the bare collection (B-2026-11-15-151).
+            let target = ty
+                .as_deref()
+                .and_then(collect_target_type)
+                .or_else(|| self.turbofish_hole_collection(open, self.pos));
             if let (true, Some(t), Some(dot)) = (method == "collect", target, dot) {
                 if matches!(self.peek_token_ref_at(1), Token::RightParen) {
                     let close = self.tokens[self.pos + 1].span;
@@ -4535,6 +4541,36 @@ impl super::Parser {
     /// annotation can carry: `<Vec<char>>` is `Vec[char]`. None for two or
     /// more arguments, a `_` (an annotation takes no placeholder), an
     /// unclosed list, or a parser without its source text.
+    /// The bare collection a turbofish with `_` holes names
+    /// (`Vec` for `Vec<_>`, `Map` for `HashMap<_, _>`), or `None` when the
+    /// list is not a known collection with holes in its arguments.
+    fn turbofish_hole_collection(&self, open: usize, after: usize) -> Option<String> {
+        let name = match &self.tokens.get(open + 1)?.token {
+            Token::Identifier { name, .. } => name.clone(),
+            _ => return None,
+        };
+        if !matches!(
+            self.tokens.get(open + 2)?.token,
+            Token::LessThan | Token::LeftBracket
+        ) || !self
+            .tokens
+            .get(open + 3..after)?
+            .iter()
+            .any(|t| t.token == Token::Underscore)
+        {
+            return None;
+        }
+        let outer = match name.as_str() {
+            "HashMap" => "Map",
+            "HashSet" => "Set",
+            "BTreeMap" => "SortedMap",
+            "BTreeSet" => "SortedSet",
+            n @ ("Vec" | "Set" | "Map" | "SortedSet" | "SortedMap" | "VecDeque") => n,
+            _ => return None,
+        };
+        Some(outer.to_string())
+    }
+
     fn turbofish_binding_type(&self, open: usize, after: usize) -> Option<String> {
         let (source, base) = self.source.as_ref()?;
         let first = self.tokens.get(open + 1)?.span;

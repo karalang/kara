@@ -1,0 +1,611 @@
+// A CoAP server (RFC 7252, block-wise GET from RFC 7959) on loopback UDP,
+// and the clients that use it. Written the way a Rust programmer would.
+import std.net.UdpSocket;
+import std.time.Duration;
+
+const ADDR: Str = "127.0.0.1:47783";
+const QUIET_MS: u64 = 300;
+
+const CON: u8 = 0;
+const NON: u8 = 1;
+const ACK: u8 = 2;
+const RST: u8 = 3;
+const TYPES: Array[Str, 4] = ["CON", "NON", "ACK", "RST"];
+
+const GET: u8 = 1;
+const POST: u8 = 2;
+const PUT: u8 = 3;
+const DELETE: u8 = 4;
+
+const ETAG: u16 = 4;
+const URI_PATH: u16 = 11;
+const CONTENT_FORMAT: u16 = 12;
+const URI_QUERY: u16 = 15;
+const BLOCK2: u16 = 23;
+const SIZE2: u16 = 28;
+const SIZE1: u16 = 60;
+const KNOWN: Array[u16, 5] = [URI_PATH, CONTENT_FORMAT, URI_QUERY, BLOCK2, SIZE1];
+
+const TEXT: u32 = 0;
+const LINK: u32 = 40;
+const XML: u32 = 41;
+const JSON: u32 = 50;
+const BLOCK_SZX: u32 = 2;
+
+fn code(class: u8, detail: u8) -> u8 {
+    class << 5 | detail
+}
+
+fn code_text(c: u8) -> String {
+    f"{c >> 5}.{c & 31:02}"
+}
+
+fn method_name(c: u8) -> String {
+    match c {
+        GET => "GET".to_string(),
+        POST => "POST".to_string(),
+        PUT => "PUT".to_string(),
+        DELETE => "DELETE".to_string(),
+        _ => code_text(c),
+    }
+}
+
+fn option_name(num: u16) -> String {
+    match num {
+        4 => "ETag".to_string(),
+        6 => "Observe".to_string(),
+        11 => "Uri-Path".to_string(),
+        12 => "Content-Format".to_string(),
+        15 => "Uri-Query".to_string(),
+        23 => "Block2".to_string(),
+        28 => "Size2".to_string(),
+        60 => "Size1".to_string(),
+        n => f"#{n}",
+    }
+}
+
+fn uint_bytes(n: u32) -> Vec[u8] {
+    let mut n = n;
+    let mut out = Vec.new();
+    while n > 0 {
+        out.insert(0, (n & 0xFF) as u8);
+        n >>= 8;
+    }
+    out
+}
+
+fn uint_of(b: Slice[u8]) -> u32 {
+    let mut n: u32 = 0;
+    for x in b {
+        n = n << 8 | x;
+    }
+    n
+}
+
+fn hex(b: Slice[u8]) -> String {
+    Vec.from_iter(b.iter().map(|x| f"{x:02x}")).join("")
+}
+
+/// The 4-bit field for a delta or a length, and its extended bytes.
+fn nibble(n: i64) -> (u8, Vec[u8]) {
+    if n < 13 {
+        (n as u8, Vec.new())
+    } else if n < 269 {
+        (13, [(n - 13) as u8])
+    } else {
+        (14, ((n - 269) as u16).to_be_bytes().to_vec())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Message {
+    typ: u8,
+    code: u8,
+    mid: u16,
+    token: Vec[u8],
+    options: Vec[(u16, Vec[u8])],
+    payload: Vec[u8],
+}
+
+fn encode(typ: u8, c: u8, mid: u16, token: Slice[u8], options: Slice[(u16, Vec[u8])], payload: Slice[u8]) -> Vec[u8] {
+    let mut out = [0x40 | typ << 4 | token.len() as u8, c];
+    out.extend_from_slice(mid.to_be_bytes());
+    out.extend_from_slice(token);
+    let mut sorted = options.to_vec();
+    sorted.sort_by_key(|o| o.0);
+    let mut last = 0;
+    for (num, val) in ref sorted {
+        let (d, dext) = nibble((num - last));
+        let (l, lext) = nibble(val.len());
+        out.push(d << 4 | l);
+        out.extend_from_slice(dext);
+        out.extend_from_slice(lext);
+        out.extend_from_slice(val);
+        last = num;
+    }
+    if not payload.is_empty() {
+        out.push(0xFF);
+        out.extend_from_slice(payload);
+    }
+    out
+}
+
+fn extended(n: u8, b: Slice[u8], at: i64) -> Result[(i64, i64), String] {
+    match n {
+        0..=12 => Ok((n as i64, at)),
+        13 => {
+            if at >= b.len() {
+                return Err("truncated option".to_string());
+            }
+            Ok((b[at] as i64 + 13, at + 1))
+        }
+        14 => {
+            if at + 2 > b.len() {
+                return Err("truncated option".to_string());
+            }
+            Ok((u16.from_be_bytes([b[at], b[at + 1]]) as i64 + 269, at + 2))
+        }
+        _ => Err("reserved nibble 15".to_string()),
+    }
+}
+
+fn decode(b: Slice[u8]) -> Result[Message, String] {
+    if b.len() < 4 {
+        return Err("short header".to_string());
+    }
+    let ver = b[0] >> 6;
+    let typ = b[0] >> 4 & 3;
+    let tkl = (b[0] & 15) as i64;
+    if ver != 1 {
+        return Err(f"version {ver}");
+    }
+    if tkl > 8 {
+        return Err(f"token length {tkl}");
+    }
+    if b.len() < 4 + tkl {
+        return Err("short token".to_string());
+    }
+    let mut msg = Message {
+        typ,
+        code: b[1],
+        mid: u16.from_be_bytes([b[2], b[3]]),
+        token: b[4..4 + tkl].to_vec(),
+        options: Vec.new(),
+        payload: Vec.new(),
+    };
+    let mut at = 4 + tkl;
+    let mut last: i64 = 0;
+    while at < b.len() {
+        if b[at] == 0xFF {
+            if at + 1 == b.len() {
+                return Err("empty payload after marker".to_string());
+            }
+            msg.payload = b[at + 1..].to_vec();
+            break;
+        }
+        let (d, at2) = extended(b[at] >> 4, b, at + 1)?;
+        let (l, at3) = extended(b[at] & 15, b, at2)?;
+        if at3 + l > b.len() {
+            return Err("option runs past the end".to_string());
+        }
+        last += d;
+        msg.options.push((last as u16, b[at3..at3 + l].to_vec()));
+        at = at3 + l;
+    }
+    Ok(msg)
+}
+
+impl Message {
+    fn option(self, num: u16) -> Vec[ref Vec[u8]] {
+        self.options.iter().filter(|(n, _)| *n == num).map(|(_, v)| v).collect()
+    }
+
+    fn path(self) -> String {
+        Vec.from_iter(self.option(URI_PATH)
+            .iter()
+            .map(|v| String.from_utf8_lossy(v).to_string()))
+            .join("/")
+    }
+}
+
+fn show_option(num: u16, val: Slice[u8]) -> String {
+    let name = option_name(num);
+    match num {
+        URI_PATH | URI_QUERY => f"{name}={String.from_utf8_lossy(val)}",
+        ETAG => f"{name}={hex(val)}",
+        BLOCK2 => {
+            let v = uint_of(val);
+            f"{name}={v >> 4}/{v >> 3 & 1}/{16 << (v & 7)}"
+        }
+        _ => f"{name}={uint_of(val)}",
+    }
+}
+
+fn show(m: ref Message) -> String {
+    let token = if m.token.is_empty() { "-".to_string() } else { hex(m.token) };
+    let mut line = f"{TYPES[m.typ]} {code_text(m.code)} mid={m.mid:04x} token={token}";
+    for (n, v) in ref m.options {
+        line.push(' ');
+        line.push_str(show_option(n, v));
+    }
+    if not m.payload.is_empty() {
+        let text = if m.payload.len() <= 60 {
+            String.from_utf8_lossy(m.payload).replace("\n", "\\n")
+        } else {
+            f"{m.payload.len()} bytes"
+        };
+        line += f" | {text}";
+    }
+    line
+}
+
+struct Resource {
+    body: Vec[u8],
+    fmt: u32,
+    version: u32,
+}
+
+struct Server {
+    tree: SortedMap[String, Resource],
+    log: Vec[String],
+    lines: Vec[String],
+    seen: Map[(String, u16), Vec[u8]],
+    next_mid: u16,
+    counts: SortedMap[String, u32],
+    stopping: bool,
+}
+
+type Answer = (u8, Vec[(u16, Vec[u8])], Vec[u8]);
+
+impl Server {
+    fn new() -> Self {
+        let mut tree = SortedMap.new();
+        tree.insert("hello".to_string(), Resource { body: b"hello, world".to_vec(), fmt: TEXT, version: 1 });
+        tree.insert("sensors/temp".to_string(), Resource { body: b"21.5".to_vec(), fmt: TEXT, version: 1 });
+        let mut big = String.new();
+        for i in 0..10 {
+            big.push_str(f"line {i:02} of the big resource\n");
+        }
+        tree.insert("big".to_string(), Resource { body: big.bytes().to_vec(), fmt: TEXT, version: 1 });
+        Server {
+            tree,
+            log: Vec.new(),
+            lines: Vec.new(),
+            seen: Map.new(),
+            next_mid: 0x7000,
+            counts: SortedMap.new(),
+            stopping: false,
+        }
+    }
+
+    fn count(mut ref self, what: Str) {
+        *self.counts.entry(what.to_string()).or_insert(0) += 1;
+    }
+
+    fn well_known(self) -> Vec[u8] {
+        Vec.from_iter(self.tree
+            .iter()
+            .map(|(p, r)| f"</{p}>;ct={r.fmt}"))
+            .join(",")
+            .bytes().to_vec()
+    }
+
+    fn answer(mut ref self, m: ref Message) -> Answer {
+        if let Some((n, _)) = m.options.iter().find(|(n, _)| not KNOWN.contains(n) and n % 2 == 1) {
+            return (code(4, 2), Vec.new(), f"unknown critical option {n}".bytes().to_vec());
+        }
+        let path = m.path();
+        let query: Vec[String] = m.option(URI_QUERY).iter().map(|v| String.from_utf8_lossy(v).to_string()).collect();
+        let method = m.code;
+        if path == ".well-known/core" {
+            if method != GET {
+                return (code(4, 5), Vec.new(), Vec.new());
+            }
+            return (code(2, 5), [(CONTENT_FORMAT, uint_bytes(LINK))], self.well_known());
+        }
+        if path == "halt" {
+            if method != POST {
+                return (code(4, 5), Vec.new(), Vec.new());
+            }
+            self.stopping = true;
+            return (code(2, 4), Vec.new(), b"halting".to_vec());
+        }
+        if path == "log" {
+            if method != POST {
+                return (code(4, 5), Vec.new(), Vec.new());
+            }
+            self.log.push(String.from_utf8_lossy(m.payload).to_string());
+            return (code(2, 4), Vec.new(), f"{self.log.len()} entries".bytes().to_vec());
+        }
+        match method {
+            GET => {
+                let res = match self.tree.get(path) {
+                    Some(r) => r,
+                    None => return (code(4, 4), Vec.new(), f"no /{path}".bytes().to_vec()),
+                };
+                let mut body = res.body.clone();
+                if path == "hello" {
+                    if let Some(name) = query.iter().find_map(|q| q.strip_prefix("name=")) {
+                        body = f"hello, {name}".bytes().to_vec();
+                    }
+                }
+                let mut opts = [(CONTENT_FORMAT, uint_bytes(res.fmt)), (ETAG, uint_bytes(res.version))];
+                let want = m.option(BLOCK2);
+                if not want.is_empty() or body.len() > (16 << BLOCK_SZX) {
+                    let v = if want.is_empty() { BLOCK_SZX } else { uint_of(want[0]) };
+                    let num = (v >> 4) as i64;
+                    let szx = (v & 7).min(BLOCK_SZX);
+                    let size = 16 << szx;
+                    if num * size >= body.len() {
+                        return (code(4, 2), Vec.new(), b"block out of range".to_vec());
+                    }
+                    let more = (num + 1) * size < body.len();
+                    opts.push((BLOCK2, uint_bytes((num as u32) << 4 | (more as u32) << 3 | szx)));
+                    if num == 0 {
+                        opts.push((SIZE2, uint_bytes(body.len() as u32)));
+                    }
+                    let end = ((num + 1) * size).min(body.len());
+                    body = body[num * size..end].to_vec();
+                }
+                (code(2, 5), opts, body)
+            }
+            PUT => {
+                let fmt = m.option(CONTENT_FORMAT).first().map(|v| uint_of(v)).unwrap_or(TEXT);
+                if fmt != TEXT and fmt != JSON {
+                    return (code(4, 15), Vec.new(), f"format {fmt}".bytes().to_vec());
+                }
+                if path.is_empty() or path == "hello" {
+                    return (code(4, 5), Vec.new(), Vec.new());
+                }
+                if let Some(size1) = m.option(SIZE1).first() {
+                    if uint_of(size1) > 64 {
+                        return (code(4, 13), [(SIZE1, uint_bytes(64))], Vec.new());
+                    }
+                }
+                match self.tree.get_mut(path) {
+                    None => {
+                        self.tree.insert(path, Resource { body: m.payload.clone(), fmt, version: 1 });
+                        (code(2, 1), Vec.new(), Vec.new())
+                    }
+                    Some(res) => {
+                        res.body = m.payload.clone();
+                        res.fmt = fmt;
+                        res.version += 1;
+                        (code(2, 4), [(ETAG, uint_bytes(res.version))], Vec.new())
+                    }
+                }
+            }
+            DELETE => {
+                if self.tree.remove(path).is_none() {
+                    return (code(4, 4), Vec.new(), f"no /{path}".bytes().to_vec());
+                }
+                (code(2, 2), Vec.new(), Vec.new())
+            }
+            _ => (code(4, 5), Vec.new(), Vec.new()),
+        }
+    }
+
+    fn handle(mut ref self, data: Slice[u8], peer: Str) -> Option[Vec[u8]] {
+        let m = match decode(data) {
+            Ok(m) => m,
+            Err(e) => {
+                self.count("malformed");
+                self.lines.push(f"malformed: {e}");
+                if data.len() >= 4 and data[0] >> 6 == 1 and (data[0] >> 4 & 3) == CON {
+                    let mid = u16.from_be_bytes([data[2], data[3]]);
+                    return Some(encode(RST, 0, mid, [], [], []));
+                }
+                return None;
+            }
+        };
+        if m.typ == ACK or m.typ == RST {
+            let t = TYPES[m.typ];
+            self.count(f"stray {t}");
+            self.lines.push(f"stray {t} mid={m.mid:04x}");
+            return None;
+        }
+        if m.code == 0 {
+            self.count("ping");
+            self.lines.push(f"ping mid={m.mid:04x}");
+            return if m.typ == CON { Some(encode(RST, 0, m.mid, [], [], [])) } else { None };
+        }
+        if m.code >> 5 != 0 {
+            self.count("response");
+            self.lines.push(f"a response {code_text(m.code)} sent to the server");
+            return if m.typ == CON { Some(encode(RST, 0, m.mid, [], [], [])) } else { None };
+        }
+        let key = (peer.to_string(), m.mid);
+        if m.typ == CON {
+            if let Some(reply) = self.seen.get(key) {
+                let reply = reply.clone();
+                self.count("duplicate");
+                self.lines.push(f"duplicate mid={m.mid:04x}, answered again");
+                return Some(reply);
+            }
+        }
+        let (c, opts, payload) = self.answer(m);
+        self.lines.push(f"{TYPES[m.typ]} {method_name(m.code)} /{m.path()} -> {code_text(c)}");
+        self.count(code_text(c));
+        if m.typ == CON {
+            let reply = encode(ACK, c, m.mid, m.token, opts, payload);
+            self.seen.insert(key, reply.clone());
+            Some(reply)
+        } else {
+            let reply = encode(NON, c, self.next_mid, m.token, opts, payload);
+            self.next_mid += 1;
+            Some(reply)
+        }
+    }
+}
+
+fn serve(srv: own Server, sock: UdpSocket) -> Server {
+    let mut srv = srv;
+    let mut buf = [0u8; 2048];
+    while not srv.stopping {
+        let (n, peer) = sock.recv_from(mut buf).unwrap();
+        if let Some(reply) = srv.handle(buf[..n], peer.to_string()) {
+            sock.send_to(reply, peer).unwrap();
+        }
+    }
+    srv
+}
+
+struct Client {
+    name: String,
+    sock: UdpSocket,
+}
+
+impl Client {
+    fn new(name: Str) -> Client {
+        let sock = UdpSocket.bind("127.0.0.1:0").unwrap();
+        Client { name: name.to_string(), sock }
+    }
+
+    fn send(self, data: Slice[u8]) {
+        self.sock.send_to(data, ADDR).unwrap();
+    }
+
+    fn recv(self, wait_ms: u64) -> Option[Message] {
+        self.sock.set_read_timeout(Some(wait_ms)).unwrap();
+        let mut buf = [0u8; 2048];
+        let n = match self.sock.recv_from(mut buf) {
+            Ok((n, _)) => n,
+            Err(_) => {
+                println(f"{self.name}: no reply");
+                return None;
+            }
+        };
+        match decode(buf[..n]) {
+            Ok(m) => {
+                println(f"{self.name}: {show(m)}");
+                Some(m)
+            }
+            Err(e) => {
+                println(f"{self.name}: unreadable reply: {e}");
+                None
+            }
+        }
+    }
+
+    fn ask(self, data: Slice[u8]) -> Option[Message] {
+        self.send(data);
+        self.recv(2000)
+    }
+}
+
+fn path_options(path: Str) -> Vec[(u16, Vec[u8])] {
+    path.split("/").filter(|p| not p.is_empty()).map(|p| (URI_PATH, p.bytes().to_vec())).collect()
+}
+
+fn with(opts: own Vec[(u16, Vec[u8])], num: u16, val: Slice[u8]) -> Vec[(u16, Vec[u8])] {
+    let mut opts = opts;
+    opts.push((num, val.to_vec()));
+    opts
+}
+
+fn main() {
+    let sock = UdpSocket.bind(ADDR).unwrap();
+    let group = TaskGroup.new();
+    let server = group.spawn(|| serve(Server.new(), sock));
+    let none: Vec[(u16, Vec[u8])] = Vec.new();
+
+    let c = Client.new("ping");
+    c.ask(encode(CON, 0, 0x0101, [], none, []));
+
+    let c = Client.new("discover");
+    c.ask(encode(CON, GET, 0x0102, [0x01], path_options(".well-known/core"), []));
+
+    let c = Client.new("hello");
+    c.ask(encode(CON, GET, 0x0103, [0xa1, 0xb2], path_options("hello"), []));
+    c.ask(encode(NON, GET, 0x0104, [0xa1, 0xb3], with(path_options("hello"), URI_QUERY, b"name=kara"), []));
+    c.ask(encode(CON, GET, 0x0105, [], path_options("sensors/temp"), []));
+    c.ask(encode(NON, GET, 0x0106, [0x09], path_options("missing/thing"), []));
+    c.ask(encode(CON, POST, 0x0107, [0x0a], path_options("hello"), b"hi"));
+
+    let c = Client.new("blocks");
+    let mut body: Vec[u8] = Vec.new();
+    let mut num: u32 = 0;
+    loop {
+        let mut opts = path_options("big");
+        if num > 0 {
+            opts.push((BLOCK2, uint_bytes(num << 4 | BLOCK_SZX)));
+        }
+        let m = match c.ask(encode(CON, GET, 0x0200 + num as u16, [num as u8], opts, [])) {
+            Some(m) => m,
+            None => break,
+        };
+        body.extend_from_slice(m.payload.clone());
+        let more = m.option(BLOCK2).first().map(|v| uint_of(v) >> 3 & 1 == 1).unwrap_or(false);
+        if not more {
+            break;
+        }
+        num += 1;
+    }
+    let text = String.from_utf8(body.clone()).unwrap();
+    let last = text.lines().last().unwrap();
+    println(f"blocks: {body.len()} bytes in {num + 1} blocks, last line '{last}'");
+    c.ask(encode(CON, GET, 0x0210, [], with(path_options("big"), BLOCK2, uint_bytes(1 << 4 | 1)), []));
+    c.ask(encode(CON, GET, 0x0211, [], with(path_options("big"), BLOCK2, uint_bytes(40 << 4 | 2)), []));
+
+    let c = Client.new("notes");
+    c.ask(encode(CON, PUT, 0x0301, [0x31], path_options("notes/today"), b"first draft"));
+    c.ask(encode(CON, PUT, 0x0302, [0x32], with(path_options("notes/today"), CONTENT_FORMAT, uint_bytes(JSON)), b"{\"v\": 2}"));
+    c.ask(encode(CON, GET, 0x0303, [0x33], path_options("notes/today"), []));
+    c.ask(encode(CON, PUT, 0x0304, [0x34], with(path_options("notes/xml"), CONTENT_FORMAT, uint_bytes(XML)), b"<a/>"));
+    c.ask(encode(CON, PUT, 0x0305, [0x35], with(path_options("notes/huge"), SIZE1, uint_bytes(4000)), b"x"));
+    c.ask(encode(CON, GET, 0x0306, [0x36], path_options(".well-known/core"), []));
+
+    let c = Client.new("logger");
+    let entry = encode(CON, POST, 0x0401, [0x41, 0x42], path_options("log"), b"boot ok");
+    c.ask(entry);
+    c.ask(entry);
+    c.ask(encode(CON, POST, 0x0402, [0x43], path_options("log"), b"second"));
+
+    let c = Client.new("options");
+    c.ask(encode(CON, GET, 0x0501, [], with(path_options("hello"), 9, b"x"), []));
+    c.ask(encode(CON, GET, 0x0502, [], with(with(path_options("hello"), 8, b"y"), 2052, b"z"), []));
+    let long = f"name={"k".repeat(20)}-{"a".repeat(280)}";
+    if let Some(m) = c.ask(encode(CON, GET, 0x0503, [0x55], with(path_options("hello"), URI_QUERY, long.bytes()), [])) {
+        println(f"options: echoed {m.payload.len()} bytes");
+    }
+
+    let c = Client.new("broken");
+    c.send([0x80, GET, 0x06, 0x01]);
+    c.recv(QUIET_MS);
+    let mut bad_token = [0x49, GET, 0x06, 0x02];
+    bad_token.extend_from_slice([0u8; 9]);
+    c.send(bad_token);
+    c.recv(QUIET_MS);
+    c.send([0x40, GET, 0x06, 0x03, 0xB5, b'h', b'e']);
+    c.recv(QUIET_MS);
+    c.send([0x50, GET, 0x06, 0x04, 0xFF]);
+    c.recv(QUIET_MS);
+    c.send(encode(ACK, 0, 0x0605, [], none, []));
+    c.recv(QUIET_MS);
+    c.send(encode(CON, code(2, 5), 0x0606, [], none, b"oops"));
+    c.recv(QUIET_MS);
+    c.send(encode(NON, 0, 0x0607, [], none, []));
+    c.recv(QUIET_MS);
+
+    let c = Client.new("cleanup");
+    c.ask(encode(CON, DELETE, 0x0701, [], path_options("notes/today"), []));
+    c.ask(encode(CON, DELETE, 0x0702, [], path_options("notes/today"), []));
+    c.ask(encode(CON, GET, 0x0703, [], path_options(".well-known/core"), []));
+
+    let c = Client.new("admin");
+    c.ask(encode(CON, POST, 0x0801, [0xad], path_options("halt"), []));
+    let srv = server.join();
+
+    println("== server log");
+    for (i, line) in srv.lines.iter().enumerate() {
+        println(f"{i + 1:02} {line}");
+    }
+    println("== log resource");
+    for e in ref srv.log {
+        println(f"{e}");
+    }
+    println("== counts");
+    for (k, v) in ref srv.counts {
+        println(f"{k}: {v}");
+    }
+}

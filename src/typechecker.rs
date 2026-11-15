@@ -104,6 +104,7 @@ mod refinement_elision;
 mod rust_binary_search;
 mod rust_last_mut;
 mod rust_scan;
+mod rust_timeout_duration;
 mod stdlib_io;
 mod stdlib_iter;
 mod stdlib_map;
@@ -4297,6 +4298,9 @@ pub struct TypeChecker<'a> {
     /// a `mut ref Vec[T]` is wanted is offered `.to_vec()` on the binding's
     /// initializer (B-2026-11-14-29).
     pub(super) read_only_slice_let_uses: FxHashMap<SpanKey, String>,
+    /// The `Some(d)` argument of a `set_read_timeout` call, by `d`'s span,
+    /// with the edits that turn `d` into milliseconds (B-2026-11-15-153).
+    pub(super) timeout_duration_args: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// The value of the unannotated `let` being inferred, when it is a
     /// repeat literal (`[0; 26]`) or `Vec.filled(n, 0)`: its element's
     /// number literal stays open for a later use to fix (B-2026-11-08-57).
@@ -4768,6 +4772,7 @@ impl<'a> TypeChecker<'a> {
             literal_tuple_pushes: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
             read_only_slice_let_uses: FxHashMap::default(),
+            timeout_duration_args: FxHashMap::default(),
             open_collection_let: None,
             array_element_hint: None,
             literal_collection_uses: FxHashMap::default(),
@@ -8437,6 +8442,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        if self.report_timeout_duration_arg(expected, found, span) {
+            return false;
+        }
         // `let s: Str = ref name`: outside a call argument a `ref String` is
         // not a `Str`, and `name.as_str()` is (B-2026-11-13-74).
         if exprs::is_str_view(&inference::resolve_type_var_top(

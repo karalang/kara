@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 348 |
-| false-positive | 220 |
+| diagnostics | 354 |
+| false-positive | 221 |
 | missing-feature | 171 |
 | perf | 169 |
+| soundness | 70 |
 | miscompile | 69 |
-| soundness | 69 |
 | other | 49 |
 | run-vs-build | 42 |
 | codegen-gap | 32 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 492 |
+| typecheck | 495 |
 | mir-llvm | 238 |
-| mir | 210 |
-| cli | 144 |
-| parser | 88 |
-| ownership | 86 |
+| mir | 212 |
+| cli | 145 |
+| parser | 90 |
+| ownership | 87 |
 | interp | 62 |
 | runtime | 50 |
 | effect | 35 |
@@ -127,6 +127,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-134 | 2026-11-15 | runtime | medium | The HTTP client returns Ok for a 3xx it does not follow (300, 304, a 302 with no Location), where io.md makes every status outside 2xx an Err that keeps the response | — |
 | B-2026-11-15-135 | 2026-11-15 | runtime | medium | Past five redirects the HTTP client's Err drops the response that arrived and names the unfollowed Location instead of the URL asked for | — |
 | B-2026-11-15-136 | 2026-11-15 | runtime | medium | RequestBuilder.timeout(0) or a negative timeout silently means no timeout; io.md now refuses a timeout below 1 ms with an Err from send | — |
+| B-2026-11-15-137 | 2026-11-15 | mir | low | A panic printed a stale error return trace from an `Err` the program had already handled: after `match twice(5) { .. Err(..) => .. }`, an index panic printed `parse(n)?` as the error's path | — |
+| B-2026-11-15-138 | 2026-11-15 | cli | low | E_REGISTRY_DEP_UNSUPPORTED's help said registry dependencies are not in 0.8, though they resolve through `KARAC_REGISTRY_PROXY` and are refused only without one | — |
+| B-2026-11-15-150 | 2026-11-15 | typecheck | low | `handle.join().unwrap()` on a `TaskHandle[T]` (Rust's `JoinHandle::join` returns a `Result`) says only "no method 'unwrap' on type 'T'", with no fix | — |
+| B-2026-11-15-151 | 2026-11-15 | parser | low | `it.collect::<Vec<_>>().join("")` (a turbofish with `_` holes as a further call's receiver) gets no fix, only "bind it first with a typed `let` (`let v: T = ..`)" | — |
+| B-2026-11-15-152 | 2026-11-15 | parser | low | `use std::thread;` in a program that spawns becomes `import std.thread;`, "unknown module `std.thread`" with no fix, and once the spawn is moved into a `TaskGroup` it is mended to `import std.time.sleep;` for a program that never sleeps | — |
+| B-2026-11-15-153 | 2026-11-15 | typecheck | medium | `set_read_timeout(Some(Duration::from_millis(n)))` mends to `Some(Duration.ms(n))`, then "expected 'i64', found 'Duration'" with no fix: Kāra's takes `Option[i64]` milliseconds | — |
+| B-2026-11-15-154 | 2026-11-15 | mir+ownership | medium | A `filter` predicate's capture is held against the collected result: `self.options.iter().filter(|(n, _)| *n == num).map(|(_, v)| v).collect()` returned as `Vec[ref Vec[u8]]` is refused with E0509 "the result borrows _2, which this function owns" (`num`) | — |
+| B-2026-11-15-155 | 2026-11-15 | typecheck | high | `Some(w)` with `w: u64` passed where an `Option[i64]` is wanted is accepted with no `as`, and `u64.MAX` prints -1; `let x: i64 = w` is refused. Same for `Ok(w)` / `Err(w)` payloads | — |
 
 ### Relocated
 

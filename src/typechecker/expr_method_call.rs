@@ -1919,6 +1919,7 @@ impl<'a> super::TypeChecker<'a> {
         args_close_span: &Span,
     ) -> Type {
         self.settle_receiver_for_specialized_impl(object, method);
+        self.note_timeout_duration_arg(method, args);
         if let ("drain", [arg]) = (method, args) {
             if let Some(t) = self.drain_range_spelling(object, &arg.value) {
                 return t;
@@ -2771,24 +2772,43 @@ impl<'a> super::TypeChecker<'a> {
                 ..
             } = &object.kind
             {
-                let on_mutex = match self.expr_types.get(&SpanKey::from_span(&mutex.span)) {
-                    Some(Type::Named { name, .. }) => name == "Mutex",
-                    Some(Type::Ref(b) | Type::MutRef(b)) => {
-                        matches!(b.as_ref(), Type::Named { name, .. } if name == "Mutex")
-                    }
-                    _ => false,
+                let recv_name = match self.expr_types.get(&SpanKey::from_span(&mutex.span)) {
+                    Some(Type::Named { name, .. }) => Some(name.clone()),
+                    Some(Type::Ref(b) | Type::MutRef(b)) => match b.as_ref() {
+                        Type::Named { name, .. } => Some(name.clone()),
+                        _ => None,
+                    },
+                    _ => None,
                 };
-                if on_mutex && matches!(inner.as_str(), "lock" | "into_inner") {
+                let on_mutex = recv_name.as_deref() == Some("Mutex")
+                    && matches!(inner.as_str(), "lock" | "into_inner");
+                // `handle.join().unwrap()`: Rust's `JoinHandle::join` returns
+                // a `Result` for the thread's panic. A Kāra task's panic
+                // ends the process, so `join()` gives `T` itself
+                // (B-2026-11-15-150).
+                let on_handle = recv_name.as_deref() == Some("TaskHandle") && inner == "join";
+                if on_mutex || on_handle {
                     let from = object.span.offset + object.span.length;
                     let end = span.offset + span.length;
-                    self.type_error_with_fix_it(
+                    let why = if on_handle {
+                        format!(
+                            "no method '{method}' on type '{}': a `TaskHandle`'s `join()` \
+                             returns the task's result itself, not a `Result` (a panic in a \
+                             task ends the process): drop the `.{method}(..)` \
+                             (library/concurrency.md § `TaskGroup`)",
+                            type_display(&obj_ty)
+                        )
+                    } else {
                         format!(
                             "no method '{method}' on type '{}': Kāra's `Mutex` has no poisoning, \
                              so `{inner}()` returns the {} itself, not a `Result`: drop the \
                              `.{method}(..)` (library/concurrency.md § `Mutex[T]`)",
                             type_display(&obj_ty),
                             if inner == "lock" { "guard" } else { "value" }
-                        ),
+                        )
+                    };
+                    self.type_error_with_fix_it(
+                        why,
                         *span,
                         TypeErrorKind::NoMethodFound,
                         super::FixIt {

@@ -1116,6 +1116,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   non-name with an error that says why (B-2026-11-15-123). References give
   the name alone, not a struct literal's or a declaration's whole range
   (B-2026-11-15-124).
+- A `filter` predicate's capture no longer counts as borrowed by what the
+  chain collects: `self.options.iter().filter(|(n, _)| *n == num).map(..)
+  .collect()` returned as `Vec[ref Vec[u8]]` was refused as borrowing the
+  parameter `num` (B-2026-11-15-154). A function erased to `Fn(..) -> bool`
+  hands back none of its captures, so a result with no place for a closure
+  does not hold them; the adaptor itself still does.
 
 ### Performance
 
@@ -1248,6 +1254,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Rust ports found by the coap_server app: `handle.join().unwrap()` on a
+  `TaskHandle` drops the `.unwrap()`, since `join` returns the task's result
+  itself (B-2026-11-15-150); `it.collect::<Vec<_>>().join(..)` gets the
+  `Vec.from_iter(it).join(..)` fix, and `HashSet<_>` / `HashMap<_, _>` name
+  `Set` / `Map` (B-2026-11-15-151); `use std::thread;` for a program that
+  spawns is deleted rather than kept as an import of a module that does not
+  exist, since a `TaskGroup` needs no import (B-2026-11-15-152); and
+  `set_read_timeout(Some(Duration::from_millis(n)))` mends to
+  `set_read_timeout(Some(n))` (`from_secs(n)` to `n * 1000`, any other
+  `Duration` to `.as_ms()`), the milliseconds Kāra's takes
+  (B-2026-11-15-153).
 - **The `vec![v; n]` deprecation fix no longer writes a refused
   program.** A count cast to `usize`, as in `vec![false; n as usize]`,
   moves into `Vec.filled` as `n as i64`, the length it takes; before, the

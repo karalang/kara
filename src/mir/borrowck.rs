@@ -124,6 +124,11 @@ impl LoanSet {
         self.0.is_empty()
     }
 
+    /// Removes `other`'s loans.
+    fn remove_all(&mut self, other: &LoanSet) {
+        self.0.retain(|l| other.0.binary_search(l).is_err());
+    }
+
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.0.iter().map(|&l| l as usize)
     }
@@ -315,6 +320,7 @@ pub fn borrow_errors(
         loans: &loans,
         has_receiver,
         writes_slices: writes_slices(body, tys, &loans),
+        pred_captures: predicate_captures(body, tys, &loans),
     };
     let origins = origins_dataflow(&cx, entry);
     let scopes = scope_dataflow(body, &loans);
@@ -514,6 +520,7 @@ pub(super) fn loan_liveness(
         loans: &loans,
         has_receiver,
         writes_slices: writes_slices(body, tys, &loans),
+        pred_captures: predicate_captures(body, tys, &loans),
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
@@ -990,6 +997,77 @@ struct Cx<'a> {
     /// type does not say whether it is a `mut Slice`, so in a body that
     /// writes through some slice no slice counts as read-only.
     writes_slices: bool,
+    /// The loans a call result with no place for a closure does not hold:
+    /// see [`predicate_captures`].
+    pred_captures: LoanSet,
+}
+
+/// The loans only a function that returns no borrow holds: a capture
+/// `_t = &k` moved into a closure that is erased to a `Fn(..) -> bool`, as
+/// `filter`'s predicate is. A call of the function hands back none of them,
+/// so a call result with no place for a closure (`collect`'s
+/// `Vec[ref i64]`, `next`'s `Option[ref i64]`) does not hold them, though
+/// the adaptor that keeps the function does (B-2026-11-15-154).
+fn predicate_captures(body: &Body, tys: &TyInterner, loans: &[Loan]) -> LoanSet {
+    let mut uses: std::collections::HashMap<Local, usize> = std::collections::HashMap::new();
+    for block in &body.blocks {
+        for s in &block.statements {
+            for l in statement_use_def(&s.kind).0 {
+                *uses.entry(l).or_default() += 1;
+            }
+        }
+        for l in terminator_use_def_with(&block.terminator.kind, &|_| false).0 {
+            *uses.entry(l).or_default() += 1;
+        }
+    }
+    let once = |l: Local| uses.get(&l) == Some(&1);
+    let whole_move = |op: &Operand| match op {
+        Operand::Move(p) if p.projection.is_empty() => Some(p.local),
+        _ => None,
+    };
+    // Each closure erased, at its one use, to a function returning no borrow.
+    let mut erased = Vec::new();
+    for block in &body.blocks {
+        for s in &block.statements {
+            if let StatementKind::Assign(_, Rvalue::Cast(_, op, t)) = &s.kind {
+                let returns_none =
+                    matches!(tys.kind(*t), TyKind::Fn { ret, .. } if !holds_borrow(tys, ret));
+                if let Some(c) = whole_move(op).filter(|&c| returns_none && once(c)) {
+                    erased.push(c);
+                }
+            }
+        }
+    }
+    // The captures moved into those closures, each used there alone.
+    let mut captures = Vec::new();
+    for block in &body.blocks {
+        for s in &block.statements {
+            if let StatementKind::Assign(d, Rvalue::Aggregate(AggregateKind::Closure { .. }, ops)) =
+                &s.kind
+            {
+                if d.projection.is_empty() && erased.contains(&d.local) {
+                    captures.extend(ops.iter().filter_map(whole_move).filter(|&t| once(t)));
+                }
+            }
+        }
+    }
+    let mut out = LoanSet::default();
+    for (li, l) in loans.iter().enumerate() {
+        let (bi, si) = l.at;
+        let assigned = body.blocks[bi]
+            .statements
+            .get(si)
+            .and_then(|s| match &s.kind {
+                StatementKind::Assign(d, Rvalue::Ref(..)) if d.projection.is_empty() => {
+                    Some(d.local)
+                }
+                _ => None,
+            });
+        if assigned.is_some_and(|t| captures.contains(&t)) {
+            out.insert(li);
+        }
+    }
+    out
 }
 
 /// Whether some loan of the body is a `mut` borrow of a `Slice` place.
@@ -1511,6 +1589,12 @@ impl Cx<'_> {
             }
         }
         clear_moved(o, std::iter::once(func).chain(args));
+        if !self.pred_captures.is_empty()
+            && place_ty(self.body, self.tys, dest)
+                .is_ok_and(|pt| !may_hold_closure(self.tys, pt.ty))
+        {
+            val.remove_all(&self.pred_captures);
+        }
         self.assign(o, dest, val);
     }
 }

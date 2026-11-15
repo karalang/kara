@@ -1,0 +1,95 @@
+ping: RST 0.00 mid=0101 token=-
+discover: ACK 2.05 mid=0102 token=01 Content-Format=40 | </big>;ct=0,</hello>;ct=0,</sensors/temp>;ct=0
+hello: ACK 2.05 mid=0103 token=a1b2 ETag=01 Content-Format=0 | hello, world
+hello: NON 2.05 mid=7000 token=a1b3 ETag=01 Content-Format=0 | hello, kara
+hello: ACK 2.05 mid=0105 token=- ETag=01 Content-Format=0 | 21.5
+hello: NON 4.04 mid=7001 token=09 | no /missing/thing
+hello: ACK 4.05 mid=0107 token=0a
+blocks: ACK 2.05 mid=0200 token=00 ETag=01 Content-Format=0 Block2=0/1/64 Size2=280 | 64 bytes
+blocks: ACK 2.05 mid=0201 token=01 ETag=01 Content-Format=0 Block2=1/1/64 | 64 bytes
+blocks: ACK 2.05 mid=0202 token=02 ETag=01 Content-Format=0 Block2=2/1/64 | 64 bytes
+blocks: ACK 2.05 mid=0203 token=03 ETag=01 Content-Format=0 Block2=3/1/64 | 64 bytes
+blocks: ACK 2.05 mid=0204 token=04 ETag=01 Content-Format=0 Block2=4/0/64 |  09 of the big resource\n
+blocks: 280 bytes in 5 blocks, last line 'line 09 of the big resource'
+blocks: ACK 2.05 mid=0210 token=- ETag=01 Content-Format=0 Block2=1/1/32 |  01 of the big resource\nline 02 
+blocks: ACK 4.02 mid=0211 token=- | block out of range
+notes: ACK 2.01 mid=0301 token=31
+notes: ACK 2.04 mid=0302 token=32 ETag=02
+notes: ACK 2.05 mid=0303 token=33 ETag=02 Content-Format=50 | {"v": 2}
+notes: ACK 4.15 mid=0304 token=34 | format 41
+notes: ACK 4.13 mid=0305 token=35 Size1=64
+notes: ACK 2.05 mid=0306 token=36 Content-Format=40 | 67 bytes
+logger: ACK 2.04 mid=0401 token=4142 | 1 entries
+logger: ACK 2.04 mid=0401 token=4142 | 1 entries
+logger: ACK 2.04 mid=0402 token=43 | 2 entries
+options: ACK 4.02 mid=0501 token=- | unknown critical option 9
+options: ACK 2.05 mid=0502 token=- ETag=01 Content-Format=0 | hello, world
+options: ACK 2.05 mid=0503 token=55 ETag=01 Content-Format=0 Block2=0/1/64 Size2=308 | 64 bytes
+options: echoed 64 bytes
+broken: no reply
+broken: RST 0.00 mid=0602 token=-
+broken: RST 0.00 mid=0603 token=-
+broken: no reply
+broken: no reply
+broken: RST 0.00 mid=0606 token=-
+broken: no reply
+cleanup: ACK 2.02 mid=0701 token=-
+cleanup: ACK 4.04 mid=0702 token=- | no /notes/today
+cleanup: ACK 2.05 mid=0703 token=- Content-Format=40 | </big>;ct=0,</hello>;ct=0,</sensors/temp>;ct=0
+admin: ACK 2.04 mid=0801 token=ad | halting
+== server log
+01 ping mid=0101
+02 CON GET /.well-known/core -> 2.05
+03 CON GET /hello -> 2.05
+04 NON GET /hello -> 2.05
+05 CON GET /sensors/temp -> 2.05
+06 NON GET /missing/thing -> 4.04
+07 CON POST /hello -> 4.05
+08 CON GET /big -> 2.05
+09 CON GET /big -> 2.05
+10 CON GET /big -> 2.05
+11 CON GET /big -> 2.05
+12 CON GET /big -> 2.05
+13 CON GET /big -> 2.05
+14 CON GET /big -> 4.02
+15 CON PUT /notes/today -> 2.01
+16 CON PUT /notes/today -> 2.04
+17 CON GET /notes/today -> 2.05
+18 CON PUT /notes/xml -> 4.15
+19 CON PUT /notes/huge -> 4.13
+20 CON GET /.well-known/core -> 2.05
+21 CON POST /log -> 2.04
+22 duplicate mid=0401, answered again
+23 CON POST /log -> 2.04
+24 CON GET /hello -> 4.02
+25 CON GET /hello -> 2.05
+26 CON GET /hello -> 2.05
+27 malformed: version 2
+28 malformed: token length 9
+29 malformed: option runs past the end
+30 malformed: empty payload after marker
+31 stray ACK mid=0605
+32 a response 2.05 sent to the server
+33 ping mid=0607
+34 CON DELETE /notes/today -> 2.02
+35 CON DELETE /notes/today -> 4.04
+36 CON GET /.well-known/core -> 2.05
+37 CON POST /halt -> 2.04
+== log resource
+boot ok
+second
+== counts
+2.01: 1
+2.02: 1
+2.04: 4
+2.05: 15
+4.02: 2
+4.04: 2
+4.05: 1
+4.13: 1
+4.15: 1
+duplicate: 1
+malformed: 4
+ping: 2
+response: 1
+stray ACK: 1

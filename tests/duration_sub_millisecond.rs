@@ -300,14 +300,17 @@ fn rusts_std_thread_sleep_paths_get_one_import() {
     assert!(text.starts_with("import std.time.sleep;\n"), "{text}");
 }
 
-/// `use std::thread;` stays while the program spawns through it: the
-/// spawn has its own diagnostic, and the line is not the pause's alone.
+/// `use std::thread;` under a spawn and a pause keeps only the pause: the
+/// spawn has its own diagnostic (no fix), and its `TaskGroup` needs no
+/// import, so `std.thread` never becomes an import line
+/// (B-2026-11-15-152, which flipped this from `import std.thread;`).
 #[test]
 fn use_std_thread_with_a_spawn_is_left_to_the_spawns_diagnostic() {
     let src = "use std::thread;\n\nfn main() {\n    let h = thread::spawn(|| 1);\n    \
                thread::sleep(std::time::Duration::from_millis(1));\n}\n";
     let (text, ok) = mended("spawn", src);
     assert!(!ok, "{text}");
-    assert!(text.contains("import std.thread;"), "{text}");
-    assert!(!text.contains("std.time.sleep"), "{text}");
+    assert!(!text.contains("import std.thread;"), "{text}");
+    assert!(text.contains("import std.time.sleep;"), "{text}");
+    assert!(text.contains("thread::spawn(|| 1)"), "{text}");
 }

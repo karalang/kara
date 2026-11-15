@@ -113,7 +113,7 @@ fn turbofish_on_a_receiver_sum_or_open_collect_names_a_typed_let_with_no_fix() {
             "let v: i64 = it.sum();",
         ),
         (
-            "let n = \"ab\".chars().collect::<Vec<_>>().len();",
+            "let n = \"ab\".chars().collect::<Rc<_>>().len();",
             "let v: T = it.collect();",
         ),
     ] {
@@ -130,6 +130,26 @@ fn turbofish_on_a_receiver_sum_or_open_collect_names_a_typed_let_with_no_fix() {
         );
         assert!(result.fix_edits.is_empty() && result.fix_diffs.is_empty());
     }
+}
+
+/// A turbofish with `_` holes names the bare collection, whose `from_iter`
+/// infers the element from the iterator (B-2026-11-15-151, which flipped the
+/// `collect::<Vec<_>>().len()` case of the pin above from "bind it first
+/// with a typed `let`" with no fix).
+#[test]
+fn turbofish_with_holes_on_a_receiver_collect_names_the_bare_collection() {
+    let src = "fn main() {\n\
+               let n = \"ab\".chars().collect::<Vec<_>>().len();\n\
+               let m = \"abca\".chars().collect::<HashSet<_>>().len();\n\
+               println(f\"{n} {m}\");\n\
+               }\n";
+    let out = fixed(src);
+    assert!(
+        out.contains("let n = Vec.from_iter(\"ab\".chars()).len();"),
+        "{out}"
+    );
+    let run = karac::mir::lower::run_source(&out).unwrap_or_else(|e| panic!("build: {e}\n{out}"));
+    assert_eq!(run.output, "2 3\n");
 }
 
 /// `s.parse::<i64>()` names the type to parse to, which Kāra writes as the
