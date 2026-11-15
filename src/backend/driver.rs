@@ -687,7 +687,18 @@ pub(crate) fn link_executable_impl(
     // (`mir_asan.rs`). A program that normalizes takes the TSan build of
     // the unicode archive.
     let special = if extra_cc_args.contains(&"-fsanitize=thread") {
-        if references_unicode {
+        // A program that matches takes the TSan build of the regex archive
+        // too, where it reached the link with a raw `undefined reference`
+        // (B-2026-11-15-92). One that dispatches to the GPU or writes Arrow
+        // has no TSan archive and is refused naming its opt-in; no v2
+        // backend emits those symbols today, so that half is a guard.
+        if references_gpu {
+            SpecialArchive::TsanWithout("`gpu.dispatch` (the GPU archive)")
+        } else if references_arrow {
+            SpecialArchive::TsanWithout("Arrow IPC (the arrow archive)")
+        } else if references_regex {
+            SpecialArchive::TsanRegex
+        } else if references_unicode {
             SpecialArchive::TsanUnicode
         } else {
             SpecialArchive::Tsan
@@ -1821,6 +1832,12 @@ pub(crate) enum SpecialArchive {
     /// A `-fsanitize=thread` link of a `karac_unicode_*` program —
     /// `libkarac_runtime_tsan_unicode.a`, the unicode archive built so.
     TsanUnicode,
+    /// A `-fsanitize=thread` link of a `karac_regex_*` program —
+    /// `libkarac_runtime_tsan_regex.a`, the regex archive built so.
+    TsanRegex,
+    /// A `-fsanitize=thread` link of a program that needs an opt-in with no
+    /// TSan build (named here): refused.
+    TsanWithout(&'static str),
 }
 
 pub(crate) fn resolve_runtime_path(
@@ -1846,6 +1863,8 @@ pub(crate) fn resolve_runtime_path(
     const TSAN: &str = "karac_runtime_tsan.lib";
     #[cfg(windows)]
     const TSAN_UNICODE: &str = "karac_runtime_tsan_unicode.lib";
+    #[cfg(windows)]
+    const TSAN_REGEX: &str = "karac_runtime_tsan_regex.lib";
     #[cfg(not(windows))]
     const FULL: &str = "libkarac_runtime.a";
     #[cfg(not(windows))]
@@ -1862,6 +1881,8 @@ pub(crate) fn resolve_runtime_path(
     const TSAN: &str = "libkarac_runtime_tsan.a";
     #[cfg(not(windows))]
     const TSAN_UNICODE: &str = "libkarac_runtime_tsan_unicode.a";
+    #[cfg(not(windows))]
+    const TSAN_REGEX: &str = "libkarac_runtime_tsan_regex.a";
 
     // Pick the archive name within a directory. An opt-in superset archive
     // (GPU / regex / Arrow) is a distinct artifact: only it resolves the symbol
@@ -1876,6 +1897,9 @@ pub(crate) fn resolve_runtime_path(
             SpecialArchive::Unicode => Some(UNICODE),
             SpecialArchive::Tsan => Some(TSAN),
             SpecialArchive::TsanUnicode => Some(TSAN_UNICODE),
+            SpecialArchive::TsanRegex => Some(TSAN_REGEX),
+            // No archive to find: refused below, even with KARAC_RUNTIME.
+            SpecialArchive::TsanWithout(_) => return None,
             SpecialArchive::None => None,
         };
         if let Some(name) = special_name {
@@ -1894,6 +1918,14 @@ pub(crate) fn resolve_runtime_path(
         }
         None
     };
+
+    if let SpecialArchive::TsanWithout(what) = special {
+        return Err(format!(
+            "a ThreadSanitizer build (`__mir-llvm-tsan`) of a program that uses {what} is not \
+             supported: that opt-in archive has no TSan build. Run the program without \
+             ThreadSanitizer, or check the code it shares with a program that does not use it"
+        ));
+    }
 
     // 1. Explicit override — honored verbatim (see doc comment above; no
     //    lean-sibling substitution, regardless of `prefer_min`).
@@ -1999,6 +2031,19 @@ pub(crate) fn resolve_runtime_path(
              --release --features unicode --target-dir target/tsan --crate-type staticlib` then \
              `cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a \
              target/release/libkarac_runtime_tsan_unicode.a` (its own target dir, so the other \
+             archives stay as they are). Or set KARAC_RUNTIME to an explicit archive path."
+                .to_string(),
+        );
+    }
+    if special == SpecialArchive::TsanRegex {
+        return Err(
+            "a ThreadSanitizer build (`__mir-llvm-tsan`) of a program that uses `Regex` needs \
+             the TSan regex runtime archive `libkarac_runtime_tsan_regex.a` — not found. Build \
+             it, with std instrumented too, with `RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread \
+             cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p \
+             karac-runtime --release --features regex --target-dir target/tsan --crate-type \
+             staticlib` then `cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a \
+             target/release/libkarac_runtime_tsan_regex.a` (its own target dir, so the other \
              archives stay as they are). Or set KARAC_RUNTIME to an explicit archive path."
                 .to_string(),
         );
@@ -2524,10 +2569,25 @@ pub(crate) fn backend_optimization_level() -> OptimizationLevel {
 mod tests {
     use super::{
         default_cpu_and_features, format_wasm_link_error, parse_cpu_names_from_help_listing,
-        parse_feature_names_from_help_listing, symbol_listing_references_gpu,
+        parse_feature_names_from_help_listing, resolve_runtime_path, symbol_listing_references_gpu,
         symbol_listing_references_tls, wasm_opt_in_archive_name, wasm_opt_in_recipe,
         SpecialArchive,
     };
+
+    /// B-2026-11-15-92: a TSan link of a program that needs an opt-in with
+    /// no TSan build is refused naming the opt-in, before `KARAC_RUNTIME`
+    /// or any archive is consulted, never left to the linker's raw
+    /// `undefined reference`.
+    #[test]
+    fn tsan_link_of_an_opt_in_without_a_tsan_build_is_refused_by_name() {
+        for what in [
+            "`gpu.dispatch` (the GPU archive)",
+            "Arrow IPC (the arrow archive)",
+        ] {
+            let err = resolve_runtime_path(false, SpecialArchive::TsanWithout(what)).unwrap_err();
+            assert!(err.contains(what) && err.contains("no TSan build"), "{err}");
+        }
+    }
 
     /// B-2026-11-13-1: the wasm opt-in archives' names, and the recipe a
     /// missing one fails with, which names the right triple and features.

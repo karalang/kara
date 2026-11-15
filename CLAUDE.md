@@ -88,6 +88,9 @@ cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/releas
 # The TSan link of a program that normalizes takes the unicode feature's TSan build:
 RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime --release --features unicode --target-dir target/tsan --crate-type staticlib
 cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan_unicode.a
+# ...and one that uses Regex, the regex feature's (gpu and arrow have no TSan build; such a link is refused):
+RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime --release --features regex --target-dir target/tsan --crate-type staticlib
+cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan_regex.a
 rm -rf target/tsan
 ```
 

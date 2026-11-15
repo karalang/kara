@@ -1801,6 +1801,71 @@ fn try_admit_frozen_for_element<'a>(
     true
 }
 
+/// A `match` over a frozen place typed `Option[S]` (B-2026-11-15-93): a
+/// `mut` field is readable through a frozen place (design.md § Frozen
+/// handles), so `match n.next { Some(m) => m.val, None => -1 }` reads it, and
+/// the payload binding `m` is a frozen alias of the place, as the loop
+/// variable of `for k in n.kids` is. Lowering binds it as a borrow of the
+/// payload, counting nothing.
+///
+/// Kept to the shape a linked-list walk writes: the payload a `shared`
+/// handle or a scalar, and every arm `Some(<name or _>)`, `None` or `_`.
+/// Anything else (a binding of the whole `Option`, a nested pattern, an
+/// or-pattern) falls through to the ordinary walk, which reports it.
+fn try_admit_frozen_match<'a>(
+    scrutinee: &'a Expr,
+    arms: &'a [MatchArm],
+    cx: &mut Cx<'a, '_>,
+) -> bool {
+    if cx.in_closure || cx.frozen_place_root(scrutinee).is_none() {
+        return false;
+    }
+    let Some(Type::Named { name, args }) = cx.place_type(scrutinee) else {
+        return false;
+    };
+    if name != "Option" || args.len() != 1 {
+        return false;
+    }
+    let handle = cx.as_shared_handle(args[0].clone());
+    if handle.is_none() && !super::is_copy_type_basic(&args[0]) {
+        return false;
+    }
+    let mut bound: Vec<&'a Pattern> = Vec::new();
+    for arm in arms {
+        match &arm.pattern.kind {
+            PatternKind::Wildcard => {}
+            PatternKind::Binding(n) if n == "None" => {}
+            PatternKind::TupleVariant { path, patterns }
+                if path.last().is_some_and(|v| v == "Some") && patterns.len() == 1 =>
+            {
+                match &patterns[0].kind {
+                    PatternKind::Wildcard => {}
+                    PatternKind::Binding(n) if n != "None" => bound.push(&patterns[0]),
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+    let owner = cx
+        .frozen_place_root(scrutinee)
+        .and_then(|r| cx.frozen_owner_path.get(r).cloned())
+        .unwrap_or_else(|| cx.block_path.clone());
+    walk_place_indices(scrutinee, cx);
+    if let Some(handle) = handle {
+        for p in bound {
+            let PatternKind::Binding(n) = &p.kind else {
+                continue;
+            };
+            cx.alias_spans.insert(SpanKey::from_span(&p.span));
+            cx.frozen.insert(n.as_str(), handle.clone());
+            cx.frozen_owner_path.insert(n.as_str(), owner.clone());
+            cx.aliases.insert(n.as_str());
+        }
+    }
+    true
+}
+
 /// Walk the sub-expressions a frozen place contains that are NOT part of the
 /// place itself — the index operands. `f(n.kids[g(x)])` still has to check
 /// `g(x)`; only the projection chain is consumed by the permitting rule.
@@ -2101,7 +2166,9 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            walk_expr(scrutinee, cx);
+            if !try_admit_frozen_match(scrutinee, arms, cx) {
+                walk_expr(scrutinee, cx);
+            }
             for arm in arms {
                 if let Some(g) = &arm.guard {
                     walk_expr(g, cx);

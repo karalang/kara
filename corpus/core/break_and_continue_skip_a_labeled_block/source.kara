@@ -1,0 +1,41 @@
+// A labeled block is not a loop: an unlabeled `break` or `continue` inside
+// one belongs to the innermost loop around it (design.md § Loops and labels).
+fn main() {
+    for i in 0..3 {
+        let v = 'b: { if i == 1 { break; } 28 };
+        println(f"{i} {v}");
+    }
+    for i in 0..3 {
+        let v = 'c: { if i == 1 { continue; } i * 10 };
+        println(f"c {i} {v}");
+    }
+    let mut n = 0;
+    let w = loop {
+        let x = 'd: {
+            if n == 2 {
+                break n * 100;
+            }
+            if n == 0 {
+                break 'd 7;
+            }
+            n
+        };
+        println(f"x {x}");
+        n = n + 1;
+    };
+    println(f"w {w}");
+    let mut k = 0;
+    while k < 5 {
+        k = k + 1;
+        'e: {
+            if k == 2 {
+                continue;
+            }
+            if k == 4 {
+                break;
+            }
+        }
+        println(f"k {k}");
+    }
+    println("end");
+}

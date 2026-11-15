@@ -1,0 +1,13 @@
+source = "B-2026-11-15-91"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["control-flow", "labels"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Loops and labels: `break` leaves the innermost loop and `continue` starts its next iteration; a labeled block is left only by `break 'label`. A plain break or continue inside a labeled block inside a `for`, `loop` or `while` targets that loop (a `break value` gives the `loop` its value); the probe's drop fuzzer found the plain break lowered as an exit from the block with a `()` value, invalid MIR. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "2d302780c"

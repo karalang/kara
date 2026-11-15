@@ -3614,6 +3614,10 @@ struct LoopCx {
     continue_bb: BasicBlock,
     depth: usize,
     dest: Option<Place>,
+    /// A labeled block (`'b: { .. }`), which only a `break 'b` leaves: an
+    /// unlabeled `break` or `continue` belongs to the innermost loop
+    /// (design.md § 6, B-2026-11-15-91).
+    block: bool,
 }
 
 /// A `par for` whose iterations run as tasks of one group (M4 item 12).
@@ -6633,7 +6637,12 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Records `l`, bound by a `let` of `value`, when the ownership check
     /// proved that `let` frozen ([`FrozenHints`]).
     fn note_frozen(&mut self, value: &Expr, l: Local) {
-        let key = SpanKey::from_span(&value.span);
+        self.note_frozen_key(SpanKey::from_span(&value.span), l);
+    }
+
+    /// [`Self::note_frozen`] by the span the ownership check keyed it on:
+    /// a `let`'s initializer, or a frozen `match`'s payload binding.
+    fn note_frozen_key(&mut self, key: SpanKey, l: Local) {
         let (alias, container) = (
             self.lcx.frozen.aliases.contains(&key),
             self.lcx.frozen.containers.contains(&key),
@@ -9683,6 +9692,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     continue_bb: head,
                     depth: self.scopes.len(),
                     dest: None,
+                    block: false,
                 });
                 let r = self.while_let_round(pattern, value, body, head, exit);
                 self.loops.pop();
@@ -9699,6 +9709,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     continue_bb: exit,
                     depth: self.scopes.len(),
                     dest: Some(dest.clone()),
+                    block: true,
                 });
                 let r = self.block_into(body, dest);
                 self.loops.pop();
@@ -9799,6 +9810,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                             continue_bb: head,
                             depth: self.scopes.len(),
                             dest: None,
+                            block: false,
                         });
                         let r = self
                             .auto_par_record(cw.inner, e.span)
@@ -12890,7 +12902,7 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     fn find_loop(&self, label: &Option<String>) -> Option<usize> {
         match label {
-            None => self.loops.len().checked_sub(1),
+            None => self.loops.iter().rposition(|c| !c.block),
             Some(l) => self
                 .loops
                 .iter()
@@ -12912,6 +12924,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             continue_bb,
             depth: self.scopes.len(),
             dest,
+            block: false,
         });
         let r = self.for_body(body);
         self.loops.pop();
@@ -16169,6 +16182,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             continue_bb,
             depth: self.scopes.len(),
             dest: None,
+            block: false,
         });
         let r = self.for_collection_round(
             pattern,
@@ -16388,6 +16402,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             continue_bb: head,
             depth: self.scopes.len(),
             dest: None,
+            block: false,
         });
         let r = (|| {
             self.push_scope();
@@ -16862,6 +16877,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             continue_bb: step,
             depth: self.scopes.len(),
             dest: None,
+            block: false,
         });
         let r = (|| {
             self.push_scope();
@@ -18110,6 +18126,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             continue_bb: head,
             depth: self.scopes.len(),
             dest: None,
+            block: false,
         });
         let r = self.for_iterator_round(pattern, it, next, some, item_t, body, head, exit);
         self.loops.pop();
@@ -18160,6 +18177,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             continue_bb: head,
             depth: self.scopes.len(),
             dest: None,
+            block: false,
         });
         let r = self.for_iterator_round(
             pattern,
@@ -18891,6 +18909,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                         .ref_bindings
                         .contains(&SpanKey::from_span(&pat.span));
                 self.bind_one(name, pat.id, place.clone(), t, by_ref, out);
+                // A payload bound out of a frozen place (`Some(m)` over
+                // `n.next`) counts nothing (B-2026-11-15-93).
+                if let Some(&(l, _)) = out.last() {
+                    self.note_frozen_key(SpanKey::from_span(&pat.span), l);
+                }
                 Ok(())
             }
             PatternKind::Tuple(ps) => {

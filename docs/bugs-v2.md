@@ -60,14 +60,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 340 |
 | false-positive | 215 |
-| missing-feature | 170 |
+| missing-feature | 171 |
 | perf | 169 |
 | soundness | 69 |
 | miscompile | 66 |
 | other | 43 |
-| run-vs-build | 41 |
+| run-vs-build | 42 |
 | codegen-gap | 32 |
-| crash | 30 |
+| crash | 31 |
 | leak | 4 |
 | use-after-free | 3 |
 | double-free | 1 |
@@ -77,13 +77,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 487 |
-| mir-llvm | 237 |
-| mir | 204 |
+| mir-llvm | 238 |
+| mir | 206 |
 | cli | 135 |
 | parser | 88 |
-| ownership | 81 |
+| ownership | 82 |
 | interp | 62 |
-| runtime | 46 |
+| runtime | 47 |
 | effect | 35 |
 | resolver | 30 |
 | codegen | 22 |
@@ -125,6 +125,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
 | B-2026-11-15-86 | 2026-11-15 | resolver | high | `karac fix` turns Rust's smallest-first `let mut heap: BinaryHeap<Reverse<i32>> = v.into_iter().map(Reverse).collect();` into a largest-first `PriorityQueue[Reverse[i32]]`: with no constructor to rewrite, the type is renamed and `Reverse` kept, so the mended program pops in the opposite order and answers wrong (kata 1167: 16 for [2,4,3], not 14) | — |
 | B-2026-11-15-87 | 2026-11-15 | effect | medium | E0418 between two different channels when one `par` branch both sends on one and receives on another: `par { { txb.send(1) }, { txa.send(2); rxb.recv() } }` is refused as `sends(Channel @ l5)` against `sends(Channel @ l2)`; with the receive gone it passes | — |
+| B-2026-11-15-91 | 2026-11-15 | mir | medium | A plain `break` (or `continue`) inside a labeled block inside a loop passes check, then every lane fails with `invalid MIR: assigning () to _7 of type i64`: lowering took the labeled block as the innermost loop | — |
+| B-2026-11-15-92 | 2026-11-15 | mir-llvm+runtime | low | A ThreadSanitizer build (`__mir-llvm-tsan`) of a std.regex program fails with a raw `undefined reference to karac_regex_mir` where CLAUDE.md promises a missing opt-in archive fails with its recipe | — |
+| B-2026-11-15-93 | 2026-11-15 | ownership+mir | medium | A frozen handle cannot match on a `mut` Option field (`match n.next { Some(m) => m.val, None => -1 }` is refused as `cannot be projected through .next yet`) though design.md says a mut field is readable through a frozen place | — |
 
 ### Relocated
 

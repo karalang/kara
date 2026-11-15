@@ -5059,6 +5059,7 @@ Dropping any one of them brings back the hazard the other three remove.
 | `n.kids.len()`, `n.kids.is_empty()` | yes | read-only queries |
 | `for k in n.kids` and `for k in n.kids.iter()` | yes | both spellings lower the same way |
 | `let k = n.kids[i];` | yes | the binding is itself a frozen place |
+| `match n.next { Some(m) => .., None => .. }` on an `Option` field | yes | `m` is itself a frozen place |
 | `n.count = 5` and every other write | **no** | property 2 |
 | capturing `n` in a closure | yes; the closure is a view and may not escape | property 3; [Handles in closures](#handles-in-closures) |
 | `return n;`, storing the **handle** in a non-frozen slot | **no** | property 3 |

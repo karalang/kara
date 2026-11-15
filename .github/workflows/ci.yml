@@ -603,7 +603,7 @@ jobs:
         with:
           key: llvm-tsan
 
-      - name: Build runtime staticlib archives (lean → full → tsan → tsan unicode)
+      - name: Build runtime staticlib archives (lean → full → tsan → tsan unicode → tsan regex)
         run: |
           cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
@@ -612,11 +612,13 @@ jobs:
           cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan.a
           RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime --release --features unicode --target-dir target/tsan --crate-type staticlib
           cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan_unicode.a
+          RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime --release --features regex --target-dir target/tsan --crate-type staticlib
+          cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan_regex.a
           rm -rf target/tsan
 
       # The instrument, then frozen handles counting nothing (B-2026-10-26-15).
       - name: TSan instrument tests
-        run: cargo test --features llvm --test mir_tsan --test mir_frozen_uncounted --test mir_tsan_unicode
+        run: cargo test --features llvm --test mir_tsan --test mir_frozen_uncounted --test mir_tsan_unicode --test mir_tsan_regex --test mir_frozen_option_match
 
       - name: Build karac (llvm)
         run: cargo build --features llvm

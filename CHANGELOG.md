@@ -167,6 +167,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- A function taking a `frozen` handle may `match` on an `Option` field of
+  it, `mut` or not: `match n.next { Some(m) => walk(m), None => 0 }` walks
+  a frozen linked list as `for k in n.kids` walks a tree, and `m` is a
+  frozen alias that counts nothing, so two `par` branches may walk one
+  list. It was refused as "cannot be projected through `.next` yet"
+  (design.md § Frozen handles, B-2026-11-15-93).
+
 - `Request.bytes()`: a server's request body exactly as it was sent, as a
   `Vec[u8]`, for a binary upload, a protobuf or CBOR body, or a webhook
   signature check over the raw body; `body()` replaces each invalid UTF-8
@@ -492,6 +499,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A plain `break` or `continue` inside a labeled block (`'b: { .. }`)
+  belongs to the innermost loop around it, as design.md § Loops and labels
+  says; it was taken as leaving the block, and a `break` there failed every
+  backend with an invalid-MIR error (B-2026-11-15-91).
+- A ThreadSanitizer build (`__mir-llvm-tsan`) of a program that uses
+  `Regex` links the TSan build of the regex archive,
+  `libkarac_runtime_tsan_regex.a` (recipe in CLAUDE.md), or is refused
+  with that recipe; it failed with a raw `undefined reference to
+  karac_regex_mir` (B-2026-11-15-92).
 - A `///` doc comment before a method's receiver (`self`, `ref self`,
   `mut ref self`, `own self`) is ignored, as design.md §3 says: it was a
   parse error calling `self` (or `ref`) a reserved keyword
