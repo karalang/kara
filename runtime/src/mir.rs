@@ -2038,11 +2038,14 @@ pub unsafe extern "C" fn karac_mir_cstr_to_string(out: *mut RawVec, p: *const u8
     let b = unsafe { std::ffi::CStr::from_ptr(p.cast()) }.to_bytes();
     match std::str::from_utf8(b) {
         Ok(_) if view != 0 => {
-            let w = out.cast::<usize>();
+            // Two words of the `Str` layout, which are 8 bytes on wasm32
+            // too: as `usize` the length went to the pointer's upper half
+            // there, and the view read as empty (B-2026-11-15-6).
+            let w = out.cast::<u64>();
             // SAFETY: as above.
             unsafe {
-                *w = p as usize;
-                *w.add(1) = b.len();
+                w.write_unaligned(p as u64);
+                w.add(1).write_unaligned(b.len() as u64);
             }
             0
         }

@@ -495,7 +495,22 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `?page=2` keeps the current path (it went to `/?page=2`), and `.` and
   `..` segments are removed, so `../login` from `/a/b/c` is `/a/login`;
   the compiled client sent `/a/b/../login` as written (B-2026-11-14-46).
-
+- On `--target=wasm_wasi`, a call through a `dyn Trait` value reached the
+  right method: the vtable's slot offsets assumed 8-byte pointers, so every
+  dyn call read past its slot and trapped (B-2026-11-15-3).
+- On `--target=wasm_wasi`, `a.iter().zip(b.iter()).map(...)` reads both
+  references: a pair of pointers was passed as a `{ptr, ptr}` register pair
+  where the MIR layout holds two 8-byte words, so the closure read zeros
+  (B-2026-11-15-4).
+- A wasm_wasi program that calls `std.log` links: the runtime's
+  `karac_mir_log_dispatch` took its size as `usize` where the module passes
+  `i64`, which wasm-ld rejects as a signature mismatch (B-2026-11-15-5).
+- On `--target=wasm_wasi`, `CString.to_str()` keeps its length: the runtime
+  wrote the borrowed `Str` view as two pointer-width words where the module
+  reads two 8-byte words, so the view read as empty (B-2026-11-15-6).
+- `VecDeque.truncate` drops the removed elements front to back, from
+  index `len` on, as collections.md says and as `clear`, `retain` and
+  `Vec.truncate` do; it dropped them back to front (B-2026-11-15-7).
 - `x`, `X`, `o` and `b` print a negative integer narrower than 64 bits as
   its two's complement at its own width, as Rust does: `-1i8` under `x` is
   `ff` and `-2i32` is `fffffffe`, where both MIR backends printed the 64-bit

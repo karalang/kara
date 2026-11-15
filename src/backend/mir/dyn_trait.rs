@@ -42,16 +42,26 @@ fn e<T: ToString>(x: T) -> String {
     x.to_string()
 }
 
-/// Where `clone` is in a table: after `drop`, `size` and `align`.
+/// Where `clone` is in a table: after `drop`, `size` and `align`, the two
+/// `i64`s aligned to 8 whatever a pointer's size.
 const CLONE: u64 = 24;
 
-/// Where the first slot is in a table: after `clone`.
-const FIRST_SLOT: u64 = 32;
+/// A pointer's size, which is a table's stride from `clone` on: 4 on
+/// wasm32, where the slots read at 8-byte steps found the next pointer's
+/// neighbour, null, and trapped (B-2026-11-15-3).
+fn ptr_bytes() -> u64 {
+    if crate::target::active_target_is_wasm() {
+        4
+    } else {
+        8
+    }
+}
 
 /// Where slot `slot`'s method (`start` false) or its `start` entry is in a
-/// table: each slot is a pair of them.
+/// table: each slot is a pair of them, the first after `clone`.
 fn slot_offset(slot: u32, start: bool) -> u64 {
-    FIRST_SLOT + 16 * u64::from(slot) + if start { 8 } else { 0 }
+    let w = ptr_bytes();
+    CLONE + w + 2 * w * u64::from(slot) + if start { w } else { 0 }
 }
 
 /// The [`Shim::DynSlot`] slot that is a table's `clone`.

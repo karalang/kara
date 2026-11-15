@@ -2361,12 +2361,20 @@ impl[T] VecDeque[T] {
         }
     }
 
-    /// Drops the elements from index `len` to the back; nothing when `len`
-    /// is at least the length.
+    /// Drops the elements from index `len` to the back, in that order, as
+    /// every other drop of elements runs front to back; nothing when `len`
+    /// is at least the length. They are taken off the back into a vector
+    /// and reversed, so only the removed elements move.
     fn truncate(mut ref self, len: i64) {
-        while self.len() > len {
-            let _ = self.pop_back();
+        if self.len() <= len {
+            return;
         }
+        let keep = if len < 0 { 0 } else { len };
+        let mut gone: Vec[T] = Vec.new();
+        while self.len() > keep {
+            gone.push(self.pop_back().unwrap());
+        }
+        gone.reverse();
     }
 }
 

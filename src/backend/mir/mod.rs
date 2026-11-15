@@ -830,7 +830,14 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 continue;
             }
             let lt = self.llvm_ty(*p).ok()?;
-            if lt.is_array_type() {
+            // A pointer is a word of the layout but 4 bytes to LLVM on
+            // wasm32, so `{ptr, ptr}` would put the second at 4 where the
+            // layout has it at 8: a zip's `(ref A, ref B)` handed to a
+            // closure read zeros there (B-2026-11-15-4). Such a pair stays in
+            // memory on wasm.
+            if lt.is_array_type()
+                || (lt.is_pointer_type() && crate::target::active_target_is_wasm())
+            {
                 return None;
             }
             regs.push((layout::field_offset(self.tys, t, None, i as u32)?, lt, pl));

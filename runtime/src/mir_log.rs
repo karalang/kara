@@ -140,7 +140,10 @@ pub unsafe extern "C" fn karac_mir_log_install(
 /// # Safety
 /// `call` is a call `emit` and `default` take.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_log_dispatch(call: *mut u8, size: usize, default: Default) {
+pub unsafe extern "C" fn karac_mir_log_dispatch(call: *mut u8, size: u64, default: Default) {
+    // `u64`, as every `karac_mir_*` size is, so the declaration codegen
+    // makes holds on wasm32 too, where a `usize` is 32 bits (B-2026-11-15-5).
+    let size = size as usize;
     if HELD.with(Cell::get) {
         // From inside a backend's `emit`.
         // SAFETY: the caller's contract.
