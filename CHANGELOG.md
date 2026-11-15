@@ -172,6 +172,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   signature check over the raw body; `body()` replaces each invalid UTF-8
   sequence (docs/library/io.md § HTTP server, B-2026-11-15-25).
 
+- Every integer has `trailing_ones()` and `leading_ones()`, as Rust's, the
+  ones counted within the receiver's width and returned as `i64` as the
+  other bit counts are (library/core-types.md "Bit counts"; kata 2154).
+
 - The iterator `chars()` returns has `as_str()`, the text it has not yet
   read, as Rust's `Chars::as_str` (library/strings.md; kata 2129).
 

@@ -107,7 +107,7 @@ Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).
 | `saturating_add(y)`, ... | `Self` | Clamps to the type's minimum or maximum |
 | `overflowing_add(y)`, ... | `(Self, bool)` | The wrapped result and whether it overflowed; a shift overflows when its amount is at least the bit width |
 
-**Bit counts.** `count_ones()`, `count_zeros()`, `leading_zeros()` and `trailing_zeros()` exist on every integer type and return `i64`, as every count does in Kāra ([design.md §5](../design.md#5-types)), not Rust's `u32`. So `x.count_ones() == k` and `total += x.count_ones()` need no cast with `k` and `total` of type `i64`. A shift amount or a `pow` exponent stays `u32` (above). (Review-thread ruling 2026-10-30, B-2026-10-29-19.)
+**Bit counts.** `count_ones()`, `count_zeros()`, `leading_zeros()`, `trailing_zeros()`, `leading_ones()` and `trailing_ones()` exist on every integer type and return `i64`, as every count does in Kāra ([design.md §5](../design.md#5-types)), not Rust's `u32`. So `x.count_ones() == k` and `total += x.count_ones()` need no cast with `k` and `total` of type `i64`. A shift amount or a `pow` exponent stays `u32` (above). (Review-thread ruling 2026-10-30, B-2026-10-29-19.)
 
 **Byte order.** As Rust's: `x.to_ne_bytes()`, `x.to_le_bytes()` and `x.to_be_bytes()` give an integer's bytes as an `Array[u8, N]`, `N` its byte width, in native, little-endian or big-endian order, and `<int>.from_ne_bytes(b)`, `from_le_bytes(b)` and `from_be_bytes(b)` read one back from an `Array[u8, N]` of that width. A wire format names its order: a SOCKS5 or IP port is `port.to_be_bytes()` and `u16.from_be_bytes([hi, lo])`. (B-2026-11-10-45.)
 

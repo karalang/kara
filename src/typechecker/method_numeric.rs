@@ -100,6 +100,7 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "count_ones",
     "count_zeros",
     "div_euclid",
+    "leading_ones",
     "leading_zeros",
     "max",
     "min",
@@ -129,6 +130,7 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "to_le_bytes",
     "to_ne_bytes",
     "to_string",
+    "trailing_ones",
     "trailing_zeros",
     "wrapping_add",
     "wrapping_div",
@@ -943,7 +945,8 @@ impl<'a> super::TypeChecker<'a> {
             return Some(receiver_for_lookup.clone());
         }
         // Bit intrinsics on integer scalars — `count_ones` / `count_zeros` /
-        // `leading_zeros` / `trailing_zeros` -> i64, as every count is in Kāra
+        // `leading_zeros` / `trailing_zeros` / `leading_ones` /
+        // `trailing_ones` -> i64, as every count is in Kāra
         // (docs/library/core-types.md "Bit counts", B-2026-10-29-19; Rust's
         // are `u32`). All width-dependent: `leading_zeros` / `trailing_zeros`
         // count within the receiver's bit width, and `count_ones` over its `bits`
@@ -957,7 +960,12 @@ impl<'a> super::TypeChecker<'a> {
             && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
             && matches!(
                 method,
-                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+                "count_ones"
+                    | "count_zeros"
+                    | "leading_zeros"
+                    | "trailing_zeros"
+                    | "leading_ones"
+                    | "trailing_ones"
             )
         {
             self.record_expr_type(args_close_span, receiver_for_lookup);

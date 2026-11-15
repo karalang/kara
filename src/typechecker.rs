@@ -8790,8 +8790,23 @@ impl<'a> TypeChecker<'a> {
             // `fold(Set.new(), |m, x| ..)` leaves the set's hasher open on
             // both sides, so the tail's `Set[i64, ?H]` solves the slot's
             // `Set[?T, ?H]` as the two whole types do.
-            (Type::Function { params: a, .. }, Type::Function { params: b, .. }) => {
-                a.len() == b.len()
+            // A `Fn` value into an `OnceFn` slot (`unwrap_or_else(|| ..)`)
+            // unifies the same way.
+            (
+                Type::Function { params: a, .. } | Type::OnceFunction { params: a, .. },
+                Type::Function { params: b, .. } | Type::OnceFunction { params: b, .. },
+            ) => a.len() == b.len(),
+            // A slot that is one open variable, such as the `T` of an
+            // `Option[T]` whose `map` closure ends in a `collect` no use has
+            // fixed yet, takes the open value handed to it whole:
+            // `.map(|x| (0..x).collect()).unwrap_or(Vec.new())` makes the
+            // `T` a `Vec[?U]`, as unification would (kata 2177). A number
+            // literal's variable takes only a number, so it is left out.
+            (Type::TypeVar(id), other) | (other, Type::TypeVar(id))
+                if inference::literal_var_kind(*id).is_none()
+                    && !matches!(other, Type::TypeVar(_)) =>
+            {
+                true
             }
             _ => false,
         };

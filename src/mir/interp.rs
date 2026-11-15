@@ -3177,12 +3177,12 @@ impl<'a> Interp<'a> {
             }
             (
                 t,
-                "trailing_zeros" | "leading_zeros" | "count_zeros" | "count_ones" | "abs_diff"
-                | "checked_add" | "checked_sub" | "checked_mul" | "saturating_add"
-                | "saturating_sub" | "saturating_mul" | "clamp" | "overflowing_add"
-                | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes" | "to_le_bytes"
-                | "to_be_bytes" | "rotate_left" | "rotate_right" | "swap_bytes" | "reverse_bits"
-                | "next_power_of_two",
+                "trailing_zeros" | "leading_zeros" | "trailing_ones" | "leading_ones"
+                | "count_zeros" | "count_ones" | "abs_diff" | "checked_add" | "checked_sub"
+                | "checked_mul" | "saturating_add" | "saturating_sub" | "saturating_mul" | "clamp"
+                | "overflowing_add" | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes"
+                | "to_le_bytes" | "to_be_bytes" | "rotate_left" | "rotate_right" | "swap_bytes"
+                | "reverse_bits" | "next_power_of_two",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
             // B-2026-10-19-11: the families' div / rem / neg / shl / shr / pow.
             (t, m) if int_width(t).is_some() && is_overflow_family_op(m) => {
@@ -12046,6 +12046,12 @@ impl<'a> Interp<'a> {
                 Ok(Value::Int((raw(*a).leading_zeros() - (128 - bits)) as i128))
             }
             ("count_zeros", [a]) => Ok(Value::Int((bits - raw(*a).count_ones()) as i128)),
+            // The ones counts are the zeros counts of the complement within
+            // the width: `raw` masks the complement's sign extension away.
+            ("trailing_ones", [a]) => Ok(Value::Int(raw(!*a).trailing_zeros().min(bits) as i128)),
+            ("leading_ones", [a]) => Ok(Value::Int(
+                (raw(!*a).leading_zeros() - (128 - bits)) as i128,
+            )),
             ("count_ones", [a]) => Ok(Value::Int(raw(*a).count_ones() as i128)),
             // The width's bytes or bits reversed, read back at the type's
             // sign (B-2026-10-19-27).

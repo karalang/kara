@@ -1748,8 +1748,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, v.into())?;
             }
-            ("trailing_zeros" | "leading_zeros" | "count_ones" | "count_zeros", []) => {
+            (
+                "trailing_zeros" | "leading_zeros" | "trailing_ones" | "leading_ones"
+                | "count_ones" | "count_zeros",
+                [],
+            ) => {
                 let v = match method {
+                    // A ones count is the zeros count of the complement.
+                    "trailing_ones" | "leading_ones" => {
+                        let nx = self.builder.build_not(x, "").map_err(e)?;
+                        let op = if method == "trailing_ones" {
+                            "cttz"
+                        } else {
+                            "ctlz"
+                        };
+                        self.int_intrinsic(op, &[nx.into(), f.into()], xt)?
+                    }
                     "trailing_zeros" => self.int_intrinsic("cttz", &[x.into(), f.into()], xt)?,
                     "leading_zeros" => self.int_intrinsic("ctlz", &[x.into(), f.into()], xt)?,
                     "count_ones" => self.int_intrinsic("ctpop", &[x.into()], xt)?,

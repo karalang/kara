@@ -3801,16 +3801,21 @@ impl super::Parser {
                 length: (bang.offset + bang.length).checked_sub(start.offset)?,
                 replacement: String::new(),
             }),
-            ExprKind::RepeatLiteral { value, count, .. } => {
+            ExprKind::RepeatLiteral { .. } => {
+                // The two operands are cut from the text between the
+                // brackets, at its `;`, and not from their own spans: an
+                // operand that ends or starts with a parenthesized operand
+                // (`1 << (m * n)`, `(n)`) has a span that stops short of
+                // its parentheses (kata 2174).
                 let (source, base) = self.source.as_ref()?;
-                let text = |span: &Span| {
-                    source.get(span.offset.checked_sub(*base)?..span.offset - base + span.length)
-                };
-                Some(whole(format!(
-                    "Vec.filled({}, {})",
-                    text(&count.span)?,
-                    text(&value.span)?
-                )))
+                let at = |offset: usize| offset.checked_sub(*base);
+                let open = at(bang.offset + bang.length)?;
+                let close = at(lit.span.offset + lit.span.length)?;
+                let inner = source.get(open..close)?.trim();
+                let inner = inner.strip_prefix('[')?.strip_suffix(']')?;
+                let semi = top_level_semicolon(inner)?;
+                let (value, count) = (inner[..semi].trim(), inner[semi + 1..].trim());
+                Some(whole(format!("Vec.filled({count}, {value})")))
             }
             _ => None,
         }
@@ -5243,4 +5248,32 @@ fn collect_target_type(ty: &str) -> Option<String> {
         "Vec" | "String" | "Set" | "Map" | "SortedSet" | "SortedMap" | "VecDeque"
     )
     .then_some(t)
+}
+
+/// The byte offset of the first `;` in `text` outside brackets and string
+/// or char literals: the one between a `[v; n]` literal's operands.
+fn top_level_semicolon(text: &str) -> Option<usize> {
+    let mut depth = 0i64;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in text.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ';' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
 }
