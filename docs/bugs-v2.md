@@ -58,28 +58,29 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 317 |
-| false-positive | 209 |
+| diagnostics | 324 |
+| false-positive | 211 |
 | perf | 169 |
-| missing-feature | 161 |
+| missing-feature | 164 |
 | soundness | 69 |
 | miscompile | 64 |
 | run-vs-build | 39 |
 | other | 34 |
 | codegen-gap | 30 |
-| crash | 29 |
+| crash | 30 |
 | leak | 4 |
 | use-after-free | 3 |
+| double-free | 1 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| typecheck | 466 |
-| mir-llvm | 232 |
-| mir | 195 |
-| cli | 117 |
-| parser | 83 |
+| typecheck | 476 |
+| mir-llvm | 234 |
+| mir | 198 |
+| cli | 121 |
+| parser | 85 |
 | ownership | 81 |
 | interp | 59 |
 | runtime | 46 |
@@ -117,6 +118,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-2 | 2026-11-15 | mir-llvm | low | Walking a `String`'s chars costs 2x to 2.8x Rust's `chars()` in a `karac build` binary: kata 1573's `s.chars().enumerate().filter(|(_, c)| c == '1').map(|(i, _)| i).collect()` over 200 strings of 500000 ASCII characters takes 0.21 s against Rust's 0.076 s, while the same chain over `s.bytes().iter()` takes 0.083 s | — |
 | B-2026-11-15-16 | 2026-11-15 | mir-llvm | low | `(0..n).map(|_| ..).collect()` into a `Vec[i64]` costs about 28 instructions an item in a `karac build` binary against 4.4 for the push loop it stands for, and 30 against Rust's 13 when the closure writes a captured variable: kata 1582's bench draws its 2000 matrices of 100 x 100 that way and runs 1.55x checked Rust, the drawing 1.9x and the solving 0.85x | — |
 | B-2026-11-15-17 | 2026-11-15 | parser | low | A Rust file's `use std::...` lines mend one per `karac fix` round: after the first line's diagnostic, the parser's item recovery skipped to the next `fn`, past the other `use` lines, so `karac check` reported one and LeetCode's binary-tree template (`RefCell`, `VecDeque`, `Rc`) took three extra rounds | — |
+| B-2026-11-15-32 | 2026-11-15 | mir+mir-llvm | high | A closure handed to `flat_map` that returns a closure using one of its non-`Copy` captures (`(0..2).flat_map(|m| (0..3).map(|c| m + clears[c]))`, `clears: Vec[i64]`) passes `karac check`, but the outer closure takes `clears` by move per call (a5ec3ea61c), so the interpreter stops ("main.c0 takes its environment by value and is called through a reference") and the compiled program double-frees (ASan: heap-use-after-free in `main.c0`); the same closure bound by `let` and called twice passes check and fails the MIR move check | — |
+| B-2026-11-15-33 | 2026-11-15 | typecheck | low | `Option.as_mut()` is refused with "no method 'as_mut' on type 'Option'" and no fix, though `as_ref` is there; Rust's linked-list templates walk `while let Some(node) = cur.as_mut()` (library/core-types.md `Option[T]`) | — |
+| B-2026-11-15-34 | 2026-11-15 | typecheck+mir | medium | `successors(Some(x), |lap| Some(lap * 2))` with `x: ref i64` from `v.iter()` is refused with E0509 "the result borrows a temporary value, which this function owns" at `Some(lap * 2)`, with no fix: the seed makes the item `ref i64`, so the closure's `i64` result is taken by reference; `Some(*x)` is the fix (and before f881db9fa4's receiver fix the interpreter stopped on invalid MIR: "IterSuccessors[ref i64, Fn(ref i64) -> Option[i64]].next: the result of a Fn call has the wrong type") | — |
+| B-2026-11-15-35 | 2026-11-15 | typecheck | low | `rotate_left` and `rotate_right` are `Vec` methods only: Rust's `s[k..=r].rotate_left(1)` on a part of a `Vec`, a `mut Slice`, is refused ("turning the elements is a `Vec` method"), though `swap`, `reverse`, `sort` and `fill` all work on a `mut Slice` (library/collections.md) | — |
+| B-2026-11-15-36 | 2026-11-15 | parser+cli | medium | Rust's `impl fmt::Display for T { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}{}", a, b) } }` is a `karac fix` dead end: after the `use`, `&self` and `&mut` fixes, the `fmt::` paths in the impl header and the parameter type stay parse errors with no fix ("Expected `{`, found `::`"), and `write!` says only that Kāra has no macros, with nothing on Kāra's `Display`, whose one method is `to_string(ref self) -> String` | — |
+| B-2026-11-15-38 | 2026-11-15 | typecheck | medium | A list literal returned by a closure (`d.iter().map(|e| [e[0], e[1], 1 - e[2]]).collect()` into a `Vec[Array[i64, 3]]`) is a `Vec`, so the `collect` fails ("`Vec[Array[i64, 3]]` implements `FromIterator[Array[i64, 3]]`, not `FromIterator[Vec[i64]]`") with no fix, and a closure cannot declare its return type (`|e| -> Array[i64, 3] { .. }` is refused as Rust syntax), so the only spelling is a typed `let` inside the closure | — |
+| B-2026-11-15-40 | 2026-11-15 | typecheck+cli | medium | `println(f"{v} -> {total(v)}")` with `v` owned and `total(v: own Vec[i64])` is refused with E0516 ("cannot move `v` while it is still borrowed") and no machine fix, though the message names `.clone()`; in kata 2202 it is where `karac fix`'s own `own` edits end, three rounds after a bare parameter was stored in a struct field | — |
 
 ### Relocated
 
@@ -1240,6 +1248,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-24 | parser | low | A `///` doc comment before a method's receiver (`self`, `ref self`, `mut ref self`, `own self`) is a parse error naming `self` / `ref` as a reserved… | 1ea33f776c |
 | B-2026-11-15-25 | mir+mir-llvm | medium | A server has no way to read a request body as it was sent: `Request` has `body()` (a `String`, so a body that is not UTF-8 is decoded lossily, B-2026… | de1d38948a |
 | B-2026-11-15-26 | cli | low | `karac fmt` moves a `///` before a function's first parameter (or before a method's receiver) into the function body, where it documents nothing and… | e5597ca22f |
+| B-2026-11-15-27 | typecheck | low | `trailing_ones()` and `leading_ones()`, which Rust has on every integer, are refused with "no method 'trailing_ones' on type 'i64'", though `count_on… | b545bd3ba1 |
+| B-2026-11-15-28 | parser+cli | medium | `karac fix` writes `vec![false; 1 << (m * n)]` as `Vec.filled(1 << (m * n, false)` and then refuses to write the result: the repeat literal's count i… | b545bd3ba1 |
+| B-2026-11-15-29 | typecheck | medium | `Some(n).map(\|x\| (0..x).collect()).unwrap_or(Vec.new())` returned as a `Vec[i64]` is refused with "expected '?T3', found 'Vec[?T4]'": the `Option`'s… | b545bd3ba1 |
+| B-2026-11-15-30 | typecheck | high | A generic free function called inside a method call's closure argument (`v.iter().map(\|x\| apply(x, \|y\| y * 2))`, with `fn apply[T, F: Fn(ref T) -> T]… | 35b04a7e5b |
+| B-2026-11-15-31 | typecheck | low | Rust's `v.sort_by_cached_key(\|x\| key(x))` is refused with a bare "no method 'sort_by_cached_key' on type 'Vec'" and no fix, though `sort_unstable_by_… | c93ef18010 |
+| B-2026-11-15-37 | typecheck+cli | low | `return nodes.get(v);` from a `-> Option[TreeNode]` is refused with a bare "expected 'Option[TreeNode]', found 'Option[ref TreeNode]'" and no fix, th… | 809d1c0c18 |
+| B-2026-11-15-39 | mir+mir-llvm | high | `for a in 1..3usize { let s = a + a; println(f"{s % a}"); }` passes `karac check` and then stops both backends with "invalid MIR: main: bb5[2]: binar… | cad67cae2b |
 
 </details>
 
