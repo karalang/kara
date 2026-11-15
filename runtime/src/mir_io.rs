@@ -1106,6 +1106,20 @@ struct MirErrorResponse {
     body: Vec<u8>,
 }
 
+/// The bytes a `Response`'s body came as, when they are not UTF-8, by the
+/// address of its `String`'s buffer, as `MIR_RESPONSE_HEADERS` keys a
+/// `Response`: `body()` is the body decoded with each invalid sequence
+/// replaced by U+FFFD, which a `String` must be, and `bytes()` returns these
+/// (docs/library/io.md § HTTP client, B-2026-11-15-8). The decoded text is
+/// kept too and compared at each read, so a `Response` a program built (a
+/// fake provider's) that reuses a freed buffer finds nothing. A body that is
+/// UTF-8 has no entry: its `String` holds its bytes. In both archives, as
+/// `bytes()` of a fake provider's `Response` reads the `String`.
+type RawBody = (Vec<u8>, Vec<u8>);
+static MIR_RESPONSE_RAW: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<usize, RawBody>>,
+> = std::sync::LazyLock::new(Default::default);
+
 static MIR_ERROR_RESPONSES: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<usize, MirErrorResponse>>,
 > = std::sync::LazyLock::new(Default::default);
@@ -1221,12 +1235,41 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_send(
         }
         RawVec::new(q, n, cap)
     };
-    let ok = st > 0;
-    let s = if ok {
-        take(body, body_len)
-    } else {
-        take(msg, msg_len)
+    // A `String` of `b`, in a buffer of its own as `take` makes one.
+    let take_bytes = |b: &[u8]| -> RawVec {
+        let q = karac_realloc_or_panic(std::ptr::null_mut(), b.len().max(1));
+        // SAFETY: `q` has room for `b.len()` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), q, b.len()) };
+        RawVec::new(q, b.len(), b.len().max(1))
     };
+    let ok = st > 0;
+    // A body that is not UTF-8 becomes a `String` of its lossy decoding,
+    // its bytes kept for `bytes()` (`MIR_RESPONSE_RAW`, B-2026-11-15-8).
+    let raw = if ok && !body.is_null() {
+        let n = usize::try_from(body_len).unwrap_or(0);
+        // SAFETY: the client wrote `n` bytes at `body`.
+        let b = unsafe { std::slice::from_raw_parts(body, n) };
+        std::str::from_utf8(b).is_err().then(|| b.to_vec())
+    } else {
+        None
+    };
+    let s = match &raw {
+        Some(raw) => {
+            // SAFETY: `body` came from `malloc`; its bytes are copied above.
+            unsafe { free(body.cast()) };
+            let text = String::from_utf8_lossy(raw).into_owned().into_bytes();
+            take_bytes(&text)
+        }
+        None if ok => take(body, body_len),
+        None => take(msg, msg_len),
+    };
+    if let Some(raw) = raw {
+        // SAFETY: `s` is the body's fresh buffer of `s.len` bytes.
+        let text = unsafe { buf_bytes(s.ptr, s.len) }.to_vec();
+        if let Ok(mut t) = MIR_RESPONSE_RAW.lock() {
+            t.insert(s.ptr as usize, (text, raw));
+        }
+    }
     if ok {
         if let Ok(mut t) = MIR_RESPONSE_HEADERS.lock() {
             t.insert(s.ptr as usize, headers);
@@ -1403,12 +1446,41 @@ pub unsafe extern "C" fn karac_runtime_http_error_mir_body(
 ) -> i32 {
     match mir_error_response(msg, len, |e| e.body.clone()) {
         Some(b) => {
+            // A `String`, so a body that is not UTF-8 is decoded with each
+            // invalid sequence replaced (B-2026-11-15-8).
+            let text = String::from_utf8_lossy(&b);
             // SAFETY: the caller's contract.
-            unsafe { string_of(out, &b) };
+            unsafe { string_of(out, text.as_bytes()) };
             1
         }
         None => 0,
     }
+}
+
+/// `Response.bytes()` for the response whose body is the `String` of `len`
+/// bytes at `body`: the bytes the body came as (`MIR_RESPONSE_RAW`), or the
+/// `String`'s own when it came as UTF-8 or the program built the
+/// `Response`; a fresh `Vec[u8]` at `out`.
+///
+/// # Safety
+///
+/// `body` describes `len` readable bytes (or is null with a zero length),
+/// and `out` is writable for a `Vec`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_mir_bytes(
+    body: *const u8,
+    len: u64,
+    out: *mut RawVec,
+) {
+    // SAFETY: the caller's contract.
+    let now = unsafe { buf_bytes(body, len as usize) };
+    let raw = MIR_RESPONSE_RAW.lock().ok().and_then(|t| {
+        t.get(&(body as usize))
+            .filter(|(text, _)| text.as_slice() == now)
+            .map(|(_, raw)| raw.clone())
+    });
+    // SAFETY: the caller's contract.
+    unsafe { string_of(out, raw.as_deref().unwrap_or(now)) };
 }
 
 // The WebSocket handshake's accept key, shared with the MIR interpreter
@@ -1741,7 +1813,9 @@ pub unsafe extern "C" fn karac_mir_http_request(
             match op {
                 0 => string_of(out, r.path().as_bytes()),
                 1 => string_of(out, r.method.as_bytes()),
-                2 => string_of(out, &r.body),
+                // A `String`, so a body that is not UTF-8 is decoded with
+                // each invalid sequence replaced (B-2026-11-15-8).
+                2 => string_of(out, String::from_utf8_lossy(&r.body).as_bytes()),
                 3 => {
                     let name = String::from_utf8_lossy(bytes_at(name, name_len));
                     match r.header(&name) {

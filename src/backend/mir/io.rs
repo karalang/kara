@@ -1667,9 +1667,28 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, v.into())?;
             }
-            // `bytes` is the body's bytes as a `Vec[u8]`, which a `String`
-            // is laid out as.
-            ("Response", "body" | "bytes") | ("HttpError", "message") => {
+            // `bytes` is the bytes the body came as, which the runtime keeps
+            // when they are not UTF-8 (`body` is then their lossy decoding,
+            // B-2026-11-15-8), else the body's own as a `Vec[u8]`.
+            ("Response", "bytes") => {
+                let (at, ty) = self.behind_refs(&args[0])?;
+                let k = self.response_field(ty, "body")?;
+                let src = self.offset(at, self.field_offset(ty, None, k)?)?;
+                let body = self.load_ptr(src)?;
+                let n = self.load_len(self.offset(src, 8)?)?;
+                let d = self.place_ptr(dest)?;
+                let f = self.extern_fn(
+                    "karac_runtime_http_client_mir_bytes",
+                    self.llcx.void_type().fn_type(
+                        &[ptr.into(), self.llcx.i64_type().into(), ptr.into()],
+                        false,
+                    ),
+                );
+                self.builder
+                    .build_call(f, &[body.into(), n.into(), d.into()], "")
+                    .map_err(e)?;
+            }
+            ("Response", "body") | ("HttpError", "message") => {
                 let (at, ty) = self.behind_refs(&args[0])?;
                 let k = if base == "Response" {
                     self.response_field(ty, "body")?

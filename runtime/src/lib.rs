@@ -698,12 +698,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_runtime_http_client_mir_headers,
     );
     // `HttpError`'s readers of the response an error status keeps
-    // (B-2026-11-09-44): in both archives, as a fake provider's error
-    // reads `None` from them.
+    // (B-2026-11-09-44), and `Response.bytes()` (B-2026-11-15-8): in both
+    // archives, as a fake provider's error or response reads them.
     keep!(
         mir_io::karac_runtime_http_error_mir_status,
         mir_io::karac_runtime_http_error_mir_header,
         mir_io::karac_runtime_http_error_mir_body,
+        mir_io::karac_runtime_http_client_mir_bytes,
     );
     // Tracing spans (`runtime/src/tracing.rs`). Codegen emits calls to the
     // whole surface (span enter/exit bracketing + exporter/min-level

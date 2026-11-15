@@ -483,6 +483,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A built program's HTTP `Response.body()`, `HttpError.body()` and a
+  server's `Request.body()` of a body that is not UTF-8 is the body decoded
+  with each invalid sequence replaced by U+FFFD, as under `karac run`. It
+  was a `String` holding the raw bytes, and `body().chars()` aborted the
+  program (B-2026-11-15-8). `Response.bytes()` returns the body as it was
+  sent, which is how a program reads a binary or compressed body.
+
 - `karac run` sends an HTTP request through the same client a built program
   links, so the two agree on what a response is. A body cut short (fewer
   bytes than its `Content-Length`, a chunked body with no last chunk, a
