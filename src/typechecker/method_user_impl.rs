@@ -1850,7 +1850,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.copy_derive_fix(&owned)
                         })
                         .flatten()
-                        .filter(|f| f.replacement.contains("Clone"))
+                        .filter(|f| f.adds_clone())
                         .or(flatten_fix);
                     match derive {
                         Some(fix) => self.type_error_with_fix_it(

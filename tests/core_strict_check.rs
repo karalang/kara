@@ -1751,7 +1751,7 @@ fn a_reused_all_copy_value_is_fixed_by_derive_copy() {
              println(take(p));\n\
          }\n",
         "moved here, used again",
-        "#[derive(Copy)]\npub struct P",
+        "#[derive(Copy, Clone)]\npub struct P",
     );
     rejected_then_fixed_by(
         "derive-copy-enum",
@@ -1763,7 +1763,7 @@ fn a_reused_all_copy_value_is_fixed_by_derive_copy() {
              println(show(d));\n\
          }\n",
         "moved here, used again",
-        "#[derive(Copy)]\nenum Dir",
+        "#[derive(Copy, Clone)]\nenum Dir",
     );
     // A heap field or a `Drop` body rules it out: no derive is written.
     for (tag, src) in [
@@ -1850,7 +1850,7 @@ fn derive_copy_fixes_loop_and_field_moves() {
              while i < 2 { println(note(r)); i = i + 1; }\n\
          }\n",
         "moved inside a loop",
-        "#[derive(Copy)]\nenum Reason",
+        "#[derive(Copy, Clone)]\nenum Reason",
     );
     rejected_then_fixed_by(
         "derive-copy-field",
@@ -1863,7 +1863,7 @@ fn derive_copy_fixes_loop_and_field_moves() {
              println(s.hits + d.size);\n\
          }\n",
         "moved here, used again",
-        "#[derive(Copy)]\nstruct Stats",
+        "#[derive(Copy, Clone)]\nstruct Stats",
     );
 }
 
@@ -15087,7 +15087,7 @@ fn a_nested_derive_fix_is_named_a_first_step() {
     rejected_then_fixed_in(
         "nested-derive-first-step",
         nested,
-        "add `#[derive(Copy)]` to 'Op' (its fields are all `Copy`), the first of the derives 'prog' needs before it can be cloned",
+        "add `#[derive(Copy, Clone)]` to 'Op' (its fields are all `Copy`), the first of the derives 'prog' needs before it can be cloned",
         "#[derive(Clone)]\nstruct Prog",
         3,
     );
@@ -15111,7 +15111,7 @@ fn a_nested_derive_fix_is_named_a_first_step() {
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        err.contains("add `#[derive(Copy)]` to 'P' (its fields are all `Copy`, so 'p' is copied instead of moved)"),
+        err.contains("add `#[derive(Copy, Clone)]` to 'P' (its fields are all `Copy`, so 'p' is copied instead of moved)"),
         "one-derive-copies: {err}"
     );
     let _ = std::fs::remove_dir_all(dir);

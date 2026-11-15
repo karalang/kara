@@ -341,7 +341,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 derive_copy.map(|(_, edit)| Box::new(edit.clone()))
             };
             let suggestion = if let Some((ty, edit)) = derive_copy {
-                if edit.replacement.contains("Clone") {
+                if edit.adds_clone() {
                     let step = crate::ownership::clone_step(ty, edit);
                     format!(
                         "{step} and write `.clone()` to take a copy, \
@@ -350,7 +350,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     )
                 } else {
                     format!(
-                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), read the \
+                        "add `#[derive(Copy, Clone)]` to '{ty}' (its fields are all `Copy`), read the \
                          element in place, or take it out with `v.swap(i, j)` / `mem.replace`"
                     )
                 }
@@ -462,7 +462,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 derive_copy.map(|(_, edit)| Box::new(edit.clone()))
             };
             let suggestion = if let Some((ty, edit)) = derive_copy {
-                if edit.replacement.contains("Clone") {
+                if edit.adds_clone() {
                     let step = crate::ownership::clone_step(ty, edit);
                     format!(
                         "{step} and write `.clone()` to call it on a \
@@ -470,7 +470,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     )
                 } else {
                     format!(
-                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), or use a \
+                        "add `#[derive(Copy, Clone)]` to '{ty}' (its fields are all `Copy`), or use a \
                          method that borrows"
                     )
                 }

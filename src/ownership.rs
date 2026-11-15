@@ -2200,11 +2200,11 @@ pub(crate) fn derive_advice(
     binding: &str,
     first_step: bool,
 ) -> String {
-    let clone = edit.replacement.contains("Clone");
+    let clone = edit.adds_clone();
     let add = if clone {
         clone_step(ty, edit)
     } else {
-        format!("add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`)")
+        format!("add `#[derive(Copy, Clone)]` to '{ty}' (its fields are all `Copy`)")
     };
     if first_step {
         format!(
@@ -2215,7 +2215,7 @@ pub(crate) fn derive_advice(
         format!("{add} and clone '{binding}' at the move site (`{binding}.clone()`)")
     } else {
         format!(
-            "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{binding}' is \
+            "add `#[derive(Copy, Clone)]` to '{ty}' (its fields are all `Copy`, so '{binding}' is \
              copied instead of moved)"
         )
     }

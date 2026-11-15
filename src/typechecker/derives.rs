@@ -979,7 +979,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 // A generic type takes only the `Clone` derive.
-                if !args.is_empty() && !decl.edit.0.replacement.contains("Clone") {
+                if !args.is_empty() && !decl.edit.0.adds_clone() {
                     return None;
                 }
                 Some((key, &decl.edit))
@@ -1101,8 +1101,10 @@ impl<'a> super::TypeChecker<'a> {
         cands
             .into_iter()
             .filter_map(|(name, offset, line, fields, _)| {
+                // `Copy` needs `Clone` (a derive never adds another), so the
+                // `Copy` derive names both
                 let derive = if copy_set.contains(name) {
-                    "Copy"
+                    "Copy, Clone"
                 } else if clone_set.contains(name) {
                     "Clone"
                 } else {

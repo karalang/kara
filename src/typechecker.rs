@@ -923,6 +923,14 @@ pub struct FixIt {
     pub replacement: String,
 }
 
+impl FixIt {
+    /// Whether this is a `Clone` fix rather than a `Copy` one; the `Copy`
+    /// derive names `Clone` too (see `TextEdit::adds_clone`).
+    pub fn adds_clone(&self) -> bool {
+        self.replacement.contains("Clone") && !self.replacement.contains("Copy")
+    }
+}
+
 /// A tuple literal's element, as `reject_borrowed_tuple_elements` reads it
 /// (B-2026-11-09-96).
 #[derive(Debug, Clone)]

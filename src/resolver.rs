@@ -658,6 +658,15 @@ pub struct TextEdit {
     pub replacement: String,
 }
 
+impl TextEdit {
+    /// Whether this is a `Clone` fix (a `#[derive(Clone)]` or a `Clone`
+    /// bound) rather than a `Copy` one; the `Copy` derive names `Clone` too,
+    /// as `Copy` needs it (design.md §9 Derive).
+    pub fn adds_clone(&self) -> bool {
+        self.replacement.contains("Clone") && !self.replacement.contains("Copy")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolveError {
     pub message: String,

@@ -9679,10 +9679,8 @@ impl<'a> super::TypeChecker<'a> {
             } else {
                 "cannot move a non-`Copy` value out of a borrowed place".to_string()
             };
-            let derive_clone = !has_clone
-                && self
-                    .copy_derive_fix(ty)
-                    .is_some_and(|f| f.replacement.contains("Clone"));
+            let derive_clone =
+                !has_clone && self.copy_derive_fix(ty).is_some_and(|f| f.adds_clone());
             message += if has_clone {
                 ". Write `.clone()` to take a copy, or keep using it in place"
             } else if self.core_let_ref_fix {
@@ -10020,7 +10018,7 @@ impl<'a> super::TypeChecker<'a> {
         let derive = (self.cli_lint_overrides.strict_core && into_iter.is_none() && !has_clone)
             .then(|| self.copy_derive_fix(ty))
             .flatten()
-            .filter(|f| f.replacement.contains("Clone"));
+            .filter(|f| f.adds_clone());
         if self.cli_lint_overrides.strict_core && into_iter.is_none() {
             message = "cannot move a non-`Copy` value out of a borrowed place: its type runs a \
                  user `Drop` body, so a copy would run that body twice"
@@ -11242,7 +11240,7 @@ impl<'a> super::TypeChecker<'a> {
             let derive = (!has_clone)
                 .then(|| self.copy_derive_fix(ty))
                 .flatten()
-                .filter(|f| f.replacement.contains("Clone"));
+                .filter(|f| f.adds_clone());
             let help = if has_clone {
                 "Write `.clone()` to take a copy, or keep using it in place"
             } else if derive.is_some() {
