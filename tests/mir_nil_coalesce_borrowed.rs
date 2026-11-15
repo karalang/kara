@@ -125,7 +125,8 @@ fn nil_coalesce_refuses_a_borrowed_non_copy_payload() {
             "param",
             BARE_PARAMETER,
             ":2:13: '??' on a borrowed 'Option[String]' would move its 'String' out of the borrow",
-            "let p = prefix.clone() ?? \"x\".to_string();",
+            // A later pass drops the `.to_string()` (B-2026-11-15-131).
+            "let p = prefix.clone() ?? \"x\";",
         ),
     ] {
         let (ok, _, err) = karac(tag, &["check"], src);

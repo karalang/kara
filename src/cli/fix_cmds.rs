@@ -237,7 +237,50 @@ pub(super) fn cmd_fix_project(dry_run: bool) {
     }
 }
 
+/// How many passes `karac fix` runs at most: a fix often uncovers the next
+/// diagnostic (`s = s + i` becomes `s += i`, and only then is the loop a
+/// fold), and one invocation runs until a pass applies nothing
+/// (B-2026-11-15-131). The cap stops two fixes that undo each other.
+const FIX_PASSES: usize = 10;
+
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
+    // A migration (`KARAC_*_MIGRATE`) is one reviewable rewrite: one pass.
+    let migrating = [
+        "KARAC_D5_MIGRATE",
+        "KARAC_MARKER_MIGRATE",
+        "KARAC_DEREF_MIGRATE",
+    ]
+    .iter()
+    .any(|v| std::env::var_os(v).is_some());
+    // `KARAC_FIX_PASSES=1` keeps the one-pass behaviour, for a test that
+    // reads the diagnostics between passes.
+    let passes = if dry_run || migrating {
+        1
+    } else {
+        std::env::var("KARAC_FIX_PASSES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(FIX_PASSES)
+            .max(1)
+    };
+    let mut total = 0;
+    let mut seen = std::collections::HashSet::new();
+    for pass in 0..passes {
+        let applied = fix_pass(filename, dry_run, pass == 0);
+        total += applied;
+        if applied == 0 || !seen.insert(read_source(filename)) {
+            break;
+        }
+    }
+    if total > 0 && !dry_run {
+        println!("applied {total} fix(es) to {filename}");
+    }
+}
+
+/// One pass of `karac fix` over `filename`: the number of fixes it wrote.
+/// Only the first pass reports a file with nothing to fix, or exits on one it
+/// cannot fix; a later pass returns 0 and leaves the earlier passes' work.
+fn fix_pass(filename: &str, dry_run: bool, first: bool) -> usize {
     let source = read_source(filename);
     // The style lints are off elsewhere and on here (B-2026-11-05-31): fixing
     // them is what `karac fix` is for. An `#[allow]` in the source still wins.
@@ -268,6 +311,9 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         fixes.groups(pipeline.parsed.fix_diffs.values());
         complement_integer_bangs(filename, &source, &mut fixes);
         if fixes.edits.is_empty() {
+            if !first {
+                return 0;
+            }
             for err in &pipeline.parsed.errors {
                 eprintln!(
                     "error[parse]: {}:{}:{}: {}",
@@ -341,8 +387,10 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     }
 
     if fixes.edits.is_empty() {
-        println!("(no fixable diagnostics in {filename})");
-        return;
+        if first {
+            println!("(no fixable diagnostics in {filename})");
+        }
+        return 0;
     }
     let mut deduped = dedupe_fixes(fixes.edits);
     // An edit that points past the end of this file belongs to no text here;
@@ -361,8 +409,10 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         inside
     });
     if deduped.is_empty() {
-        println!("(no fixable diagnostics in {filename})");
-        return;
+        if first {
+            println!("(no fixable diagnostics in {filename})");
+        }
+        return 0;
     }
 
     if dry_run {
@@ -378,7 +428,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
                 original, edit.replacement
             );
         }
-        return;
+        return deduped.len();
     }
 
     let Some(mut rewritten) = apply_edits(&source, deduped.iter().map(|(_, e)| e)) else {
@@ -428,6 +478,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
                 applied = kept;
                 rewritten = r;
             }
+            None if !first => return 0,
             None => {
                 eprintln!(
                     "error: applying {} fix(es) would leave {filename} with MORE parse errors \
@@ -445,7 +496,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         eprintln!("error: failed to write {filename}: {e}");
         process::exit(1);
     }
-    println!("applied {applied} fix(es) to {filename}");
+    applied
 }
 
 /// The machine-applicable edits every phase of a checked `pipeline` offers,
@@ -483,10 +534,25 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
         .filter(|f| f.span.length == 0)
         .map(|f| f.span.offset)
         .collect();
+    // A typecheck error with a fix at the very spot an ownership error
+    // answers is the same move seen twice, and their remedies do not compose
+    // (`ref ` before it and `.clone()` after it, B-2026-11-15-132): the
+    // typechecker's is kept, since it knows the place is borrowed.
+    let typed_anchors: std::collections::HashSet<usize> = pipeline
+        .typed
+        .iter()
+        .flat_map(|t| t.errors.iter())
+        .filter(|e| e.fix_it.is_some())
+        .map(|e| e.span.offset)
+        .collect();
     if let Some(ref o) = pipeline.ownership {
         fixes.anchored(o.errors.iter().filter_map(|e| {
             let edit = e.replacement.as_deref().cloned()?;
-            (edit.length != 0 || !typed_inserts.contains(&edit.offset))
+            let answered = edit.length == 0
+                && edit.replacement == "ref "
+                && edit.offset == e.span.offset
+                && typed_anchors.contains(&e.span.offset);
+            (!answered && (edit.length != 0 || !typed_inserts.contains(&edit.offset)))
                 .then_some((e.span.offset, edit))
         }));
         fixes.anchored(

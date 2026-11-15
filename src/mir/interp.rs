@@ -13174,7 +13174,10 @@ impl<'a> Interp<'a> {
                 let Some(var) = adt.variants.get(*k as usize) else {
                     return err(format!("{} has no variant {k}", adt.name));
                 };
-                let vname = if self.program.display_styles.get(&a) == Some(&DisplayStyle::SnakeCase)
+                // `snake_case` is a `Display` option: `Debug` shows the
+                // variant's own name (design.md §9, B-2026-11-16-1).
+                let vname = if !self.debug_render
+                    && self.program.display_styles.get(&a) == Some(&DisplayStyle::SnakeCase)
                 {
                     crate::ident_case::pascal_to_snake(&var.name)
                 } else {

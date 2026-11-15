@@ -15,7 +15,7 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::typechecker::Type;
 
-use super::{OwnershipError, OwnershipErrorKind, ParamUsage, ValueState};
+use super::{ActiveBorrow, OwnershipError, OwnershipErrorKind, ParamUsage, ValueState};
 
 impl<'a> super::OwnershipChecker<'a> {
     // ── Block / Statement / Expression Walking ──────────────────
@@ -61,11 +61,33 @@ impl<'a> super::OwnershipChecker<'a> {
         // The slice bindings this block's `let`s made, each with the index
         // of its `let`.
         let mut holders: Vec<(String, usize)> = Vec::new();
+        // An outer binding a `let` here shadows: its live borrows and its
+        // scope depth, set aside until the block ends. Borrows are keyed by
+        // name, so without this the inner binding answered for the outer
+        // one's borrows (`m.push({ let mut m = ..; m })`, B-2026-11-16-2).
+        let mut shadowed: Vec<(String, Vec<ActiveBorrow>, Option<usize>)> = Vec::new();
         for (i, stmt) in block.stmts.iter().enumerate() {
             self.end_dead_slice_holders(block, i, &mut holders);
             let before = param_usage.clone();
+            let outer_depths: Vec<(String, Option<usize>)> = match &stmt.kind {
+                StmtKind::Let { pattern, .. } => pattern
+                    .binding_names()
+                    .into_iter()
+                    .map(|n| {
+                        let d = self.binding_scope_depth.get(&n).copied();
+                        (n, d)
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
             self.check_stmt(stmt, states, param_types, param_usage);
             self.note_usage_changes(&before, param_usage, stmt.span);
+            for (name, depth) in outer_depths {
+                if depth.is_some_and(|d| d < entered_depth) {
+                    let borrows = self.active_borrows.remove(&name).unwrap_or_default();
+                    shadowed.push((name, borrows, depth));
+                }
+            }
             if let StmtKind::Let { pattern, .. } = &stmt.kind {
                 for name in pattern.binding_names() {
                     holders.retain(|(h, _)| *h != name);
@@ -89,6 +111,22 @@ impl<'a> super::OwnershipChecker<'a> {
             }
         }
         self.drain_borrows_at_depth(entered_depth);
+        // The shadowed bindings come back, innermost shadow last undone.
+        for (name, borrows, depth) in shadowed.into_iter().rev() {
+            let borrows: Vec<ActiveBorrow> = borrows
+                .into_iter()
+                .filter(|b| b.scope_depth < entered_depth)
+                .collect();
+            if !borrows.is_empty() {
+                self.active_borrows
+                    .entry(name.clone())
+                    .or_default()
+                    .extend(borrows);
+            }
+            if let Some(d) = depth {
+                self.binding_scope_depth.insert(name, d);
+            }
+        }
         self.current_scope_depth = entered_depth - 1;
         self.immutable_lets = lets_at_entry;
     }

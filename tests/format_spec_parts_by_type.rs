@@ -167,7 +167,7 @@ fn a_part_that_does_not_apply_is_an_error_at_the_hole() {
             10,
             "a radix type (x/X/o/b), which is for integers, is not valid for a `char`",
         ),
-        (11, "a radix type (x/X/o) is not valid for a float"),
+        (11, "a radix type (x/X/o/b) is not valid for a float"),
         (12, "precision (`.N`) is not valid for an integer"),
         (13, "precision (`.N`) on a string is not in v1"),
     ] {

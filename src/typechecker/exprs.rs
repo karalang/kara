@@ -78,7 +78,7 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
     if is_float {
         if fs.radix != crate::format_spec::Radix::Dec {
             return Err(format!(
-                "format spec `{spec_raw}`: a radix type (x/X/o) is not valid for a float"
+                "format spec `{spec_raw}`: a radix type (x/X/o/b) is not valid for a float"
             ));
         }
         return Ok(());
@@ -86,7 +86,7 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
     if is_str {
         if fs.radix != crate::format_spec::Radix::Dec {
             return Err(format!(
-                "format spec `{spec_raw}`: a radix type (x/X/o) is not valid for a string"
+                "format spec `{spec_raw}`: a radix type (x/X/o/b) is not valid for a string"
             ));
         }
         if fs.precision.is_some() {

@@ -42,7 +42,9 @@ fn main() {
         karac(&["fix", file]);
     }
     let out = std::fs::read_to_string(&path).unwrap();
-    for want in ["MONTHS.contains(s[..3])", ".to_string().bytes().to_vec();"] {
+    // A later pass drops the `.to_string()` an f-string does not need
+    // (B-2026-11-15-131).
+    for want in ["MONTHS.contains(s[..3])", "f\"{v} \".bytes().to_vec();"] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
     let run = karac(&["__mir-run", file]);

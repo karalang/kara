@@ -42,7 +42,9 @@ fn a_bare_trait_type_is_refused_once_per_site_and_fixed_with_dyn() {
     assert!(ok, "{err}");
     let fixed = std::fs::read_to_string(&path).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(fixed.contains("fn show(s: ref dyn Shape)"), "{fixed}");
+    // A later pass drops the `ref` a bare parameter already means
+    // (B-2026-11-15-131).
+    assert!(fixed.contains("fn show(s: dyn Shape)"), "{fixed}");
     assert!(fixed.contains("let v: Vec[dyn Shape] ="), "{fixed}");
     assert_eq!(
         karac::mir::lower::run_source(&fixed)

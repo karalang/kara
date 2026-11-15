@@ -86,6 +86,8 @@ fn rust_boxed_closure_type_is_the_function_type() {
 
 fn karac(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_karac"))
+        // One pass per call: these read the diagnostics between passes.
+        .env("KARAC_FIX_PASSES", "1")
         .args(args)
         .stdin(Stdio::null())
         .output()

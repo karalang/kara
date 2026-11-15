@@ -13,7 +13,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn karac() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_karac"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_karac"));
+    // One pass per call: these read the diagnostics between passes.
+    c.env("KARAC_FIX_PASSES", "1");
+    c
 }
 
 fn fixture(tag: &str, src: &str) -> (PathBuf, PathBuf) {

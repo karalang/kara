@@ -149,12 +149,12 @@ fn fix_inside_an_fstring_interpolation_edits_only_the_marker() {
     for (name, before, after) in [
         (
             "plain.kara",
-            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { xs.len() }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(mut xs)}\");\n\
              }\n\
              fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
-            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { xs.len() }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(xs)}\");\n\
              }\n\
@@ -162,12 +162,12 @@ fn fix_inside_an_fstring_interpolation_edits_only_the_marker() {
         ),
         (
             "labeled.kara",
-            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { xs.len() }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(xs: mut xs)}\");\n\
              }\n\
              fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
-            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { xs.len() }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(xs: xs)}\");\n\
              }\n\
@@ -11031,15 +11031,10 @@ fn test_fix_applies_module_binding_const_rename() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("applied 1 fix"), "stdout: {stdout}");
-    let rewritten = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(rewritten, "pub let MY_CONFIG: i64 = 5;\n");
     // The rename lets the file reach the typechecker, which then turns the
-    // module `let` into the `const` it must be (B-2026-10-22-8).
-    karac_bin()
-        .args(["fix", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    // module `let` into the `const` it must be (B-2026-10-22-8): two fixes,
+    // one invocation (B-2026-11-15-131).
+    assert!(stdout.contains("applied 2 fix"), "stdout: {stdout}");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         "pub const MY_CONFIG: i64 = 5;\n"
@@ -11085,30 +11080,17 @@ fn test_fix_module_binding_rename_updates_use_sites() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
+    // The declaration and two use sites, then a later pass turns the module
+    // `let` into a `const` (B-2026-10-22-8), in one invocation
+    // (B-2026-11-15-131).
     assert!(
-        stdout.contains("applied 3 fix"),
-        "declaration + two use sites: {stdout}"
+        stdout.contains("applied 4 fix"),
+        "declaration + two use sites + const: {stdout}"
     );
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        "let MY_LIMIT: i64 = 3;\n\
+        "const MY_LIMIT: i64 = 3;\n\
          fn main() {\n    println(MY_LIMIT);\n    println(MY_LIMIT + 1);\n}\n",
-    );
-    // A second pass turns the module `let` into a `const` (B-2026-10-22-8).
-    let second = karac_bin()
-        .args(["fix", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(
-        String::from_utf8_lossy(&second.stdout).contains("applied 1 fix"),
-        "the `const` rewrite: {}",
-        String::from_utf8_lossy(&second.stdout)
-    );
-    assert!(
-        std::fs::read_to_string(&path)
-            .unwrap()
-            .starts_with("const MY_LIMIT: i64 = 3;\n"),
-        "module `let` → `const`"
     );
     // The oracle: a fix loop must converge on a program that BUILDS, and a
     // second pass must find nothing left to do.
@@ -25428,7 +25410,8 @@ fn test_fix_applies_edit_from_inside_an_fstring_hole() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("applied 1 fix"), "got: {stdout}");
+    // Later passes take the style fixes the edit uncovers (B-2026-11-15-131).
+    assert!(stdout.contains("applied "), "got: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("f\"n={takes(xs)}\""),

@@ -56,7 +56,9 @@ fn a_mut_closure_parameter_with_an_expression_body_is_wrapped() {
         "expr",
         "fn main() {\n    let v = [1, 2, 3].to_vec();\n    let s: i64 = v.iter().fold(0, |mut n, x| n + x);\n    println(s);\n}\n",
     );
-    assert!(out.contains("|n, x| { let mut n = n; n + x })"), "{out}");
+    // The wrap's `mut` is never written, and the next pass drops it
+    // (B-2026-11-15-131).
+    assert!(out.contains("|n, x| { let n = n; n + x })"), "{out}");
     assert!(out.ends_with("6\n"), "{out}");
 }
 

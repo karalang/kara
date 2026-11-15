@@ -15,6 +15,8 @@ use std::process::{Command, Stdio};
 
 fn karac(dir: &Path, args: &[&str]) -> (bool, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        // One pass per call: these read the diagnostics between passes.
+        .env("KARAC_FIX_PASSES", "1")
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::null())

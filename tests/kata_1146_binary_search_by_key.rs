@@ -14,6 +14,8 @@ use std::process::{Command, Output, Stdio};
 
 fn karac(args: &[&str], path: &std::path::Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_karac"))
+        // One pass per call: these read the diagnostics between passes.
+        .env("KARAC_FIX_PASSES", "1")
         .args(args)
         .arg(path)
         .stdin(Stdio::null())

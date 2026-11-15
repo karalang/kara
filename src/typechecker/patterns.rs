@@ -321,6 +321,7 @@ impl<'a> super::TypeChecker<'a> {
             // with a Block body and is covered there instead; both are the same
             // value position and must answer alike.
             self.warn_partial_move_of_drop_struct(&arm.body, expected);
+            self.note_view_tail(&arm.body);
             // v2 core §3.7: a bare arm body that hands back a `ref`
             // binding moves out of a borrow (a braced body's tail is checked
             // by the block).
@@ -734,6 +735,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             // The synth-mode twin of the check-mode arm hook above.
             self.warn_partial_move_of_drop_struct(&arm.body, &arm_ty);
+            self.note_view_tail(&arm.body);
             // v2 core §3.7: a bare arm body that hands back a `ref`
             // binding moves out of a borrow (a braced body's tail is checked
             // by the block).

@@ -4511,6 +4511,7 @@ impl<'a> super::TypeChecker<'a> {
             // the construct's value, which is why the arm spellings needed no
             // hook of their own.
             self.warn_partial_move_of_drop_struct(expr, expected);
+            self.note_view_tail(expr);
             // B-2026-09-06-31 — the borrowed-root twin. One site for the tail
             // and for every `if` / `match` arm that produces a value through it,
             // exactly as the owned rule's note above says. Measured: two bodies.
@@ -9186,9 +9187,23 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Record `tail` when it names a view binding, for a judgment made
+    /// after the binding's scope ends ([`Self::warn_lent_branch_tails`]).
+    pub(super) fn note_view_tail(&mut self, tail: &Expr) {
+        if let ExprKind::Identifier(n) = &tail.kind {
+            if self.local_scope.is_view(n.as_str()) {
+                self.view_tail_spans.insert(SpanKey::from_span(&tail.span));
+            }
+        }
+    }
+
     fn rooted_in_borrow(&self, value: &Expr, views: bool) -> bool {
         if let ExprKind::Identifier(n) = &value.kind {
-            return views && self.local_scope.is_view(n.as_str());
+            return views
+                && (self.local_scope.is_view(n.as_str())
+                    || self
+                        .view_tail_spans
+                        .contains(&SpanKey::from_span(&value.span)));
         }
         if !matches!(
             value.kind,

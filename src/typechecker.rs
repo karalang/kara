@@ -3796,6 +3796,11 @@ pub struct TypeChecker<'a> {
     /// The length of each `s.try_into_array()`, which only the expected
     /// type fixes; one nothing fixed is reported at the end (B-2026-11-15-77).
     pub(super) unsolved_array_lens: Vec<(Span, types::ConstVarId)>,
+    /// A block's or a bare arm's tail that names a view binding (a `ref`
+    /// pattern binding, a bare `for` element), by span: the binding's scope
+    /// is gone when a lent call argument's tails are judged after the
+    /// match (B-2026-11-15-133).
+    pub(super) view_tail_spans: std::collections::HashSet<SpanKey>,
     /// B-2026-11-08-19: the variables standing for an unannotated
     /// collection's element, key or value (`Vec.new()`'s `T`). The first
     /// `ref T` with `T: Copy` that solves one solves it to `T` (design.md §8).
@@ -4663,6 +4668,7 @@ impl<'a> TypeChecker<'a> {
             deferred_operand_vars: Vec::new(),
             unsolved_call_consts: Vec::new(),
             unsolved_array_lens: Vec::new(),
+            view_tail_spans: std::collections::HashSet::new(),
             collection_vars: FxHashSet::default(),
             pending_atomic_inners: Vec::new(),
             pending_buf_sources: Vec::new(),

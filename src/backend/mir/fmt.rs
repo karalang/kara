@@ -479,6 +479,9 @@ impl<'ctx> Cx<'ctx, '_> {
         if style == Some(DisplayStyle::Redacted) {
             return self.lit("<redacted>");
         }
+        // `snake_case` is a `Display` option: `Debug` shows the variant's
+        // own name (design.md §9, B-2026-11-16-1).
+        let style = style.filter(|s| !(self.fmt.debug && *s == DisplayStyle::SnakeCase));
         let user = format!("{}.to_string", self.tys.adt_name(ty));
         if !self.fmt.debug && program.bodies.contains_key(&user) {
             return self.fmt_user(p, ty, &user);

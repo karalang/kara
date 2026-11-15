@@ -38,7 +38,8 @@ fn kata_2196_option_ref_return_offers_cloned() {
     assert!(out.contains("\"text\":\".cloned()\""), "{out}");
     let (ok, out, fixed) = karac("fix", &src, &["fix"]);
     assert!(ok, "{out}");
-    assert!(fixed.contains("return m.get(k).cloned();"), "{fixed}");
+    // A later pass drops the `return` (B-2026-11-15-131).
+    assert!(fixed.contains("    m.get(k).cloned()\n"), "{fixed}");
 }
 
 #[test]
