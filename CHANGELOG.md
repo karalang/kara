@@ -1175,6 +1175,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- **The `vec![v; n]` deprecation fix no longer writes a refused
+  program.** A count cast to `usize`, as in `vec![false; n as usize]`,
+  moves into `Vec.filled` as `n as i64`, the length it takes; before, the
+  rewrite `Vec.filled(n as usize, false)` was refused, along with every
+  other `as usize` in the program. The same holds for a bare `[v; n]`
+  where a `Vec` is wanted (B-2026-11-14-13).
 - **A `collect` of narrower integers into a wider collection says how to
   widen them.** `w.bytes().iter().map(|b| b - 96).collect()` into a
   `Vec[i64]` was refused with only `FromIterator[u8]` is not satisfied,

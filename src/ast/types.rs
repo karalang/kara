@@ -437,6 +437,14 @@ pub struct TypeExpr {
 }
 
 impl TypeExpr {
+    /// `usize` or `isize` written as a bare type, the pointer-sized
+    /// integers design.md §5 keeps for FFI.
+    pub fn is_pointer_int(&self) -> bool {
+        matches!(&self.kind, TypeKind::Path(p)
+            if p.generic_args.is_none()
+                && matches!(p.segments.as_slice(), [n] if n == "usize" || n == "isize"))
+    }
+
     /// The effect argument written on this type, `EventBus[with E]`'s
     /// `with E` (design.md § Effect variables): outermost path only, and
     /// `None` for a type written without one.

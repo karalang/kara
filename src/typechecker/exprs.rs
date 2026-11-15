@@ -1088,9 +1088,25 @@ impl<'a> super::TypeChecker<'a> {
         count: &Expr,
         for_vec: bool,
     ) {
+        // A count cast to `usize` is cast to `i64`, the length
+        // `Vec.filled` takes (B-2026-11-14-13).
+        let count_text = match &count.kind {
+            // The rendered cast ends with its type.
+            ExprKind::Cast { ty, .. } if ty.is_pointer_int() => {
+                let shown = crate::formatter::render_expr(count);
+                match shown
+                    .strip_suffix("usize")
+                    .or_else(|| shown.strip_suffix("isize"))
+                {
+                    Some(head) => format!("{head}i64"),
+                    None => shown,
+                }
+            }
+            _ => crate::formatter::render_expr(count),
+        };
         let replacement = format!(
             "Vec.filled({}, {})",
-            crate::formatter::render_expr(count),
+            count_text,
             crate::formatter::render_expr(value)
         );
         let why = if for_vec {

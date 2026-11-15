@@ -3801,7 +3801,9 @@ impl super::Parser {
                 length: (bang.offset + bang.length).checked_sub(start.offset)?,
                 replacement: String::new(),
             }),
-            ExprKind::RepeatLiteral { .. } => {
+            ExprKind::RepeatLiteral {
+                count: count_expr, ..
+            } => {
                 // The two operands are cut from the text between the
                 // brackets, at its `;`, and not from their own spans: an
                 // operand that ends or starts with a parenthesized operand
@@ -3815,6 +3817,21 @@ impl super::Parser {
                 let inner = inner.strip_prefix('[')?.strip_suffix(']')?;
                 let semi = top_level_semicolon(inner)?;
                 let (value, count) = (inner[..semi].trim(), inner[semi + 1..].trim());
+                // A count cast to `usize` (Rust's spelling, carried in by
+                // LeetCode's templates) is cast to `i64` as it moves:
+                // `Vec.filled` takes an `i64` length, and a `usize` one is
+                // refused, so the rewrite of a checking program would not
+                // check (B-2026-11-14-13). The cast's type is the count's
+                // last word.
+                let count = match &count_expr.kind {
+                    ExprKind::Cast { ty, .. } if ty.is_pointer_int() => {
+                        let head = count
+                            .strip_suffix("usize")
+                            .or_else(|| count.strip_suffix("isize"))?;
+                        format!("{head}i64")
+                    }
+                    _ => count.to_string(),
+                };
                 Some(whole(format!("Vec.filled({count}, {value})")))
             }
             _ => None,
