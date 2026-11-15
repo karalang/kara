@@ -191,7 +191,7 @@ fn completion_after_std_lists_modules_then_their_items() {
 
 fn rename(src: &str, new_name: &str) -> Option<String> {
     let (text, pos) = at(src);
-    let edits = analysis::rename(&text, pos, new_name)?;
+    let edits = analysis::rename(&text, pos, new_name).ok()??;
     let index = analysis::LineIndex::new(&text);
     let mut spans: Vec<(usize, usize)> = edits
         .iter()

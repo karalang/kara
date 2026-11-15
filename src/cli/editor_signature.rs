@@ -174,13 +174,18 @@ fn open_call(text: &str, at: usize) -> Option<OpenCall> {
                 continue;
             }
             b'"' => {
-                let mut j = i + 1;
-                while j < b.len() && b[j] != b'"' {
-                    j += if b[j] == b'\\' { 2 } else { 1 };
-                }
-                let end = (j + 1).min(b.len());
+                let (end, holes) = string_end(text, i);
                 if at > i && at < end && found.is_none() {
-                    return None;
+                    // In an f-string's `{..}`, a call there is code: its
+                    // call is the one in the hole (B-2026-11-15-125).
+                    let (s, e) = holes.into_iter().find(|&(s, e)| at >= s && at <= e)?;
+                    let inner = open_call(&text[s..e], at - s)?;
+                    return Some(OpenCall {
+                        open: inner.open + s,
+                        commas: inner.commas,
+                        arg_start: inner.arg_start + s,
+                        close: inner.close.map(|c| c + s),
+                    });
                 }
                 i = end;
                 continue;
@@ -234,6 +239,46 @@ fn open_call(text: &str, at: usize) -> Option<OpenCall> {
     }
     let f = found?;
     call_at(text, f.0, f, None)
+}
+
+/// The end of the string literal whose `"` is at `start` (past its
+/// closing `"`), and for an f-string (`f"..."`) the code of each `{..}`
+/// hole in it, which may hold strings of its own (`f"{m.get("k")}"`).
+fn string_end(text: &str, start: usize) -> (usize, Vec<(usize, usize)>) {
+    let b = text.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let f_string = start > 0 && b[start - 1] == b'f' && (start < 2 || !ident(b[start - 2]));
+    let mut holes = Vec::new();
+    let mut j = start + 1;
+    while j < b.len() && b[j] != b'"' {
+        match b[j] {
+            b'\\' => j += 2,
+            b'{' if f_string && b.get(j + 1) == Some(&b'{') => j += 2,
+            b'{' if f_string => {
+                // The hole runs to its `}` at depth 0, past nested strings.
+                let mut k = j + 1;
+                let mut depth = 0usize;
+                while k < b.len() {
+                    match b[k] {
+                        b'"' => {
+                            k = string_end(text, k).0;
+                            continue;
+                        }
+                        b'{' | b'(' | b'[' => depth += 1,
+                        b')' | b']' => depth = depth.saturating_sub(1),
+                        b'}' if depth == 0 => break,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                holes.push((j + 1, k.min(b.len())));
+                j = k + 1;
+            }
+            _ => j += 1,
+        }
+    }
+    ((j + 1).min(b.len()), holes)
 }
 
 fn call_at(
@@ -471,6 +516,12 @@ fn callee<'a>(nav: &'a Nav, found: &FoundCall) -> Option<FnLike<'a>> {
         .resolutions
         .get(&SpanKey::from_span(&callee.span))?;
     let def = nav.resolved().symbol_table.get_symbol(sym).span;
+    // A prelude name (`println`) has a synthetic span at offset 0, which is
+    // no declaration in the buffer: matched against the item that starts
+    // there, it showed the buffer's first function (B-2026-11-15-121).
+    if def.length == 0 {
+        return None;
+    }
 
     let (text, _) = nav.text();
     nav.program().items.iter().find_map(|item| match item {

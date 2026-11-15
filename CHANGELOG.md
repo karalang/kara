@@ -1093,6 +1093,20 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `Mutex[T]` has `into_inner(own self) -> T`, and both backends lower it for
   any `T`: the LLVM backend crashed on a struct, and the interpreter refused
   the mutex passed by value (B-2026-11-15-75).
+- An iterator chain over an `Array` constant returned from a function
+  (`MX.iter().filter(..).map(|m| (m.1, m.2)).collect()`) borrows nothing:
+  `MX.iter()` parses as a path call, which built the constant in a temporary
+  that the result was then refused for borrowing. A `ref self` method now
+  lends the constant from its static (B-2026-11-15-120).
+- kara-lsp: signature help inside `println(..)` showed the buffer's first
+  function (B-2026-11-15-121), and now also works on a call inside an
+  f-string's `{..}` (B-2026-11-15-125). Renaming a struct field renames its
+  accesses (`p.x`, `self.x`) and its literal and pattern fields, where a
+  shorthand `P { x }` becomes `P { z: x }`, and renaming a local a shorthand
+  names writes `P { x: w }` (B-2026-11-15-122). Rename refuses a keyword or a
+  non-name with an error that says why (B-2026-11-15-123). References give
+  the name alone, not a struct literal's or a declaration's whole range
+  (B-2026-11-15-124).
 
 ### Performance
 

@@ -50,6 +50,20 @@ pub(crate) struct Member {
     pub(crate) method: Option<(String, Option<String>)>,
 }
 
+/// A struct field named in the buffer, as [`Nav::field_sites`] finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FieldSite {
+    /// The struct's name.
+    pub(crate) ty: String,
+    pub(crate) field: String,
+    /// The name's span; a `ref name` pattern field, whose name is its
+    /// binding's, has length 0 at the field's start.
+    pub(crate) offset: usize,
+    pub(crate) length: usize,
+    /// `P { x }`: the field and its value or binding in one name.
+    pub(crate) shorthand: bool,
+}
+
 /// Check `source` for a position query; `None` when it does not parse.
 pub(crate) fn analyze(source: &str) -> Option<Nav> {
     nav_of(super::editor::checked(source), source)
@@ -188,6 +202,107 @@ impl Nav {
                 method: None,
             })
         }
+    }
+
+    /// Every place the buffer names a struct's field: its declaration, a
+    /// field access (`p.x`, `self.x`), a struct literal's field and a
+    /// struct pattern's, each as `(struct, field)` and the name's span.
+    /// A shorthand (`P { x }`) is the field and the value or binding at
+    /// once, so it is marked: renaming the field writes `P { z: x }`.
+    pub(crate) fn field_sites(&self) -> Vec<FieldSite> {
+        struct Walk<'a> {
+            nav: &'a Nav,
+            text: &'a str,
+            out: Vec<FieldSite>,
+        }
+        impl Walk<'_> {
+            fn push(&mut self, ty: &str, field: &str, offset: usize, shorthand: bool) {
+                self.out.push(FieldSite {
+                    ty: ty.to_string(),
+                    field: field.to_string(),
+                    offset,
+                    length: field.len(),
+                    shorthand,
+                });
+            }
+            /// The field name at the start of a field's span, `None` for
+            /// `ref name` in a pattern, whose name follows the mode.
+            fn name_at(&self, span: &Span, field: &str) -> Option<usize> {
+                let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+                let end = span.offset + field.len();
+                (self.text.get(span.offset..end) == Some(field)
+                    && !self.text.as_bytes().get(end).is_some_and(|b| ident(*b)))
+                .then_some(span.offset)
+            }
+        }
+        impl MutVisitor for Walk<'_> {
+            fn span(&mut self, _: &mut Span) {}
+            fn expr(&mut self, e: &mut Expr) {
+                match &e.kind {
+                    ExprKind::FieldAccess { object, field } => {
+                        let typed = self.nav.typed();
+                        let ty = typed
+                            .node_types
+                            .get(&object.id)
+                            .map(|(t, _)| t)
+                            .or_else(|| typed.expr_types.get(&SpanKey::from_span(&object.span)));
+                        let Some(ty) = ty.and_then(type_head) else {
+                            return;
+                        };
+                        let from = expr_end(self.text, object);
+                        if let Some(off) = member_name_offset(self.text, from, field) {
+                            let ty = ty.to_string();
+                            self.push(&ty, field, off, false);
+                        }
+                    }
+                    ExprKind::StructLiteral { path, fields, .. } => {
+                        let Some(ty) = path.last() else { return };
+                        for f in fields {
+                            if let Some(off) = self.name_at(&f.span, &f.name) {
+                                self.push(ty, &f.name, off, f.shorthand);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            fn pattern(&mut self, p: &mut Pattern) {
+                let PatternKind::Struct { path, fields, .. } = &p.kind else {
+                    return;
+                };
+                let Some(ty) = path.last() else { return };
+                for f in fields {
+                    match self.name_at(&f.span, &f.name) {
+                        Some(off) => self.push(ty, &f.name, off, f.pattern.is_none()),
+                        // `ref name`: the field is named by its binding.
+                        None => self.out.push(FieldSite {
+                            ty: ty.to_string(),
+                            field: f.name.clone(),
+                            offset: f.span.offset,
+                            length: 0,
+                            shorthand: true,
+                        }),
+                    }
+                }
+            }
+        }
+        let mut walk = Walk {
+            nav: self,
+            text: &self.text[..self.user_len],
+            out: Vec::new(),
+        };
+        for item in self.user_items() {
+            if let Item::StructDef(s) = item {
+                for f in &s.fields {
+                    walk.push(&s.name, &f.name, f.name_span.offset, false);
+                }
+            }
+            walk_item_mut_with(&mut item.clone(), &mut walk);
+        }
+        let mut out = walk.out;
+        out.sort_by_key(|f| (f.offset, f.length));
+        out.dedup_by(|a, b| a.offset == b.offset && a.length == b.length);
+        out
     }
 
     /// The type of the `let` (or other pattern) binding whose name is under

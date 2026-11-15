@@ -7945,21 +7945,68 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return Ok(None);
         }
-        self.const_segments_place(e.span, segments)
+        self.const_segments_place(e.span, segments, false)
     }
 
-    /// The constant `segments[0]` built in a temporary, then each field of
-    /// `segments[1..]` in turn; `None` when the head is no constant.
-    fn const_segments_place(&mut self, span: Span, segments: &[String]) -> R<Option<Place>> {
-        let Some(value) = segments
+    /// Whether the method `callee` takes the constant path `head`
+    /// (`MX.iter()`) by `ref self`, so the constant can be lent from its
+    /// static rather than built in a temporary (B-2026-11-15-120). A
+    /// `mut ref` or owned receiver, or a native method, still gets a fresh
+    /// value.
+    fn lends_const_receiver(&mut self, callee: &Callee, head: &[String]) -> R<bool> {
+        let Callee::Def(d) = *callee else {
+            return Ok(false);
+        };
+        let Some(f) = self.lcx.fns.get(&d).map(|i| i.f) else {
+            return Ok(false);
+        };
+        let Some(mode) = f.self_param.clone() else {
+            return Ok(false);
+        };
+        let Some(value) = head
             .first()
             .and_then(|c| self.lcx.defs.lookup(0, c))
             .and_then(|d| self.lcx.consts.get(&d).copied())
         else {
+            return Ok(false);
+        };
+        let mut t = self.expr_ty(value)?;
+        for field in &head[1..] {
+            match self.field_of(t, None, field) {
+                Some((_, ft)) => t = ft,
+                None => return Ok(false),
+            }
+        }
+        Ok(self.self_mode(f, mode, t) == SelfParam::Ref)
+    }
+
+    /// The constant `segments[0]` built in a temporary, then each field of
+    /// `segments[1..]` in turn; `None` when the head is no constant. Lent
+    /// read-only (`MX.iter()`, which the parser reads as a path), a
+    /// constant that lives in a static is that static, so a view of it
+    /// borrows nothing (core semantics §5.3; B-2026-11-15-120).
+    fn const_segments_place(
+        &mut self,
+        span: Span,
+        segments: &[String],
+        lent: bool,
+    ) -> R<Option<Place>> {
+        let Some((d, value)) = segments
+            .first()
+            .and_then(|c| self.lcx.defs.lookup(0, c))
+            .and_then(|d| self.lcx.consts.get(&d).map(|&v| (d, v)))
+        else {
             return Ok(None);
         };
         let t = self.expr_ty(value)?;
-        let mut p = Place::local(self.temp_of(value, t)?);
+        let in_static = match lent {
+            true => self.const_static_ref(d)?,
+            false => None,
+        };
+        let mut p = match in_static {
+            Some(p) => p,
+            None => Place::local(self.temp_of(value, t)?),
+        };
         for field in &segments[1..] {
             let (base, bt) = self.strip_refs(p);
             let Some((idx, ft)) = self.field_of(bt, None, field) else {
@@ -8094,8 +8141,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(None);
         };
         let t = self.expr_ty(value)?;
-        if self.expr_ty(e)? != t
-            || self.needs_drop(t)
+        if self.expr_ty(e)? != t {
+            return Ok(None);
+        }
+        self.const_static_ref(d)
+    }
+
+    /// The constant `d` in its static, as [`Self::const_static_place`]
+    /// takes it, for a use at the value's own type: `None` unless the value
+    /// is an `Array` or tuple that needs no drop.
+    fn const_static_ref(&mut self, d: DefId) -> R<Option<Place>> {
+        let Some(value) = self.lcx.consts.get(&d).copied() else {
+            return Ok(None);
+        };
+        let t = self.expr_ty(value)?;
+        if self.needs_drop(t)
             || !matches!(self.tys().tcx().kind(t), HK::Array { .. } | HK::Tuple(_))
         {
             return Ok(None);
@@ -19798,7 +19858,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Some(&Res::LocalPath(sym)) => {
                         Some(self.local_path_place(callee.span, sym, head)?)
                     }
-                    _ => self.const_segments_place(callee.span, head)?,
+                    _ => {
+                        let lent = self.lends_const_receiver(&callee_kind, head)?;
+                        self.const_segments_place(callee.span, head, lent)?
+                    }
                 };
                 if let Some(rp) = recv_place {
                     let vt = self.place_type(&rp);

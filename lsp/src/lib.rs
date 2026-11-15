@@ -297,14 +297,22 @@ fn handle_request(
                 let pos = p.text_document_position.position;
                 let uri = p.text_document_position.text_document.uri;
                 // `None` (not on a renameable name) → a null result, which
-                // the client reports as "cannot rename here".
-                let edit = docs.get(&uri.to_string()).and_then(|text| {
-                    analysis::rename(text, pos, &p.new_name).map(|edits| lsp_types::WorkspaceEdit {
-                        changes: Some(std::iter::once((uri.clone(), edits)).collect()),
-                        ..Default::default()
-                    })
-                });
-                lsp_server::Response::new_ok(id, edit)
+                // the client reports as "cannot rename here"; a new name
+                // that is no name → an error that says why (B-2026-11-15-123).
+                let renamed = match docs.get(&uri.to_string()) {
+                    Some(text) => analysis::rename(text, pos, &p.new_name),
+                    None => Ok(None),
+                };
+                match renamed {
+                    Ok(edits) => {
+                        let edit = edits.map(|edits| lsp_types::WorkspaceEdit {
+                            changes: Some(std::iter::once((uri.clone(), edits)).collect()),
+                            ..Default::default()
+                        });
+                        lsp_server::Response::new_ok(id, edit)
+                    }
+                    Err(why) => lsp_server::Response::new_err(id, INVALID_PARAMS, why),
+                }
             }
             Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
         },

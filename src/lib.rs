@@ -1680,6 +1680,20 @@ pub fn find_references(
             }
         }
     }
+    // A struct field's name, at its declaration or any use: the field's
+    // sites, which the typechecker resolves (B-2026-11-15-122).
+    if let Some(sites) = field_sites_at(source, &resolved, byte_offset) {
+        let mut out: Vec<DefLocation> = sites
+            .into_iter()
+            .filter(|s| include_declaration || !s.declaration)
+            .map(|s| DefLocation {
+                span_offset: s.offset,
+                span_length: s.length,
+            })
+            .collect();
+        out.dedup();
+        return out;
+    }
     let Some(target) = target else {
         return Vec::new();
     };
@@ -1704,6 +1718,19 @@ pub fn find_references(
             });
         }
     }
+    // Each span narrowed to the name: a struct literal's resolution covers
+    // the whole literal (`P { x: 1 }`) and a declaration's its whole item,
+    // where an editor wants the name alone (B-2026-11-15-124).
+    let name = &resolved.symbol_table.get_symbol(target).name;
+    for r in &mut out {
+        if let Some(at) = source
+            .get(r.span_offset..r.span_offset + r.span_length)
+            .and_then(|text| word_at(text, name))
+        {
+            r.span_offset += at;
+            r.span_length = name.len();
+        }
+    }
     out.sort_by(|a, b| {
         a.span_offset
             .cmp(&b.span_offset)
@@ -1711,6 +1738,182 @@ pub fn find_references(
     });
     out.dedup();
     out
+}
+
+/// The first whole-word occurrence of `name` in `text`.
+fn word_at(text: &str, name: &str) -> Option<usize> {
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+    let b = text.as_bytes();
+    text.match_indices(name)
+        .find(|(i, _)| {
+            (*i == 0 || !ident(b[i - 1]))
+                && (i + name.len() == b.len() || !ident(b[i + name.len()]))
+        })
+        .map(|(i, _)| i)
+}
+
+/// A struct field named in the buffer, for find-references and rename.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FieldRef {
+    offset: usize,
+    length: usize,
+    declaration: bool,
+    /// `P { x }`: the field and its value or binding in one name.
+    shorthand: bool,
+}
+
+/// When `byte_offset` is on a struct field's name (its declaration, `p.x`,
+/// `P { x: .. }` or a struct pattern's `x`), every site of that field, in
+/// source order. `None` elsewhere, and before any check when no struct in
+/// the buffer has a field named as the word under the cursor.
+#[cfg(not(target_arch = "wasm32"))]
+fn field_sites_at(
+    source: &str,
+    resolved: &crate::resolver::ResolveResult,
+    byte_offset: usize,
+) -> Option<Vec<FieldRef>> {
+    use crate::resolver::SymbolKind;
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+    let bytes = source.as_bytes();
+    let (mut start, mut end) = (byte_offset.min(source.len()), byte_offset.min(source.len()));
+    while start > 0 && ident(bytes[start - 1]) {
+        start -= 1;
+    }
+    while end < bytes.len() && ident(bytes[end]) {
+        end += 1;
+    }
+    let word = source.get(start..end)?;
+    let is_field = resolved.symbol_table.all_symbols().iter().any(|s| {
+        matches!(&s.kind, SymbolKind::Struct { field_names } if field_names.iter().any(|f| f == word))
+    });
+    if word.is_empty() || !is_field {
+        return None;
+    }
+    let nav = cli::editor_nav::analyze(source)?;
+    let sites = nav.field_sites();
+    let hit = sites.iter().find(|s| {
+        s.field == word && s.offset <= byte_offset && byte_offset <= s.offset + word.len()
+    })?;
+    let (ty, field) = (hit.ty.clone(), hit.field.clone());
+    let decls: Vec<usize> = nav
+        .user_items()
+        .filter_map(|item| match item {
+            crate::ast::Item::StructDef(s) if s.name == ty => s
+                .fields
+                .iter()
+                .find(|f| f.name == field)
+                .map(|f| f.name_span.offset),
+            _ => None,
+        })
+        .collect();
+    Some(
+        sites
+            .into_iter()
+            .filter(|s| s.ty == ty && s.field == field)
+            .map(|s| FieldRef {
+                declaration: decls.contains(&s.offset),
+                offset: s.offset,
+                length: s.length,
+                shorthand: s.shorthand,
+            })
+            .collect(),
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn field_sites_at(_: &str, _: &crate::resolver::ResolveResult, _: usize) -> Option<Vec<FieldRef>> {
+    None
+}
+
+/// One edit of a rename: replace the span with `new_text`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameEdit {
+    pub span_offset: usize,
+    pub span_length: usize,
+    pub new_text: String,
+}
+
+/// Why `new_name` cannot name anything, or `None` when it can: it must lex
+/// as one identifier, which a keyword (`fn`) or a reserved word does not.
+pub fn rename_name_error(new_name: &str) -> Option<String> {
+    use crate::token::Token;
+    let mut lexer = crate::lexer::Lexer::new(new_name);
+    let first = lexer.next_token();
+    let rest = lexer.next_token();
+    let whole = first.span.offset == 0 && first.span.length == new_name.len();
+    match (&first.token, &rest.token) {
+        (Token::Identifier { name, raw: false }, Token::EOF) if whole && name == new_name => None,
+        _ if !new_name.is_empty()
+            && new_name.starts_with(|c: char| c.is_alphabetic() || c == '_')
+            && new_name.chars().all(|c| c.is_alphanumeric() || c == '_') =>
+        {
+            Some(format!(
+                "`{new_name}` is a keyword, so it cannot be a name: choose another name"
+            ))
+        }
+        _ => Some(format!(
+            "`{new_name}` is not a name: a name is a letter or `_`, then letters, digits or `_`"
+        )),
+    }
+}
+
+/// Rename query: the edits that rename the name under `byte_offset` to
+/// `new_name`, at its declaration and every use. A struct field is renamed
+/// at its declaration, every `p.x`, and every literal and pattern field,
+/// where a shorthand `P { x }` becomes `P { new: x }`; a local named by a
+/// shorthand becomes `P { x: new }`. `Err` when `new_name` is no name
+/// ([`rename_name_error`]); `Ok(None)` when the cursor is on nothing to
+/// rename.
+pub fn rename_edits(
+    source: &str,
+    byte_offset: usize,
+    new_name: &str,
+) -> Result<Option<Vec<RenameEdit>>, String> {
+    if let Some(why) = rename_name_error(new_name) {
+        return Err(why);
+    }
+    let edit = |span_offset, span_length, new_text: String| RenameEdit {
+        span_offset,
+        span_length,
+        new_text,
+    };
+    if let Some(sites) = resolve_source(source)
+        .and_then(|(_, resolved)| field_sites_at(source, &resolved, byte_offset))
+    {
+        let edits = sites
+            .into_iter()
+            .map(|s| match s.shorthand {
+                true => edit(s.offset, 0, format!("{new_name}: ")),
+                false => edit(s.offset, s.length, new_name.to_string()),
+            })
+            .collect();
+        return Ok(Some(edits));
+    }
+    let Some((name, spans)) = rename_spans(source, byte_offset) else {
+        return Ok(None);
+    };
+    // A local named by a shorthand field (`P { x }`) keeps the field's name.
+    #[cfg(not(target_arch = "wasm32"))]
+    let shorthands: Vec<usize> = cli::editor_nav::analyze(source)
+        .map(|nav| {
+            nav.field_sites()
+                .into_iter()
+                .filter(|s| s.shorthand && s.field == name)
+                .map(|s| s.offset)
+                .collect()
+        })
+        .unwrap_or_default();
+    #[cfg(target_arch = "wasm32")]
+    let shorthands: Vec<usize> = Vec::new();
+    Ok(Some(
+        spans
+            .into_iter()
+            .map(|s| match shorthands.contains(&s.span_offset) {
+                true => edit(s.span_offset, s.span_length, format!("{name}: {new_name}")),
+                false => edit(s.span_offset, s.span_length, new_name.to_string()),
+            })
+            .collect(),
+    ))
 }
 
 /// Rename query: the spans of the name under `byte_offset`, at its
@@ -2179,10 +2382,12 @@ mod playground_tests {
         let with = find_references(src, call, true);
         assert_eq!(without.len(), 1);
         assert_eq!(with.len(), 2, "declaration included: {with:?}");
-        // The extra entry is the definition item span (contains `fn g`).
+        // The extra entry is the definition's name, not its whole item
+        // (B-2026-11-15-124).
+        let decl = src.find("g()").unwrap();
         assert!(with
             .iter()
-            .any(|r| src[r.span_offset..r.span_offset + r.span_length].contains("fn g")));
+            .any(|r| r.span_offset == decl && r.span_length == 1));
     }
 
     #[test]

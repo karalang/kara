@@ -381,30 +381,31 @@ pub fn inlay_hints(text: &str, hints: &[karac::InlayHint], range: Range) -> Vec<
 }
 
 /// Rename the name under `position` to `new_name`: one edit per occurrence,
-/// declaration included. `None` when the cursor is not on a name the
-/// resolver binds, or `new_name` is not an identifier. `catch_unwind`-guarded
-/// like [`diagnostics`].
-pub fn rename(text: &str, position: Position, new_name: &str) -> Option<Vec<TextEdit>> {
-    let mut chars = new_name.chars();
-    let first = chars.next()?;
-    if !(first.is_alphabetic() || first == '_') || !chars.all(|c| c.is_alphanumeric() || c == '_') {
-        return None;
-    }
+/// declaration included, a struct field's accesses, literal and pattern
+/// fields too. `Err` with the reason when `new_name` is not a name (a
+/// keyword, `1 bad`), which the server answers with a `ResponseError`;
+/// `Ok(None)` when the cursor is not on a name it can rename.
+/// `catch_unwind`-guarded like [`diagnostics`].
+pub fn rename(
+    text: &str,
+    position: Position,
+    new_name: &str,
+) -> Result<Option<Vec<TextEdit>>, String> {
     let index = LineIndex::new(text);
     let offset = index.offset(position);
-    let (_, spans) =
-        std::panic::catch_unwind(AssertUnwindSafe(|| karac::rename_spans(text, offset)))
-            .ok()
-            .flatten()?;
-    Some(
-        spans
+    let edits = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        karac::rename_edits(text, offset, new_name)
+    }))
+    .unwrap_or(Ok(None))?;
+    Ok(edits.map(|edits| {
+        edits
             .into_iter()
-            .map(|s| TextEdit {
-                range: index.range(s.span_offset, s.span_length),
-                new_text: new_name.to_string(),
+            .map(|e| TextEdit {
+                range: index.range(e.span_offset, e.span_length),
+                new_text: e.new_text,
             })
-            .collect(),
-    )
+            .collect()
+    }))
 }
 
 /// Document outline: one flat [`DocumentSymbol`] per top-level item, in source
