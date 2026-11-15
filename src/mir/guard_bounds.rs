@@ -11,14 +11,16 @@
 //! The shape, for an index call in block `B` on the vector `X` at `h as
 //! usize`, `h` a signed local:
 //!
-//! - `X` is `*r` with `r` a shared reference no statement writes after its
-//!   one assignment (a parameter has none), so `X`'s length cannot change
-//!   while `r` lives;
+//! - `X` is `*r`, or a field of the struct `*r` (`self.pairs` in a `ref
+//!   self` method), with `r` a shared reference no statement writes after
+//!   its one assignment (a parameter has none), so `X`'s length cannot
+//!   change while `r` lives;
 //! - `n` is assigned once in the body, by `len` on `&X` with the index's
 //!   receiver type;
 //! - walking up from `B` through blocks with one predecessor, an edge taken
 //!   only when a `bool` `c` holds, where `c` implies `h <s n` (`c = Lt(h, n)`,
-//!   or a copy or `&` of one, through the arms of a join that set it), and
+//!   or a copy or `&` of one, through the arms of a join that set it, with
+//!   what the edges into each arm proved), and
 //!   nothing writes `h` between that compare and the call.
 //!
 //! Then `h <s n = len`, so `h as usize <u len` exactly when `h >= 0`.
@@ -38,9 +40,10 @@ const COPIES: usize = 4;
 /// `KARAC_MIR_RANGE_BOUNDS=0`.
 pub fn upper_proven_indexes(body: &Body, tys: &TyInterner) -> Vec<usize> {
     let preds = super::counters::predecessors(body);
+    let idom = super::counters::dominators(body, &preds);
     let mut out = Vec::new();
     for (bi, b) in body.blocks.iter().enumerate() {
-        if proven(body, tys, &preds, bi, b).is_some() {
+        if proven(body, tys, &preds, &idom, bi, b).is_some() {
             out.push(bi);
         }
     }
@@ -59,6 +62,7 @@ fn proven(
     body: &Body,
     tys: &TyInterner,
     preds: &[Vec<usize>],
+    idom: &[usize],
     bi: usize,
     b: &BasicBlockData,
 ) -> Option<()> {
@@ -115,7 +119,7 @@ fn proven(
                 let taken_when_set = matches!(targets.values.as_slice(), [(0, other)]
                     if targets.otherwise.index() == w && other.index() != w);
                 if taken_when_set {
-                    let facts = implied(body, preds, p, pb.statements.len(), c.local, 0);
+                    let facts = implied(body, preds, idom, p, pb.statements.len(), c.local, 0);
                     if facts.is_none_or(|f| f.iter().any(|&(a, y)| a == h && is_length(y))) {
                         return Some(());
                     }
@@ -136,6 +140,7 @@ fn proven(
 fn implied(
     body: &Body,
     preds: &[Vec<usize>],
+    idom: &[usize],
     bi: usize,
     k: usize,
     c: Local,
@@ -174,7 +179,7 @@ fn implied(
                 Some(unchanged(vec![(x.local, y.local)], j + 1))
             }
             Rvalue::Use(Operand::Copy(d) | Operand::Move(d)) if d.projection.is_empty() => {
-                let f = implied(body, preds, bi, j, d.local, depth)?;
+                let f = implied(body, preds, idom, bi, j, d.local, depth)?;
                 Some(unchanged(f, j + 1))
             }
             Rvalue::Use(Operand::Const(Const {
@@ -184,8 +189,8 @@ fn implied(
             Rvalue::BinaryOp(BinOp::BitAnd, Operand::Copy(l), Operand::Copy(r))
                 if l.projection.is_empty() && r.projection.is_empty() =>
             {
-                let mut f = implied(body, preds, bi, j, l.local, depth)?;
-                f.extend(implied(body, preds, bi, j, r.local, depth)?);
+                let mut f = implied(body, preds, idom, bi, j, l.local, depth)?;
+                f.extend(implied(body, preds, idom, bi, j, r.local, depth)?);
                 Some(unchanged(f, j + 1))
             }
             _ => Some(Vec::new()),
@@ -194,7 +199,7 @@ fn implied(
         None if depth < JOIN_DEPTH && !preds[bi].is_empty() => {
             let mut all: Option<Vec<(Local, Local)>> = None;
             for &q in &preds[bi] {
-                if q >= bi {
+                if super::counters::dominates(idom, bi, q) {
                     // A back edge: what the loop's latch sets is not seen.
                     return Some(Vec::new());
                 }
@@ -202,9 +207,20 @@ fn implied(
                 if !matches!(qb.terminator.kind, TerminatorKind::Goto { .. }) {
                     return Some(Vec::new());
                 }
-                let Some(f) = implied(body, preds, q, qb.statements.len(), c, depth + 1) else {
+                let Some(mut f) = implied(body, preds, idom, q, qb.statements.len(), c, depth + 1)
+                else {
                     continue;
                 };
+                // What the edges into `q` proved holds through it too
+                // (`a < n and b < m` sets its flag in the block the first
+                // compare's edge leads to, B-2026-11-14-28).
+                f.extend(
+                    entry_facts(body, preds, idom, q, depth + 1)
+                        .into_iter()
+                        .filter(|&(x, y)| {
+                            !qb.statements.iter().any(|s| writes(s, x) || writes(s, y))
+                        }),
+                );
                 all = Some(match all {
                     None => f,
                     Some(a) => a.into_iter().filter(|x| f.contains(x)).collect(),
@@ -214,6 +230,62 @@ fn implied(
         }
         None => Some(Vec::new()),
     }
+}
+
+/// The `a <s b` facts that hold on entry to block `bi`, from the edges
+/// taken only when a flag holds on its one-predecessor path up, less
+/// those whose locals a block on the way writes.
+fn entry_facts(
+    body: &Body,
+    preds: &[Vec<usize>],
+    idom: &[usize],
+    bi: usize,
+    depth: usize,
+) -> Vec<(Local, Local)> {
+    let mut out = Vec::new();
+    // Locals written between the block reached and `bi`.
+    let mut killed: Vec<Local> = Vec::new();
+    let mut w = bi;
+    for _ in 0..WALK {
+        let [p] = preds[w].as_slice() else { break };
+        let p = *p;
+        let pb = &body.blocks[p];
+        match &pb.terminator.kind {
+            TerminatorKind::Goto { .. } | TerminatorKind::Drop { .. } => {}
+            TerminatorKind::Call { destination, .. } => killed.push(destination.local),
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(c) | Operand::Move(c),
+                targets,
+            } if c.projection.is_empty() => {
+                let taken_when_set = matches!(targets.values.as_slice(), [(0, other)]
+                    if targets.otherwise.index() == w && other.index() != w);
+                if taken_when_set && depth < JOIN_DEPTH {
+                    if let Some(f) =
+                        implied(body, preds, idom, p, pb.statements.len(), c.local, depth)
+                    {
+                        out.extend(
+                            f.into_iter()
+                                .filter(|(x, y)| !killed.contains(x) && !killed.contains(y)),
+                        );
+                    }
+                }
+            }
+            _ => break,
+        }
+        for s in &pb.statements {
+            if let StatementKind::Assign(q, rv) = &s.kind {
+                killed.push(q.local);
+                if let Rvalue::Ref(BorrowKind::Mut, q) = rv {
+                    killed.push(q.local);
+                }
+            }
+            if let StatementKind::SetDiscriminant(q, _) = &s.kind {
+                killed.push(q.local);
+            }
+        }
+        w = p;
+    }
+    out
 }
 
 /// The locals of `body` that hold a length: assigned once, by a native
@@ -314,8 +386,9 @@ fn through_copies(b: &BasicBlockData, k: usize, h: Local) -> Option<Local> {
     None
 }
 
-/// Whether `x`'s length is fixed while it can be indexed: `x` is `*r` for
-/// a shared reference `r` written at most once, or a local vector written
+/// Whether `x`'s length is fixed while it can be indexed: `x` is `*r`, or
+/// a field of a struct or tuple `*r` lends, for a shared reference `r`
+/// written at most once, or a local vector written
 /// once, whole, and never borrowed mutably (kata 459's `let cs: Vec[char]
 /// = s.chars().collect()`, B-2026-11-08-61).
 fn frozen(body: &Body, tys: &TyInterner, x: &Place) -> bool {
@@ -324,6 +397,15 @@ fn frozen(body: &Body, tys: &TyInterner, x: &Place) -> bool {
     let once = assigns(body, r) == usize::from(!param);
     match (x.projection.as_slice(), tys.kind(body.locals[r.index()].ty)) {
         ([ProjElem::Deref], TyKind::Ref(_)) => once,
+        // A field of what a shared reference lends, as `self.pairs` in a
+        // `ref self` method: the lender cannot change while it is lent
+        // (B-2026-11-14-28).
+        ([ProjElem::Deref, fields @ ..], TyKind::Ref(lent))
+            if matches!(tys.kind(lent), TyKind::Adt(_) | TyKind::Tuple(_))
+                && fields.iter().all(|e| matches!(e, ProjElem::Field(..))) =>
+        {
+            once
+        }
         ([], TyKind::Intrinsic(IntrinsicTy::Vec(_))) => once,
         _ => false,
     }
@@ -406,5 +488,74 @@ fn fn_name(func: &Operand) -> Option<&str> {
             ..
         }) => Some(inst.name.as_str()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mir::lower::build_source;
+
+    /// The index calls in `f`, and how many of them this pass proves.
+    fn proved(src: &str, f: &str) -> (usize, usize) {
+        let l = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let body = l
+            .program
+            .bodies
+            .values()
+            .find(|b| b.instance.name == f)
+            .unwrap_or_else(|| panic!("no body {f}"));
+        let preds = crate::mir::counters::predecessors(body);
+        let idom = crate::mir::counters::dominators(body, &preds);
+        let indexes = body
+            .blocks
+            .iter()
+            .filter(|b| {
+                matches!(&b.terminator.kind, super::TerminatorKind::Call { func, .. }
+                    if super::fn_name(func).is_some_and(|n| n.ends_with(".index")))
+            })
+            .count();
+        let n = body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(bi, b)| super::proven(body, &l.tys, &preds, &idom, *bi, b).is_some())
+            .count();
+        (indexes, n)
+    }
+
+    const MERGE: &str = r#"struct Sparse { pairs: Vec[(i64, i64)] }
+impl Sparse {
+    fn dot(ref self, other: Sparse) -> i64 {
+        let mut i = 0;
+        let mut j = 0;
+        let mut total = 0;
+        while i < self.pairs.len() and j < other.pairs.len() {
+            let (a, x) = self.pairs[i];
+            let (b, y) = other.pairs[j];
+            if a == b {
+                total += x * y;
+                i += 1;
+                j += 1;
+            } else if a < b {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+        total
+    }
+}
+fn main() {
+    let u = Sparse { pairs: [(0, 2), (3, 4), (7, 1)].to_vec() };
+    let v = Sparse { pairs: [(3, 5), (7, 6), (9, 9)].to_vec() };
+    println(u.dot(v));
+}
+"#;
+
+    /// Both indexes of a merge over two borrowed receivers' fields are
+    /// proved by the `and` guard (B-2026-11-14-28).
+    #[test]
+    fn guard_bounds_proves_a_merge_over_borrowed_fields() {
+        assert_eq!(proved(MERGE, "Sparse.dot"), (2, 2));
     }
 }
