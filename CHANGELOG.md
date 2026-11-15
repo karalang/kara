@@ -350,6 +350,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- Both backends send `User-Agent: kara/<version>` unless the request sets
+  its own, and `Accept: */*` unless it sets one, and neither asks for or
+  decodes compression (docs/library/io.md § HTTP client, B-2026-11-14-49).
+  `karac run` sent `ureq`'s `User-Agent`, `Accept-Encoding: gzip` and
+  gunzipped the body; a built program sent neither header. A
+  `Content-Encoding` the server sends anyway now reaches `bytes()` as sent
+  on both.
+
 - With a width and no align, an f-string hole holding anything but a
   number (`String`, `Str`, `char`, `bool`, a user type's `Display`) is
   left-aligned, as in Rust and Python: `f"[{s:6}]"` with `s = "hi"` prints
@@ -474,6 +482,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Vec[ref i64]` keeps its references (B-2026-11-08-19).
 
 ### Wrong behaviour fixed
+
+- `karac run` sends an HTTP request through the same client a built program
+  links, so the two agree on what a response is. A body cut short (fewer
+  bytes than its `Content-Length`, a chunked body with no last chunk, a
+  timeout mid-body) is an `Err` under `run` too, where it was a 200 holding
+  the bytes that came (B-2026-11-14-47). A `100 Continue` ahead of the answer
+  is skipped, where `run` returned the 100 with the real response as its body
+  (B-2026-11-14-48).
 
 - A redirect's `Location` is resolved as RFC 3986 says, on both backends:
   `?page=2` keeps the current path (it went to `/?page=2`), and `.` and

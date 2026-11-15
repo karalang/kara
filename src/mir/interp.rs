@@ -16475,7 +16475,8 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
-    /// `std.http`'s client, through `ureq` as legacy's. A `Response` is its
+    /// `std.http`'s client, the compiled program's (`src/http_client.rs`). A
+    /// `Response` is its
     /// status and body, its headers kept by its body's box; a
     /// `RequestBuilder` the handle of the request it assembles.
     fn http_method(
@@ -19245,388 +19246,34 @@ struct HttpAnswer {
 /// What a request came to: the response, or the client's message.
 type HttpFetched = Result<HttpAnswer, String>;
 
-/// Sends `req`, with its body when `with_body`. Redirects are followed
-/// here rather than by `ureq`, as the compiled client follows them
-/// (runtime/src/lib.rs `http_fetch_redirects`), so each hop goes through
-/// the proxy its own URL names. Plain data in and out, so a helper thread
-/// runs it.
+/// Sends `req`, with its body when `with_body`, through the client the
+/// compiled program runs (`src/http_client.rs`), so the two backends agree
+/// on redirects, proxies, a cut-short body, a 1xx answer and the headers
+/// sent (B-2026-11-14-47, B-2026-11-14-48, B-2026-11-14-49). Plain data in
+/// and out, so a helper thread runs it.
 #[cfg(not(target_arch = "wasm32"))]
 fn http_fetch(req: &HttpBuilder, with_body: bool) -> HttpFetched {
-    let mut method = req.method.clone();
-    let mut url = req.url.clone();
-    let mut body = with_body.then(|| req.body.clone());
-    let mut headers = req.headers.clone();
-    for _hop in 0..=5 {
-        let resp = http_exchange(
-            &method,
-            &url,
-            &req.url,
-            &headers,
-            body.as_deref(),
-            req.timeout_ms,
-        )?;
-        let status = resp.status();
-        if matches!(status, 301 | 302 | 303 | 307 | 308) {
-            if let Some(loc) = resp.header("location") {
-                url = http_resolve_location(&url, loc);
-                let demote = status == 303
-                    || (status == 301 || status == 302)
-                        && !method.eq_ignore_ascii_case("GET")
-                        && !method.eq_ignore_ascii_case("HEAD");
-                if demote {
-                    method = "GET".to_string();
-                    body = None;
-                }
-                // The caller's credentials go no further once a hop
-                // leaves the first request's origin (docs/library/io.md).
-                if !crate::http_proxy::redirect_keeps_credentials(&req.url, &url) {
-                    headers.retain(|(k, _)| !crate::http_proxy::is_credential_header(k));
-                }
-                continue;
-            }
-        }
-        let headers = resp
-            .headers_names()
-            .into_iter()
-            .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
-            .collect();
-        // `ureq`'s own wording for an error status, which the compiled
-        // client's matches (runtime/src/lib.rs `http_status_error`).
-        let error = (status >= 400).then(|| format!("{}: status code {status}", resp.get_url()));
-        let mut raw = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut resp.into_reader(), &mut raw);
-        return Ok(HttpAnswer {
-            status,
-            headers,
-            raw,
-            error,
-        });
-    }
-    Err(format!("{url}: too many redirects"))
+    let body: &[u8] = if with_body { req.body.as_bytes() } else { &[] };
+    let timeout_ms = i64::try_from(req.timeout_ms).unwrap_or(i64::MAX);
+    let fetched = crate::http_client::http_fetch_blocking(
+        &req.method,
+        &req.url,
+        body,
+        &req.headers,
+        timeout_ms,
+    )?;
+    let error = crate::http_client::http_status_error(&fetched);
+    Ok(HttpAnswer {
+        status: fetched.status,
+        headers: fetched.headers,
+        raw: fetched.body,
+        error,
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
 fn http_fetch(_req: &HttpBuilder, _with_body: bool) -> HttpFetched {
     Err("the HTTP client is not available in the browser".into())
-}
-
-/// One request of `http_send`'s, redirects not followed: the
-/// response, or the error message the compiled client gives for it.
-/// `origin` is the URL the program asked for, which a timeout names.
-#[cfg(not(target_arch = "wasm32"))]
-fn http_exchange(
-    method: &str,
-    url: &str,
-    origin: &str,
-    headers: &[(String, String)],
-    body: Option<&str>,
-    timeout_ms: i128,
-) -> Result<ureq::Response, String> {
-    // A URL without a scheme is a bare authority to the runtime's client
-    // (`hyper::Uri`), so it fails at the connect, as the compiled
-    // program reports it, before `ureq` would refuse it as a bad URL. A
-    // path after that authority is a URI `hyper` refuses, and a bare path
-    // one with no host.
-    if !url.contains("://") {
-        if url.starts_with('/') {
-            return Err(format!("{url}: url has no host"));
-        }
-        if url.contains(['/', '?', '#']) {
-            return Err(format!("{url}: bad url: invalid format"));
-        }
-        let authority = url.split('/').next().unwrap_or_default();
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => (h, p.parse().unwrap_or(80)),
-            None => (authority, 80),
-        };
-        if let Err(e) = std::net::TcpStream::connect((host, port)) {
-            return Err(format!("{url}: connect failed: {e}"));
-        }
-    }
-    // The proxy the environment names for this URL, read at each request
-    // (docs/library/io.md § HTTP client, `src/http_proxy.rs`).
-    let route = match crate::http_proxy::url_scheme_host(url) {
-        Some((scheme, host)) => crate::http_proxy::proxy_for(&scheme, &host)
-            .map_err(|e| format!("{url}: {e}"))?
-            .map(|r| (scheme, r)),
-        None => None,
-    };
-    // An https URL through a proxy is tunnelled here rather than by `ureq`,
-    // which would send the tunnelled request in absolute form: the request
-    // inside a CONNECT tunnel is the one sent to the origin, in origin form,
-    // as the compiled client sends it (RFC 9112 §3.2.1; B-2026-11-07-29).
-    let tunnel_refusal = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let agent = match &route {
-        None => http_agent()?,
-        Some((scheme, r)) if scheme == "https" => {
-            let port = crate::http_proxy::url_port(url, scheme).unwrap_or(443);
-            let host = crate::http_proxy::url_scheme_host(url)
-                .map(|(_, h)| h)
-                .unwrap_or_default();
-            http_agent_tunnelled(r, &host, port, tunnel_refusal.clone())?
-        }
-        Some((_, r)) => http_agent_through(r)?,
-    };
-    let mut r = agent.request(method, url);
-    for (k, v) in headers {
-        r = r.set(k, v);
-    }
-    // `ureq` puts the proxy's credentials on a CONNECT only; an http
-    // request carries them itself, as the compiled client sends them.
-    if let Some(("http", auth)) = route
-        .as_ref()
-        .and_then(|(scheme, r)| r.authorization().map(|a| (scheme.as_str(), a)))
-    {
-        r = r.set("Proxy-Authorization", &auth);
-    }
-    if timeout_ms > 0 {
-        r = r.timeout(std::time::Duration::from_millis(timeout_ms as u64));
-    }
-    let result = match body {
-        Some(body) => r.send_string(body),
-        None => r.call(),
-    };
-    use std::error::Error;
-    if result.is_err() {
-        if let Some(why) = tunnel_refusal.lock().ok().and_then(|mut w| w.take()) {
-            return Err(format!("{url}: {why}"));
-        }
-    }
-    match result {
-        // An error status is still a response, which `http_fetch` keeps.
-        Ok(resp) | Err(ureq::Error::Status(_, resp)) => Ok(resp),
-        Err(ureq::Error::Transport(t))
-            if matches!(
-                t.kind(),
-                ureq::ErrorKind::ProxyConnect | ureq::ErrorKind::ProxyUnauthorized
-            ) =>
-        {
-            // `ureq` drops the proxy's status; ask the proxy again for it,
-            // so the message is the compiled client's.
-            let (_, r) = route.as_ref().expect("a proxy error has a proxy");
-            let msg = connect_refusal_of(r, url).unwrap_or_else(|| t.to_string());
-            Err(format!("{url}: {msg}"))
-        }
-        Err(ureq::Error::Transport(t))
-            if matches!(
-                t.kind(),
-                ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Dns
-            ) =>
-        {
-            // The runtime's wording, which the compiled program prints.
-            let cause = t
-                .source()
-                .map_or_else(|| t.to_string(), |io| io.to_string());
-            Err(match &route {
-                Some((_, r)) => {
-                    format!("{url}: {}", crate::http_proxy::proxy_unreachable(r, &cause))
-                }
-                None => format!("{url}: connect failed: {cause}"),
-            })
-        }
-        // A request past its timeout, in the compiled client's words
-        // (runtime/src/lib.rs `http_fetch_blocking`), not `ureq`'s
-        // "Network Error: ... timed out reading response" (B-2026-11-09-69).
-        Err(ureq::Error::Transport(t)) if timeout_ms > 0 && http_timed_out(&t) => {
-            Err(format!("{origin}: request timed out after {timeout_ms} ms"))
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// Whether `ureq`'s transport error is a read or connect that ran out
-/// of time: an `io::Error` of kind `TimedOut` (or `WouldBlock`, which a
-/// socket timeout is on some platforms) somewhere in its sources.
-#[cfg(not(target_arch = "wasm32"))]
-fn http_timed_out(t: &ureq::Transport) -> bool {
-    use std::error::Error;
-    let mut cause: Option<&(dyn Error + 'static)> = t.source();
-    while let Some(c) = cause {
-        if let Some(io) = c.downcast_ref::<std::io::Error>() {
-            if matches!(
-                io.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            ) {
-                return true;
-            }
-        }
-        cause = c.source();
-    }
-    false
-}
-
-/// `loc`, a redirect's `Location`, against the URL `current` it answered, as
-/// the compiled client resolves it: RFC 3986 §5.2, in the resolver both
-/// backends share (`src/http_proxy.rs`, B-2026-11-14-46).
-#[cfg(not(target_arch = "wasm32"))]
-fn http_resolve_location(current: &str, loc: &str) -> String {
-    crate::http_proxy::resolve_location(current, loc)
-}
-
-/// The HTTP client's agent, trusting what the compiled program's client
-/// trusts (runtime/src/lib.rs `http_client_tls_config`): the bundled Mozilla
-/// roots plus the PEM certificates at `KARAC_HTTP_EXTRA_CA`, over rustls
-/// with `ring`. Only HTTP/1.1 is offered, the one protocol `ureq` speaks.
-/// The TLS configuration is built once; the variable is read on first use,
-/// as the runtime reads it.
-#[cfg(not(target_arch = "wasm32"))]
-fn http_agent() -> Result<ureq::Agent, String> {
-    http_tls_config().map(|config| http_agent_builder(config).build())
-}
-
-/// The agent for a request through the proxy `route`: the same TLS
-/// configuration, so a certificate is checked against the target host as it
-/// is without a proxy, and `ureq`'s CONNECT tunnel for an https URL.
-#[cfg(not(target_arch = "wasm32"))]
-fn http_agent_through(route: &crate::http_proxy::ProxyRoute) -> Result<ureq::Agent, String> {
-    let url = match &route.credentials {
-        Some(c) => format!("http://{c}@{}", route.authority()),
-        None => format!("http://{}", route.authority()),
-    };
-    let proxy = ureq::Proxy::new(url).map_err(|e| e.to_string())?;
-    http_tls_config().map(|config| http_agent_builder(config).proxy(proxy).build())
-}
-
-/// The agent for an https URL through the proxy `route`: `ureq` connects to
-/// the proxy (every name resolves to it), and the TLS step first asks the
-/// proxy for a tunnel to `host:port`, then speaks TLS to the origin through
-/// it. `ureq` has no proxy configured, so it sends the request in origin
-/// form. Why the proxy refused, or could not be reached, is left in
-/// `refusal` in the compiled client's words.
-#[cfg(not(target_arch = "wasm32"))]
-fn http_agent_tunnelled(
-    route: &crate::http_proxy::ProxyRoute,
-    host: &str,
-    port: u16,
-    refusal: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-) -> Result<ureq::Agent, String> {
-    let tls = http_tls_config()?;
-    let proxy = (route.host.clone(), route.port);
-    let resolve = move |_: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
-        std::net::ToSocketAddrs::to_socket_addrs(&(proxy.0.as_str(), proxy.1)).map(|a| a.collect())
-    };
-    let tunnel = TunnelTls {
-        tls,
-        route: route.clone(),
-        connect: crate::http_proxy::connect_request(route, host, port),
-        refusal,
-    };
-    Ok(ureq::AgentBuilder::new()
-        .redirects(0)
-        .resolver(resolve)
-        .tls_connector(std::sync::Arc::new(tunnel))
-        .build())
-}
-
-/// The TLS step of [`http_agent_tunnelled`]: CONNECT on the stream to the
-/// proxy, then the handshake with the origin over the tunnel.
-#[cfg(not(target_arch = "wasm32"))]
-struct TunnelTls {
-    tls: std::sync::Arc<rustls::ClientConfig>,
-    route: crate::http_proxy::ProxyRoute,
-    connect: String,
-    refusal: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ureq::TlsConnector for TunnelTls {
-    fn connect(
-        &self,
-        dns_name: &str,
-        mut io: Box<dyn ureq::ReadWrite>,
-    ) -> Result<Box<dyn ureq::ReadWrite>, ureq::Error> {
-        use std::io::{Read, Write};
-        let refuse = |why: String| {
-            if let Ok(mut r) = self.refusal.lock() {
-                *r = Some(why.clone());
-            }
-            ureq::Error::from(std::io::Error::other(why))
-        };
-        let unreachable = |e: std::io::Error| {
-            refuse(crate::http_proxy::proxy_unreachable(
-                &self.route,
-                &e.to_string(),
-            ))
-        };
-        io.write_all(self.connect.as_bytes()).map_err(unreachable)?;
-        let mut head = Vec::new();
-        let mut byte = [0u8; 1];
-        while !head.ends_with(b"\r\n\r\n") && head.len() < 64 * 1024 {
-            match io.read(&mut byte) {
-                Ok(0) => break,
-                Ok(_) => head.push(byte[0]),
-                Err(e) => return Err(unreachable(e)),
-            }
-        }
-        if let Some(why) = crate::http_proxy::connect_refusal(&head) {
-            return Err(refuse(why));
-        }
-        ureq::TlsConnector::connect(&self.tls, dns_name, io)
-    }
-}
-
-/// Why the proxy at `route` refuses a tunnel to `url`'s host, asked again:
-/// `ureq` reports a refused CONNECT without the proxy's status, which the
-/// compiled client's message carries. `None` when the second answer opens
-/// the tunnel or the proxy cannot be asked.
-#[cfg(not(target_arch = "wasm32"))]
-fn connect_refusal_of(route: &crate::http_proxy::ProxyRoute, url: &str) -> Option<String> {
-    use std::io::{Read, Write};
-    let (scheme, host) = crate::http_proxy::url_scheme_host(url)?;
-    let port = crate::http_proxy::url_port(url, &scheme)?;
-    let mut tcp = std::net::TcpStream::connect((route.host.as_str(), route.port)).ok()?;
-    let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(10)));
-    tcp.write_all(crate::http_proxy::connect_request(route, &host, port).as_bytes())
-        .ok()?;
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") && head.len() < 64 * 1024 {
-        match tcp.read(&mut byte) {
-            Ok(1) => head.push(byte[0]),
-            _ => break,
-        }
-    }
-    crate::http_proxy::connect_refusal(&head)
-}
-
-/// The agent follows no redirect: `http_send` follows them, so each hop
-/// goes through the proxy its own URL names.
-#[cfg(not(target_arch = "wasm32"))]
-fn http_agent_builder(config: std::sync::Arc<rustls::ClientConfig>) -> ureq::AgentBuilder {
-    ureq::AgentBuilder::new().tls_config(config).redirects(0)
-}
-
-/// The client's TLS configuration, built once.
-#[cfg(not(target_arch = "wasm32"))]
-fn http_tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
-    type Config = Result<std::sync::Arc<rustls::ClientConfig>, String>;
-    static CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let mut roots = rustls::RootCertStore {
-                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-            };
-            if let Ok(path) = std::env::var("KARAC_HTTP_EXTRA_CA") {
-                let pem = std::fs::read(&path)
-                    .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: cannot read '{path}': {e}"))?;
-                for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
-                    let cert =
-                        cert.map_err(|e| format!("KARAC_HTTP_EXTRA_CA: bad PEM in '{path}': {e}"))?;
-                    roots.add(cert).map_err(|e| {
-                        format!("KARAC_HTTP_EXTRA_CA: rejected cert in '{path}': {e}")
-                    })?;
-                }
-            }
-            let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-            let mut config = rustls::ClientConfig::builder_with_provider(provider)
-                .with_safe_default_protocol_versions()
-                .map_err(|e| e.to_string())?
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            config.alpn_protocols = vec![b"http/1.1".to_vec()];
-            Ok(std::sync::Arc::new(config))
-        })
-        .clone()
 }
 
 /// The `std.log` native `name` stands for (`log_enabled$std_log` is

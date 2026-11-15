@@ -286,11 +286,11 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["loggin
 # HTTP/2 client leg; replaced the ureq HTTP/1.1-only transport
 # 2026-08-02). Redirect-following (5 hops, POST->GET demotion on
 # 301/302/303) and the `status >= 400 -> Err` mapping preserve the old
-# ureq/interpreter-visible contract. No JSON / cookies / proxy features
-# at v1 — minimal surface to back the get/post/send bodies. The
-# interpreter path in the karac compiler crate still uses ureq (an
-# HTTP/1.1 client); status/body/header VALUES are identical across the
-# two, which is what run-vs-build parity observes.
+# ureq/interpreter-visible contract. No JSON / cookies features at v1 —
+# minimal surface to back the get/post/send bodies. The client is
+# `src/http_client.rs`, which the MIR interpreter in the karac compiler
+# crate runs too (B-2026-11-14-47), so the two backends answer a request
+# with one implementation.
 #
 # Phase-8 line 48 (public-CA trust default): all 4 client fetch sites
 # (`_client_get` / `_post` / `_client_send` / `_builder_send`) route

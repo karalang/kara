@@ -262,12 +262,20 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # cfg-gated off on wasm32).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = "2"
-# The MIR interpreter's HTTPS client trusts what the compiled program's
-# does: the bundled Mozilla roots plus `KARAC_HTTP_EXTRA_CA`, through a
-# rustls `ClientConfig` handed to `ureq` (runtime/src/lib.rs
-# `http_client_tls_config`). No new crate: `ureq` already pulls `rustls` and
-# `webpki-roots` 0.26, and the runtime pulls `rustls-pemfile`; naming them
-# pins the versions to the runtime's.
+# The HTTP client both backends run (`src/http_client.rs`, which the runtime
+# compiles by `#[path]`): the MIR interpreter sends a request through the
+# same hyper client the compiled program links (B-2026-11-14-47). No new
+# crate: the runtime's client pulls each of these, at these versions.
+tokio = { version = "1", features = ["rt", "net", "io-util", "time"] }
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+# The HTTP client's TLS (`src/http_client.rs` `http_client_tls_config`):
+# the bundled Mozilla roots plus `KARAC_HTTP_EXTRA_CA`. Also the
+# interpreter's TLS server (`src/tls_conn.rs`). No new crate: the runtime
+# pulls each, and naming them pins the versions to the runtime's.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
 rustls-pemfile = "2"
 webpki-roots = "0.26"

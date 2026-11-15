@@ -62,6 +62,9 @@ pub mod gpu_wgsl;
 pub mod hasher_kind;
 pub mod host_cpu;
 pub mod http1;
+// The HTTP client both backends run; the runtime compiles it by `#[path]`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod http_client;
 pub mod http_proxy;
 pub mod ident_case;
 pub mod ids;
