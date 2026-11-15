@@ -1761,7 +1761,18 @@ impl<'a> super::TypeChecker<'a> {
             .insert(SpanKey::from_span(&expr.span), elems);
     }
 
+    /// Records `expr`'s arguments when it is a call or a method call
+    /// (`TypeChecker::call_arg_exprs`).
+    fn note_call_args(&mut self, expr: &Expr) {
+        if let ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } = &expr.kind {
+            for arg in args {
+                self.call_arg_exprs.insert(arg.value.id);
+            }
+        }
+    }
+
     fn check_expr_unexplained(&mut self, expr: &Expr, expected: &Type) -> Type {
+        self.note_call_args(expr);
         self.note_tuple_literal(expr);
         self.warn_vec_macro(expr);
         self.note_loose_expr(expr);
@@ -1789,6 +1800,26 @@ impl<'a> super::TypeChecker<'a> {
             if method == "collect" && args.is_empty() && self.collect_target_keeps_refs(expected) {
                 self.core_collect_keeps_refs
                     .insert(SpanKey::from_span(&expr.span));
+            }
+            // A `collect()` passed where a call takes a `Slice[T]` (a
+            // borrowed sequence parameter, `String.from_utf8(bytes:
+            // Slice[u8])`) collects into a `Vec[T]`, which that slot takes as
+            // it takes any `Vec[T]` value: no `Slice` is a `FromIterator`.
+            // Only an argument: the temporary lives as long as the call, where
+            // a `let v: Slice[T] = ..collect()` would outlive it
+            // (B-2026-11-15-21).
+            if method == "collect" && args.is_empty() && self.call_arg_exprs.contains(&expr.id) {
+                if let Type::Slice {
+                    element,
+                    mutable: false,
+                } = resolve_type_var_top(expected, &self.env.substitutions)
+                {
+                    let vec_ty = Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![*element],
+                    };
+                    return self.check_expr_unexplained(expr, &vec_ty);
+                }
             }
         }
         self.collect_views_into_strings_fix(expr, expected);
@@ -11452,6 +11483,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
+        self.note_call_args(expr);
         // A value a closure gives its callee's open return type is open, as
         // a `let`'s is (`TypeChecker::open_closure_values`).
         if self.open_closure_values.contains(&expr.id) {

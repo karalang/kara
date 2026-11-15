@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 317 |
-| false-positive | 207 |
+| false-positive | 208 |
 | perf | 169 |
 | missing-feature | 160 |
 | soundness | 69 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 465 |
+| typecheck | 466 |
 | mir-llvm | 229 |
 | mir | 194 |
 | cli | 116 |
@@ -117,6 +117,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-2 | 2026-11-15 | mir-llvm | low | Walking a `String`'s chars costs 2x to 2.8x Rust's `chars()` in a `karac build` binary: kata 1573's `s.chars().enumerate().filter(|(_, c)| c == '1').map(|(i, _)| i).collect()` over 200 strings of 500000 ASCII characters takes 0.21 s against Rust's 0.076 s, while the same chain over `s.bytes().iter()` takes 0.083 s | — |
 | B-2026-11-15-16 | 2026-11-15 | mir-llvm | low | `(0..n).map(|_| ..).collect()` into a `Vec[i64]` costs about 28 instructions an item in a `karac build` binary against 4.4 for the push loop it stands for, and 30 against Rust's 13 when the closure writes a captured variable: kata 1582's bench draws its 2000 matrices of 100 x 100 that way and runs 1.55x checked Rust, the drawing 1.9x and the solving 0.85x | — |
 | B-2026-11-15-17 | 2026-11-15 | parser | low | A Rust file's `use std::...` lines mend one per `karac fix` round: after the first line's diagnostic, the parser's item recovery skipped to the next `fn`, past the other `use` lines, so `karac check` reported one and LeetCode's binary-tree template (`RefCell`, `VecDeque`, `Rc`) took three extra rounds | — |
+| B-2026-11-15-21 | 2026-11-15 | typecheck | low | A `collect()` passed where a call takes a `Slice[T]` is refused: `String.from_utf8(s.bytes().iter().map(|c| c + 1).collect())` (strings.md's `from_utf8(bytes: Slice[u8])`) and a user `total((1..5).map(|x| x * x).collect())` with `fn total(xs: Slice[i64])` get "trait bound `C: FromIterator` is not satisfied; `Slice[u8]` does not implement `FromIterator`", though both calls take any `Vec[T]` value | — |
 
 ### Relocated
 
