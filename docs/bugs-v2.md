@@ -61,11 +61,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 332 |
 | false-positive | 211 |
 | perf | 169 |
-| missing-feature | 165 |
+| missing-feature | 168 |
 | soundness | 69 |
 | miscompile | 64 |
+| run-vs-build | 41 |
 | other | 40 |
-| run-vs-build | 39 |
 | codegen-gap | 31 |
 | crash | 30 |
 | leak | 4 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 478 |
+| typecheck | 479 |
 | mir-llvm | 235 |
 | mir | 199 |
 | cli | 131 |
 | parser | 86 |
 | ownership | 81 |
-| interp | 59 |
+| interp | 61 |
 | runtime | 46 |
 | effect | 34 |
-| resolver | 27 |
+| resolver | 29 |
 | codegen | 22 |
 | other | 8 |
 | autopar | 5 |
@@ -1271,6 +1271,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-54 | cli | low | `[build].targets` accepts `wasm_browser` and `gpu` and check passes, while `karac build --target=gpu` says "not in 0.8"; the unknown-target error lis… | 109b0d6051 |
 | B-2026-11-15-55 | cli | low | `karac build --help` says under --no-proxy that registry and git dependencies are not in 0.8, so the flag only prints a note; they are fetched (desig… | 109b0d6051 |
 | B-2026-11-15-56 | cli | low | After `#[target(native)] fn name` and `#[target(wasm_wasi)] fn name` twins, `karac check` notes "1 item NOT checked — gated away from every checked t… | 109b0d6051 |
+| B-2026-11-15-57 | interp | low | An `extern "C"` `cbrt(27.0)` gave 3.0000000000000004 on the MIR interpreter and 3.0 compiled: the interpreter's `dlsym` found glibc's `cbrt`, while e… | 838346a6da |
+| B-2026-11-15-58 | resolver | medium | design.md §15's opaque-type example did not compile: `#[kara_name("CFile")] type FILE;` left `CFile` undefined, spelling it `FILE` failed in the MIR… | 838346a6da |
+| B-2026-11-15-59 | typecheck | medium | An `extern "C"` signature crossed only integers, `bool`, floats and raw pointers: a `#[repr(C)]` struct by value (glibc's `div` / `ldiv` results), an… | 838346a6da |
+| B-2026-11-15-60 | resolver | low | `mem.zeroed()` (design.md §15) did not exist: "undefined name 'mem'" though `mem.replace` resolves, no `Pod` trait to bound it (`#[derive(Pod)]` was… | 838346a6da |
+| B-2026-11-15-61 | interp | low | The MIR interpreter refused a pointer to a `#[repr(C)]` struct crossing to C ("a pointer to Agg([...]) cannot cross to C", glibc's `gmtime_r(t, ptr.m… | 838346a6da |
 
 </details>
 
