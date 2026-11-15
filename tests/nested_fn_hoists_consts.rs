@@ -1,4 +1,4 @@
-//! B-2026-11-15-3: `karac fix` moves Rust's nested `fn` to the top level,
+//! B-2026-11-15-9: `karac fix` moves Rust's nested `fn` to the top level,
 //! and a Rust nested `fn` sees the items of the block around it, so a
 //! `const MOD` the body declared above it was left behind and the moved
 //! `fn` named an undefined `MOD`. The `const` now moves with it; a

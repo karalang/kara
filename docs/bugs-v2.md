@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 311 |
+| diagnostics | 312 |
 | false-positive | 205 |
 | perf | 168 |
 | missing-feature | 160 |
@@ -78,9 +78,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 462 |
 | mir-llvm | 228 |
 | mir | 192 |
-| cli | 114 |
+| cli | 115 |
 | ownership | 81 |
-| parser | 80 |
+| parser | 81 |
 | interp | 58 |
 | runtime | 45 |
 | effect | 33 |
@@ -1224,6 +1224,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-47 | mir | medium | The interpreter's HTTP client returns a cut-short body as a whole answer: a body shorter than its Content-Length, a chunked body with no last chunk,… | 171f807df7 |
 | B-2026-11-14-48 | mir | low | The interpreter's HTTP client returns an interim 1xx response as the answer: a server that sends `100 Continue` before its `200` gives `status() == 1… | 171f807df7 |
 | B-2026-11-14-49 | mir+mir-llvm | medium | The two HTTP clients send different requests: the interpreter adds `User-Agent: ureq/2.12.1`, `Accept: */*` and `accept-encoding: gzip` and decodes a… | 171f807df7 |
+| B-2026-11-15-9 | parser+cli | low | `karac fix` moves Rust's nested `fn` to the top level and leaves behind a `const` of the body around it that the `fn` names, so the moved `fn` names… | 76e5a13ad |
 
 </details>
 
