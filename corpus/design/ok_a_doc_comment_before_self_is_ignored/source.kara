@@ -1,0 +1,37 @@
+struct P { x: i64 }
+
+impl P {
+    /// Adds `n` to the field.
+    fn plus(
+        /// doc on the receiver, which design.md §3 ignores
+        self,
+        /// doc on n
+        n: i64,
+    ) -> i64 {
+        self.x + n
+    }
+
+    fn get(/// before `ref self`
+        ref self) -> i64 {
+        self.x
+    }
+
+    fn bump(/// before `mut ref self`
+        mut ref self, /// on k
+        k: i64) {
+        self.x = self.x + k;
+    }
+
+    fn take(/// before `own self`
+        own self) -> i64 {
+        self.x
+    }
+}
+
+fn main() {
+    let mut p = P { x: 1 };
+    println(p.plus(2));
+    println(p.get());
+    p.bump(4);
+    println(p.take());
+}

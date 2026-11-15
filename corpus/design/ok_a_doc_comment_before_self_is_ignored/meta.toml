@@ -1,0 +1,9 @@
+source = "B-2026-11-15-24"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "doc-comments", "parser"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §3 Doc comments: a `///` before `self` in a method signature is ignored, as `self` is not a documented parameter. Before `self`, `ref self`, `mut ref self` and `own self` it was a parse error ('self' / 'ref' / 'mut' is a reserved keyword and cannot be used as an identifier). plus(2) on x=1 is 3, get is 1, bump(4) makes 5, take returns 5."

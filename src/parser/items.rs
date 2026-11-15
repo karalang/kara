@@ -1713,29 +1713,31 @@ impl super::Parser {
             return Some((None, None, params));
         }
 
+        // A `///` before the receiver is ignored: `self` is not a documented
+        // parameter (design.md §3 Doc comments). The doc comments are skipped
+        // when a receiver follows them; before any other parameter they stay
+        // for `parse_param` to attach.
+        let before_docs = self.pos;
+        while matches!(self.peek_token_ref(), Token::DocComment(_)) {
+            self.advance();
+        }
+
         // Check for self parameter. `frozen` is a CONTEXTUAL keyword, so it
         // arrives as an identifier and only counts as a receiver mode when the
         // very next token is `self` — a method named `frozen` or a parameter
         // called `frozen` still parses as it always did.
-        let frozen_self = matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "frozen")
-            && matches!(self.peek_token_ref_at(1), Token::SelfValue);
-        if frozen_self
-            || self.check(&Token::SelfValue)
-            || (self.at_kw("own") && matches!(self.peek_token_ref_at(1), Token::SelfValue))
-            || self.check(&Token::Ref)
-            || self.check(&Token::Mut)
-            || (self.check(&Token::Amp)
-                && (matches!(self.peek_token_ref_at(1), Token::SelfValue)
-                    || (matches!(self.peek_token_ref_at(1), Token::Mut)
-                        && matches!(self.peek_token_ref_at(2), Token::SelfValue))))
-        {
+        if self.at_receiver() {
             if let Some((sp, sp_span)) = self.try_parse_self_param() {
                 self_param = Some(sp);
                 self_span = Some(sp_span);
                 if !self.check(&Token::Semicolon) && !self.eat(&Token::Comma) {
                     return Some((self_param, self_span, params));
                 }
+            } else {
+                self.pos = before_docs;
             }
+        } else {
+            self.pos = before_docs;
         }
 
         // Parse remaining params. A `;` ends the positional ones: those
@@ -1765,6 +1767,23 @@ impl super::Parser {
         }
 
         Some((self_param, self_span, params))
+    }
+
+    /// Whether the next tokens may begin a receiver (`self`, `ref self`,
+    /// `mut ref self`, `own self`, `frozen self`, `&self`, `&mut self`), as
+    /// [`Self::try_parse_self_param`] decides it finally.
+    fn at_receiver(&self) -> bool {
+        let frozen_self = matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "frozen")
+            && matches!(self.peek_token_ref_at(1), Token::SelfValue);
+        frozen_self
+            || self.check(&Token::SelfValue)
+            || (self.at_kw("own") && matches!(self.peek_token_ref_at(1), Token::SelfValue))
+            || self.check(&Token::Ref)
+            || self.check(&Token::Mut)
+            || (self.check(&Token::Amp)
+                && (matches!(self.peek_token_ref_at(1), Token::SelfValue)
+                    || (matches!(self.peek_token_ref_at(1), Token::Mut)
+                        && matches!(self.peek_token_ref_at(2), Token::SelfValue))))
     }
 
     /// Returns the receiver mode plus the span covering exactly the

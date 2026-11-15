@@ -483,6 +483,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A `///` doc comment before a method's receiver (`self`, `ref self`,
+  `mut ref self`, `own self`) is ignored, as design.md §3 says: it was a
+  parse error calling `self` (or `ref`) a reserved keyword
+  (B-2026-11-15-24). A doc comment on the parameter after the receiver
+  still documents that parameter.
+
 - A built program's HTTP `Response.body()`, `HttpError.body()` and a
   server's `Request.body()` of a body that is not UTF-8 is the body decoded
   with each invalid sequence replaced by U+FFFD, as under `karac run`. It
