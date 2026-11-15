@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 314 |
+| diagnostics | 315 |
 | false-positive | 207 |
 | perf | 169 |
 | missing-feature | 160 |
@@ -79,8 +79,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 229 |
 | mir | 194 |
 | cli | 115 |
+| parser | 82 |
 | ownership | 81 |
-| parser | 81 |
 | interp | 58 |
 | runtime | 45 |
 | effect | 33 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-7 | 2026-11-15 | interp+mir-llvm | low | `VecDeque.truncate` drops the removed elements back to front, where collections.md says it drops them from index `len` to the back and every other element drop runs front to back: `[1, 2, 3].truncate(0)` drops 3, 2, 1 | — |
 | B-2026-11-15-8 | 2026-11-15 | mir+mir-llvm | high | A compiled program's HTTP `Response.body()` (and `HttpError.body()`) of a body that is not UTF-8 is a `String` holding the raw bytes, which breaks String's UTF-8 invariant: `body().chars()` hits `unreachable_unchecked` in the runtime (Rust's UB check aborts the program); the interpreter replaces each bad sequence with U+FFFD | — |
 | B-2026-11-15-16 | 2026-11-15 | mir-llvm | low | `(0..n).map(|_| ..).collect()` into a `Vec[i64]` costs about 28 instructions an item in a `karac build` binary against 4.4 for the push loop it stands for, and 30 against Rust's 13 when the closure writes a captured variable: kata 1582's bench draws its 2000 matrices of 100 x 100 that way and runs 1.55x checked Rust, the drawing 1.9x and the solving 0.85x | — |
+| B-2026-11-15-17 | 2026-11-15 | parser | low | A Rust file's `use std::...` lines mend one per `karac fix` round: after the first line's diagnostic, the parser's item recovery skipped to the next `fn`, past the other `use` lines, so `karac check` reported one and LeetCode's binary-tree template (`RefCell`, `VecDeque`, `Rc`) took three extra rounds | — |
 
 ### Relocated
 

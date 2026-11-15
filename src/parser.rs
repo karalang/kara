@@ -626,6 +626,10 @@ pub struct Parser {
     /// Where the top-level item being parsed starts, the place a nested
     /// `fn`'s fix moves it to ([`Self::hoist_nested_fn`]).
     pub(crate) item_start: Option<usize>,
+    /// Each Rust `use` line a fix deletes so far, as (offset, length): a
+    /// line right after deleted ones sees their start as its own when it
+    /// decides whether a blank line goes with it (B-2026-11-15-17).
+    pub(crate) deleted_use_lines: Vec<(usize, usize)>,
     /// Each turbofish rejected so far (`collect::<Vec<char>>`): the
     /// diagnostic's span, the method's name, the index of the token after
     /// the list, and the list's Kāra spelling when it is one type a binding
@@ -770,6 +774,7 @@ impl Parser {
             escaped_bindings: rustc_hash::FxHashSet::default(),
             source: None,
             item_start: None,
+            deleted_use_lines: Vec::new(),
             turbofishes: Vec::new(),
             from_iter_ends: Vec::new(),
             closure_returns: Vec::new(),
@@ -3445,19 +3450,28 @@ impl Parser {
     /// takes: the statement, its newline, and a blank line after it when a
     /// blank line (or the top of the file) is before it too, so the two do
     /// not become two blank lines in a row (katas 1120, 1122). Two `use`
-    /// lines in a row go in separate `karac fix` rounds, so each round sees
-    /// the lines the last one left.
-    pub(crate) fn rust_use_line_length(&self, whole: Span) -> usize {
+    /// lines in a row go in one `karac fix` round (B-2026-11-15-17), so a
+    /// line right after deleted ones looks before the first of them.
+    pub(crate) fn rust_use_line_length(&mut self, whole: Span) -> usize {
         let mut length = whole.length;
         if self.source_at(whole.offset + whole.length, 1) != Some("\n") {
             return length;
         }
         length += 1;
-        let blank_before = whole.offset == 0
-            || (whole.offset >= 2 && self.source_at(whole.offset - 2, 2) == Some("\n\n"));
+        let mut start = whole.offset;
+        while let Some(&(offset, _)) = self
+            .deleted_use_lines
+            .iter()
+            .find(|&&(offset, len)| offset + len == start)
+        {
+            start = offset;
+        }
+        let blank_before =
+            start == 0 || (start >= 2 && self.source_at(start - 2, 2) == Some("\n\n"));
         if blank_before && self.source_at(whole.offset + length, 1) == Some("\n") {
             length += 1;
         }
+        self.deleted_use_lines.push((whole.offset, length));
         length
     }
 
@@ -3857,6 +3871,18 @@ impl Parser {
     fn synchronize_to_item(&mut self) {
         while !self.is_at_end() {
             match self.peek_token_ref() {
+                // A Rust `use a::b;` line after the one that failed is an item
+                // too: each `reject_rust_*_import` line reports its own fix,
+                // so a file of three takes one `karac fix` round, not three
+                // (B-2026-11-15-17). The failed item's own `use` is passed,
+                // so the loop always makes progress.
+                Token::Identifier { name, raw: false }
+                    if name == "use"
+                        && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+                        && self.item_start != Some(self.current_span().offset) =>
+                {
+                    return
+                }
                 Token::Fn
                 | Token::Struct
                 | Token::Enum
