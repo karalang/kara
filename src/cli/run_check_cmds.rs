@@ -718,7 +718,7 @@ pub(super) fn run_manifest_preamble(
             let has_deps = !mf.dependencies.is_empty()
                 || !mf.dev_dependencies.is_empty()
                 || mf.kara_version.is_some();
-            if has_deps && !surface_dep_graph_diagnostics(&root, mf, output) {
+            if has_deps && !surface_dep_graph_diagnostics(&root, mf, output, false) {
                 process::exit(1);
             }
         }
@@ -783,7 +783,7 @@ pub(super) fn cmd_check_project(
         let has_deps = !mf.dependencies.is_empty()
             || !mf.dev_dependencies.is_empty()
             || mf.kara_version.is_some();
-        if has_deps && !surface_dep_graph_diagnostics(&root, mf, output) {
+        if has_deps && !surface_dep_graph_diagnostics(&root, mf, output, true) {
             process::exit(1);
         }
     }
@@ -1609,7 +1609,7 @@ pub(super) fn cmd_check(
             let has_deps = !mf.dependencies.is_empty()
                 || !mf.dev_dependencies.is_empty()
                 || mf.kara_version.is_some();
-            if has_deps && !surface_dep_graph_diagnostics(&root, mf, output) {
+            if has_deps && !surface_dep_graph_diagnostics(&root, mf, output, true) {
                 process::exit(1);
             }
         }

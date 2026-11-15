@@ -10,6 +10,9 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[path = "cli/dev_deps_check.rs"]
+mod dev_deps_check;
+
 /// Wrapper around `Command` that routes `.output()` through the
 /// shared `output_with_hang_watchdog` helper (15 s timeout per call)
 /// so a hung `karac` invocation can't lock up the cli test suite — same

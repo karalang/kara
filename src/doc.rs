@@ -800,10 +800,13 @@ fn impls_for<'a>(items: &'a [Item], name: &str) -> Vec<&'a ImplBlock> {
 }
 
 /// One `<dt>` signature / `<dd>` prose row of a method list.
+/// The method's documented parameters follow its prose, as a free
+/// function's do on its own page.
 fn push_method_row(
     out: &mut String,
     signature: &str,
     doc: Option<&str>,
+    params: &[crate::ast::Param],
     link_table: &HashMap<String, String>,
     page_dir: &Path,
     doc_root: &Path,
@@ -814,6 +817,7 @@ fn push_method_row(
     if let Some(doc) = doc {
         out.push_str(&markdown_to_html(doc, link_table, page_dir, doc_root));
     }
+    out.push_str(&render_param_list(params, link_table, page_dir, doc_root));
     out.push_str("</dd>\n");
 }
 
@@ -845,6 +849,7 @@ fn render_impl_extras(
                 &mut out,
                 &sig,
                 f.doc_comment.as_deref(),
+                &f.params,
                 link_table,
                 page_dir,
                 doc_root,
@@ -931,6 +936,7 @@ fn render_trait_extras(
                 &mut out,
                 &sig,
                 m.doc_comment.as_deref(),
+                &m.params,
                 link_table,
                 page_dir,
                 doc_root,
@@ -947,11 +953,25 @@ fn render_param_extras(
     page_dir: &Path,
     doc_root: &Path,
 ) -> String {
-    if !f.params.iter().any(|p| p.doc_comment.is_some()) {
+    match render_param_list(&f.params, link_table, page_dir, doc_root) {
+        list if list.is_empty() => list,
+        list => format!("<h2>Parameters</h2>\n{list}"),
+    }
+}
+
+/// A `<dl class="params">` of `params`, each with its `///` prose; empty
+/// when none has any.
+fn render_param_list(
+    params: &[crate::ast::Param],
+    link_table: &HashMap<String, String>,
+    page_dir: &Path,
+    doc_root: &Path,
+) -> String {
+    if !params.iter().any(|p| p.doc_comment.is_some()) {
         return String::new();
     }
-    let mut out = String::from("<h2>Parameters</h2>\n<dl class=\"params\">\n");
-    for p in &f.params {
+    let mut out = String::from("<dl class=\"params\">\n");
+    for p in params {
         let name = p.name().unwrap_or("_");
         out.push_str("<dt>");
         out.push_str(&html_escape(name));
@@ -1459,9 +1479,8 @@ fn relative_link(page_dir: &Path, doc_root: &Path, target_rel: &str) -> String {
 /// Build the cross-reference table consumed by the broken-link callback.
 /// Walks every non-synthetic module in `tree` and records each
 /// documentable item's name → `<module-dirs>/Item.html` (path relative
-/// to the doc root). Items without a `doc_comment` are still entered —
-/// otherwise a `[Vec]` reference whose target is itself undocumented
-/// would silently fail to resolve, which is more confusing than helpful.
+/// to the doc root). An item without a `doc_comment` has no page, so it is
+/// left out and a reference to it renders as plain text.
 fn build_link_table(tree: &ProgramTree) -> HashMap<String, String> {
     let mut table = HashMap::new();
     for module in &tree.modules {
@@ -1470,7 +1489,10 @@ fn build_link_table(tree: &ProgramTree) -> HashMap<String, String> {
         }
         for d in documentables(&module.items) {
             let name = documentable_name(d);
-            if name.is_empty() {
+            // Only a documented item gets a page; a reference to any other
+            // renders as plain text (DC2), never as a link to a page that
+            // is not written.
+            if name.is_empty() || documentable_doc(d).is_none() {
                 continue;
             }
             let mut href = String::new();

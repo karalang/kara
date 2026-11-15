@@ -53,7 +53,8 @@ pub(super) fn cmd_doc() {
     let BuildTreeOk { tree, parse_errors } = built;
     if !parse_errors.is_empty() {
         // Surface parse errors but keep going — render docs for what
-        // parsed cleanly. The user can iterate.
+        // parsed cleanly. The user can iterate. The run still fails (DC4):
+        // a script or CI step must not read the partial docs as a success.
         print_parse_errors_text(&parse_errors);
     }
 
@@ -78,6 +79,13 @@ pub(super) fn cmd_doc() {
                 result.written.len().saturating_sub(1), // minus the index
                 output_dir.display()
             );
+            if !parse_errors.is_empty() {
+                eprintln!(
+                    "error[doc]: the docs are incomplete: {} file(s) did not parse",
+                    parse_errors.len()
+                );
+                process::exit(1);
+            }
         }
         Err(e) => {
             eprintln!("error[doc]: {e}");
@@ -2073,7 +2081,19 @@ pub(super) fn surface_dep_graph_diagnostics(
     root: &std::path::Path,
     mf: crate::manifest::Manifest,
     output: OutputMode,
+    dev_deps: bool,
 ) -> bool {
+    // `karac check` (`dev_deps`) also resolves `[dev-dependencies]`, as
+    // `karac test` will, so one that cannot resolve is reported in check's
+    // own form whether or not a `_test.kara` exists (PK1). Only the build
+    // graph's packages are walked: a dev-dependency is not importable from
+    // the package itself.
+    if dev_deps
+        && !mf.dev_dependencies.is_empty()
+        && run_dep_resolution(root, mf.clone(), output, None, true, false, false).is_err()
+    {
+        return false;
+    }
     let Ok(resolution) = run_dep_resolution(root, mf, output, None, false, false, false) else {
         return false;
     };

@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+#[path = "doc/tooling_rows.rs"]
+mod tooling_rows;
+
 static TEST_ID: AtomicU32 = AtomicU32::new(0);
 
 struct ScratchDir {
