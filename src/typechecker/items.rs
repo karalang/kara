@@ -9772,14 +9772,76 @@ impl<'a> super::TypeChecker<'a> {
                     ". Write `.clone()` to take a copy, or keep using it in place",
                     &format!(
                         ". `{name}` is only read after this, so the fix borrows the place \
-                         (`let {name} = ref <place>;`) rather than copying it with \
-                         `.clone()`"
+                         (`ref <place>`) rather than copying it with `.clone()`"
                     ),
                 );
                 e.fix_it = Some(crate::typechecker::FixIt {
                     span: Span { length: 0, ..span },
                     replacement: "ref ".to_string(),
                 });
+            }
+        }
+    }
+
+    /// B-2026-11-14-23: the tuple twin of the Kata 2121 `let` above. Each
+    /// slot of `let (a, b) = <init>` whose every result (the tuple literal,
+    /// or each `if` / `match` / block tail's tuple literal) is a projection
+    /// of a borrowed place is queued with its binding's name, so a `.clone()`
+    /// fix on it becomes `ref` when the binding is only read. A slot that
+    /// any result fills some other way keeps the clone: a `ref` in one branch
+    /// and a value in another would not agree.
+    pub(super) fn note_tuple_let_ref_slots(&mut self, pattern: &Pattern, value: &Expr) {
+        let PatternKind::Tuple(names) = &pattern.kind else {
+            return;
+        };
+        fn tails<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) -> bool {
+            match &e.kind {
+                ExprKind::Tuple(_) => {
+                    out.push(e);
+                    true
+                }
+                ExprKind::Block(b) => b.final_expr.as_deref().is_some_and(|t| tails(t, out)),
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    then_block
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(|t| tails(t, out))
+                        && else_branch.as_deref().is_some_and(|t| tails(t, out))
+                }
+                ExprKind::Match { arms, .. } => arms.iter().all(|a| tails(&a.body, out)),
+                _ => false,
+            }
+        }
+        let mut results = Vec::new();
+        if !tails(value, &mut results) {
+            return;
+        }
+        for (i, slot) in names.iter().enumerate() {
+            let PatternKind::Binding(name) = &slot.kind else {
+                continue;
+            };
+            let places: Option<Vec<&Expr>> = results
+                .iter()
+                .map(|r| match &r.kind {
+                    ExprKind::Tuple(es) if es.len() == names.len() => Some(&es[i]),
+                    _ => None,
+                })
+                .collect();
+            let Some(places) = places else {
+                return;
+            };
+            if places.iter().all(|p| {
+                !matches!(p.kind, ExprKind::Identifier(_))
+                    && super::expr_ops::is_named_place_projection(p)
+                    && self.copy_source_rooted_in_borrow(p)
+            }) {
+                for p in places {
+                    self.core_clone_or_let_ref.push((p.span, name.clone()));
+                }
             }
         }
     }
@@ -11550,6 +11612,13 @@ impl<'a> super::TypeChecker<'a> {
                             }
                         }
                     }
+                }
+                // B-2026-11-14-23: `let (a, b) = if c { (s.x, o.x) } else
+                // { (o.x, s.x) };` over borrowed places: a slot whose binding
+                // is only read is fixed by borrowing each place it takes
+                // (`(ref s.x, ref o.x)`), not by copying it with `.clone()`.
+                if self.cli_lint_overrides.strict_core && ty.is_none() && !*is_mut {
+                    self.note_tuple_let_ref_slots(pattern, value);
                 }
                 // `let g = freeze root;` binds a `frozen` handle, which may
                 // enter a `par` branch (core §11.3; B-2026-10-19-46).
