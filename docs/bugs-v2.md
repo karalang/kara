@@ -127,12 +127,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-48 | 2026-11-15 | typecheck | low | A `collect()` after a misspelt method in its `map` closure reports a second, cascading error naming the poisoned type: `trait bound `C: FromIterator[<error>]` is not satisfied` | — |
 | B-2026-11-15-49 | 2026-11-15 | cli | low | A `match` over an `Option[ref T]` of a `shared` or `Copy` value gets no machine fix for E0516, though the message names the repair and an `if let` or `while let` over the same call gets `.cloned()` | — |
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
-| B-2026-11-15-51 | 2026-11-15 | mir-llvm | medium | `karac build --target=x86_64-unknown-linux-musl` prints "Built" for a binary that cannot run: the clang --target fallback linked against the host glibc, so readelf shows a /lib/ld-musl interpreter with NEEDED libc.so.6, libm.so.6, libgcc_s.so.1 and ld-linux-x86-64.so.2 | — |
-| B-2026-11-15-52 | 2026-11-15 | cli | low | `--target=thumbv7em-none-eabihf` fails at link asking for a runtime archive built for that triple, which cannot work (the runtime needs std), and a bogus triple gets the raw "error[mir]: llvm: LLVM has no target for the triple" line | — |
-| B-2026-11-15-53 | 2026-11-15 | parser | low | `#[cfg(target: "native")]` says "unknown attribute `cfg` ... write `#[diagnostic::cfg]`" and its twin item then gets a bogus E0101 duplicate definition; design.md § 4 says to use the interim `#[target(...)]` until `#[cfg]` lands | — |
-| B-2026-11-15-54 | 2026-11-15 | cli | low | `[build].targets` accepts `wasm_browser` and `gpu` and check passes, while `karac build --target=gpu` says "not in 0.8"; the unknown-target error lists both as valid | — |
-| B-2026-11-15-55 | 2026-11-15 | cli | low | `karac build --help` says under --no-proxy that registry and git dependencies are not in 0.8, so the flag only prints a note; they are fetched (design.md § 4) | — |
-| B-2026-11-15-56 | 2026-11-15 | cli | low | After `#[target(native)] fn name` and `#[target(wasm_wasi)] fn name` twins, `karac check` notes "1 item NOT checked — gated away from every checked target (native, wasm_wasi): name (wasm_wasi)" though each twin is checked by its own pass | — |
 
 ### Relocated
 
@@ -1271,6 +1265,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-45 | cli | low | `karac repl`'s `:help` said a mutation does not survive to the next cell and that bindings are recomputed (source replay) every cell; the REPL keeps… | 92d18d909c |
 | B-2026-11-15-46 | other | low | The book's REPL transcript (ch01b) failed as written: its `binary_search` uses `usize`, which the checker now refuses, so every later cell met an und… | 92d18d909c |
 | B-2026-11-15-47 | mir | low | A `()` passed for a generic parameter that borrows (`fn f[T](v: T)`, `f(())`, or a unit-valued `if` such as `f(if c { () } else { () })`) was invalid… | 92d18d909c |
+| B-2026-11-15-51 | mir-llvm | medium | `karac build --target=x86_64-unknown-linux-musl` prints "Built" for a binary that cannot run: the clang --target fallback linked against the host gli… | 109b0d6051 |
+| B-2026-11-15-52 | cli | low | `--target=thumbv7em-none-eabihf` fails at link asking for a runtime archive built for that triple, which cannot work (the runtime needs std), and a b… | 109b0d6051 |
+| B-2026-11-15-53 | parser | low | `#[cfg(target: "native")]` says "unknown attribute `cfg` .. | 109b0d6051 |
+| B-2026-11-15-54 | cli | low | `[build].targets` accepts `wasm_browser` and `gpu` and check passes, while `karac build --target=gpu` says "not in 0.8"; the unknown-target error lis… | 109b0d6051 |
+| B-2026-11-15-55 | cli | low | `karac build --help` says under --no-proxy that registry and git dependencies are not in 0.8, so the flag only prints a note; they are fetched (desig… | 109b0d6051 |
+| B-2026-11-15-56 | cli | low | After `#[target(native)] fn name` and `#[target(wasm_wasi)] fn name` twins, `karac check` notes "1 item NOT checked — gated away from every checked t… | 109b0d6051 |
 
 </details>
 
