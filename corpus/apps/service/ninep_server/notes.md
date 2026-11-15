@@ -33,7 +33,7 @@ The mirror `ninep_server.py` is the same server and clients written
 independently with `socket`, `struct` and `threading`; it wrote
 `expected.out`.
 
-Written 2026-11-15 by the real-world apps thread; karac at KARAC_SHA,
+Written 2026-11-15 by the real-world apps thread; karac at 3e72c72f48,
 which carries the fixes below.
 
 ## From ninep_server.orig.kara to ninep_server.kara

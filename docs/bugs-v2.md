@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 332 |
-| false-positive | 211 |
+| diagnostics | 337 |
+| false-positive | 212 |
+| missing-feature | 170 |
 | perf | 169 |
-| missing-feature | 168 |
 | soundness | 69 |
 | miscompile | 64 |
 | run-vs-build | 41 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 479 |
-| mir-llvm | 235 |
-| mir | 199 |
+| typecheck | 485 |
+| mir-llvm | 236 |
+| mir | 200 |
 | cli | 131 |
-| parser | 86 |
+| parser | 88 |
 | ownership | 81 |
-| interp | 61 |
+| interp | 62 |
 | runtime | 46 |
 | effect | 34 |
 | resolver | 29 |
@@ -126,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-48 | 2026-11-15 | typecheck | low | A `collect()` after a misspelt method in its `map` closure reports a second, cascading error naming the poisoned type: `trait bound `C: FromIterator[<error>]` is not satisfied` | — |
 | B-2026-11-15-49 | 2026-11-15 | cli | low | A `match` over an `Option[ref T]` of a `shared` or `Copy` value gets no machine fix for E0516, though the message names the repair and an `if let` or `while let` over the same call gets `.cloned()` | — |
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
+| B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
 
 ### Relocated
 
@@ -1276,6 +1277,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-59 | typecheck | medium | An `extern "C"` signature crossed only integers, `bool`, floats and raw pointers: a `#[repr(C)]` struct by value (glibc's `div` / `ldiv` results), an… | 838346a6da |
 | B-2026-11-15-60 | resolver | low | `mem.zeroed()` (design.md §15) did not exist: "undefined name 'mem'" though `mem.replace` resolves, no `Pod` trait to bound it (`#[derive(Pod)]` was… | 838346a6da |
 | B-2026-11-15-61 | interp | low | The MIR interpreter refused a pointer to a `#[repr(C)]` struct crossing to C ("a pointer to Agg([...]) cannot cross to C", glibc's `gmtime_r(t, ptr.m… | 838346a6da |
+| B-2026-11-15-70 | parser | low | `t += &format!(..)` is fixed to `t += ref f".."`, which is refused (E_REF_OPERAND_UNSUPPORTED): the `&` fix writes a borrow of a temporary | 3e72c72f48 |
+| B-2026-11-15-71 | parser | medium | Rust's `impl fmt::Display for T { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, ..) } }` stops the parse ("Expected `{`, found `::… | 3e72c72f48 |
+| B-2026-11-15-72 | typecheck | medium | `Err("unknown fid".into())` is refused ("`.into()` on 'String' cannot pick a conversion: nothing here fixes the target type") at a return, a tail and… | 3e72c72f48 |
+| B-2026-11-15-73 | typecheck | low | A `MutexGuard` passed for its value (`sess.handle(mut guard, ..)` for a `mut ref Server`) or read for a field of its value (`srv.lock().counts`) is r… | 3e72c72f48 |
+| B-2026-11-15-74 | typecheck | low | Rust's `let (sock, _) = listener.accept().unwrap();` is refused ("tuple pattern used but type is `TcpStream`") with no fix | 3e72c72f48 |
+| B-2026-11-15-75 | typecheck+interp+mir-llvm | medium | `Mutex` has no `into_inner` ("no method 'into_inner' on type 'Mutex'"), and the natives both backends kept for it crash the LLVM backend on a struct… | 3e72c72f48 |
+| B-2026-11-15-76 | typecheck | low | `self.take(2)?.try_into().unwrap()` for `u16.from_le_bytes(..)` is refused as "no method 'try_into' on type 'Slice'" with nothing about what to write | 3e72c72f48 |
 
 </details>
 
