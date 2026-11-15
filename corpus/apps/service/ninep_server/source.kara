@@ -165,18 +165,15 @@ impl R {
     }
 
     fn u16(mut ref self) -> Result[u16, NineError] {
-        let b = self.take(2)?;
-        Ok(u16.from_le_bytes([b[0], b[1]]))
+        Ok(u16.from_le_bytes(self.take(2)?.try_into_array().unwrap()))
     }
 
     fn u32(mut ref self) -> Result[u32, NineError] {
-        let b = self.take(4)?;
-        Ok(u32.from_le_bytes([b[0], b[1], b[2], b[3]]))
+        Ok(u32.from_le_bytes(self.take(4)?.try_into_array().unwrap()))
     }
 
     fn u64(mut ref self) -> Result[u64, NineError] {
-        let b = self.take(8)?;
-        Ok(u64.from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+        Ok(u64.from_le_bytes(self.take(8)?.try_into_array().unwrap()))
     }
 
     fn s(mut ref self) -> Result[String, NineError] {

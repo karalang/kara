@@ -34,7 +34,8 @@ independently with `socket`, `struct` and `threading`; it wrote
 `expected.out`.
 
 Written 2026-11-15 by the real-world apps thread; karac at 3e72c72f48,
-which carries the fixes below.
+which carries the fixes below. Re-mended from the draft at 5fa96a69c9,
+after B-2026-11-15-77 landed, with no hand edits.
 
 ## From ninep_server.orig.kara to ninep_server.kara
 
@@ -68,15 +69,14 @@ fixed in the compiler before the fix passes were rerun:
   poisoning).
 - B-2026-11-15-76: `self.take(2)?.try_into().unwrap()` for
   `u16.from_le_bytes` was refused as "no method 'try_into' on type 'Slice'".
-  The diagnostic now says what to write. Kāra has no slice-to-array
-  conversion (B-2026-11-15-77, open).
+  The diagnostic now says what to write. Kāra had no slice-to-array
+  conversion (B-2026-11-15-77); since 3751c0d9be a slice has
+  `try_into_array()`, and the fix writes it.
 
-After those, `karac fix` rewrote the draft over six passes, and one
-diagnostic with no machine fix was answered by hand, as it says:
-
-- `u16.from_le_bytes(self.take(2)?.try_into().unwrap())` (and the `u32`
-  and `u64` readers): `let b = self.take(2)?; u16.from_le_bytes([b[0],
-  b[1]])`.
+After those, `karac fix` rewrote the draft over five passes to a program
+that checks clean, with no hand edits: `self.take(2)?.try_into().unwrap()`
+(and the `u32` and `u64` readers) became
+`self.take(2)?.try_into_array().unwrap()`.
 
 `struct Server` keeps its name, so `karac check` warns that it shadows the
 prelude's HTTP `Server`, which the warning says is legal.
