@@ -1084,7 +1084,10 @@ impl<'a> super::TypeChecker<'a> {
     /// on a `Vec`, an array or a slice. collections.md gives only the stable
     /// sorts, and a stable sort is also a valid unstable one, so on v2 the
     /// call is refused by name with the fix that drops `_unstable`, and is
-    /// then checked as the stable sort it names (kata 1051).
+    /// then checked as the stable sort it names (kata 1051). Rust's
+    /// `sort_by_cached_key` is the same stable sort by a key, differing only
+    /// in how often it calls the key, which collections.md leaves
+    /// unspecified, so it is renamed to `sort_by_key` the same way (kata 2191).
     pub(super) fn rename_rust_unstable_sort(
         &mut self,
         object: &Expr,
@@ -1099,7 +1102,7 @@ impl<'a> super::TypeChecker<'a> {
         let to = match method {
             "sort_unstable" => "sort",
             "sort_unstable_by" => "sort_by",
-            "sort_unstable_by_key" => "sort_by_key",
+            "sort_unstable_by_key" | "sort_by_cached_key" => "sort_by_key",
             _ => return None,
         };
         let inner = match obj_ty {
@@ -1114,11 +1117,20 @@ impl<'a> super::TypeChecker<'a> {
         if !sortable {
             return None;
         }
-        let msg = format!(
-            "no method '{method}' on type '{}': a stable sort is also an unstable \
-             one, and the library has only the stable `{to}` (docs/library/collections.md)",
-            type_display(inner)
-        );
+        let msg = if method == "sort_by_cached_key" {
+            format!(
+                "no method '{method}' on type '{}': the library's `{to}` is the same \
+                 stable sort, and how often it calls the key is unspecified \
+                 (docs/library/collections.md)",
+                type_display(inner)
+            )
+        } else {
+            format!(
+                "no method '{method}' on type '{}': a stable sort is also an unstable \
+                 one, and the library has only the stable `{to}` (docs/library/collections.md)",
+                type_display(inner)
+            )
+        };
         // The edit renames the method, offered only when `.{method}(` sits
         // right after the receiver with nothing in between.
         let object_end = object.span.offset + object.span.length;
