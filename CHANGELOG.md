@@ -1329,6 +1329,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `karac build --help` says `--no-proxy` fetches git and registry
   dependencies straight from their source; it said they were not in 0.8
   (B-2026-11-15-55).
+- **A closure that returns an adaptor over a capture is an `OnceFn`.**
+  `(0..2).flat_map(|m| (0..3).map(|c| m + clears[c]))` passed `karac
+  check`, then stopped the interpreter and double-freed when compiled: the
+  returned `map` closure takes `clears` by move (core semantics §9.3), so
+  the outer closure can run once. `check` now refuses it with one error and
+  a fix, `let clears = ref clears;` before the statement, and a `let f`
+  bound the same way and called twice is refused as an `OnceFn` called
+  again (B-2026-11-15-32).
+- **`Option.as_mut()` exists.** The writable twin of `as_ref`
+  (`if let Some(x) = o.as_mut() { *x += 1; }`, a linked-list walk with
+  `cur = node.next.as_mut()`) was refused as an unknown method
+  (B-2026-11-15-33).
 - **`isize.abs_diff` returns a `usize`.** It was typed `isize`, so
   `isize.MIN.abs_diff(0)` printed a negative number from a built binary and
   could not go into a `usize` (B-2026-11-15-88).

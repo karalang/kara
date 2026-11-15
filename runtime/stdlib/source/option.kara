@@ -39,6 +39,14 @@ impl[T] Option[T] {
         }
     }
 
+    /// A mutable view of the value, without moving it (B-2026-11-15-33).
+    fn as_mut(mut ref self) -> Option[mut ref T] {
+        match self {
+            Some(x) => Some(x),
+            None => None,
+        }
+    }
+
     fn unwrap(own self) -> T {
         match self {
             Some(x) => x,

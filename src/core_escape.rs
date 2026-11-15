@@ -382,6 +382,17 @@ impl Walker<'_> {
                 args,
                 ..
             } => {
+                // B-2026-11-15-32: a lazy adaptor's result holds the closure it
+                // is handed (and the iterator it was called on), so where the
+                // result escapes, both do: a closure returning
+                // `(0..3).map(|c| m + clears[c])` returns that closure.
+                if let (Pos::Escape(why), true) = (pos, LAZY_ADAPTORS.contains(&method.as_str())) {
+                    self.walk_expr(object, Pos::Escape(why));
+                    for a in args {
+                        self.walk_expr(&a.value, Pos::Escape(why));
+                    }
+                    return;
+                }
                 self.walk_expr(object, Pos::Other);
                 // `TaskGroup.spawn` is not here: a task that joins inside the
                 // scope of every origin may hold views (§5.7), so its closure
@@ -554,3 +565,25 @@ fn value_of(pos: Pos) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// Iterator methods whose result holds the closure argument and the
+/// receiver, to be run later (docs/library/iterators.md).
+pub(crate) const LAZY_ADAPTORS: &[&str] = &[
+    "map",
+    "filter",
+    "filter_map",
+    "flat_map",
+    "take_while",
+    "skip_while",
+    "map_while",
+    "inspect",
+    "scan",
+    "step_by",
+    "take",
+    "skip",
+    "enumerate",
+    "peekable",
+    "rev",
+    "chain",
+    "zip",
+];

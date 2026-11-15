@@ -501,6 +501,7 @@ impl<'a> super::TypeChecker<'a> {
                             *reason = Some(OnceReason {
                                 consumed_binding: name.clone(),
                                 consumed_span: expr.span,
+                                into_returned: mode != CaptureWalkMode::Consuming,
                             });
                         }
                     }
@@ -516,6 +517,7 @@ impl<'a> super::TypeChecker<'a> {
                             *reason = Some(OnceReason {
                                 consumed_binding: "self".to_string(),
                                 consumed_span: expr.span,
+                                into_returned: mode != CaptureWalkMode::Consuming,
                             });
                         }
                     }
@@ -979,6 +981,19 @@ fn returned_closure_spans(body: &Expr) -> HashSet<SpanKey> {
             ExprKind::Return(Some(x)) => work.push(x),
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => work.extend(es),
             ExprKind::StructLiteral { fields, .. } => work.extend(fields.iter().map(|f| &f.value)),
+            // B-2026-11-15-32: a lazy adaptor keeps the closure it is
+            // handed inside the iterator it returns, so a returned
+            // `(0..3).map(|c| m + clears[c])` returns that closure too, and
+            // so does every adaptor further down the receiver chain.
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if crate::core_escape::LAZY_ADAPTORS.contains(&method.as_str()) => {
+                work.push(object);
+                work.extend(args.iter().map(|a| &a.value));
+            }
             _ => {}
         }
     }

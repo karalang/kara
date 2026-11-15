@@ -8430,6 +8430,13 @@ impl<'a> super::TypeChecker<'a> {
     /// coercion (phase-12 #12). Only `StmtKind::Expr` can carry
     /// divergence; every other statement form completes normally.
     pub(super) fn check_stmt(&mut self, stmt: &Stmt) -> Type {
+        let saved = self.current_stmt.replace(stmt.span);
+        let ty = self.check_stmt_framed(stmt);
+        self.current_stmt = saved;
+        ty
+    }
+
+    fn check_stmt_framed(&mut self, stmt: &Stmt) -> Type {
         // A statement-position lint attribute (`#[allow(lint)] stmt;`) becomes
         // a frame around exactly this statement — its subexpressions included,
         // nothing after it. The overrides live on

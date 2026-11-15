@@ -4179,6 +4179,11 @@ pub struct TypeChecker<'a> {
     /// `E_ONCE_FN_INTO_FN_SLOT` can name the consumed binding when a closure
     /// literal is rejected at a `Fn` slot. Round 12.45 (Step 3).
     pub(super) closure_once_reasons: FxHashMap<SpanKey, OnceReason>,
+    /// The statement being checked, for a fix that inserts a line before it.
+    pub(super) current_stmt: Option<Span>,
+    /// The `OnceFn` types refused at a slot with the `ref` remedy: the trait
+    /// bound errors the same closure raises at the adaptor repeat it.
+    pub(super) once_slot_types: Vec<String>,
     /// The closures the body being walked for its closure kind returns, and
     /// how many of them the walk is inside: there every capture moves
     /// (core §9.3, B-2026-10-26-9).
@@ -4471,6 +4476,10 @@ pub(super) struct OnceReason {
     /// the rejection message but kept for future polish in Step 5.
     #[allow(dead_code)]
     pub(super) consumed_span: Span,
+    /// The capture is only read, by a closure this one returns, which takes
+    /// it by move (core semantics §9.3, B-2026-11-15-32): borrowing it
+    /// before the closure (`let x = ref x;`) keeps this one repeatable.
+    pub(super) into_returned: bool,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -4755,6 +4764,8 @@ impl<'a> TypeChecker<'a> {
             current_impl_const_params: Vec::new(),
             enclosing_trait: None,
             closure_once_reasons: FxHashMap::default(),
+            current_stmt: None,
+            once_slot_types: Vec::new(),
             returned_closure_spans: Default::default(),
             capture_walk_by_move: Default::default(),
             closure_param_seeds: FxHashMap::default(),
@@ -5199,6 +5210,14 @@ impl<'a> TypeChecker<'a> {
                     *text = m;
                 }
             }
+        }
+        if !self.once_slot_types.is_empty() {
+            let once = std::mem::take(&mut self.once_slot_types);
+            self.errors.retain(|e| {
+                !once
+                    .iter()
+                    .any(|t| e.message.contains(&format!("`{t}` does not implement")))
+            });
         }
         TypeCheckResult {
             impls: std::mem::take(&mut self.env.impls),
@@ -9035,6 +9054,35 @@ impl<'a> TypeChecker<'a> {
             return false;
         }
         if Self::is_once_into_fn_shape(expected, found) {
+            // B-2026-11-15-32: a closure that only reads a capture, inside
+            // the closure it returns (a lazy adaptor's included), moves it
+            // there (§9.3) and can run once. Borrowing the capture before the
+            // statement makes the returned closure copy the borrow instead.
+            let returned = self
+                .closure_once_reasons
+                .get(&SpanKey::from_span(&span))
+                .filter(|r| r.into_returned && r.consumed_binding != "self")
+                .map(|r| r.consumed_binding.clone());
+            if let (Some(n), Some(stmt)) = (returned, self.current_stmt) {
+                let msg = format!(
+                    "this closure can run only once, but this slot ('{}') calls it again: \
+                     the closure it returns reads `{n}`, and a returned closure takes its \
+                     captures by move (core semantics §9.3), so each call would move `{n}` \
+                     out of this one (§9.6). Borrow `{n}` before the statement \
+                     (`let {n} = ref {n};`) so the returned closure copies the borrow",
+                    type_display(expected),
+                );
+                let fix = FixIt {
+                    span: Span { length: 0, ..stmt },
+                    replacement: format!(
+                        "let {n} = ref {n};\n{}",
+                        " ".repeat(stmt.column.saturating_sub(1))
+                    ),
+                };
+                self.once_slot_types.push(type_display(found));
+                self.type_error_with_fix_it(msg, span, TypeErrorKind::OnceFnIntoFnSlot, fix);
+                return false;
+            }
             let mut msg = format!(
                 "cannot pass once-callable closure where '{}' is expected; \
                  the slot promises repeatable invocation but the closure has type '{}'",

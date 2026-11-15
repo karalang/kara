@@ -71,6 +71,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "replace"
                 | "cloned"
                 | "as_ref"
+                | "as_mut"
         ) {
             let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
                 match ty {
@@ -221,6 +222,16 @@ impl<'a> super::TypeChecker<'a> {
                         let inner = resolve_type_var_top(&t_ty, &self.env.substitutions);
                         record_src(self, &t_ty);
                         Some(opt(Type::Ref(Box::new(inner))))
+                    }
+                    // `Option[T].as_mut() -> Option[mut ref T]` (B-2026-11-15-33):
+                    // the writable twin of `as_ref`; the MIR pipeline takes
+                    // the Kāra body in option.kara.
+                    "as_mut"
+                        if !is_result && args.is_empty() && !self.library_methods_from_source =>
+                    {
+                        let inner = resolve_type_var_top(&t_ty, &self.env.substitutions);
+                        record_src(self, &t_ty);
+                        Some(opt(Type::MutRef(Box::new(inner))))
                     }
                     // `Option[ref T].cloned() -> Option[T]`
                     // (docs/library/collections.md: `Map.get` lends the value).
