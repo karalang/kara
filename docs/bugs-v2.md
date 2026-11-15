@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 337 |
-| false-positive | 212 |
+| diagnostics | 339 |
+| false-positive | 213 |
 | missing-feature | 170 |
 | perf | 169 |
 | soundness | 69 |
 | miscompile | 64 |
 | run-vs-build | 41 |
 | other | 40 |
-| codegen-gap | 31 |
+| codegen-gap | 32 |
 | crash | 30 |
 | leak | 4 |
 | use-after-free | 3 |
@@ -77,8 +77,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 485 |
-| mir-llvm | 236 |
-| mir | 200 |
+| mir-llvm | 237 |
+| mir | 204 |
 | cli | 131 |
 | parser | 88 |
 | ownership | 81 |
@@ -1284,6 +1284,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-74 | typecheck | low | Rust's `let (sock, _) = listener.accept().unwrap();` is refused ("tuple pattern used but type is `TcpStream`") with no fix | 3e72c72f48 |
 | B-2026-11-15-75 | typecheck+interp+mir-llvm | medium | `Mutex` has no `into_inner` ("no method 'into_inner' on type 'Mutex'"), and the natives both backends kept for it crash the LLVM backend on a struct… | 3e72c72f48 |
 | B-2026-11-15-76 | typecheck | low | `self.take(2)?.try_into().unwrap()` for `u16.from_le_bytes(..)` is refused as "no method 'try_into' on type 'Slice'" with nothing about what to write | 3e72c72f48 |
+| B-2026-11-15-78 | mir | medium | `PriorityQueue[Reverse[F64]]` passes `karac check` and then the MIR builder refuses it: `Reverse`'s generic `T.cmp` under `T: Ord` at `T = F64` had n… | ee3c8ec9c4 |
+| B-2026-11-15-79 | mir+mir-llvm | medium | `let Reverse { value: top } = heap.pop().unwrap();` over `Reverse[i64]` reads `top` as moved after one use: a field of a generic struct bound by a `l… | ee3c8ec9c4 |
+| B-2026-11-15-80 | mir | high | `karac fix` renamed `let mut heap: BinaryHeap<i64> = it.collect();` to a plain `PriorityQueue[i64]`, which pops the smallest first where Rust's heap… | ee3c8ec9c4 |
+| B-2026-11-15-81 | mir | low | The fix for reusing a moved value whose type could be `Copy` wrote `#[derive(Copy)]`, which the check then flags at once as deprecated (`Copy` needs… | e6b72f3957 |
 
 </details>
 
