@@ -15614,7 +15614,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             }) => Some(*v),
             _ => None,
         };
-        let t = if scalar(&start).is_some() && end.as_ref().is_some_and(|e| scalar(e).is_none()) {
+        // A bare literal start before a suffixed literal end (`1..3usize`,
+        // Rust's spelling) takes the end's type too: both are constants, so
+        // the test above cannot tell them apart, and the start's recorded
+        // `i64` would type the counter while the checker typed it `usize`
+        // (B-2026-11-15-39).
+        let bare = |e: &Expr| match &e.kind {
+            ExprKind::Integer(_, None) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => matches!(operand.kind, ExprKind::Integer(_, None)),
+            _ => false,
+        };
+        let t = if (scalar(&start).is_some() && end.as_ref().is_some_and(|e| scalar(e).is_none()))
+            || (bare(left) && right.is_some_and(|r| !bare(r)))
+        {
             rt
         } else {
             lt
