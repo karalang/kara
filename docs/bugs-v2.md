@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-2 | 2026-11-15 | mir-llvm | low | Walking a `String`'s chars costs 2x to 2.8x Rust's `chars()` in a `karac build` binary: kata 1573's `s.chars().enumerate().filter(|(_, c)| c == '1').map(|(i, _)| i).collect()` over 200 strings of 500000 ASCII characters takes 0.21 s against Rust's 0.076 s, while the same chain over `s.bytes().iter()` takes 0.083 s | — |
 | B-2026-11-15-16 | 2026-11-15 | mir-llvm | low | `(0..n).map(|_| ..).collect()` into a `Vec[i64]` costs about 28 instructions an item in a `karac build` binary against 4.4 for the push loop it stands for, and 30 against Rust's 13 when the closure writes a captured variable: kata 1582's bench draws its 2000 matrices of 100 x 100 that way and runs 1.55x checked Rust, the drawing 1.9x and the solving 0.85x | — |
 | B-2026-11-15-17 | 2026-11-15 | parser | low | A Rust file's `use std::...` lines mend one per `karac fix` round: after the first line's diagnostic, the parser's item recovery skipped to the next `fn`, past the other `use` lines, so `karac check` reported one and LeetCode's binary-tree template (`RefCell`, `VecDeque`, `Rc`) took three extra rounds | — |
-| B-2026-11-15-21 | 2026-11-15 | typecheck | low | A `collect()` passed where a call takes a `Slice[T]` is refused: `String.from_utf8(s.bytes().iter().map(|c| c + 1).collect())` (strings.md's `from_utf8(bytes: Slice[u8])`) and a user `total((1..5).map(|x| x * x).collect())` with `fn total(xs: Slice[i64])` get "trait bound `C: FromIterator` is not satisfied; `Slice[u8]` does not implement `FromIterator`", though both calls take any `Vec[T]` value | — |
 
 ### Relocated
 
@@ -1235,6 +1234,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-18 | effect | low | A `FileSystem` fake whose `close` prints passes `karac check` when its file is used inside a `with_provider[Stdout]` nested in the `FileSystem` overr… | 0dd548c8b8 |
 | B-2026-11-15-19 | resolver | low | `std.random.next_u64()` is refused as "a Rust path .. | 0dd548c8b8 |
 | B-2026-11-15-20 | cli | low | `karac explain` refuses 15 live typechecker codes (E_INT_AS_BOOL, E_SHAPE, E_IMPL_TRAIT_ASSOC_MISMATCH and 12 more) plus W_DEPENDENCY_YANKED and the… | 0dd548c8b8 |
+| B-2026-11-15-21 | typecheck | low | A `collect()` passed where a call takes a `Slice[T]` is refused: `String.from_utf8(s.bytes().iter().map(\|c\| c + 1).collect())` (strings.md's `from_ut… | bae463436e |
 
 </details>
 
