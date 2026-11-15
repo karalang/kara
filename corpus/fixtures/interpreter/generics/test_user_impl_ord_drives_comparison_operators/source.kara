@@ -7,7 +7,10 @@ struct Point { x: i64, y: i64 }
                  fn partial_cmp(ref self, other: ref Point) -> Option[Ordering] { Some(self.x.cmp(other.x)) }
              }
              impl Ord for Point {
-                 fn cmp(ref self, other: ref Point) -> Ordering { self.x.cmp(other.x) }
+                 fn lt(self, other: Point) -> bool { self.x < other.x }
+                 fn le(self, other: Point) -> bool { self.x <= other.x }
+                 fn gt(self, other: Point) -> bool { self.x > other.x }
+                 fn ge(self, other: Point) -> bool { self.x >= other.x }
              }
              fn main() {
                  let a = Point { x: 1, y: 99 };
