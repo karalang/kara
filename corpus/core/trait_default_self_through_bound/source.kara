@@ -1,0 +1,49 @@
+// Inside a trait's default method, `Self` is known only as `Self: Tr`, so a
+// method call on `self` resolves through the trait (and its supertraits),
+// as in a generic function, never to an inherent method of the type the
+// impl is for. A direct call still takes the inherent method (B-2026-11-15-130).
+trait Base {
+    fn base(self) -> i64;
+}
+
+trait Tr: Base {
+    fn def1(self) -> i64 {
+        self.base() * 10
+    }
+    fn def2(self) -> i64 {
+        self.def1() + 1
+    }
+}
+
+struct B {
+    v: i64,
+}
+
+impl Base for B {
+    fn base(self) -> i64 {
+        self.v
+    }
+}
+
+impl Tr for B {}
+
+impl B {
+    fn def1(self) -> String {
+        "inherent def1".to_string()
+    }
+    fn base(self) -> i64 {
+        900
+    }
+}
+
+fn g[T: Tr](x: T) -> i64 {
+    x.def1()
+}
+
+fn main() {
+    let b = B { v: 2 };
+    println(b.def1());
+    println(b.base());
+    println(g(b));
+    println(b.def2());
+}

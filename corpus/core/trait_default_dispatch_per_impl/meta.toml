@@ -1,0 +1,13 @@
+source = "design.md § Method resolution"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "A trait's default method calls the required method of the impl it runs for (design.md § Method resolution): with impl Tr for Pr[i64] and impl Tr for Pr[bool] beside impl Tr for A, def1's self.req() is each receiver's own req, and a default calling a default (def2 -> def1 -> req) too. The default body is copied into each impl with its spans, and the span-keyed dispatch table held the last copy's impl for all of them: every def1 printed 70, and the interpreter failed at run time (B-2026-11-15-129)."
+bucket = "mir-gap:runtime: in main at bbN[term]: in A.defN at bbN[term]: in Pr[bool].req#N at bbN"
+classified_with = "d7fca301d"

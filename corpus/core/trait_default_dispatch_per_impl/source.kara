@@ -1,0 +1,48 @@
+// A trait's default method calls the required method of the impl it runs
+// for, when one generic struct has an impl per instantiation (B-2026-11-15-129).
+trait Tr {
+    fn req(self) -> i64;
+    fn def1(self) -> i64 {
+        self.req() * 10
+    }
+    fn def2(self) -> i64 {
+        self.def1() + 1
+    }
+}
+
+struct A {
+    v: i64,
+}
+
+impl Tr for A {
+    fn req(self) -> i64 {
+        self.v
+    }
+}
+
+struct Pr[T] {
+    x: T,
+}
+
+impl Tr for Pr[i64] {
+    fn req(self) -> i64 {
+        self.x + 100
+    }
+}
+
+impl Tr for Pr[bool] {
+    fn req(self) -> i64 {
+        if self.x { 7 } else { 0 }
+    }
+}
+
+fn main() {
+    let a = A { v: 3 };
+    println(a.def1());
+    println(Pr { x: 5 }.def1());
+    println(Pr { x: true }.def1());
+    println(Pr { x: false }.def2());
+    println(Pr { x: 5 }.def2());
+    println(a.def2());
+    println(Pr { x: 5 }.req());
+}

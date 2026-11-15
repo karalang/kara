@@ -514,6 +514,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `libkarac_runtime_tsan_regex.a` (recipe in CLAUDE.md), or is refused
   with that recipe; it failed with a raw `undefined reference to
   karac_regex_mir` (B-2026-11-15-92).
+- **A trait's default method dispatches through the trait, for the impl
+  it runs in.** With `impl Tr for Pr[i64]` and `impl Tr for Pr[bool]`, a
+  default `def1` calling `self.req()` called `Pr[bool]`'s `req` for every
+  receiver, `Pr[i64]` and unrelated types alike, and the interpreter
+  failed at run time. And a default `def2` calling `self.def1()` took the
+  type's inherent `def1` over the trait's. Inside a default body `Self` is
+  known only through the trait, so `self.m()` now resolves as it does in
+  a generic function: the trait's method (or a supertrait's), of the
+  receiver's own impl. A direct call still takes an inherent method.
 - A `///` doc comment before a method's receiver (`self`, `ref self`,
   `mut ref self`, `own self`) is ignored, as design.md §3 says: it was a
   parse error calling `self` (or `ref`) a reserved keyword

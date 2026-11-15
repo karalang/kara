@@ -3073,6 +3073,11 @@ fn main() -> () {
             "ok_view_param_results_live_together",
             "ok_view_param_through_struct_field",
             "ok_view_receiver_results_live_together",
+            // `self` in `impl Tr for Pr[i64]` keeps its args only on the v2
+            // pipelines (items.rs, B-2026-09-27-115); erased to `Pr`, a
+            // default body's `self.req()` misses the impl on `Pr[i64]`.
+            // Refused here before and after the B-2026-11-15-129 fix alike.
+            "trait_default_dispatch_per_impl",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

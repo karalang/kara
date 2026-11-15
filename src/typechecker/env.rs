@@ -934,6 +934,30 @@ impl TypeEnv {
     /// A length-1 result is the dispatch-normally case; length ≥ 2 is the
     /// ambiguity case (item 4 of the parent CR — see
     /// `phase-4-interpreter.md`).
+    /// [`Self::find_methods_with_args`]'s trait-impl candidates, which it
+    /// leaves out when an inherent method of the name applies: a trait's
+    /// default body resolves `self.m()` through the trait whatever the
+    /// type's inherent methods (B-2026-11-15-130).
+    pub fn find_trait_methods_with_args(
+        &self,
+        target_type: &str,
+        target_args: &[Type],
+        method: &str,
+    ) -> Vec<(&ImplInfo, &FunctionSig)> {
+        self.impls
+            .iter()
+            .filter(|imp| {
+                imp.trait_name.is_some()
+                    && imp.target_type == target_type
+                    && impl_args_match(&imp.target_args, target_args)
+                    && impl_shape_fits(imp, target_args)
+                    && self.impl_bounds_discharge(imp, target_args)
+                    && self.ufcs_admits(imp, method)
+            })
+            .filter_map(|imp| imp.methods.get(method).map(|sig| (imp, sig)))
+            .collect()
+    }
+
     pub fn find_methods_with_args(
         &self,
         target_type: &str,

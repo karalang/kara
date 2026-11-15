@@ -1078,16 +1078,33 @@ impl<'a> super::TypeChecker<'a> {
         }
         // In a trait's default body, `self` is `Self: Trait`, so `self.m()`
         // has the one candidate that trait gives, though the copy's `self` is
-        // a concrete type that other traits' `m` also fit (B-2026-11-04-40).
-        if candidates.len() > 1 && matches!(object.kind, ExprKind::SelfValue) {
-            if let Some(t) = self.current_default_trait.as_deref() {
-                let own: Vec<_> = candidates
-                    .iter()
-                    .filter(|(imp, _)| imp.trait_name.as_deref() == Some(t))
-                    .cloned()
-                    .collect();
-                if own.len() == 1 {
-                    candidates = own;
+        // a concrete type that other traits' `m` also fit (B-2026-11-04-40),
+        // and though the type has an inherent `m` of its own, which a direct
+        // call would take: the body is written against the bound, as a
+        // generic function's is, so `self.def1()` in a default `def2` is the
+        // trait's `def1` and never `impl B { fn def1 }` (B-2026-11-15-130). The trait's
+        // own impl first, then a supertrait's.
+        if matches!(object.kind, ExprKind::SelfValue) {
+            if let Some(t) = self.current_default_trait.clone() {
+                let pool = if candidates.iter().all(|(imp, _)| imp.trait_name.is_none()) {
+                    self.env
+                        .find_trait_methods_with_args(&type_name, &type_args, method)
+                } else {
+                    candidates.clone()
+                };
+                let traits = std::iter::once(t.clone())
+                    .chain(self.env.supertrait_closure_traits(&t))
+                    .collect::<Vec<_>>();
+                for tr in &traits {
+                    let own: Vec<_> = pool
+                        .iter()
+                        .filter(|(imp, _)| imp.trait_name.as_deref() == Some(tr.as_str()))
+                        .cloned()
+                        .collect();
+                    if own.len() == 1 {
+                        candidates = own;
+                        break;
+                    }
                 }
             }
         }

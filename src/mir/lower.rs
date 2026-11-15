@@ -16539,6 +16539,45 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.pop_scope()
     }
 
+    /// The impl the checker resolved `e`, a call of `method` on `object`,
+    /// to, by its dispatch name (`Pr[i64]`), when it is one of several impls
+    /// for single instantiations of one type. A trait's default method is
+    /// copied into every impl that takes it with the default body's spans,
+    /// so the span-keyed table holds the last copy's entry for all of them:
+    /// `self.req()` in the default `def1` called `Pr[bool]`'s `req` from
+    /// `Pr[i64]`'s copy and from `A`'s (B-2026-11-15-129). In a shared body the impl is
+    /// the receiver's own: the sibling whose dispatch name is the
+    /// receiver's type, or none, which leaves the call to the callee the
+    /// checker recorded for this copy.
+    fn recorded_dispatch(
+        &mut self,
+        e: &'a Expr,
+        object: &'a Expr,
+        method: &str,
+    ) -> R<Option<String>> {
+        let key = SpanKey::from_span(&e.span);
+        let Some(seg) = self
+            .lcx
+            .tc
+            .method_impl_dispatch
+            .get(&(key, method.to_string()))
+        else {
+            return Ok(None);
+        };
+        if !self.lcx.tc.default_copy_spans.contains(&key) {
+            return Ok(Some(seg.clone()));
+        }
+        let rt = self.expr_ty(object)?;
+        let own = self.strip_ty_full(rt).1;
+        let shown = self.tys().display(own);
+        Ok(self
+            .lcx
+            .fns
+            .values()
+            .any(|i| i.f.name == method && i.impl_dispatch.as_deref() == Some(shown.as_str()))
+            .then_some(shown))
+    }
+
     /// The ranges `e`, a `collect()` into a `Vec` of the integer type
     /// their bounds have, pulls from: `a..b` or `a..=b` alone, or ranges
     /// joined by the library's `chain`, `(1..=end).chain(start..=n)`
@@ -23331,12 +23370,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         // (`impl Bx[String]`, `impl Bx[i64]`): the one the checker resolved
         // for this call site, by its dispatch name. The recorded callee names
         // the first impl of that name whatever the receiver.
-        if let Some(seg) = self
-            .lcx
-            .tc
-            .method_impl_dispatch
-            .get(&(SpanKey::from_span(&e.span), method.to_string()))
-        {
+        if let Some(seg) = self.recorded_dispatch(e, object, method)? {
+            let seg = &seg;
             let hit = self
                 .lcx
                 .fns
