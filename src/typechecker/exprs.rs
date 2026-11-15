@@ -1380,6 +1380,70 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// Records where a `collect()`'s items could be widened, for the
+    /// refusal of an integer item a wider integer collection does not
+    /// gather (B-2026-11-14-12): the end of the receiver, where a
+    /// `.map(|x| x as i64)` goes, and the body of the receiver's own
+    /// `map` closure when it is a single expression, which `as i64` widens.
+    fn note_collect_widen_site(&mut self, expr: &Expr) {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return;
+        };
+        if method != "collect" || !args.is_empty() {
+            return;
+        }
+        let after = Span {
+            offset: object.span.offset + object.span.length,
+            length: 0,
+            ..object.span
+        };
+        let body = match &object.kind {
+            ExprKind::MethodCall { method, args, .. } if method == "map" && args.len() == 1 => {
+                match &args[0].value.kind {
+                    ExprKind::Closure { body, .. } if !matches!(body.kind, ExprKind::Block(_)) => {
+                        Some((body.span, crate::formatter::render_expr(body)))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        self.collect_widen_sites
+            .insert(SpanKey::from_span(&expr.span), (after, body));
+    }
+
+    /// The integer a `collect` refused for items of `want` would gather:
+    /// the one item type of `offered` that `want`'s integer (read through
+    /// a `ref`) widens into without loss, `u8` into `i64`.
+    fn collect_widening_target(want: &[Type], offered: &[Vec<Type>]) -> Option<Type> {
+        let [w] = want else {
+            return None;
+        };
+        let w = match w {
+            Type::Ref(i) | Type::MutRef(i) => &**i,
+            w => w,
+        };
+        if !matches!(w, Type::Int(_) | Type::UInt(_)) {
+            return None;
+        }
+        let mut wider = offered.iter().filter_map(|a| match a.as_slice() {
+            [o @ (Type::Int(_) | Type::UInt(_))]
+                if o != w && super::types::int_coercion_is_widening(w, o) =>
+            {
+                Some(o.clone())
+            }
+            _ => None,
+        });
+        let to = wider.next()?;
+        wider.next().is_none().then_some(to)
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         // An unsuffixed literal past `i128::MAX` is judged by the integer
         // type its slot gives it, as any unsuffixed literal is; its carrier's
@@ -1728,6 +1792,7 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.collect_views_into_strings_fix(expr, expected);
+        self.note_collect_widen_site(expr);
         self.retyped_int_literal = None;
         let deferred = matches!(&expr.kind, ExprKind::Call { callee, .. }
                 if self.callee_is_variant_constructor(callee))
@@ -7917,6 +7982,51 @@ impl<'a> super::TypeChecker<'a> {
                                     fix,
                                 );
                                 continue;
+                            }
+                        }
+                        // Integer items a wider integer collection holds
+                        // (`u8`s into a `Vec[i64]`): `collect` gathers
+                        // items as they are, so each is widened first,
+                        // in the `map` that makes it or by a `map` of its
+                        // own (B-2026-11-14-12).
+                        if trait_name == "FromIterator" {
+                            if let Some(to) = Self::collect_widening_target(&want, &offered) {
+                                let to = type_display(&to);
+                                let site = self
+                                    .collect_widen_sites
+                                    .get(&SpanKey::from_span(&d.span))
+                                    .cloned();
+                                let fix = site.map(|(after, body)| match body {
+                                    Some((span, text)) => {
+                                        message.push_str(&format!(
+                                            "; `collect` does not convert its items: widen \
+                                             each in the `map`, `({text}) as {to}`"
+                                        ));
+                                        FixIt {
+                                            span,
+                                            replacement: format!("({text}) as {to}"),
+                                        }
+                                    }
+                                    None => {
+                                        message.push_str(&format!(
+                                            "; `collect` does not convert its items: widen \
+                                             each first, `.map(|x| x as {to})`"
+                                        ));
+                                        FixIt {
+                                            span: after,
+                                            replacement: format!(".map(|x| x as {to})"),
+                                        }
+                                    }
+                                });
+                                if let Some(fix) = fix {
+                                    self.type_error_with_fix_it(
+                                        message,
+                                        d.span,
+                                        TypeErrorKind::TypeMismatch,
+                                        fix,
+                                    );
+                                    continue;
+                                }
                             }
                         }
                         // Rust's `String: FromIterator<String>`: a `String`

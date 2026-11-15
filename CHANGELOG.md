@@ -1131,6 +1131,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- **A `collect` of narrower integers into a wider collection says how to
+  widen them.** `w.bytes().iter().map(|b| b - 96).collect()` into a
+  `Vec[i64]` was refused with only `FromIterator[u8]` is not satisfied,
+  though a `u8` widens into `i64` without loss. The refusal now says that
+  `collect` does not convert its items, and `karac fix` widens them: the
+  `map` closure's body becomes `(b - 96) as i64`, or a `.map(|x| x as i64)`
+  goes before the `collect` when there is no such body (B-2026-11-14-12).
 - A value computed from a fill's elements, `let l = pre[k + 1] - pre[i]`,
   refused at an `i32` `max` names the fill's literal and `karac fix` writes
   `0i32` there, as it already did for a read of the fill itself
