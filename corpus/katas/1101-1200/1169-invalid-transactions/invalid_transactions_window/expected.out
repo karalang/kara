@@ -1,0 +1,10 @@
+2 -> 2: alice,20,800,mtv, alice,50,100,beijing
+2 -> 1: alice,50,1200,mtv
+2 -> 1: bob,50,1200,mtv
+3 -> 2: ann,0,5,rome, ann,60,5,oslo
+4 -> 1: ann,10,1001,rome
+4 -> 3: ann,5,1,rome, ann,5,1,rome, ann,65,1,oslo
+1 -> 1: zed,1000,2000,x
+300 random lists: 4532 invalid, checksum 352250502
+1000 transactions by 100 names: 498 invalid, checksum 217367208
+one name, one city but one: 122 invalid, checksum 819072712

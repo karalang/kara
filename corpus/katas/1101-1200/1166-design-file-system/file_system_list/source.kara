@@ -1,0 +1,127 @@
+// LeetCode #1166: Design File System -- a list: every made path and its
+// value in a `Vec` of pairs, in the order they were made, each call a
+// walk of the whole list. O(n L) a call.
+
+struct FileSystem {
+    made: Vec[(String, i64)],
+}
+
+impl FileSystem {
+    fn new() -> FileSystem {
+        FileSystem { made: [] }
+    }
+
+    fn has(self, path: Str) -> bool {
+        self.made.iter().any(|(p, _)| p == path)
+    }
+
+    fn create_path(mut ref self, path: Str, value: i64) -> bool {
+        let cut = match path.rfind("/") {
+            Some(i) => i,
+            None => return false,
+        };
+        if cut + 1 == path.len() or self.has(path) {
+            return false;
+        }
+        if cut > 0 and not self.has(path[0..cut]) {
+            return false;
+        }
+        self.made.push((path.to_string(), value));
+        true
+    }
+
+    fn get(self, path: Str) -> i64 {
+        match self.made.iter().find(|(p, _)| p == path) {
+            Some((_, v)) => v,
+            None => -1,
+        }
+    }
+}
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Runs `ops` on a new file system: `c <path> <value>` creates, `g <path>`
+// gets. Returns the answers, a create as 1 or 0.
+fn run(ops: Vec[String]) -> Vec[i64] {
+    let mut fs = FileSystem.new();
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        let parts: Vec[Str] = op.split(" ").collect();
+        if parts[0] == "c" {
+            out.push(if fs.create_path(parts[1], i64.parse(parts[2]).unwrap()) { 1 } else { 0 });
+        } else {
+            out.push(fs.get(parts[1]));
+        }
+    }
+    out
+}
+
+// A random path of 1 to `depth` parts, each one of the first `k` names.
+fn random_path(seed: mut ref i64, depth: i64, k: i64) -> String {
+    let names = ["a", "b", "c", "leet", "code", "x"];
+    let parts = 1 + next_random(mut seed) % depth;
+    let mut p = String.new();
+    for _ in 0..parts {
+        p = p + "/" + names[next_random(mut seed) % k];
+    }
+    p
+}
+
+fn show(ops: Vec[Str]) {
+    let answers = run(ops.iter().map(|o| o.to_string()).collect());
+    let shown: Vec[String] = answers.iter().map(|a| f"{a}").collect();
+    println(f"{ops.join("; ")} -> {shown.join(" ")}");
+}
+
+fn main() {
+    // LeetCode's examples and four more: a path made twice; a get before
+    // anything exists; a parent made after its child was refused; a name
+    // that is a prefix of another
+    show(["c /a 1", "g /a"]);
+    show(["c /leet 1", "c /leet/code 2", "g /leet/code", "c /c/d 1", "g /c"]);
+    show(["c /a 1", "c /a 2", "g /a"]);
+    show(["g /a"]);
+    show(["c /a/b 1", "c /a 2", "c /a/b 3", "g /a/b"]);
+    show(["c /le 1", "c /leet 2", "c /le/et 3", "g /le", "g /leet", "g /le/et", "g /leet/et"]);
+    // 300 random runs of 1 to 60 operations over paths of 1 to 4 parts
+    let mut seed = 1166;
+    let mut made = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let k = 1 + next_random(mut seed) % 6;
+        let n = 1 + next_random(mut seed) % 60;
+        let ops: Vec[String] = (0..n).map(|i| {
+            let p = random_path(mut seed, 4, k);
+            if next_random(mut seed) % 3 == 0 { f"g {p}" } else { f"c {p} {i + 1}" }
+        }).collect();
+        for (i, a) in run(ops).iter().enumerate() {
+            if ops[i].starts_with("c") {
+                made += a;
+            }
+            check = (check * 31 + a + 2) % 1000000007;
+        }
+    }
+    println(f"300 random runs: made {made}, checksum {check}");
+    // 10^4 operations, the constraints' most: a chain 33 deep, its last path
+    // 99 letters long, then random paths of 1 to 3 parts made and asked for
+    // in turn
+    let mut ops: Vec[String] = [];
+    let mut p = String.new();
+    for i in 0..33 {
+        p = p + "/" + f"d{i % 7}";
+        ops.push(f"c {p} {i}");
+    }
+    let mut seed2 = 11662;
+    while ops.len() < 10000 {
+        let q = random_path(mut seed2, 3, 6);
+        ops.push(if ops.len() % 2 == 0 { f"c {q} {ops.len()}" } else { f"g {q}" });
+    }
+    let answers = run(ops);
+    let total = answers.iter().filter(|a| a >= 0).count();
+    let sum: i64 = answers.iter().sum();
+    println(f"10000 operations: {total} not -1, sum {sum}");
+}

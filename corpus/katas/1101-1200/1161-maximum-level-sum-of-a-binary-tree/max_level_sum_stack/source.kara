@@ -1,0 +1,155 @@
+// LeetCode #1161: Maximum Level Sum of a Binary Tree -- an explicit
+// stack: (node, depth) pairs popped and their children pushed, right
+// before left, the sums kept by depth in a `Map`; the deepest level is
+// the map's size, so the levels are read back in order from 1. O(n).
+
+fn max_level_sum(root: Option[TreeNode]) -> i64 {
+    let mut sums: Map[i64, i64] = Map.new();
+    let mut stack: Vec[(TreeNode, i64)] = [];
+    if let Some(r) = root {
+        stack.push((r, 1));
+    }
+    while let Some((node, depth)) = stack.pop() {
+        *sums.entry(depth).or_insert(0) += node.val;
+        if let Some(r) = node.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    let mut best = 1;
+    for d in 2..sums.len() + 1 {
+        if sums[d] > sums[best] {
+            best = d;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+shared struct TreeNode {
+    mut val: i32,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i32) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level-order form, "[1,2,null,4]": each node's two children
+// come next, in the order the nodes were met, "null" for none.
+fn parse(text: Str) -> Option[TreeNode] {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return None;
+    }
+    let items: Vec[Option[i32]] = inner.split(",").map(|s| if s == "null" { None } else { Some(i32.parse(s).unwrap()) }).collect();
+    let root = leaf(items[0].unwrap());
+    let mut queue: Vec[TreeNode] = [root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue[head];
+        head += 1;
+        if let Some(v) = items[i] {
+            let child = leaf(v);
+            node.left = Some(child);
+            queue.push(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = leaf(v);
+                node.right = Some(child);
+                queue.push(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A value from -10^5 to 10^5, the constraints' range, or with `small`
+// from -2 to 2, so that levels tie.
+fn value(seed: mut ref i64, small: bool) -> i32 {
+    if small {
+        (next_random(mut seed) % 5 - 2) as i32
+    } else {
+        (next_random(mut seed) % 200001 - 100000) as i32
+    }
+}
+
+// A random tree of `count` nodes, each hung at a random free place below
+// the ones before it; with `deep`, the place is below the newest node
+// half the time, so the tree grows long branches.
+fn random_tree(seed: mut ref i64, count: i64, deep: bool, small: bool) -> TreeNode {
+    let root = leaf(value(mut seed, small));
+    let mut nodes: Vec[TreeNode] = [root];
+    for _ in 1..count {
+        let c = leaf(value(mut seed, small));
+        loop {
+            let at = if deep and next_random(mut seed) % 2 == 0 {
+                nodes[nodes.len() - 1]
+            } else {
+                nodes[next_random(mut seed) % nodes.len()]
+            };
+            if next_random(mut seed) % 2 == 0 {
+                if at.left.is_none() {
+                    at.left = Some(c);
+                    break;
+                }
+            } else if at.right.is_none() {
+                at.right = Some(c);
+                break;
+            }
+        }
+        nodes.push(c);
+    }
+    root
+}
+
+fn main() {
+    // LeetCode's two examples and six more: one node; every level
+    // negative, the root's the largest; two levels tied; all zero; a
+    // deeper level less negative than the root; a long chain whose last
+    // level wins
+    let cases = [
+        "[1,7,0,7,-8,null,null]",
+        "[989,null,10250,98693,-89388,null,null,null,-32127]",
+        "[5]",
+        "[-1,-2,-3]",
+        "[1,1,0]",
+        "[0,0,0,0]",
+        "[-5,-1,-1]",
+        "[1,2,null,3,null,4,null,5]",
+    ];
+    for c in cases.iter() {
+        println(f"{c} -> {max_level_sum(parse(c))}");
+    }
+    // 1000 random trees of up to 1000 nodes, a quarter grown deep and
+    // half with values from -2 to 2: the levels summed and a checksum
+    let mut seed = 1161;
+    let mut levels = 0;
+    let mut check = 0;
+    for t in 0..1000 {
+        let count = next_random(mut seed) % 1000 + 1;
+        let root = random_tree(mut seed, count, t % 4 == 1, t % 2 == 0);
+        let level = max_level_sum(Some(root));
+        levels += level;
+        check = (check * 31 + level) % 1000000007;
+    }
+    println(f"1000 random trees: levels {levels}, checksum {check}");
+    // 10^4 nodes, the constraints' most: wide and deep
+    for deep in [false, true] {
+        let root = random_tree(mut seed, 10000, deep, false);
+        println(f"10000 nodes: level {max_level_sum(Some(root))}");
+    }
+}

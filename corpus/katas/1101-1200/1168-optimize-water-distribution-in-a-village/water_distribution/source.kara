@@ -1,0 +1,109 @@
+// LeetCode #1168: Optimize Water Distribution in a Village -- the ★ arm,
+// Kruskal: a well is a pipe from a source, node 0, to its house, so the
+// cheapest supply is a minimum spanning tree over houses 0 to n. Every pipe
+// sorted by cost, each joined in turn unless its ends are already joined,
+// kept in a union-find by size with path halving. O((n + m) log(n + m)).
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn min_cost_to_supply_water(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    let mut edges: Vec[(i64, i64, i64)] = [];
+    for (i, w) in wells.iter().enumerate() {
+        edges.push((w, 0, i + 1));
+    }
+    for p in pipes.iter() {
+        edges.push((p[2], p[0], p[1]));
+    }
+    edges.sort();
+    let mut parent: Vec[i64] = (0..n + 1).collect();
+    let mut size = Vec.filled(n + 1, 1);
+    let mut cost = 0;
+    let mut joined = 0;
+    for (c, a, b) in edges {
+        let mut ra = find(mut parent, a);
+        let mut rb = find(mut parent, b);
+        if ra == rb {
+            continue;
+        }
+        if size[ra] < size[rb] {
+            ra, rb = rb, ra;
+        }
+        parent[rb] = ra;
+        size[ra] += size[rb];
+        cost += c;
+        joined += 1;
+        if joined == n {
+            break;
+        }
+    }
+    cost
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) {
+    println(f"{n} {wells} {pipes} -> {min_cost_to_supply_water(n, wells, pipes)}");
+}
+
+fn random_pipes(n: i64, m: i64, top: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut pipes = Vec.new();
+    for _ in 0..m {
+        let a = 1 + next_random(mut seed) % n;
+        let mut b = 1 + next_random(mut seed) % (n - 1);
+        if b >= a {
+            b += 1;
+        }
+        pipes.push([a, b, next_random(mut seed) % (top + 1)]);
+    }
+    pipes
+}
+
+fn main() {
+    // LeetCode's examples and four more: every well cheaper than any pipe;
+    // one cheap well and a cheap ring; a free well and a free pipe; two
+    // villages apart
+    show(3, [1, 2, 2], [[1, 2, 1], [2, 3, 1]]);
+    show(2, [1, 1], [[1, 2, 1], [1, 2, 2]]);
+    show(2, [1, 1], [[1, 2, 1]]);
+    show(3, [5, 5, 5], [[1, 2, 9], [2, 3, 9]]);
+    show(4, [9, 1, 9, 9], [[1, 2, 2], [2, 3, 2], [3, 4, 2], [1, 4, 1]]);
+    show(3, [0, 4, 4], [[1, 2, 0], [2, 3, 3], [1, 3, 5]]);
+    show(5, [7, 7, 7, 7, 7], [[1, 2, 3], [2, 3, 3], [4, 5, 3]]);
+    // 300 random villages of 2 to 30 houses and 1 to 2n pipes, half with
+    // costs of 0 to 10 so that costs tie, half 0 to 10^5
+    let mut seed = 1168;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let n = 2 + next_random(mut seed) % 29;
+        let top = if i % 2 == 0 { 10 } else { 100000 };
+        let wells: Vec[i64] = (0..n).map(|_| next_random(mut seed) % (top + 1)).collect();
+        let m = 1 + next_random(mut seed) % (2 * n);
+        let pipes = random_pipes(n, m, top, mut seed);
+        let c = min_cost_to_supply_water(n, wells, pipes);
+        total += c;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"300 random villages: total {total}, checksum {check}");
+    // 10^4 houses and 10^4 pipes, the constraints' most: random, and a ring
+    // of pipes cheaper than every well
+    let n = 10000;
+    let wells: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 100001).collect();
+    let pipes = random_pipes(n, 10000, 100000, mut seed);
+    println(f"10000 houses, 10000 random pipes: {min_cost_to_supply_water(n, wells, pipes)}");
+    let mut ring: Vec[Vec[i64]] = (1..n).map(|i| [i, i + 1, 1]).collect();
+    ring.push([1, n, 0]);
+    println(f"10000 houses in a ring of cheap pipes: {min_cost_to_supply_water(n, Vec.filled(n, 100000), ring)}");
+}

@@ -1,0 +1,323 @@
+// LeetCode #1163: Last Substring in Lexicographical Order -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against six properties that do not compute it; see the
+// README.
+
+// ---- last_substring.kara ----
+
+fn a0_last_substring(s: Str) -> String {
+    let b = s.bytes();
+    let n = b.len();
+    let mut i = 0;
+    let mut j = 1;
+    let mut k = 0;
+    while j + k < n {
+        if b[i + k] == b[j + k] {
+            k += 1;
+        } else if b[i + k] > b[j + k] {
+            j = j + k + 1;
+            k = 0;
+        } else {
+            i = (i + k + 1).max(j);
+            j = i + 1;
+            k = 0;
+        }
+    }
+    s[i..].to_string()
+}
+
+// ---- last_substring_period.kara ----
+
+fn a1_last_substring(s: Str) -> String {
+    let b: Vec[u8] = s.bytes().iter().collect();
+    let n = b.len();
+    let mut ms = -1;
+    let mut j = 0;
+    let mut k = 1;
+    let mut p = 1;
+    while j + k < n {
+        let a = b[j + k];
+        let c = b[ms + k];
+        if a < c {
+            j += k;
+            k = 1;
+            p = j - ms;
+        } else if a == c {
+            if k != p {
+                k += 1;
+            } else {
+                j += p;
+                k = 1;
+            }
+        } else {
+            ms = j;
+            j = ms + 1;
+            k = 1;
+            p = 1;
+        }
+    }
+    s[ms + 1..].to_string()
+}
+
+// ---- last_substring_candidates.kara ----
+
+fn a2_last_substring(s: Str) -> String {
+    let b: Vec[u8] = s.bytes().iter().collect();
+    let n = b.len();
+    let top = b.iter().max().unwrap();
+    let mut alive: Vec[i64] = (0..n).filter(|i| b[i] == top).collect();
+    let mut k = 1;
+    while alive.len() > 1 {
+        let best = alive.iter().filter(|c| c + k < n).map(|c| b[c + k]).max();
+        let mut next: Vec[i64] = [];
+        for c in alive.iter() {
+            // a start the previous survivor reaches is held inside it
+            if let Some(last) = next.last() {
+                if last + k >= c {
+                    continue;
+                }
+            }
+            let here = if c + k < n { Some(b[c + k]) } else { None };
+            if here == best {
+                next.push(c);
+            }
+        }
+        alive = next;
+        k += 1;
+    }
+    s[alive[0]..].to_string()
+}
+
+// ---- last_substring_hash.kara ----
+
+struct A3Hashes {
+    m: i64,
+    pre: Vec[i64],
+    pow: Vec[i64],
+}
+
+fn a3_hashes(b: Vec[u8], m: i64) -> A3Hashes {
+    let mut pre = [0];
+    let mut pow = [1];
+    for c in b.iter() {
+        pre.push((pre[pre.len() - 1] * 131 + c as i64) % m);
+        pow.push(pow[pow.len() - 1] * 131 % m);
+    }
+    A3Hashes { m, pre, pow }
+}
+
+// The hash of the `len` letters from `at`.
+fn a3_part(h: A3Hashes, at: i64, len: i64) -> i64 {
+    ((h.pre[at + len] - h.pre[at] * h.pow[len]) % h.m + h.m) % h.m
+}
+
+fn a3_last_substring(s: Str) -> String {
+    let b: Vec[u8] = s.bytes().iter().collect();
+    let n = b.len();
+    let h1 = a3_hashes(b, 1000000007);
+    let h2 = a3_hashes(b, 1000000009);
+    let top = b.iter().max().unwrap();
+    let mut best = 0;
+    while b[best] != top {
+        best += 1;
+    }
+    for i in best + 1..n {
+        if b[i] != top {
+            continue;
+        }
+        // the longest common prefix of the suffixes at `best` and `i`
+        let mut (lo, hi) = (0, n - i);
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2;
+            if a3_part(h1, best, mid) == a3_part(h1, i, mid) and a3_part(h2, best, mid) == a3_part(h2, i, mid) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if i + lo < n and b[i + lo] > b[best + lo] {
+            best = i;
+        }
+    }
+    s[best..].to_string()
+}
+
+// ---- last_substring_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_last_substring(s: String) -> String {
+        let s = s.bytes();
+        let n = s.len();
+        let mut (i, j, k) = (0, 1, 0);
+        while j + k < n {
+            if s[i + k] == s[j + k] {
+                k += 1;
+                continue;
+            }
+            if s[i + k] > s[j + k] {
+                j += k + 1;
+            } else {
+                i = max(i + k + 1, j);
+                j = i + 1;
+            }
+            k = 0;
+        }
+        String.from_utf8(s[i..].to_vec()).unwrap()
+    }
+}
+
+fn a4_last_substring(s: Str) -> String {
+    A4Solution.a4_last_substring(s.to_string())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, s: Str) -> String {
+    match w {
+        0 => a0_last_substring(s),
+        1 => a1_last_substring(s),
+        2 => a2_last_substring(s),
+        3 => a3_last_substring(s),
+        _ => a4_last_substring(s),
+    }
+}
+
+// The statement read literally: every substring, the largest kept, for up
+// to 12 letters; past that, every suffix, since a substring is never larger
+// than the suffix it begins.
+fn literal(s: Str) -> String {
+    let n = s.len();
+    let mut best = s[0..1].to_string();
+    for a in 0..n {
+        let ends = if n <= 12 { a + 1..n + 1 } else { n..n + 1 };
+        for b in ends {
+            if s[a..b] > best {
+                best = s[a..b].to_string();
+            }
+        }
+    }
+    best
+}
+
+// A string of `len` letters over the `k` letters from `b`.
+fn word(seed: mut ref i64, len: i64, k: i64) -> String {
+    let b: Vec[u8] = (0..len).map(|_| b'b' + (next_random(mut seed) % k) as u8).collect();
+    String.from_utf8(b).unwrap()
+}
+
+struct Case {
+    s: String,
+    // P4's increasing map of the 13 letters from `b` into `b` to `y`, P5's cut
+    map: Vec[u8],
+    cut: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let s = ref c.s;
+    let n = s.len();
+    let want = literal(s);
+    let start = n - want.len();
+    let lowered = s.to_string() + "a";
+    let raised = "z" + s;
+    let renamed = String.from_utf8(s.bytes().iter().map(|b| c.map[b - b'b']).collect()).unwrap();
+    let cut = s[c.cut % (start + 1)..].to_string();
+    for w in 0..5 {
+        let got = arm(w, s);
+        let what = f"arm {w}, case {t.cases} \"{s}\" -> \"{got}\"";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literally \"{want}\"");
+        // P2: a letter below every other appended joins the answer
+        let l = arm(w, lowered);
+        expect(mut t, 2, l == got + "a", f"P2 {what}, with a: \"{l}\"");
+        // P3: a letter above every other prepended makes the whole string
+        // the answer
+        let r = arm(w, raised);
+        expect(mut t, 3, r == raised, f"P3 {what}, after z: \"{r}\"");
+        // P4: the letters renamed in the same order keep where it starts
+        let m = arm(w, renamed);
+        expect(mut t, 4, m.len() == got.len(), f"P4 {what}, renamed: \"{m}\"");
+        // P5: a cut at or before its start keeps the answer
+        let k = arm(w, cut);
+        expect(mut t, 5, k == got, f"P5 {what}, cut to \"{cut}\": \"{k}\"");
+        // P6: the answer's own answer is itself
+        let g = arm(w, got);
+        expect(mut t, 6, g == got, f"P6 {what}, again: \"{g}\"");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + start * 7 + want.len()) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 2000 strings in four kinds, 500 each, over letters from `b`: 1 to 10
+    // letters over 1 to 3; 1 to 40 over 1 to 4; a block of 1 to 5 letters
+    // over 2 repeated to up to 120, a quarter with one letter changed; and
+    // 50 to 600 over 2 to 13. Every choice the properties make is drawn
+    // before any arm answers.
+    let mut seed = 11631;
+    let mut cases: Vec[Case] = [];
+    for i in 0..2000 {
+        let kind = i % 4;
+        let s = if kind == 0 {
+            word(mut seed, 1 + next_random(mut seed) % 10, 1 + next_random(mut seed) % 3)
+        } else if kind == 1 {
+            word(mut seed, 1 + next_random(mut seed) % 40, 1 + next_random(mut seed) % 4)
+        } else if kind == 2 {
+            let block = word(mut seed, 1 + next_random(mut seed) % 5, 2);
+            let len = 1 + next_random(mut seed) % 120;
+            let mut b: Vec[u8] = (0..len).map(|i| block.bytes()[i % block.len()]).collect();
+            if next_random(mut seed) % 4 == 0 {
+                let at = next_random(mut seed) % len;
+                b[at] = b'b' + (next_random(mut seed) % 3) as u8;
+            }
+            String.from_utf8(b).unwrap()
+        } else {
+            word(mut seed, 50 + next_random(mut seed) % 551, 2 + next_random(mut seed) % 12)
+        };
+        // 13 increasing letters from the 24 from `b` to `y`
+        let mut map: Vec[u8] = [];
+        let mut left = 13;
+        for l in 0..24 {
+            if next_random(mut seed) % (24 - l) < left {
+                map.push(b'b' + l as u8);
+                left -= 1;
+            }
+        }
+        let cut = next_random(mut seed);
+        cases.push(Case { s, map, cut });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} strings: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

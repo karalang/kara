@@ -1,0 +1,11 @@
+[1,7,0,7,-8,null,null] -> 2
+[989,null,10250,98693,-89388,null,null,null,-32127] -> 2
+[5] -> 1
+[-1,-2,-3] -> 1
+[1,1,0] -> 1
+[0,0,0,0] -> 1
+[-5,-1,-1] -> 2
+[1,2,null,3,null,4,null,5] -> 5
+1000 random trees: levels 12307, checksum 173056104
+10000 nodes: level 1
+10000 nodes: level 77

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1167-minimum-cost-to-connect-sticks/bench/connect_sticks.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1167 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "fea9ba9b8"
+extracted_src = "bf2fbcf1"

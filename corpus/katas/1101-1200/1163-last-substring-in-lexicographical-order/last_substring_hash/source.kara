@@ -1,0 +1,109 @@
+// LeetCode #1163: Last Substring in Lexicographical Order -- hashing: the
+// best start so far meets each later start of the largest letter, the
+// longest common prefix of the two suffixes found by a binary search over
+// prefix hashes (two of them, modulo 10^9 + 7 and 10^9 + 9), and the letter
+// after it decides; a suffix that runs out first is the smaller. O(n log n).
+
+struct Hashes {
+    m: i64,
+    pre: Vec[i64],
+    pow: Vec[i64],
+}
+
+fn hashes(b: Vec[u8], m: i64) -> Hashes {
+    let mut pre = [0];
+    let mut pow = [1];
+    for c in b.iter() {
+        pre.push((pre[pre.len() - 1] * 131 + c as i64) % m);
+        pow.push(pow[pow.len() - 1] * 131 % m);
+    }
+    Hashes { m, pre, pow }
+}
+
+// The hash of the `len` letters from `at`.
+fn part(h: Hashes, at: i64, len: i64) -> i64 {
+    ((h.pre[at + len] - h.pre[at] * h.pow[len]) % h.m + h.m) % h.m
+}
+
+fn last_substring(s: Str) -> String {
+    let b: Vec[u8] = s.bytes().iter().collect();
+    let n = b.len();
+    let h1 = hashes(b, 1000000007);
+    let h2 = hashes(b, 1000000009);
+    let top = b.iter().max().unwrap();
+    let mut best = 0;
+    while b[best] != top {
+        best += 1;
+    }
+    for i in best + 1..n {
+        if b[i] != top {
+            continue;
+        }
+        // the longest common prefix of the suffixes at `best` and `i`
+        let mut (lo, hi) = (0, n - i);
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2;
+            if part(h1, best, mid) == part(h1, i, mid) and part(h2, best, mid) == part(h2, i, mid) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if i + lo < n and b[i + lo] > b[best + lo] {
+            best = i;
+        }
+    }
+    s[best..].to_string()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A string of `len` letters over the first `k`.
+fn word(seed: mut ref i64, len: i64, k: i64) -> String {
+    let b: Vec[u8] = (0..len).map(|_| b'a' + (next_random(mut seed) % k) as u8).collect();
+    String.from_utf8(b).unwrap()
+}
+
+fn main() {
+    // LeetCode's examples and seven more: one letter; one letter repeated;
+    // the largest letter last; a period of three; two runs of the largest
+    // letter, the longer one later; a prefix tie the longer suffix wins;
+    // the largest letter first
+    let cases = ["abab", "leetcode", "a", "zzz", "aaab", "abcabcabc", "zazzab", "zyzyzyz", "cbabc"];
+    for c in cases.iter() {
+        println(f"{c} -> {last_substring(c)}");
+    }
+    // 2000 random strings of 1 to 30 letters over the first 1 to 4 or all
+    // 26: where each answer starts, summed, and a checksum of the answers
+    let mut seed = 1163;
+    let mut starts = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let k = [1, 2, 3, 4, 26][next_random(mut seed) % 5];
+        let s = word(mut seed, 1 + next_random(mut seed) % 30, k);
+        let t = last_substring(s);
+        starts += s.len() - t.len();
+        for b in t.bytes() {
+            check = (check * 31 + b) % 1000000007;
+        }
+    }
+    println(f"2000 random strings: starts {starts}, checksum {check}");
+    // 4 * 10^5 letters, the constraints' most: one letter repeated; a period
+    // of two; random over three letters; every letter `a` but the last
+    let n = 400000;
+    let big = [
+        "z".repeat(n),
+        "ab".repeat(n / 2),
+        word(mut seed, n, 3),
+        "a".repeat(n - 1) + "b",
+    ];
+    for s in big.iter() {
+        let t = last_substring(s);
+        println(f"{n} letters: starts at {s.len() - t.len()}, {t.len()} long");
+    }
+}

@@ -1,0 +1,10 @@
+abcdefghijklmnopqrstuvwxyz cba -> 4
+pqrstuvwxyzabcdefghijklmno leetcode -> 73
+abcdefghijklmnopqrstuvwxyz a -> 0
+abcdefghijklmnopqrstuvwxyz z -> 25
+abcdefghijklmnopqrstuvwxyz zzzz -> 25
+abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz -> 25
+zyxwvutsrqponmlkjihgfedcba abcdefghijklmnopqrstuvwxyz -> 50
+2000 random words: total 316019, checksum 806931988
+10000 letters: 86037
+10000 letters a and z: 249975

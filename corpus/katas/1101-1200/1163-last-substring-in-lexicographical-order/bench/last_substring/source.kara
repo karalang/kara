@@ -1,0 +1,75 @@
+// LeetCode #1163: Last Substring in Lexicographical Order -- the ★ arm, two
+// pointers: the last substring is the largest suffix, and `i` holds the best
+// start so far while `j` challenges it, the two compared `k` letters in; a
+// loser skips past everything the comparison read, since every start inside
+// it loses to a start the winner already beat. O(n).
+
+fn last_substring(s: Str) -> String {
+    let b = s.bytes();
+    let n = b.len();
+    let mut i = 0;
+    let mut j = 1;
+    let mut k = 0;
+    while j + k < n {
+        if b[i + k] == b[j + k] {
+            k += 1;
+        } else if b[i + k] > b[j + k] {
+            j = j + k + 1;
+            k = 0;
+        } else {
+            i = (i + k + 1).max(j);
+            j = i + 1;
+            k = 0;
+        }
+    }
+    s[i..].to_string()
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 4 * 10^5 letters of kind `kind`: random over all 26; random over two;
+// a random block of seven letters repeated, one letter in a thousand
+// changed; `y` and `z`, nine in ten of them `z`.
+fn make(seed: mut ref i64, kind: i64) -> String {
+    let n = 400000;
+    let block: Vec[u8] = (0..7).map(|_| b'a' + (next_random(mut seed) % 26) as u8).collect();
+    let b: Vec[u8] = (0..n).map(|i| {
+        if kind == 0 {
+            b'a' + (next_random(mut seed) % 26) as u8
+        } else if kind == 1 {
+            b'a' + (next_random(mut seed) % 2) as u8
+        } else if kind == 2 {
+            if next_random(mut seed) % 1000 == 0 { b'a' + (next_random(mut seed) % 26) as u8 } else { block[i % 7] }
+        } else if next_random(mut seed) % 10 == 0 {
+            b'y'
+        } else {
+            b'z'
+        }
+    }).collect();
+    String.from_utf8(b).unwrap()
+}
+
+fn main() {
+    // 8 strings of 4 * 10^5 letters, the constraints' most, two of each
+    // kind, built once; each of 150 rounds solves every string from a random
+    // place in its first half.
+    let mut seed = 1163;
+    let texts: Vec[String] = (0..8).map(|k| make(mut seed, k % 4)).collect();
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..150 {
+        for t in texts.iter() {
+            let from = next_random(mut seed) % (t.len() / 2);
+            let rest = t[from..];
+            let got = last_substring(rest);
+            total += got.len();
+            check = (check * 31 + (rest.len() - got.len()) * 7 + got.len()) % 1000000007;
+        }
+    }
+    println(f"150 rounds over 8 strings of 4 * 10^5 letters: total {total}, checksum {check}");
+}

@@ -1,0 +1,97 @@
+// LeetCode #1162: As Far from Land as Possible -- two sweeps: each cell's
+// distance to the nearest land, taken first from above and the left in
+// reading order, then from below and the right in reverse, since a nearest
+// land cell lies in one of the four quadrants and each sweep sees two.
+// O(n^2).
+
+fn max_distance(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let far = 2 * n;
+    let mut d: Vec[Vec[i64]] = grid.iter().map(|row| row.iter().map(|c| if c == 1 { 0 } else { far }).collect()).collect();
+    for i in 0..n {
+        for j in 0..n {
+            if i > 0 {
+                d[i][j] = d[i][j].min(d[i - 1][j] + 1);
+            }
+            if j > 0 {
+                d[i][j] = d[i][j].min(d[i][j - 1] + 1);
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        for j in (0..n).rev() {
+            if i + 1 < n {
+                d[i][j] = d[i][j].min(d[i + 1][j] + 1);
+            }
+            if j + 1 < n {
+                d[i][j] = d[i][j].min(d[i][j + 1] + 1);
+            }
+        }
+    }
+    let mut best = -1;
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] == 0 {
+                best = best.max(d[i][j]);
+            }
+        }
+    }
+    if best == 0 or best >= far { -1 } else { best }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n grid, each cell land with odds `land` in 100.
+fn random_grid(seed: mut ref i64, n: i64, land: i64) -> Vec[Vec[i64]] {
+    (0..n).map(|_| (0..n).map(|_| if next_random(mut seed) % 100 < land { 1 } else { 0 }).collect()).collect()
+}
+
+fn parse(s: Str) -> Vec[Vec[i64]] {
+    let inner = s.strip_prefix("[[").unwrap().strip_suffix("]]").unwrap();
+    inner.split("],[").map(|row| row.split(",").map(|c| i64.parse(c).unwrap()).collect()).collect()
+}
+
+fn main() {
+    // LeetCode's examples and six more: one land cell, one water cell; all
+    // land, all water; a cell two away diagonally; land in two corners
+    let cases = [
+        "[[1,0,1],[0,0,0],[1,0,1]]",
+        "[[1,0,0],[0,0,0],[0,0,0]]",
+        "[[1]]",
+        "[[0]]",
+        "[[1,1],[1,1]]",
+        "[[0,0,0],[0,0,0],[0,0,0]]",
+        "[[0,1],[0,0]]",
+        "[[1,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]]",
+    ];
+    for c in cases.iter() {
+        println(f"{c} -> {max_distance(parse(c))}");
+    }
+    // 1000 random grids of 1 to 20 a side, land odds from 1 in 100 to 99
+    let mut seed = 1162;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let n = 1 + next_random(mut seed) % 20;
+        let land = [1, 3, 10, 30, 60, 90, 99][next_random(mut seed) % 7];
+        let d = max_distance(random_grid(mut seed, n, land));
+        total += d;
+        check = (check * 31 + d + 1) % 1000000007;
+    }
+    println(f"1000 random grids: total {total}, checksum {check}");
+    // 100 a side, the constraints' most: one land cell in a corner, one in
+    // the middle, and land at odds 1 in 500
+    let mut corner = Vec.filled(100, Vec.filled(100, 0));
+    corner[0][0] = 1;
+    println(f"100 by 100, a corner: {max_distance(corner)}");
+    let mut middle = Vec.filled(100, Vec.filled(100, 0));
+    middle[50][50] = 1;
+    println(f"100 by 100, the middle: {max_distance(middle)}");
+    let sparse: Vec[Vec[i64]] = (0..100).map(|_| (0..100).map(|_| if next_random(mut seed) % 500 == 0 { 1 } else { 0 }).collect()).collect();
+    println(f"100 by 100, sparse: {max_distance(sparse)}");
+}

@@ -1,0 +1,421 @@
+// LeetCode #1169: Invalid Transactions -- a differential over the five
+// arms. Each answer is checked against the statement read literally and
+// against six properties that do not compute it; see the README.
+
+// ---- invalid_transactions.kara ----
+
+struct A0Txn {
+    name: String,
+    time: i64,
+    amount: i64,
+    city: String,
+}
+
+fn a0_parse(t: Str) -> A0Txn {
+    let f: Vec[Str] = t.split(",").collect();
+    A0Txn {
+        name: f[0].to_string(),
+        time: i64.parse(f[1]).unwrap(),
+        amount: i64.parse(f[2]).unwrap(),
+        city: f[3].to_string(),
+    }
+}
+
+fn a0_invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+    let txns: Vec[A0Txn] = transactions.iter().map(|t| a0_parse(t)).collect();
+    let mut by_name: Map[String, Vec[i64]] = Map.new();
+    for (i, t) in txns.iter().enumerate() {
+        by_name.entry(t.name.clone()).or_insert(Vec.new()).push(i);
+    }
+    let mut out = Vec.new();
+    for (i, t) in txns.iter().enumerate() {
+        let bad = t.amount > 1000
+            or by_name[t.name].iter().any(|j| {
+                let o = ref txns[j];
+                (o.time - t.time).abs() <= 60 and o.city != t.city
+            });
+        if bad {
+            out.push(transactions[i].clone());
+        }
+    }
+    out
+}
+
+// ---- invalid_transactions_pairs.kara ----
+
+fn a1_invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+    let mut rows: Vec[(Str, i64, i64, Str)] = [];
+    for t in transactions.iter() {
+        let mut parts = t.split(",");
+        let name = parts.next().unwrap();
+        let time = i64.parse(parts.next().unwrap()).unwrap();
+        let amount = i64.parse(parts.next().unwrap()).unwrap();
+        let city = parts.next().unwrap();
+        rows.push((name, time, amount, city));
+    }
+    let mut out = Vec.new();
+    for i in 0..rows.len() {
+        let (name, time, amount, city) = rows[i];
+        let mut bad = amount > 1000;
+        for j in 0..rows.len() {
+            if bad {
+                break;
+            }
+            let (n2, t2, _, c2) = rows[j];
+            if j != i and n2 == name and (t2 - time).abs() <= 60 and c2 != city {
+                bad = true;
+            }
+        }
+        if bad {
+            out.push(transactions[i].clone());
+        }
+    }
+    out
+}
+
+// ---- invalid_transactions_window.kara ----
+
+fn a2_invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+    let rows: Vec[Vec[Str]] = transactions.iter().map(|t| t.split(",").collect()).collect();
+    let times: Vec[i64] = rows.iter().map(|r| i64.parse(r[1]).unwrap()).collect();
+    let mut order: Vec[i64] = (0..rows.len()).collect();
+    order.sort_by_key(|i| (rows[i][0], times[i]));
+    let mut bad = Vec.filled(rows.len(), false);
+    let mut start = 0;
+    while start < order.len() {
+        // one name's transactions: order[start..end]
+        let name = rows[order[start]][0];
+        let mut end = start;
+        while end < order.len() and rows[order[end]][0] == name {
+            end += 1;
+        }
+        let mut in_window: Map[Str, i64] = Map.new();
+        let mut size = 0;
+        let mut (lo, hi) = (start, start);
+        for k in start..end {
+            let i = order[k];
+            while hi < end and times[order[hi]] <= times[i] + 60 {
+                *in_window.entry(rows[order[hi]][3]).or_insert(0) += 1;
+                size += 1;
+                hi += 1;
+            }
+            while times[order[lo]] < times[i] - 60 {
+                *in_window.entry(rows[order[lo]][3]).or_insert(0) -= 1;
+                size -= 1;
+                lo += 1;
+            }
+            let same_city = in_window.get(rows[i][3]).cloned().unwrap_or(0);
+            if size > same_city or i64.parse(rows[i][2]).unwrap() > 1000 {
+                bad[i] = true;
+            }
+        }
+        start = end;
+    }
+    (0..rows.len()).filter(|i| bad[i]).map(|i| transactions[i].clone()).collect()
+}
+
+// ---- invalid_transactions_minutes.kara ----
+
+fn a3_running(minutes: Vec[i64]) -> Vec[i64] {
+    let mut total = Vec.filled(minutes.len() + 1, 0);
+    for (m, c) in minutes.iter().enumerate() {
+        total[m + 1] = total[m] + c;
+    }
+    total
+}
+
+fn a3_within(total: Vec[i64], t: i64) -> i64 {
+    total[(t + 60).min(1000) + 1] - total[(t - 60).max(0)]
+}
+
+fn a3_invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+    let mut by_name: Map[String, Vec[i64]] = Map.new();
+    let mut by_city: Map[(String, String), Vec[i64]] = Map.new();
+    let mut rows = Vec.new();
+    for t in transactions.iter() {
+        let f: Vec[Str] = t.split(",").collect();
+        let (name, city) = (f[0].to_string(), f[3].to_string());
+        let time = i64.parse(f[1]).unwrap();
+        let amount = i64.parse(f[2]).unwrap();
+        by_name.entry(name.clone()).or_insert(Vec.filled(1001, 0))[time] += 1;
+        by_city.entry((name.clone(), city.clone())).or_insert(Vec.filled(1001, 0))[time] += 1;
+        rows.push((name, time, amount, city));
+    }
+    let name_total: Map[String, Vec[i64]] = by_name.into_iter().map(|(k, v)| (k, a3_running(v))).collect();
+    let city_total: Map[(String, String), Vec[i64]] =
+        by_city.into_iter().map(|(k, v)| (k, a3_running(v))).collect();
+    let mut out = Vec.new();
+    for (i, (name, time, amount, city)) in rows.iter().enumerate() {
+        let all = a3_within(name_total[name], time);
+        let same = a3_within(city_total[(name.clone(), city.clone())], time);
+        if amount > 1000 or all > same {
+            out.push(transactions[i].clone());
+        }
+    }
+    out
+}
+
+// ---- invalid_transactions_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+        let parsed: Vec[(String, i32, i32, String)] = transactions
+            .iter()
+            .map(|t| {
+                let parts: Vec[Str] = t.split(",").collect();
+                (
+                    parts[0].to_string(),
+                    i32.parse(parts[1]).unwrap(),
+                    i32.parse(parts[2]).unwrap(),
+                    parts[3].to_string(),
+                )
+            })
+            .collect();
+        let mut res = Vec.new();
+        for i in 0..parsed.len() {
+            let (ref name, time, amount, ref city) = ref parsed[i];
+            if amount > 1000 {
+                res.push(transactions[i].clone());
+                continue;
+            }
+            for j in 0..parsed.len() {
+                if i != j and parsed[j].0 == *name and (parsed[j].1 - time).abs() <= 60 and parsed[j].3 != *city {
+                    res.push(transactions[i].clone());
+                    break;
+                }
+            }
+        }
+        res
+    }
+}
+
+fn a4_invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+    A4Solution.a4_invalid_transactions(transactions)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, ts: Vec[String]) -> Vec[String] {
+    let mut got = match w {
+        0 => a0_invalid_transactions(ts),
+        1 => a1_invalid_transactions(ts),
+        2 => a2_invalid_transactions(ts),
+        3 => a3_invalid_transactions(ts),
+        _ => a4_invalid_transactions(ts),
+    };
+    got.sort();
+    got
+}
+
+fn fields(t: Str) -> (String, i64, i64, String) {
+    let f: Vec[Str] = t.split(",").collect();
+    (f[0].to_string(), i64.parse(f[1]).unwrap(), i64.parse(f[2]).unwrap(), f[3].to_string())
+}
+
+// The statement read literally: a transaction is possibly invalid if its
+// amount exceeds 1000, or if it occurs within (and including) 60 minutes
+// of another transaction with the same name in a different city.
+fn literal(ts: Vec[String]) -> Vec[String] {
+    let parsed: Vec[(String, i64, i64, String)] = ts.iter().map(|t| fields(t)).collect();
+    let mut out: Vec[String] = [];
+    for i in 0..ts.len() {
+        let (name, time, amount, city) = ref parsed[i];
+        let mut invalid = amount > 1000;
+        for j in 0..ts.len() {
+            let (n2, t2, _, c2) = ref parsed[j];
+            if j != i and n2 == name and (t2 - time).abs() <= 60 and c2 != city {
+                invalid = true;
+            }
+        }
+        if invalid {
+            out.push(ts[i].clone());
+        }
+    }
+    out.sort();
+    out
+}
+
+// Is every line of the sorted `small` in the sorted `big`, as often?
+fn within(small: Vec[String], big: Vec[String]) -> bool {
+    let mut j = 0;
+    for s in small.iter() {
+        while j < big.len() and big[j] < s {
+            j += 1;
+        }
+        if j == big.len() or big[j] != s {
+            return false;
+        }
+        j += 1;
+    }
+    true
+}
+
+const NAMES: Array[Str, 5] = ["ann", "bo", "cy", "dee", "eve"];
+const CITIES: Array[Str, 4] = ["rome", "oslo", "lima", "pune"];
+const NEW_NAMES: Array[Str, 5] = ["kai", "lu", "mo", "ny", "ole"];
+const NEW_CITIES: Array[Str, 4] = ["aden", "baku", "cork", "doha"];
+
+struct Case {
+    ts: Vec[String],
+    // P2's order; P3's renaming of names and cities; P4's shift; P6's
+    // added transaction
+    order: Vec[i64],
+    name_to: Vec[i64],
+    city_to: Vec[i64],
+    shift: i64,
+    extra: String,
+}
+
+fn renamed(t: Str, c: Case) -> String {
+    let (name, time, amount, city) = fields(t);
+    let n = (0..5).find(|k| NAMES[k] == name).unwrap();
+    let m = (0..4).find(|k| CITIES[k] == city).unwrap();
+    f"{NEW_NAMES[c.name_to[n]]},{time},{amount},{NEW_CITIES[c.city_to[m]]}"
+}
+
+fn shifted(t: Str, d: i64) -> String {
+    let (name, time, amount, city) = fields(t);
+    f"{name},{time + d},{amount},{city}"
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let ts = ref c.ts;
+    let want = literal(ts);
+    let reordered: Vec[String] = c.order.iter().map(|i| ts[i].clone()).collect();
+    let renamed_ts: Vec[String] = ts.iter().map(|x| renamed(x, c)).collect();
+    let shifted_ts: Vec[String] = ts.iter().map(|x| shifted(x, c.shift)).collect();
+    let mut with_big = ts.clone();
+    with_big.push("zoe,500,1001,rome");
+    let mut with_extra = ts.clone();
+    with_extra.push(c.extra.clone());
+    for a in 0..5 {
+        let got = arm(a, ts);
+        let what = f"arm {a}, case {t.cases} {ts} -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        // P2: the transactions in another order
+        let r = arm(a, reordered);
+        expect(mut t, 2, r == got, f"P2 {what}, reordered: {r}");
+        // P3: every name and city renamed alike
+        let mut n: Vec[String] = got.iter().map(|x| renamed(x, c)).collect();
+        n.sort();
+        let rn = arm(a, renamed_ts);
+        expect(mut t, 3, rn == n, f"P3 {what}, renamed: {rn}");
+        // P4: every time moved by the same minutes
+        let mut s: Vec[String] = got.iter().map(|x| shifted(x, c.shift)).collect();
+        s.sort();
+        let sh = arm(a, shifted_ts);
+        expect(mut t, 4, sh == s, f"P4 {what}, moved {c.shift}: {sh}");
+        // P5: a dear transaction by a new name is invalid alone
+        let mut b = got.clone();
+        b.push("zoe,500,1001,rome");
+        b.sort();
+        let bg = arm(a, with_big);
+        expect(mut t, 5, bg == b, f"P5 {what}, with a dear one: {bg}");
+        // P6: one more transaction leaves every invalid one invalid, and
+        // every answer is one of the transactions given
+        let e = arm(a, with_extra);
+        let mut given = ts.clone();
+        given.sort();
+        expect(mut t, 6, within(got, e) and within(got, given), f"P6 {what}, with {c.extra}: {e}");
+    }
+    t.cases += 1;
+    let mut h = 0;
+    for line in want.iter() {
+        for ch in line.bytes() {
+            h = (h * 131 + ch) % 1000000007;
+        }
+        h = (h * 131 + 10) % 1000000007;
+    }
+    t.check = (t.check * 31 + h) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 600 lists in four kinds, 150 each: 1 to 8 transactions by two names
+    // in two cities within 130 minutes; 1 to 30 by three names in three
+    // cities within 300; 30 to 100 by five names in four cities within the
+    // whole 1000; and 1 to 20 at whole half hours within 240 minutes, so
+    // that two are often exactly 60 apart, of 995 to 1005. Every choice the
+    // properties make is drawn before any arm answers.
+    let mut seed = 11691;
+    let mut cases: Vec[Case] = [];
+    for i in 0..600 {
+        let kind = i % 4;
+        let (n, names, cities, span) = match kind {
+            0 => (1 + next_random(mut seed) % 8, 2, 2, 131),
+            1 => (1 + next_random(mut seed) % 30, 3, 3, 301),
+            2 => (30 + next_random(mut seed) % 71, 5, 4, 1001),
+            _ => (1 + next_random(mut seed) % 20, 2, 2, 9),
+        };
+        let mut ts: Vec[String] = [];
+        for _ in 0..n {
+            let name = NAMES[next_random(mut seed) % names];
+            let time = if kind == 3 { 30 * (next_random(mut seed) % span) } else { next_random(mut seed) % span };
+            let amount = if kind == 3 {
+                995 + next_random(mut seed) % 11
+            } else if next_random(mut seed) % 4 == 0 {
+                next_random(mut seed) % 2001
+            } else {
+                next_random(mut seed) % 1001
+            };
+            let city = CITIES[next_random(mut seed) % cities];
+            ts.push(f"{name},{time},{amount},{city}");
+        }
+        let mut order: Vec[i64] = (0..n).collect();
+        for x in (1..n).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            order.swap(x, y);
+        }
+        let mut name_to: Vec[i64] = (0..5).collect();
+        for x in (1..5).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            name_to.swap(x, y);
+        }
+        let mut city_to: Vec[i64] = (0..4).collect();
+        for x in (1..4).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            city_to.swap(x, y);
+        }
+        // a shift that keeps every time within 0 to 1000
+        let times: Vec[i64] = ts.iter().map(|x| fields(x).1).collect();
+        let (lo, hi) = (times.iter().min().unwrap(), times.iter().max().unwrap());
+        let shift = next_random(mut seed) % (1001 - hi + lo) - lo;
+        let extra = f"{NAMES[next_random(mut seed) % names]},{next_random(mut seed) % 301},{next_random(mut seed) % 2001},{CITIES[next_random(mut seed) % cities]}";
+        cases.push(Case { ts, order, name_to, city_to, shift, extra });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} lists: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

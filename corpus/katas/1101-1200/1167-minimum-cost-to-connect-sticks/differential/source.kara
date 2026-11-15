@@ -1,0 +1,278 @@
+// LeetCode #1167: Minimum Cost to Connect Sticks -- a differential over
+// the five arms. Each answer is checked against the statement read
+// literally and against six properties that do not compute it; see the
+// README.
+
+// ---- connect_sticks.kara ----
+
+fn a0_connect_sticks(sticks: own Vec[i64]) -> i64 {
+    let mut pq = PriorityQueue.from(sticks);
+    let mut cost = 0;
+    while pq.len() > 1 {
+        let a = pq.pop().unwrap();
+        let b = pq.pop().unwrap();
+        cost += a + b;
+        pq.push(a + b);
+    }
+    cost
+}
+
+// ---- connect_sticks_queues.kara ----
+
+fn a1_connect_sticks(sticks: Vec[i64]) -> i64 {
+    let mut a = sticks.clone();
+    a.sort();
+    let mut joined: Vec[i64] = [];
+    let mut (i, j) = (0, 0);
+    let mut cost = 0;
+    for _ in 1..a.len() {
+        let mut pair = 0;
+        for _ in 0..2 {
+            if j == joined.len() or (i < a.len() and a[i] <= joined[j]) {
+                pair += a[i];
+                i += 1;
+            } else {
+                pair += joined[j];
+                j += 1;
+            }
+        }
+        cost += pair;
+        joined.push(pair);
+    }
+    cost
+}
+
+// ---- connect_sticks_counts.kara ----
+
+fn a2_take_shortest(counts: mut ref SortedMap[i64, i64]) -> i64 {
+    let (len, n) = counts.pop_first().unwrap();
+    if n > 1 {
+        counts.insert(len, n - 1);
+    }
+    len
+}
+
+fn a2_connect_sticks(sticks: Vec[i64]) -> i64 {
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    for s in sticks.iter() {
+        *counts.entry(s).or_insert(0) += 1;
+    }
+    let mut left = sticks.len();
+    let mut cost = 0;
+    while left > 1 {
+        let a = a2_take_shortest(mut counts);
+        let b = a2_take_shortest(mut counts);
+        cost += a + b;
+        *counts.entry(a + b).or_insert(0) += 1;
+        left -= 1;
+    }
+    cost
+}
+
+// ---- connect_sticks_insert.kara ----
+
+fn a3_connect_sticks(sticks: Vec[i64]) -> i64 {
+    let mut pile = sticks.clone();
+    pile.sort_by(|x, y| y.cmp(x));
+    let mut cost = 0;
+    while pile.len() > 1 {
+        let joined = pile.pop().unwrap() + pile.pop().unwrap();
+        cost += joined;
+        let at = pile.partition_point(|s| s > joined);
+        pile.insert(at, joined);
+    }
+    cost
+}
+
+// ---- connect_sticks_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_connect_sticks(sticks: Vec[i32]) -> i32 {
+        let mut heap = PriorityQueue.new();
+        for s in sticks {
+            heap.push(s);
+        }
+        let mut ans: i32 = 0;
+        while heap.len() > 1 {
+            let a = heap.pop().unwrap();
+            let b = heap.pop().unwrap();
+            ans += a + b;
+            heap.push(a + b);
+        }
+        ans
+    }
+}
+
+fn a4_connect_sticks(sticks: Vec[i64]) -> i64 {
+    A4Solution.a4_connect_sticks(sticks.iter().map(|s| s as i32).collect())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, sticks: Vec[i64]) -> i64 {
+    match w {
+        0 => a0_connect_sticks(sticks.clone()),
+        1 => a1_connect_sticks(sticks),
+        2 => a2_connect_sticks(sticks),
+        3 => a3_connect_sticks(sticks),
+        _ => a4_connect_sticks(sticks),
+    }
+}
+
+// The statement read literally: every way to join two of the sticks, then
+// two of what is left, and so on, tried; the cheapest kept.
+fn literal(sticks: Vec[i64]) -> i64 {
+    if sticks.len() <= 1 {
+        return 0;
+    }
+    let mut best = -1;
+    for i in 0..sticks.len() {
+        for j in i + 1..sticks.len() {
+            let mut rest: Vec[i64] = [];
+            for k in 0..sticks.len() {
+                if k != i and k != j {
+                    rest.push(sticks[k]);
+                }
+            }
+            rest.push(sticks[i] + sticks[j]);
+            let c = sticks[i] + sticks[j] + literal(rest);
+            if best < 0 or c < best {
+                best = c;
+            }
+        }
+    }
+    best
+}
+
+// One way of joining: two sticks at the places `picks` names, in turn.
+fn joined_by(sticks: Vec[i64], picks: Vec[i64]) -> i64 {
+    let mut pile = sticks.clone();
+    let mut cost = 0;
+    let mut p = 0;
+    while pile.len() > 1 {
+        let i = picks[p] % pile.len();
+        let a = pile.remove(i);
+        let j = picks[p + 1] % pile.len();
+        let b = pile.remove(j);
+        cost += a + b;
+        pile.push(a + b);
+        p += 2;
+    }
+    cost
+}
+
+struct Case {
+    sticks: Vec[i64],
+    // P2's factor, P3's order, P6's joining
+    factor: i64,
+    order: Vec[i64],
+    picks: Vec[i64],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let s = ref c.sticks;
+    let want = if s.len() <= 6 { literal(s) } else { -1 };
+    let total: i64 = s.iter().sum();
+    let scaled: Vec[i64] = s.iter().map(|x| x * c.factor).collect();
+    let reordered: Vec[i64] = c.order.iter().map(|i| s[i]).collect();
+    let mut with_long = s.clone();
+    with_long.push(total + c.factor);
+    let doubled: Vec[i64] = s.iter().map(|x| 2 * x).collect();
+    let mut with_ones = doubled.clone();
+    with_ones.push(1);
+    with_ones.push(1);
+    let mut with_two = doubled.clone();
+    with_two.push(2);
+    let some_way = joined_by(s, c.picks);
+    for a in 0..5 {
+        let got = arm(a, s);
+        let what = f"arm {a}, case {t.cases} {s} -> {got}";
+        // P1: every way of joining tried, for up to 6 sticks
+        if want >= 0 {
+            expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        }
+        // P2: every stick k times as long costs k times as much
+        let k = arm(a, scaled);
+        expect(mut t, 2, k == got * c.factor, f"P2 {what}, times {c.factor}: {k}");
+        // P3: the sticks in another order cost the same
+        let r = arm(a, reordered);
+        expect(mut t, 3, r == got, f"P3 {what}, reordered: {r}");
+        // P4: a stick longer than all the others together is joined last,
+        // to the whole of them
+        let l = arm(a, with_long);
+        let l_want = got + total + (total + c.factor);
+        expect(mut t, 4, l == l_want, f"P4 {what}, with {total + c.factor}: {l}, not {l_want}");
+        // P5: two sticks of 1 beside sticks of 2 or more are joined first,
+        // into a stick of 2
+        let o = arm(a, with_ones);
+        let w = arm(a, with_two);
+        expect(mut t, 5, o == 2 + w, f"P5 {what}, doubled with 1 and 1: {o}, with 2: {w}");
+        // P6: no way of joining costs less
+        expect(mut t, 6, got <= some_way, f"P6 {what}, one way costs {some_way}");
+    }
+    t.cases += 1;
+    let answer = arm(0, s);
+    t.check = (t.check * 31 + answer) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 1200 piles in four kinds, 300 each: 1 to 6 sticks of 1 to 5, so that
+    // lengths tie; 1 to 6 of 1 to 10^4; 7 to 100 of 1 to 10; and 7 to 200
+    // of 1 to 10^4. Every choice the properties make is drawn before any
+    // arm answers.
+    let mut seed = 11671;
+    let mut cases: Vec[Case] = [];
+    for i in 0..1200 {
+        let kind = i % 4;
+        let n = match kind {
+            0 | 1 => 1 + next_random(mut seed) % 6,
+            2 => 7 + next_random(mut seed) % 94,
+            _ => 7 + next_random(mut seed) % 194,
+        };
+        let top = if kind == 0 { 5 } else if kind == 2 { 10 } else { 10000 };
+        let sticks: Vec[i64] = (0..n).map(|_| 1 + next_random(mut seed) % top).collect();
+        let factor = 2 + next_random(mut seed) % 4;
+        let mut order: Vec[i64] = (0..n).collect();
+        for x in (1..n).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            order.swap(x, y);
+        }
+        let picks: Vec[i64] = (0..2 * n).map(|_| next_random(mut seed)).collect();
+        cases.push(Case { sticks, factor, order, picks });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} piles: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

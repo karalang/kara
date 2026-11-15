@@ -1,0 +1,70 @@
+// LeetCode #1162: As Far from Land as Possible -- the ★ arm, a breadth-first
+// search from every land cell at once: the land cells start the queue at
+// distance 0, each water cell is reached first from its nearest land, and
+// the last cell reached is the farthest. O(n^2).
+
+fn max_distance(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut dist = Vec.filled(n * n, -1);
+    let mut queue: Vec[i64] = [];
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] == 1 {
+                dist[i * n + j] = 0;
+                queue.push(i * n + j);
+            }
+        }
+    }
+    if queue.len() == 0 or queue.len() == n * n {
+        return -1;
+    }
+    let mut head = 0;
+    let mut far = 0;
+    while head < queue.len() {
+        let cell = queue[head];
+        head += 1;
+        let (i, j) = (cell / n, cell % n);
+        far = dist[cell];
+        for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let (a, b) = (i + di, j + dj);
+            if a >= 0 and a < n and b >= 0 and b < n and dist[a * n + b] < 0 {
+                dist[a * n + b] = far + 1;
+                queue.push(a * n + b);
+            }
+        }
+    }
+    far
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 16 grids of 100 by 100, the constraints' most, land at odds from 1 in
+    // 1000 to 9 in 10, built once; each of 300 rounds flips one random cell
+    // of every grid and solves it.
+    let mut seed = 1162;
+    let odds = [1, 2, 5, 10, 50, 200, 500, 900];
+    let mut grids: Vec[Vec[Vec[i64]]] = [];
+    for k in 0..16 {
+        let o = odds[k % 8];
+        grids.push((0..100).map(|_| (0..100).map(|_| if next_random(mut seed) % 1000 < o { 1 } else { 0 }).collect()).collect());
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        for k in 0..16 {
+            let a = next_random(mut seed) % 100;
+            let b = next_random(mut seed) % 100;
+            grids[k][a][b] = 1 - grids[k][a][b];
+            let d = max_distance(grids[k]);
+            total += d;
+            check = (check * 31 + d + 1) % 1000000007;
+        }
+    }
+    println(f"300 rounds over 16 grids of 100 by 100: total {total}, checksum {check}");
+}

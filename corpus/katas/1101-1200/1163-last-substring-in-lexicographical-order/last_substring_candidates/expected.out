@@ -1,0 +1,14 @@
+abab -> bab
+leetcode -> tcode
+a -> a
+zzz -> zzz
+aaab -> b
+abcabcabc -> cabcabc
+zazzab -> zzab
+zyzyzyz -> zyzyzyz
+cbabc -> cbabc
+2000 random strings: starts 10390, checksum 918827991
+400000 letters: starts at 0, 400000 long
+400000 letters: starts at 1, 399999 long
+400000 letters: starts at 299626, 100374 long
+400000 letters: starts at 399999, 1 long

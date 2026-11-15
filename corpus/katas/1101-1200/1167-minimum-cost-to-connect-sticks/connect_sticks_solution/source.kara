@@ -1,0 +1,69 @@
+// LeetCode #1167: Minimum Cost to Connect Sticks -- a Rust solution as
+// LeetCode's Rust users write it (`impl Solution`, `Vec<i32>`, a
+// `BinaryHeap::new()` given every stick as `Reverse(s)`, two pops matched
+// as `Reverse(a)`, an `i32` sum), carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn connect_sticks(sticks: Vec[i32]) -> i32 {
+        let mut heap = PriorityQueue.new();
+        for s in sticks {
+            heap.push(s);
+        }
+        let mut ans: i32 = 0;
+        while heap.len() > 1 {
+            let a = heap.pop().unwrap();
+            let b = heap.pop().unwrap();
+            ans += a + b;
+            heap.push(a + b);
+        }
+        ans
+    }
+}
+
+fn connect_sticks(sticks: Vec[i64]) -> i64 {
+    Solution.connect_sticks(sticks.iter().map(|s| s as i32).collect())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(sticks: Vec[i64]) {
+    println(f"{sticks} -> {connect_sticks(sticks)}");
+}
+
+fn main() {
+    // LeetCode's examples and four more: two sticks; four equal; the powers
+    // of two, each joined stick the next one's equal; a stick far longer
+    // than the rest
+    show([2, 4, 3]);
+    show([1, 8, 3, 5]);
+    show([5]);
+    show([1, 1]);
+    show([3, 3, 3, 3]);
+    show([1, 1, 2, 4, 8, 16, 32, 64]);
+    show([10000, 1, 2, 3]);
+    // 300 random piles of 1 to 50 sticks, half of length 1 to 10 so that
+    // lengths tie, half 1 to 10^4
+    let mut seed = 1167;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let n = 1 + next_random(mut seed) % 50;
+        let top = if i % 2 == 0 { 10 } else { 10000 };
+        let sticks: Vec[i64] = (0..n).map(|_| 1 + next_random(mut seed) % top).collect();
+        let c = connect_sticks(sticks);
+        total += c;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"300 random piles: total {total}, checksum {check}");
+    // 10^4 sticks, the constraints' most: random, and all of the longest
+    let sticks: Vec[i64] = (0..10000).map(|_| 1 + next_random(mut seed) % 10000).collect();
+    println(f"10000 random sticks: {connect_sticks(sticks)}");
+    println(f"10000 sticks of 10000: {connect_sticks(Vec.filled(10000, 10000))}");
+}

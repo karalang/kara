@@ -1,0 +1,475 @@
+// LeetCode #1168: Optimize Water Distribution in a Village -- a
+// differential over the five arms. Each answer is checked against the
+// statement read literally and against six properties that do not compute
+// it; see the README.
+
+// ---- water_distribution.kara ----
+
+fn a0_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn a0_min_cost_to_supply_water(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    let mut edges: Vec[(i64, i64, i64)] = [];
+    for (i, w) in wells.iter().enumerate() {
+        edges.push((w, 0, i + 1));
+    }
+    for p in pipes.iter() {
+        edges.push((p[2], p[0], p[1]));
+    }
+    edges.sort();
+    let mut parent: Vec[i64] = (0..n + 1).collect();
+    let mut size = Vec.filled(n + 1, 1);
+    let mut cost = 0;
+    let mut joined = 0;
+    for (c, a, b) in edges {
+        let mut ra = a0_find(mut parent, a);
+        let mut rb = a0_find(mut parent, b);
+        if ra == rb {
+            continue;
+        }
+        if size[ra] < size[rb] {
+            ra, rb = rb, ra;
+        }
+        parent[rb] = ra;
+        size[ra] += size[rb];
+        cost += c;
+        joined += 1;
+        if joined == n {
+            break;
+        }
+    }
+    cost
+}
+
+// ---- water_distribution_prim.kara ----
+
+fn a1_min_cost_to_supply_water(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    let mut adj: Vec[Vec[(i64, i64)]] = Vec.filled(n + 1, []);
+    for (i, w) in wells.iter().enumerate() {
+        adj[0].push((w, i + 1));
+    }
+    for p in pipes.iter() {
+        adj[p[0]].push((p[2], p[1]));
+        adj[p[1]].push((p[2], p[0]));
+    }
+    let mut in_tree = Vec.filled(n + 1, false);
+    let mut pq = PriorityQueue.new();
+    pq.push((0, 0));
+    let mut cost = 0;
+    let mut joined = 0;
+    while let Some((c, u)) = pq.pop() {
+        if in_tree[u] {
+            continue;
+        }
+        in_tree[u] = true;
+        cost += c;
+        joined += 1;
+        if joined == n + 1 {
+            break;
+        }
+        for (w, v) in adj[u].iter() {
+            if not in_tree[v] {
+                pq.push((w, v));
+            }
+        }
+    }
+    cost
+}
+
+// ---- water_distribution_boruvka.kara ----
+
+fn a2_root(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut r = x;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut x = x;
+    while parent[x] != r {
+        let next = parent[x];
+        parent[x] = r;
+        x = next;
+    }
+    r
+}
+
+fn a2_min_cost_to_supply_water(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    let mut edges: Vec[(i64, i64, i64)] = [];
+    for (i, w) in wells.iter().enumerate() {
+        edges.push((0, i + 1, w));
+    }
+    for p in pipes.iter() {
+        edges.push((p[0], p[1], p[2]));
+    }
+    let mut parent: Vec[i64] = (0..n + 1).collect();
+    let mut groups = n + 1;
+    let mut cost = 0;
+    while groups > 1 {
+        let mut cheapest: Vec[Option[i64]] = Vec.filled(n + 1, None);
+        for (k, (a, b, c)) in edges.iter().enumerate() {
+            let ra = a2_root(mut parent, a);
+            let rb = a2_root(mut parent, b);
+            if ra == rb {
+                continue;
+            }
+            for r in [ra, rb] {
+                let better = match cheapest[r] {
+                    None => true,
+                    Some(j) => (c, k) < (edges[j].2, j),
+                };
+                if better {
+                    cheapest[r] = Some(k);
+                }
+            }
+        }
+        for r in 0..n + 1 {
+            if let Some(k) = cheapest[r] {
+                let (a, b, c) = edges[k];
+                let ra = a2_root(mut parent, a);
+                let rb = a2_root(mut parent, b);
+                if ra != rb {
+                    parent[ra] = rb;
+                    cost += c;
+                    groups -= 1;
+                }
+            }
+        }
+    }
+    cost
+}
+
+// ---- water_distribution_folded.kara ----
+
+fn a3_top(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn a3_min_cost_to_supply_water(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut well = wells.clone();
+    let mut cost: i64 = wells.iter().sum();
+    let mut order = pipes.clone();
+    order.sort_by_key(|p| p[2]);
+    for p in order.iter() {
+        let a = a3_top(mut parent, p[0] - 1);
+        let b = a3_top(mut parent, p[1] - 1);
+        if a == b {
+            continue;
+        }
+        let dear = well[a].max(well[b]);
+        if p[2] < dear {
+            cost += p[2] - dear;
+            parent[a] = b;
+            well[b] = well[a].min(well[b]);
+        }
+    }
+    cost
+}
+
+// ---- water_distribution_solution.kara ----
+
+fn a4_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    if parent[x] != x {
+        let p = parent[x];
+        parent[x] = a4_find(mut parent, p);
+    }
+    parent[x]
+}
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_min_cost_to_supply_water(n: i32, wells: Vec[i32], pipes: Vec[Vec[i32]]) -> i32 {
+        let mut edges: Vec[(i32, i64, i64)] = Vec.new();
+        for (i, w) in wells.iter().enumerate() {
+            edges.push((w, 0, i + 1));
+        }
+        for p in ref pipes {
+            edges.push((p[2], p[0] as i64, p[1] as i64));
+        }
+        edges.sort();
+        let mut parent: Vec[i64] = (0..=n as i64).collect();
+        let mut ans: i32 = 0;
+        for (cost, a, b) in edges {
+            let ra = a4_find(mut parent, a);
+            let rb = a4_find(mut parent, b);
+            if ra != rb {
+                parent[ra] = rb;
+                ans += cost;
+            }
+        }
+        ans
+    }
+}
+
+fn a4_min_cost_to_supply_water(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    let wells: Vec[i32] = wells.iter().map(|w| w as i32).collect();
+    let pipes: Vec[Vec[i32]] = pipes.iter().map(|p| p.iter().map(|x| x as i32).collect()).collect();
+    A4Solution.a4_min_cost_to_supply_water(n as i32, wells, pipes)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    match w {
+        0 => a0_min_cost_to_supply_water(n, wells, pipes),
+        1 => a1_min_cost_to_supply_water(n, wells, pipes),
+        2 => a2_min_cost_to_supply_water(n, wells, pipes),
+        3 => a3_min_cost_to_supply_water(n, wells, pipes),
+        _ => a4_min_cost_to_supply_water(n, wells, pipes),
+    }
+}
+
+// Does every house get water, from a well dug in it or through laid pipes
+// from one that has?
+fn supplied(n: i64, dug: Vec[bool], laid: Vec[Vec[i64]]) -> bool {
+    let mut water = dug.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for p in laid.iter() {
+            let (a, b) = (p[0] - 1, p[1] - 1);
+            if water[a] != water[b] {
+                water[a] = true;
+                water[b] = true;
+                changed = true;
+            }
+        }
+    }
+    water.iter().all(|w| w)
+}
+
+// The statement read literally: every set of wells to dig and every set of
+// pipes to lay tried, and the cheapest that supplies every house kept.
+fn literal(n: i64, wells: Vec[i64], pipes: Vec[Vec[i64]]) -> i64 {
+    let m = pipes.len();
+    let mut best = -1;
+    for wm in 0..1 << n {
+        let dug: Vec[bool] = (0..n).map(|i| (wm >> i) & 1 == 1).collect();
+        let mut dig = 0;
+        for i in 0..n {
+            if dug[i] {
+                dig += wells[i];
+            }
+        }
+        for pm in 0..1 << m {
+            let laid: Vec[Vec[i64]] = (0..m)
+                .filter(|j| (pm >> j) & 1 == 1)
+                .map(|j| pipes[j].clone())
+                .collect();
+            let cost = dig + laid.iter().map(|p| p[2]).sum();
+            if (best < 0 or cost < best) and supplied(n, dug, laid) {
+                best = cost;
+            }
+        }
+    }
+    best
+}
+
+// One way of supplying every house: the houses in the drawn order, each
+// taking the first drawn pipe to a house already supplied when its coin
+// says so, and digging its well otherwise.
+fn one_supply(c: Case) -> i64 {
+    let mut has = Vec.filled(c.n, false);
+    let mut cost = 0;
+    for (k, h) in c.visit.iter().enumerate() {
+        let mut took = false;
+        if c.coins[k] {
+            for j in 0..c.pipes.len() {
+                let p = ref c.pipes[(j + c.start[k]) % c.pipes.len()];
+                let other = if p[0] - 1 == h { p[1] - 1 } else if p[1] - 1 == h { p[0] - 1 } else { -1 };
+                if other >= 0 and has[other] {
+                    cost += p[2];
+                    took = true;
+                    break;
+                }
+            }
+        }
+        if not took {
+            cost += c.wells[h];
+        }
+        has[h] = true;
+    }
+    cost
+}
+
+struct Case {
+    n: i64,
+    wells: Vec[i64],
+    pipes: Vec[Vec[i64]],
+    // P2's factor; P3's order of the pipes and which have their ends
+    // swapped; P4's renaming of the houses; P5's mark-ups; P6's order of
+    // the houses, coins and first pipes
+    factor: i64,
+    order: Vec[i64],
+    flip: Vec[bool],
+    rename: Vec[i64],
+    dearer: Vec[i64],
+    visit: Vec[i64],
+    coins: Vec[bool],
+    start: Vec[i64],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let (n, wells, pipes) = (c.n, ref c.wells, ref c.pipes);
+    let want = if n <= 5 and pipes.len() <= 6 { literal(n, wells, pipes) } else { -1 };
+    let scaled_wells: Vec[i64] = wells.iter().map(|w| w * c.factor).collect();
+    let scaled_pipes: Vec[Vec[i64]] = pipes.iter().map(|p| [p[0], p[1], p[2] * c.factor]).collect();
+    let reordered: Vec[Vec[i64]] = c
+        .order
+        .iter()
+        .map(|j| {
+            let p = ref pipes[j];
+            if c.flip[j] { [p[1], p[0], p[2]] } else { p.clone() }
+        })
+        .collect();
+    let mut renamed_wells = Vec.filled(n, 0);
+    for i in 0..n {
+        renamed_wells[c.rename[i]] = wells[i];
+    }
+    let renamed_pipes: Vec[Vec[i64]] = pipes
+        .iter()
+        .map(|p| [c.rename[p[0] - 1] + 1, c.rename[p[1] - 1] + 1, p[2]])
+        .collect();
+    let mut with_dearer = pipes.clone();
+    for (j, p) in pipes.iter().enumerate() {
+        with_dearer.push([p[1], p[0], p[2] + c.dearer[j]]);
+    }
+    let all_wells: i64 = wells.iter().sum();
+    let some_supply = one_supply(c);
+    for a in 0..5 {
+        let got = arm(a, n, wells, pipes);
+        let what = f"arm {a}, case {t.cases} {n} {wells} {pipes} -> {got}";
+        // P1: every set of wells and pipes tried, for up to 5 houses and 6
+        // pipes
+        if want >= 0 {
+            expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        }
+        // P2: every cost k times as much costs k times as much
+        let k = arm(a, n, scaled_wells, scaled_pipes);
+        expect(mut t, 2, k == got * c.factor, f"P2 {what}, times {c.factor}: {k}");
+        // P3: the pipes in another order, some with their ends swapped
+        let r = arm(a, n, wells, reordered);
+        expect(mut t, 3, r == got, f"P3 {what}, reordered: {r}");
+        // P4: the houses renamed
+        let h = arm(a, n, renamed_wells, renamed_pipes);
+        expect(mut t, 4, h == got, f"P4 {what}, renamed: {h}");
+        // P5: a dearer copy of every pipe changes nothing
+        let d = arm(a, n, wells, with_dearer);
+        expect(mut t, 5, d == got, f"P5 {what}, with dearer copies: {d}");
+        // P6: no way of supplying costs less: neither every well dug nor a
+        // drawn mix of wells and pipes
+        expect(
+            mut t,
+            6,
+            got >= 0 and got <= all_wells and got <= some_supply,
+            f"P6 {what}, every well {all_wells}, one supply {some_supply}",
+        );
+    }
+    t.cases += 1;
+    let answer = arm(0, n, wells, pipes);
+    t.check = (t.check * 31 + answer) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 1200 villages in four kinds, 300 each: 2 to 4 houses and 1 to 5
+    // pipes costing 0 to 5, so that costs tie; 2 to 5 houses and 1 to 6
+    // pipes costing 0 to 10^5; 6 to 30 houses and 1 to 3n pipes costing 0
+    // to 10; and 6 to 60 houses and 1 to 3n pipes costing 0 to 10^5. Every
+    // choice the properties make is drawn before any arm answers.
+    let mut seed = 11681;
+    let mut cases: Vec[Case] = [];
+    for i in 0..1200 {
+        let kind = i % 4;
+        let n = match kind {
+            0 => 2 + next_random(mut seed) % 3,
+            1 => 2 + next_random(mut seed) % 4,
+            2 => 6 + next_random(mut seed) % 25,
+            _ => 6 + next_random(mut seed) % 55,
+        };
+        let m = match kind {
+            0 => 1 + next_random(mut seed) % 5,
+            1 => 1 + next_random(mut seed) % 6,
+            _ => 1 + next_random(mut seed) % (3 * n),
+        };
+        let top = match kind {
+            0 => 5,
+            2 => 10,
+            _ => 100000,
+        };
+        let wells: Vec[i64] = (0..n).map(|_| next_random(mut seed) % (top + 1)).collect();
+        let mut pipes: Vec[Vec[i64]] = [];
+        for _ in 0..m {
+            let a = 1 + next_random(mut seed) % n;
+            let mut b = 1 + next_random(mut seed) % (n - 1);
+            if b >= a {
+                b += 1;
+            }
+            pipes.push([a, b, next_random(mut seed) % (top + 1)]);
+        }
+        let factor = 2 + next_random(mut seed) % 4;
+        let mut order: Vec[i64] = (0..m).collect();
+        for x in (1..m).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            order.swap(x, y);
+        }
+        let flip: Vec[bool] = (0..m).map(|_| next_random(mut seed) % 2 == 0).collect();
+        let mut rename: Vec[i64] = (0..n).collect();
+        for x in (1..n).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            rename.swap(x, y);
+        }
+        let dearer: Vec[i64] = (0..m).map(|_| 1 + next_random(mut seed) % (top + 1)).collect();
+        let mut visit: Vec[i64] = (0..n).collect();
+        for x in (1..n).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            visit.swap(x, y);
+        }
+        let coins: Vec[bool] = (0..n).map(|_| next_random(mut seed) % 3 != 0).collect();
+        let start: Vec[i64] = (0..n).map(|_| next_random(mut seed) % m).collect();
+        cases.push(Case { n, wells, pipes, factor, order, flip, rename, dearer, visit, coins, start });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} villages: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

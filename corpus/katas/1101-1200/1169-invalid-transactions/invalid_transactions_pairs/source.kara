@@ -1,0 +1,123 @@
+// LeetCode #1169: Invalid Transactions -- every pair: each transaction
+// split into a tuple of its fields, and compared with every other one,
+// whatever its name. O(n^2).
+
+fn invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+    let mut rows: Vec[(Str, i64, i64, Str)] = [];
+    for t in transactions.iter() {
+        let mut parts = t.split(",");
+        let name = parts.next().unwrap();
+        let time = i64.parse(parts.next().unwrap()).unwrap();
+        let amount = i64.parse(parts.next().unwrap()).unwrap();
+        let city = parts.next().unwrap();
+        rows.push((name, time, amount, city));
+    }
+    let mut out = Vec.new();
+    for i in 0..rows.len() {
+        let (name, time, amount, city) = rows[i];
+        let mut bad = amount > 1000;
+        for j in 0..rows.len() {
+            if bad {
+                break;
+            }
+            let (n2, t2, _, c2) = rows[j];
+            if j != i and n2 == name and (t2 - time).abs() <= 60 and c2 != city {
+                bad = true;
+            }
+        }
+        if bad {
+            out.push(transactions[i].clone());
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digest(lines: Vec[String]) -> i64 {
+    let mut h = 0;
+    for line in lines.iter() {
+        for b in line.bytes() {
+            h = (h * 131 + b) % 1000000007;
+        }
+        h = (h * 131 + 10) % 1000000007;
+    }
+    h
+}
+
+fn sorted_invalid(ts: Vec[String]) -> Vec[String] {
+    let mut got = invalid_transactions(ts);
+    got.sort();
+    got
+}
+
+fn show(ts: Vec[String]) {
+    let got = sorted_invalid(ts);
+    println(f"{ts.len()} -> {got.len()}: {got.join(", ")}");
+}
+
+fn strings(xs: Vec[Str]) -> Vec[String] {
+    xs.iter().map(|x| x.to_string()).collect()
+}
+
+fn main() {
+    // LeetCode's examples and four more: 60 minutes apart counts, 61 does
+    // not; 1000 is no more than 1000; the same transaction twice; a
+    // transaction alone
+    show(strings(["alice,20,800,mtv", "alice,50,100,beijing"]));
+    show(strings(["alice,20,800,mtv", "alice,50,1200,mtv"]));
+    show(strings(["alice,20,800,mtv", "bob,50,1200,mtv"]));
+    show(strings(["ann,0,5,rome", "ann,60,5,oslo", "ann,121,5,rome"]));
+    show(strings(["ann,10,1000,rome", "ann,10,1001,rome", "bo,10,5,rome", "bo,10,5,rome"]));
+    show(strings(["ann,5,1,rome", "ann,5,1,rome", "ann,65,1,oslo", "cy,5,1,oslo"]));
+    show(strings(["zed,1000,2000,x"]));
+    // 300 random lists of 1 to 40 transactions by three names in three
+    // cities, half within 200 minutes so that times crowd, half within the
+    // whole 1000
+    let names = ["ann", "bo", "cy", "dee"];
+    let cities = ["rome", "oslo", "lima", "pune"];
+    let mut seed = 1169;
+    let mut count = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let span = if i % 2 == 0 { 200 } else { 1001 };
+        let mut ts: Vec[String] = [];
+        for _ in 0..n {
+            let name = ref names[next_random(mut seed) % 3];
+            let time = next_random(mut seed) % span;
+            let amount = if next_random(mut seed) % 4 == 0 {
+                next_random(mut seed) % 2001
+            } else {
+                next_random(mut seed) % 1001
+            };
+            let city = ref cities[next_random(mut seed) % 3];
+            ts.push(f"{name},{time},{amount},{city}");
+        }
+        let got = sorted_invalid(ts);
+        count += got.len();
+        check = (check * 31 + digest(got)) % 1000000007;
+    }
+    println(f"300 random lists: {count} invalid, checksum {check}");
+    // 1000 transactions, the constraints' most: by 100 names in two cities,
+    // and by one name in one city but one
+    let mut ts: Vec[String] = [];
+    for _ in 0..1000 {
+        let name = next_random(mut seed) % 100;
+        let time = next_random(mut seed) % 1001;
+        let amount = next_random(mut seed) % 1101;
+        let city = ref cities[next_random(mut seed) % 2];
+        ts.push(f"p{name},{time},{amount},{city}");
+    }
+    let got = sorted_invalid(ts);
+    println(f"1000 transactions by 100 names: {got.len()} invalid, checksum {digest(got)}");
+    let mut ts: Vec[String] = (0..999).map(|i| f"ann,{i},5,rome").collect();
+    ts.push("ann,500,5,oslo");
+    let got = sorted_invalid(ts);
+    println(f"one name, one city but one: {got.len()} invalid, checksum {digest(got)}");
+}

@@ -1,0 +1,434 @@
+// LeetCode #1162: As Far from Land as Possible -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against six properties that do not compute it; see the
+// README.
+
+// ---- max_distance.kara ----
+
+fn a0_max_distance(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut dist = Vec.filled(n * n, -1);
+    let mut queue: Vec[i64] = [];
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] == 1 {
+                dist[i * n + j] = 0;
+                queue.push(i * n + j);
+            }
+        }
+    }
+    if queue.len() == 0 or queue.len() == n * n {
+        return -1;
+    }
+    let mut head = 0;
+    let mut far = 0;
+    while head < queue.len() {
+        let cell = queue[head];
+        head += 1;
+        let (i, j) = (cell / n, cell % n);
+        far = dist[cell];
+        for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let (a, b) = (i + di, j + dj);
+            if a >= 0 and a < n and b >= 0 and b < n and dist[a * n + b] < 0 {
+                dist[a * n + b] = far + 1;
+                queue.push(a * n + b);
+            }
+        }
+    }
+    far
+}
+
+// ---- max_distance_dp.kara ----
+
+fn a1_max_distance(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let far = 2 * n;
+    let mut d: Vec[Vec[i64]] = grid.iter().map(|row| row.iter().map(|c| if c == 1 { 0 } else { far }).collect()).collect();
+    for i in 0..n {
+        for j in 0..n {
+            if i > 0 {
+                d[i][j] = d[i][j].min(d[i - 1][j] + 1);
+            }
+            if j > 0 {
+                d[i][j] = d[i][j].min(d[i][j - 1] + 1);
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        for j in (0..n).rev() {
+            if i + 1 < n {
+                d[i][j] = d[i][j].min(d[i + 1][j] + 1);
+            }
+            if j + 1 < n {
+                d[i][j] = d[i][j].min(d[i][j + 1] + 1);
+            }
+        }
+    }
+    let mut best = -1;
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] == 0 {
+                best = best.max(d[i][j]);
+            }
+        }
+    }
+    if best == 0 or best >= far { -1 } else { best }
+}
+
+// ---- max_distance_rings.kara ----
+
+fn a2_max_distance(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut taken: Set[(i64, i64)] = Set.new();
+    let mut ring: Vec[(i64, i64)] = [];
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] == 1 {
+                taken.insert((i, j));
+                ring.push((i, j));
+            }
+        }
+    }
+    if ring.is_empty() or taken.len() == n * n {
+        return -1;
+    }
+    let mut rounds = 0;
+    while taken.len() < n * n {
+        let mut next: Vec[(i64, i64)] = [];
+        for (i, j) in ring.iter() {
+            for (a, b) in [(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)] {
+                if a >= 0 and a < n and b >= 0 and b < n and taken.insert((a, b)) {
+                    next.push((a, b));
+                }
+            }
+        }
+        ring = next;
+        rounds += 1;
+    }
+    rounds
+}
+
+// ---- max_distance_rows.kara ----
+
+fn a3_max_distance(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let none = 4 * n;
+    let mut near: Vec[Vec[i64]] = [];
+    for row in grid.iter() {
+        let mut d = Vec.filled(n, none);
+        let mut last = -1;
+        for j in 0..n {
+            if row[j] == 1 {
+                last = j;
+            }
+            if last >= 0 {
+                d[j] = j - last;
+            }
+        }
+        last = -1;
+        for j in (0..n).rev() {
+            if row[j] == 1 {
+                last = j;
+            }
+            if last >= 0 {
+                d[j] = d[j].min(last - j);
+            }
+        }
+        near.push(d);
+    }
+    let mut best = -1;
+    let mut land = false;
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] == 1 {
+                land = true;
+                continue;
+            }
+            let mut nearest = none;
+            for r in 0..n {
+                nearest = nearest.min((i - r).abs() + near[r][j]);
+            }
+            best = best.max(nearest);
+        }
+    }
+    if not land { -1 } else { best }
+}
+
+// ---- max_distance_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_max_distance(grid: own Vec[Vec[i32]]) -> i32 {
+        let n = grid.len();
+        let mut grid = grid;
+        let mut q = VecDeque.new();
+        for i in 0..n {
+            for j in 0..n {
+                if grid[i][j] == 1 {
+                    q.push_back((i, j));
+                }
+            }
+        }
+        if q.is_empty() or q.len() == n * n {
+            return -1;
+        }
+        let dirs = [(0, 1), (1, 0), (0, -1), (-1, 0)];
+        let mut ans = -1;
+        while let Some((i, j)) = q.pop_front() {
+            ans = grid[i][j] - 1;
+            for (di, dj) in dirs.iter() {
+                let x = i as i32 + di;
+                let y = j as i32 + dj;
+                if x < 0 or y < 0 or x >= n as i32 or y >= n as i32 {
+                    continue;
+                }
+                let (x, y) = (x, y);
+                if grid[x][y] == 0 {
+                    grid[x][y] = grid[i][j] + 1;
+                    q.push_back((x, y));
+                }
+            }
+        }
+        ans
+    }
+}
+
+fn a4_max_distance(grid: Vec[Vec[i64]]) -> i64 {
+    let g: Vec[Vec[i32]] = grid.iter().map(|r| r.iter().map(|c| c as i32).collect()).collect();
+    A4Solution.a4_max_distance(g)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, grid: Vec[Vec[i64]]) -> i64 {
+    match w {
+        0 => a0_max_distance(grid),
+        1 => a1_max_distance(grid),
+        2 => a2_max_distance(grid),
+        3 => a3_max_distance(grid),
+        _ => a4_max_distance(grid),
+    }
+}
+
+// The statement read literally: every water cell's distance to every land
+// cell, the nearest kept, and the farthest of those; -1 with no land or no
+// water.
+fn literal(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut land: Vec[(i64, i64)] = [];
+    let mut water: Vec[(i64, i64)] = [];
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] == 1 {
+                land.push((i, j));
+            } else {
+                water.push((i, j));
+            }
+        }
+    }
+    if land.is_empty() or water.is_empty() {
+        return -1;
+    }
+    let mut best = -1;
+    for (i, j) in water.iter() {
+        let mut nearest = 2 * n;
+        for (a, b) in land.iter() {
+            nearest = nearest.min((i - a).abs() + (j - b).abs());
+        }
+        best = best.max(nearest);
+    }
+    best
+}
+
+fn count(grid: Vec[Vec[i64]], v: i64) -> i64 {
+    grid.iter().map(|row| row.iter().filter(|c| c == v).count()).sum()
+}
+
+// One of the square's eight symmetries: `s % 4` quarter turns, then a
+// mirror when `s >= 4`.
+fn symmetric(grid: Vec[Vec[i64]], s: i64) -> Vec[Vec[i64]] {
+    let n = grid.len();
+    (0..n).map(|i| (0..n).map(|j| {
+        let mut (a, b) = (i, j);
+        for _ in 0..s % 4 {
+            let t = a;
+            a = b;
+            b = n - 1 - t;
+        }
+        if s >= 4 {
+            b = n - 1 - b;
+        }
+        grid[a][b]
+    }).collect()).collect()
+}
+
+// The `k`-th cell holding `v`, in reading order, set to `1 - v`.
+fn flipped(grid: Vec[Vec[i64]], v: i64, k: i64) -> Vec[Vec[i64]] {
+    let mut out = grid.clone();
+    let mut seen = 0;
+    for i in 0..grid.len() {
+        for j in 0..grid.len() {
+            if grid[i][j] == v {
+                if seen == k {
+                    out[i][j] = 1 - v;
+                }
+                seen += 1;
+            }
+        }
+    }
+    out
+}
+
+// The grid and its mirror images, a square of twice the side.
+fn reflected(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = grid.len();
+    (0..2 * n).map(|i| (0..2 * n).map(|j| {
+        let a = if i < n { i } else { 2 * n - 1 - i };
+        let b = if j < n { j } else { 2 * n - 1 - j };
+        grid[a][b]
+    }).collect()).collect()
+}
+
+struct Case {
+    grid: Vec[Vec[i64]],
+    // P2's symmetry, P3's water cell, P4's land cell, P6's land cell
+    symmetry: i64,
+    water: i64,
+    land: i64,
+    at: (i64, i64),
+}
+
+struct Tally {
+    cases: i64,
+    literal: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let g = ref c.grid;
+    let n = g.len();
+    let lands = count(g, 1);
+    let waters = n * n - lands;
+    let want = if lands * waters <= 40000 { Some(literal(g)) } else { None };
+    if want.is_some() {
+        t.literal += 1;
+    }
+    let turned = symmetric(g, c.symmetry);
+    let filled = if waters > 0 { flipped(g, 0, c.water % waters) } else { g.clone() };
+    let drained = if lands > 0 { flipped(g, 1, c.land % lands) } else { g.clone() };
+    let doubled = reflected(g);
+    let mut alone = Vec.filled(n, Vec.filled(n, 0));
+    let (a, b) = c.at;
+    alone[a][b] = 1;
+    let alone_want = if n == 1 { -1 } else { a.max(n - 1 - a) + b.max(n - 1 - b) };
+    let mut first = 0;
+    for w in 0..5 {
+        let got = arm(w, g);
+        if w == 0 {
+            first = got;
+        }
+        let what = f"arm {w}, case {t.cases} of side {n} -> {got}";
+        // P1: the statement read literally
+        if let Some(x) = want {
+            expect(mut t, 1, got == x, f"P1 {what}, literally {x}");
+        }
+        // P2: a symmetry of the square keeps the answer
+        let s = arm(w, turned);
+        expect(mut t, 2, s == got, f"P2 {what}, symmetry {c.symmetry}: {s}");
+        // P3: a water cell made land never takes the answer up, while land
+        // and two water cells remain
+        if lands > 0 and waters >= 2 {
+            let f = arm(w, filled);
+            expect(mut t, 3, f >= 1 and f <= got, f"P3 {what}, a water cell filled: {f}");
+        }
+        // P4: a land cell made water never takes the answer down, while two
+        // land cells remain
+        if lands >= 2 {
+            let d = arm(w, drained);
+            expect(mut t, 4, d >= got, f"P4 {what}, a land cell drained: {d}");
+        }
+        // P5: the grid among its mirror images keeps the answer, a mirrored
+        // land cell never being nearer than its original
+        let r = arm(w, doubled);
+        expect(mut t, 5, r == got, f"P5 {what}, reflected: {r}");
+        // P6: one land cell alone is as far as its farthest corner
+        let o = arm(w, alone);
+        expect(mut t, 6, o == alone_want, f"P6 {what}, alone at {a}, {b}: {o}, not {alone_want}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + first + 1 + n) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, literal: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 1200 grids in four kinds, 300 each: 1 to 6 a side and 1 to 14 a side,
+    // land at odds from 1 in 100 to 99; 5 to 24 a side with one to three
+    // land cells; and 5 to 24 a side at odds from 2 to 50 in 100. Every
+    // choice the properties make is drawn before any arm answers.
+    let mut seed = 11621;
+    let mut cases: Vec[Case] = [];
+    for i in 0..1200 {
+        let kind = i % 4;
+        let n = if kind == 0 {
+            1 + next_random(mut seed) % 6
+        } else if kind == 1 {
+            1 + next_random(mut seed) % 14
+        } else {
+            5 + next_random(mut seed) % 20
+        };
+        let mut grid = Vec.filled(n, Vec.filled(n, 0));
+        if kind == 2 {
+            for _ in 0..1 + next_random(mut seed) % 3 {
+                let a = next_random(mut seed) % n;
+                let b = next_random(mut seed) % n;
+                grid[a][b] = 1;
+            }
+        } else {
+            let odds = if kind == 3 {
+                [2, 5, 20, 50][next_random(mut seed) % 4]
+            } else {
+                [1, 10, 30, 50, 70, 90, 99][next_random(mut seed) % 7]
+            };
+            for a in 0..n {
+                for b in 0..n {
+                    if next_random(mut seed) % 100 < odds {
+                        grid[a][b] = 1;
+                    }
+                }
+            }
+        }
+        let symmetry = next_random(mut seed) % 8;
+        let water = next_random(mut seed);
+        let land = next_random(mut seed);
+        let at = (next_random(mut seed) % n, next_random(mut seed) % n);
+        cases.push(Case { grid, symmetry, water, land, at });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} grids ({t.literal} read literally): checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

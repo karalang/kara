@@ -1,0 +1,82 @@
+// LeetCode #1169: Invalid Transactions -- the ★ arm's bench: each
+// transaction split into its fields, the places of each name's
+// transactions gathered in a `Map`, and every transaction compared with
+// the others of its name.
+
+struct Txn {
+    name: String,
+    time: i64,
+    amount: i64,
+    city: String,
+}
+
+fn parse(t: Str) -> Txn {
+    let f: Vec[Str] = t.split(",").collect();
+    Txn {
+        name: f[0].to_string(),
+        time: i64.parse(f[1]).unwrap(),
+        amount: i64.parse(f[2]).unwrap(),
+        city: f[3].to_string(),
+    }
+}
+
+fn invalid_transactions(transactions: Vec[String]) -> Vec[String] {
+    let txns: Vec[Txn] = transactions.iter().map(|t| parse(t)).collect();
+    let mut by_name: Map[String, Vec[i64]] = Map.new();
+    for (i, t) in txns.iter().enumerate() {
+        by_name.entry(t.name.clone()).or_insert(Vec.new()).push(i);
+    }
+    let mut out = Vec.new();
+    for (i, t) in txns.iter().enumerate() {
+        let bad = t.amount > 1000
+            or by_name[t.name].iter().any(|j| {
+                let o = ref txns[j];
+                (o.time - t.time).abs() <= 60 and o.city != t.city
+            });
+        if bad {
+            out.push(transactions[i].clone());
+        }
+    }
+    out
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn line(seed: mut ref i64) -> String {
+    let name = next_random(mut seed) % 200;
+    let time = next_random(mut seed) % 1001;
+    let amount = next_random(mut seed) % 1101;
+    let city = next_random(mut seed) % 2;
+    f"n{name},{time},{amount},c{city}"
+}
+
+fn main() {
+    // 16 lists of 1000 transactions, the constraints' most, by 200 names in
+    // two cities, built once; each of 300 rounds gives one transaction of
+    // every list a new name, time, amount and city and finds the invalid
+    // ones.
+    let mut seed = 1169;
+    let mut lists: Vec[Vec[String]] = [];
+    for _ in 0..16 {
+        lists.push((0..1000).map(|_| line(mut seed)).collect());
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        for k in 0..16 {
+            let at = next_random(mut seed) % 1000;
+            lists[k][at] = line(mut seed);
+            let bad = invalid_transactions(lists[k]);
+            total += bad.len();
+            for b in bad.iter() {
+                check = (check * 31 + b.len()) % 1000000007;
+            }
+        }
+    }
+    println(f"300 rounds over 16 lists of 1000 transactions: {total} invalid, checksum {check}");
+}

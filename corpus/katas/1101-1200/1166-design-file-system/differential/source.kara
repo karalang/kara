@@ -1,0 +1,476 @@
+// LeetCode #1166: Design File System -- a differential over the five
+// arms. Each run's answers are checked against the statement read
+// literally and against six properties that do not compute them; see the
+// README.
+
+// ---- file_system.kara ----
+
+struct A0FileSystem {
+    paths: Map[String, i64],
+}
+
+impl A0FileSystem {
+    fn new() -> A0FileSystem {
+        A0FileSystem { paths: Map.new() }
+    }
+
+    fn create_path(mut ref self, path: Str, value: i64) -> bool {
+        if path.len() == 0 or path == "/" or self.paths.contains_key(path) {
+            return false;
+        }
+        let parent = path[0..path.rfind("/").unwrap()];
+        if parent.len() > 0 and not self.paths.contains_key(parent) {
+            return false;
+        }
+        self.paths.insert(path.to_string(), value);
+        true
+    }
+
+    fn get(self, path: Str) -> i64 {
+        match self.paths.get(path) {
+            Some(v) => v,
+            None => -1,
+        }
+    }
+}
+
+// ---- file_system_trie.kara ----
+
+shared struct A1Dir {
+    mut kids: Map[String, A1Dir],
+    value: i64,
+}
+
+struct A1FileSystem {
+    root: A1Dir,
+}
+
+impl A1FileSystem {
+    fn new() -> A1FileSystem {
+        A1FileSystem { root: A1Dir { kids: Map.new(), value: -1 } }
+    }
+
+    fn create_path(mut ref self, path: Str, value: i64) -> bool {
+        let names: Vec[Str] = path.split("/").skip(1).collect();
+        let mut at = self.root;
+        for name in names[0..names.len() - 1].iter() {
+            match at.kids.get(name).cloned() {
+                Some(next) => at = next,
+                None => return false,
+            }
+        }
+        let last = names[names.len() - 1];
+        if last.is_empty() or at.kids.contains_key(last) {
+            return false;
+        }
+        at.kids.insert(last.to_string(), A1Dir { kids: Map.new(), value: value });
+        true
+    }
+
+    fn get(self, path: Str) -> i64 {
+        let mut at = self.root;
+        for name in path.split("/").skip(1) {
+            match at.kids.get(name).cloned() {
+                Some(next) => at = next,
+                None => return -1,
+            }
+        }
+        at.value
+    }
+}
+
+// ---- file_system_sorted.kara ----
+
+struct A2FileSystem {
+    paths: SortedMap[Vec[String], i64],
+}
+
+impl A2FileSystem {
+    fn new() -> A2FileSystem {
+        A2FileSystem { paths: SortedMap.new() }
+    }
+
+    fn create_path(mut ref self, path: Str, value: i64) -> bool {
+        let names: Vec[String] = path.split("/").skip(1).map(|s| s.to_string()).collect();
+        if names.iter().any(|n| n.is_empty()) or self.paths.contains_key(names) {
+            return false;
+        }
+        let parent = names[0..names.len() - 1].to_vec();
+        if parent.len() > 0 and not self.paths.contains_key(parent) {
+            return false;
+        }
+        self.paths.insert(names, value);
+        true
+    }
+
+    fn get(self, path: Str) -> i64 {
+        let names: Vec[String] = path.split("/").skip(1).map(|s| s.to_string()).collect();
+        self.paths.get(names).unwrap_or(-1)
+    }
+}
+
+// ---- file_system_list.kara ----
+
+struct A3FileSystem {
+    made: Vec[(String, i64)],
+}
+
+impl A3FileSystem {
+    fn new() -> A3FileSystem {
+        A3FileSystem { made: [] }
+    }
+
+    fn has(self, path: Str) -> bool {
+        self.made.iter().any(|(p, _)| p == path)
+    }
+
+    fn create_path(mut ref self, path: Str, value: i64) -> bool {
+        let cut = match path.rfind("/") {
+            Some(i) => i,
+            None => return false,
+        };
+        if cut + 1 == path.len() or self.has(path) {
+            return false;
+        }
+        if cut > 0 and not self.has(path[0..cut]) {
+            return false;
+        }
+        self.made.push((path.to_string(), value));
+        true
+    }
+
+    fn get(self, path: Str) -> i64 {
+        match self.made.iter().find(|(p, _)| p == path) {
+            Some((_, v)) => v,
+            None => -1,
+        }
+    }
+}
+
+// ---- file_system_solution.kara ----
+
+struct A4FileSystem {
+    paths: Map[String, i32],
+}
+
+impl A4FileSystem {
+    fn new() -> Self {
+        A4FileSystem { paths: Map.new() }
+    }
+
+    fn create_path(mut ref self, path: own String, value: i32) -> bool {
+        if self.paths.contains_key(path) {
+            return false;
+        }
+        let idx = path.rfind("/").unwrap();
+        let parent = path[..idx];
+        if not parent.is_empty() and not self.paths.contains_key(parent) {
+            return false;
+        }
+        self.paths.insert(path, value);
+        true
+    }
+
+    fn get(self, path: String) -> i32 {
+        *self.paths.get(path).unwrap_or(-1)
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Op {
+    create: bool,
+    path: String,
+    value: i64,
+}
+
+fn run0(ops: Vec[Op]) -> Vec[i64] {
+    let mut fs = A0FileSystem.new();
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        if op.create {
+            out.push(if fs.create_path(op.path, op.value) { 1 } else { 0 });
+        } else {
+            out.push(fs.get(op.path));
+        }
+    }
+    out
+}
+
+fn run1(ops: Vec[Op]) -> Vec[i64] {
+    let mut fs = A1FileSystem.new();
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        if op.create {
+            out.push(if fs.create_path(op.path, op.value) { 1 } else { 0 });
+        } else {
+            out.push(fs.get(op.path));
+        }
+    }
+    out
+}
+
+fn run2(ops: Vec[Op]) -> Vec[i64] {
+    let mut fs = A2FileSystem.new();
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        if op.create {
+            out.push(if fs.create_path(op.path, op.value) { 1 } else { 0 });
+        } else {
+            out.push(fs.get(op.path));
+        }
+    }
+    out
+}
+
+fn run3(ops: Vec[Op]) -> Vec[i64] {
+    let mut fs = A3FileSystem.new();
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        if op.create {
+            out.push(if fs.create_path(op.path, op.value) { 1 } else { 0 });
+        } else {
+            out.push(fs.get(op.path));
+        }
+    }
+    out
+}
+
+fn run4(ops: Vec[Op]) -> Vec[i64] {
+    let mut fs = A4FileSystem.new();
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        if op.create {
+            out.push(if fs.create_path(op.path.clone(), op.value as i32) { 1 } else { 0 });
+        } else {
+            out.push(fs.get(op.path));
+        }
+    }
+    out
+}
+
+fn arm(w: i64, ops: Vec[Op]) -> Vec[i64] {
+    match w {
+        0 => run0(ops),
+        1 => run1(ops),
+        2 => run2(ops),
+        3 => run3(ops),
+        _ => run4(ops),
+    }
+}
+
+// The statement read literally: the paths made so far, with their values,
+// in a list; a path is one or more names each after a `/`, and it may be
+// made when no made path equals it and, unless it has one name, the path
+// of all its names but the last was made.
+fn literal(ops: Vec[Op]) -> Vec[i64] {
+    let mut made: Vec[(String, i64)] = [];
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        let found = made.iter().position(|(p, _)| p == op.path);
+        if not op.create {
+            out.push(match found {
+                Some(i) => made[i].1,
+                None => -1,
+            });
+            continue;
+        }
+        let names: Vec[Str] = op.path.split("/").collect();
+        let well_formed = names.len() >= 2 and names[0] == "" and names[1..].iter().all(|n| not n.is_empty());
+        let parent = names[0..names.len() - 1].join("/");
+        let parent_made = names.len() == 2 or made.iter().any(|(p, _)| p == parent);
+        if well_formed and found.is_none() and parent_made {
+            made.push((op.path.clone(), op.value));
+            out.push(1);
+        } else {
+            out.push(0);
+        }
+    }
+    out
+}
+
+const NAMES: Array[Str, 6] = ["a", "b", "ab", "le", "leet", "code"];
+
+// A path of 1 to `depth` names, each one of the first `k`.
+fn random_path(seed: mut ref i64, depth: i64, k: i64) -> String {
+    let parts = 1 + next_random(mut seed) % depth;
+    let mut p = String.new();
+    for _ in 0..parts {
+        p = p + "/" + NAMES[next_random(mut seed) % k].to_string();
+    }
+    p
+}
+
+// Every name of `path` renamed: the i-th name to the `to[i]`-th.
+fn renamed(path: Str, to: Vec[i64]) -> String {
+    let mut p = String.new();
+    for name in path.split("/").skip(1) {
+        let i = NAMES.iter().position(|n| n == name).unwrap();
+        p = p + "/" + NAMES[to[i]].to_string();
+    }
+    p
+}
+
+struct Case {
+    ops: Vec[Op],
+    // P2's renaming, P4's second values
+    rename: Vec[i64],
+    again: Vec[i64],
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn shown(ops: Vec[Op]) -> String {
+    let parts: Vec[String] = ops.iter().map(|o| if o.create { f"c {o.path} {o.value}" } else { f"g {o.path}" }).collect();
+    parts.join("; ")
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let ops = ref c.ops;
+    let want = literal(ops);
+    let renamed_ops: Vec[Op] = ops.iter().map(|o| Op { create: o.create, path: renamed(o.path, c.rename), value: o.value }).collect();
+    let mut twice: Vec[Op] = [];
+    for (i, o) in ops.iter().enumerate() {
+        twice.push(Op { create: o.create, path: o.path.clone(), value: o.value });
+        if o.create {
+            twice.push(Op { create: true, path: o.path.clone(), value: c.again[i] });
+        }
+    }
+    let mut moved: Vec[Op] = [Op { create: true, path: "/root", value: 0 }];
+    for o in ops.iter() {
+        moved.push(Op { create: o.create, path: "/root" + o.path, value: o.value });
+    }
+    let creates: Vec[Op] = ops.iter().filter(|o| o.create).map(|o| Op { create: true, path: o.path.clone(), value: o.value }).collect();
+    for a in 0..5 {
+        let got = arm(a, ops);
+        let what = f"arm {a}, case {t.cases} [{shown(ops)}] -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        // P2: every name renamed alike keeps every answer
+        let r = arm(a, renamed_ops);
+        expect(mut t, 2, r == got, f"P2 {what}, renamed: {r}");
+        // P3: after the operations, a get of each path a create named gives
+        // the value of the create that answered 1 for it, or -1
+        let mut asks: Vec[Op] = ops.iter().map(|o| Op { create: o.create, path: o.path.clone(), value: o.value }).collect();
+        let mut asks_want = got.clone();
+        for o in ops.iter() {
+            if o.create {
+                let mut v = -1;
+                for (i, p) in ops.iter().enumerate() {
+                    if p.create and got[i] == 1 and p.path == o.path {
+                        v = p.value;
+                    }
+                }
+                asks.push(Op { create: false, path: o.path.clone(), value: 0 });
+                asks_want.push(v);
+            }
+        }
+        let g = arm(a, asks);
+        expect(mut t, 3, g == asks_want, f"P3 {what}, asked after: {g}, not {asks_want}");
+        // P4: each create repeated at once, with another value: the repeat
+        // answers 0 and every other answer stays
+        let d = arm(a, twice);
+        let mut d_want: Vec[i64] = [];
+        for (i, o) in ops.iter().enumerate() {
+            d_want.push(got[i]);
+            if o.create {
+                d_want.push(0);
+            }
+        }
+        expect(mut t, 4, d == d_want, f"P4 {what}, twice: {d}, not {d_want}");
+        // P5: everything moved under a new `/root` keeps every answer
+        let m = arm(a, moved);
+        let mut m_want: Vec[i64] = [1];
+        m_want.extend(got.iter());
+        expect(mut t, 5, m == m_want, f"P5 {what}, under /root: {m}, not {m_want}");
+        // P6: the gets left out keep every create's answer
+        let n = arm(a, creates);
+        let n_want: Vec[i64] = got.iter().enumerate().filter(|(i, _)| ops[i].create).map(|(_, v)| v).collect();
+        expect(mut t, 6, n == n_want, f"P6 {what}, creates only: {n}, not {n_want}");
+    }
+    t.cases += 1;
+    for v in want.iter() {
+        t.check = (t.check * 31 + v + 2) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 1200 runs in four kinds, 300 each: 1 to 12 operations over paths of
+    // 1 to 3 names from the first 1 or 2; 1 to 60 over 1 to 4 names from the
+    // first 1 to 6; 50 to 150, three in four of them creates, over 1 to 5
+    // names from all 6; and 1 to 40 over the prefixes of one path of 6 to
+    // 20 names, so that chains are made out of order. Every choice the
+    // properties make is drawn before any arm answers.
+    let mut seed = 11661;
+    let mut cases: Vec[Case] = [];
+    for i in 0..1200 {
+        let kind = i % 4;
+        let n = match kind {
+            0 => 1 + next_random(mut seed) % 12,
+            1 => 1 + next_random(mut seed) % 60,
+            2 => 50 + next_random(mut seed) % 101,
+            _ => 1 + next_random(mut seed) % 40,
+        };
+        let k = match kind {
+            0 => 1 + next_random(mut seed) % 2,
+            1 => 1 + next_random(mut seed) % 6,
+            _ => 6,
+        };
+        let long = random_path(mut seed, 1, 6);
+        let mut chain: Vec[String] = [long];
+        let depth = 6 + next_random(mut seed) % 15;
+        while chain.len() < depth {
+            let last = chain[chain.len() - 1].clone();
+            chain.push(last + "/" + NAMES[next_random(mut seed) % 6].to_string());
+        }
+        let mut ops: Vec[Op] = [];
+        for j in 0..n {
+            let path = match kind {
+                0 => random_path(mut seed, 3, k),
+                1 => random_path(mut seed, 4, k),
+                2 => random_path(mut seed, 5, 6),
+                _ => chain[next_random(mut seed) % depth].clone(),
+            };
+            let create = if kind == 2 { next_random(mut seed) % 4 != 0 } else { next_random(mut seed) % 3 != 0 };
+            ops.push(Op { create, path, value: j + 1 });
+        }
+        let mut rename: Vec[i64] = (0..6).collect();
+        for x in (1..6).rev() {
+            let y = next_random(mut seed) % (x + 1);
+            rename.swap(x, y);
+        }
+        let again: Vec[i64] = (0..n).map(|_| 1000 + next_random(mut seed)).collect();
+        cases.push(Case { ops, rename, again });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} runs: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
