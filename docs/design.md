@@ -1834,7 +1834,7 @@ match flag {
 
 **`Array[T, N]`.** `N` is known, so an array pattern `[p1, p2, …, pN]` specializes like a tuple: `[a, b, c]` is exhaustive on `Array[T, 3]` iff each of `a`, `b` and `c` is exhaustive on `T`. A rest pattern counts as a wildcard for the positions it covers ([Slice and array patterns](#slice-and-array-patterns)).
 
-**`Vec[T]`, `Map[K, V]`, `String`.** Variable length. A match over these is exhaustive only with a wildcard arm, except that on `Vec[T]` the slice patterns `[]` and `[x, ..rest]` together cover every length. `Map[K, V]` has no positional pattern; match it as a whole and use `.get()` or iteration in the arm. `String` has no slice patterns.
+**`Vec[T]`, `Map[K, V]`, `String`.** Variable length. A match over a `Map[K, V]` or a `String` is exhaustive only with a wildcard arm. A match over a `Vec[T]` is checked one length at a time: a slice pattern `[p1, …, pn]` has the length `n`, and `[p1, …, pi, .., q1, …, qj]` every length from `i + j` up, with wildcards in the positions its `..` spans. So `[]` and `[x, ..rest]` together cover every length, `[_, _]` after `[x, ..]` is unreachable, and `[.., 0]` after `[0, ..]` is reachable (`[1, 0]`). Past the longest fixed pattern and the longest prefix plus the longest suffix, every length behaves alike, so the check is finite. `Map[K, V]` has no positional pattern; match it as a whole and use `.get()` or iteration in the arm. `String` has no slice patterns.
 
 **`Never`.** `match x { }` on a scrutinee of type `Never` is exhaustive, because the empty matrix misses nothing. This is the only type for which an empty match is well formed.
 

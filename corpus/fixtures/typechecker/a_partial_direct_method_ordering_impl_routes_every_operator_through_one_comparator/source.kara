@@ -5,7 +5,6 @@ impl Eq for P {}
 impl PartialOrd for P { fn partial_cmp(ref self, other: ref P) -> Option[Ordering] { Some(self.x.cmp(other.x)) } }
 impl Ord for P {
     fn cmp(ref self, other: ref P) -> Ordering { self.x.cmp(other.x) }
-    fn lt(self, other: P) -> bool { self.x < other.x }
 }
 fn main() {
     let a = P { x: 1 };

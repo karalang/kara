@@ -4809,6 +4809,54 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// design.md §9 "An impl holds only the trait's items" (B-2026-11-15-98):
+    /// a method the trait does not declare is an error, so a misspelled
+    /// override cannot leave the trait's default running. (An associated
+    /// type the trait does not declare is refused where the impl's types
+    /// are bound.)
+    fn check_impl_holds_only_trait_items(&mut self, imp: &ImplBlock, trait_name: &str) {
+        let Some(t) = self.find_trait_def(trait_name) else {
+            return;
+        };
+        let mut methods: Vec<String> = match trait_name {
+            "Index" => vec!["index".to_string()],
+            "IndexMut" => vec!["index_mut".to_string()],
+            "IndexSet" => vec!["index_set".to_string()],
+            _ => Vec::new(),
+        };
+        for ti in &t.items {
+            if let TraitItem::Method(m) = ti {
+                methods.push(m.name.clone());
+            }
+        }
+        let type_name = match &imp.target_type.kind {
+            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        for item in &imp.items {
+            let ImplItem::Method(m) = item else {
+                continue;
+            };
+            if methods.contains(&m.name) {
+                continue;
+            }
+            let names: Vec<&str> = methods.iter().map(String::as_str).collect();
+            let help = match crate::edit_distance::suggest_similar(&m.name, &names) {
+                Some(near) => format!("did you mean '{near}'?"),
+                None => format!("move it to an inherent `impl {type_name}`"),
+            };
+            self.type_error(
+                format!(
+                    "method '{}' is not a member of trait '{trait_name}': an impl of \
+                     '{trait_name}' for '{type_name}' holds only the trait's items; {help}",
+                    m.name
+                ),
+                m.span,
+                TypeErrorKind::ExtraField,
+            );
+        }
+    }
+
     fn check_impl_modes_not_stronger(&mut self, imp: &ImplBlock, trait_name: &str) {
         // Strength rank: lower is stronger.
         fn param_rank(ty: &TypeExpr) -> (u8, &'static str) {
@@ -5647,6 +5695,7 @@ impl<'a> super::TypeChecker<'a> {
             if self.cli_lint_overrides.strict_core {
                 self.check_impl_modes_not_stronger(imp, &trait_name);
                 self.check_impl_defines_required_methods(imp, &trait_name);
+                self.check_impl_holds_only_trait_items(imp, &trait_name);
                 self.check_impl_signatures_match_trait(imp, &trait_name, &full_target, &gp);
             }
             if let Some(trait_info) = self.env.traits.get(&trait_name).cloned() {

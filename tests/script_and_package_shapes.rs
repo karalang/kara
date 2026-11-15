@@ -54,7 +54,7 @@ fn text(b: &[u8]) -> String {
 const RUNS: [&[&str]; 2] = [&["run"], &["run", "--interp"]];
 
 const SCRIPT: &str = "struct Bad { why: String }
-impl Error for Bad { fn message(self) -> String { f\"bad:{self.why}\" } }
+impl Error for Bad {}
 impl Display for Bad { fn to_string(self) -> String { f\"bad:{self.why}\" } }
 fn chk(n: i64) -> Result[i64, Bad] {
     if n < 0 { Err(Bad { why: f\"neg{n}\" }) } else { Ok(n * 2) }

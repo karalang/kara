@@ -401,13 +401,14 @@ enum PatCtor {
     /// arm for exhaustiveness regardless of which slice patterns appear.
     /// `fixed` is `prefix.len() + suffix.len()`; `has_rest` discriminates
     /// `[a, b]` (fixed=2, has_rest=false) from `[a, b, ..]` (fixed=2,
-    /// has_rest=true). Precise overlap analysis between length classes
-    /// (e.g. `[a, ..]` covers `[a, b]`) is deferred — this representation
-    /// gives sound exhaustiveness (always requires wildcard) but imprecise
-    /// reachability across distinct length classes.
+    /// has_rest=true); `prefix` counts the args before the `..`, so
+    /// `[a, ..]` and `[.., a]` differ. Exhaustiveness still demands a
+    /// wildcard; a query with a slice head is checked length by length
+    /// ([`slice_useful`]), so `[a, ..]` covers `[a, b]` (B-2026-11-15-96).
     SliceLen {
         fixed: usize,
         has_rest: bool,
+        prefix: usize,
     },
 }
 
@@ -606,7 +607,9 @@ fn slice_patterns_cover_all_lengths(matrix: &Matrix) -> bool {
             // A catch-all (bare `_` / binding) is already total.
             Some(Pat::Wildcard) => return true,
             Some(Pat::Ctor {
-                ctor: PatCtor::SliceLen { fixed, has_rest },
+                ctor: PatCtor::SliceLen {
+                    fixed, has_rest, ..
+                },
                 args,
             }) => {
                 if !args.iter().all(|a| matches!(a, Pat::Wildcard)) {
@@ -965,6 +968,11 @@ fn lower_open_slice(
         ctor: PatCtor::SliceLen {
             fixed: prefix.len() + suffix.len(),
             has_rest: rest.is_some(),
+            prefix: if rest.is_some() {
+                prefix.len()
+            } else {
+                prefix.len() + suffix.len()
+            },
         },
         args,
     }
@@ -1169,6 +1177,22 @@ fn usefulness(matrix: &Matrix, q: &[Pat], head_types: &[Type], env: &TypeEnv) ->
             let (min, max) = effective_int_domain(head_ty, env).unwrap();
             int_column_useful(matrix, (min, max), q_rest, rest_tys, env)
         }
+        Pat::Ctor {
+            ctor:
+                PatCtor::SliceLen {
+                    fixed,
+                    has_rest,
+                    prefix,
+                },
+            args,
+        } => slice_useful(
+            matrix,
+            (*fixed, *has_rest, *prefix, args),
+            q_rest,
+            head_ty,
+            rest_tys,
+            env,
+        ),
         Pat::Ctor { ctor, args } => {
             let arity = args.len();
             let specialized = specialize(matrix, ctor, arity);
@@ -1217,6 +1241,19 @@ fn usefulness(matrix: &Matrix, q: &[Pat], head_types: &[Type], env: &TypeEnv) ->
                     out
                 });
             }
+            // An open collection's column with slice patterns in it: by
+            // length, as the query `[..]` (B-2026-11-15-96).
+            if is_open_slice_scrutinee(peel_borrow(head_ty)) && {
+                let mut heads = Vec::new();
+                for row in &matrix.rows {
+                    if let Some(h) = row.pats.first() {
+                        slice_heads(h, &mut heads);
+                    }
+                }
+                !heads.is_empty()
+            } {
+                return slice_useful(matrix, (0, true, 0, &[]), q_rest, head_ty, rest_tys, env);
+            }
             if let Some(all) = enumerate_ctors(head_ty, env) {
                 for c in &all {
                     let arity = ctor_arity(c, head_ty, env);
@@ -1241,6 +1278,127 @@ fn usefulness(matrix: &Matrix, q: &[Pat], head_types: &[Type], env: &TypeEnv) ->
             }
         }
     }
+}
+
+/// `U(P, q)` for a query whose head is a slice pattern over an open
+/// collection, by length (B-2026-11-15-96). The query is useful iff it is
+/// useful at some length `L` it matches: a fixed `[p…]` only at its own
+/// length, a `[p…, .., s…]` at every length from its fixed count up. Past
+/// the longest fixed row and the longest prefix plus the longest suffix,
+/// every length specializes the same way, so the lengths checked stop
+/// there. At length `L` a row `[a…]` of length `L` keeps its args, a row
+/// `[a…, .., b…]` no longer than `L` fills its `..` with wildcards, a
+/// wildcard row becomes `L` wildcards, and any other row matches nothing.
+fn slice_useful(
+    matrix: &Matrix,
+    (fixed, has_rest, prefix, args): (usize, bool, usize, &[Pat]),
+    q_rest: &[Pat],
+    head_ty: &Type,
+    rest_tys: &[Type],
+    env: &TypeEnv,
+) -> Option<Vec<Pat>> {
+    let mut heads = Vec::new();
+    for row in &matrix.rows {
+        if let Some(h) = row.pats.first() {
+            slice_heads(h, &mut heads);
+        }
+    }
+    let top = if has_rest {
+        let (mut pre, mut suf, mut closed) = (prefix, fixed - prefix, fixed);
+        for &(f, rest, p) in &heads {
+            if rest {
+                pre = pre.max(p);
+                suf = suf.max(f - p);
+            } else {
+                closed = closed.max(f + 1);
+            }
+        }
+        closed.max(pre + suf).max(fixed)
+    } else {
+        fixed
+    };
+    let element = array_or_collection_element(peel_borrow(head_ty));
+    for len in fixed..=top {
+        let mut spec = Matrix::default();
+        for row in &matrix.rows {
+            if let Some((h, tail)) = row.pats.split_first() {
+                slice_specialize(h, tail, len, &mut spec);
+            }
+        }
+        let mut q = fill_rest(args, has_rest, prefix, len);
+        q.extend_from_slice(q_rest);
+        let mut tys = vec![element.clone(); len];
+        tys.extend_from_slice(rest_tys);
+        if let Some(w) = usefulness(&spec, &q, &tys, env) {
+            // The last length stands for every longer one too.
+            let ctor = PatCtor::SliceLen {
+                fixed: len,
+                has_rest: has_rest && len == top,
+                prefix: len,
+            };
+            return Some(repackage_witness(&ctor, len, w));
+        }
+    }
+    None
+}
+
+/// The `(fixed, has_rest, prefix)` of each slice pattern `p` holds at its
+/// head, through or-patterns.
+fn slice_heads(p: &Pat, out: &mut Vec<(usize, bool, usize)>) {
+    match p {
+        Pat::Ctor {
+            ctor:
+                PatCtor::SliceLen {
+                    fixed,
+                    has_rest,
+                    prefix,
+                },
+            ..
+        } => out.push((*fixed, *has_rest, *prefix)),
+        Pat::Or(alts) => alts.iter().for_each(|a| slice_heads(a, out)),
+        _ => {}
+    }
+}
+
+/// The row `head, tail…` specialized to a slice of length `len`, pushed
+/// onto `out` (see [`slice_useful`]).
+fn slice_specialize(head: &Pat, tail: &[Pat], len: usize, out: &mut Matrix) {
+    let args = match head {
+        Pat::Wildcard => vec![Pat::Wildcard; len],
+        Pat::Ctor {
+            ctor:
+                PatCtor::SliceLen {
+                    fixed,
+                    has_rest,
+                    prefix,
+                },
+            args,
+        } if *fixed == len || (*has_rest && *fixed < len) => {
+            fill_rest(args, *has_rest, *prefix, len)
+        }
+        Pat::Or(alts) => {
+            for alt in alts {
+                slice_specialize(alt, tail, len, out);
+            }
+            return;
+        }
+        Pat::Ctor { .. } => return,
+    };
+    let mut pats = args;
+    pats.extend_from_slice(tail);
+    out.rows.push(Row { pats });
+}
+
+/// A slice pattern's args at length `len`: the `..` filled with wildcards.
+fn fill_rest(args: &[Pat], has_rest: bool, prefix: usize, len: usize) -> Vec<Pat> {
+    if !has_rest {
+        return args.to_vec();
+    }
+    let mut out = Vec::with_capacity(len);
+    out.extend_from_slice(&args[..prefix]);
+    out.resize(len - (args.len() - prefix), Pat::Wildcard);
+    out.extend_from_slice(&args[prefix..]);
+    out
 }
 
 /// Take a sub-witness produced by recursing into `ctor`'s `arity` fields and
@@ -1580,8 +1738,10 @@ fn render_ctor(ctor: &PatCtor, args: &[Pat], ty: &Type, env: &TypeEnv) -> String
         PatCtor::Variant(name) => render_variant(name, args, ty, env),
         PatCtor::Tuple => render_tuple(args, ty, env),
         PatCtor::Struct(name) => render_struct(name, args, env),
-        PatCtor::Array(_) => render_slice_witness(args, ty, env, false),
-        PatCtor::SliceLen { has_rest, .. } => render_slice_witness(args, ty, env, *has_rest),
+        PatCtor::Array(_) => render_slice_witness(args, ty, env, None),
+        PatCtor::SliceLen {
+            has_rest, prefix, ..
+        } => render_slice_witness(args, ty, env, has_rest.then_some(*prefix)),
     }
 }
 
@@ -1638,21 +1798,17 @@ fn representative_value(lo: i128, hi: i128, ty: &Type, env: &TypeEnv) -> i128 {
     }
 }
 
-fn render_slice_witness(args: &[Pat], ty: &Type, env: &TypeEnv, has_rest: bool) -> String {
+/// `rest` is where the `..` stands among the args, when there is one.
+fn render_slice_witness(args: &[Pat], ty: &Type, env: &TypeEnv, rest: Option<usize>) -> String {
     let element = array_or_collection_element(ty);
-    let parts: Vec<String> = args
+    let mut parts: Vec<String> = args
         .iter()
         .map(|a| render_witness(a, &element, env))
         .collect();
-    if has_rest {
-        if parts.is_empty() {
-            "[..]".to_string()
-        } else {
-            format!("[{}, ..]", parts.join(", "))
-        }
-    } else {
-        format!("[{}]", parts.join(", "))
+    if let Some(at) = rest {
+        parts.insert(at.min(parts.len()), "..".to_string());
     }
+    format!("[{}]", parts.join(", "))
 }
 
 fn render_variant(name: &str, args: &[Pat], ty: &Type, env: &TypeEnv) -> String {

@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A method in `impl Tr for X` that the trait `Tr` does not declare is an
+  error (design.md §9 "An impl holds only the trait's items",
+  B-2026-11-15-98). A misspelled override (`fn descibe`) used to be
+  accepted, leaving the trait's default running, and an extra method was
+  callable. The help names the closest trait method when one is near, and
+  otherwise says to move the method to an inherent `impl X`.
 - A `?`, a `return`, or a `break` or `continue` whose loop encloses the
   block is an error in a `defer` or `errdefer` block, one diagnostic for the
   four: `a defer/errdefer block cannot leave its scope early (`?`, `return`,
@@ -1090,6 +1096,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- **`karac run` walks a plain recursive value in linear time.** A boxed
+  field's value (`next` in `struct ListNode { val: i64, next:
+  Option[ListNode] }`) now sits in a heap slot of its own in the
+  interpreter, as it sits in a box in compiled code, so a reference into
+  the list no longer grows by a step per node. Following a 16000-node list
+  through a `ref` cursor went from 17 s to 0.21 s, and kata 2130's
+  solution from 1438 s to 1.06 s (B-2026-11-14-61).
+- **`karac run` runs an iterator chain over a range faster.** The
+  interpreter steps a `Range` and does `wrapping_add` / `wrapping_sub` /
+  `wrapping_mul` in place rather than through a library call, and finds a
+  generic method's name in one pass. Kata 2151's iterator arm went from
+  101 s to 85 s; the rest of B-2026-11-14-62, the cost of each
+  interpreted call, is still open.
 - **Collecting a `chain` of integer ranges allocates once.**
   `(1..=end).chain(start..=n).collect()` into a `Vec` of the ranges' type
   fills each range in turn into a vector created at the sum of their
@@ -1248,6 +1267,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   the binding now counts as a read, so both slots get `ref`; a closure
   bound to a name or taking its captures `own` keeps the copy
   (B-2026-11-15-1).
+- **Slice arms over a `Vec` are checked length by length**
+  (design.md § Pattern exhaustiveness, B-2026-11-15-96). `[_, _]` after
+  `[x, ..]`, `[0]` after `[.., _]` and a `_` after `[]` and `[x, ..]` are
+  reported unreachable, where they were not. `[.., 0]` after `[0, ..]` is no
+  longer reported unreachable: `[1, 0]` reaches it, and `karac fix` deleted
+  it (B-2026-11-15-97). A missing case is named by length (`[]`,
+  `Some([_, _, ..])`) instead of `_`, and a `Vec` match whose arms cover
+  every length without a wildcard (`[]`, `[true, ..]`, `[false, ..]`) is
+  exhaustive.
 - **A `collect` of narrower integers into a wider collection says how to
   widen them.** `w.bytes().iter().map(|b| b - 96).collect()` into a
   `Vec[i64]` was refused with only `FromIterator[u8]` is not satisfied,

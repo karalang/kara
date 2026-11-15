@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 341 |
-| false-positive | 216 |
+| diagnostics | 343 |
+| false-positive | 217 |
 | missing-feature | 171 |
 | perf | 169 |
 | soundness | 69 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 487 |
+| typecheck | 490 |
 | mir-llvm | 238 |
 | mir | 206 |
-| cli | 135 |
+| cli | 136 |
 | parser | 88 |
 | ownership | 84 |
 | interp | 62 |
@@ -125,6 +125,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
 | B-2026-11-15-86 | 2026-11-15 | resolver | high | `karac fix` turns Rust's smallest-first `let mut heap: BinaryHeap<Reverse<i32>> = v.into_iter().map(Reverse).collect();` into a largest-first `PriorityQueue[Reverse[i32]]`: with no constructor to rewrite, the type is renamed and `Reverse` kept, so the mended program pops in the opposite order and answers wrong (kata 1167: 16 for [2,4,3], not 14) | — |
 | B-2026-11-15-87 | 2026-11-15 | effect | medium | E0418 between two different channels when one `par` branch both sends on one and receives on another: `par { { txb.send(1) }, { txa.send(2); rxb.recv() } }` is refused as `sends(Channel @ l5)` against `sends(Channel @ l2)`; with the receive gone it passes | — |
+| B-2026-11-15-96 | 2026-11-15 | typecheck | low | A fixed-length slice arm after an earlier rest arm that covers it gets no unreachable_arm warning (`[_, _]` after `[x, ..]`, `[0]` after `[.., _]`), nor does a `_` after `[]` and `[x, ..]` | — |
+| B-2026-11-15-97 | 2026-11-15 | typecheck+cli | medium | `[.., 0]` after `[0, ..]` was reported as an unreachable arm though `[1, 0]` reaches it, and `karac fix` deleted the live arm | — |
+| B-2026-11-15-98 | 2026-11-15 | typecheck | low | A trait impl may declare a method the trait lacks, and that method is then callable; a misspelled override silently leaves the trait's default running | — |
 
 ### Relocated
 
