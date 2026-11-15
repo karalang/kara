@@ -404,6 +404,72 @@ fn statement_closure_runs_before(cfg: &Cfg, cb: BlockId, c: &UseSite, ub: BlockI
     !inside && made != cb && !cfg_reaches(cfg, cb, made)
 }
 
+/// Core semantics §9.3 (B-2026-11-15-95): a closure whose body consumes a
+/// captured binding moves it in when the closure is made, so every site of
+/// the binding in that body acts at the creation, on the closure's own
+/// value. Returns `(creation block, creation offset)` for such a site.
+fn move_capture_point(
+    uses: &[(BlockId, usize, &UseSite)],
+    cfg: &Cfg,
+    b: BlockId,
+    site: &UseSite,
+) -> Option<(BlockId, usize)> {
+    let owner = site
+        .capture_scope
+        .or_else(|| cfg.closure_body_owner.get(&b).copied())?;
+    let moves_in = uses.iter().any(|(xb, _, x)| {
+        x.kind == UseKind::Consume
+            && (x.capture_scope == Some(owner) || cfg.closure_body_owner.get(xb) == Some(&owner))
+    });
+    let at = *cfg.closure_creations.get(&owner)?;
+    (moves_in && !cfg.closure_body_blocks.contains(&at)).then_some((at, owner.0))
+}
+
+/// Whether a (C, U) pair, one side of which sits in the body of a closure
+/// that moved the binding in, is no re-use once that side is put at the
+/// closure's creation: the creation comes before C and C cannot reach it
+/// again, or a rebind of the whole binding outside every closure lies
+/// between C and the creation (`let c = || eat(a); a = D {..}; eat(a)`).
+fn move_capture_pair_clears(
+    uses: &[(BlockId, usize, &UseSite)],
+    cfg: &Cfg,
+    dom: &DominatorTree,
+    (cb, c): (BlockId, &UseSite),
+    (ub, u): (BlockId, &UseSite),
+) -> bool {
+    let at = |b: BlockId, x: &UseSite| -> Option<(BlockId, usize, bool)> {
+        if let Some((m, off)) = move_capture_point(uses, cfg, b, x) {
+            return Some((m, off, true));
+        }
+        (!cfg.closure_body_blocks.contains(&b)).then_some((b, x.span.offset, false))
+    };
+    let (Some((mc, oc, c_in)), Some((mu, ou, u_in))) = (at(cb, c), at(ub, u)) else {
+        return false;
+    };
+    if !c_in && !u_in {
+        return false;
+    }
+    let before = |ab: BlockId, ao: usize, bb: BlockId, bo: usize| {
+        if ab == bb {
+            ao < bo && !cfg_reaches(cfg, ab, ab)
+        } else {
+            dom.dominates(ab, bb) && !cfg_reaches(cfg, bb, ab)
+        }
+    };
+    // U acts at a creation that precedes C and that C cannot reach again.
+    if u_in && !c_in && before(mu, ou, mc, oc) {
+        return true;
+    }
+    // A rebind between the two, in that order.
+    uses.iter().any(|(rb, _, r)| {
+        r.kind == UseKind::Reassign
+            && place_rebind_covers(&r.place, &c.place)
+            && !cfg.closure_body_blocks.contains(rb)
+            && before(mc, oc, *rb, r.span.offset)
+            && before(*rb, r.span.offset, mu, ou)
+    })
+}
+
 fn first_witness(
     binding: &str,
     uses: &[(BlockId, usize, &UseSite)],
@@ -542,6 +608,9 @@ fn first_witness(
                 && outside_closures(ub)
                 && !cfg_reaches(cfg, *cb, *ub)
             {
+                continue;
+            }
+            if !closure_local && move_capture_pair_clears(uses, cfg, dom, (*cb, c), (*ub, u)) {
                 continue;
             }
             // B-2026-11-04-34: a closure that takes a captured value moves it

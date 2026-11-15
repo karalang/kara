@@ -1518,6 +1518,18 @@ impl<'a> UseClassifier<'a> {
                 };
                 self.walk_block(block, tail)
             }
+            // A labeled block is a block whose value also leaves through
+            // `break 'b v` (B-2026-11-15-94); with no arm here its body's
+            // uses fell to the default Read, a move and a reassignment
+            // included. Paired with the cfg.rs arm.
+            ExprKind::LabeledBlock { body, .. } => {
+                let tail = if crate::ownership::core_rules() {
+                    Mode::Consuming
+                } else {
+                    mode
+                };
+                self.walk_block(body, tail)
+            }
 
             ExprKind::If {
                 condition,

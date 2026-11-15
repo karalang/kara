@@ -395,6 +395,9 @@ struct LoopFrame {
     /// scopes outside this loop and are not unwound by break /
     /// continue (only by `return` / `?`-error).
     defer_depth: usize,
+    /// A labeled block (`'b: { .. }`): only `break 'b` targets it, and an
+    /// unlabeled `break` / `continue` passes it for the innermost loop.
+    block: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1410,6 +1413,7 @@ impl<'a> CfgBuilder<'a> {
                     break_target: merge,
                     continue_target: header,
                     defer_depth: self.defer_stack.len(),
+                    block: false,
                 };
                 let mut new_loops = loops.to_vec();
                 new_loops.push(frame);
@@ -1455,6 +1459,7 @@ impl<'a> CfgBuilder<'a> {
                     break_target: merge,
                     continue_target: header,
                     defer_depth: self.defer_stack.len(),
+                    block: false,
                 };
                 let mut new_loops = loops.to_vec();
                 new_loops.push(frame);
@@ -1515,6 +1520,7 @@ impl<'a> CfgBuilder<'a> {
                     break_target: merge,
                     continue_target: header,
                     defer_depth: self.defer_stack.len(),
+                    block: false,
                 };
                 let mut new_loops = loops.to_vec();
                 new_loops.push(frame);
@@ -1532,6 +1538,7 @@ impl<'a> CfgBuilder<'a> {
                     break_target: merge,
                     continue_target: header,
                     defer_depth: self.defer_stack.len(),
+                    block: false,
                 };
                 let mut new_loops = loops.to_vec();
                 new_loops.push(frame);
@@ -1758,6 +1765,24 @@ impl<'a> CfgBuilder<'a> {
             | ExprKind::Unsafe(body)
             | ExprKind::Try(body) => self.lower_block(body, cur, exit, loops),
             ExprKind::Lock { body, .. } => self.lower_block(body, cur, exit, loops),
+            // A labeled block: its body runs in line, and each `break 'b`
+            // joins the block's end at the code after it (B-2026-11-15-94).
+            // Falling through `_ => cur` dropped the body's uses and its
+            // breaks' paths.
+            ExprKind::LabeledBlock { label, body, .. } => {
+                let merge = self.new_block();
+                let mut new_loops = loops.to_vec();
+                new_loops.push(LoopFrame {
+                    label: Some(label.clone()),
+                    break_target: merge,
+                    continue_target: merge,
+                    defer_depth: self.defer_stack.len(),
+                    block: true,
+                });
+                let body_exit = self.lower_block(body, cur, exit, &new_loops);
+                self.add_edge(body_exit, merge);
+                merge
+            }
             ExprKind::Providers { bindings, body } => {
                 let mut c = cur;
                 for binding in bindings {
@@ -1781,7 +1806,7 @@ impl<'a> CfgBuilder<'a> {
 fn resolve_loop_frame<'f>(loops: &'f [LoopFrame], label: Option<&str>) -> Option<&'f LoopFrame> {
     match label {
         Some(l) => loops.iter().rev().find(|f| f.label.as_deref() == Some(l)),
-        None => loops.last(),
+        None => loops.iter().rev().find(|f| !f.block),
     }
 }
 
