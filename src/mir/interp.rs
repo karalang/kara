@@ -14,6 +14,9 @@
 //! must have removed or guarded it. Running one program both ways is the
 //! check on drop elaboration.
 
+/// Winsock's "message too long": a peek shorter than the datagram.
+const WSAEMSGSIZE: i32 = 10040;
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -16432,6 +16435,11 @@ impl<'a> Interp<'a> {
                 let _ = u.set_nonblocking(false);
                 match got {
                     Err(e) if e.kind() == WouldBlock => self.sockets.past(*fd, *at),
+                    // Windows reports a datagram longer than the 1-byte peek
+                    // as WSAEMSGSIZE where Linux truncates it: a datagram is
+                    // waiting, so the `recv` that follows reads it whole
+                    // rather than failing on the peek's error.
+                    Err(e) if e.raw_os_error() == Some(WSAEMSGSIZE) => true,
                     Err(e) => {
                         self.sockets.failed.insert(*fd, e);
                         true
