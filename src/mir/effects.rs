@@ -1230,7 +1230,14 @@ impl Origins {
             .iter()
             .map(|d| carries_value(tcx, d.ty))
             .collect();
-        let by_ref: Vec<bool> = body.locals.iter().map(|d| refers(tcx, d.ty, 0)).collect();
+        // A local another value can be stored into: a `ref Sender[i64]`
+        // takes in nothing that holds a resource, so a `par` branch that
+        // borrows two channels does not make them one (B-2026-11-15-87).
+        let by_ref: Vec<bool> = body
+            .locals
+            .iter()
+            .map(|d| writes_through(tcx, d.ty, 0))
+            .collect();
         let mut preds: Vec<Vec<u32>> = vec![Vec::new(); n + 1];
         let mut assigned = vec![BTreeSet::new(); n];
         let flow = |preds: &mut Vec<Vec<u32>>, src: usize, dst: usize, back: bool| {
@@ -1450,6 +1457,70 @@ fn carries_at(tcx: &TyCtxt, ty: Ty, depth: u32) -> bool {
             .into_iter()
             .any(|e| carries_at(tcx, e, depth + 1)),
         SK::Array { elem, .. } | SK::Slice { elem, .. } => carries_at(tcx, elem, depth + 1),
+        _ => true,
+    }
+}
+
+/// Can a value that holds a resource be stored through a value of type
+/// `ty`? It can through a `mut ref`, a `shared` or `weak` handle, a raw
+/// pointer or a function value, through a closure that captures one, and
+/// through a `ref` to a value that can take one in ([`stores_behind_ref`]).
+/// A `ref` is read-only otherwise, so a closure that captures `ref txa` and
+/// `ref rxb` cannot put one channel where the other was (B-2026-11-15-87).
+fn writes_through(tcx: &TyCtxt, ty: Ty, depth: u32) -> bool {
+    if depth > 4 {
+        return true;
+    }
+    match tcx.kind(ty) {
+        SK::Ref(i) => stores_behind_ref(tcx, i, depth + 1),
+        SK::Closure { captures: l, .. }
+        | SK::Tuple(l)
+        | SK::Adt { args: l, .. }
+        | SK::Intrinsic { args: l, .. } => tcx
+            .list(l)
+            .into_iter()
+            .any(|t| writes_through(tcx, t, depth + 1)),
+        SK::Array { elem, .. } | SK::Slice { elem, .. } => writes_through(tcx, elem, depth + 1),
+        _ => refers(tcx, ty, depth),
+    }
+}
+
+/// Can a value that holds a resource be stored into a value of type `ty`
+/// reached through a `ref`? Not into scalars, strings or collections of
+/// them, nor into a struct whose fields cannot take one in. A library type
+/// whose state is hidden (`Sender[T]`, `Mutex[T]`) takes in what its type
+/// arguments hold, so a `Sender[i64]` takes in nothing and a
+/// `Mutex[Vec[Sender[i64]]]` may take in a sender; one with no type
+/// arguments (`TaskGroup`) may take in anything.
+fn stores_behind_ref(tcx: &TyCtxt, ty: Ty, depth: u32) -> bool {
+    if depth > 4 {
+        return true;
+    }
+    if !carries_value(tcx, ty) {
+        return false;
+    }
+    let any = |l: Vec<Ty>| l.into_iter().any(|t| stores_behind_ref(tcx, t, depth + 1));
+    match tcx.kind(ty) {
+        SK::Ref(i) => stores_behind_ref(tcx, i, depth + 1),
+        SK::Tuple(l) | SK::Intrinsic { args: l, .. } => any(tcx.list(l)),
+        SK::Array { elem, .. } | SK::Slice { elem, .. } => stores_behind_ref(tcx, elem, depth + 1),
+        SK::Closure { captures: l, .. } => tcx
+            .list(l)
+            .into_iter()
+            .any(|t| writes_through(tcx, t, depth + 1)),
+        SK::Adt { .. } => {
+            let Some((adt, args)) = tcx.adt_of(ty) else {
+                return true;
+            };
+            if adt.variants.iter().all(|v| v.fields.is_empty()) {
+                return args.is_empty() || args.iter().any(|&t| carries_value(tcx, t));
+            }
+            any(adt
+                .variants
+                .iter()
+                .flat_map(|v| v.fields.iter().map(|(_, t)| tcx.subst(*t, &args, &[])))
+                .collect())
+        }
         _ => true,
     }
 }
