@@ -384,6 +384,9 @@ fn lower_program_inner<'a>(
         tc,
         source,
         user_len,
+        user_questions: source
+            .get(..user_len.unwrap_or(source.len()))
+            .is_none_or(|s| s.contains('?')),
         fn_field_effects: program
             .items
             .iter()
@@ -1317,6 +1320,10 @@ struct Lcx<'a> {
     /// How many leading bytes of `source` are the program's own, the rest
     /// being the appended library's; `None` when it is all the program's.
     user_len: Option<usize>,
+    /// Whether the program's own source has a `?` in it: without one no
+    /// error return trace is ever recorded, so a handled `Result` has none
+    /// to clear and links no trace machinery (TK2).
+    user_questions: bool,
     /// The struct fields whose function type declares an effect clause, as
     /// (struct, field): a call through one has those effects (core
     /// semantics §12, B-2026-10-27-2).
@@ -9980,7 +9987,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 method,
                 args,
                 ..
-            } => self.method_call(e, object, method, args, dest),
+            } => {
+                // A `Result` handled by a method that consumes it without
+                // panicking (`unwrap_or`, `is_err`, `ok`) clears the trace
+                // its error carried (design.md § Error return traces).
+                if method.starts_with("unwrap_or")
+                    || matches!(
+                        method.as_str(),
+                        "ok" | "err" | "is_ok" | "is_err" | "is_ok_and" | "is_err_and"
+                    )
+                {
+                    // Cleared after the call: the receiver is evaluated
+                    // inside it, and its `?`s push first.
+                    self.method_call(e, object, method, args, dest)?;
+                    return self.handled_result(e.span, object);
+                }
+                self.method_call(e, object, method, args, dest)
+            }
             ExprKind::Question(inner) => self.question(e, inner, dest),
             ExprKind::NilCoalesce { left, right } => self.nil_coalesce(left, right, dest),
             ExprKind::InterpolatedStringLit(_) => {
@@ -17759,6 +17782,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         if indexed {
             self.element_reborrows.insert(place.local);
         }
+        // A `Result` matched by a pattern is handled: the error return
+        // trace its error carried is cleared once it is evaluated
+        // (design.md § Error return traces), so a later panic does not
+        // print it.
+        self.handled_result(scrutinee.span, scrutinee)?;
         // A `mut` field of a `shared` value that is `Copy` or counted is
         // read as a value (core semantics §6.2), so a binding covering the
         // whole handle is a counted copy, not a `ref` into the field:
@@ -19379,6 +19407,26 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// whose type names a hasher does (`karac_mir_map_unkeyed`).
     fn unkey_table(&mut self, place: Place) {
         self.call_native("table_unkeyed", vec![Operand::Move(place.clone())], place);
+    }
+
+    /// `error_trace_clear()` at `at` when `value` is a `Result` (or a
+    /// reference to one) and the site keeps traces: the program consumed
+    /// the error by something other than `?`, so its trace is over
+    /// (design.md § Error return traces).
+    fn handled_result(&mut self, at: Span, value: &'a Expr) -> R<()> {
+        let mut t = self.expr_ty(value)?;
+        while let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+            t = inner;
+        }
+        let is_result = self
+            .tys()
+            .tcx()
+            .adt_of(t)
+            .is_some_and(|(adt, _)| adt.name == "Result");
+        if is_result && self.lcx.user_questions && self.traces_question(at) {
+            self.error_trace("error_trace_clear", at, None);
+        }
+        Ok(())
     }
 
     /// Whether the `?` at `at` keeps the error return trace (design.md §
