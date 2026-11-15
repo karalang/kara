@@ -81,12 +81,17 @@ fn kata_2208_collected_binary_heap_stays_largest_first() {
 }
 
 #[test]
-fn kata_2208_collected_reverse_heap_takes_the_plain_rename() {
+fn kata_2208_collected_reverse_heap_pops_the_largest_reverse_first() {
     let (_, _, fixed) = karac(
         "rev",
         "use std::cmp::Reverse;\nfn main() {\n    let nums = [3, 9, 1];\n    let mut heap: BinaryHeap<Reverse<i64>> = nums.iter().map(|x| Reverse(x)).collect();\n    println(f\"{heap.len()}\");\n}",
         &["fix"],
     );
     let (_, out, fixed) = karac("rev2", &fixed, &["fix"]);
-    assert!(!fixed.contains("max_first"), "{out}\n{fixed}");
+    // B-2026-11-15-86: the heap keeps its `Reverse`, so it must pop the largest
+    // `Reverse` first, the smallest item, as Rust's does.
+    assert!(
+        fixed.contains("PriorityQueue.max_first_from("),
+        "{out}\n{fixed}"
+    );
 }

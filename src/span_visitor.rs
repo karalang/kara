@@ -989,6 +989,20 @@ pub fn for_each_block_in_block(b: &Block, f: &mut impl FnMut(&Block)) {
     visit_block_spans_mut(&mut copy, &mut Each(f, 0));
 }
 
+/// Call `f` on every statement in `e`, nested blocks' included, outermost
+/// first.
+pub fn for_each_stmt(e: &Expr, f: &mut impl FnMut(&Stmt)) {
+    struct Each<'f, F>(&'f mut F);
+    impl<F: FnMut(&Stmt)> MutVisitor for Each<'_, F> {
+        fn span(&mut self, _: &mut Span) {}
+        fn stmt(&mut self, s: &mut Stmt) {
+            (self.0)(s)
+        }
+    }
+    let mut copy = e.clone();
+    walk_expr_mut(&mut copy, &mut Each(f));
+}
+
 /// Call `f` on every expression in `e`, outermost first.
 pub fn for_each_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     struct Each<'f, F>(&'f mut F);

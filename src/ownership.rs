@@ -778,6 +778,11 @@ pub fn kind_blocks_production(kind: &OwnershipErrorKind) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum OwnershipErrorKind {
     UseAfterMove,
+    /// Core §11.2: one `par` branch moves a binding another branch uses.
+    /// Found as a use after a move when the move comes first in the
+    /// source, and reported as the branch conflict (E0418) MIR's effect
+    /// pass gives the other order (B-2026-11-15-128).
+    ParBranchConflict,
     /// v2 core C3 (`docs/core-semantics.md` §3.7): a non-`Copy` value is moved
     /// out of a place its owner keeps, such as an element of a collection
     /// (`v[i]` in a moving position). Legacy copies it silently. Reported
@@ -987,6 +992,7 @@ pub(crate) fn class_for_ownership_error_kind(
     match kind {
         // "Use of a binding after its value was moved" — verbatim.
         OwnershipErrorKind::UseAfterMove => Some(DC::OwnershipMoveAfterUse),
+        OwnershipErrorKind::ParBranchConflict => Some(DC::EffectConflict),
         // A move the v2 core forbids at its source (C3), named by the same
         // class as the use-after-move it would otherwise become.
         OwnershipErrorKind::MoveOutOfPlace => Some(DC::OwnershipMoveAfterUse),
@@ -1598,6 +1604,46 @@ pub(crate) fn collect_copy_bounded_type_params(
 /// The closure literal last bound to `name` by a `let` before `before`, so a
 /// second call of an `OnceFn` local can name what made it `OnceFn`
 /// (B-2026-11-04-67).
+/// A `par` branch's number (from 1), with whether the site in it is the
+/// move.
+type ParBranch = (usize, bool);
+
+/// When `a` and `b` lie in different branches of one `par { x, y, .. }`:
+/// the `par`'s span, then each branch, lower first, with whether its site
+/// is `a`.
+fn par_branches_of(body: &Block, a: &Span, b: &Span) -> Option<(Span, ParBranch, ParBranch)> {
+    let within =
+        |s: &Span, x: &Span| x.offset >= s.offset && x.offset + x.length <= s.offset + s.length;
+    let mut found = None;
+    crate::span_visitor::for_each_expr_in_block(body, &mut |e| {
+        if found.is_some() {
+            return;
+        }
+        let ExprKind::Par(blk) = &e.kind else {
+            return;
+        };
+        if !blk.stmts.is_empty() {
+            return;
+        }
+        let Some(ExprKind::Tuple(branches)) = blk.final_expr.as_deref().map(|t| &t.kind) else {
+            return;
+        };
+        let ia = branches.iter().position(|br| within(&br.span, a));
+        let ib = branches.iter().position(|br| within(&br.span, b));
+        if let (Some(ia), Some(ib)) = (ia, ib) {
+            if ia != ib {
+                let (lo, hi) = if ia < ib {
+                    ((ia + 1, true), (ib + 1, false))
+                } else {
+                    ((ib + 1, false), (ia + 1, true))
+                };
+                found = Some((e.span, lo, hi));
+            }
+        }
+    });
+    found
+}
+
 fn once_closure_of(body: &Block, name: &str, before: &Span) -> Option<SpanKey> {
     fn block(b: &Block, name: &str, before: &Span, out: &mut Option<SpanKey>) {
         for st in &b.stmts {
@@ -4112,6 +4158,13 @@ impl<'a> OwnershipChecker<'a> {
                 .then_with(|| aw.consume_span.offset.cmp(&bw.consume_span.offset))
                 .then_with(|| ab.cmp(bb))
         });
+        // Every move site, for naming a `par` branch's access (B-2026-11-15-128).
+        let moves: Vec<(usize, usize)> = sites
+            .values()
+            .flatten()
+            .filter(|(_, _, u)| matches!(u.kind, crate::cfg::UseKind::Consume))
+            .map(|(_, _, u)| (u.span.offset, u.span.length))
+            .collect();
         drop(sites);
         for (binding, w) in uam_witnesses {
             // Strip the internal rename suffix for the user-facing message
@@ -4143,6 +4196,38 @@ impl<'a> OwnershipChecker<'a> {
             // pair.
             if let Some(e) = self.map_assign_key_error(binding, w.consume_span, w.other_use_span) {
                 self.errors.push(e);
+                continue;
+            }
+            // A move in one `par` branch and a use in another is no use
+            // after a move: the branches may run at once (core semantics
+            // §11.2), so it is the branch conflict MIR's effect pass names
+            // when the use comes first, said the same way in either order
+            // (B-2026-11-15-128).
+            if let Some((at, (i, first), (j, second))) =
+                par_branches_of(&f.body, &w.consume_span, &w.other_use_span)
+            {
+                let use_moves = moves.contains(&(w.other_use_span.offset, w.other_use_span.length));
+                let access = |consume: bool| {
+                    if consume || use_moves {
+                        format!("move of {binding}")
+                    } else {
+                        format!("read of {binding}")
+                    }
+                };
+                self.errors.push(OwnershipError {
+                    message: format!(
+                        "branches {i} and {j} of the `par` conflict: `{}` and `{}` (core semantics \
+                         §11.2: branches may run at once, so none may write, move, mutably borrow \
+                         or drop a place another uses, or write a resource another uses)",
+                        access(first),
+                        access(second)
+                    ),
+                    span: at,
+                    kind: OwnershipErrorKind::ParBranchConflict,
+                    suggestion: None,
+                    replacement: None,
+                    consume_span: Some(w.consume_span),
+                });
                 continue;
             }
             let supports_clone = self.moved_type_supports_clone(&w.consume_span);

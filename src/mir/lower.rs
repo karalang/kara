@@ -25485,6 +25485,86 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// The fields of `sym` the closure body may change: those an
+    /// assignment's target, a method call's receiver, a `mut` argument, a
+    /// dereference or a pattern's scrutinee reaches. A method call on a
+    /// `Copy` field cannot change it. Anything else is a read.
+    fn changed_fields(&self, body: &Expr, sym: SymbolId) -> FxHashSet<String> {
+        let res = &self.lcx.res;
+        let field_of = |e: &Expr| -> Option<String> {
+            let mut e = e;
+            let mut field = None;
+            loop {
+                match &e.kind {
+                    ExprKind::FieldAccess { object, field: f } => {
+                        field = Some(f.clone());
+                        e = object;
+                    }
+                    ExprKind::TupleIndex { object, index } => {
+                        field = Some(index.to_string());
+                        e = object;
+                    }
+                    ExprKind::Index { object, .. } => e = object,
+                    _ => break,
+                }
+            }
+            let is_sym = matches!(e.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+                && matches!(res.get(&e.id), Some(Res::Local(s)) if *s == sym);
+            if is_sym {
+                field
+            } else {
+                None
+            }
+        };
+        let mut out = FxHashSet::default();
+        let note = |e: &Expr, out: &mut FxHashSet<String>| {
+            if let Some(f) = field_of(e) {
+                out.insert(f);
+            }
+        };
+        crate::span_visitor::for_each_expr(body, &mut |x| match &x.kind {
+            ExprKind::MethodCall { object, args, .. } => {
+                let copy = self
+                    .lcx
+                    .node_types
+                    .get(&object.id)
+                    .is_some_and(|&t| self.is_copy(t));
+                if !copy {
+                    note(object, &mut out);
+                }
+                for a in args.iter().filter(|a| a.mut_marker) {
+                    note(&a.value, &mut out);
+                }
+            }
+            ExprKind::Call { args, .. } => {
+                for a in args.iter().filter(|a| a.mut_marker) {
+                    note(&a.value, &mut out);
+                }
+            }
+            ExprKind::Unary {
+                op: crate::ast::UnaryOp::Deref,
+                operand,
+            } => note(operand, &mut out),
+            ExprKind::Match { scrutinee, .. } => note(scrutinee, &mut out),
+            ExprKind::IfLet { value, .. } | ExprKind::WhileLet { value, .. } => {
+                note(value, &mut out)
+            }
+            _ => {}
+        });
+        crate::span_visitor::for_each_stmt(body, &mut |st| match &st.kind {
+            StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+                note(target, &mut out)
+            }
+            StmtKind::MultiAssign { targets, .. } => {
+                for t in targets {
+                    note(t, &mut out);
+                }
+            }
+            _ => {}
+        });
+        out
+    }
+
     /// Record the capture an assignment's target is rooted at.
     fn note_assigned(&self, target: &Expr, caps: &[SymbolId]) {
         let mut e = target;
@@ -25716,6 +25796,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             ExprKind::Loop { body, .. } => self.mv_block(body, false, caps, out),
             ExprKind::Closure { body, .. } => go(body, true, out),
+            // A `par` branch that moves a capture moves it out of this
+            // closure's environment too, so the closure takes it by move
+            // (core semantics §9.1; B-2026-11-15-127).
+            ExprKind::Par(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                self.mv_block(b, ctx, caps, out)
+            }
             ExprKind::Return(Some(x)) | ExprKind::Question(x) => go(x, true, out),
             ExprKind::Break { value: Some(x), .. } => go(x, true, out),
             ExprKind::Binary { left, right, .. } => {
@@ -25922,9 +26008,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     _ => (place.clone(), t, false),
                 };
                 if let Some(names) = self.disjoint_fields(body, sym, st) {
+                    // Each field takes its own mode (§9.1): one the body
+                    // only reads is lent by `ref` even when another is
+                    // written, so a sibling `par` branch or task may read it
+                    // (B-2026-11-15-126).
+                    let changed = self.changed_fields(body, sym);
                     for (name, idx, ft) in names {
-                        let mutable =
-                            cm == CapMode::Mut || (through_mut && assigned.contains(&sym));
+                        let mutable = (cm == CapMode::Mut
+                            || (through_mut && assigned.contains(&sym)))
+                            && changed.contains(&name);
                         let rt = self.tys().tcx().reference(ft, mutable);
                         let r = self.temp(rt);
                         let kind = if mutable {

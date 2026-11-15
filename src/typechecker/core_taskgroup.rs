@@ -82,12 +82,18 @@ struct Capture {
     /// (`p.x` is `["x"]`, `p` and `p.v[i]` stop at the binding and at `v`):
     /// two tasks that name only disjoint fields do not overlap (§5.6, §9.1).
     paths: Vec<Vec<String>>,
+    /// The paths the task writes: its `mut ref` is exclusive only over
+    /// these, so a task that writes `p.a` and one that reads `p.b` do not
+    /// overlap (B-2026-11-15-126).
+    mut_paths: Vec<Vec<String>>,
 }
 
 /// A write or move of a place, for checking against the live borrows.
 struct Write {
     name: String,
     decl: Decl,
+    /// The field path written under the binding (empty for the whole).
+    path: Vec<String>,
     span: Span,
     what: &'static str,
 }
@@ -290,7 +296,7 @@ impl Walk<'_, '_> {
                 self.expr(value);
                 self.expr(target);
                 if let Some(root) = place_root(target) {
-                    self.write(root, target.span, "written");
+                    self.write(root, path_of(target), target.span, "written");
                 }
             }
             StmtKind::MultiAssign { targets, values } => {
@@ -302,11 +308,12 @@ impl Walk<'_, '_> {
         }
     }
 
-    fn write(&mut self, name: &str, span: Span, what: &'static str) {
+    fn write(&mut self, name: &str, path: Vec<String>, span: Span, what: &'static str) {
         if let Some(decl) = self.lookup(name) {
             self.writes.push(Write {
                 name: name.to_string(),
                 decl,
+                path,
                 span,
                 what,
             });
@@ -321,7 +328,7 @@ impl Walk<'_, '_> {
         if self.tc.is_copy_type_during_check(ty) || self.tc.copy_is_only_an_rc_retain(ty) {
             return;
         }
-        self.write(name, e.span, "moved");
+        self.write(name, Vec::new(), e.span, "moved");
     }
 
     fn expr(&mut self, e: &Expr) {
@@ -358,7 +365,7 @@ impl Walk<'_, '_> {
                 }
                 if let Some(root) = place_root(object) {
                     if self.method_writes_receiver(e, method) {
-                        self.write(root, object.span, "written");
+                        self.write(root, path_of(object), object.span, "written");
                     }
                 }
             }
@@ -368,7 +375,7 @@ impl Walk<'_, '_> {
                     self.expr(&a.value);
                     if a.mut_marker {
                         if let Some(root) = place_root(&a.value) {
-                            self.write(root, a.value.span, "written");
+                            self.write(root, path_of(&a.value), a.value.span, "written");
                         }
                     }
                 }
@@ -390,6 +397,7 @@ impl Walk<'_, '_> {
                     self.uses.push(Write {
                         name: n.clone(),
                         decl,
+                        path: Vec::new(),
                         span: e.span,
                         what: "used",
                     });
@@ -498,12 +506,13 @@ impl Walk<'_, '_> {
             loop_depth: 0,
         };
         inner.expr(body);
-        let written: FxHashSet<String> = inner
-            .writes
-            .iter()
-            .filter(|w| w.decl.offset != usize::MAX)
-            .map(|w| w.name.clone())
-            .collect();
+        let mut written: FxHashMap<String, Vec<Vec<String>>> = FxHashMap::default();
+        for w in inner.writes.iter().filter(|w| w.decl.offset != usize::MAX) {
+            written
+                .entry(w.name.clone())
+                .or_default()
+                .push(w.path.clone());
+        }
         let mut names: Vec<(String, Expr)> = Vec::new();
         free_identifiers(body, &mut names);
         let mut paths: FxHashMap<String, Vec<Vec<String>>> = FxHashMap::default();
@@ -525,12 +534,13 @@ impl Walk<'_, '_> {
                 .is_some_and(|(ty, _)| self.tc.is_copy_type_during_check(ty));
             // A `Copy` place the body writes is captured by `mut ref` even
             // when the body also copies it out.
-            if moved.contains(&name) && !(copy && written.contains(&name)) {
+            if moved.contains(&name) && !(copy && written.contains_key(&name)) {
                 continue;
             }
             self.captures.push(Capture {
                 group,
-                mutable: written.contains(&name),
+                mutable: written.contains_key(&name),
+                mut_paths: written.get(&name).cloned().unwrap_or_default(),
                 paths: paths
                     .get(&name)
                     .cloned()
@@ -717,7 +727,7 @@ impl Walk<'_, '_> {
                 j != i
                     && d.group == c.group
                     && d.decl == c.decl
-                    && c.paths
+                    && c.mut_paths
                         .iter()
                         .any(|a| d.paths.iter().any(|b| overlap(a, b)))
             });
@@ -814,6 +824,15 @@ fn capture_paths(e: &Expr, out: &mut FxHashMap<String, Vec<Vec<String>>>) {
             }
         }
     }
+}
+
+/// The field path of a place expression under its binding, as
+/// [`field_path`] gives it; empty when it is not a place.
+fn path_of(e: &Expr) -> Vec<String> {
+    let mut rest = Vec::new();
+    field_path(e, &mut rest)
+        .map(|(_, p, _)| p)
+        .unwrap_or_default()
 }
 
 /// The binding a place expression is rooted at.

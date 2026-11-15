@@ -14408,8 +14408,19 @@ impl<'a> super::TypeChecker<'a> {
                             crate::typechecker::TypeErrorKind::NotCallable,
                         );
                         let key = SpanKey::from_span(&expr.span);
-                        if let Some(edits) = self.struct_call_literals.remove(&key) {
-                            self.error_fix_diffs.insert(key, edits);
+                        match self.struct_call_literals.remove(&key) {
+                            Some(edits) if !edits.is_empty() => {
+                                self.error_fix_diffs.insert(key, edits);
+                            }
+                            // A callee the call could not rewrite.
+                            Some(_) => {}
+                            None => {
+                                // Rust's tuple-struct constructor passed as
+                                // a function, `.map(Reverse)` (B-2026-11-15-86).
+                                if let Some(edit) = self.one_field_struct_as_fn(name, &expr.span) {
+                                    self.error_fix_diffs.insert(key, vec![edit]);
+                                }
+                            }
                         }
                     }
                 }

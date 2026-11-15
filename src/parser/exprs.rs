@@ -3774,7 +3774,9 @@ impl super::Parser {
     /// the edit that writes `PriorityQueue.max_first_from(it.collect())`, for
     /// the resolver to attach beside the annotation's rename
     /// ([`crate::ast::Program::rust_heap_collect`]). A heap of `Reverse` items
-    /// pops the smallest first and takes the plain rename.
+    /// is noted too, flagged: its `Reverse` stays unless the program drops
+    /// it, and a smallest-first queue would pop its largest item first
+    /// (B-2026-11-15-86).
     pub(super) fn note_rust_heap_collect(
         &mut self,
         ty: Option<&crate::ast::TypeExpr>,
@@ -3796,9 +3798,6 @@ impl super::Parser {
                 if matches!(&t.kind, crate::ast::TypeKind::Path(p)
                     if p.segments.last().is_some_and(|s| s == "Reverse")))
         });
-        if reversed {
-            return;
-        }
         let ExprKind::MethodCall { method, args, .. } = &value.kind else {
             return;
         };
@@ -3822,7 +3821,8 @@ impl super::Parser {
             length: text.len(),
             replacement: format!("PriorityQueue.max_first_from({text})"),
         };
-        self.rust_heap_collect.insert(path.span.offset, edit);
+        self.rust_heap_collect
+            .insert(path.span.offset, (edit, reversed));
     }
 
     /// Rust's `BinaryHeap.new()` / `BinaryHeap.from(v)`, whose `BinaryHeap`

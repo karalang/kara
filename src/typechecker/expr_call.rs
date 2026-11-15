@@ -1063,6 +1063,12 @@ impl<'a> super::TypeChecker<'a> {
         let ExprKind::Identifier(name) = &callee.kind else {
             return;
         };
+        // Marks the name as called, with no rewrite unless one is found
+        // below: a callee is never a constructor passed as a function.
+        if self.env.structs.contains_key(name) {
+            self.struct_call_literals
+                .insert(SpanKey::from_span(&callee.span), Vec::new());
+        }
         if self.local_scope.lookup(name).is_some()
             || self.env.functions.contains_key(name)
             || self.env.distinct_bases.contains_key(name)

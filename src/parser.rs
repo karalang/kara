@@ -399,7 +399,7 @@ pub struct Parser {
     /// See [`crate::ast::Program::rust_heap_ctor`].
     pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::rust_heap_collect`].
-    pub(crate) rust_heap_collect: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    pub(crate) rust_heap_collect: rustc_hash::FxHashMap<usize, (crate::resolver::TextEdit, bool)>,
     /// See [`crate::ast::Program::parse_target_edits`].
     pub(crate) parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::range_arg_edits`].

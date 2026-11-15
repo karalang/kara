@@ -17190,9 +17190,11 @@ fn test_json_par_plain_struct_moved_into_two_branches_is_a_move_error() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let _ = std::fs::remove_file(&fixture);
     assert!(!out.status.success());
+    // The branches run at once, so this is the `par` conflict E0418, not a
+    // use after a move (B-2026-11-15-128).
     assert!(
-        stdout.contains("\"code\":\"E0500\""),
-        "expected a use-after-move error in JSON; got: {stdout}",
+        stdout.contains("\"code\":\"E0418\"") && stdout.contains("`move of s` and `move of s`"),
+        "expected a par branch conflict in JSON; got: {stdout}",
     );
     assert!(
         !stdout.contains("E_CONCURRENT_PLAIN_STRUCT"),

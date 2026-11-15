@@ -939,8 +939,11 @@ pub struct Program {
     /// hands the collected items to `PriorityQueue.max_first_from(..)`: the
     /// annotation's rename alone would make the heap pop the smallest first.
     /// Set by the PARSER; the resolver reports it beside the rename
-    /// (B-2026-11-15-80, kata 2208).
-    pub rust_heap_collect: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// (B-2026-11-15-80, kata 2208). The flag marks a heap of `Reverse`
+    /// items, which keeps its `Reverse` and so needs the largest-first
+    /// queue too, unless the program's other heaps drop `Reverse`
+    /// (B-2026-11-15-86).
+    pub rust_heap_collect: rustc_hash::FxHashMap<usize, (crate::resolver::TextEdit, bool)>,
     /// Rust's `std::cmp::Reverse` around a heap's item, `heap.push(Reverse(x))`
     /// or `Some(Reverse(p))`, keyed by the offset of `Reverse`, with the edit
     /// that writes `x` in its place. Set by the PARSER from the

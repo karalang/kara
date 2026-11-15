@@ -1116,6 +1116,28 @@ impl<'a> super::TypeChecker<'a> {
         Some(format!("'{name}' is a type, not a function — {msg}"))
     }
 
+    /// A struct of one field named where a function goes, Rust's tuple-struct
+    /// constructor passed as a value (`.map(Reverse)`): the closure that
+    /// builds it, `|x| Reverse { value: x }` (B-2026-11-15-86).
+    pub(super) fn one_field_struct_as_fn(
+        &self,
+        name: &str,
+        span: &crate::token::Span,
+    ) -> Option<crate::resolver::TextEdit> {
+        if is_prelude_type_or_module_name(name) || self.user_enum_owning_variant(name).is_some() {
+            return None;
+        }
+        let info = self.env.structs.get(name)?;
+        let [(field, _, _)] = info.fields.as_slice() else {
+            return None;
+        };
+        Some(crate::resolver::TextEdit {
+            offset: span.offset,
+            length: span.length,
+            replacement: format!("|x| {name} {{ {field}: x }}"),
+        })
+    }
+
     /// The USER-declared enum that declares a variant called `name`, if any.
     ///
     /// Stdlib/prelude-owned enums are excluded on purpose: the point is to name

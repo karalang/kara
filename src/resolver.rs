@@ -2628,10 +2628,15 @@ impl<'a> Resolver<'a> {
             .map(|s| Self::name_only_replacement(name, &span, s));
         // A heap filled by `collect` keeps Rust's largest-first order only
         // when the collected items go to `PriorityQueue.max_first_from`
-        // (B-2026-11-15-80, kata 2208).
+        // (B-2026-11-15-80, kata 2208). A heap of `Reverse` items too, as
+        // its `Reverse` stays: the largest `Reverse` is the smallest item
+        // Rust's heap pops (B-2026-11-15-86). Where the program drops `Reverse`
+        // from its heaps, the plain queue already pops the smallest.
         let collected = (name == "BinaryHeap")
             .then(|| self.program.rust_heap_collect.get(&span.offset).cloned())
-            .flatten();
+            .flatten()
+            .filter(|(_, reversed)| !(*reversed && self.rust_heaps_pop_smallest()))
+            .map(|(edit, _)| edit);
         self.errors.push(ResolveError {
             message,
             span,
