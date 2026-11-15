@@ -246,7 +246,7 @@ impl Semaphore {
 enum SemaphoreError { Timeout }
 ```
 
-A counting semaphore: `new` starts it with `permits` free (a negative count is 0). `acquire` takes a free permit. With none free, the task waits until another task's `release` frees one, or until `timeout` milliseconds have passed, when it returns `Err(SemaphoreError.Timeout)`. Outside a task no other task can release a permit, so an `acquire` on an exhausted semaphore there waits its whole timeout and fails. `release` frees a permit and wakes a waiting `acquire`. It is not capped at the starting count, so a semaphore made with `Semaphore.new(0)` signals between tasks, as Python's `threading.Semaphore` and POSIX `sem_post` do (B-2026-11-11-34):
+`Semaphore` and `SemaphoreError` are in the prelude, so a program names them without an import (`import std.sync.{Semaphore}` is refused). A counting semaphore: `new` starts it with `permits` free (a negative count is 0). `acquire` takes a free permit. With none free, the task waits until another task's `release` frees one, or until `timeout` milliseconds have passed, when it returns `Err(SemaphoreError.Timeout)`. Outside a task no other task can release a permit, so an `acquire` on an exhausted semaphore there waits its whole timeout and fails. `release` frees a permit and wakes a waiting `acquire`. It is not capped at the starting count, so a semaphore made with `Semaphore.new(0)` signals between tasks, as Python's `threading.Semaphore` and POSIX `sem_post` do (B-2026-11-11-34):
 
 ```kara
 sync struct FooBar {
