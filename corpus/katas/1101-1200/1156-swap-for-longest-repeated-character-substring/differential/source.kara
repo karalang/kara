@@ -1,0 +1,343 @@
+// LeetCode #1156: Swap For Longest Repeated Character Substring -- a
+// differential over the four arms. Each answer is checked against the
+// statement read literally and against five properties that do not
+// compute the answer; see the README.
+
+// ---- max_rep_opt1.kara ----
+
+fn a0_max_rep_opt1(text: Str) -> i64 {
+    let b = text.bytes();
+    let mut count: Vec[i64] = Vec.filled(26, 0);
+    for c in b.iter() {
+        count[c - b'a'] += 1;
+    }
+    // (letter, length) of each run, in order
+    let mut runs: Vec[(u8, i64)] = [];
+    let mut i = 0;
+    while i < b.len() {
+        let mut j = i;
+        while j < b.len() and b[j] == b[i] {
+            j += 1;
+        }
+        runs.push((b[i], j - i));
+        i = j;
+    }
+    let mut best = 0;
+    for r in 0..runs.len() {
+        let (c, len) = runs[r];
+        let have = count[c - b'a'];
+        best = best.max((len + 1).min(have));
+        if r + 2 < runs.len() and runs[r + 1].1 == 1 and runs[r + 2].0 == c {
+            best = best.max((len + runs[r + 2].1 + 1).min(have));
+        }
+    }
+    best
+}
+
+// ---- max_rep_opt1_window.kara ----
+
+fn a1_max_rep_opt1(text: Str) -> i64 {
+    let chars: Vec[char] = text.chars().collect();
+    let mut best = 0;
+    for letter in 'a'..='z' {
+        let total = chars.iter().filter(|c| c == letter).count();
+        if total == 0 {
+            continue;
+        }
+        let mut left = 0;
+        let mut others = 0;
+        for right in 0..chars.len() {
+            if chars[right] != letter {
+                others += 1;
+            }
+            while others > 1 {
+                if chars[left] != letter {
+                    others -= 1;
+                }
+                left += 1;
+            }
+            best = best.max((right - left + 1).min(total));
+        }
+    }
+    best
+}
+
+// ---- max_rep_opt1_sides.kara ----
+
+fn a2_max_rep_opt1(text: Str) -> i64 {
+    let b = text.bytes();
+    let n = b.len();
+    let mut count: Vec[i64] = Vec.filled(26, 0);
+    for i in 0..n {
+        count[(b[i] - b'a')] += 1;
+    }
+    // run[i]: the length of the run of b[i] ending at i; back[i]: starting at i
+    let mut run: Vec[i64] = Vec.filled(n, 1);
+    let mut back: Vec[i64] = Vec.filled(n, 1);
+    for i in 1..n {
+        if b[i] == b[i - 1] {
+            run[i] = run[i - 1] + 1;
+        }
+    }
+    for i in (0..n - 1).rev() {
+        if b[i] == b[i + 1] {
+            back[i] = back[i + 1] + 1;
+        }
+    }
+    let mut best = 1;
+    for i in 0..n {
+        // the run through i itself, grown by one from elsewhere
+        best = best.max((run[i] + back[i]).min(count[(b[i] - b'a')]));
+        let left = if i > 0 { run[i - 1] } else { 0 };
+        let right = if i + 1 < n { back[i + 1] } else { 0 };
+        if i > 0 and i + 1 < n and b[i - 1] == b[i + 1] {
+            best = best.max((left + right + 1).min(count[(b[i - 1] - b'a')]));
+        } else {
+            if i > 0 {
+                best = best.max((left + 1).min(count[(b[i - 1] - b'a')]));
+            }
+            if i + 1 < n {
+                best = best.max((right + 1).min(count[(b[i + 1] - b'a')]));
+            }
+        }
+    }
+    best
+}
+
+// ---- max_rep_opt1_solution.kara ----
+
+struct A3Solution {}
+
+impl A3Solution {
+    pub fn a3_max_rep_opt1(text: String) -> i32 {
+        let s = text.bytes();
+        let n = s.len();
+        let mut cnt = [0i32; 26];
+        for c in s {
+            cnt[(c - b'a') as usize] += 1;
+        }
+        let mut ans = 0;
+        let mut i = 0;
+        while i < n {
+            let mut j = i;
+            while j < n and s[j] == s[i] {
+                j += 1;
+            }
+            let len = (j - i) as i32;
+            let mut k = j + 1;
+            while k < n and s[k] == s[i] {
+                k += 1;
+            }
+            let joined = (k - i - 1) as i32;
+            ans = max(ans, min(joined + 1, cnt[(s[i] - b'a') as usize]));
+            ans = max(ans, min(len + 1, cnt[(s[i] - b'a') as usize]));
+            i = j;
+        }
+        ans
+    }
+}
+
+fn a3_max_rep_opt1(text: Str) -> i64 {
+    A3Solution.a3_max_rep_opt1(text.to_string())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, text: Str) -> i64 {
+    match which {
+        0 => a0_max_rep_opt1(text),
+        1 => a1_max_rep_opt1(text),
+        2 => a2_max_rep_opt1(text),
+        _ => a3_max_rep_opt1(text),
+    }
+}
+
+fn text(bytes: Vec[u8]) -> String {
+    String.from_utf8(bytes).unwrap()
+}
+
+// The longest run of one letter.
+fn longest_run(b: Vec[u8]) -> i64 {
+    let mut best = 0;
+    let mut run = 0;
+    for i in 0..b.len() {
+        run = if i > 0 and b[i] == b[i - 1] { run + 1 } else { 1 };
+        if run > best {
+            best = run;
+        }
+    }
+    best
+}
+
+// The statement read literally: the longest run after each swap of two
+// places, or after none.
+fn literal(b: Vec[u8]) -> i64 {
+    let mut best = longest_run(b.clone());
+    let mut s = b.clone();
+    for i in 0..s.len() {
+        for j in i + 1..s.len() {
+            s.swap(i, j);
+            let r = longest_run(s.clone());
+            if r > best {
+                best = r;
+            }
+            s.swap(i, j);
+        }
+    }
+    best
+}
+
+// A text in four kinds: 1 to 10 letters over the first 1 to 4; 10 to 60
+// letters over the first 2 to 5; runs
+// of `a` of 1 to 8 letters split by single other letters, with 0 to 2
+// more `a`s placed at random or none; and two runs of `a` split by one
+// other letter, with the `a`s elsewhere 0, 1 or 2, so that the count caps
+// the join or does not. The literal swap search runs on all but the
+// second kind.
+fn problem(seed: mut ref i64, kind: i64) -> Vec[u8] {
+    if kind < 2 {
+        let n = if kind == 0 { 1 + next_random(mut seed) % 10 } else { 10 + next_random(mut seed) % 51 };
+        let letters = if kind == 0 { 1 + next_random(mut seed) % 4 } else { 2 + next_random(mut seed) % 4 };
+        return (0..n).map(|_| b'a' + (next_random(mut seed) % letters) as u8).collect();
+    }
+    let mut b: Vec[u8] = [];
+    if kind == 2 {
+        let runs = 1 + next_random(mut seed) % 4;
+        for r in 0..runs {
+            if r > 0 {
+                b.push(b'b' + (next_random(mut seed) % 3) as u8);
+            }
+            for _ in 0..1 + next_random(mut seed) % 8 {
+                b.push(b'a');
+            }
+        }
+    } else {
+        for _ in 0..1 + next_random(mut seed) % 10 {
+            b.push(b'a');
+        }
+        b.push(b'b');
+        for _ in 0..1 + next_random(mut seed) % 10 {
+            b.push(b'a');
+        }
+    }
+    for _ in 0..next_random(mut seed) % 3 {
+        b.push(b'c');
+    }
+    let extra = next_random(mut seed) % 3;
+    for _ in 0..extra {
+        b.push(b'a');
+    }
+    b
+}
+
+struct Case {
+    kind: i64,
+    b: Vec[u8],
+    // P3's renaming, P6's swap
+    rename: Vec[u8],
+    i: i64,
+    j: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let b = c.b.clone();
+    let s = text(b.clone());
+    let literally = c.kind != 1;
+    let want = if literally { literal(b.clone()) } else { -1 };
+    let mut reversed = b.clone();
+    reversed.reverse();
+    let reversed = text(reversed);
+    let renamed = text(b.iter().map(|x| c.rename[(x - b'a')]).collect());
+    let mut counts: Vec[i64] = Vec.filled(26, 0);
+    for x in b.iter() {
+        counts[(x - b'a')] += 1;
+    }
+    let most = counts.iter().max().unwrap();
+    let run = longest_run(b.clone());
+    // the first letter the text does not hold
+    let absent = (0..26).find(|x| counts[x] == 0).unwrap();
+    let fresh = text(b.iter().chain([b'a' + absent as u8].iter()).collect());
+    let mut swapped = b.clone();
+    swapped.swap(c.i, c.j);
+    let swapped_run = longest_run(swapped.clone());
+    let swapped = text(swapped);
+    for w in 0..4 {
+        let got = arm(w, s);
+        let what = f"arm {w}, case {t.cases} {s} -> {got}";
+        // P1: the statement read literally
+        if literally {
+            expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        }
+        // P2: the text reversed
+        let r = arm(w, reversed);
+        expect(mut t, 2, r == got, f"P2 {what}, reversed {r}");
+        // P3: the letters renamed alike
+        let n = arm(w, renamed);
+        expect(mut t, 3, n == got, f"P3 {what}, {renamed} {n}");
+        // P4: no shorter than the longest run, no longer than the most of
+        // any one letter
+        expect(mut t, 4, got >= run and got <= most, f"P4 {what}, run {run}, most {most}");
+        // P5: a letter the text does not hold, added at the end, changes
+        // nothing
+        let z = arm(w, fresh);
+        expect(mut t, 5, z == got, f"P5 {what}, with {fresh} {z}");
+        // P6: one swap away, each text's longest run is within the
+        // other's answer
+        let o = arm(w, swapped);
+        expect(mut t, 6, swapped_run <= got and run <= o, f"P6 {what}, {swapped} run {swapped_run} answer {o}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + arm(0, s)) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 4000 problems in four kinds, 1000 each. Every choice the properties
+    // make is drawn before any arm answers.
+    let mut seed = 11561;
+    let mut cases: Vec[Case] = [];
+    for i in 0..4000 {
+        let kind = i % 4;
+        let b = problem(mut seed, kind);
+        let mut rename: Vec[u8] = (0..26).map(|x| b'a' + x as u8).collect();
+        for j in (1..26).rev() {
+            rename.swap(j, next_random(mut seed) % (j + 1));
+        }
+        let n = b.len();
+        let i = next_random(mut seed) % n;
+        let j = next_random(mut seed) % n;
+        cases.push(Case { kind, b, rename, i, j });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} texts: checksum {t.check}, {t.checks} checks over 4 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,18 @@
+ababa  ->  3
+aaabaaa  ->  6
+aaabbaaa  ->  4
+aaaaa  ->  5
+abcdef  ->  1
+a  ->  1
+ab  ->  1
+aba  ->  2
+aab  ->  2
+baaab  ->  3
+aaabaaab  ->  6
+abaaac  ->  4
+bbababaaaa  ->  6
+2000 random texts: total 17833, checksum 778468252
+20000 random over 2: 19
+20000 random over 26: 5
+20000 of one letter: 20000
+one letter split once, another at the end: 19998

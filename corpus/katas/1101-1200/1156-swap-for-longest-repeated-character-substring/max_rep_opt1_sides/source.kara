@@ -1,0 +1,103 @@
+// LeetCode #1156: Swap For Longest Repeated Character Substring, from the
+// run lengths on either side of each place: `before[i]` letters equal to
+// `text[i - 1]` end just before `i`, `after[i]` letters equal to
+// `text[i + 1]` start just after it. Replacing the letter at `i` joins
+// the two sides when they match, or extends one; the swap must find the
+// letter elsewhere, so the length is capped by the letter's count. O(n)
+
+fn max_rep_opt1(text: Str) -> i64 {
+    let b = text.bytes();
+    let n = b.len();
+    let mut count: Vec[i64] = Vec.filled(26, 0);
+    for i in 0..n {
+        count[(b[i] - b'a')] += 1;
+    }
+    // run[i]: the length of the run of b[i] ending at i; back[i]: starting at i
+    let mut run: Vec[i64] = Vec.filled(n, 1);
+    let mut back: Vec[i64] = Vec.filled(n, 1);
+    for i in 1..n {
+        if b[i] == b[i - 1] {
+            run[i] = run[i - 1] + 1;
+        }
+    }
+    for i in (0..n - 1).rev() {
+        if b[i] == b[i + 1] {
+            back[i] = back[i + 1] + 1;
+        }
+    }
+    let mut best = 1;
+    for i in 0..n {
+        // the run through i itself, grown by one from elsewhere
+        best = best.max((run[i] + back[i]).min(count[(b[i] - b'a')]));
+        let left = if i > 0 { run[i - 1] } else { 0 };
+        let right = if i + 1 < n { back[i + 1] } else { 0 };
+        if i > 0 and i + 1 < n and b[i - 1] == b[i + 1] {
+            best = best.max((left + right + 1).min(count[(b[i - 1] - b'a')]));
+        } else {
+            if i > 0 {
+                best = best.max((left + 1).min(count[(b[i - 1] - b'a')]));
+            }
+            if i + 1 < n {
+                best = best.max((right + 1).min(count[(b[i + 1] - b'a')]));
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(text: Str) {
+    println(f"{text}  ->  {max_rep_opt1(text)}");
+}
+
+fn random_text(seed: mut ref i64, n: i64, letters: i64) -> String {
+    let b: Vec[u8] = (0..n).map(|_| b'a' + (next_random(mut seed) % letters) as u8).collect();
+    String.from_utf8(b).unwrap()
+}
+
+fn main() {
+    show("ababa");
+    show("aaabaaa");
+    show("aaabbaaa");
+    show("aaaaa");
+    show("abcdef");
+    show("a");
+    show("ab");
+    show("aba");
+    show("aab");
+    show("baaab");
+    show("aaabaaab");
+    show("abaaac");
+    show("bbababaaaa");
+
+    // 2000 random texts of 1 to 40 letters over the first 1 to 4 letters
+    let mut seed = 1156;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = 1 + next_random(mut seed) % 40;
+        let letters = 1 + next_random(mut seed) % 4;
+        let answer = max_rep_opt1(random_text(mut seed, n, letters));
+        total += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random texts: total {total}, checksum {check}");
+
+    // 20000 letters, the most the constraints allow: random over 2 and
+    // over 26 letters, all one letter, and one letter with a single other
+    // letter in the middle and another at the end
+    println(f"20000 random over 2: {max_rep_opt1(random_text(mut seed, 20000, 2))}");
+    println(f"20000 random over 26: {max_rep_opt1(random_text(mut seed, 20000, 26))}");
+    let same: Vec[u8] = Vec.filled(20000, b'a');
+    println(f"20000 of one letter: {max_rep_opt1(String.from_utf8(same.clone()).unwrap())}");
+    let mut split = same.clone();
+    split[10000] = b'b';
+    split[19999] = b'c';
+    println(f"one letter split once, another at the end: {max_rep_opt1(String.from_utf8(split).unwrap())}");
+}
