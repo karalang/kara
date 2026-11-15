@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 340 |
-| false-positive | 215 |
+| diagnostics | 341 |
+| false-positive | 216 |
 | missing-feature | 171 |
 | perf | 169 |
 | soundness | 69 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 206 |
 | cli | 135 |
 | parser | 88 |
-| ownership | 82 |
+| ownership | 84 |
 | interp | 62 |
 | runtime | 47 |
 | effect | 35 |
@@ -1299,6 +1299,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-91 | mir | medium | A plain `break` (or `continue`) inside a labeled block inside a loop passes check, then every lane fails with `invalid MIR: assigning () to _7 of typ… | ecdc3f1527 |
 | B-2026-11-15-92 | mir-llvm+runtime | low | A ThreadSanitizer build (`__mir-llvm-tsan`) of a std.regex program fails with a raw `undefined reference to karac_regex_mir` where CLAUDE.md promises… | ecdc3f1527 |
 | B-2026-11-15-93 | ownership+mir | medium | A frozen handle cannot match on a `mut` Option field (`match n.next { Some(m) => m.val, None => -1 }` is refused as `cannot be projected through .nex… | ecdc3f1527 |
+| B-2026-11-15-94 | ownership | medium | `karac check` passed a use after a move carried by `break 'b`: `eat(d1); if k == 5 { break 'b 50; } d1 = D { n: 2 }; 45` inside `let v = 'b: { . | e7de9f1cb3 |
+| B-2026-11-15-95 | ownership | medium | Reassigning a local after a closure took it by move was refused (`let c = \|\| { eat(a); }; a = D { n: 2 }; eat(a); c();` gave "'a' is moved at line 8:… | e7de9f1cb3 |
 
 </details>
 
