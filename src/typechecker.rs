@@ -5890,6 +5890,25 @@ impl<'a> TypeChecker<'a> {
     /// slots it fills with `ref x` over a `String`: the edits that write each
     /// such element `x.as_str()` (B-2026-11-15-13). None when any mismatched
     /// slot is something else.
+    /// Is `found` a `MutexGuard[T]` (or a borrow of one) where `expected`
+    /// is `T`, or a borrow of `T`?
+    pub(super) fn guard_value_fits(&self, expected: &Type, found: &Type) -> bool {
+        let peel = |t: &Type| -> Type {
+            match inference::resolve_type_var_top(t, &self.env.substitutions) {
+                Type::Ref(inner) | Type::MutRef(inner) => (*inner).clone(),
+                other => other,
+            }
+        };
+        let Type::Named { name, args } = peel(found) else {
+            return false;
+        };
+        if name != "MutexGuard" || args.len() != 1 || types_compatible(expected, found) {
+            return false;
+        }
+        let want = peel(expected);
+        !matches!(want, Type::Error | Type::TypeVar(_)) && types_compatible(&want, &args[0])
+    }
+
     fn tuple_ref_string_edits(
         &self,
         expected: &Type,
@@ -8449,6 +8468,30 @@ impl<'a> TypeChecker<'a> {
             );
             self.error_fix_diffs
                 .insert(SpanKey::from_span(&span), edits);
+            return false;
+        }
+        // `sess.handle(mut guard, ..)` for a `mut ref Server`: Rust's
+        // `&mut guard`, which derefs the guard. A guard has no `Deref`, and
+        // the locked value is its `value` field (B-2026-11-15-73).
+        if self.guard_value_fits(expected, found) {
+            self.type_error_with_fix_it(
+                format!(
+                    "expected '{}', found '{}': a guard has no `Deref`, and the locked value \
+                     is its `value` field (docs/library/concurrency.md § `Mutex[T]`)",
+                    type_display(expected),
+                    type_display(found)
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: Span {
+                        offset: span.offset + span.length,
+                        length: 0,
+                        ..span
+                    },
+                    replacement: ".value".to_string(),
+                },
+            );
             return false;
         }
         // An unannotated collection's element or key takes a `Copy`

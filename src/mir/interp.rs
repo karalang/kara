@@ -4747,6 +4747,13 @@ impl<'a> Interp<'a> {
         let Some(recv) = args.first() else {
             return err(format!("{name} needs its receiver"));
         };
+        // `Mutex[T].into_inner(own self)` is handed the mutex itself, not a
+        // reference to it (B-2026-11-15-75).
+        if let (true, Value::Agg(inner)) = (method == "into_inner", recv) {
+            if let [v] = inner.as_slice() {
+                return Ok(v.clone());
+            }
+        }
         let cell = self.atomic_cell(recv, name)?;
         let old = self.slot(&cell)?;
         let operand = |i: usize| -> R<Value> {

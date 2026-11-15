@@ -1363,6 +1363,11 @@ impl super::Parser {
                     length: self.current_span().offset.saturating_sub(start.offset),
                     ..start
                 };
+                // `&format!(..)`: the macro reads as an error operand, so
+                // whether it is one is decided before it is parsed.
+                let format_macro = !is_mut
+                    && matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "format")
+                    && matches!(self.peek_token_ref_at(1), Token::Bang);
                 let operand = self.parse_expr_bp(24)?;
                 // `&v[a..b]`: a range index is already a view, a `Slice[T]`
                 // (design.md § Slices), so the edit drops the `&` rather than
@@ -1392,10 +1397,30 @@ impl super::Parser {
                             | ExprKind::PrefixCollectionLiteral { .. }
                             | ExprKind::RepeatLiteral { .. }
                     );
+                // `t += &format!("..")`, `&s.to_string()`, `&"x"`: a call's
+                // result or a string is a new value, and Kāra has no borrow
+                // of a temporary (`ref f()` is refused, design.md §
+                // Temporaries), so the edit drops the `&` and the value is
+                // used as it is (B-2026-11-15-70).
+                let temporary = format_macro
+                    || (!is_mut
+                        && matches!(
+                            &operand.kind,
+                            ExprKind::Call { .. }
+                                | ExprKind::MethodCall { .. }
+                                | ExprKind::StringLit(_)
+                                | ExprKind::InterpolatedStringLit(_)
+                        ));
                 let (message, kara) = if is_mut {
                     (
                         "`&mut` is Rust syntax -- a borrow that writes is `mut ref place`",
                         "mut ref ",
+                    )
+                } else if temporary {
+                    (
+                        "`&` is Rust syntax -- a call's result or a string is a new value, not a \
+                         place, and Kāra has no borrow of a temporary: use the value as it is",
+                        "",
                     )
                 } else if literal {
                     (
@@ -1427,7 +1452,7 @@ impl super::Parser {
                         replacement: kara.to_string(),
                     },
                 );
-                if view || literal || list {
+                if view || literal || list || temporary {
                     return Some(operand);
                 }
                 Some(Expr {

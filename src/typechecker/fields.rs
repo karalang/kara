@@ -500,7 +500,28 @@ impl<'a> super::TypeChecker<'a> {
             // fields (B-2026-10-15-6): `success` keeps its meaning as a
             // call; `code` became an `Option[i32]`.
             let exit_status = type_name == "ExitStatus" && available.contains(&"exit_code");
+            // `srv.lock().counts`: Rust reaches the locked value's field
+            // through the guard's `Deref`. A guard has none; the value is
+            // its `value` field (B-2026-11-15-73).
+            let through_guard = type_name == "MutexGuard" && self.guarded_has_field(&obj_ty, field);
             match field {
+                _ if through_guard => self.type_error_with_fix_it(
+                    format!(
+                        "{message}: a guard has no `Deref`, and the locked value is its `value` \
+                         field, so this is `.value.{field}` (docs/library/concurrency.md § \
+                         `Mutex[T]`)"
+                    ),
+                    *span,
+                    TypeErrorKind::UndefinedField,
+                    super::FixIt {
+                        span: Span {
+                            offset: span.offset + span.length - field.len(),
+                            length: 0,
+                            ..*span
+                        },
+                        replacement: "value.".to_string(),
+                    },
+                ),
                 "success" if exit_status => self.type_error_with_fix_it(
                     format!("{message}; `success` is a method now: call `success()`"),
                     *span,
@@ -547,6 +568,26 @@ impl<'a> super::TypeChecker<'a> {
             // be validated for CR-18.
             self.infer_imported_field_access(&type_name, field, span)
         }
+    }
+
+    /// Does the value a `MutexGuard[T]` receiver locks, a struct `T`, have
+    /// the field `field`?
+    fn guarded_has_field(&self, obj_ty: &Type, field: &str) -> bool {
+        let guard = match obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            t => t,
+        };
+        let Type::Named { args, .. } = guard else {
+            return false;
+        };
+        let name = match args.first() {
+            Some(Type::Named { name, .. }) | Some(Type::Shared(name)) => name,
+            _ => return false,
+        };
+        self.env
+            .structs
+            .get(name)
+            .is_some_and(|s| s.fields.iter().any(|(n, _, _)| n == field))
     }
 
     /// Substitute the receiver's concrete generic args into a struct field's

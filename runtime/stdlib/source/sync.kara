@@ -178,6 +178,13 @@ impl[T] Mutex[T] {
         MutexGuard { value: self.acquire(), mutex: self }
     }
 
+    /// Consumes the mutex and returns the value it protected. The mutex is
+    /// owned here, so no task holds it and nothing waits.
+    #[compiler_builtin]
+    fn into_inner(own self) -> T {
+        self.into_inner()
+    }
+
     // Waits until no other task holds the mutex, marks it held and returns
     // the protected value. A native of each MIR backend.
     #[compiler_builtin]

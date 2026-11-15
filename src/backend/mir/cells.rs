@@ -287,13 +287,17 @@ impl<'ctx> Cx<'ctx, '_> {
         // "Atomics"); a trailing ordering argument is the deprecated form
         // and only ever as strong.
         let seq = AtomicOrdering::SequentiallyConsistent;
+        // `Mutex[T].into_inner(own self)` takes the value whatever `T` is,
+        // a struct included, so it is answered before the width an atomic
+        // operation needs (B-2026-11-15-75).
+        if method == "into_inner" {
+            let d = self.place_ptr(dest)?;
+            self.copy(d, cell, t)?;
+            return Ok(Some(()));
+        }
         let width = self.llvm_ty(t)?.into_int_type();
         let align = width.get_bit_width().div_ceil(8);
         match (method, &args[1..]) {
-            ("into_inner", [..]) => {
-                let d = self.place_ptr(dest)?;
-                self.copy(d, cell, t)?;
-            }
             ("load", [..]) => {
                 let v = self.atomic_load(cell, t)?;
                 let d = self.place_ptr(dest)?;

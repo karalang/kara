@@ -1064,6 +1064,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - The interpreter's UDP `recv_from` on Windows: a datagram longer than the
   1-byte readiness peek is ready (Winsock reports `WSAEMSGSIZE` where Linux
   truncates), so the receive reads it instead of failing.
+- `Err("unknown fid".into())`, `Ok(..)` and `Some(..)` of a `.into()` take
+  the conversion from their slot, as a `let` annotation does, and
+  `"text".into()` takes an `impl From[Str]` (Rust's `From<&str>`); both were
+  refused as having no target (B-2026-11-15-72).
+- `Mutex[T]` has `into_inner(own self) -> T`, and both backends lower it for
+  any `T`: the LLVM backend crashed on a struct, and the interpreter refused
+  the mutex passed by value (B-2026-11-15-75).
 
 ### Performance
 
@@ -1250,6 +1257,25 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `const NAMES: Slice[T] = [..]`, which `karac fix` writes for Rust's
   `&[T] = &[..]`, is refused at the declaration with a fix to `Array[T, N]`; a
   `for` loop over it used to fail the build (B-2026-11-15-14).
+- Rust's `&` on a call's result or a string (`t += &format!(..)`,
+  `&s.to_uppercase()`) is fixed by dropping the `&`. The fix wrote
+  `ref f".."`, which is refused, since Kāra has no borrow of a temporary
+  (B-2026-11-15-70).
+- Rust's `impl fmt::Display for T` (or `std::fmt::Debug`) gets a fix to the
+  prelude trait, and a `fn fmt(&self, f: &mut fmt::Formatter)` whose body
+  returns `write!(f, ..)` or `f.write_str("..")` is rewritten to
+  `fn to_string(self) -> String` (`fmt_debug` for `Debug`). The parse stopped
+  at the `::` with no hint (B-2026-11-15-71).
+- A `MutexGuard` passed where its value is wanted (`bump(mut g)` for a
+  `mut ref S`) or read for a field of its value (`m.lock().count`) gets a fix
+  to the guard's `value` field, and `.unwrap()` after `lock()` or
+  `into_inner()` is fixed away, since Kāra's `Mutex` has no poisoning
+  (B-2026-11-15-73, B-2026-11-15-75).
+- Rust's `let (sock, _) = listener.accept()?` gets a fix to `let sock`:
+  Kāra's `accept` gives the stream alone (B-2026-11-15-74).
+- A slice's `.try_into()`, Rust's conversion to an array for
+  `u16.from_le_bytes(..)`, says to write the array from the slice's elements;
+  it said only that `Slice` has no `try_into` (B-2026-11-15-76).
 - A value read out of a tuple a literal was pushed into
   (`graph[a].push((b, 0))`, then `for (next, color) in graph[n]`) and narrowed
   into an `i32` names that literal, and `karac fix` writes its suffix

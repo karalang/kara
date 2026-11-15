@@ -110,6 +110,7 @@ const ALWAYS_KEPT: &[&str] = &[
     "push",
     "get",
     "get_mut",
+    "into_inner",
     "insert",
     "Option",
     "Some",

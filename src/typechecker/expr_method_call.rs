@@ -2756,6 +2756,82 @@ impl<'a> super::TypeChecker<'a> {
             }
             other => other.clone(),
         };
+        // `m.lock().unwrap()`, `m.into_inner().unwrap()`: Rust's `Mutex`
+        // returns a `LockResult` for its poisoning. Kāra's has none, so the
+        // call gives the guard or the value itself and the `.unwrap()` goes
+        // (B-2026-11-15-75).
+        if matches!(method, "unwrap" | "expect")
+            && !matches!(&obj_ty, Type::Named { name, .. } if name == "Option" || name == "Result")
+            && obj_ty != Type::Error
+        {
+            if let ExprKind::MethodCall {
+                method: inner,
+                object: mutex,
+                ..
+            } = &object.kind
+            {
+                let on_mutex = match self.expr_types.get(&SpanKey::from_span(&mutex.span)) {
+                    Some(Type::Named { name, .. }) => name == "Mutex",
+                    Some(Type::Ref(b) | Type::MutRef(b)) => {
+                        matches!(b.as_ref(), Type::Named { name, .. } if name == "Mutex")
+                    }
+                    _ => false,
+                };
+                if on_mutex && matches!(inner.as_str(), "lock" | "into_inner") {
+                    let from = object.span.offset + object.span.length;
+                    let end = span.offset + span.length;
+                    self.type_error_with_fix_it(
+                        format!(
+                            "no method '{method}' on type '{}': Kāra's `Mutex` has no poisoning, \
+                             so `{inner}()` returns the {} itself, not a `Result`: drop the \
+                             `.{method}(..)` (library/concurrency.md § `Mutex[T]`)",
+                            type_display(&obj_ty),
+                            if inner == "lock" { "guard" } else { "value" }
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span: Span {
+                                offset: from,
+                                length: end - from,
+                                ..*span
+                            },
+                            replacement: String::new(),
+                        },
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return obj_ty.clone();
+                }
+            }
+        }
+        // `b[..2].try_into().unwrap()` for a `u16.from_le_bytes(..)`: Rust's
+        // `TryFrom<&[T]> for [T; N]`, which Kāra does not have (B-2026-11-15-76).
+        // Say what to write instead of the bare no-method error.
+        if let Type::Slice { element, .. } = &slice_recv {
+            if method == "try_into"
+                && args.is_empty()
+                && self
+                    .env
+                    .find_methods_with_args("Slice", &[(**element).clone()], method)
+                    .is_empty()
+            {
+                self.type_error(
+                    format!(
+                        "no method 'try_into' on type '{}': Rust's conversion of a slice to \
+                         an array (`TryFrom<&[T]> for [T; N]`) is not in Kāra; write the array \
+                         from the slice's elements, `[b[0], b[1]]`, as \
+                         `u16.from_le_bytes([b[0], b[1]])` does (library/core-types.md § Byte \
+                         order)",
+                        type_display(&slice_recv)
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                );
+                return Type::Error;
+            }
+        }
         if let Type::Slice { element, mutable } = &slice_recv {
             let routes_to_user_impl = !SLICE_BUILTIN_METHODS.contains(&method)
                 && !self

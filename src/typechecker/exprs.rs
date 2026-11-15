@@ -3435,6 +3435,14 @@ impl<'a> super::TypeChecker<'a> {
                     // `Some(300)` into `Option[u8]` is still caught.
                     let payload_is_unsuffixed_int =
                         Self::unsuffixed_int_literal_value(&args[0].value).is_some();
+                    // `Err("unknown fid".into())`: the conversion is chosen
+                    // by the slot, so `.into()` needs it pushed, as at a
+                    // let annotation (B-2026-11-15-72).
+                    let payload_is_into = matches!(
+                        &args[0].value.kind,
+                        ExprKind::MethodCall { method, args: margs, .. }
+                            if method == "into" && margs.is_empty()
+                    );
                     if let Some(slot) = payload_slot {
                         // B-2026-09-30-90 — and a payload literal that only
                         // check mode can type as written: `Some(([4, 5], 7))`
@@ -3473,7 +3481,7 @@ impl<'a> super::TypeChecker<'a> {
                                 _ => false,
                             };
                         if payload_is_inferred_ctor
-                            || (payload_is_unsuffixed_int && !slot_unsolved)
+                            || ((payload_is_unsuffixed_int || payload_is_into) && !slot_unsolved)
                             || payload_needs_slot
                         {
                             let payload = self.check_expr(&args[0].value, &slot);
@@ -10918,10 +10926,31 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => return None,
         };
-        let src_ty = self.infer_expr(object);
+        let mut src_ty = self.infer_expr(object);
         if src_ty == Type::Error {
             self.record_expr_type(&expr.span, &Type::Error);
             return Some(Type::Error);
+        }
+        // A string literal is a `String` by default and a `Str` where a
+        // `Str` is expected (design.md § String literals): with no
+        // `From[String]` for the target, an `impl From[Str]` expects one,
+        // so `"text".into()` takes it (Rust's `From<&str>`,
+        // B-2026-11-15-72).
+        let str_view = Type::Named {
+            name: "StringSlice".to_string(),
+            args: Vec::new(),
+        };
+        if matches!(object.kind, ExprKind::StringLit(_))
+            && self
+                .env
+                .find_from_impl(&src_ty, &target_name, &[])
+                .is_none()
+            && self
+                .env
+                .find_from_impl(&str_view, &target_name, &[])
+                .is_some()
+        {
+            src_ty = self.check_expr(object, &str_view);
         }
         // The resolved impl's dispatch segment, not the bare target — see
         // `resolved_impl_dispatch_segment` (B-2026-08-27-1).

@@ -1,0 +1,171 @@
+== alice connects
+alice -> Tattach tag=1 fid=0 uname=alice aname=''
+alice <- Rerror tag=1 'version not negotiated'
+alice    bytes: 13 00 00 00 64 ff ff 00 40 00 00 06 00 39 50 32 30 30 30
+alice -> Tversion tag=65535 msize=16384 version=9P2000
+alice <- Rversion tag=65535 msize=8192 version=9P2000
+alice -> Tattach tag=2 fid=0 uname=alice aname='archive'
+alice <- Rerror tag=2 'no such tree: archive'
+alice -> Tattach tag=3 fid=0 uname=alice aname=''
+alice <- Rattach tag=3 qid(1 v0 dir)
+alice -> Twalk tag=4 fid=0 newfid=1 [etc, motd]
+alice <- Rwalk tag=4 [qid(3 v0 dir), qid(4 v0 file)]
+alice -> Topen tag=5 fid=1 mode=OREAD
+alice <- Ropen tag=5 qid(4 v0 file) iounit=8168
+alice -> Tread tag=6 fid=1 offset=0 count=100
+alice <- Rread tag=6 20 bytes 'welcome to the grid\n'
+alice -> Tread tag=7 fid=1 offset=11 count=4
+alice <- Rread tag=7 4 bytes 'the '
+alice -> Tstat tag=8 fid=1
+alice <- Rstat tag=8 -644 motd len=20 uid=glenda gid=glenda muid=glenda qid(4 v0 file) atime=+8 mtime=+0
+alice -> Twalk tag=9 fid=0 newfid=2 [nope]
+alice <- Rerror tag=9 'file does not exist'
+alice -> Twalk tag=10 fid=0 newfid=2 [etc, nope, deeper]
+alice <- Rwalk tag=10 [qid(3 v0 dir)]
+alice -> Tclunk tag=11 fid=2
+alice <- Rerror tag=11 'unknown fid'
+alice -> Twalk tag=12 fid=0 newfid=2 [etc, motd, x]
+alice <- Rwalk tag=12 [qid(3 v0 dir), qid(4 v0 file)]
+alice -> Twalk tag=13 fid=0 newfid=2 []
+alice <- Rwalk tag=13 []
+alice -> Topen tag=14 fid=2 mode=OWRITE
+alice <- Rerror tag=14 'is a directory'
+alice -> Topen tag=15 fid=2 mode=OREAD
+alice <- Ropen tag=15 qid(1 v0 dir) iounit=8168
+alice -> Tread tag=16 fid=2 offset=0 count=8192
+alice <- Rread tag=16 274 bytes, 4 entries
+alice      | -644 readme len=23 uid=admin gid=admin muid=admin qid(2 v0 file) atime=+0 mtime=+0
+alice      | d755 etc len=0 uid=glenda gid=glenda muid=glenda qid(3 v0 dir) atime=+0 mtime=+0
+alice      | d777 tmp len=0 uid=admin gid=admin muid=admin qid(5 v0 dir) atime=+0 mtime=+0
+alice      | -200 ctl len=0 uid=admin gid=admin muid=admin qid(6 v0 file) atime=+0 mtime=+0
+alice -> Tread tag=17 fid=2 offset=0 count=200
+alice <- Rread tag=17 140 bytes, 2 entries
+alice      | -644 readme len=23 uid=admin gid=admin muid=admin qid(2 v0 file) atime=+0 mtime=+0
+alice      | d755 etc len=0 uid=glenda gid=glenda muid=glenda qid(3 v0 dir) atime=+0 mtime=+0
+alice -> Tread tag=18 fid=2 offset=141 count=200
+alice <- Rerror tag=18 'bad offset in directory read'
+alice -> Tread tag=19 fid=2 offset=140 count=200
+alice <- Rread tag=19 134 bytes, 2 entries
+alice      | d777 tmp len=0 uid=admin gid=admin muid=admin qid(5 v0 dir) atime=+0 mtime=+0
+alice      | -200 ctl len=0 uid=admin gid=admin muid=admin qid(6 v0 file) atime=+0 mtime=+0
+alice -> Tread tag=20 fid=2 offset=274 count=200
+alice <- Rread tag=20 0 bytes, 0 entries
+alice -> Tread tag=21 fid=2 offset=0 count=40
+alice <- Rerror tag=21 'count too small for a directory entry'
+alice -> Twalk tag=22 fid=1 newfid=3 []
+alice <- Rerror tag=22 'cannot walk an open fid'
+alice -> Twalk tag=23 fid=0 newfid=1 []
+alice <- Rerror tag=23 'fid already in use'
+alice -> Twalk tag=24 fid=0 newfid=3 [etc, .., tmp]
+alice <- Rwalk tag=24 [qid(3 v0 dir), qid(1 v0 dir), qid(5 v0 dir)]
+alice -> Tcreate tag=25 fid=3 name=notes perm=666 mode=ORDWR
+alice <- Rcreate tag=25 qid(7 v0 file) iounit=8168
+alice -> Twrite tag=26 fid=3 offset=0 'first line\n'
+alice <- Rwrite tag=26 count=11
+alice -> Twrite tag=27 fid=3 offset=11 'second line\n'
+alice <- Rwrite tag=27 count=12
+alice -> Tread tag=28 fid=3 offset=0 count=8192
+alice <- Rread tag=28 23 bytes 'first line\nsecond line\n'
+alice -> Tcreate tag=29 fid=3 name=more perm=644 mode=OREAD
+alice <- Rerror tag=29 'fid already open'
+== bob connects
+bob -> Tversion tag=65535 msize=8192 version=9P2000.u
+bob <- Rversion tag=65535 msize=8192 version=9P2000
+bob -> Tattach tag=1 fid=10 uname=bob aname=''
+bob <- Rattach tag=1 qid(1 v0 dir)
+bob -> Twalk tag=2 fid=10 newfid=11 [etc, motd]
+bob <- Rwalk tag=2 [qid(3 v0 dir), qid(4 v0 file)]
+bob -> Topen tag=3 fid=11 mode=OWRITE
+bob <- Rerror tag=3 'permission denied'
+bob -> Topen tag=4 fid=11 mode=OREAD
+bob <- Ropen tag=4 qid(4 v0 file) iounit=8168
+bob -> Twalk tag=5 fid=10 newfid=12 [tmp, notes]
+bob <- Rwalk tag=5 [qid(5 v1 dir), qid(7 v2 file)]
+bob -> Topen tag=6 fid=12 mode=OWRITE|OTRUNC
+bob <- Ropen tag=6 qid(7 v3 file) iounit=8168
+bob -> Twrite tag=7 fid=12 offset=0 'bob was here\n'
+bob <- Rwrite tag=7 count=13
+bob -> Twrite tag=8 fid=12 offset=20 '!'
+bob <- Rwrite tag=8 count=1
+bob -> Twalk tag=9 fid=10 newfid=13 [ctl]
+bob <- Rwalk tag=9 [qid(6 v0 file)]
+bob -> Topen tag=10 fid=13 mode=OWRITE
+bob <- Rerror tag=10 'permission denied'
+bob -> Twalk tag=11 fid=10 newfid=14 [tmp]
+bob <- Rwalk tag=11 [qid(5 v1 dir)]
+bob -> Tcreate tag=12 fid=14 name=box perm=DMDIR|755 mode=OREAD
+bob <- Rcreate tag=12 qid(8 v0 dir) iounit=8168
+bob -> Twalk tag=13 fid=10 newfid=15 [readme]
+bob <- Rwalk tag=13 [qid(2 v0 file)]
+bob -> Tremove tag=14 fid=15
+bob <- Rerror tag=14 'permission denied'
+bob -> Tstat tag=15 fid=15
+bob <- Rerror tag=15 'unknown fid'
+== alice again
+alice -> Tread tag=30 fid=3 offset=0 count=8192
+alice <- Rread tag=30 21 bytes 'bob was here\n\0\0\0\0\0\0\0!'
+alice -> Tstat tag=31 fid=3
+alice <- Rstat tag=31 -666 notes len=21 uid=alice gid=alice muid=bob qid(7 v5 file) atime=+47 mtime=+39
+== alice pipelines three stats
+alice -> Tstat tag=32 fid=0
+alice -> Tstat tag=33 fid=1
+alice -> Tstat tag=34 fid=3
+alice <- Rstat tag=32 d775 / len=0 uid=admin gid=admin muid=admin qid(1 v0 dir) atime=+22 mtime=+0
+alice <- Rstat tag=33 -644 motd len=20 uid=glenda gid=glenda muid=glenda qid(4 v0 file) atime=+8 mtime=+0
+alice <- Rstat tag=34 -666 notes len=21 uid=alice gid=alice muid=bob qid(7 v5 file) atime=+47 mtime=+39
+alice -> T99 tag=35 (a type the protocol does not have)
+alice <- Rerror tag=35 'unknown message type 99'
+alice -> Tauth tag=36 afid=5 uname=alice
+alice <- Rerror tag=36 'authentication not required'
+alice -> Tflush tag=37 oldtag=4
+alice <- Rflush tag=37
+alice -> Twalk tag=38 fid=0 newfid=4 [tmp]
+alice <- Rwalk tag=38 [qid(5 v2 dir)]
+alice -> Tremove tag=39 fid=4
+alice <- Rerror tag=39 'directory not empty'
+alice -> Tclunk tag=40 fid=4
+alice <- Rerror tag=40 'unknown fid'
+alice -> Twalk tag=41 fid=0 newfid=4 [tmp, box]
+alice <- Rwalk tag=41 [qid(5 v2 dir), qid(8 v0 dir)]
+alice -> Tremove tag=42 fid=4
+alice <- Rremove tag=42
+alice -> Tremove tag=43 fid=3
+alice <- Rremove tag=43
+alice -> Twalk tag=44 fid=0 newfid=5 [tmp, notes]
+alice <- Rwalk tag=44 [qid(5 v4 dir)]
+alice -> Tclunk tag=45 fid=1
+alice <- Rclunk tag=45
+alice -> Tclunk tag=46 fid=1
+alice <- Rerror tag=46 'unknown fid'
+== admin halts the server
+admin -> Tversion tag=65535 msize=8192 version=9P2000
+admin <- Rversion tag=65535 msize=8192 version=9P2000
+admin -> Tattach tag=1 fid=0 uname=admin aname=''
+admin <- Rattach tag=1 qid(1 v0 dir)
+admin -> Twalk tag=2 fid=0 newfid=1 [ctl]
+admin <- Rwalk tag=2 [qid(6 v0 file)]
+admin -> Topen tag=3 fid=1 mode=OWRITE
+admin <- Ropen tag=3 qid(6 v0 file) iounit=8168
+admin -> Twrite tag=4 fid=1 offset=0 'reboot\n'
+admin <- Rerror tag=4 'unknown ctl message: reboot'
+admin -> Twrite tag=5 fid=1 offset=0 'halt\n'
+admin <- Rwrite tag=5 count=5
+== server log
+conn 1: alice attached
+conn 1: alice created /tmp/notes
+conn 2: bob attached
+conn 2: bob created /tmp/box
+conn 1: alice removed /tmp/box
+conn 1: alice removed /tmp/notes
+conn 3: admin attached
+conn 3: admin wrote halt to /ctl
+conn 1: closed after 47 messages
+conn 2: closed after 16 messages
+conn 3: closed after 6 messages
+== final tree
+d775 / path=1 v0 uid=admin muid=admin
+  -644 readme path=2 v0 uid=admin muid=admin 23 bytes
+  d755 etc path=3 v0 uid=glenda muid=glenda
+    -644 motd path=4 v0 uid=glenda muid=glenda 20 bytes
+  d777 tmp path=5 v4 uid=admin muid=alice
+  -200 ctl path=6 v0 uid=admin muid=admin 0 bytes

@@ -561,6 +561,9 @@ impl super::Parser {
         let generic_params = self.parse_optional_generic_params();
         self.push_effect_scope(generic_params.as_ref());
 
+        // `impl fmt::Display for T`: Rust's formatting trait, whose `fmt`
+        // method is rewritten below (B-2026-11-15-71).
+        let rust_fmt = self.rust_fmt_trait_header();
         // Parse the type or trait name
         let first_type = self.parse_type()?;
 
@@ -668,6 +671,15 @@ impl super::Parser {
                 } else {
                     false
                 };
+                if let Some(kind) = rust_fmt {
+                    if self.check(&Token::Fn)
+                        && matches!(self.peek_token_ref_at(1), Token::Identifier { name, .. } if name == "fmt")
+                        && self.peek_token_ref_at(2) == &Token::LeftParen
+                        && self.rust_fmt_method(kind)
+                    {
+                        continue;
+                    }
+                }
                 // A method or associated function may be named by any keyword.
                 self.member_fn_name = true;
                 let method =
@@ -712,6 +724,215 @@ impl super::Parser {
             lint_overrides,
             do_not_recommend,
         })
+    }
+
+    /// At an impl header: Rust's `fmt::Display` / `std::fmt::Debug` (or
+    /// the bare name, after `use std::fmt::Display;`) before `for`. Kāra's
+    /// `Display` and `Debug` are in the prelude, so a module path is
+    /// reported, its fix deletes it, and its tokens go so the parse goes on
+    /// as the fixed text would. Returns the trait, so the block's Rust
+    /// `fmt` method can be rewritten to Kāra's.
+    fn rust_fmt_trait_header(&mut self) -> Option<&'static str> {
+        let at = self.pos;
+        let ident = |i: usize| match self.tokens.get(i).map(|t| &t.token) {
+            Some(Token::Identifier { name, .. }) => Some(name.clone()),
+            _ => None,
+        };
+        let mut names = vec![ident(at)?];
+        let mut last = at;
+        while matches!(
+            self.tokens.get(last + 1).map(|t| &t.token),
+            Some(Token::ColonColon)
+        ) {
+            names.push(ident(last + 2)?);
+            last += 2;
+        }
+        let kind = match names[names.len() - 1].as_str() {
+            "Display" => "Display",
+            "Debug" => "Debug",
+            _ => return None,
+        };
+        let prefix: Vec<&str> = names[..names.len() - 1]
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        if !matches!(
+            prefix.as_slice(),
+            [] | ["fmt"] | ["std", "fmt"] | ["core", "fmt"]
+        ) || !matches!(
+            self.tokens.get(last + 1).map(|t| &t.token),
+            Some(Token::For)
+        ) {
+            return None;
+        }
+        if !prefix.is_empty() {
+            let first = self.tokens[at].span;
+            let end = self.tokens[last].span;
+            let whole = Span {
+                length: end.offset + end.length - first.offset,
+                ..first
+            };
+            self.error_at(
+                &format!(
+                    "`{}` is Rust's formatting trait -- Kāra's `{kind}` is in the prelude: \
+                     write `{kind}`",
+                    names.join("::")
+                ),
+                whole,
+            );
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&whole),
+                crate::resolver::TextEdit {
+                    offset: first.offset,
+                    length: end.offset - first.offset,
+                    replacement: String::new(),
+                },
+            );
+            self.tokens.drain(at..last);
+        }
+        Some(kind)
+    }
+
+    /// At `fn fmt(` in an `impl Display` / `impl Debug` block: Rust's
+    /// `fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result`. Kāra's
+    /// `Display` is `fn to_string(self) -> String` and its `Debug` is
+    /// `fn fmt_debug(self) -> String` (design.md § Display and Debug), so
+    /// the signature is rewritten, and each `write!(f, ..)` whose result is
+    /// the method's (no `?` after it) becomes the `format!(..)` the next
+    /// pass turns into an f-string, and `f.write_str("..")` the string. A
+    /// body that uses the formatter any other way is reported with no fix.
+    /// The method's tokens are skipped either way: its Rust types
+    /// (`fmt::Formatter<'_>`) would only cascade (B-2026-11-15-71).
+    fn rust_fmt_method(&mut self, kind: &str) -> bool {
+        let toks = &self.tokens;
+        let matching = |open: usize| -> Option<usize> {
+            let mut depth = 0usize;
+            for (i, t) in toks.iter().enumerate().skip(open) {
+                match t.token {
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth = depth.checked_sub(1)?;
+                        if depth == 0 {
+                            return Some(i);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        };
+        let name_at = self.pos + 1;
+        let open = self.pos + 2;
+        let Some(close) = matching(open) else {
+            return false;
+        };
+        let Some(body_open) =
+            (close + 1..toks.len()).find(|&i| matches!(toks[i].token, Token::LeftBrace))
+        else {
+            return false;
+        };
+        let Some(body_close) = matching(body_open) else {
+            return false;
+        };
+        let tok = |i: usize| toks.get(i).map(|t| &t.token);
+        let is_ident = |i: usize, want: &str| matches!(tok(i), Some(Token::Identifier { name, .. }) if name == want);
+        // `&self, f: ..` (or `self, f: ..`): the formatter's name.
+        let mut p = open + 1;
+        if matches!(tok(p), Some(Token::Amp)) {
+            p += 1;
+        }
+        let formatter = match (tok(p), tok(p + 1), tok(p + 2), tok(p + 3)) {
+            (
+                Some(Token::SelfValue),
+                Some(Token::Comma),
+                Some(Token::Identifier { name, .. }),
+                Some(Token::Colon),
+            ) => Some(name.clone()),
+            _ => None,
+        };
+        // A `fn fmt(self)` with no formatter is not Rust's method: it is
+        // parsed as written.
+        let Some(formatter) = formatter else {
+            return false;
+        };
+        let new_name = if kind == "Display" {
+            "to_string"
+        } else {
+            "fmt_debug"
+        };
+        let name_span = toks[name_at].span;
+        let sig_end = toks[body_open - 1].span;
+        let mut edits = vec![crate::resolver::TextEdit {
+            offset: name_span.offset,
+            length: sig_end.offset + sig_end.length - name_span.offset,
+            replacement: format!("{new_name}(self) -> String"),
+        }];
+        let mut fixable = true;
+        {
+            let f = &formatter;
+            for i in body_open + 1..body_close {
+                if !is_ident(i, f) {
+                    continue;
+                }
+                let write = i >= 3
+                    && is_ident(i - 3, "write")
+                    && matches!(tok(i - 2), Some(Token::Bang))
+                    && matches!(tok(i - 1), Some(Token::LeftParen))
+                    && matches!(tok(i + 1), Some(Token::Comma));
+                if write {
+                    let returned = matching(i - 1)
+                        .is_some_and(|c| !matches!(tok(c + 1), Some(Token::Question)));
+                    fixable &= returned;
+                    let from = toks[i - 3].span.offset;
+                    edits.push(crate::resolver::TextEdit {
+                        offset: from,
+                        length: toks[i + 2].span.offset - from,
+                        replacement: "format!(".to_string(),
+                    });
+                    continue;
+                }
+                let write_str = matches!(tok(i + 1), Some(Token::Dot))
+                    && is_ident(i + 2, "write_str")
+                    && matches!(tok(i + 3), Some(Token::LeftParen))
+                    && matches!(tok(i + 4), Some(Token::StringLiteral(_)))
+                    && matches!(tok(i + 5), Some(Token::RightParen))
+                    && !matches!(tok(i + 6), Some(Token::Question));
+                if write_str {
+                    let from = toks[i].span.offset;
+                    let lit = toks[i + 4].span;
+                    let end = toks[i + 5].span;
+                    edits.push(crate::resolver::TextEdit {
+                        offset: from,
+                        length: lit.offset - from,
+                        replacement: String::new(),
+                    });
+                    edits.push(crate::resolver::TextEdit {
+                        offset: end.offset,
+                        length: end.length,
+                        replacement: ".to_string()".to_string(),
+                    });
+                    continue;
+                }
+                fixable = false;
+            }
+        }
+        let message = format!(
+            "`fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result` is Rust's -- Kāra's \
+             `{kind}` is `fn {new_name}(self) -> String`, which returns the text: write \
+             `fn {new_name}(self) -> String {{ f\"..\" }}`{}",
+            if fixable {
+                ""
+            } else {
+                ", building the text where the body writes to the formatter"
+            }
+        );
+        self.error_at(&message, name_span);
+        if fixable {
+            self.fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&name_span), edits);
+        }
+        self.pos = body_close + 1;
+        true
     }
 
     fn parse_assoc_type_binding(&mut self) -> Option<AssocTypeBinding> {

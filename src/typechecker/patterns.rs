@@ -4064,7 +4064,43 @@ impl<'a> super::TypeChecker<'a> {
                     } else {
                         format!("tuple pattern used but type is `{}`", type_display(ty))
                     };
-                    self.type_error(message, pattern.span, TypeErrorKind::TypeMismatch);
+                    // `let (sock, _) = listener.accept()?`: Rust's accept
+                    // gives the stream and the peer's address, and Kāra's
+                    // gives the stream alone (docs/library/io.md §
+                    // Networking), so the pattern is its first element
+                    // when the address is not bound (B-2026-11-15-74).
+                    let stream = patterns.len() == 2
+                        && matches!(ty, Type::Named { name, .. }
+                            if name == "TcpStream" || name == "TlsStream");
+                    if stream {
+                        let message = format!(
+                            "a tuple `(stream, addr)` is what Rust's `accept` gives: Kāra's \
+                             `accept` gives the `{}` alone, so bind it by itself",
+                            type_display(ty)
+                        );
+                        self.type_error(message, pattern.span, TypeErrorKind::TypeMismatch);
+                        if matches!(patterns[1].kind, PatternKind::Wildcard) {
+                            let first = patterns[0].span;
+                            let end = pattern.span.offset + pattern.span.length;
+                            self.error_fix_diffs.insert(
+                                SpanKey::from_span(&pattern.span),
+                                vec![
+                                    crate::resolver::TextEdit {
+                                        offset: pattern.span.offset,
+                                        length: first.offset - pattern.span.offset,
+                                        replacement: String::new(),
+                                    },
+                                    crate::resolver::TextEdit {
+                                        offset: first.offset + first.length,
+                                        length: end - (first.offset + first.length),
+                                        replacement: String::new(),
+                                    },
+                                ],
+                            );
+                        }
+                    } else {
+                        self.type_error(message, pattern.span, TypeErrorKind::TypeMismatch);
+                    }
                     for pat in patterns {
                         self.bind_pattern_types(pat, &Type::Error);
                     }

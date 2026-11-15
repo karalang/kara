@@ -1,0 +1,995 @@
+// ninep_server: a 9P2000 file server (the Plan 9 file protocol, also v9fs
+// in Linux and the protocol under WSL's and QEMU's file sharing) over TCP,
+// with an in-memory tree, and the clients that use it. Messages are
+// little-endian: size[4] type[1] tag[2], then the body. Each connection is a
+// session with its own fids; the tree is shared under one lock, and writing
+// "halt" to /ctl stops the server.
+
+use std::sync::{TaskGroup, Mutex};
+use std::net::{TcpListener, TcpStream};
+use std::io::BufReader;
+use std::collections::{HashMap, HashSet, BTreeMap};
+
+const NOFID: u32 = 0xFFFF_FFFF;
+const NOTAG: u16 = 0xFFFF;
+const MAX_MSIZE: u32 = 8192;
+const QTDIR: u8 = 0x80;
+const DMDIR: u32 = 0x8000_0000;
+const BASE_TIME: u32 = 1_700_000_000;
+const OREAD: u8 = 0;
+const OWRITE: u8 = 1;
+const ORDWR: u8 = 2;
+const OTRUNC: u8 = 0x10;
+const IOHDR: u32 = 24; // size, type, tag, fid, offset, count: the most a header takes
+const ROOT: usize = 0;
+
+fn msg_name(t: u8) -> String {
+    let name = match t {
+        100 => "Tversion",
+        101 => "Rversion",
+        102 => "Tauth",
+        103 => "Rauth",
+        104 => "Tattach",
+        105 => "Rattach",
+        107 => "Rerror",
+        108 => "Tflush",
+        109 => "Rflush",
+        110 => "Twalk",
+        111 => "Rwalk",
+        112 => "Topen",
+        113 => "Ropen",
+        114 => "Tcreate",
+        115 => "Rcreate",
+        116 => "Tread",
+        117 => "Rread",
+        118 => "Twrite",
+        119 => "Rwrite",
+        120 => "Tclunk",
+        121 => "Rclunk",
+        122 => "Tremove",
+        123 => "Rremove",
+        124 => "Tstat",
+        125 => "Rstat",
+        _ => "",
+    };
+    if name.is_empty() {
+        format!("T{}", t)
+    } else {
+        name.to_string()
+    }
+}
+
+// ------------------------------------------------------------ wire format
+
+#[derive(Clone, Copy, Debug)]
+struct Qid {
+    qtype: u8,
+    vers: u32,
+    path: u64,
+}
+
+#[derive(Debug)]
+enum NineError {
+    Msg(String),
+    Malformed,
+}
+
+impl From<&str> for NineError {
+    fn from(s: &str) -> Self {
+        NineError::Msg(s.to_string())
+    }
+}
+
+impl std::fmt::Display for NineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            NineError::Msg(m) => write!(f, "{}", m),
+            NineError::Malformed => write!(f, "malformed message"),
+        }
+    }
+}
+
+struct W {
+    b: Vec<u8>,
+}
+
+impl W {
+    fn new() -> W {
+        W { b: Vec::new() }
+    }
+
+    fn u8(&mut self, v: u8) -> &mut W {
+        self.b.push(v);
+        self
+    }
+
+    fn u16(&mut self, v: u16) -> &mut W {
+        self.b.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    fn u32(&mut self, v: u32) -> &mut W {
+        self.b.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    fn u64(&mut self, v: u64) -> &mut W {
+        self.b.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    fn s(&mut self, text: &str) -> &mut W {
+        self.u16(text.len() as u16);
+        self.b.extend_from_slice(text.as_bytes());
+        self
+    }
+
+    fn raw(&mut self, data: &[u8]) -> &mut W {
+        self.b.extend_from_slice(data);
+        self
+    }
+
+    fn qid(&mut self, q: Qid) -> &mut W {
+        self.u8(q.qtype).u32(q.vers).u64(q.path)
+    }
+
+    fn done(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.b)
+    }
+}
+
+struct R<'a> {
+    d: &'a [u8],
+    at: usize,
+}
+
+impl<'a> R<'a> {
+    fn new(d: &'a [u8]) -> R<'a> {
+        R { d, at: 0 }
+    }
+
+    fn take(&mut self, n: usize) -> Result<&'a [u8], NineError> {
+        if self.at + n > self.d.len() {
+            return Err(NineError::Malformed);
+        }
+        let out = &self.d[self.at..self.at + n];
+        self.at += n;
+        Ok(out)
+    }
+
+    fn left(&self) -> usize {
+        self.d.len() - self.at
+    }
+
+    fn u8(&mut self) -> Result<u8, NineError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16, NineError> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
+
+    fn u32(&mut self) -> Result<u32, NineError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
+    fn u64(&mut self) -> Result<u64, NineError> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
+    fn s(&mut self) -> Result<String, NineError> {
+        let n = self.u16()? as usize;
+        Ok(String::from_utf8_lossy(self.take(n)?).into_owned())
+    }
+
+    fn qid(&mut self) -> Result<Qid, NineError> {
+        Ok(Qid { qtype: self.u8()?, vers: self.u32()?, path: self.u64()? })
+    }
+}
+
+fn frame(mtype: u8, tag: u16, body: &[u8]) -> Vec<u8> {
+    W::new().u32(7 + body.len() as u32).u8(mtype).u16(tag).raw(body).done()
+}
+
+fn read_frame(r: &mut BufReader<TcpStream>) -> Option<(u8, u16, Vec<u8>)> {
+    let mut head = [0u8; 4];
+    r.read_exact(&mut head).ok()?;
+    let size = u32::from_le_bytes(head) as usize;
+    let mut rest = vec![0u8; size - 4];
+    r.read_exact(&mut rest).ok()?;
+    let tag = u16::from_le_bytes([rest[1], rest[2]]);
+    Some((rest[0], tag, rest[3..].to_vec()))
+}
+
+fn show_qid(q: Qid) -> String {
+    let kind = if q.qtype & QTDIR != 0 { "dir" } else { "file" };
+    format!("qid({} v{} {})", q.path, q.vers, kind)
+}
+
+fn escape(data: &[u8]) -> String {
+    String::from_utf8_lossy(data).replace('\n', "\\n").replace('\0', "\\0")
+}
+
+// ------------------------------------------------------------ the tree
+
+struct Node {
+    path: u64,
+    name: String,
+    is_dir: bool,
+    perm: u32,
+    uid: String,
+    gid: String,
+    muid: String,
+    parent: usize,
+    children: Vec<usize>,
+    data: Vec<u8>,
+    version: u32,
+    atime: u32,
+    mtime: u32,
+    ctl: bool,
+}
+
+impl Node {
+    fn qid(&self) -> Qid {
+        Qid { qtype: if self.is_dir { QTDIR } else { 0 }, vers: self.version, path: self.path }
+    }
+
+    fn stat(&self) -> Vec<u8> {
+        let mode = self.perm | if self.is_dir { DMDIR } else { 0 };
+        let length = if self.is_dir { 0 } else { self.data.len() as u64 };
+        let body = W::new()
+            .u16(0)
+            .u32(0)
+            .qid(self.qid())
+            .u32(mode)
+            .u32(BASE_TIME + self.atime)
+            .u32(BASE_TIME + self.mtime)
+            .u64(length)
+            .s(&self.name)
+            .s(&self.uid)
+            .s(&self.gid)
+            .s(&self.muid)
+            .done();
+        W::new().u16(body.len() as u16).raw(&body).done()
+    }
+}
+
+struct Server {
+    clock: u32,
+    nodes: Vec<Node>,
+    stopping: bool,
+    log: Vec<String>,
+    counts: BTreeMap<usize, usize>,
+}
+
+impl Server {
+    fn new() -> Server {
+        let mut s = Server { clock: 0, nodes: Vec::new(), stopping: false, log: Vec::new(), counts: BTreeMap::new() };
+        let root = s.make(None, "/", true, 0o775, "admin");
+        let readme = s.make(Some(root), "readme", false, 0o644, "admin");
+        s.nodes[readme].data.extend_from_slice(b"served by ninep_server\n");
+        let etc = s.make(Some(root), "etc", true, 0o755, "glenda");
+        let motd = s.make(Some(etc), "motd", false, 0o644, "glenda");
+        s.nodes[motd].data.extend_from_slice(b"welcome to the grid\n");
+        s.make(Some(root), "tmp", true, 0o777, "admin");
+        let ctl = s.make(Some(root), "ctl", false, 0o200, "admin");
+        s.nodes[ctl].ctl = true;
+        s
+    }
+
+    fn make(&mut self, parent: Option<usize>, name: &str, is_dir: bool, perm: u32, uid: &str) -> usize {
+        let id = self.nodes.len();
+        self.nodes.push(Node {
+            path: id as u64 + 1,
+            name: name.to_string(),
+            is_dir,
+            perm,
+            uid: uid.to_string(),
+            gid: uid.to_string(),
+            muid: uid.to_string(),
+            parent: parent.unwrap_or(id),
+            children: Vec::new(),
+            data: Vec::new(),
+            version: 0,
+            atime: self.clock,
+            mtime: self.clock,
+            ctl: false,
+        });
+        if let Some(p) = parent {
+            self.nodes[p].children.push(id);
+        }
+        id
+    }
+
+    fn child(&self, n: usize, name: &str) -> Option<usize> {
+        self.nodes[n].children.iter().copied().find(|&c| self.nodes[c].name == name)
+    }
+
+    fn walk_path(&self, mut n: usize) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        while self.nodes[n].parent != n {
+            parts.push(&self.nodes[n].name);
+            n = self.nodes[n].parent;
+        }
+        parts.reverse();
+        format!("/{}", parts.join("/"))
+    }
+
+    fn allowed(&self, n: usize, user: &str, want: u32) -> bool {
+        let node = &self.nodes[n];
+        let bits = if node.uid == user { (node.perm >> 6) & 7 } else { node.perm & 7 };
+        bits & want == want
+    }
+}
+
+fn check_open(srv: &Server, n: usize, user: &str, mode: u8) -> Result<(), NineError> {
+    if srv.nodes[n].is_dir && (mode & 3 != OREAD || mode & OTRUNC != 0) {
+        return Err("is a directory".into());
+    }
+    let mut want = match mode & 3 {
+        0 => 4,
+        1 => 2,
+        2 => 6,
+        _ => 1,
+    };
+    if mode & OTRUNC != 0 {
+        want |= 2;
+    }
+    if !srv.allowed(n, user, want) {
+        return Err("permission denied".into());
+    }
+    Ok(())
+}
+
+fn touch(srv: &mut Server, n: usize, user: &str) {
+    let clock = srv.clock;
+    let node = &mut srv.nodes[n];
+    node.version += 1;
+    node.mtime = clock;
+    node.muid = user.to_string();
+}
+
+// ------------------------------------------------------------ sessions
+
+struct Fid {
+    node: usize,
+    mode: Option<u8>, // None until opened
+    dir_offset: u64,
+    dir_index: usize,
+}
+
+impl Fid {
+    fn new(node: usize) -> Fid {
+        Fid { node, mode: None, dir_offset: 0, dir_index: 0 }
+    }
+}
+
+struct Session {
+    conn_no: usize,
+    msize: u32,
+    user: String,
+    fids: HashMap<u32, Fid>,
+    count: usize,
+}
+
+impl Session {
+    fn new(conn_no: usize) -> Session {
+        Session { conn_no, msize: 0, user: String::new(), fids: HashMap::new(), count: 0 }
+    }
+
+    fn fid(&self, f: u32) -> Result<&Fid, NineError> {
+        self.fids.get(&f).ok_or(NineError::from("unknown fid"))
+    }
+
+    /// One T-message; returns the R-message's type and body.
+    fn handle(&mut self, srv: &mut Server, mtype: u8, body: &[u8]) -> (u8, Vec<u8>) {
+        self.count += 1;
+        srv.clock += 1;
+        let mut r = R::new(body);
+        match self.dispatch(srv, mtype, &mut r) {
+            Ok(reply) => reply,
+            Err(e) => (107, W::new().s(&e.to_string()).done()),
+        }
+    }
+
+    fn dispatch(&mut self, srv: &mut Server, mtype: u8, r: &mut R<'_>) -> Result<(u8, Vec<u8>), NineError> {
+        if mtype == 100 {
+            let msize = r.u32()?;
+            let version = r.s()?;
+            self.fids.clear();
+            self.msize = msize.min(MAX_MSIZE);
+            let v = if version.starts_with("9P2000") { "9P2000" } else { "unknown" };
+            return Ok((101, W::new().u32(self.msize).s(v).done()));
+        }
+        if self.msize == 0 {
+            return Err("version not negotiated".into());
+        }
+        match mtype {
+            102 => Err("authentication not required".into()),
+            104 => {
+                let fid = r.u32()?;
+                let afid = r.u32()?;
+                let uname = r.s()?;
+                let aname = r.s()?;
+                if afid != NOFID {
+                    return Err("authentication not required".into());
+                }
+                if aname != "" && aname != "/" {
+                    return Err(NineError::Msg(format!("no such tree: {}", aname)));
+                }
+                if self.fids.contains_key(&fid) {
+                    return Err("fid already in use".into());
+                }
+                self.user = uname.clone();
+                self.fids.insert(fid, Fid::new(ROOT));
+                srv.log.push(format!("conn {}: {} attached", self.conn_no, uname));
+                Ok((105, W::new().qid(srv.nodes[ROOT].qid()).done()))
+            }
+            108 => {
+                r.u16()?;
+                Ok((109, Vec::new()))
+            }
+            110 => {
+                let fid = r.u32()?;
+                let newfid = r.u32()?;
+                let n = r.u16()? as usize;
+                let mut names = Vec::new();
+                for _ in 0..n {
+                    names.push(r.s()?);
+                }
+                let f = self.fid(fid)?;
+                if f.mode.is_some() {
+                    return Err("cannot walk an open fid".into());
+                }
+                if newfid != fid && self.fids.contains_key(&newfid) {
+                    return Err("fid already in use".into());
+                }
+                if n > 16 {
+                    return Err("too many names in walk".into());
+                }
+                let mut node = f.node;
+                let mut qids: Vec<Qid> = Vec::new();
+                for name in &names {
+                    if !srv.nodes[node].is_dir {
+                        if qids.is_empty() {
+                            return Err("not a directory".into());
+                        }
+                        break;
+                    }
+                    let next = if name == ".." { Some(srv.nodes[node].parent) } else { srv.child(node, name) };
+                    match next {
+                        Some(x) => {
+                            node = x;
+                            qids.push(srv.nodes[node].qid());
+                        }
+                        None => {
+                            if qids.is_empty() {
+                                return Err("file does not exist".into());
+                            }
+                            break;
+                        }
+                    }
+                }
+                if qids.len() == n {
+                    self.fids.insert(newfid, Fid::new(node));
+                }
+                let mut w = W::new();
+                w.u16(qids.len() as u16);
+                for q in &qids {
+                    w.qid(*q);
+                }
+                Ok((111, w.done()))
+            }
+            112 => {
+                let fid = r.u32()?;
+                let mode = r.u8()?;
+                let f = self.fids.get_mut(&fid).ok_or(NineError::from("unknown fid"))?;
+                if f.mode.is_some() {
+                    return Err("fid already open".into());
+                }
+                check_open(srv, f.node, &self.user, mode)?;
+                if mode & OTRUNC != 0 {
+                    srv.nodes[f.node].data.clear();
+                    touch(srv, f.node, &self.user);
+                }
+                f.mode = Some(mode);
+                Ok((113, W::new().qid(srv.nodes[f.node].qid()).u32(self.msize - IOHDR).done()))
+            }
+            114 => {
+                let fid = r.u32()?;
+                let name = r.s()?;
+                let perm = r.u32()?;
+                let mode = r.u8()?;
+                let f = self.fids.get_mut(&fid).ok_or(NineError::from("unknown fid"))?;
+                let d = f.node;
+                if f.mode.is_some() {
+                    return Err("fid already open".into());
+                }
+                if !srv.nodes[d].is_dir {
+                    return Err("not a directory".into());
+                }
+                if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+                    return Err("bad file name".into());
+                }
+                if srv.child(d, &name).is_some() {
+                    return Err("file exists".into());
+                }
+                if !srv.allowed(d, &self.user, 2) {
+                    return Err("permission denied".into());
+                }
+                let is_dir = perm & DMDIR != 0;
+                if is_dir && mode & 3 != OREAD {
+                    return Err("is a directory".into());
+                }
+                let n = srv.make(Some(d), &name, is_dir, perm & 0o777, &self.user);
+                touch(srv, d, &self.user);
+                f.node = n;
+                f.mode = Some(mode);
+                let path = srv.walk_path(n);
+                srv.log.push(format!("conn {}: {} created {}", self.conn_no, self.user, path));
+                Ok((115, W::new().qid(srv.nodes[n].qid()).u32(self.msize - IOHDR).done()))
+            }
+            116 => {
+                let fid = r.u32()?;
+                let offset = r.u64()?;
+                let count = r.u32()?;
+                let f = self.fids.get_mut(&fid).ok_or(NineError::from("unknown fid"))?;
+                match f.mode {
+                    Some(m) if m & 3 == OREAD || m & 3 == ORDWR => {}
+                    _ => return Err("fid not open for reading".into()),
+                }
+                let count = count.min(self.msize - IOHDR) as usize;
+                let n = f.node;
+                srv.nodes[n].atime = srv.clock;
+                let node = &srv.nodes[n];
+                if !node.is_dir {
+                    let start = (offset as usize).min(node.data.len());
+                    let end = (start + count).min(node.data.len());
+                    let data = &node.data[start..end];
+                    return Ok((117, W::new().u32(data.len() as u32).raw(data).done()));
+                }
+                if offset == 0 {
+                    f.dir_index = 0;
+                    f.dir_offset = 0;
+                } else if offset != f.dir_offset {
+                    return Err("bad offset in directory read".into());
+                }
+                let mut out: Vec<u8> = Vec::new();
+                while f.dir_index < node.children.len() {
+                    let st = srv.nodes[node.children[f.dir_index]].stat();
+                    if out.len() + st.len() > count {
+                        break;
+                    }
+                    out.extend_from_slice(&st);
+                    f.dir_index += 1;
+                }
+                if out.is_empty() && f.dir_index < node.children.len() {
+                    return Err("count too small for a directory entry".into());
+                }
+                f.dir_offset += out.len() as u64;
+                Ok((117, W::new().u32(out.len() as u32).raw(&out).done()))
+            }
+            118 => {
+                let fid = r.u32()?;
+                let offset = r.u64()? as usize;
+                let count = r.u32()?;
+                let data = r.take(count as usize)?;
+                let f = self.fid(fid)?;
+                match f.mode {
+                    Some(m) if m & 3 == OWRITE || m & 3 == ORDWR => {}
+                    _ => return Err("fid not open for writing".into()),
+                }
+                let n = f.node;
+                if srv.nodes[n].ctl {
+                    let cmd = String::from_utf8_lossy(data).trim().to_string();
+                    if cmd != "halt" {
+                        return Err(NineError::Msg(format!("unknown ctl message: {}", cmd)));
+                    }
+                    srv.stopping = true;
+                    srv.log.push(format!("conn {}: {} wrote halt to /ctl", self.conn_no, self.user));
+                    return Ok((119, W::new().u32(count).done()));
+                }
+                let buf = &mut srv.nodes[n].data;
+                if offset + data.len() > buf.len() {
+                    buf.resize(offset + data.len(), 0);
+                }
+                buf[offset..offset + data.len()].copy_from_slice(data);
+                touch(srv, n, &self.user);
+                Ok((119, W::new().u32(count).done()))
+            }
+            120 => {
+                let fid = r.u32()?;
+                self.fids.remove(&fid).ok_or(NineError::from("unknown fid"))?;
+                Ok((121, Vec::new()))
+            }
+            122 => {
+                let fid = r.u32()?;
+                // A remove clunks the fid, whatever happens.
+                let f = self.fids.remove(&fid).ok_or(NineError::from("unknown fid"))?;
+                let n = f.node;
+                if n == ROOT {
+                    return Err("cannot remove the root".into());
+                }
+                if srv.nodes[n].is_dir && !srv.nodes[n].children.is_empty() {
+                    return Err("directory not empty".into());
+                }
+                let parent = srv.nodes[n].parent;
+                if !srv.allowed(parent, &self.user, 2) {
+                    return Err("permission denied".into());
+                }
+                let place = srv.walk_path(n);
+                srv.nodes[parent].children.retain(|&c| c != n);
+                touch(srv, parent, &self.user);
+                srv.log.push(format!("conn {}: {} removed {}", self.conn_no, self.user, place));
+                Ok((123, Vec::new()))
+            }
+            124 => {
+                let fid = r.u32()?;
+                let st = srv.nodes[self.fid(fid)?.node].stat();
+                Ok((125, W::new().u16(st.len() as u16).raw(&st).done()))
+            }
+            _ => Err(NineError::Msg(format!("unknown message type {}", mtype))),
+        }
+    }
+}
+
+fn serve_conn(srv: &Mutex<Server>, sock: TcpStream, conn_no: usize) {
+    let mut reader = BufReader::new(sock.try_clone().unwrap());
+    let mut sock = sock;
+    let mut sess = Session::new(conn_no);
+    while let Some((mtype, tag, body)) = read_frame(&mut reader) {
+        let (rtype, rbody) = {
+            let mut guard = srv.lock();
+            sess.handle(&mut guard, mtype, &body)
+        };
+        let _ = sock.write_all(&frame(rtype, tag, &rbody));
+    }
+    srv.lock().counts.insert(conn_no, sess.count);
+}
+
+fn serve(srv: &Mutex<Server>, listener: TcpListener) {
+    let group = TaskGroup::new();
+    let mut conn_no = 0;
+    loop {
+        let (sock, _) = listener.accept().unwrap();
+        if srv.lock().stopping {
+            drop(sock);
+            break;
+        }
+        conn_no += 1;
+        let n = conn_no;
+        group.spawn(move || serve_conn(srv, sock, n));
+    }
+    drop(listener);
+    group.join();
+}
+
+// ------------------------------------------------------------ the clients
+
+struct Client {
+    name: String,
+    w: TcpStream,
+    r: BufReader<TcpStream>,
+    next_tag: u16,
+    dirs: HashSet<u32>, // fids that name directories
+    got: usize,
+}
+
+impl Client {
+    fn connect(name: &str, addr: &str) -> Client {
+        let sock = TcpStream::connect(addr).unwrap();
+        let r = BufReader::new(sock.try_clone().unwrap());
+        Client { name: name.to_string(), w: sock, r, next_tag: 1, dirs: HashSet::new(), got: 0 }
+    }
+
+    fn send(&mut self, mtype: u8, body: &[u8], tag: Option<u16>, show: &str) -> u16 {
+        let tag = match tag {
+            Some(t) => t,
+            None => {
+                let t = self.next_tag;
+                self.next_tag += 1;
+                t
+            }
+        };
+        let line = format!("{} -> {} tag={} {}", self.name, msg_name(mtype), tag, show);
+        println!("{}", line.trim_end());
+        let _ = self.w.write_all(&frame(mtype, tag, body));
+        tag
+    }
+
+    fn recv(&mut self, dir: bool) -> u8 {
+        let (mtype, tag, body) = read_frame(&mut self.r).unwrap();
+        let mut r = R::new(&body);
+        self.got = 0;
+        let text = match mtype {
+            107 => format!("'{}'", r.s().unwrap()),
+            101 => {
+                let m = r.u32().unwrap();
+                format!("msize={} version={}", m, r.s().unwrap())
+            }
+            105 | 113 | 115 => {
+                let mut t = show_qid(r.qid().unwrap());
+                if mtype != 105 {
+                    t += &format!(" iounit={}", r.u32().unwrap());
+                }
+                t
+            }
+            111 => {
+                let n = r.u16().unwrap();
+                let qs: Vec<String> = (0..n).map(|_| show_qid(r.qid().unwrap())).collect();
+                format!("[{}]", qs.join(", "))
+            }
+            117 => {
+                let n = r.u32().unwrap() as usize;
+                let data = r.take(n).unwrap();
+                self.got = data.len();
+                if dir {
+                    let mut rd = R::new(data);
+                    let mut entries = Vec::new();
+                    while rd.left() > 0 {
+                        let size = rd.u16().unwrap() as usize;
+                        entries.push(show_stat(&mut R::new(rd.take(size).unwrap())));
+                    }
+                    let mut t = format!("{} bytes, {} entries", data.len(), entries.len());
+                    for e in &entries {
+                        t += &format!("\n{}      | {}", self.name, e);
+                    }
+                    t
+                } else {
+                    format!("{} bytes '{}'", data.len(), escape(data))
+                }
+            }
+            119 => format!("count={}", r.u32().unwrap()),
+            125 => {
+                let n = r.u16().unwrap() as usize;
+                let mut st = R::new(r.take(n).unwrap());
+                st.u16().unwrap(); // the stat's own size
+                show_stat(&mut st)
+            }
+            _ => String::new(),
+        };
+        let line = format!("{} <- {} tag={} {}", self.name, msg_name(mtype), tag, text);
+        println!("{}", line.trim_end());
+        mtype
+    }
+
+    fn version(&mut self, msize: u32, version: &str, hexdump: bool) -> u8 {
+        let body = W::new().u32(msize).s(version).done();
+        if hexdump {
+            let bytes: Vec<String> = frame(100, NOTAG, &body).iter().map(|b| format!("{:02x}", b)).collect();
+            println!("{}    bytes: {}", self.name, bytes.join(" "));
+        }
+        self.send(100, &body, Some(NOTAG), &format!("msize={} version={}", msize, version));
+        self.recv(false)
+    }
+
+    fn attach(&mut self, fid: u32, uname: &str, aname: &str) -> u8 {
+        let body = W::new().u32(fid).u32(NOFID).s(uname).s(aname).done();
+        self.send(104, &body, None, &format!("fid={} uname={} aname='{}'", fid, uname, aname));
+        self.recv(false)
+    }
+
+    fn walk(&mut self, fid: u32, newfid: u32, names: &[&str]) -> u8 {
+        let mut w = W::new();
+        w.u32(fid).u32(newfid).u16(names.len() as u16);
+        for n in names {
+            w.s(n);
+        }
+        self.send(110, &w.done(), None, &format!("fid={} newfid={} [{}]", fid, newfid, names.join(", ")));
+        self.recv(false)
+    }
+
+    fn open(&mut self, fid: u32, mode: u8) -> u8 {
+        self.send(112, &W::new().u32(fid).u8(mode).done(), None, &format!("fid={} mode={}", fid, mode_name(mode)));
+        self.recv(false)
+    }
+
+    fn create(&mut self, fid: u32, name: &str, perm: u32, mode: u8) -> u8 {
+        let body = W::new().u32(fid).s(name).u32(perm).u8(mode).done();
+        let show = format!("fid={} name={} perm={} mode={}", fid, name, perm_name(perm), mode_name(mode));
+        self.send(114, &body, None, &show);
+        self.recv(false)
+    }
+
+    fn read(&mut self, fid: u32, offset: u64, count: u32) -> usize {
+        let body = W::new().u32(fid).u64(offset).u32(count).done();
+        self.send(116, &body, None, &format!("fid={} offset={} count={}", fid, offset, count));
+        let dir = self.dirs.contains(&fid);
+        self.recv(dir);
+        self.got
+    }
+
+    fn write(&mut self, fid: u32, offset: u64, data: &[u8]) -> u8 {
+        let body = W::new().u32(fid).u64(offset).u32(data.len() as u32).raw(data).done();
+        self.send(118, &body, None, &format!("fid={} offset={} '{}'", fid, offset, escape(data)));
+        self.recv(false)
+    }
+
+    fn clunk(&mut self, fid: u32) -> u8 {
+        self.send(120, &W::new().u32(fid).done(), None, &format!("fid={}", fid));
+        self.dirs.remove(&fid);
+        self.recv(false)
+    }
+
+    fn remove(&mut self, fid: u32) -> u8 {
+        self.send(122, &W::new().u32(fid).done(), None, &format!("fid={}", fid));
+        self.dirs.remove(&fid);
+        self.recv(false)
+    }
+
+    fn stat(&mut self, fid: u32) -> u8 {
+        self.send(124, &W::new().u32(fid).done(), None, &format!("fid={}", fid));
+        self.recv(false)
+    }
+}
+
+fn show_stat(r: &mut R<'_>) -> String {
+    r.u16().unwrap();
+    r.u32().unwrap();
+    let q = r.qid().unwrap();
+    let mode = r.u32().unwrap();
+    let atime = r.u32().unwrap();
+    let mtime = r.u32().unwrap();
+    let length = r.u64().unwrap();
+    let name = r.s().unwrap();
+    let uid = r.s().unwrap();
+    let gid = r.s().unwrap();
+    let muid = r.s().unwrap();
+    let kind = if mode & DMDIR != 0 { "d" } else { "-" };
+    format!(
+        "{}{:03o} {} len={} uid={} gid={} muid={} {} atime=+{} mtime=+{}",
+        kind,
+        mode & 0o777,
+        name,
+        length,
+        uid,
+        gid,
+        muid,
+        show_qid(q),
+        atime - BASE_TIME,
+        mtime - BASE_TIME
+    )
+}
+
+fn mode_name(m: u8) -> String {
+    let base = ["OREAD", "OWRITE", "ORDWR", "OEXEC"][(m & 3) as usize];
+    format!("{}{}", base, if m & OTRUNC != 0 { "|OTRUNC" } else { "" })
+}
+
+fn perm_name(p: u32) -> String {
+    format!("{}{:03o}", if p & DMDIR != 0 { "DMDIR|" } else { "" }, p & 0o777)
+}
+
+fn show_tree(srv: &Server, n: usize, depth: usize) {
+    let node = &srv.nodes[n];
+    let kind = if node.is_dir { "d" } else { "-" };
+    let size = if node.is_dir { String::new() } else { format!(" {} bytes", node.data.len()) };
+    println!(
+        "{}{}{:03o} {} path={} v{} uid={} muid={}{}",
+        "  ".repeat(depth),
+        kind,
+        node.perm,
+        node.name,
+        node.path,
+        node.version,
+        node.uid,
+        node.muid,
+        size
+    );
+    for &c in &node.children {
+        show_tree(srv, c, depth + 1);
+    }
+}
+
+fn main() {
+    let srv = Mutex::new(Server::new());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let group = TaskGroup::new();
+    group.spawn(|| serve(&srv, listener));
+
+    println!("== alice connects");
+    let mut a = Client::connect("alice", &addr);
+    a.attach(0, "alice", "");
+    a.version(16384, "9P2000", true);
+    a.attach(0, "alice", "archive");
+    a.attach(0, "alice", "");
+    a.walk(0, 1, &["etc", "motd"]);
+    a.open(1, OREAD);
+    a.read(1, 0, 100);
+    a.read(1, 11, 4);
+    a.stat(1);
+    a.walk(0, 2, &["nope"]);
+    a.walk(0, 2, &["etc", "nope", "deeper"]);
+    a.clunk(2);
+    a.walk(0, 2, &["etc", "motd", "x"]);
+    a.walk(0, 2, &[]);
+    a.open(2, OWRITE);
+    a.dirs.insert(2);
+    a.open(2, OREAD);
+    a.read(2, 0, 8192);
+    let first = a.read(2, 0, 200) as u64;
+    a.read(2, first + 1, 200);
+    let second = a.read(2, first, 200) as u64;
+    a.read(2, first + second, 200);
+    a.read(2, 0, 40);
+    a.walk(1, 3, &[]);
+    a.walk(0, 1, &[]);
+    a.walk(0, 3, &["etc", "..", "tmp"]);
+    a.create(3, "notes", 0o666, ORDWR);
+    a.write(3, 0, b"first line\n");
+    a.write(3, 11, b"second line\n");
+    a.read(3, 0, 8192);
+    a.create(3, "more", 0o644, OREAD);
+
+    println!("== bob connects");
+    let mut b = Client::connect("bob", &addr);
+    b.version(8192, "9P2000.u", false);
+    b.attach(10, "bob", "");
+    b.walk(10, 11, &["etc", "motd"]);
+    b.open(11, OWRITE);
+    b.open(11, OREAD);
+    b.walk(10, 12, &["tmp", "notes"]);
+    b.open(12, OWRITE | OTRUNC);
+    b.write(12, 0, b"bob was here\n");
+    b.write(12, 20, b"!");
+    b.walk(10, 13, &["ctl"]);
+    b.open(13, OWRITE);
+    b.walk(10, 14, &["tmp"]);
+    b.create(14, "box", DMDIR | 0o755, OREAD);
+    b.walk(10, 15, &["readme"]);
+    b.remove(15);
+    b.stat(15);
+
+    println!("== alice again");
+    a.read(3, 0, 8192);
+    a.stat(3);
+    println!("== alice pipelines three stats");
+    let mut tags = Vec::new();
+    for fid in [0u32, 1, 3] {
+        tags.push(a.send(124, &W::new().u32(fid).done(), None, &format!("fid={}", fid)));
+    }
+    for _ in &tags {
+        a.recv(false);
+    }
+    a.send(99, &[0, 0], None, "(a type the protocol does not have)");
+    a.recv(false);
+    a.send(102, &W::new().u32(5).s("alice").s("").done(), None, "afid=5 uname=alice");
+    a.recv(false);
+    a.send(108, &W::new().u16(4).done(), None, "oldtag=4");
+    a.recv(false);
+    a.walk(0, 4, &["tmp"]);
+    a.remove(4);
+    a.clunk(4);
+    a.walk(0, 4, &["tmp", "box"]);
+    a.remove(4);
+    a.remove(3);
+    a.walk(0, 5, &["tmp", "notes"]);
+    a.clunk(1);
+    a.clunk(1);
+
+    println!("== admin halts the server");
+    let mut c = Client::connect("admin", &addr);
+    c.version(8192, "9P2000", false);
+    c.attach(0, "admin", "");
+    c.walk(0, 1, &["ctl"]);
+    c.open(1, OWRITE);
+    c.write(1, 0, b"reboot\n");
+    c.write(1, 0, b"halt\n");
+    drop(a);
+    drop(b);
+    drop(c);
+    drop(TcpStream::connect(&addr).unwrap()); // wakes the accept loop
+    group.join();
+
+    let srv = srv.into_inner().unwrap();
+    println!("== server log");
+    for line in &srv.log {
+        println!("{}", line);
+    }
+    for (conn_no, count) in &srv.counts {
+        println!("conn {}: closed after {} messages", conn_no, count);
+    }
+    println!("== final tree");
+    show_tree(&srv, ROOT, 0);
+}
