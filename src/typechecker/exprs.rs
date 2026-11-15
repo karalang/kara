@@ -13329,6 +13329,38 @@ impl<'a> super::TypeChecker<'a> {
         if *actual == Type::Error {
             return;
         }
+        // `Some(w)` / `Ok(w)` / `Err(w)` where an `Option[i64]` or a
+        // `Result[i64, E]` is wanted: a payload whose type the expected type
+        // fixes follows the widening table (design.md § implicit widening,
+        // B-2026-11-15-155). The call's own type has already met the slot,
+        // so the payload's is read from where it was recorded. A constant
+        // payload that fits (`Some(0 - 1)` into `Option[i32]`) is
+        // range-checked as a literal is, and passes.
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let (ExprKind::Identifier(ctor), [payload]) = (&callee.kind, args.as_slice()) {
+                let slot = match ctor.as_str() {
+                    "Some" => Some(("Option", 0)),
+                    "Ok" => Some(("Result", 0)),
+                    "Err" => Some(("Result", 1)),
+                    _ => None,
+                };
+                let got = self
+                    .expr_types
+                    .get(&SpanKey::from_span(&payload.value.span))
+                    .cloned();
+                if let (Some((wrapper, i)), Type::Named { name: en, args: ea }, Some(got)) =
+                    (slot, expected, got)
+                {
+                    if en == wrapper
+                        && ea.len() > i
+                        && self.eval_const_expr(&payload.value, &ea[i]).is_err()
+                    {
+                        let want = ea[i].clone();
+                        self.check_int_widening_coercion(&payload.value, &want, &got);
+                    }
+                }
+            }
+        }
         // A literal was already validated by the two `*_int_literal_value`
         // blocks; re-flagging it here would be a spurious "needs `as`" on a
         // value that provably fits.
@@ -13758,13 +13790,11 @@ impl<'a> super::TypeChecker<'a> {
     /// because a seeded slot is not an ordinary assignment target and two
     /// existing behaviours have to survive:
     ///
-    ///  - SAME-WIDTH reinterpretation stays permissive. `return Some(i)` with
-    ///    `i: i64` into an `Option[u64]` is a tested, deliberate shape
-    ///    (`generic_numeric_arg_same_layout_and_literals_still_accepted`:
-    ///    "same eight bytes, only the interpretation differs"). It disagrees
-    ///    with the plain `return i` into a `-> u64` fn, which IS rejected —
-    ///    but that disagreement predates this row and settling it is a language
-    ///    decision, not a bug fix. Only a STRICT width reduction is caught.
+    ///  - SAME-WIDTH reinterpretation is not this check's to catch. A
+    ///    constructor payload (`return Some(i)` with `i: i64` into an
+    ///    `Option[u64]`) is judged by `check_int_widening_coercion` itself,
+    ///    by the review's ruling on B-2026-11-15-155; only a STRICT width
+    ///    reduction is caught here.
     ///
     ///  - A COMPILE-TIME-CONSTANT argument stays permissive when its value
     ///    fits. `let a: Option[i32] = Some(0 - 1)` is arithmetic over literals,

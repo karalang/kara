@@ -118,7 +118,7 @@ No ambiguity with comparison operators. `Vec[i32]` can't be misread as "is Vec l
 Here's a generic function with a trait bound and a return type:
 
 ```kara,run
-fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] {
+fn find[T: Eq](items: Vec[T], target: T) -> Option[i64] {
     for i in 0..items.len() {
         if items[i] == target {
             return Some(i);

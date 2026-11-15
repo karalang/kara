@@ -466,7 +466,7 @@ impl Client {
     }
 
     fn recv(self, wait_ms: u64) -> Option[Message] {
-        self.sock.set_read_timeout(Some(wait_ms)).unwrap();
+        self.sock.set_read_timeout(Some(wait_ms as i64)).unwrap();
         let mut buf = [0u8; 2048];
         let n = match self.sock.recv_from(mut buf) {
             Ok((n, _)) => n,

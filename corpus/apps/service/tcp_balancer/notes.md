@@ -56,6 +56,11 @@ By hand:
   holding a nested `format!`, since a nested f-string is deprecated
   (design.md §3). The `.kara` writes the closure as a block that binds
   `streak` first.
+- `pick` returns the Rust draft's `Option[usize]`, and `Some(i)` with
+  `i: i64` (a range over `len()`) was let through until B-2026-11-15-155
+  made a constructor's payload a coercion like any other. That diagnostic
+  has no machine fix, since an out-of-range value is not caught, so the
+  three `Some(i)` in `pick` are `Some(i as usize)`.
 
 Found while writing it:
 - `std.mem.take(&mut g.value.events)` failed "undefined name 'std'" with

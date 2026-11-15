@@ -31,7 +31,7 @@ payload after a `0xFF` marker.
 The mirror `coap_server.py` is the same server and clients written
 independently with `socket` and `threading`; it wrote `expected.out`.
 
-Written 2026-11-15 by the real-world apps thread; karac at 4dbfebec42,
+Written 2026-11-15 by the real-world apps thread; karac at KARAC_SHA,
 which carries the fixes below.
 
 ## From coap_server.orig.kara to coap_server.kara
@@ -41,7 +41,7 @@ The draft was written Rust-shaped (`use` and `::` paths, `&str`, `&[u8]`,
 `thread::spawn(move || ..)`, `handle.join().unwrap()`,
 `set_read_timeout(Some(Duration::from_millis(ms)))`,
 `.collect::<Vec<_>>().join("")`, iterator chains returning
-`Vec<&Vec<u8>>`). Six gaps turned up. Five were fixed in the compiler
+`Vec<&Vec<u8>>`). Six gaps turned up, and each was fixed in the compiler
 before the fix passes were rerun:
 
 - B-2026-11-15-150: `server.join().unwrap()` said only "no method
@@ -59,19 +59,19 @@ before the fix passes were rerun:
   `filter(|(n, _)| *n == num).map(..).collect()`, was refused as returning
   a borrow of `num`. A predicate returns `bool`, so the collected views
   cannot hold its capture.
+- B-2026-11-15-155: with the timeout mended, `Some(wait_ms)` with
+  `wait_ms: u64` passed an `Option[i64]` slot with no `as`, where a bare
+  `i64` slot refuses it (and `u64.MAX` would have become -1). A
+  constructor's payload now follows the widening table (review's ruling).
 
-The sixth is open: with the timeout mended, `Some(wait_ms)` with
-`wait_ms: u64` passes an `Option[i64]` slot with no `as`, where a bare
-`i64` slot refuses it, and `u64.MAX` would become -1 (B-2026-11-15-155).
-The checker keeps a variable payload permissive on purpose, so the
-program is left as `karac fix` wrote it; its timeouts are 300 ms.
-
-After those, `karac fix` rewrote the draft over five passes, and one
-diagnostic with no machine fix was answered by hand, as it says:
+After those, `karac fix` rewrote the draft over five passes, and two
+diagnostics with no machine fix were answered by hand, as they say:
 
 - `thread::spawn(|| serve(Server.new(), sock))` (B-2026-11-07-41: the
   rewrite needs a group): `let group = TaskGroup.new();` and
   `group.spawn(|| ..)`.
+- `set_read_timeout(Some(wait_ms))` (B-2026-11-15-155: a narrowing needs
+  an explicit `as`): `Some(wait_ms as i64)`.
 
 `struct Server` keeps its name, so `karac check` warns that it shadows the
 prelude's HTTP `Server`, which the warning says is legal, and the clients'

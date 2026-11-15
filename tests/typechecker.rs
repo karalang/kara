@@ -35343,15 +35343,18 @@ fn seeded_slot_rejects_a_narrowing_non_constant_argument() {
     assert!(narrowing_path_call
         .iter()
         .any(|e| e.message.contains("would narrow or change sign")));
-    // Deliberately narrower than the general rule, so two existing behaviours
-    // survive. A payload checked against its slot stays permissive — see
-    // `generic_numeric_arg_same_layout_and_literals_still_accepted`.
-    typecheck_ok(
+    // A variable payload is judged by the widening table itself
+    // (B-2026-11-15-155, which flipped this from accepted): `return Some(i)`
+    // with `i: i64` into an `Option[u64]` changes sign.
+    let payload = typecheck_errors(
         "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
              for i in 0..items.len() { if items[i] == target { return Some(i); } } \
              None \
          }",
     );
+    assert!(payload
+        .iter()
+        .any(|e| e.message.contains("would narrow or change sign")));
     // And a COMPILE-TIME CONSTANT whose value fits stays permissive, even
     // though arithmetic over literals is not itself a literal (B-2026-08-05-25).
     typecheck_ok("fn main() { let a: Option[i32] = Some(0 - 1); println(a.is_some()); }");
@@ -42071,10 +42074,10 @@ fn enum_constructor_constant_expression_payload_adopts_expected_type() {
     // The plain literal forms keep working.
     typecheck_ok("fn main() { let a: Option[i32] = Some(-1); println(a.is_some()); }");
     typecheck_ok("fn main() { let a: Option[i32] = Some(1); println(a.is_some()); }");
-    // The case the payload-adoption comment warns a blanket push would break:
-    // a VARIABLE payload stays in synthesis mode and is unaffected.
+    // A VARIABLE payload stays in synthesis mode; a lossless one is accepted
+    // (B-2026-11-15-155 refuses the `Option[u64]` spelling this held).
     typecheck_ok(
-        "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
+        "fn find[T: Eq](items: Vec[T], target: T) -> Option[i64] { \
              for i in 0..items.len() { if items[i] == target { return Some(i); } } \
              None \
          }",
@@ -42089,13 +42092,23 @@ fn enum_constructor_constant_expression_payload_adopts_expected_type() {
 
 #[test]
 fn generic_numeric_arg_same_layout_and_literals_still_accepted() {
-    // A payload is checked against its slot, so `return Some(i)` with
-    // `i: i64` into an `Option[u64]` builds an `Option[u64]`. A whole
-    // `Option[i64]` VALUE does not stand for an `Option[u64]`
-    // (B-2026-10-23-12, a_numeric_type_inside_a_compound_keeps_its_sign).
-    typecheck_ok(
+    // A payload follows the widening table (B-2026-11-15-155, which flipped
+    // this from accepted): `return Some(i)` with `i: i64` into an
+    // `Option[u64]` needs `as u64`, as a whole `Option[i64]` VALUE does not
+    // stand for an `Option[u64]` (B-2026-10-23-12,
+    // a_numeric_type_inside_a_compound_keeps_its_sign).
+    let payload = typecheck_errors(
         "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
              for i in 0..items.len() { if items[i] == target { return Some(i); } } \
+             None \
+         }",
+    );
+    assert!(payload
+        .iter()
+        .any(|e| e.message.contains("would narrow or change sign")));
+    typecheck_ok(
+        "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
+             for i in 0..items.len() { if items[i] == target { return Some(i as u64); } } \
              None \
          }",
     );
@@ -42181,9 +42194,15 @@ fn qualified_enum_ctor_literal_adopts_expected_type_like_bare() {
     );
 }
 
+/// A variable payload is judged as the coercion it is: `Some(i)` with
+/// `i: i64` into an `Option[u64]` changes sign, as `let x: u64 = i` does,
+/// so it needs `as u64` (B-2026-11-15-155, which flipped this from
+/// accepted; `Some(w)` with `w: u64` into an `Option[i64]` printed -1).
+/// Widening payloads stay implicit, and a constant that fits is
+/// range-checked as a literal is.
 #[test]
 fn enum_payload_push_does_not_change_integer_coercion() {
-    typecheck_ok(
+    let errs = typecheck_errors(
         "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
              for i in 0..items.len() { \
                  if items[i] == target { return Some(i); } \
@@ -42191,6 +42210,27 @@ fn enum_payload_push_does_not_change_integer_coercion() {
              None \
          }",
     );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("would narrow or change sign")),
+        "{errs:?}"
+    );
+    typecheck_ok(
+        "fn find[T: Eq](items: Vec[T], target: T) -> Option[i64] { \
+             for i in 0..items.len() { \
+                 if items[i] == target { return Some(i); } \
+             } \
+             None \
+         }",
+    );
+    typecheck_ok("fn f(w: i32) -> Result[i64, Str] { if w > 0 { Ok(w) } else { Err(\"no\") } }");
+    let errs = typecheck_errors("fn f(w: u64) -> Result[Str, i64] { Err(w) }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("would narrow or change sign")),
+        "{errs:?}"
+    );
+    typecheck_ok("fn main() { let a: Option[i32] = Some(0 - 1); println(a.is_some()); }");
 }
 
 // ── sync enum satisfies the nesting rule ─────────────────────────

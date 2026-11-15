@@ -7,8 +7,8 @@
 //! `Duration` where the milliseconds go, with no fix (B-2026-11-15-153), and
 //! a `filter` predicate's capture was held against a `collect`ed
 //! `Vec[ref T]` returned from the function (B-2026-11-15-154).
-//! B-2026-11-15-155 (`Some(w)` with `w: u64` passing an `Option[i64]` slot)
-//! stays open: tests/typechecker.rs pins the permissive payload on purpose.
+//! `Some(w)` with `w: u64` passed an `Option[i64]` slot with no `as`
+//! (B-2026-11-15-155).
 
 use std::process::{Command, Output};
 
@@ -244,4 +244,39 @@ fn main() {
 ",
     );
     assert_eq!(run_stdout(&path), "5\n");
+}
+
+#[test]
+fn a_some_payload_that_changes_sign_needs_as() {
+    // `Some(w)` with `w: u64` into an `Option[i64]` slot passed and printed
+    // -1 (B-2026-11-15-155); it is the coercion `let x: i64 = w` is.
+    let path = scratch(
+        "payload-sign.kara",
+        "fn take(ms: Option[i64]) -> i64 { ms.unwrap() }
+
+fn main() {
+    let w: u64 = 18446744073709551615;
+    println(f\"{take(Some(w))}\");
+}
+",
+    );
+    let check = karac(&["check"], &path);
+    assert!(!check.status.success(), "{}", text(&check));
+    assert!(
+        text(&check).contains("implicit coercion from 'u64' to 'i64'"),
+        "{}",
+        text(&check)
+    );
+    let path = scratch(
+        "payload-widen.kara",
+        "fn take(ms: Option[i64]) -> i64 { ms.unwrap() }
+
+fn main() {
+    let w: u32 = 7;
+    let c: Option[i32] = Some(0 - 1);
+    println(f\"{take(Some(w))} {take(Some(w as i64 * 2))} {c.unwrap()}\");
+}
+",
+    );
+    assert_eq!(run_stdout(&path), "7 14 -1\n");
 }

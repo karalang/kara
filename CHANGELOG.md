@@ -20,6 +20,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `Some(w)`, `Ok(w)` or `Err(w)` whose integer payload narrows or changes
+  sign into the slot is an error, as `let x: i64 = w` is: `Some(w)` with
+  `w: u64` passed for an `Option[i64]` printed -1 for `u64.MAX`
+  (B-2026-11-15-155). Write `as`. A widening payload stays implicit, and a
+  constant that fits (`Some(0 - 1)` into `Option[i32]`) is range-checked as
+  a literal is. The book's ch08 `find` returns `Option[i64]`, the index
+  type.
 - A method in `impl Tr for X` that the trait `Tr` does not declare is an
   error (design.md §9 "An impl holds only the trait's items",
   B-2026-11-15-98). A misspelled override (`fn descibe`) used to be

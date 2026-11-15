@@ -170,7 +170,7 @@ fn pick(pool: mut ref Pool) -> Option[usize] {
                 let i = (pool.next + k) % n;
                 if pool.backends[i].up {
                     pool.next = (i + 1) % n;
-                    return Some(i);
+                    return Some(i as usize);
                 }
             }
             None
@@ -183,8 +183,8 @@ fn pick(pool: mut ref Pool) -> Option[usize] {
                     continue;
                 }
                 best = match best {
-                    None => Some(i),
-                    Some(j) if b.active < pool.backends[j].active => Some(i),
+                    None => Some(i as usize),
+                    Some(j) if b.active < pool.backends[j].active => Some(i as usize),
                     keep => keep,
                 };
             }
