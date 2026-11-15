@@ -1185,8 +1185,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   interpreter steps a `Range` and does `wrapping_add` / `wrapping_sub` /
   `wrapping_mul` in place rather than through a library call, and finds a
   generic method's name in one pass. Kata 2151's iterator arm went from
-  101 s to 85 s; the rest of B-2026-11-14-62, the cost of each
-  interpreted call, is still open.
+  101 s to 85 s.
+- **`karac run` makes an interpreted call cheaper, and runs more of an
+  iterator chain's steps the quick way.** A call builds its frame in a
+  reused buffer, looks its decoded body up once, and returns a scalar
+  without the general checks; the moves an adaptor's `next` is made of
+  (an inner iterator taken out of its `Option` and put back, a payload
+  moved out, a `bool as i64`, a reference to a tuple's field) no longer
+  take the general step. `fib(27)` runs 18% fewer instructions, kata
+  2151's iterator arm went from 81 s to 53 s, and the whole mir-interp
+  corpus from 4812 s to 4693 s (B-2026-11-14-62). A value with a field
+  held in a box of its own (`next: Option[Node]`) is still built by the
+  general step, which boxes it.
 - **`(a..b).map(|i| ..).collect()` into a `Vec` runs as the loop it
   stands for.** The closure literal is called on each value of the range
   and its result pushed, so the library's `map` adaptor and `collect` no

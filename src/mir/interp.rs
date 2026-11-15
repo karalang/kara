@@ -1204,8 +1204,8 @@ struct Interp<'a> {
     /// call does not search the body map by string.
     callees: rustc_hash::FxHashMap<usize, Option<&'a Body>>,
     /// The functions a decoded call ([`fast::Term::Call`]) names, by the
-    /// index it holds.
-    fast_callees: Vec<(&'a str, &'a Body)>,
+    /// index it holds, each with its body decoded once it has run.
+    fast_callees: Vec<(&'a str, &'a Body, Option<std::rc::Rc<fast::Decoded>>)>,
     /// The closure bodies a decoded erased call ([`fast::Term::CallErased`])
     /// has found by name: each with whether it takes its environment by
     /// reference, and a bit for each parameter after it that is not a
@@ -1217,7 +1217,7 @@ struct Interp<'a> {
     erased_index: rustc_hash::FxHashMap<(usize, usize), usize>,
     /// Each body's decoded scalar steps ([`fast`]), keyed by its address,
     /// made on its first call.
-    decoded: rustc_hash::FxHashMap<usize, std::rc::Rc<[fast::Block]>>,
+    decoded: rustc_hash::FxHashMap<usize, std::rc::Rc<fast::Decoded>>,
     /// Each body's locals that can own a value to drop
     /// ([`Interp::droppable_locals`]), keyed by its address.
     droppable: rustc_hash::FxHashMap<usize, std::rc::Rc<[usize]>>,
@@ -1569,8 +1569,26 @@ impl<'a> Interp<'a> {
                 args.len()
             ));
         }
+        let mut locals = self.spare_locals.pop().unwrap_or_default();
+        locals.push(Value::Uninit);
+        let mut args = args;
+        locals.append(&mut args);
+        self.give_back(args);
+        self.call_frame(name, body, None, locals)
+    }
+
+    /// Runs `body` in a new frame whose locals start as `locals`: `_0`
+    /// uninitialized, then the arguments. `decoded` is `body` decoded,
+    /// when the caller has it to hand.
+    pub(super) fn call_frame(
+        &mut self,
+        name: &str,
+        body: &'a Body,
+        decoded: Option<std::rc::Rc<fast::Decoded>>,
+        mut locals: Vec<Value>,
+    ) -> R<Value> {
         if self.repl_bindings.is_some() && name.starts_with(REPL_SNAPSHOT_FN) {
-            self.record_repl_binding(body, &args)?;
+            self.record_repl_binding(body, &locals[1..])?;
         }
         if self.frames.len() >= MAX_DEPTH {
             // A compiled program's stack guard reports it so and aborts
@@ -1581,7 +1599,7 @@ impl<'a> Interp<'a> {
         // A coroutine's borrow flags outlive the `resume` that suspended
         // holding them: they are parked with its frame until the next
         // resume, or until `drop_frame` gives them back.
-        let frame_at = match args.first() {
+        let frame_at = match locals.get(1) {
             Some(Value::Ref(a)) if coroutine::is_resume(name) || coroutine::is_drop_frame(name) => {
                 Some(a.clone())
             }
@@ -1591,20 +1609,17 @@ impl<'a> Interp<'a> {
             let i = self.parked_flags.iter().position(|(at, _)| at == a)?;
             Some(self.parked_flags.swap_remove(i).1)
         });
-        let mut locals = self.spare_locals.pop().unwrap_or_default();
-        locals.push(Value::Uninit);
-        let mut args = args;
-        locals.append(&mut args);
-        self.give_back(args);
         locals.resize_with(body.locals.len(), || Value::Uninit);
         self.next_frame_id += 1;
         let mut held = Vec::new();
-        if coroutine::is_drop_frame(name) {
-            for (_, flags) in parked.into_iter().flatten() {
-                self.release_flags(flags);
+        if let Some(parked) = parked {
+            if coroutine::is_drop_frame(name) {
+                for (_, flags) in parked {
+                    self.release_flags(flags);
+                }
+            } else {
+                held = parked;
             }
-        } else {
-            held = parked.unwrap_or_default();
         }
         self.frames.push(Frame {
             id: self.next_frame_id,
@@ -1616,12 +1631,24 @@ impl<'a> Interp<'a> {
         }
         // A deep recursion outgrows any fixed thread stack: the body runs
         // on a fresh segment once this one runs low.
-        let result = stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || self.run_body(body));
+        let result = stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || {
+            self.run_body(body, decoded)
+        });
         let mut frame = self.frames.pop().expect("frame");
         let mut spare = std::mem::take(&mut frame.locals);
-        for v in spare.drain(..) {
-            self.recycle_value(v);
+        // Most locals are scalars or already moved out: only the rest need
+        // their drop, and clearing the plain ones that are left frees
+        // nothing.
+        for v in spare.iter_mut() {
+            if !v.is_plain() {
+                let v = std::mem::replace(v, Value::Uninit);
+                self.recycle_value(v);
+            }
         }
+        // SAFETY: every value left is plain (`Value::is_plain`), which owns
+        // nothing and has no drop to run, so forgetting them leaks nothing;
+        // `clear` would call the drop glue once per local.
+        unsafe { spare.set_len(0) };
         self.spare_locals.push(spare);
         match (&result, frame_at) {
             (Ok(Value::Variant(1, _)), Some(at)) if coroutine::is_resume(name) => {
@@ -8336,6 +8363,7 @@ impl<'a> Interp<'a> {
     /// task made are cancelled first, as for a cancelled task (§11.9). A
     /// call that returns while a panic unwinds, with no exit to leave by,
     /// ends the process with that panic instead, as would a panic there.
+    #[inline]
     fn contain(
         &mut self,
         body: &'a Body,
@@ -8349,6 +8377,17 @@ impl<'a> Interp<'a> {
             Ok(Some(_)) if self.panic_unwinding() => {}
             _ => return next,
         }
+        self.contain_slow(body, kind, span, next)
+    }
+
+    #[inline(never)]
+    fn contain_slow(
+        &mut self,
+        body: &'a Body,
+        kind: &TerminatorKind,
+        span: crate::token::Span,
+        next: R<Option<BasicBlock>>,
+    ) -> R<Option<BasicBlock>> {
         let (TerminatorKind::Call {
             target: Some(target),
             ..
@@ -13505,17 +13544,24 @@ impl<'a> Interp<'a> {
         })
     }
 
-    fn run_body(&mut self, body: &'a Body) -> R<Value> {
+    fn run_body(
+        &mut self,
+        body: &'a Body,
+        decoded: Option<std::rc::Rc<fast::Decoded>>,
+    ) -> R<Value> {
         // A traced run logs every step, which the decoded steps do not.
         if self.trace {
             return self.run_body_general(body);
         }
         let strict = body.phase >= MirPhase::DropsElaborated;
-        let decoded = self.decoded(body);
+        let decoded = match decoded {
+            Some(d) => d,
+            None => self.decoded(body),
+        };
         let mut bb = BasicBlock(0);
         loop {
             let block = body.block(bb);
-            let fast_block = &decoded[bb.index()];
+            let fast_block = &decoded.blocks[bb.index()];
             // The block's statements and its terminator, counted at once.
             self.tick_n(fast_block.ops.len() as u64 + 1)?;
             for (i, op) in fast_block.ops.iter().enumerate() {
@@ -13530,6 +13576,13 @@ impl<'a> Interp<'a> {
             if let Some(b) = self.fast_term(&fast_block.term, &block.terminator.kind) {
                 bb = b;
                 continue;
+            }
+            // What the general terminator and `contain` do for a `return`,
+            // without matching on it.
+            if let fast::Term::Return = fast_block.term {
+                return self
+                    .finish_frame(body, &decoded.droppable)
+                    .map_err(|s| locate(s, body, format!("{bb}[term]")));
             }
             let next = match fast_block.term {
                 fast::Term::Native { ret } => self.native_call(body, &block.terminator.kind, ret),
@@ -13572,7 +13625,7 @@ impl<'a> Interp<'a> {
                 Some(b) => bb = b,
                 None => {
                     return self
-                        .finish_frame(body)
+                        .finish_frame(body, &decoded.droppable)
                         .map_err(|s| locate(s, body, format!("{bb}[term]")));
                 }
             }
@@ -13601,8 +13654,9 @@ impl<'a> Interp<'a> {
             match next {
                 Some(b) => bb = b,
                 None => {
+                    let droppable = self.droppable_locals(body);
                     return self
-                        .finish_frame(body)
+                        .finish_frame(body, &droppable)
                         .map_err(|s| locate(s, body, format!("{bb}[term]")));
                 }
             }
@@ -13759,9 +13813,23 @@ impl<'a> Interp<'a> {
     }
 
     /// At `Return`: every local except `_0` must have been dropped or
-    /// moved, and `_0` must be initialized.
-    fn finish_frame(&mut self, body: &Body) -> R<Value> {
-        let droppable = self.droppable_locals(body);
+    /// moved, and `_0` must be initialized. `droppable` is
+    /// [`Interp::droppable_locals`] of `body`.
+    #[inline]
+    fn finish_frame(&mut self, body: &Body, droppable: &[usize]) -> R<Value> {
+        let frame = self.frames.last_mut().expect("a frame is running");
+        // The common case: nothing that could own a value, and `_0` a
+        // scalar.
+        if droppable.is_empty()
+            && frame.locals[0].is_plain()
+            && !matches!(frame.locals[0], Value::Uninit)
+        {
+            return Ok(std::mem::replace(&mut frame.locals[0], Value::Uninit));
+        }
+        self.finish_frame_slow(body, droppable)
+    }
+
+    fn finish_frame_slow(&mut self, body: &Body, droppable: &[usize]) -> R<Value> {
         let frame = self.frames.last().expect("a frame is running");
         for &i in droppable.iter() {
             let (v, ty) = (&frame.locals[i], body.locals[i].ty);
