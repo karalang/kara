@@ -505,6 +505,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- The playground's checker, which runs without the library, accepts a
+  trait default method that calls `self.req()` in an impl for one
+  instantiation of a generic type (`impl Tr for Pr[i64]`), as `karac check`
+  does; it erased `self` to `Pr` and reported `no method 'req' on type 'Pr'`
+  (B-2026-11-15-156).
 - A plain `break` or `continue` inside a labeled block (`'b: { .. }`)
   belongs to the innermost loop around it, as design.md § Loops and labels
   says; it was taken as leaving the block, and a `break` there failed every

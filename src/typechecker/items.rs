@@ -5564,17 +5564,16 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 // B-2026-09-27-115 / B-2026-10-01-48 — a CONCRETE impl on a
                 // user generic type (`impl G[String]`, `impl Bx[R]`) keeps
-                // its args on the v2 pipelines. There is no impl param for
-                // the erasure to protect, and the body needs them: erased to
-                // `G`, a payload binding is the declared `T` (no `len`, no
-                // field, `let w = v` cannot infer it) and `self.n()` misses
-                // the methods registered on `G[String]`. Legacy codegen's
-                // receiver protocol double-frees the spellings this makes
-                // reachable, so the legacy pipeline keeps the erasure.
+                // its args. There is no impl param for the erasure to
+                // protect, and the body needs them: erased to `G`, a payload
+                // binding is the declared `T` (no `len`, no field, `let w = v`
+                // cannot infer it) and `self.n()` misses the methods
+                // registered on `G[String]`. The erasure was kept off the v2
+                // pipelines for legacy codegen, deleted at M3; the checker
+                // without the library kept it, and refused a default body's
+                // `self.req()` that `karac check` accepts (B-2026-11-15-156).
                 Type::Named { name, args }
-                    if (self.cli_lint_overrides.strict_core
-                        || self.library_methods_from_source)
-                        && !args.is_empty()
+                    if !args.is_empty()
                         && args.iter().all(type_is_fully_concrete)
                         && (self
                             .env
