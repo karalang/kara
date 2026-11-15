@@ -11742,8 +11742,14 @@ impl<'a> super::TypeChecker<'a> {
             // band and beyond. Applying the u64 wrap read-back to it would
             // truncate — caught by this function's own debug assertion when a
             // `u128` literal past `u64::MAX` first reached here.
-            Some(IntSuffix::U8) | Some(IntSuffix::U16) | Some(IntSuffix::U32)
-            | Some(IntSuffix::U64) => {
+            // `usize` rides the same wrapped carrier (B-2026-11-15-89: a
+            // `usize` context now has a range, so its suffixed literals past
+            // `i64::MAX` reach this read-back too).
+            Some(IntSuffix::U8)
+            | Some(IntSuffix::U16)
+            | Some(IntSuffix::U32)
+            | Some(IntSuffix::U64)
+            | Some(IntSuffix::Usize) => {
                 // The WRAPPED u64 bit pattern, unchanged by the i128 node
                 // (B-2026-08-19-8 stage 2). Widening `ExprKind::Integer` gave
                 // the literal room; it did NOT change how an unsigned magnitude
@@ -11845,7 +11851,16 @@ impl<'a> super::TypeChecker<'a> {
             }
             return true;
         }
-        let Some((min, max)) = Self::int_literal_range(ty) else {
+        // B-2026-11-15-89: an unsuffixed literal at a `usize` / `isize`
+        // context accepts exactly what the `usize` / `isize` suffix does,
+        // the 64-bit range. Without a range here a literal past `i64.MAX`
+        // went unjudged and was then refused as an `i64`.
+        let pointer_width = match ty {
+            Type::UInt(UIntSize::Usize) => Some((0, u64::MAX as i128)),
+            Type::Int(IntSize::Isize) => Some((i64::MIN as i128, i64::MAX as i128)),
+            _ => None,
+        };
+        let Some((min, max)) = Self::int_literal_range(ty).or(pointer_width) else {
             return true;
         };
         // The upper half of `u128` rides as a wrapped NEGATIVE carrier, so
@@ -13128,7 +13143,12 @@ impl<'a> super::TypeChecker<'a> {
                 } if args.is_empty()
                     && matches!(
                         method.as_str(),
-                        "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+                        "count_ones"
+                            | "count_zeros"
+                            | "leading_zeros"
+                            | "trailing_zeros"
+                            | "leading_ones"
+                            | "trailing_ones"
                     ) =>
                 {
                     let width = tc
@@ -13146,9 +13166,11 @@ impl<'a> super::TypeChecker<'a> {
                     });
                     i128::from(width) <= max
                 }
-                ExprKind::Binary { left, op, right }
-                    if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) =>
-                {
+                ExprKind::Binary {
+                    left,
+                    op: BinOp::Add | BinOp::Sub | BinOp::Mul,
+                    right,
+                } => {
                     let lit =
                         |x: &Expr| super::TypeChecker::unsuffixed_int_literal_value(x).is_some();
                     let l = lit(left) || walk(tc, left, max, t, out);

@@ -1211,6 +1211,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `karac build --help` says `--no-proxy` fetches git and registry
   dependencies straight from their source; it said they were not in 0.8
   (B-2026-11-15-55).
+- **`isize.abs_diff` returns a `usize`.** It was typed `isize`, so
+  `isize.MIN.abs_diff(0)` printed a negative number from a built binary and
+  could not go into a `usize` (B-2026-11-15-88).
+- **A `usize` takes an unsuffixed literal past `i64.MAX`.**
+  `let a: usize = 18446744073709551614` was refused as out of range for
+  `i64`; it is now judged by the `usize` range, as the `usize` suffix is, and
+  an out-of-range literal names `usize` or `isize` (B-2026-11-15-89).
 - **A bit count going into a `u32` is fixed with `as u32`.** A Rust port
   that keeps `count_ones` or `leading_zeros` in a `u32`
   (`ones += x.count_ones()`, `max_bits.max(32 - x.leading_zeros())`) was

@@ -1096,6 +1096,10 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Int(IntSize::I32) => Type::UInt(UIntSize::U32),
                 Type::Int(IntSize::I64) => Type::UInt(UIntSize::U64),
                 Type::Int(IntSize::I128) => Type::UInt(UIntSize::U128),
+                // B-2026-11-15-88: `isize` was missing, so its `abs_diff`
+                // was typed `isize` and `isize.MIN.abs_diff(0)` read back
+                // negative on the compiled backend.
+                Type::Int(IntSize::Isize) => Type::UInt(UIntSize::Usize),
                 // Already unsigned — `abs_diff` returns the same unsigned type.
                 other => other.clone(),
             });

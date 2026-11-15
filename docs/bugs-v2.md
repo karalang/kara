@@ -59,11 +59,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 340 |
-| false-positive | 214 |
+| false-positive | 215 |
 | missing-feature | 170 |
 | perf | 169 |
 | soundness | 69 |
-| miscompile | 65 |
+| miscompile | 66 |
 | other | 43 |
 | run-vs-build | 41 |
 | codegen-gap | 32 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 485 |
+| typecheck | 487 |
 | mir-llvm | 237 |
 | mir | 204 |
 | cli | 135 |
@@ -127,6 +127,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
 | B-2026-11-15-86 | 2026-11-15 | resolver | high | `karac fix` turns Rust's smallest-first `let mut heap: BinaryHeap<Reverse<i32>> = v.into_iter().map(Reverse).collect();` into a largest-first `PriorityQueue[Reverse[i32]]`: with no constructor to rewrite, the type is renamed and `Reverse` kept, so the mended program pops in the opposite order and answers wrong (kata 1167: 16 for [2,4,3], not 14) | — |
 | B-2026-11-15-87 | 2026-11-15 | effect | medium | E0418 between two different channels when one `par` branch both sends on one and receives on another: `par { { txb.send(1) }, { txa.send(2); rxb.recv() } }` is refused as `sends(Channel @ l5)` against `sends(Channel @ l2)`; with the receive gone it passes | — |
+| B-2026-11-15-88 | 2026-11-15 | typecheck | medium | `isize.abs_diff` is typed `isize`, not `usize`: `o(isize.MIN).abs_diff(o(0))` prints -9223372036854775808 under `karac build` (9223372036854775808 in the interpreter), `d > 0` is false, and `let e: usize = d` is refused | — |
+| B-2026-11-15-89 | 2026-11-15 | typecheck | low | An unsuffixed integer literal past `i64.MAX` at a `usize` context (`let a: usize = 18446744073709551614`, `o_usize(9223372036854775808)`) is refused as out of range for `i64`, though `u64` and the `usize` suffix accept it | — |
 
 ### Relocated
 
