@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 343 |
-| false-positive | 217 |
+| diagnostics | 344 |
+| false-positive | 218 |
 | missing-feature | 171 |
 | perf | 169 |
 | soundness | 69 |
 | miscompile | 66 |
-| other | 43 |
+| other | 47 |
 | run-vs-build | 42 |
 | codegen-gap | 32 |
 | crash | 31 |
@@ -78,8 +78,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 490 |
 | mir-llvm | 238 |
-| mir | 206 |
-| cli | 136 |
+| mir | 207 |
+| cli | 141 |
 | parser | 88 |
 | ownership | 84 |
 | interp | 62 |
@@ -1304,6 +1304,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-96 | typecheck | low | A fixed-length slice arm after an earlier rest arm that covers it gets no unreachable_arm warning (`[_, _]` after `[x, ..]`, `[0]` after `[.., _]`),… | 41bab687c5 |
 | B-2026-11-15-97 | typecheck+cli | medium | `[.., 0]` after `[0, ..]` was reported as an unreachable arm though `[1, 0]` reaches it, and `karac fix` deleted the live arm | 41bab687c5 |
 | B-2026-11-15-98 | typecheck | low | A trait impl may declare a method the trait lacks, and that method is then callable; a misspelled override silently leaves the trait's default running | 41bab687c5 |
+| B-2026-11-15-120 | mir | medium | An iterator chain over an `Array` constant returned from a function (`MX.iter().filter(..).map(\|m\| (m.1, m.2)).collect()`, `let it = NAMES.iter(); it… | 83d072f4fc |
+| B-2026-11-15-121 | cli | medium | kara-lsp signatureHelp inside `println(..)` shows another function's signature: with `fn add` first in the file it shows `fn add(a: i64, b: i64) -> i… | 83d072f4fc |
+| B-2026-11-15-122 | cli | high | kara-lsp rename of a struct field edits the declaration and struct-literal fields but not member accesses (`p.x`, `f"{helper(p.x)}"`), so the renamed… | 83d072f4fc |
+| B-2026-11-15-123 | cli | low | kara-lsp rename accepts a keyword as the new name (`fn` gives an unparseable file) and answers a non-name (`1 bad`) with a null result and no reason;… | 83d072f4fc |
+| B-2026-11-15-124 | cli | low | kara-lsp references on a struct name returns a struct literal's whole range (`P { x: helper(1) }`) rather than the name `P`, and the declaration's wh… | 83d072f4fc |
+| B-2026-11-15-125 | cli | low | kara-lsp signatureHelp is null for a call inside an f-string interpolation (`f"{helper(p.x)}"`), though hover, definition and references work there | 83d072f4fc |
 
 </details>
 
