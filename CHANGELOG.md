@@ -372,6 +372,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- The HTTP client's 3xx answers and timeout follow docs/library/io.md §
+  HTTP client on both backends. A 3xx it does not follow (a 300, a 304, a
+  redirect with no `Location`) is an `Err` that keeps the response, where
+  it was an `Ok` (B-2026-11-15-134). A sixth redirect is not followed: the
+  `Err` keeps that 3xx response and says `<asked-for url>: too many
+  redirects`, where it had no response and named the last `Location`
+  (B-2026-11-15-135). A `timeout` below 1 ms makes `send` an `Err`,
+  `<url>: timeout must be at least 1 ms`, without connecting, where
+  `timeout(0)` or a negative one meant no limit (B-2026-11-15-136).
 - Both backends send `User-Agent: kara/<version>` unless the request sets
   its own, and `Accept: */*` unless it sets one, and neither asks for or
   decodes compression (docs/library/io.md § HTTP client, B-2026-11-14-49).

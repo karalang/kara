@@ -7249,7 +7249,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
         };
 
         http_deliver(
-            http_fetch_blocking("GET", url, &[], &[], 0),
+            http_fetch_blocking("GET", url, &[], &[], None),
             out_status,
             out_body_ptr,
             out_body_len,
@@ -7317,7 +7317,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
         };
 
         http_deliver(
-            http_fetch_blocking("POST", url, body_bytes, &[], 0),
+            http_fetch_blocking("POST", url, body_bytes, &[], None),
             out_status,
             out_body_ptr,
             out_body_len,
@@ -7379,8 +7379,8 @@ unsafe fn kara_str_to_str(s: &KaracStr) -> Option<&str> {
 /// empty entity (correct for GET / HEAD; benign for verbs that ignore
 /// the body). `headers_ptr` / `headers_count`: array of `(key, val)`
 /// String pairs; each non-empty (key, val) is applied via `req.set(k, v)`.
-/// `timeout_ms`: `> 0` configures `ureq::Request::timeout`; `0` leaves
-/// ureq's default (no timeout).
+/// `timeout_ms`: `0` sets no timeout; any other value is the request's
+/// timeout, which below 1 ms is refused (B-2026-11-15-136).
 ///
 /// # Safety
 ///
@@ -7469,7 +7469,13 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
         };
 
         http_deliver(
-            http_fetch_blocking(method, url, body_bytes, &header_pairs, timeout_ms),
+            http_fetch_blocking(
+                method,
+                url,
+                body_bytes,
+                &header_pairs,
+                (timeout_ms != 0).then_some(timeout_ms),
+            ),
             out_status,
             out_body_ptr,
             out_body_len,
@@ -7496,7 +7502,8 @@ struct HttpBuilderState {
     url: String,
     body: Vec<u8>,
     headers: Vec<(String, String)>,
-    timeout_ms: i64,
+    /// What `timeout` set, if it was called.
+    timeout_ms: Option<i64>,
 }
 
 #[cfg(feature = "tls")]
@@ -7558,7 +7565,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_new(
             url,
             body: Vec::new(),
             headers: Vec::new(),
-            timeout_ms: 0,
+            timeout_ms: None,
         };
         let handle = HTTP_BUILDER_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut map) = HTTP_BUILDERS.lock() {
@@ -7644,7 +7651,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_set_body(
 pub unsafe extern "C" fn karac_runtime_http_builder_set_timeout(handle: i64, ms: i64) {
     if let Ok(mut map) = HTTP_BUILDERS.lock() {
         if let Some(state) = map.get_mut(&handle) {
-            state.timeout_ms = ms;
+            state.timeout_ms = Some(ms);
         }
     }
 }
@@ -7759,7 +7766,7 @@ pub(crate) struct HttpJob {
     url: String,
     body: Vec<u8>,
     headers: Vec<(String, String)>,
-    timeout_ms: i64,
+    timeout_ms: Option<i64>,
 }
 
 /// The request `karac_runtime_http_client_mir_send`'s arguments name, or
@@ -7809,7 +7816,7 @@ pub(crate) unsafe fn http_job(
             bytes(b, b_len).to_vec()
         },
         headers: Vec::new(),
-        timeout_ms: 0,
+        timeout_ms: None,
     })
 }
 

@@ -17,9 +17,12 @@
 //!     affordance, not assumed of arbitrary origins).
 //!
 //! Redirects are followed up to 5 hops with the 301/302/303 POST→GET
-//! demotion (307/308 keep method and body); a status of 400 or more is an
-//! `Err` that keeps the response, in the message shape
-//! `"{url}: status code {n}"`; `timeout_ms > 0` bounds the whole request.
+//! demotion (307/308 keep method and body); a status outside 2xx, an
+//! unfollowed 3xx included, is an `Err` that keeps the response, in the
+//! message shape `"{url}: status code {n}"`, and a sixth redirect is one
+//! that keeps that 3xx, as `"{asked-for url}: too many redirects"`
+//! (B-2026-11-15-134, B-2026-11-15-135). A timeout bounds the whole
+//! request; one below 1 ms is refused before connecting (B-2026-11-15-136).
 //! A 1xx interim response is skipped. A body cut short (fewer bytes than
 //! its `Content-Length`, a chunked body with no last chunk, a timeout
 //! mid-body) is an `Err`, never a short `Ok`. Bodies are raw bytes: the
@@ -35,15 +38,33 @@ pub(crate) struct HttpFetched {
     pub(crate) status: u16,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
-    /// The URL that answered (the last hop's), which a status of 400 or
-    /// more names in its error's message.
+    /// The URL that answered (the last hop's), which a status outside 2xx
+    /// names in its error's message.
     pub(crate) url: String,
+    /// The URL the program asked for, when this is the sixth redirect,
+    /// which is not followed.
+    pub(crate) too_many_redirects: Option<String>,
 }
 
-/// The error a final status of 400 or more is (docs/library/io.md § HTTP
-/// client: the `HttpError` keeps the response).
+/// The error a final status outside 2xx is, or a sixth redirect
+/// (docs/library/io.md § HTTP client: the `HttpError` keeps the response).
+/// A 3xx the client did not follow (a 300, a 304, a redirect with no
+/// `Location`) is outside 2xx too (B-2026-11-15-134).
 pub(crate) fn http_status_error(fetched: &HttpFetched) -> Option<String> {
-    (fetched.status >= 400).then(|| format!("{}: status code {}", fetched.url, fetched.status))
+    if let Some(asked) = &fetched.too_many_redirects {
+        return Some(format!("{asked}: too many redirects"));
+    }
+    (!(200..300).contains(&fetched.status))
+        .then(|| format!("{}: status code {}", fetched.url, fetched.status))
+}
+
+/// The message for a request's `timeout` below 1 ms, which is refused
+/// before connecting, as a socket's `set_read_timeout` refuses one
+/// (B-2026-11-15-136).
+pub(crate) fn http_timeout_refused(url: &str, timeout_ms: Option<i64>) -> Option<String> {
+    timeout_ms
+        .is_some_and(|ms| ms < 1)
+        .then(|| format!("{url}: timeout must be at least 1 ms"))
 }
 
 /// Run `f` on this thread's private current-thread tokio runtime for the
@@ -124,32 +145,38 @@ pub(crate) fn http_client_tls_config() -> Result<std::sync::Arc<rustls::ClientCo
 }
 
 /// Synchronous entry point: run the redirect-following fetch on the
-/// client runtime, bounded by `timeout_ms` when positive.
+/// client runtime, bounded by `timeout_ms` when the request set one. A
+/// timeout below 1 ms is refused without connecting.
 pub(crate) fn http_fetch_blocking(
     method: &str,
     url: &str,
     body: &[u8],
     headers: &[(String, String)],
-    timeout_ms: i64,
+    timeout_ms: Option<i64>,
 ) -> Result<HttpFetched, String> {
+    if let Some(e) = http_timeout_refused(url, timeout_ms) {
+        return Err(e);
+    }
     with_http_client_runtime(|rt| {
         rt.block_on(async {
             let fut = http_fetch_redirects(method, url, body, headers);
-            if timeout_ms > 0 {
-                match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms as u64), fut)
-                    .await
-                {
-                    Ok(r) => r,
-                    Err(_) => Err(format!("{url}: request timed out after {timeout_ms} ms")),
+            match timeout_ms {
+                Some(ms) => {
+                    match tokio::time::timeout(std::time::Duration::from_millis(ms as u64), fut)
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(_) => Err(format!("{url}: request timed out after {ms} ms")),
+                    }
                 }
-            } else {
-                fut.await
+                None => fut.await,
             }
         })
     })
 }
 
-/// Follow up to 5 redirects, demoting to GET and dropping the body on
+/// Follow up to 5 redirects (a sixth comes back marked, not followed),
+/// demoting to GET and dropping the body on
 /// 301/302/303 for non-GET/HEAD methods (307/308 preserve both), and
 /// dropping the caller's `Authorization` and `Cookie` headers once a hop
 /// leaves the first request's origin. Each hop goes through the proxy its
@@ -165,14 +192,20 @@ async fn http_fetch_redirects(
     let mut body = body.to_vec();
     let mut headers = headers.to_vec();
     let first = url.clone();
-    for _hop in 0..=5 {
-        let fetched = http_fetch_once(&method, &url, &body, &headers).await?;
+    for hop in 0..=5 {
+        let mut fetched = http_fetch_once(&method, &url, &body, &headers).await?;
         if matches!(fetched.status, 301 | 302 | 303 | 307 | 308) {
             let loc = fetched
                 .headers
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case("location"))
                 .map(|(_, v)| v.clone());
+            // The sixth redirect is not followed: the `Err` keeps it
+            // and names the URL asked for (B-2026-11-15-135).
+            if loc.is_some() && hop == 5 {
+                fetched.too_many_redirects = Some(first.clone());
+                return Ok(fetched);
+            }
             if let Some(loc) = loc {
                 url = http_resolve_location(&url, &loc)?;
                 let demote = fetched.status == 303
@@ -191,10 +224,11 @@ async fn http_fetch_redirects(
                 continue;
             }
         }
-        // A status of 400 or more is an `Err` that keeps the response,
-        // which `http_deliver` makes of it (`http_status_error`).
+        // A status outside 2xx is an `Err` that keeps the response, which
+        // `http_deliver` makes of it (`http_status_error`).
         return Ok(fetched);
     }
+    // Not reached: the sixth hop returns above.
     Err(format!("{url}: too many redirects"))
 }
 
@@ -486,5 +520,6 @@ async fn http_collect_response(
         headers,
         body,
         url: url.to_string(),
+        too_many_redirects: None,
     })
 }

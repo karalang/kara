@@ -1503,7 +1503,8 @@ struct HttpBuilder {
     url: String,
     headers: Vec<(String, String)>,
     body: String,
-    timeout_ms: i128,
+    /// What `timeout` set, if it was called.
+    timeout_ms: Option<i128>,
 }
 
 /// One `Interner`'s strings.
@@ -16947,7 +16948,7 @@ impl<'a> Interp<'a> {
                     "body" => self.http_builders[i].body = self.string_at(&args[1])?,
                     "timeout" => {
                         if let Some(Value::Int(ms)) = args.get(1) {
-                            self.http_builders[i].timeout_ms = *ms;
+                            self.http_builders[i].timeout_ms = Some(*ms);
                         }
                     }
                     "send" => {
@@ -20044,7 +20045,11 @@ type HttpFetched = Result<HttpAnswer, String>;
 #[cfg(not(target_arch = "wasm32"))]
 fn http_fetch(req: &HttpBuilder, with_body: bool) -> HttpFetched {
     let body: &[u8] = if with_body { req.body.as_bytes() } else { &[] };
-    let timeout_ms = i64::try_from(req.timeout_ms).unwrap_or(i64::MAX);
+    // Out of `i64`'s range, the nearest end of it: still refused, or
+    // still no limit in practice.
+    let timeout_ms = req
+        .timeout_ms
+        .map(|ms| i64::try_from(ms).unwrap_or(if ms < 0 { i64::MIN } else { i64::MAX }));
     let fetched = crate::http_client::http_fetch_blocking(
         &req.method,
         &req.url,
