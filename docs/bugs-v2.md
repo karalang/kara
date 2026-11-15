@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 311 |
 | false-positive | 205 |
-| perf | 167 |
+| perf | 168 |
 | missing-feature | 160 |
 | soundness | 67 |
 | miscompile | 61 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 462 |
-| mir-llvm | 222 |
+| mir-llvm | 223 |
 | mir | 191 |
 | cli | 114 |
 | ownership | 81 |
@@ -120,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-48 | 2026-11-14 | mir | low | The interpreter's HTTP client returns an interim 1xx response as the answer: a server that sends `100 Continue` before its `200` gives `status() == 100` with the 200's status line and headers inside `body()`, where the compiled client skips the 1xx and returns the 200 | — |
 | B-2026-11-14-49 | 2026-11-14 | mir+mir-llvm | medium | The two HTTP clients send different requests: the interpreter adds `User-Agent: ureq/2.12.1`, `Accept: */*` and `accept-encoding: gzip` and decodes a gzip body, the compiled client sends only `host` and returns a gzip body undecoded; a server that requires a User-Agent (GitHub's API answers 403 without one) refuses only the compiled program | — |
 | B-2026-11-15-1 | 2026-11-15 | typecheck+cli | low | A tuple `let` slot whose binding is read only inside a closure still gets `.clone()` from `karac fix` where `ref` would do: `let (small, large) = if .. { (self.values, other.values) } else { (other.values, self.values) }; small.iter().map(|(i, x)| x * large.get(i).cloned().unwrap_or(0)).sum()` becomes `(ref self.values, other.values.clone())`, copying the larger map on every call | — |
+| B-2026-11-15-2 | 2026-11-15 | mir-llvm | low | Walking a `String`'s chars costs 2x to 2.8x Rust's `chars()` in a `karac build` binary: kata 1573's `s.chars().enumerate().filter(|(_, c)| c == '1').map(|(i, _)| i).collect()` over 200 strings of 500000 ASCII characters takes 0.21 s against Rust's 0.076 s, while the same chain over `s.bytes().iter()` takes 0.083 s | — |
 
 ### Relocated
 
