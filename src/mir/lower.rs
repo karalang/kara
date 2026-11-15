@@ -21087,6 +21087,27 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.call_native("String.as_str", vec![recv], Place::local(v));
             return Ok(Operand::Move(Place::local(v)));
         }
+        // A tuple literal lent to a bare tuple parameter is built at the
+        // parameter's element types and then lent, as one passed by value
+        // is below: an owned place for a `ref` element (`g((a[0], b[0]))`
+        // for `p: (ref i64, ref i64)`) is borrowed there, where the literal
+        // built at its own type held the values (B-2026-11-15-22).
+        let tuple_t = match (borrow, self.tys().tcx().kind(pt)) {
+            (Some(BorrowKind::Shared), HK::Ref(t)) => t,
+            _ => pt,
+        };
+        let rebuilt_tuple = borrow != Some(BorrowKind::Mut)
+            && matches!(&a.kind, ExprKind::Tuple(es) if !es.is_empty())
+            && matches!(self.tys().tcx().kind(tuple_t), HK::Tuple(_))
+            && self.expr_ty(a)? != tuple_t;
+        if rebuilt_tuple && borrow.is_some() {
+            let op = self.operand_at(a, tuple_t)?;
+            let v = self.scoped_temp(tuple_t);
+            self.assign(v, Rvalue::Use(op));
+            let r = self.temp(pt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Shared, Place::local(v)));
+            return Ok(Operand::Move(Place::local(r)));
+        }
         let arg_is_ref = matches!(self.tys().tcx().kind(at), HK::Ref(_) | HK::MutRef(_));
         // A `mut ref` place passed on is reborrowed, `&mut (*r)` (or `&(*r)`
         // for a `ref` parameter), so the caller keeps its reference.
@@ -21185,7 +21206,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             // A tuple literal handed to a tuple of wider numbers is built
             // at the parameter's element types.
-            None if matches!(a.kind, ExprKind::Tuple(_)) && at != pt => self.operand_at(a, pt),
+            None if rebuilt_tuple => self.operand_at(a, pt),
             None => {
                 let op = self.owned_operand(a, pt)?;
                 if self.erases(&op, pt) {

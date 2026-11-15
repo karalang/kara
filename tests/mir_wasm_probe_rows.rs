@@ -195,3 +195,21 @@ fn wasm_cstring_to_str_keeps_its_length() {
         "[abc] 3\nabc\n",
     );
 }
+
+/// A trap keeps what was printed before it (B-2026-11-15-23): stdout is
+/// written line by line on wasm, since a trap (here node's stack limit)
+/// ends the module where nothing can flush. It lost every line before.
+#[test]
+fn wasm_trap_keeps_the_lines_printed_before_it() {
+    let src = r#"fn depth(n: i64) -> i64 { if n == 0 { 0 } else { 1 + depth(n - 1) } }
+fn main() {
+    println("one");
+    println("two");
+    println(depth(1000000000));
+}
+"#;
+    if let Some((out, code)) = build_and_run("trap-flush", src) {
+        assert_eq!(out, "one\ntwo\n", "wasm stdout before the trap");
+        assert_ne!(code, 0, "the trap ends the run");
+    }
+}

@@ -489,7 +489,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   was a `String` holding the raw bytes, and `body().chars()` aborted the
   program (B-2026-11-15-8). `Response.bytes()` returns the body as it was
   sent, which is how a program reads a binary or compressed body.
-
+- A tuple literal of owned places passed for a tuple parameter with `ref`
+  elements lends each place: `g((a[0], b[0]))` for `p: (ref i64, ref i64)`,
+  and a closure's `|(x, y): (ref i64, ref i64)|`, passed check and then
+  stopped the interpreter with "deref of non-reference" and crashed the
+  compiled program (B-2026-11-15-22).
+- On `--target=wasm_wasi`, stdout is written line by line, so a trap (such
+  as the host's stack limit) keeps the lines printed before it; it lost
+  all of them (B-2026-11-15-23).
 - `karac run` sends an HTTP request through the same client a built program
   links, so the two agree on what a response is. A body cut short (fewer
   bytes than its `Content-Length`, a chunked body with no last chunk, a

@@ -69,7 +69,7 @@ fn main() {
 
 **UTF-8 and stdin.** `stdin.read_line` and `stdin.read_to_string` return `Result[String, IoError]`: invalid UTF-8 on stdin is `IoError.InvalidUtf8`, which keeps `String`'s UTF-8 invariant. A bytes-level stdin read is deferred ([deferred.md](../deferred.md)).
 
-**Buffering.** Stdin is line-buffered, and so is stdout when it is a terminal. Stdout on a pipe or a file may hold more than a line, but it is written out before a child process starts, before anything is written to stderr, at `stdout.flush()` and at exit, so its order against those is the program's. File I/O is block-buffered. `stdout.flush()` forces out buffered output, including a partial line, which is needed when a prompt without a newline (`print("Guess: ")`) comes before a stdin read. `stderr.flush()` is the stderr counterpart. Both return `()`, not a `Result`. Typed buffering traits are deferred ([deferred.md](../deferred.md)).
+**Buffering.** Stdin is line-buffered, and so is stdout when it is a terminal, and always on `wasm_wasi`, where a trap ends the module before anything can write what is held. Stdout on a pipe or a file may hold more than a line, but it is written out before a child process starts, before anything is written to stderr, at `stdout.flush()` and at exit, so its order against those is the program's. File I/O is block-buffered. `stdout.flush()` forces out buffered output, including a partial line, which is needed when a prompt without a newline (`print("Guess: ")`) comes before a stdin read. `stderr.flush()` is the stderr counterpart. Both return `()`, not a `Result`. Typed buffering traits are deferred ([deferred.md](../deferred.md)).
 
 ## Files
 

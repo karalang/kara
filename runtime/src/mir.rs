@@ -282,8 +282,13 @@ fn write(stderr: bool, bytes: &[u8]) {
         let full = with_out(|o| {
             o.extend_from_slice(bytes);
             // A terminal sees each line as it ends (docs/library/io.md §
-            // Buffering); a pipe or file gets the block.
-            o.len() >= OUT_LIMIT || (bytes.contains(&b'\n') && stdout_is_terminal())
+            // Buffering); a pipe or file gets the block. On wasm every
+            // line is written as it ends: a trap (the host's stack limit)
+            // ends the module where nothing can flush, which lost all a
+            // program had printed (B-2026-11-15-23).
+            o.len() >= OUT_LIMIT
+                || (bytes.contains(&b'\n')
+                    && (cfg!(target_family = "wasm") || stdout_is_terminal()))
         });
         if full {
             out_flush();
