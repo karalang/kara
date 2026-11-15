@@ -291,8 +291,13 @@ fn main() {
     );
     let check = karac(&["check"], &path);
     let out = text(&check);
-    assert!(
-        out.contains("write the array from the slice's elements, `[b[0], b[1]]`"),
-        "{out}"
-    );
+    // B-2026-11-15-77: Kāra's spelling is `try_into_array()`, and the fix
+    // writes it.
+    assert!(out.contains("is `try_into_array()` in Kāra"), "{out}");
+    let fix = karac(&["fix"], &path);
+    assert!(text(&fix).contains("applied"), "{}", text(&fix));
+    let src = std::fs::read_to_string(&path).unwrap();
+    assert!(src.contains("b[..2].try_into_array().unwrap()"), "{src}");
+    let check = karac(&["check"], &path);
+    assert!(check.status.success(), "{}", text(&check));
 }

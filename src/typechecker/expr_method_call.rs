@@ -253,6 +253,7 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
     "split_at_mut",
     "swap",
     "to_vec",
+    "try_into_array",
     "windows",
 ];
 
@@ -2807,8 +2808,9 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         // `b[..2].try_into().unwrap()` for a `u16.from_le_bytes(..)`: Rust's
-        // `TryFrom<&[T]> for [T; N]`, which Kāra does not have (B-2026-11-15-76).
-        // Say what to write instead of the bare no-method error.
+        // `TryFrom<&[T]> for [T; N]` (B-2026-11-15-76). Kāra's is
+        // `try_into_array()`, an `Option` (B-2026-11-15-77), so the fix
+        // renames the call and the `.unwrap()` after it stands.
         if let Type::Slice { element, .. } = &slice_recv {
             if method == "try_into"
                 && args.is_empty()
@@ -2817,19 +2819,29 @@ impl<'a> super::TypeChecker<'a> {
                     .find_methods_with_args("Slice", &[(**element).clone()], method)
                     .is_empty()
             {
-                self.type_error(
+                let from = object.span.offset + object.span.length;
+                let end = span.offset + span.length;
+                let element = (**element).clone();
+                self.type_error_with_fix_it(
                     format!(
                         "no method 'try_into' on type '{}': Rust's conversion of a slice to \
-                         an array (`TryFrom<&[T]> for [T; N]`) is not in Kāra; write the array \
-                         from the slice's elements, `[b[0], b[1]]`, as \
-                         `u16.from_le_bytes([b[0], b[1]])` does (library/core-types.md § Byte \
-                         order)",
+                         an array (`TryFrom<&[T]> for [T; N]`) is `try_into_array()` in Kāra, \
+                         an `Option[Array[T, N]]` that is `None` when the length is not `N` \
+                         (library/collections.md § `Slice[T]`)",
                         type_display(&slice_recv)
                     ),
                     *span,
                     TypeErrorKind::NoMethodFound,
+                    super::FixIt {
+                        span: Span {
+                            offset: from,
+                            length: end - from,
+                            ..*span
+                        },
+                        replacement: ".try_into_array()".to_string(),
+                    },
                 );
-                return Type::Error;
+                return self.infer_try_into_array(&element, args, span);
             }
         }
         if let Type::Slice { element, mutable } = &slice_recv {

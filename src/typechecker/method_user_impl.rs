@@ -36,6 +36,7 @@ use std::collections::HashMap;
 /// `Slice[T]` method" (docs/library/collections.md; B-2026-10-21-30).
 const ARRAY_SLICE_METHODS: &[&str] = &[
     "to_vec",
+    "try_into_array",
     "binary_search",
     "windows",
     "chunks",

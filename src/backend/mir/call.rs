@@ -1031,7 +1031,7 @@ impl<'ctx> Cx<'ctx, '_> {
             base,
             "Vec" | "VecDeque" | "String" | "Map" | "SortedMap" | "Set" | "SortedSet"
         ) && method.starts_with("try_")
-            && !matches!(method, "try_into" | "try_from")
+            && !matches!(method, "try_into" | "try_from" | "try_into_array")
             && !can_fail
         {
             // The other fallible companions: the allocator aborts rather

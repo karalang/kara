@@ -1252,6 +1252,45 @@ impl<'a> super::TypeChecker<'a> {
     /// Handles the full read-only surface and the mutation-only surface for
     /// `mut Slice[T]`. Called from `infer_method_call` when the object type is
     /// `Type::Slice`.
+    /// `try_into_array()` on a sequence of `elem`: `Option[Array[elem, ?N]]`,
+    /// its length a const variable the expected type fixes, as an annotated
+    /// `let`, a parameter or a return type does (B-2026-11-15-77). The
+    /// elements are copied, so `elem` must be `Copy`, as Rust's
+    /// `TryFrom<&[T]> for [T; N]` asks.
+    pub(super) fn infer_try_into_array(
+        &mut self,
+        elem: &Type,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        self.expect_no_args("try_into_array", args, span);
+        let resolved = self.resolved_now(elem);
+        if !super::exprs::contains_type_var(&resolved)
+            && !matches!(resolved, Type::Error)
+            && !self.is_copy_type_during_check(&resolved)
+        {
+            self.type_error(
+                format!(
+                    "`try_into_array()` copies the elements into an array, so they must be \
+                     `Copy`, and `{}` is not; `to_vec()` clones them into a `Vec`",
+                    type_display(&resolved)
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        }
+        let id = super::types::ConstVarId(self.env.next_const_var);
+        self.env.next_const_var += 1;
+        self.unsolved_array_lens.push((*span, id));
+        Type::Named {
+            name: "Option".to_string(),
+            args: vec![Type::Array {
+                element: Box::new(elem.clone()),
+                size: super::types::ConstArg::ConstVar(id),
+            }],
+        }
+    }
+
     pub(super) fn infer_slice_method(
         &mut self,
         element: &Type,
@@ -1496,6 +1535,10 @@ impl<'a> super::TypeChecker<'a> {
             // element) had to hand-roll a push loop to feed an owned-`Vec`
             // consumer. Answered for `mut Slice[T]` too: copying OUT of a
             // mutable view is as sound as copying out of a read-only one.
+            // `s.try_into_array()`: the elements as an `Array[T, N]`, `None`
+            // when the length is not `N`; `N` comes from the expected type
+            // only (B-2026-11-15-77, library/collections.md § `Slice[T]`).
+            "try_into_array" => self.infer_try_into_array(&elem, args, span),
             "to_vec" => {
                 if !args.is_empty() {
                     self.type_error(
@@ -2015,6 +2058,7 @@ impl<'a> super::TypeChecker<'a> {
             // B-2026-10-23-5 — a `Vec` receiver finds every `Slice` method
             // (docs/library/collections.md), `to_vec` among them: a copy
             // into a new `Vec`, the value `clone` gives.
+            "try_into_array" => self.infer_try_into_array(&elem, args, span),
             "to_vec" => {
                 self.expect_no_args("Vec.to_vec", args, span);
                 let vec = Type::Named {

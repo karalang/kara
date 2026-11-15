@@ -2857,7 +2857,10 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             ("Vec" | "VecDeque" | "String" | "Map" | "SortedMap" | "Set" | "SortedSet", m)
-                if m.starts_with("try_") && m != "try_into" && m != "try_from" =>
+                if m.starts_with("try_")
+                    && m != "try_into"
+                    && m != "try_from"
+                    && m != "try_into_array" =>
             {
                 // The fallible companions: each is its base method, in
                 // `Ok`, except that a capacity that cannot be represented,
@@ -2932,7 +2935,7 @@ impl<'a> Interp<'a> {
             (
                 "Vec",
                 "get_unchecked" | "split_at" | "split_at_mut" | "chunks" | "windows" | "as_ptr"
-                | "as_mut_ptr",
+                | "as_mut_ptr" | "try_into_array",
             ) => self.view_method(name, method, args, ret),
             (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut")
             | ("Slice", _)
@@ -8832,6 +8835,37 @@ impl<'a> Interp<'a> {
             }
             // The data pointer: element 0's address (B-2026-11-14-36).
             ("as_ptr" | "as_mut_ptr", []) => Ok(Value::Ref(base.child(lo))),
+            // `s.try_into_array()`: a copy of the `Copy` elements as the
+            // `Array[T, N]` of the result, `None` when the length is not `N`
+            // (B-2026-11-15-77).
+            ("try_into_array", []) => {
+                let n = match self.tys.kind(ret) {
+                    TyKind::Adt(a) => {
+                        let some = self
+                            .tys
+                            .adt(a)
+                            .variants
+                            .iter()
+                            .position(|v| v.name == "Some");
+                        match some
+                            .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0))
+                            .map(|t| self.tys.kind(t))
+                        {
+                            Some(TyKind::Array(_, n)) => n,
+                            _ => return err(format!("{name} into {}", self.tys.display(ret))),
+                        }
+                    }
+                    _ => return err(format!("{name} into {}", self.tys.display(ret))),
+                };
+                if len != n {
+                    return self.option(ret, None);
+                }
+                let mut out = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    out.push(self.slot(&base.child(lo + i))?);
+                }
+                self.option(ret, Some(Value::Agg(out)))
+            }
             ("first" | "last" | "get", rest) => {
                 let i = match (method, rest) {
                     ("first", []) => 0,

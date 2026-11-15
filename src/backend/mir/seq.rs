@@ -2084,6 +2084,31 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.some_elem(dest, p, n, i, size, el)?;
             }
             ("first", []) => self.some_elem(dest, p, n, self.i64(0), size, el)?,
+            // `s.try_into_array()`: the elements copied into the result's
+            // `Array[T, N]` (`T: Copy`, so a byte copy), `None` when the
+            // length is not `N` (B-2026-11-15-77).
+            ("try_into_array", []) => {
+                let (some, none) = self.option_variants(dty)?;
+                let arr = self
+                    .tys
+                    .field_ty(dty, Some(some), 0)
+                    .ok_or("try_into_array: an option without a payload")?;
+                let TyKind::Array(_, want) = self.tys.kind(arr) else {
+                    return Err(format!("try_into_array into {}", self.tys.display(dty)));
+                };
+                let d = self.place_ptr(dest)?;
+                self.store_tag(d, dty, none)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, n, self.i64(want), "")
+                    .map_err(e)?;
+                let at = self.field_offset(dty, Some(some), 0)?;
+                self.if_then(ok, |cx| {
+                    cx.store_tag(d, dty, some)?;
+                    let q = cx.offset(d, at)?;
+                    cx.copy(q, p, arr)
+                })?;
+            }
             ("last", rest) => {
                 let k = match rest {
                     [k] => self.int_arg(k)?,

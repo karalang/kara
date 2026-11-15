@@ -428,6 +428,18 @@ impl<'a> super::TypeChecker<'a> {
                         };
                         let fits = match &arg_ty {
                             Type::Error => true,
+                            // A length only this parameter fixes, as of
+                            // `b.try_into_array().unwrap()` (B-2026-11-15-77).
+                            Type::Array {
+                                element,
+                                size: size @ ConstArg::ConstVar(_),
+                            } if matches!(**element, Type::UInt(UIntSize::U8)) => {
+                                super::inference::unify_const_args(
+                                    size,
+                                    &ConstArg::Literal(width),
+                                    &mut self.env.const_substitutions,
+                                )
+                            }
                             Type::Array { element, size } => {
                                 matches!(**element, Type::UInt(UIntSize::U8))
                                     && matches!(size, ConstArg::Literal(n) if *n == width)

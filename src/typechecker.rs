@@ -3792,6 +3792,9 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-07-9: the same for a call's `const` parameters only its
     /// result names, judged with them.
     pub(super) unsolved_call_consts: Vec<(Span, Vec<(types::ConstVarId, String)>)>,
+    /// The length of each `s.try_into_array()`, which only the expected
+    /// type fixes; one nothing fixed is reported at the end (B-2026-11-15-77).
+    pub(super) unsolved_array_lens: Vec<(Span, types::ConstVarId)>,
     /// B-2026-11-08-19: the variables standing for an unannotated
     /// collection's element, key or value (`Vec.new()`'s `T`). The first
     /// `ref T` with `T: Copy` that solves one solves it to `T` (design.md §8).
@@ -4655,6 +4658,7 @@ impl<'a> TypeChecker<'a> {
             unsolved_call_vars: Vec::new(),
             deferred_operand_vars: Vec::new(),
             unsolved_call_consts: Vec::new(),
+            unsolved_array_lens: Vec::new(),
             collection_vars: FxHashSet::default(),
             pending_atomic_inners: Vec::new(),
             pending_buf_sources: Vec::new(),

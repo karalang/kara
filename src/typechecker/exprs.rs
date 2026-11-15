@@ -7383,6 +7383,27 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn report_unsolved_call_vars(&mut self) {
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
+        for (span, id) in std::mem::take(&mut self.unsolved_array_lens) {
+            let unsolved = matches!(
+                resolve_const_arg(
+                    &ConstArg::ConstVar(id),
+                    &self.env.const_substitutions,
+                    &no_consts,
+                ),
+                ConstArg::ConstVar(_)
+            );
+            if unsolved {
+                self.type_error(
+                    "cannot tell the length of the array `try_into_array()` makes: nothing \
+                     here expects an `Array[T, N]`; give the result its type, \
+                     `let a: Array[u8, 4] = s.try_into_array().unwrap();` \
+                     (library/collections.md § `Slice[T]`)"
+                        .to_string(),
+                    span,
+                    TypeErrorKind::CannotInferTypeParam,
+                );
+            }
+        }
         // B-2026-11-07-9: a `const` parameter no later use fixed.
         for (span, vars) in std::mem::take(&mut self.unsolved_call_consts) {
             let unsolved = vars.iter().find(|(id, _)| {
