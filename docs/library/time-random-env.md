@@ -64,8 +64,10 @@ fn timed(work: Fn()) -> Duration {
 
 | Function | Effects | Returns |
 |---|---|---|
-| `std.random.next_u64()` | `writes(RandomSource)` | 64 random bits |
-| `std.uuid.v4()` | `writes(RandomSource)` | A random (version 4) UUID, as a `String` in its 36-character lowercase form (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`) |
+| `random.next_u64()` | `writes(RandomSource)` | 64 random bits |
+| `uuid.v4()` | `writes(RandomSource)` | A random (version 4) UUID, as a `String` in its 36-character lowercase form (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`) |
+
+The functions are reached through their modules: `import std.random;` then `random.next_u64()`, and `import std.uuid;` then `uuid.v4()` (or import the function itself, `import std.random.{next_u64};`). A call spelled with its full `std.` path is refused.
 
 A draw advances the source, so it writes `RandomSource`: two draws keep their order, and two `par` branches that both draw conflict, which is a compile error. Cryptographic nonces draw too. A pseudo-random generator seeded from a constant does not touch `RandomSource`: it is deterministic, and its state is an ordinary value passed as an argument.
 
