@@ -123,7 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
 | B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
 | B-2026-11-15-86 | 2026-11-15 | resolver | high | `karac fix` turns Rust's smallest-first `let mut heap: BinaryHeap<Reverse<i32>> = v.into_iter().map(Reverse).collect();` into a largest-first `PriorityQueue[Reverse[i32]]`: with no constructor to rewrite, the type is renamed and `Reverse` kept, so the mended program pops in the opposite order and answers wrong (kata 1167: 16 for [2,4,3], not 14) | — |
-| B-2026-11-15-87 | 2026-11-15 | effect | medium | E0418 between two different channels when one `par` branch both sends on one and receives on another: `par { { txb.send(1) }, { txa.send(2); rxb.recv() } }` is refused as `sends(Channel @ l5)` against `sends(Channel @ l2)`; with the receive gone it passes | — |
 
 ### Relocated
 
@@ -1294,6 +1293,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-83 | cli | low | `karac doc` dropped the `///` doc on a trait method's parameter: `Greet.hello`'s `name` doc "who" was missing from Greet.html, while a free function'… | 1887cb8dd9 |
 | B-2026-11-15-84 | cli | low | `karac doc` printed a source file's parse errors, rendered the rest anyway and exited 0, so a script or CI step read incomplete docs as a success | 1887cb8dd9 |
 | B-2026-11-15-85 | cli | medium | A `[dev-dependencies]` entry that cannot resolve (a registry entry with no proxy, an unreachable git URL, a missing path): with a `_test.kara` presen… | 1887cb8dd9 |
+| B-2026-11-15-87 | effect | medium | E0418 between two different channels when one `par` branch both sends on one and receives on another: `par { { txb.send(1) }, { txa.send(2); rxb.recv… | 7a337d9532 |
 | B-2026-11-15-88 | typecheck | medium | `isize.abs_diff` is typed `isize`, not `usize`: `o(isize.MIN).abs_diff(o(0))` prints -9223372036854775808 under `karac build` (9223372036854775808 in… | d00b138745 |
 | B-2026-11-15-89 | typecheck | low | An unsuffixed integer literal past `i64.MAX` at a `usize` context (`let a: usize = 18446744073709551614`, `o_usize(9223372036854775808)`) is refused… | d00b138745 |
 | B-2026-11-15-91 | mir | medium | A plain `break` (or `continue`) inside a labeled block inside a loop passes check, then every lane fails with `invalid MIR: assigning () to _7 of typ… | ecdc3f1527 |
