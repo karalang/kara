@@ -1586,6 +1586,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `karac fmt` keeps a `///` before a function's first parameter, or before
+  a method's receiver, where it was: it moved it into the function's body,
+  where it documents nothing and `karac check` warned that it is discarded
+  (B-2026-11-15-26).
+
 - A `let` binding after a `#[derive]`d type had no type on hover: the
   derive's items were spliced in numbered from zero, so the program's own
   nodes after the type were renumbered away from the ids the type checker's

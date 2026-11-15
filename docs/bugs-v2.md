@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 69 |
 | miscompile | 64 |
 | run-vs-build | 39 |
-| other | 33 |
+| other | 34 |
 | codegen-gap | 30 |
 | crash | 29 |
 | leak | 4 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 466 |
 | mir-llvm | 232 |
 | mir | 195 |
-| cli | 116 |
+| cli | 117 |
 | parser | 83 |
 | ownership | 81 |
 | interp | 59 |
@@ -119,6 +119,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-17 | 2026-11-15 | parser | low | A Rust file's `use std::...` lines mend one per `karac fix` round: after the first line's diagnostic, the parser's item recovery skipped to the next `fn`, past the other `use` lines, so `karac check` reported one and LeetCode's binary-tree template (`RefCell`, `VecDeque`, `Rc`) took three extra rounds | — |
 | B-2026-11-15-24 | 2026-11-15 | parser | low | A `///` doc comment before a method's receiver (`self`, `ref self`, `mut ref self`, `own self`) is a parse error naming `self` / `ref` as a reserved keyword; design.md §3 Doc comments says it is ignored | — |
 | B-2026-11-15-25 | 2026-11-15 | mir+mir-llvm | medium | A server has no way to read a request body as it was sent: `Request` has `body()` (a `String`, so a body that is not UTF-8 is decoded lossily, B-2026-11-15-8) but no `bytes()`, so a binary upload, a protobuf or CBOR body, or a webhook signature check over the raw body cannot be served | — |
+| B-2026-11-15-26 | 2026-11-15 | cli | low | `karac fmt` moves a `///` before a function's first parameter (or before a method's receiver) into the function body, where it documents nothing and `karac check` warns that it is discarded | — |
 
 ### Relocated
 

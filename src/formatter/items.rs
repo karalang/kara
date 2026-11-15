@@ -227,6 +227,7 @@ impl super::Formatter {
         });
         self.format_fn_params_in(
             &f.self_param,
+            f.self_span,
             f.self_is_frozen,
             f.self_is_own,
             &f.params,
@@ -258,28 +259,50 @@ impl super::Formatter {
     }
 
     /// [`Self::format_fn_params_with_receiver`], laid out one parameter per
-    /// line when a comment sits between two parameters or after the last
-    /// one, before `close` (the source offset of the `)` or later), so each
-    /// comment stays beside the parameter it follows (B-2026-11-07-44).
+    /// line when a comment sits before the receiver or a parameter, between
+    /// two of them, or after the last one, before `close` (the source offset
+    /// of the `)` or later), so each comment stays beside the parameter it
+    /// documents or follows (B-2026-11-07-44). A `///` before a parameter
+    /// stays before it rather than moving into the body, where it documents
+    /// nothing (B-2026-11-15-26).
     pub(super) fn format_fn_params_in(
         &mut self,
         self_param: &Option<SelfParam>,
+        self_span: Option<crate::token::Span>,
         self_is_frozen: bool,
         self_is_own: bool,
         params: &[Param],
         close: Option<usize>,
     ) {
-        let spans: Vec<(usize, usize)> = params
+        let mut spans: Vec<(usize, usize)> = params
             .iter()
             .map(|p| (p.span.offset, p.span.offset + p.span.length))
             .collect();
-        let Some(close) = close.filter(|&c| self.comment_between(&spans, c)) else {
+        let receiver = self_param
+            .as_ref()
+            .and(self_span)
+            .map(|s| (s.offset, s.offset + s.length));
+        if let Some(r) = receiver {
+            spans.insert(0, r);
+        }
+        let first = spans.first().map(|s| s.0);
+        let Some(close) = close.filter(|&c| {
+            self.comment_between(&spans, c) || self.has_comment_in(0, first.unwrap_or(c))
+        }) else {
             self.format_fn_params_with_receiver(self_param, self_is_frozen, self_is_own, params);
             return;
+        };
+        let spans = if receiver.is_some() {
+            &spans[1..]
+        } else {
+            &spans[..]
         };
         self.output.push('\n');
         self.push_indent();
         if self_param.is_some() {
+            if let Some(r) = receiver {
+                self.flush_comments_before(r.0);
+            }
             self.write_indent();
             self.format_fn_params_with_receiver(self_param, self_is_frozen, self_is_own, &[]);
             self.output
@@ -290,6 +313,7 @@ impl super::Formatter {
                 });
         }
         for (i, p) in params.iter().enumerate() {
+            self.flush_comments_before(spans[i].0);
             self.write_indent();
             // A lone parameter prints without its `;`; the separator after
             // it says whether the next one opens the named parameters.
