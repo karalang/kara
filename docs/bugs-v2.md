@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 339 |
-| false-positive | 213 |
+| diagnostics | 340 |
+| false-positive | 214 |
 | missing-feature | 170 |
 | perf | 169 |
 | soundness | 69 |
-| miscompile | 64 |
+| miscompile | 65 |
+| other | 43 |
 | run-vs-build | 41 |
-| other | 40 |
 | codegen-gap | 32 |
 | crash | 30 |
 | leak | 4 |
@@ -79,13 +79,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 485 |
 | mir-llvm | 237 |
 | mir | 204 |
-| cli | 131 |
+| cli | 135 |
 | parser | 88 |
 | ownership | 81 |
 | interp | 62 |
 | runtime | 46 |
-| effect | 34 |
-| resolver | 29 |
+| effect | 35 |
+| resolver | 30 |
 | codegen | 22 |
 | other | 8 |
 | autopar | 5 |
@@ -125,6 +125,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-40 | 2026-11-15 | typecheck+cli | medium | `println(f"{v} -> {total(v)}")` with `v` owned and `total(v: own Vec[i64])` is refused with E0516 ("cannot move `v` while it is still borrowed") and no machine fix, though the message names `.clone()`; in kata 2202 it is where `karac fix`'s own `own` edits end, three rounds after a bare parameter was stored in a struct field | — |
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
 | B-2026-11-15-77 | 2026-11-15 | typecheck+mir | low | No conversion from a `Slice[T]` to an `Array[T, N]` (Rust's `TryFrom<&[T]> for [T; N]`, `b[..4].try_into()`), so reading an integer from a byte slice needs the array written element by element | — |
+| B-2026-11-15-86 | 2026-11-15 | resolver | high | `karac fix` turns Rust's smallest-first `let mut heap: BinaryHeap<Reverse<i32>> = v.into_iter().map(Reverse).collect();` into a largest-first `PriorityQueue[Reverse[i32]]`: with no constructor to rewrite, the type is renamed and `Reverse` kept, so the mended program pops in the opposite order and answers wrong (kata 1167: 16 for [2,4,3], not 14) | — |
+| B-2026-11-15-87 | 2026-11-15 | effect | medium | E0418 between two different channels when one `par` branch both sends on one and receives on another: `par { { txb.send(1) }, { txa.send(2); rxb.recv() } }` is refused as `sends(Channel @ l5)` against `sends(Channel @ l2)`; with the receive gone it passes | — |
 
 ### Relocated
 
@@ -1288,6 +1290,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-79 | mir+mir-llvm | medium | `let Reverse { value: top } = heap.pop().unwrap();` over `Reverse[i64]` reads `top` as moved after one use: a field of a generic struct bound by a `l… | ee3c8ec9c4 |
 | B-2026-11-15-80 | mir | high | `karac fix` renamed `let mut heap: BinaryHeap<i64> = it.collect();` to a plain `PriorityQueue[i64]`, which pops the smallest first where Rust's heap… | ee3c8ec9c4 |
 | B-2026-11-15-81 | mir | low | The fix for reusing a moved value whose type could be `Copy` wrote `#[derive(Copy)]`, which the check then flags at once as deprecated (`Copy` needs… | e6b72f3957 |
+| B-2026-11-15-82 | cli | low | `karac doc` rendered a cross-reference to an item that exists but has no doc comment as a link to a page it never writes: `[helper_two]` became `help… | 1887cb8dd9 |
+| B-2026-11-15-83 | cli | low | `karac doc` dropped the `///` doc on a trait method's parameter: `Greet.hello`'s `name` doc "who" was missing from Greet.html, while a free function'… | 1887cb8dd9 |
+| B-2026-11-15-84 | cli | low | `karac doc` printed a source file's parse errors, rendered the rest anyway and exited 0, so a script or CI step read incomplete docs as a success | 1887cb8dd9 |
+| B-2026-11-15-85 | cli | medium | A `[dev-dependencies]` entry that cannot resolve (a registry entry with no proxy, an unreachable git URL, a missing path): with a `_test.kara` presen… | 1887cb8dd9 |
 
 </details>
 
