@@ -54,40 +54,40 @@ Now start the REPL:
 
 ```text
 $ karac repl
-Kāra REPL — :help for commands, :quit to exit.
-karac> 
+Kāra REPL  (type :help for commands, :quit to exit)
+> 
 ```
 
 We'll build the same example cell by cell. Each line you submit is a *cell* — its own unit of evaluation, kept around so later cells can see it.
 
 ```text
-karac> fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[usize] {
-    ...     let mut lo: usize = 0;
-    ...     let mut hi: usize = haystack.len();
-    ...     while lo < hi {
-    ...         let mid = (lo + hi) / 2;
-    ...         let value = haystack[mid];
-    ...         if value == needle { return Some(mid); }
-    ...         else if value < needle { lo = mid + 1; }
-    ...         else { hi = mid; }
-    ...     }
-    ...     None
-    ... }
-karac> let nums = [1, 3, 5, 7, 9, 11, 13];
-karac> binary_search(nums, 7)
+> fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[i64] {
+..     let mut lo: i64 = 0;
+..     let mut hi: i64 = haystack.len();
+..     while lo < hi {
+..         let mid = (lo + hi) / 2;
+..         let value = haystack[mid];
+..         if value == needle { return Some(mid); }
+..         else if value < needle { lo = mid + 1; }
+..         else { hi = mid; }
+..     }
+..     None
+.. }
+> let nums = [1, 3, 5, 7, 9, 11, 13];
+> binary_search(nums, 7)
 Some(3)
 ```
 
-That last line — a bare expression with no `let` — is shown as a value. The REPL prints `Some(3)` because that's what the expression evaluated to. Compare this to the file version, which had to wrap the result in `match` and `println` to see it.
+That last line — a bare expression with no `let` — is shown as a value. The REPL prints `Some(3)` because that's what the expression evaluated to. Compare this to the file version, which had to wrap the result in `match` and `println` to see it. Showing a value never consumes it: a bare `nums` prints the vector and leaves `nums` where it was.
 
 ### Cells remember each other
 
 The `fn binary_search` declaration is a *pure-items cell*: it adds a function to the session. Later cells can call it without redefining it. Same for `let nums = …` — that binding stays in scope for every cell that follows.
 
 ```text
-karac> binary_search(nums, 100)
+> binary_search(nums, 100)
 None
-karac> binary_search(nums, 5)
+> binary_search(nums, 5)
 Some(2)
 ```
 
@@ -98,8 +98,8 @@ Some(2)
 You don't have to invent new names for retries:
 
 ```text
-karac> let nums = [10, 20, 30, 40, 50];
-karac> binary_search(nums, 30)
+> let nums = [10, 20, 30, 40, 50];
+> binary_search(nums, 30)
 Some(2)
 ```
 
@@ -110,28 +110,26 @@ The second `let nums` *shadows* the first — same name, fresh binding. The old 
 This is the part most REPLs cheat on. They evaluate each cell in isolation and pretend ownership doesn't exist. Kāra doesn't pretend.
 
 ```text
-karac> let owned = [1, 2, 3];
-karac> let sum: i32 = owned.iter().sum();
-karac> println(f"sum={sum}, owned still here: {owned.len()}");
+> let owned = [1, 2, 3];
+> let sum: i32 = owned.iter().sum();
+> println(f"sum={sum}, owned still here: {owned.len()}");
 sum=6, owned still here: 3
 ```
 
 `owned.iter().sum()` borrows; the original is still yours. But:
 
 ```text
-karac> let s: String = "hello".to_string();
-karac> let taken = s;
-karac> println(s);
-error: use of moved value `s`
-  --> cell 3:1
+> let s: String = "hello".to_string();
+> let taken = s;
+> println(s);
+error[ownership]: cell 13:1:9: value 's' moved here, used again here (moved at cell 12:1:13)
    |
  1 | println(s);
-   |         ^ value moved into `taken` in cell 2
-   = the move happened in a previous cell; this cell sees the post-move state.
-   = consider `let taken = s.clone();` if you need both bindings.
+   |         ^
+  help: clone 's' at the move site (`s.clone()`), drop `own` from the callee parameter if it only reads, or restructure to avoid reuse
 ```
 
-The diagnostic doesn't just say *moved* — it tells you *which cell* the move happened in and suggests a fix. This is the [`UseAfterMove` notebook-aware tail](./ch12-ownership.md) at work; ownership in the REPL behaves exactly like ownership in a file, but the diagnostics know about your cell history.
+The diagnostic doesn't just say *moved* — it tells you *which cell* the move happened in (cell 12, column 13: the `s` in `let taken = s;`) and suggests a fix. A refused cell changes nothing, so the session carries on as if you had never typed it. This is the [`UseAfterMove` notebook-aware tail](./ch12-ownership.md) at work; ownership in the REPL behaves exactly like ownership in a file, but the diagnostics know about your cell history.
 
 Teaching ownership honestly from day one matters: when you graduate from REPL doodles to compiled `.kara` files, nothing has to be un-learned.
 
@@ -141,27 +139,29 @@ The REPL ships with a handful of `:command` helpers. Two are worth knowing right
 
 ### `:effects` — what does this session touch?
 
+In a fresh `karac repl`:
+
 ```text
-karac> fn read_config() -> String {
-    ...     read_file("config.toml").unwrap()
-    ... }
-karac> :effects
-session effects: reads(FileSystem), panics
-  read_config: reads(FileSystem), panics
+> fn read_config() -> String {
+..     FileSystem.read_to_string("config.toml").unwrap()
+.. }
+> :effects
+session effects: reads(FileSystem), panics, blocks
+  read_config: reads(FileSystem), panics, blocks
 ```
 
-Every function the session knows about, every effect it carries. This is the same effect analysis that the compiler runs on `.kara` files — you're just getting a live readout instead of waiting for a diagnostic to fire. We'll cover the effect system properly in [chapter 11](./ch11-effects.md); for now, treat `:effects` as a "what would I have to declare if this were a public API" lens.
+The first line is the whole session's effects: its functions' and its cells'. Under it comes every function the session defined, with the effects it carries. This is the same effect analysis that the compiler runs on `.kara` files — you're just getting a live readout instead of waiting for a diagnostic to fire. We'll cover the effect system properly in [chapter 11](./ch11-effects.md); for now, treat `:effects` as a "what would I have to declare if this were a public API" lens.
 
 ### `:save` — graduate to a file
 
 When the REPL session has earned its keep, hand it off to disk:
 
 ```text
-karac> :save search.kara
-wrote search.kara (4 cells, 1 fn, 1 let)
+> :save search.kara
+session saved to search.kara
 ```
 
-`:save` writes a real `.kara` file. The session's items become top-level definitions, the cell history becomes the body of `fn main()`, and any `:provide` scopes you opened are emitted as `with_provider[R](…) { … }` blocks. The file `karac run`s without modification.
+`:save` writes a real `.kara` file. The session's items become top-level definitions, the cells that ran become the body of `fn main()` (a refused cell is left out, and a bare expression is kept as `let _ = …;`, which runs it without printing), and any `:provide` scopes you opened are emitted as `with_provider[R](…, || { … })` blocks. The file `karac run`s without modification.
 
 This is the natural lifecycle: prototype in the REPL, `:save` when the shape feels right, edit the file from there. The same compiler runs both ends; nothing gets translated.
 

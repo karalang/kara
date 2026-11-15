@@ -134,6 +134,35 @@ fn terminated(cell_src: &str) -> String {
     }
 }
 
+/// `cell_src` with its bare final expression's value recorded
+/// ([`with_shown_value`]), and how far the cell's own text moved; `None`
+/// when it ends in a statement or the rewrite does not parse.
+fn shown_cell(cell_src: &str) -> Option<(String, usize)> {
+    let (src, head) = with_shown_value(cell_src, tail_expr(cell_src)?);
+    crate::parse(&format!("fn main() {{\n{src}\n}}\n"))
+        .errors
+        .is_empty()
+        .then_some((src, head))
+}
+
+/// What a cell shows for the value of its bare final expression: the value
+/// as `%show` renders it (`Some(3)`), nothing for `()`, and a note for a
+/// value with no written form.
+fn shown_text(value: Option<&(String, String)>) -> String {
+    match value {
+        Some((ty, _)) if ty == "()" => String::new(),
+        Some((_, source)) => {
+            let text = display::render_source(source)
+                .and_then(|b| b.get("text/plain").map(str::to_string))
+                .unwrap_or_else(|| source.clone());
+            format!("{}\n", text.trim_end())
+        }
+        None => {
+            "(a value with no written form: a function, a `shared` value or a handle)\n".to_string()
+        }
+    }
+}
+
 /// Caller-supplied options for `run_with_options` — mirrors the flags
 /// surfaced on the `karac repl` subcommand. `Default` matches the
 /// historical bare-`karac repl` behavior so existing callers keep working.
@@ -1451,11 +1480,10 @@ impl Session {
                 for m in &out.errors {
                     eprintln!("{m}");
                 }
-                // Production `evaluate_cell` does not roll back
-                // `cell_history` on diagnostic-side failure; keep
-                // `cell_effect_history` aligned by pushing an empty
-                // snapshot for the failed cell.
-                self.cell_effect_history.push(CellEffectSnapshot::default());
+                // A refused or panicking cell leaves the session as it
+                // was, as `evaluate_cell_captured` does: `:save` must not
+                // write it, nor a later cell's replay run it.
+                self.cell_history.pop();
             }
         }
     }
@@ -1473,7 +1501,13 @@ impl Session {
         capture: bool,
     ) -> Result<WrapperOutcome, WrapperOutcome> {
         let mut notes = Vec::new();
-        let mut r = self.run_cell_v2(&terminated(cell_src), capture);
+        // A cell ending in a bare expression runs as written: its value is
+        // shown (`Session::build_synthetic_cell`).
+        let src = match tail_expr(cell_src) {
+            Some(_) => cell_src.to_string(),
+            None => terminated(cell_src),
+        };
+        let mut r = self.run_cell_v2(&src, capture);
         // Each round clones at least one more binding, so a bound on the
         // rounds only stops a cell whose errors keep naming new moves.
         for _ in 0..8 {
@@ -1485,7 +1519,7 @@ impl Session {
                 Some(more) => notes.extend(more),
                 None => break,
             }
-            r = self.run_cell_v2(&terminated(cell_src), capture);
+            r = self.run_cell_v2(&src, capture);
         }
         match &mut r {
             Ok(out) | Err(out) => out.notes.splice(0..0, notes),
@@ -1544,7 +1578,7 @@ impl Session {
             let old = &self.cell_history[cell - 1];
             let slot = (0..self.persistent_lets.len()).find(|&i| {
                 self.persistent_let_origin.get(i) == Some(&cell)
-                    && self.persistent_lets[i] == terminated(old)
+                    && self.persistent_lets[i] == as_statements(old)
             })?;
             let mut new = old.clone();
             let mut at_cell = at_cell.clone();
@@ -1556,7 +1590,7 @@ impl Session {
         }
         let mut notes = Vec::new();
         for (cell, slot, new) in rewritten {
-            self.persistent_lets[slot] = terminated(&new);
+            self.persistent_lets[slot] = as_statements(&new);
             self.cell_history[cell - 1] = new;
             let mut names: Vec<&String> = edits[&cell].iter().map(|(_, n)| n).collect();
             names.sort();
@@ -1751,6 +1785,19 @@ impl Session {
         match r {
             Ok(mut ran) => {
                 ran.stderr = self.relabel_v2(&synthetic, &ran.stderr);
+                if let Some(value) = &ran.shown {
+                    ran.stdout.push_str(&shown_text(value.as_ref()));
+                    // A final expression of type `()` (`println(x)`) is a
+                    // statement that lacked its `;`: it is kept, and
+                    // saved, with one.
+                    if value.as_ref().is_some_and(|(ty, _)| ty == "()") {
+                        if let Some(cell) = self.cell_history.last_mut() {
+                            if let Some(r) = tail_expr(cell) {
+                                cell.insert(r.end, ';');
+                            }
+                        }
+                    }
+                }
                 if capture {
                     return Ok(WrapperOutcome {
                         stdout: lines(&ran.stdout),
@@ -1925,7 +1972,9 @@ impl Session {
         if !s.is_empty() && !s.ends_with('\n') {
             s.push('\n');
         }
-        if snap.is_some() {
+        // A bare final expression's value is recorded to be shown.
+        let shown = shown_cell(cell_src);
+        if snap.is_some() || shown.is_some() {
             s.push_str(&format!("fn {snap_fn}[T](name: Str, value: T) {{}}\n"));
         }
         s.push_str("fn main() {\n");
@@ -1940,7 +1989,9 @@ impl Session {
         // current `cell_history` length (the entry has already been pushed
         // by the caller before `build_synthetic_cell` runs).
         let cell_idx = self.cell_history.len();
-        let body = self.push_in_scopes(&mut s, &mut ranges, cell_src, true);
+        let (body_src, head) = shown.unwrap_or_else(|| (cell_src.to_string(), 0));
+        let mut body = self.push_in_scopes(&mut s, &mut ranges, &body_src, true);
+        body.start += head;
         if cell_idx > 0 {
             ranges.push((cell_idx, body));
         }
@@ -1996,7 +2047,9 @@ impl Session {
             // What the replay prints is dropped (`repl_v2::CELL_START`).
             // Under a provider the cell's `let`s alone are replayed, inside
             // the provider's closure (`Session::push_in_scopes`).
-            self.persistent_lets.push(terminated(cell_src));
+            // The cell as kept (a `()` final expression has its `;`).
+            let kept = self.cell_history.last().map_or(cell_src, String::as_str);
+            self.persistent_lets.push(as_statements(kept));
             self.persistent_let_origin.push(cell_idx);
             self.persistent_let_provider_scope.push(active_scope);
             return;
@@ -2032,85 +2085,95 @@ impl Session {
     }
 
     /// Type a single expression by wrapping it as `let __t = <expr>;` inside
-    /// a synthetic main and reporting the inferred type of the binding.
+    /// a synthetic main, after the session's bindings as a cell starts
+    /// from them, and reporting the inferred type of the binding.
     fn show_type(&self, expr: &str) {
+        match self.type_of(expr) {
+            Ok(ty) => println!("{ty}"),
+            Err(errs) => {
+                for e in errs {
+                    eprintln!("{e}");
+                }
+            }
+        }
+    }
+
+    /// What `:type <expr>` prints: the expression's type, or the errors
+    /// that stopped it. The expression sees the session's bindings and
+    /// open providers, as a cell would; nothing runs.
+    pub fn type_of(&self, expr: &str) -> Result<String, Vec<String>> {
         let mut s = String::new();
         s.push_str(&strip_main(&self.items_source));
         if !s.is_empty() && !s.ends_with('\n') {
             s.push('\n');
         }
-        s.push_str("fn main() { let __t = ");
-        s.push_str(expr.trim());
-        s.push_str("; }\n");
+        s.push_str("fn main() {\n");
+        let mut ranges = Vec::new();
+        self.push_cell_start(&mut s, &mut ranges, true);
+        let body = format!("let __t = {};", expr.trim());
+        self.push_in_scopes(&mut s, &mut ranges, &body, false);
+        s.push_str("}\n");
 
-        let parsed = crate::parse(&s);
-        if !parsed.errors.is_empty() {
-            for e in &parsed.errors {
-                eprintln!("parse error: {}", e.message);
-            }
-            return;
-        }
-        let resolved = crate::resolve(&parsed.program);
-        let typed = crate::typecheck(&parsed.program, &resolved);
-        if !typed.errors.is_empty() {
-            // Surface resolve-side and type-side errors uniformly.
-            for e in &typed.errors {
-                eprintln!("type error: {}", e.message);
-            }
-            return;
-        }
-
-        // Find the `__t` binding's recorded type. The typechecker stores
-        // expression types keyed by span; for the MVP we just print the
-        // RHS expression's type by re-walking the parsed AST.
-        if let Some(ty) = lookup_let_rhs_type(&parsed.program, &typed, "__t") {
-            println!("{ty}");
-        } else {
-            eprintln!("(could not infer type — typechecker did not record one)");
-        }
+        // Checked as a cell is, the library in scope, so a session
+        // binding's type (`String`, `Vec[i64]`) is known.
+        let (program, typed) = crate::cli::repl_v2::typed(&s)?;
+        lookup_let_rhs_type(&program, &typed, "__t").ok_or_else(|| {
+            vec!["(could not infer type — typechecker did not record one)".to_string()]
+        })
     }
 
-    /// Print the union of every cell's effect set so far. v1 MVP runs the
-    /// effect checker over the accumulated items + a synthetic main built
-    /// from concatenating every prior statement-style cell.
+    /// `:effects`: the effects of the session's own functions, their union
+    /// first (`session effects: reads(FileSystem), panics`), then one line
+    /// per function (and method of a session type) that has any. The
+    /// library's own functions are left out.
     fn show_effects(&self) {
-        // For the MVP, just compute effects on items_source. A richer
-        // version that tracks per-cell effects belongs with the Jupyter
-        // kernel CR (post-MVP).
-        if self.items_source.trim().is_empty() {
-            println!("(no items defined yet)");
-            return;
+        print!("{}", self.effects_report());
+    }
+
+    /// What `:effects` prints. The session's effects are those of its
+    /// functions and of its cells, which run as the saved file's `main`
+    /// does (`Session::render_exported_session`).
+    pub fn effects_report(&self) -> String {
+        let items = strip_main(&self.items_source);
+        let body = self.exported_main_body();
+        if items.trim().is_empty() && body.trim().is_empty() {
+            return "(no cells yet)\n".to_string();
         }
-        let parsed = crate::parse(&self.items_source);
+        let parsed = crate::parse(&format!("{items}\nfn main() {{\n{body}}}\n"));
         if !parsed.errors.is_empty() {
-            eprintln!("(items_source has parse errors — fix them first)");
-            return;
+            return "(the session has parse errors: fix them first)\n".to_string();
         }
+        let names = collect_top_level_item_names(&items);
+        let ours = |key: &str| {
+            let owner = key.split_once('.').map_or(key, |(t, _)| t);
+            names.contains(key) || names.contains(owner.split('[').next().unwrap_or(owner))
+        };
         let effects = crate::effectcheck(&parsed.program);
-        // Surface every function's inferred effect set. Empty sets are
-        // skipped so the output focuses on functions that actually touch
-        // resources.
-        let mut printed = 0usize;
-        let mut entries: Vec<(&String, &crate::effectchecker::EffectSet)> =
-            effects.inferred_effects.iter().collect();
+        let mut entries: Vec<(&String, &crate::effectchecker::EffectSet)> = effects
+            .inferred_effects
+            .iter()
+            .filter(|(name, eff)| ours(name) && !eff.effects.is_empty())
+            .collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut all = effects
+            .inferred_effects
+            .get("main")
+            .cloned()
+            .unwrap_or_default();
+        for (_, eff) in &entries {
+            all.effects.extend(eff.effects.iter().cloned());
+        }
+        if all.effects.is_empty() {
+            return "session effects: none\n".to_string();
+        }
+        let mut out = format!("session effects: {}\n", effect_decl_parts(&all).join(", "));
         for (name, eff) in entries {
-            if eff.effects.is_empty() {
-                continue;
-            }
-            let mut parts: Vec<String> = eff
-                .effects
-                .iter()
-                .map(|e| format!("{:?}", e.effect))
-                .collect();
-            parts.sort();
-            parts.dedup();
-            println!("{name}: {}", parts.join(", "));
-            printed += 1;
+            out.push_str(&format!(
+                "  {name}: {}\n",
+                effect_decl_parts(eff).join(", ")
+            ));
         }
-        if printed == 0 {
-            println!("(no effects inferred so far)");
-        }
+        out
     }
 
     fn save(&self, path: &str) {
@@ -2142,24 +2205,7 @@ impl Session {
     /// without an intermediate file write.
     pub fn render_exported_session(&self) -> String {
         let items_section = self.items_source.trim_end().to_string();
-
-        // When the session never opened a provider scope, the simpler
-        // flat path matches the existing behavior byte-for-byte. The
-        // timeline-aware path only kicks in for sessions that touched
-        // `:provide` / `:end-provide`.
-        let body = if self.provider_history.is_empty() {
-            // A cell's final `;` may be missing, which the cell after it
-            // would run into.
-            let stmt_cells: Vec<String> = self
-                .cell_history
-                .iter()
-                .filter(|c| self.classify(c) != CellShape::PureItems)
-                .map(|c| terminated(c))
-                .collect();
-            render_main_body(&stmt_cells.iter().map(String::as_str).collect::<Vec<_>>())
-        } else {
-            self.render_exported_main_body_with_providers()
-        };
+        let body = self.exported_main_body();
         let effects = self.compute_main_effect_decls(&items_section, &body);
 
         let mut out = String::new();
@@ -2177,13 +2223,34 @@ impl Session {
         }
         out.push_str("fn main()");
         if !effects.is_empty() {
-            out.push(' ');
+            out.push_str(" with ");
             out.push_str(&effects);
         }
         out.push_str(" {\n");
         out.push_str(&body);
         out.push_str("}\n");
         out
+    }
+
+    /// The saved file's `main` body: the statement cells, in order.
+    fn exported_main_body(&self) -> String {
+        // When the session never opened a provider scope, the simpler
+        // flat path matches the existing behavior byte-for-byte. The
+        // timeline-aware path only kicks in for sessions that touched
+        // `:provide` / `:end-provide`.
+        if self.provider_history.is_empty() {
+            // A cell's final `;` may be missing, which the cell after it
+            // would run into, and a bare final expression is discarded.
+            let stmt_cells: Vec<String> = self
+                .cell_history
+                .iter()
+                .filter(|c| self.classify(c) != CellShape::PureItems)
+                .map(|c| as_statements(c))
+                .collect();
+            render_main_body(&stmt_cells.iter().map(String::as_str).collect::<Vec<_>>())
+        } else {
+            self.render_exported_main_body_with_providers()
+        }
     }
 
     /// Render the synthetic `fn main()` body with one nested
@@ -2252,7 +2319,7 @@ impl Session {
                     children_stack
                         .last_mut()
                         .expect("root frame always present")
-                        .push(ExportNode::Statement(terminated(src)));
+                        .push(ExportNode::Statement(as_statements(src)));
                 }
                 Item::Open { resource, expr_src } => {
                     meta_stack.push(((*resource).to_string(), (*expr_src).to_string()));

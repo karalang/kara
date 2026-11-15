@@ -3,6 +3,9 @@
 
 use karac::repl::{ReplOptions, Session};
 
+#[path = "repl_v2/book_transcript.rs"]
+mod book_transcript;
+
 fn session() -> Session {
     Session::with_options(ReplOptions::default())
 }

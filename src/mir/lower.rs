@@ -21024,7 +21024,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => None,
         };
         let at = self.expr_ty(a)?;
-        if at != pt && self.fills_unit_holes(at, pt) {
+        // A `()` lent to a parameter (`f(())` for `fn f[T](v: T)`, at `ref
+        // ()`) is borrowed like any value, not a hole to build at the
+        // reference's type.
+        let lent_unit = at == self.unit() && borrow.is_some();
+        if at != pt && !lent_unit && self.fills_unit_holes(at, pt) {
             return self.operand_filling_holes(a, pt);
         }
         let slice_t = match self.tys().tcx().kind(pt) {

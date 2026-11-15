@@ -13158,9 +13158,11 @@ impl<'a> Interp<'a> {
         let mut ty = body.locals[2].ty;
         let mut v = v.clone();
         // The binding is lent to the call (D5): read through the loan.
-        if let (TyKind::Ref(t), Value::Ref(addr)) = (self.tys.kind(ty), &v) {
+        if let TyKind::Ref(t) = self.tys.kind(ty) {
+            if let Value::Ref(addr) = &v {
+                v = self.slot(addr)?;
+            }
             ty = t;
-            v = self.slot(addr)?;
         }
         let source = match (self.source_ty(ty), self.source_of(&v, ty)) {
             (Some(t), Some(v)) => Some((t, v)),

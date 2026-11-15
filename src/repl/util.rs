@@ -3,6 +3,8 @@
 //! free functions kept out of `Session` so the impl block stays focused
 //! on the read-eval-print loop.
 
+use crate::cli::repl_v2::SHOWN_VALUE;
+
 /// Minimal TOML basic-string escaper. Only the characters that need
 /// escaping inside a `"..."` literal are touched; everything else passes
 /// through. Used to round-trip a `:dep` version string through the stored
@@ -78,7 +80,7 @@ pub(super) fn print_help() {
   :help              show this help
   :quit / :q         exit the REPL
   :type <expr>       print the inferred type of <expr>
-  :effects           print effects accumulated by session items
+  :effects           print the effects of the session's functions
   :save <file.kara>  write the cell history to <file.kara>
   :reset             clear persistent `let` bindings (items + history kept)
   :provide R = expr  open a cross-cell `with_provider[R]` scope; expr is
@@ -99,13 +101,17 @@ Cell semantics:
     the same name.
   - Each statement-style cell runs as the body of an implicit `fn main()`,
     so `?` is legal.
+  - A cell that ends in a bare expression (`1 + 2`, `f(x)`, `nums`)
+    prints its value. Showing a binding lends it: `s` does not move `s`.
   - `let` / `let mut` bindings persist across statement cells: cell N's
-    `let x = 5;` is in scope when cell N+1 evaluates `println(x);`. The
-    REPL uses source-replay — the RHS re-runs each cell — so side-effecting
-    bindings (`let log = read_file(...)`) recompute every time. Use
-    `:reset` to drop the replay buffer if it gets expensive.
-  - Mutation in a statement cell (`x += 1;`) does NOT survive to the
-    next cell. Re-bind with `let x = x + 1;` to thread updated values.
+    `let x = 5;` is in scope when cell N+1 evaluates `println(x);`. A
+    binding keeps the value the cell left it with, so the cells that built
+    it do not run again, and a mutation (`x += 1;`, `v.push(4);`) is seen
+    by the cells after it. A value with no written form (a function, a
+    `shared` value, a handle) is rebuilt by running the earlier cells
+    again, with what they print dropped. `:reset` drops the bindings.
+  - A cell that is refused or panics leaves the session as it was: its
+    bindings are not kept and `:save` does not write it.
   - Re-declaring an item in a later cell (`fn f` in cell 5 after `fn f`
     in cell 2; same for struct / enum / trait / const / type alias /
     distinct type / layout / effect group) shadows the earlier
@@ -426,6 +432,11 @@ pub(super) fn effect_set_to_snapshot(
 }
 
 pub(super) fn render_effect_decls(set: &crate::effectchecker::EffectSet) -> String {
+    effect_decl_parts(set).join(" ")
+}
+
+/// [`render_effect_decls`]'s clauses, one per verb (`reads(A, B)`, `panics`).
+pub(super) fn effect_decl_parts(set: &crate::effectchecker::EffectSet) -> Vec<String> {
     use crate::ast::EffectVerbKind;
     use std::collections::BTreeMap;
 
@@ -446,9 +457,6 @@ pub(super) fn render_effect_decls(set: &crate::effectchecker::EffectSet) -> Stri
             entry.1.insert(traced.effect.resource.clone());
         }
     }
-    if by_verb.is_empty() {
-        return String::new();
-    }
     let mut parts: Vec<String> = Vec::new();
     for (_, (verb, resources)) in by_verb {
         let name = verb_keyword(&verb);
@@ -462,7 +470,7 @@ pub(super) fn render_effect_decls(set: &crate::effectchecker::EffectSet) -> Stri
             parts.push(format!("{name}({})", list.join(", ")));
         }
     }
-    parts.join(" ")
+    parts
 }
 
 // The REPL footer keeps its own space-joined `with`-clause surface, but the
@@ -932,6 +940,91 @@ pub(super) fn is_balanced(src: &str) -> bool {
         }
     }
     depth_curly <= 0 && depth_paren <= 0 && depth_brack <= 0
+}
+
+/// The byte range in `cell` of the bare expression it ends with, whose
+/// value the cell shows (`1 + 2`, `binary_search(nums, 7)`, `s`): the
+/// final expression of `cell` read as a block. `None` when the cell ends
+/// in a statement, or in a loop, whose value is `()`.
+pub(super) fn tail_expr(cell: &str) -> Option<std::ops::Range<usize>> {
+    use crate::ast::{ExprKind, Item};
+    const HEAD: &str = "fn main() {\n";
+    let parsed = crate::parse(&format!("{HEAD}{cell}\n}}\n"));
+    if !parsed.errors.is_empty() {
+        return None;
+    }
+    let body = parsed.program.items.iter().find_map(|i| match i {
+        Item::Function(f) if f.name == "main" => Some(&f.body),
+        _ => None,
+    })?;
+    let tail = body.final_expr.as_ref()?;
+    if matches!(
+        tail.kind,
+        ExprKind::While { .. }
+            | ExprKind::WhileLet { .. }
+            | ExprKind::For { par: None, .. }
+            | ExprKind::Loop { .. }
+    ) {
+        return None;
+    }
+    let start = tail.span.offset.checked_sub(HEAD.len())?;
+    let end = start + tail.span.length;
+    (end <= cell.len() && cell.is_char_boundary(start) && cell.is_char_boundary(end))
+        .then_some(start..end)
+}
+
+/// `cell` as statements a later cell's replay or a saved file runs: a
+/// cell's bare final expression becomes `let _ = <expr>;`, which runs it
+/// for what it does and discards its value without moving a binding it
+/// names (core-semantics.md: `_` never binds and never moves), and a
+/// final statement missing its `;` gets one ([`super::terminated`]).
+pub(super) fn as_statements(cell: &str) -> String {
+    let src = cell.trim_end();
+    match tail_expr(src) {
+        Some(r) => format!("{}let _ = {};", &src[..r.start], &src[r.start..r.end]),
+        None => super::terminated(src),
+    }
+}
+
+/// `cell` with its bare final expression passed to
+/// [`crate::mir::interp::REPL_SNAPSHOT_FN`] as [`SHOWN_VALUE`], so the run
+/// records the value it shows. The parameter borrows (D5), so a binding the
+/// expression names is lent, not moved. The call's head goes at the end of
+/// the line before the expression when only blanks come before it on its
+/// own line, so every line of the cell keeps its number and its columns;
+/// the expression's first line otherwise. Returns the rewritten cell and
+/// how many bytes the head added before the cell's own first line (`0`
+/// unless the expression starts on it).
+pub(super) fn with_shown_value(cell: &str, tail: std::ops::Range<usize>) -> (String, usize) {
+    let head = format!(
+        "{}(\"{SHOWN_VALUE}\", ",
+        crate::mir::interp::REPL_SNAPSHOT_FN
+    );
+    let line_start = cell[..tail.start].rfind('\n').map_or(0, |i| i + 1);
+    // A `//` on the line before would comment the head out.
+    let prev_comment = line_start > 0
+        && cell[..line_start - 1]
+            .lines()
+            .last()
+            .unwrap_or("")
+            .contains("//");
+    let blank_before = cell[line_start..tail.start].trim().is_empty() && !prev_comment;
+    let rest = format!("{}\n);{}", &cell[tail.start..tail.end], &cell[tail.end..]);
+    match (blank_before, line_start) {
+        (true, 0) => (
+            format!("{head}\n{}{rest}", &cell[..tail.start]),
+            head.len() + 1,
+        ),
+        (true, _) => (
+            format!(
+                "{}{head}\n{}{rest}",
+                &cell[..line_start - 1],
+                &cell[line_start..tail.start]
+            ),
+            0,
+        ),
+        (false, _) => (format!("{}{head}{rest}", &cell[..tail.start]), 0),
+    }
 }
 
 #[cfg(test)]

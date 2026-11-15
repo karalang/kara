@@ -16,7 +16,14 @@ pub(crate) struct Ran {
     pub stdout: String,
     pub stderr: String,
     pub bindings: Vec<crate::mir::interp::ReplBinding>,
+    /// The value of the cell's bare final expression, recorded as
+    /// [`SHOWN_VALUE`] (and left out of `bindings`): `Some(None)` for a value
+    /// with no written form.
+    pub shown: Option<Option<(String, String)>>,
 }
+
+/// The name a cell's shown value is recorded under; no binding can take it.
+pub(crate) const SHOWN_VALUE: &str = "__karac_shown_value";
 
 /// Why a cell did not run to the end: its diagnostics, or a panic's message,
 /// with what it printed before stopping.
@@ -71,7 +78,7 @@ pub(crate) fn run_checked(source: &str) -> Result<Ran, Failed> {
         })
         .expect("failed to spawn the MIR interpreter thread")
         .join();
-    let (r, bindings) = match run {
+    let (r, mut bindings) = match run {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Err(failed(vec![format!("error[mir]: {e}")])),
         Err(_) => {
@@ -86,11 +93,16 @@ pub(crate) fn run_checked(source: &str) -> Result<Ran, Failed> {
         // The replay stopped before the cell began.
         None => String::new(),
     };
+    let shown = bindings
+        .iter()
+        .position(|(n, _)| n == SHOWN_VALUE)
+        .map(|at| bindings.remove(at).1);
     match (&r.outcome, r.exit_code()) {
         (_, Some(0)) => Ok(Ran {
             stdout,
             stderr: r.stderr,
             bindings,
+            shown,
         }),
         (crate::mir::interp::Outcome::Error(e), _) => Err(Failed {
             stdout,
@@ -106,5 +118,29 @@ pub(crate) fn run_checked(source: &str) -> Result<Ran, Failed> {
                 errors: vec![msg],
             })
         }
+    }
+}
+
+/// The program `source` is and its types, checked as [`check`] checks a
+/// cell up to the typechecker (the library in scope), or the errors that
+/// stopped it. `:type` reads a `let`'s type from it.
+pub(crate) fn typed(
+    source: &str,
+) -> Result<(crate::ast::Program, crate::typechecker::TypeCheckResult), Vec<String>> {
+    let mut p = Pipeline::new("<repl>", source).strict_core().with_library();
+    p.drop_library_diagnostics();
+    p.resolve();
+    p.drop_library_diagnostics();
+    p.typecheck();
+    p.drop_library_diagnostics();
+    if p.total_errors() != 0 {
+        return Err(render_text_diagnostics(&p)
+            .into_iter()
+            .filter(|b| b.starts_with("error"))
+            .collect());
+    }
+    match p.typed.take() {
+        Some(t) => Ok((p.parsed.program, t)),
+        None => Err(vec!["error: the typechecker did not run".to_string()]),
     }
 }
