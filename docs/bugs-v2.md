@@ -117,9 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-2 | 2026-11-15 | mir-llvm | low | Walking a `String`'s chars costs 2x to 2.8x Rust's `chars()` in a `karac build` binary: kata 1573's `s.chars().enumerate().filter(|(_, c)| c == '1').map(|(i, _)| i).collect()` over 200 strings of 500000 ASCII characters takes 0.21 s against Rust's 0.076 s, while the same chain over `s.bytes().iter()` takes 0.083 s | — |
 | B-2026-11-15-16 | 2026-11-15 | mir-llvm | low | `(0..n).map(|_| ..).collect()` into a `Vec[i64]` costs about 28 instructions an item in a `karac build` binary against 4.4 for the push loop it stands for, and 30 against Rust's 13 when the closure writes a captured variable: kata 1582's bench draws its 2000 matrices of 100 x 100 that way and runs 1.55x checked Rust, the drawing 1.9x and the solving 0.85x | — |
 | B-2026-11-15-17 | 2026-11-15 | parser | low | A Rust file's `use std::...` lines mend one per `karac fix` round: after the first line's diagnostic, the parser's item recovery skipped to the next `fn`, past the other `use` lines, so `karac check` reported one and LeetCode's binary-tree template (`RefCell`, `VecDeque`, `Rc`) took three extra rounds | — |
-| B-2026-11-15-24 | 2026-11-15 | parser | low | A `///` doc comment before a method's receiver (`self`, `ref self`, `mut ref self`, `own self`) is a parse error naming `self` / `ref` as a reserved keyword; design.md §3 Doc comments says it is ignored | — |
-| B-2026-11-15-25 | 2026-11-15 | mir+mir-llvm | medium | A server has no way to read a request body as it was sent: `Request` has `body()` (a `String`, so a body that is not UTF-8 is decoded lossily, B-2026-11-15-8) but no `bytes()`, so a binary upload, a protobuf or CBOR body, or a webhook signature check over the raw body cannot be served | — |
-| B-2026-11-15-26 | 2026-11-15 | cli | low | `karac fmt` moves a `///` before a function's first parameter (or before a method's receiver) into the function body, where it documents nothing and `karac check` warns that it is discarded | — |
 
 ### Relocated
 
@@ -1240,6 +1237,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-21 | typecheck | low | A `collect()` passed where a call takes a `Slice[T]` is refused: `String.from_utf8(s.bytes().iter().map(\|c\| c + 1).collect())` (strings.md's `from_ut… | bae463436e |
 | B-2026-11-15-22 | interp+mir-llvm | high | A tuple literal of owned places passed for a tuple parameter with `ref` elements (`g((a[0], b[0]))` for `p: (ref i64, ref i64)`, or a closure's `\|(x,… | 76f25d4356 |
 | B-2026-11-15-23 | mir-llvm+runtime | medium | A trap on wasm_wasi loses everything the program printed before it: stdout was block-buffered on a pipe, and a trap (the host's stack limit) ends the… | 76f25d4356 |
+| B-2026-11-15-24 | parser | low | A `///` doc comment before a method's receiver (`self`, `ref self`, `mut ref self`, `own self`) is a parse error naming `self` / `ref` as a reserved… | 1ea33f776c |
+| B-2026-11-15-25 | mir+mir-llvm | medium | A server has no way to read a request body as it was sent: `Request` has `body()` (a `String`, so a body that is not UTF-8 is decoded lossily, B-2026… | de1d38948a |
+| B-2026-11-15-26 | cli | low | `karac fmt` moves a `///` before a function's first parameter (or before a method's receiver) into the function body, where it documents nothing and… | e5597ca22f |
 
 </details>
 
