@@ -987,6 +987,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- **Collecting a `chain` of integer ranges allocates once.**
+  `(1..=end).chain(start..=n).collect()` into a `Vec` of the ranges' type
+  fills each range in turn into a vector created at the sum of their
+  lengths, as a single range's `collect()` already did. Before, the
+  library's `collect` grew the vector by reallocation. Kata 1560's bench
+  went from 2.06 G to 1.24 G instructions and from 0.30 s to 0.27 s
+  (B-2026-11-14-15).
 - **A sorted set's or map's `range` finds its bounds by searching the
   tree.** `SortedSet.range` / `range_inclusive` and SortedMap's found where
   a range starts and ends by walking the elements from the front, so a

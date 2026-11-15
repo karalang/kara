@@ -16383,14 +16383,44 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.pop_scope()
     }
 
-    /// `a..b` or `a..=b` when `e`, its `collect()`, builds a `Vec` of the
-    /// integer type both bounds have.
+    /// The ranges `e`, a `collect()` into a `Vec` of the integer type
+    /// their bounds have, pulls from: `a..b` or `a..=b` alone, or ranges
+    /// joined by the library's `chain`, `(1..=end).chain(start..=n)`
+    /// (B-2026-11-14-15).
     #[allow(clippy::type_complexity)]
     fn collects_range_vec(
         &mut self,
         e: &'a Expr,
         range: &'a Expr,
-    ) -> R<Option<(&'a Expr, &'a Expr, bool)>> {
+    ) -> R<Option<Vec<(&'a Expr, &'a Expr, bool)>>> {
+        let vt = self.expr_ty(e)?;
+        let tcx = self.tys().tcx();
+        let HK::Intrinsic {
+            kind: IntrinsicKind::Vec,
+            args,
+        } = tcx.kind(vt)
+        else {
+            return Ok(None);
+        };
+        let elem = tcx.list(args)[0];
+        if !matches!(tcx.kind(elem), HK::Int(_) | HK::UInt(_)) {
+            return Ok(None);
+        }
+        let mut out = Vec::new();
+        Ok(self.chained_ranges(range, elem, &mut out)?.then_some(out))
+    }
+
+    /// Adds `range`'s bounds to `out` when it is a bounded range of
+    /// `elem`, or the library's `chain` of two such (each of which may be
+    /// a chain itself), in the order the values come; false for anything
+    /// else.
+    #[allow(clippy::type_complexity)]
+    fn chained_ranges(
+        &mut self,
+        range: &'a Expr,
+        elem: Ty,
+        out: &mut Vec<(&'a Expr, &'a Expr, bool)>,
+    ) -> R<bool> {
         let (left, right, inclusive): (&'a Expr, &'a Expr, bool) = match &range.kind {
             ExprKind::Binary {
                 op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
@@ -16402,22 +16432,37 @@ impl<'l, 'a> Bx<'l, 'a> {
                 end: Some(right),
                 inclusive,
             } => (left, right, *inclusive),
-            _ => return Ok(None),
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "chain" && args.len() == 1 => {
+                // The library's own `chain`, which yields the receiver's
+                // values and then the argument's; a program's method of
+                // that name may not.
+                let library = |d: &DefId| {
+                    self.lcx
+                        .fns
+                        .get(d)
+                        .is_some_and(|i| self.lcx.user_len.is_some_and(|n| i.f.span.offset >= n))
+                };
+                if !matches!(self.lcx.calls.get(&range.id), Some(rc) if matches!(&rc.callee, Callee::Def(d) if library(d)))
+                {
+                    return Ok(false);
+                }
+                return Ok(self.chained_ranges(object, elem, out)?
+                    && self.chained_ranges(&args[0].value, elem, out)?);
+            }
+            _ => return Ok(false),
         };
-        let vt = self.expr_ty(e)?;
         let lt = self.expr_ty(left)?;
         let rt = self.expr_ty(right)?;
-        let tcx = self.tys().tcx();
-        let HK::Intrinsic {
-            kind: IntrinsicKind::Vec,
-            args,
-        } = tcx.kind(vt)
-        else {
-            return Ok(None);
-        };
-        let elem = tcx.list(args)[0];
-        let int = matches!(tcx.kind(elem), HK::Int(_) | HK::UInt(_));
-        Ok((int && lt == elem && rt == elem).then_some((left, right, inclusive)))
+        if lt != elem || rt != elem {
+            return Ok(false);
+        }
+        out.push((left, right, inclusive));
+        Ok(true)
     }
 
     /// `(a..b).collect()` (`..=` when `inclusive`) into a `Vec` of the
@@ -16431,17 +16476,42 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// of its own with that one bound, so LLVM can count its pushes
     /// against it and vectorize it (B-2026-11-09-26); at the largest value
     /// a second loop runs `a..b` and pushes `b` after.
+    ///
+    /// A `chain` of ranges is one such fill after another into the same
+    /// vector, which starts as `Vec.with_capacity` of all their lengths,
+    /// so it is allocated once (B-2026-11-14-15). Every bound is evaluated
+    /// first, in source order, as the chain's own arguments are.
+    #[allow(clippy::type_complexity)]
     fn collect_range(
         &mut self,
         e: &'a Expr,
-        (left, right, inclusive): (&'a Expr, &'a Expr, bool),
+        ranges: Vec<(&'a Expr, &'a Expr, bool)>,
         dest: Place,
     ) -> R<()> {
         let vt = self.expr_ty(e)?;
         let name = self.tys().display(vt);
         self.push_scope();
-        let (start, end, t) = self.range_bounds(left, Some(right))?;
-        let end = end.expect("a bounded range");
+        let mut parts = Vec::with_capacity(ranges.len());
+        let mut elem = None;
+        for (left, right, inclusive) in ranges {
+            let (start, end, t) = self.range_bounds(left, Some(right))?;
+            let end = end.expect("a bounded range");
+            // A start the loops copy: a constant as it is, anything else
+            // read once into a local.
+            let start = match start {
+                Operand::Const(_) => start,
+                other => {
+                    let s = self.temp(t);
+                    self.assign(s, Rvalue::Use(other));
+                    Operand::Copy(Place::local(s))
+                }
+            };
+            let end_t = self.temp(t);
+            self.assign(end_t, Rvalue::Use(end));
+            parts.push((start, end_t, inclusive));
+            elem = Some(t);
+        }
+        let t = elem.expect("at least one range");
         let bool_t = self.tys().bool();
         let konst = |v: u128| {
             Operand::Const(Const {
@@ -16449,18 +16519,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 kind: ConstKind::Scalar(v),
             })
         };
-        // A start the loops copy: a constant as it is, anything else read
-        // once into a local.
-        let start = match start {
-            Operand::Const(_) => start,
-            other => {
-                let s = self.temp(t);
-                self.assign(s, Rvalue::Use(other));
-                Operand::Copy(Place::local(s))
-            }
-        };
-        let end_t = self.temp(t);
-        self.assign(end_t, Rvalue::Use(end));
+        let cap = (parts.len() > 1).then(|| self.chain_len(&parts));
         let v = self.scoped_temp(vt);
         let mt = self.tys().tcx().reference(vt, true);
         let unit_t = self.unit();
@@ -16477,10 +16536,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Place::local(u),
             );
         };
-        // `v = Vec.new()` and a push of each of `start..bound`, from the
-        // current block, ending in the loop's exit.
-        let fill = |this: &mut Self, bound: Local| {
-            this.call_native(&format!("{name}.new"), vec![], Place::local(v));
+        // A push of each of `start..bound`, from the current block, ending
+        // in the loop's exit; `v = Vec.new()` (or `with_capacity`) first
+        // when `fresh`.
+        let fill = |this: &mut Self, start: &Operand, bound: Local, fresh: bool| {
+            if fresh {
+                match cap {
+                    Some(n) => this.call_native(
+                        &format!("{name}.with_capacity"),
+                        vec![Operand::Copy(Place::local(n))],
+                        Place::local(v),
+                    ),
+                    None => this.call_native(&format!("{name}.new"), vec![], Place::local(v)),
+                }
+            }
             let i = this.temp(t);
             this.assign(i, Rvalue::Use(start.clone()));
             let head = this.b.new_block();
@@ -16518,9 +16587,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => None,
         };
-        if !inclusive {
-            fill(self, end_t);
-        } else {
+        for (n, (start, end_t, inclusive)) in parts.into_iter().enumerate() {
+            let fresh = n == 0;
+            if !inclusive {
+                fill(self, &start, end_t, fresh);
+                continue;
+            }
             let join = self.b.new_block();
             let at_top = self.b.new_block();
             if let Some(top) = top {
@@ -16542,13 +16614,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     bound,
                     Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(end_t)), konst(1)),
                 );
-                fill(self, bound);
+                fill(self, &start, bound, fresh);
                 self.goto(join);
             } else {
                 self.goto(at_top);
             }
             self.cur = at_top;
-            fill(self, end_t);
+            fill(self, &start, end_t, fresh);
             let extra = self.temp(bool_t);
             self.assign(
                 extra,
@@ -16568,6 +16640,80 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.assign(dest, Rvalue::Use(Operand::Move(Place::local(v))));
         self.pop_scope()
+    }
+
+    /// The number of values the ranges in `parts` (`start`, end, whether
+    /// the end is included) yield, as an `i64` local: the
+    /// capacity a chain of them is collected into. Each length is taken
+    /// in `i64` only when the range is not empty, and a length or sum
+    /// that overflows counts 0: past `i64` no allocation could hold the
+    /// values anyway, and the pushes still grow the vector.
+    fn chain_len(&mut self, parts: &[(Operand, Local, bool)]) -> Local {
+        let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let bool_t = self.tys().bool();
+        let pair_t = self.tys().tcx().tuple(&[i64_t, bool_t]);
+        let int = |v: i64| {
+            Operand::Const(Const {
+                ty: i64_t,
+                kind: ConstKind::Scalar(v as u64 as u128),
+            })
+        };
+        // `a op b`, or 0 when it overflows.
+        let checked = |this: &mut Self, op: BinOp, a: Operand, b: Operand| -> Local {
+            let pair = this.temp(pair_t);
+            this.assign(pair, Rvalue::CheckedBinaryOp(op, a, b));
+            let r = this.temp(i64_t);
+            this.assign(
+                r,
+                Rvalue::Use(Operand::Copy(Place::local(pair).field(0, i64_t))),
+            );
+            let over = this.temp(bool_t);
+            this.assign(
+                over,
+                Rvalue::Use(Operand::Copy(Place::local(pair).field(1, bool_t))),
+            );
+            this.when(over, |b| b.assign(r, Rvalue::Use(int(0))));
+            r
+        };
+        let total = self.temp(i64_t);
+        self.assign(total, Rvalue::Use(int(0)));
+        for (start, end_t, inclusive) in parts {
+            let some = self.temp(bool_t);
+            let cmp = if *inclusive { BinOp::Le } else { BinOp::Lt };
+            self.assign(
+                some,
+                Rvalue::BinaryOp(cmp, start.clone(), Operand::Copy(Place::local(*end_t))),
+            );
+            self.when(some, |this| {
+                let (s, e) = (this.temp(i64_t), this.temp(i64_t));
+                this.assign(s, Rvalue::Cast(CastKind::IntToInt, start.clone(), i64_t));
+                this.assign(
+                    e,
+                    Rvalue::Cast(
+                        CastKind::IntToInt,
+                        Operand::Copy(Place::local(*end_t)),
+                        i64_t,
+                    ),
+                );
+                let mut len = checked(
+                    this,
+                    BinOp::Sub,
+                    Operand::Copy(Place::local(e)),
+                    Operand::Copy(Place::local(s)),
+                );
+                if *inclusive {
+                    len = checked(this, BinOp::Add, Operand::Copy(Place::local(len)), int(1));
+                }
+                let sum = checked(
+                    this,
+                    BinOp::Add,
+                    Operand::Copy(Place::local(total)),
+                    Operand::Copy(Place::local(len)),
+                );
+                this.assign(total, Rvalue::Use(Operand::Copy(Place::local(sum))));
+            });
+        }
+        total
     }
 
     /// `for x in a` over a fixed-size array, by position: `x` is a copy of
@@ -22882,8 +23028,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A bounded integer range into a `Vec` of its type, as a counting
         // loop of pushes, which `presize` reserves for and LLVM vectorizes.
         if method == "collect" && args.is_empty() {
-            if let Some((left, right, inclusive)) = self.collects_range_vec(e, object)? {
-                return self.collect_range(e, (left, right, inclusive), dest);
+            if let Some(ranges) = self.collects_range_vec(e, object)? {
+                return self.collect_range(e, ranges, dest);
             }
         }
         // One of several impls for single instantiations of one type

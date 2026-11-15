@@ -82,6 +82,10 @@ const ALWAYS_KEPT: &[&str] = &[
     // `Ordering.then`: the backend's `"then"` basic-block label reads as
     // a reference to it, so the guard below asks for it to be kept.
     "then",
+    // `Iterator.chain`: the builder matches `(a..b).chain(c..d).collect()`
+    // by that name (B-2026-11-14-15) and never calls it, but the guard below
+    // reads the name as a reference.
+    "chain",
     // `for`, `?`, conversions and collecting.
     "iter",
     "iter_mut",
