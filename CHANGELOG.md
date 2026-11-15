@@ -1337,6 +1337,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   a fix, `let clears = ref clears;` before the statement, and a `let f`
   bound the same way and called twice is refused as an `OnceFn` called
   again (B-2026-11-15-32).
+- **Rust's `use std::fmt` line is deleted by `karac fix`.** With a Rust
+  `impl fmt::Display` rewritten to Kāra's `to_string`, the `use std::fmt;`
+  line (or `use std::fmt::{Display, Formatter, Result};`) became `import
+  std.fmt;`, an unknown module with no fix. Kāra's `Display` is in the
+  prelude, so the fix now deletes the line and the port runs
+  (B-2026-11-15-36).
 - **A borrowed `successors` seed is named at the seed.**
   `successors(Some(x), |lap| Some(lap * 2))` with `x` a `ref i64` was
   refused as E0509 on the closure ("the result borrows a temporary value"),

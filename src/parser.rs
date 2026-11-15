@@ -3584,6 +3584,83 @@ impl Parser {
         length
     }
 
+    /// Rust's `use std::fmt;` or `use std::fmt::{Display, Formatter,
+    /// Result};` (or the `import` an earlier fix made of it), at the
+    /// keyword. Kāra's `Display` is in the prelude and its one method is
+    /// `to_string(ref self) -> String`, so there is no `Formatter` or
+    /// `fmt::Result` to import: the fix deletes the line, and the impl
+    /// itself is rewritten where it is written (B-2026-11-15-36). Returns
+    /// `false`, consuming nothing, for any other import or another `fmt`
+    /// name (`Write`, `Debug`), whose own errors say more.
+    pub(crate) fn reject_rust_fmt_import(&mut self) -> bool {
+        let at = self.pos;
+        let token = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let ident = |i: usize| match token(i) {
+            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+        let sep = |i: usize| matches!(token(i), Some(Token::ColonColon | Token::Dot));
+        if !matches!(ident(at + 1), Some("std" | "core"))
+            || !sep(at + 2)
+            || ident(at + 3) != Some("fmt")
+        {
+            return false;
+        }
+        let mut semi = at + 4;
+        loop {
+            match token(semi) {
+                Some(Token::Semicolon) => break,
+                Some(Token::Identifier { name, .. }) => {
+                    if !matches!(name.as_str(), "Display" | "Formatter" | "Result") {
+                        return false;
+                    }
+                }
+                Some(
+                    Token::ColonColon
+                    | Token::Dot
+                    | Token::LeftBrace
+                    | Token::RightBrace
+                    | Token::Comma
+                    | Token::SelfValue,
+                ) => {}
+                _ => return false,
+            }
+            semi += 1;
+        }
+        let first = self.tokens[at].span;
+        let end = self.tokens[semi].span;
+        let whole = Span {
+            length: end.offset + end.length - first.offset,
+            ..first
+        };
+        let path_start = self.tokens[at + 1].span.offset;
+        let path_end = {
+            let last = self.tokens[semi - 1].span;
+            last.offset + last.length
+        };
+        let written = self
+            .source_at(path_start, path_end - path_start)
+            .unwrap_or("std::fmt")
+            .to_string();
+        let message = format!(
+            "`{written}` is Rust's standard library -- Kāra's `Display` is in its prelude, \
+             and its one method is `fn to_string(ref self) -> String`, so there is no \
+             `Formatter` or `fmt::Result` to import: delete the line"
+        );
+        let length = self.rust_use_line_length(whole);
+        self.error_at(&message, whole);
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&whole),
+            vec![crate::resolver::TextEdit {
+                offset: whole.offset,
+                length,
+                replacement: String::new(),
+            }],
+        );
+        self.pos = semi + 1;
+        true
+    }
+
     /// Rust's `use std::collections::HashMap;`, or the `import` `karac fix`
     /// makes of its `use`, at the `use` / `import` keyword. Rust's
     /// collections, `cmp` and `mem` are in Kāra's prelude (`Map`, `max`,

@@ -416,6 +416,7 @@ impl super::Parser {
                 if self.reject_rust_prelude_import()
                     || self.reject_rust_rc_import()
                     || self.reject_rust_thread_import()
+                    || self.reject_rust_fmt_import()
                 {
                     return None;
                 }
@@ -438,6 +439,7 @@ impl super::Parser {
                 if self.reject_rust_prelude_import()
                     || self.reject_rust_rc_import()
                     || self.reject_rust_thread_import()
+                    || self.reject_rust_fmt_import()
                 {
                     return None;
                 }
