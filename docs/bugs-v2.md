@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 171 |
 | perf | 169 |
 | soundness | 69 |
-| miscompile | 66 |
+| miscompile | 68 |
 | other | 47 |
 | run-vs-build | 42 |
 | codegen-gap | 32 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 490 |
+| typecheck | 491 |
 | mir-llvm | 238 |
-| mir | 209 |
+| mir | 210 |
 | cli | 141 |
 | parser | 88 |
 | ownership | 85 |
@@ -1313,6 +1313,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-126 | mir | medium | A `par` branch or `TaskGroup` task that reads `p.a` and writes `p.b` is charged a mutable borrow of `p.a`: `par { { p.a }, { let t = p.a; p.b = 2; t… | ed156ca6d4 |
 | B-2026-11-15-127 | mir | medium | A move inside a `par` branch inside a closure is refused: `run(\|\| { let (x, y) = par { eat(s), 1 }; x + y })` with `run(f: own OnceFn() -> i64)` give… | ed156ca6d4 |
 | B-2026-11-15-128 | ownership | low | A move in an earlier `par` branch and a read in a later one is reported as a sequential use after move: `par { { eat(s1) }, { s1.len() } }` gives "va… | ed156ca6d4 |
+| B-2026-11-15-129 | mir | high | A trait default method's `self.req()` dispatches to the last impl for every type: with `impl Tr for Pr[i64]`, `impl Tr for Pr[bool]` and `impl Tr for… | 32d67e4304 |
+| B-2026-11-15-130 | typecheck | medium | Inside a trait default body, `self.def1()` took the type's inherent `def1` instead of the trait's: a default `def2` calling `self.def1()` on `B` with… | 32d67e4304 |
 
 </details>
 
