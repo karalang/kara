@@ -36,8 +36,9 @@ pub const V1_TARGETS: &[&str] = &["native", "wasm_browser", "wasm_wasi", "gpu"];
 
 /// The targets `--targets=all` checks: design.md § The v1 target set,
 /// closed at `native` and `wasm_wasi`. `wasm_browser` and `gpu` belong to
-/// later tracks; a check sweeps them when asked by name, or when the
-/// program gates an item on one (B-2026-11-05-12).
+/// later tracks: `--targets`, `--target` and `[build].targets` refuse them
+/// by name (B-2026-11-15-54), and a check sweeps one only when the
+/// program gates an item on it (B-2026-11-05-12).
 pub const ALL_CHECK_TARGETS: &[&str] = &["native", "wasm_wasi"];
 
 /// The `--targets` value standing for `all` until the check knows the
@@ -277,6 +278,16 @@ pub fn wasm_export_marshalling() -> bool {
 /// value space is shared with rustc-style triples (manifest
 /// `[target.<triple>.*]` overlay selection); this predicate is how the
 /// CLI tells the two apart.
+/// The deferred track a recognized name belongs to, for a name outside the
+/// v1 set that design.md § 16 closes at `native` and `wasm_wasi`.
+pub fn later_track(name: &str) -> Option<&'static str> {
+    match name {
+        "wasm_browser" => Some("the web track"),
+        "gpu" => Some("the GPU track"),
+        _ => None,
+    }
+}
+
 pub fn is_v1_target_name(name: &str) -> bool {
     V1_TARGETS.contains(&name)
 }
@@ -519,6 +530,22 @@ pub fn target_spec_of(attrs: &[Attribute]) -> Option<TargetSpec> {
         return None;
     }
     Some(TargetSpec { names, negated })
+}
+
+/// The target a `#[cfg(target: "<name>")]` names, when that is its whole
+/// argument and the name is in the closed set: the spelling design.md § 4
+/// describes and the compiler does not implement yet.
+pub fn cfg_target_name(attr: &Attribute) -> Option<String> {
+    if !attr.is_bare("cfg") || attr.args.len() != 1 {
+        return None;
+    }
+    let arg = &attr.args[0];
+    match (arg.name.as_deref(), arg.value.as_ref().map(|v| &v.kind)) {
+        (Some("target"), Some(ExprKind::StringLit(n))) if V1_TARGETS.contains(&n.as_str()) => {
+            Some(n.clone())
+        }
+        _ => None,
+    }
 }
 
 /// Validation used by the parser: is `expr` a bare target name or a

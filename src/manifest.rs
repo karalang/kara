@@ -2065,7 +2065,7 @@ fn parse_build_targets(path: &Path, table: &toml::Table) -> Result<Vec<String>, 
         return Err(ManifestError::InvalidFieldType {
             path: path.to_path_buf(),
             key: "build.targets".to_string(),
-            expected: "an array of target names (e.g. [\"native\", \"wasm_browser\"])",
+            expected: "an array of target names (e.g. [\"native\", \"wasm_wasi\"])",
         });
     };
     let mut out: Vec<String> = Vec::new();
@@ -2075,17 +2075,30 @@ fn parse_build_targets(path: &Path, table: &toml::Table) -> Result<Vec<String>, 
                 path: path.to_path_buf(),
                 message: format!(
                     "entries must be strings naming targets ({})",
-                    crate::target::V1_TARGETS.join(", "),
+                    crate::target::ALL_CHECK_TARGETS.join(", "),
                 ),
             });
         };
+        // design.md § 16 closes the v1 set at `native` and `wasm_wasi`:
+        // `wasm_browser` and `gpu` are later tracks, which `karac build`
+        // refuses, so a matrix naming them is refused here rather than
+        // checked green and then unbuildable (B-2026-11-15-54).
+        if let Some(track) = crate::target::later_track(name) {
+            return Err(ManifestError::InvalidBuildTargets {
+                path: path.to_path_buf(),
+                message: format!(
+                    "target '{name}' is not in v1 ({track}; design.md § 16). Valid targets: {}",
+                    crate::target::ALL_CHECK_TARGETS.join(", "),
+                ),
+            });
+        }
         if !crate::target::is_v1_target_name(name) {
             return Err(ManifestError::InvalidBuildTargets {
                 path: path.to_path_buf(),
                 message: format!(
                     "unknown target '{}'. Valid targets: {}",
                     name,
-                    crate::target::V1_TARGETS.join(", "),
+                    crate::target::ALL_CHECK_TARGETS.join(", "),
                 ),
             });
         }
@@ -4125,10 +4138,10 @@ target = "   "
 name = "hello"
 
 [build]
-targets = ["wasm_browser", "native"]
+targets = ["wasm_wasi", "native"]
 "#;
         let m = parse_manifest(&p(), src).unwrap();
-        assert_eq!(m.build_targets, vec!["wasm_browser", "native"]);
+        assert_eq!(m.build_targets, vec!["wasm_wasi", "native"]);
         assert!(m.warnings.is_empty());
     }
 
@@ -4158,6 +4171,26 @@ targets = ["native", "wasm_wsi"]
                 assert!(message.contains("wasm_wasi"), "valid set listed: {message}");
             }
             other => panic!("expected InvalidBuildTargets, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_targets_later_track_is_refused() {
+        for (name, track) in [("gpu", "the GPU track"), ("wasm_browser", "the web track")] {
+            let src = format!(
+                "[package]\nname = \"hello\"\n\n[build]\ntargets = [\"native\", \"{name}\"]\n"
+            );
+            let err = parse_manifest(&p(), &src).unwrap_err();
+            match err {
+                ManifestError::InvalidBuildTargets { message, .. } => {
+                    assert!(
+                        message.contains(&format!("target '{name}' is not in v1 ({track}"))
+                            && message.ends_with("Valid targets: native, wasm_wasi"),
+                        "{message}"
+                    );
+                }
+                other => panic!("expected InvalidBuildTargets, got {other:?}"),
+            }
         }
     }
 

@@ -282,11 +282,9 @@ OPTIONS:
                             Incompatible with embedded / kernel profiles.
     --no-proxy              Opt out of the registry proxy at
                             proxy.kara-lang.org (override the URL with the
-                            KARAC_REGISTRY_PROXY env var). Registry / git
-                            deps would then be fetched direct from their
-                            source. Registry and git dependencies are not
-                            in 0.8, so today the flag only prints a
-                            confirmation note.
+                            KARAC_REGISTRY_PROXY env var): git and
+                            registry dependencies are fetched straight
+                            from their source instead of through it.
     --offline               Read every transitive path dependency from
                             `./vendor/<name>/` instead of the manifest-
                             declared path, and refuse any network access.

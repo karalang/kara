@@ -497,7 +497,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   parse error calling `self` (or `ref`) a reserved keyword
   (B-2026-11-15-24). A doc comment on the parameter after the receiver
   still documents that parameter.
-
+- `karac build --target=x86_64-unknown-linux-musl` (any `*-linux-musl`)
+  makes a fully static musl binary, linking with `KARAC_LINKER`, a musl gcc
+  on PATH, or clang over the musl `rustup target add` installs; with none it
+  is refused with that recipe. It linked against the host's glibc into a
+  binary with musl's interpreter that printed "Built" and could not run
+  (B-2026-11-15-51).
+- `check`'s note on items checked by no target no longer names one of a
+  pair of `#[target]` twins, each of which its own target's pass checked
+  (B-2026-11-15-56).
 - A built program's HTTP `Response.body()`, `HttpError.body()` and a
   server's `Request.body()` of a body that is not UTF-8 is the body decoded
   with each invalid sequence replaced by U+FFFD, as under `karac run`. It
@@ -1181,6 +1189,21 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   rewrite `Vec.filled(n as usize, false)` was refused, along with every
   other `as usize` in the program. The same holds for a bare `[v; n]`
   where a `Vec` is wanted (B-2026-11-14-13).
+- A bare-metal triple (`--target=thumbv7em-none-eabihf`) is refused before
+  any pass as not in v1, where the link asked for a runtime archive that
+  cannot be built for it, and a triple LLVM does not know gets an "unknown
+  target" error in place of a raw `error[mir]: llvm:` line
+  (B-2026-11-15-52).
+- `#[cfg(...)]` says it is not implemented yet and points at the interim
+  `#[target(...)]`, with a fix for `#[cfg(target: "<name>")]`; it read as an
+  unknown attribute with a `#[diagnostic::cfg]` hint, and its twin item as a
+  duplicate definition (B-2026-11-15-53).
+- `[build].targets`, `check --targets` and `check --target` refuse
+  `wasm_browser` and `gpu` as not in v1 (design.md § 16), as `karac build`
+  does, and list only `native` and `wasm_wasi` as valid (B-2026-11-15-54).
+- `karac build --help` says `--no-proxy` fetches git and registry
+  dependencies straight from their source; it said they were not in 0.8
+  (B-2026-11-15-55).
 - **A `collect` of narrower integers into a wider collection says how to
   widen them.** `w.bytes().iter().map(|b| b - 96).collect()` into a
   `Vec[i64]` was refused with only `FromIterator[u8]` is not satisfied,

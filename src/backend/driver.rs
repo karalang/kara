@@ -877,6 +877,9 @@ fn link_executable_cross(
 ) -> Result<(), String> {
     let runtime_path = resolve_cross_runtime_path(triple)?;
     let os: Vec<&str> = triple.split('-').skip(1).collect();
+    if is_musl(triple) {
+        return link_musl_static(obj_path, exe_path, triple, &runtime_path, extra_cc_args);
+    }
     let (linker, mut cmd) = cross_linker(triple);
     for arg in extra_cc_args {
         cmd.arg(arg);
@@ -927,6 +930,152 @@ fn link_executable_cross(
         ));
     }
     Ok(())
+}
+
+fn is_musl(triple: &str) -> bool {
+    triple.split('-').any(|c| c.starts_with("musl"))
+}
+
+fn on_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
+}
+
+/// A `*-linux-musl` build links a fully static musl binary (design.md § 16;
+/// B-2026-11-15-51): through `KARAC_LINKER`, a musl gcc on PATH
+/// (`<arch>-linux-musl-gcc`, or `musl-gcc` for the host's arch), or clang
+/// over the musl that `rustup target add <triple>` installs (its
+/// `self-contained` crt objects and `libc.a`). With none of them it is
+/// refused with the recipe. It linked through `clang --target`, against the
+/// host's glibc, into a binary with musl's interpreter and glibc's libraries
+/// that printed "Built" and could not run; a link that still comes out
+/// dynamic is removed and refused.
+fn link_musl_static(
+    obj_path: &str,
+    exe_path: &str,
+    triple: &str,
+    runtime_path: &str,
+    extra_cc_args: &[&str],
+) -> Result<(), String> {
+    let arch = triple.split('-').next().unwrap_or("");
+    let host_arch = std::env::consts::ARCH;
+    let gcc = [format!("{arch}-linux-musl-gcc"), "musl-gcc".to_string()]
+        .into_iter()
+        .find(|g| on_path(g) && (g != "musl-gcc" || arch == host_arch));
+    let (linker, mut cmd) = if let Ok(l) = std::env::var("KARAC_LINKER") {
+        let mut cmd = std::process::Command::new(&l);
+        cmd.args(["-static", obj_path, runtime_path]);
+        (l, cmd)
+    } else if let Some(g) = gcc {
+        let mut cmd = std::process::Command::new(&g);
+        cmd.args(["-static", obj_path, runtime_path]);
+        (g, cmd)
+    } else if let Some(dir) = musl_self_contained_dir(triple) {
+        let mut cmd = std::process::Command::new("clang");
+        cmd.arg(format!("--target={triple}"));
+        if arch != host_arch {
+            cmd.arg("-fuse-ld=lld");
+        }
+        cmd.args(["-static", "-nostdlib", "-nostartfiles"]);
+        let o = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        cmd.args([o("crt1.o"), o("crti.o"), o("crtbegin.o")]);
+        cmd.args([obj_path, runtime_path, "-Wl,--start-group"]);
+        cmd.args([o("libunwind.a"), o("libc.a"), "-Wl,--end-group".to_string()]);
+        cmd.args([o("crtend.o"), o("crtn.o")]);
+        (
+            format!("clang --target={triple} (musl from {})", dir.display()),
+            cmd,
+        )
+    } else {
+        return Err(format!(
+            "a build for `{triple}` links a fully static musl binary and needs musl's C \
+             library, which was not found. Install musl-gcc (`apt install musl-tools`) or an \
+             `{arch}-linux-musl-gcc` cross toolchain, or run `rustup target add {triple}`, \
+             whose musl karac links with clang; KARAC_LINKER names another linker"
+        ));
+    };
+    for arg in extra_cc_args {
+        cmd.arg(arg);
+    }
+    cmd.args(["-o", exe_path]);
+    if let Some(link) = crate::target::native_link_config() {
+        for dir in &link.search_paths {
+            cmd.arg(format!("-L{dir}"));
+        }
+        for lib in &link.libs {
+            cmd.arg(format!("-l{lib}"));
+        }
+    }
+    if !is_sanitizer_link(extra_cc_args) {
+        cmd.arg("-Wl,--gc-sections");
+    }
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "Failed to invoke the linker `{linker}` for `{triple}`: {e}. Install a linker for \
+             the target, or name one with KARAC_LINKER"
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Linker `{linker}` failed for `{triple}`: {stderr}(a musl link needs musl's C \
+             library; KARAC_LINKER names another linker)"
+        ));
+    }
+    if elf_has_interpreter(std::path::Path::new(exe_path)) {
+        let _ = std::fs::remove_file(exe_path);
+        return Err(format!(
+            "the linker `{linker}` made a dynamically linked binary for `{triple}`, which must \
+             be fully static; it was removed. Link with a musl toolchain (musl-gcc, or \
+             `rustup target add {triple}`), or a KARAC_LINKER that links statically"
+        ));
+    }
+    Ok(())
+}
+
+/// The musl crt objects and `libc.a` a Rust toolchain ships for `triple`:
+/// beside karac in a release bundle, or under the active or the build
+/// toolchain's `lib/rustlib/<triple>/lib/self-contained`.
+fn musl_self_contained_dir(triple: &str) -> Option<std::path::PathBuf> {
+    let has_libc = |d: &std::path::Path| d.join("crt1.o").is_file() && d.join("libc.a").is_file();
+    let mut dirs = Vec::new();
+    if let Some(bin) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    {
+        dirs.push(bin.join("../lib").join(triple).join("self-contained"));
+    }
+    if let Ok(libdir) = rustc_print(&["--print", "target-libdir", "--target", triple]) {
+        dirs.push(std::path::Path::new(libdir.trim()).join("self-contained"));
+    }
+    if let Some((sysroot, _)) = build_rust_toolchain() {
+        dirs.push(
+            sysroot
+                .join("lib/rustlib")
+                .join(triple)
+                .join("lib/self-contained"),
+        );
+    }
+    dirs.into_iter().find(|d| has_libc(d))
+}
+
+/// Whether the ELF file at `path` names a program interpreter (`PT_INTERP`):
+/// a dynamically linked executable. False for a file that is not a 64-bit
+/// little-endian ELF, which is not this check's to judge.
+fn elf_has_interpreter(path: &std::path::Path) -> bool {
+    let Ok(b) = std::fs::read(path) else {
+        return false;
+    };
+    if b.len() < 64 || &b[..4] != b"\x7fELF" || b[4] != 2 || b[5] != 1 {
+        return false;
+    }
+    let u16_at = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]) as usize;
+    let phoff = u64::from_le_bytes(b[32..40].try_into().unwrap()) as usize;
+    let (phentsize, phnum) = (u16_at(54), u16_at(56));
+    (0..phnum).any(|i| {
+        let o = phoff + i * phentsize;
+        o + 4 <= b.len() && u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) == 3
+    })
 }
 
 /// The linker a cross build for `triple` runs, with its name.
@@ -2037,6 +2186,13 @@ pub(crate) fn create_unoptimized_target_machine() -> Result<TargetMachine, Strin
         crate::target::target_cpu_override(),
         OptimizationLevel::None,
     )
+}
+
+/// Whether LLVM has a backend for `triple` (B-2026-11-15-52): the build
+/// refuses one it has not before any pass runs.
+pub fn llvm_knows_triple(triple: &str) -> bool {
+    Target::initialize_all(&InitializationConfig::default());
+    Target::from_triple(&inkwell::targets::TargetTriple::create(triple)).is_ok()
 }
 
 fn create_native_target_machine_at(

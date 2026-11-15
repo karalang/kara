@@ -421,13 +421,50 @@ impl super::Parser {
             }
         }
 
-        Some(Attribute {
+        let attr = Attribute {
             span: self.span_from(&start),
             path,
             args,
             string_value,
             effect_args: Vec::new(),
-        })
+        };
+        if attr.is_bare("cfg") {
+            self.cfg_not_implemented(&attr);
+        }
+        Some(attr)
+    }
+
+    /// `#[cfg(...)]` is the spelling design.md § 4 gives conditional
+    /// compilation, not implemented yet: the interim `#[target(...)]` gates
+    /// an item on one target, so the error points there, with a fix when the
+    /// attribute is exactly `#[cfg(target: "<name>")]` (B-2026-11-15-53).
+    /// It read as an unknown attribute whose help said to write
+    /// `#[diagnostic::cfg]`, and its twin on another target as a duplicate
+    /// definition. Reported here, where every item is still present, so one
+    /// check reports and one fix rewrites every `cfg`, whatever target it
+    /// names.
+    fn cfg_not_implemented(&mut self, attr: &Attribute) {
+        let target = crate::target::cfg_target_name(attr);
+        let spelled = target.as_deref().unwrap_or("native");
+        self.errors.push(super::ParseError {
+            kind: crate::parser::ParseErrorKind::ReservedSyntax,
+            message: format!(
+                "`#[cfg(...)]` is not implemented yet — gate the item on one target with \
+                 `#[target({spelled})]` (design.md § 4: `#[target]` is the interim spelling of \
+                 `#[cfg(target: ...)]`)"
+            ),
+            span: attr.span,
+        });
+        if let Some(t) = target {
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&attr.span),
+                crate::resolver::TextEdit {
+                    offset: attr.span.offset,
+                    length: attr.span.length,
+                    replacement: format!("#[target({t})]"),
+                },
+            );
+        }
     }
 
     /// The argument list of `#[no_effect(...)]` — comma-separated effect

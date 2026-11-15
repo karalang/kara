@@ -788,7 +788,7 @@ fn parse_platforms_arg(spec: &str) -> Vec<crate::walker::Platform> {
 fn parse_targets_arg(spec: &str) -> Vec<String> {
     if spec.is_empty() {
         eprintln!(
-            "error: --targets requires at least one target name (e.g. --targets=all or --targets=native,wasm_browser)"
+            "error: --targets requires at least one target name (e.g. --targets=all or --targets=native,wasm_wasi)"
         );
         process::exit(1);
     }
@@ -802,11 +802,22 @@ fn parse_targets_arg(spec: &str) -> Vec<String> {
             eprintln!("error: --targets entry must not be empty (got '{spec}')");
             process::exit(1);
         }
+        // A target nobody can build is not checked green either: design.md
+        // § 16 closes v1 at `native` and `wasm_wasi`, as `[build].targets`
+        // and `karac build` do (B-2026-11-15-54).
+        if let Some(track) = crate::target::later_track(name) {
+            eprintln!(
+                "error: target '{name}' is not in v1 ({track}; design.md § 16). Valid targets: \
+                 {}, all.",
+                crate::target::ALL_CHECK_TARGETS.join(", "),
+            );
+            process::exit(1);
+        }
         if !crate::target::is_v1_target_name(name) {
             eprintln!(
                 "error: unknown target '{}'. Valid targets: {}, all.",
                 name,
-                crate::target::V1_TARGETS.join(", "),
+                crate::target::ALL_CHECK_TARGETS.join(", "),
             );
             process::exit(1);
         }

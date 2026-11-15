@@ -33,6 +33,7 @@ pub(super) struct BuildArgs<'a> {
 /// `karac build <file>` on v2.
 pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
     refuse_unsupported(&a);
+    refuse_triple(a.target, a.output);
     set_cross_triple(a.target);
     let output = a.output;
     let manifest = run_manifest_preamble(filename, output, None, false);
@@ -97,6 +98,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     // triple selects the `[target.<triple>.*]` overlay and, when it is not
     // the host's, is what the build emits and links for (B-2026-10-27-4).
     let target = a.target.or(raw.build_default_target.as_deref());
+    refuse_triple(target, output);
     let overlay = match target {
         _ if is_wasm_wasi(&a) => "wasm32-wasip1".to_string(),
         Some(t) if !crate::target::is_v1_target_name(t) => t.to_string(),
@@ -256,6 +258,45 @@ fn exe_suffix(a: &BuildArgs) -> &'static str {
     } else {
         ""
     }
+}
+
+/// Refuses, before any pass runs, a `--target` (or `[build].target`) triple
+/// no build can produce: a bare-metal one, whose runtime would need the std
+/// it lacks, and one LLVM has no backend for. Each was found only at code
+/// generation or link, the first with a recipe that cannot work and the
+/// second as a raw `error[mir]: llvm:` line (B-2026-11-15-52).
+fn refuse_triple(target: Option<&str>, output: OutputMode) {
+    let Some(t) = target.filter(|t| !crate::target::is_v1_target_name(t)) else {
+        return;
+    };
+    let msg = if t.split('-').any(|c| c == "none" || c == "elf") {
+        format!(
+            "error: `{t}` is a bare-metal (no_std) target, which is not in v1: the Kāra runtime \
+             needs an operating system's std. A build targets `native`, `wasm_wasi` or the triple \
+             of an OS (design.md § 16)"
+        )
+    } else if !triple_is_known(t) {
+        format!(
+            "error: unknown target `{t}`: not a target name (native, wasm_wasi) and not a triple \
+             LLVM knows, such as x86_64-unknown-linux-gnu or aarch64-apple-darwin \
+             (design.md § 16)"
+        )
+    } else {
+        return;
+    };
+    fail_with(&msg, output);
+    process::exit(1);
+}
+
+#[cfg(feature = "llvm")]
+fn triple_is_known(t: &str) -> bool {
+    crate::backend::driver::llvm_knows_triple(t)
+}
+
+/// A build with no backend stops before code generation, so it does not ask.
+#[cfg(not(feature = "llvm"))]
+fn triple_is_known(_: &str) -> bool {
+    true
 }
 
 /// Makes `target`, when it is a triple other than the host's, the triple

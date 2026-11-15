@@ -2818,6 +2818,11 @@ pub(super) fn render_target_skip_note(
 /// said nothing — the same silence the note exists to break, one level
 /// up. Intersecting the per-pass maps keeps the original intent
 /// (never mention an item a sibling pass checked) and closes that hole.
+///
+/// An item is the same in two passes when its name AND its gate are: twins
+/// `#[target(native)] fn name` and `#[target(wasm_wasi)] fn name` are each
+/// skipped by the other's pass, under one name, and were reported as
+/// checked nowhere while each was checked by its own (B-2026-11-15-56).
 pub(super) fn unchecked_across_targets(
     per_target: &[std::collections::HashMap<String, String>],
 ) -> std::collections::HashMap<String, String> {
@@ -2826,7 +2831,7 @@ pub(super) fn unchecked_across_targets(
     };
     first
         .iter()
-        .filter(|(name, _)| rest.iter().all(|m| m.contains_key(*name)))
+        .filter(|(name, spec)| rest.iter().all(|m| m.get(*name) == Some(*spec)))
         .map(|(name, spec)| (name.clone(), spec.clone()))
         .collect()
 }

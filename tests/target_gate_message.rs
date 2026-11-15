@@ -46,15 +46,17 @@ fn a_process_on_wasm_names_no_provider_and_the_gating_section() {
 }
 
 #[test]
-fn a_file_read_in_the_browser_names_its_provider() {
+fn a_tcp_connect_on_wasm_names_its_provider() {
+    // wasm_browser, where this pinned a file read, is not a v1 target
+    // (B-2026-11-15-54); a connect on wasm_wasi is the same remedy.
     let out = check(
-        "fs",
-        "fn load() -> bool { fs.read_to_string(\"a.txt\").is_ok() }\nfn main() { println(load()); }\n",
-        "wasm_browser",
+        "net",
+        "import std.net.{TcpStream};\nfn dial() -> i64 { match TcpStream.connect(\"127.0.0.1:1\") { Ok(_) => 1, Err(_) => 0 } }\nfn main() { println(dial()); }\n",
+        "wasm_wasi",
     );
     assert!(
-        out.contains("does not provide resource 'FileSystem'")
-            && out.contains("bind a provider for 'FileSystem'")
+        out.contains("does not provide resource 'Network'")
+            && out.contains("bind a provider for 'Network'")
             && out.contains("(design.md § Effect-driven target gating)"),
         "{out}"
     );

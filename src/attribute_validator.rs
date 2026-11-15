@@ -708,7 +708,8 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
     for attr in attrs {
         if attr.path.len() == 1 {
             let name = &attr.path[0];
-            if !is_recognized_bare_attribute(name) {
+            // `#[cfg]` is refused by the parser, with its fix.
+            if name != "cfg" && !is_recognized_bare_attribute(name) {
                 errors.push(ResolveError {
                     message: format!(
                         "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `{name}` — the \
