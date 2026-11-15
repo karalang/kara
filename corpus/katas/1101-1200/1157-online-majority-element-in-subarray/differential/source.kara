@@ -1,0 +1,533 @@
+// LeetCode #1157: Online Majority Element In Subarray -- a differential
+// over the five arms. Each answer is checked against the statement read
+// literally and against six properties that do not compute it; see the
+// README.
+
+// ---- majority_checker.kara ----
+
+struct A0MajorityChecker {
+    size: i64,
+    tree: Vec[(i64, i64)],
+    places: Vec[Vec[i64]],
+}
+
+// One a0_vote over two ranges' (value, votes left).
+fn a0_vote(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    if a.0 == b.0 {
+        (a.0, a.1 + b.1)
+    } else if a.1 >= b.1 {
+        (a.0, a.1 - b.1)
+    } else {
+        (b.0, b.1 - a.1)
+    }
+}
+
+impl A0MajorityChecker {
+    fn new(arr: Vec[i32]) -> A0MajorityChecker {
+        let n = arr.len();
+        let mut size = 1;
+        while size < n {
+            size *= 2;
+        }
+        let mut tree: Vec[(i64, i64)] = Vec.filled(2 * size, (0, 0));
+        let mut places: Vec[Vec[i64]] = Vec.filled(20001, []);
+        for i in 0..n {
+            tree[size + i] = (arr[i] as i64, 1);
+            places[arr[i]].push(i);
+        }
+        for i in (1..size).rev() {
+            tree[i] = a0_vote(tree[2 * i], tree[2 * i + 1]);
+        }
+        A0MajorityChecker { size, tree, places }
+    }
+
+    fn query(self, left: i64, right: i64, threshold: i64) -> i64 {
+        let mut lo = left + self.size;
+        let mut hi = right + self.size + 1;
+        let mut won = (0, 0);
+        while lo < hi {
+            if lo % 2 == 1 {
+                won = a0_vote(won, self.tree[lo]);
+                lo += 1;
+            }
+            if hi % 2 == 1 {
+                hi -= 1;
+                won = a0_vote(won, self.tree[hi]);
+            }
+            lo /= 2;
+            hi /= 2;
+        }
+        let p = ref self.places[won.0];
+        let count = p.partition_point(|i| i <= right) - p.partition_point(|i| i < left);
+        if count >= threshold { won.0 } else { -1 }
+    }
+}
+
+// ---- majority_checker_bits.kara ----
+
+struct A1MajorityChecker {
+    // ones[b][i]: how many of the first i values have bit b
+    ones: Vec[Vec[i64]],
+    places: Vec[Vec[i64]],
+}
+
+impl A1MajorityChecker {
+    fn new(arr: Vec[i32]) -> A1MajorityChecker {
+        let n = arr.len();
+        let mut ones: Vec[Vec[i64]] = Vec.filled(15, Vec.filled(n + 1, 0));
+        let mut places: Vec[Vec[i64]] = Vec.filled(1 << 15, []);
+        for i in 0..n {
+            let x = arr[i] as i64;
+            for b in 0..15 {
+                ones[b][i + 1] = ones[b][i] + (x >> b) % 2;
+            }
+            places[x].push(i);
+        }
+        A1MajorityChecker { ones, places }
+    }
+
+    fn query(self, left: i64, right: i64, threshold: i64) -> i64 {
+        let mut candidate = 0;
+        for b in 0..15 {
+            if self.ones[b][right + 1] - self.ones[b][left] >= threshold {
+                candidate |= 1 << b;
+            }
+        }
+        let p = ref self.places[candidate];
+        let count = p.partition_point(|i| i <= right) - p.partition_point(|i| i < left);
+        if count >= threshold { candidate } else { -1 }
+    }
+}
+
+// ---- majority_checker_sample.kara ----
+
+struct A2MajorityChecker {
+    arr: Vec[i64],
+    places: Vec[Vec[i64]],
+}
+
+impl A2MajorityChecker {
+    fn new(arr: Vec[i32]) -> A2MajorityChecker {
+        let mut places: Vec[Vec[i64]] = Vec.filled(20001, []);
+        for (i, x) in arr.iter().enumerate() {
+            places[x].push(i);
+        }
+        A2MajorityChecker { arr: arr.iter().map(|x| x as i64).collect(), places }
+    }
+
+    fn query(self, left: i64, right: i64, threshold: i64) -> i64 {
+        let mut seed = left * 20011 + right * 31 + threshold;
+        for _ in 0..40 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let v = self.arr[left + (seed / 65536) % (right - left + 1)];
+            let p = ref self.places[v];
+            if p.partition_point(|i| i <= right) - p.partition_point(|i| i < left) >= threshold {
+                return v;
+            }
+        }
+        -1
+    }
+}
+
+// ---- majority_checker_heavy.kara ----
+
+struct A3MajorityChecker {
+    arr: Vec[i64],
+    cut: i64,
+    // (value, how many of the first i values are it)
+    heavy: Vec[(i64, Vec[i64])],
+}
+
+impl A3MajorityChecker {
+    fn new(arr: Vec[i32]) -> A3MajorityChecker {
+        let n = arr.len();
+        let mut cut = 1;
+        while cut * cut < n {
+            cut += 1;
+        }
+        let mut count: Vec[i64] = Vec.filled(20001, 0);
+        for x in arr.iter() {
+            count[x] += 1;
+        }
+        let mut heavy: Vec[(i64, Vec[i64])] = [];
+        for v in 1..20001 {
+            if count[v] >= cut {
+                let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+                for i in 0..n {
+                    prefix[i + 1] = prefix[i] + if arr[i] == v { 1 } else { 0 };
+                }
+                heavy.push((v, prefix));
+            }
+        }
+        A3MajorityChecker { arr: arr.iter().map(|x| x as i64).collect(), cut, heavy }
+    }
+
+    fn query(self, left: i64, right: i64, threshold: i64) -> i64 {
+        if threshold >= self.cut {
+            for (v, prefix) in self.heavy.iter() {
+                if prefix[right + 1] - prefix[left] >= threshold {
+                    return v;
+                }
+            }
+            return -1;
+        }
+        let range = self.arr[left..right + 1];
+        let mut survivor = 0;
+        let mut votes = 0;
+        for x in range.iter() {
+            if votes == 0 {
+                survivor = x;
+                votes = 1;
+            } else if x == survivor {
+                votes += 1;
+            } else {
+                votes -= 1;
+            }
+        }
+        if range.iter().filter(|x| x == survivor).count() >= threshold { survivor } else { -1 }
+    }
+}
+
+// ---- majority_checker_solution.kara ----
+
+struct A4MajorityChecker {
+    n: i64,
+    tree: Vec[(i32, i32)],
+    pos: Map[i32, Vec[i64]],
+}
+
+impl A4MajorityChecker {
+    fn new(arr: Vec[i32]) -> Self {
+        let n = arr.len();
+        let mut tree = Vec.filled(4 * n, (0, 0));
+        let mut pos: Map[i32, Vec[i64]] = Map.new();
+        for (i, x) in arr.iter().enumerate() {
+            pos.entry(x).or_insert_with(Vec.new).push(i);
+        }
+        A4MajorityChecker.build(mut tree, arr, 1, 0, n - 1);
+        A4MajorityChecker { n, tree, pos }
+    }
+
+    fn merge(a: (i32, i32), b: (i32, i32)) -> (i32, i32) {
+        if a.0 == b.0 {
+            (a.0, a.1 + b.1)
+        } else if a.1 >= b.1 {
+            (a.0, a.1 - b.1)
+        } else {
+            (b.0, b.1 - a.1)
+        }
+    }
+
+    fn build(tree: mut ref Vec[(i32, i32)], arr: Vec[i32], node: i64, l: i64, r: i64) {
+        if l == r {
+            tree[node] = (arr[l], 1);
+            return;
+        }
+        let m = (l + r) / 2;
+        A4MajorityChecker.build(mut tree, arr, node * 2, l, m);
+        A4MajorityChecker.build(mut tree, arr, node * 2 + 1, m + 1, r);
+        tree[node] = A4MajorityChecker.merge(tree[node * 2], tree[node * 2 + 1]);
+    }
+
+    fn find(self, node: i64, l: i64, r: i64, ql: i64, qr: i64) -> (i32, i32) {
+        if qr < l or r < ql {
+            return (0, 0);
+        }
+        if ql <= l and r <= qr {
+            return self.tree[node];
+        }
+        let m = (l + r) / 2;
+        A4MajorityChecker.merge(self.find(node * 2, l, m, ql, qr), self.find(node * 2 + 1, m + 1, r, ql, qr))
+    }
+
+    fn query(self, left: i32, right: i32, threshold: i32) -> i32 {
+        let (cand, _) = self.find(1, 0, self.n - 1, left, right);
+        if let Some(p) = self.pos.get(cand) {
+            let lo = p.partition_point(|i| i < left);
+            let hi = p.partition_point(|i| i <= right);
+            if (hi - lo) as i32 >= threshold {
+                return cand;
+            }
+        }
+        -1
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answers(w: i64, arr: Vec[i32], qs: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    match w {
+        0 => {
+            let c = A0MajorityChecker.new(arr);
+            qs.iter().map(|(l, r, t)| c.query(l, r, t)).collect()
+        }
+        1 => {
+            let c = A1MajorityChecker.new(arr);
+            qs.iter().map(|(l, r, t)| c.query(l, r, t)).collect()
+        }
+        2 => {
+            let c = A2MajorityChecker.new(arr);
+            qs.iter().map(|(l, r, t)| c.query(l, r, t)).collect()
+        }
+        3 => {
+            let c = A3MajorityChecker.new(arr);
+            qs.iter().map(|(l, r, t)| c.query(l, r, t)).collect()
+        }
+        _ => {
+            let c = A4MajorityChecker.new(arr);
+            qs.iter().map(|(l, r, t)| c.query(l as i32, r as i32, t as i32) as i64).collect()
+        }
+    }
+}
+
+// The statement read literally: the range sorted, a value held at
+// `threshold` places or more found among its runs.
+fn literal(arr: Vec[i32], left: i64, right: i64, threshold: i64) -> i64 {
+    let mut range: Vec[i64] = arr[left..right + 1].iter().map(|x| x as i64).collect();
+    range.sort();
+    let mut i = 0;
+    while i < range.len() {
+        let mut j = i;
+        while j < range.len() and range[j] == range[i] {
+            j += 1;
+        }
+        if j - i >= threshold {
+            return range[i];
+        }
+        i = j;
+    }
+    -1
+}
+
+// The least threshold a range of `left..=right` allows.
+fn least(left: i64, right: i64) -> i64 {
+    (right - left + 1) / 2 + 1
+}
+
+// A random range of `n` values and a threshold from the least to all of it.
+fn random_query(seed: mut ref i64, n: i64) -> (i64, i64, i64) {
+    let a = next_random(mut seed) % n;
+    let b = next_random(mut seed) % n;
+    let (left, right) = (a.min(b), a.max(b));
+    let low = least(left, right);
+    (left, right, low + next_random(mut seed) % (right - left + 2 - low))
+}
+
+// A range of `len` values inside `n` and a threshold `low + 0..3`, kept
+// legal.
+fn placed_query(seed: mut ref i64, n: i64, len: i64, low: i64) -> (i64, i64, i64) {
+    let len = len.max(1).min(n);
+    let left = next_random(mut seed) % (n - len + 1);
+    let right = left + len - 1;
+    let t = (low + next_random(mut seed) % 3).max(least(left, right)).min(len);
+    (left, right, t)
+}
+
+// A case in four kinds: 1 to 12 values over 1 to 3; 10 to 80 values over
+// 1 to 5 or planted at about two places in three, low values or values
+// near 20000; a range of 1 to 120 values holding one value at about half
+// its places, shuffled or all at its end, after 0 to 10 random values or
+// 100 to 400 and before 0 to 10, asked at the border; and 50 to 400 values, one at about 55% of places, asked
+// with ranges and thresholds about the heavy arm's cut.
+fn case_of(seed: mut ref i64, kind: i64) -> (Vec[i32], Vec[(i64, i64, i64)]) {
+    let mut arr: Vec[i64] = [];
+    let mut qs: Vec[(i64, i64, i64)] = [];
+    if kind == 0 {
+        let n = 1 + next_random(mut seed) % 12;
+        let k = 1 + next_random(mut seed) % 3;
+        arr = (0..n).map(|_| 1 + next_random(mut seed) % k).collect();
+    } else if kind == 1 {
+        let n = 10 + next_random(mut seed) % 71;
+        let k = next_random(mut seed) % 6;
+        let base = if next_random(mut seed) % 2 == 0 { 0 } else { 19990 - k };
+        let v = 1 + next_random(mut seed) % 20000;
+        arr = (0..n).map(|_| if k == 0 {
+            if next_random(mut seed) % 3 < 2 { v } else { 1 + next_random(mut seed) % 20000 }
+        } else {
+            base + 1 + next_random(mut seed) % k
+        }).collect();
+    } else if kind == 2 {
+        let len = 1 + next_random(mut seed) % 120;
+        let v = 1 + next_random(mut seed) % 3;
+        let held = (len / 2 + next_random(mut seed) % 3).min(len);
+        let one_other = next_random(mut seed) % 2 == 0;
+        let mut middle: Vec[i64] = (0..len).map(|i| if i < held { v } else if one_other { 4 } else { 4 + next_random(mut seed) % 30 }).collect();
+        if next_random(mut seed) % 2 == 0 {
+            middle.reverse();
+        } else {
+            for j in (1..len).rev() {
+                middle.swap(j, next_random(mut seed) % (j + 1));
+            }
+        }
+        let before = if next_random(mut seed) % 2 == 0 { next_random(mut seed) % 11 } else { 100 + next_random(mut seed) % 301 };
+        let after = next_random(mut seed) % 11;
+        for _ in 0..before {
+            arr.push(1 + next_random(mut seed) % 6);
+        }
+        arr.extend(middle.iter());
+        for _ in 0..after {
+            arr.push(1 + next_random(mut seed) % 6);
+        }
+        let low = least(before, before + len - 1);
+        for d in 0..3 {
+            qs.push((before, before + len - 1, (low + d).min(len)));
+        }
+    } else {
+        let n = 50 + next_random(mut seed) % 351;
+        let k = 1 + next_random(mut seed) % 8;
+        let v = 1 + next_random(mut seed) % k;
+        arr = (0..n).map(|_| if next_random(mut seed) % 100 < 55 { v } else { 1 + next_random(mut seed) % k }).collect();
+        let mut cut = 1;
+        while cut * cut < n {
+            cut += 1;
+        }
+        for _ in 0..4 {
+            let len = 2 * cut - 4 + next_random(mut seed) % 7;
+            qs.push(placed_query(mut seed, n, len, cut - 1));
+        }
+    }
+    let n = arr.len();
+    while qs.len() < 8 {
+        qs.push(random_query(mut seed, n));
+    }
+    (arr.iter().map(|x| x as i32).collect(), qs)
+}
+
+struct Case {
+    arr: Vec[i32],
+    qs: Vec[(i64, i64, i64)],
+    // P6's split of each query's range
+    splits: Vec[i64],
+    // P3's renaming, P5's values before and after
+    rename: (i64, i64),
+    before: Vec[i32],
+    after: Vec[i32],
+}
+
+struct Tally {
+    answers: i64,
+    found: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let arr = c.arr.clone();
+    let n = arr.len();
+    let qs = c.qs.clone();
+    let q = qs.len();
+    let want: Vec[i64] = qs.iter().map(|(l, r, h)| literal(arr, l, r, h)).collect();
+    // one batch on the array itself: the queries, again in reverse, each
+    // at one threshold lower and one higher, at its least, and its two
+    // halves at theirs
+    let mut batch = qs.clone();
+    batch.extend(qs.iter().rev());
+    batch.extend(qs.iter().map(|(l, r, h)| (l, r, (h - 1).max(least(l, r)))));
+    batch.extend(qs.iter().map(|(l, r, h)| (l, r, (h + 1).min(r - l + 1))));
+    batch.extend(qs.iter().map(|(l, r, _)| (l, r, least(l, r))));
+    for i in 0..q {
+        let (l, r, _) = qs[i];
+        if l == r {
+            batch.push((l, r, 1));
+            batch.push((l, r, 1));
+        } else {
+            let m = c.splits[i];
+            batch.push((l, m, least(l, m)));
+            batch.push((m + 1, r, least(m + 1, r)));
+        }
+    }
+    let reversed: Vec[i32] = arr.iter().rev().collect();
+    let reversed_qs: Vec[(i64, i64, i64)] = qs.iter().map(|(l, r, h)| (n - 1 - r, n - 1 - l, h)).collect();
+    let (a, b) = c.rename;
+    let renamed: Vec[i32] = arr.iter().map(|x| (((x as i64 - 1) * a + b) % 20000 + 1) as i32).collect();
+    let mut framed = c.before.clone();
+    framed.extend(arr.iter());
+    framed.extend(c.after.iter());
+    let shift = c.before.len();
+    let framed_qs: Vec[(i64, i64, i64)] = qs.iter().map(|(l, r, h)| (l + shift, r + shift, h)).collect();
+    for w in 0..5 {
+        let got = answers(w, arr, batch);
+        let back = answers(w, reversed, reversed_qs);
+        let named = answers(w, renamed, qs);
+        let inside = answers(w, framed, framed_qs);
+        for i in 0..q {
+            let (l, r, h) = qs[i];
+            let g = got[i];
+            let what = f"arm {w}, {arr} query({l}, {r}, {h}) -> {g}";
+            // P1: the statement read literally
+            expect(mut t, 1, g == want[i], f"P1 {what}, literally {want[i]}");
+            // P2: asked again after every other query
+            expect(mut t, 2, got[2 * q - 1 - i] == g, f"P2 {what}, again {got[2 * q - 1 - i]}");
+            // P3: a lower threshold keeps an answer, a higher one keeps -1
+            let lower = got[2 * q + i];
+            let higher = got[3 * q + i];
+            expect(mut t, 3, (g == -1 or lower == g) and (g != -1 or higher == -1) and (higher == -1 or higher == g), f"P3 {what}, lower {lower}, higher {higher}");
+            // P4: the array reversed, the range with it
+            expect(mut t, 4, back[i] == g, f"P4 {what}, reversed {back[i]}");
+            // P5: the values renamed alike
+            let r5 = if g == -1 { -1 } else { ((g - 1) * a + b) % 20000 + 1 };
+            expect(mut t, 5, named[i] == r5, f"P5 {what}, renamed {named[i]}, not {r5}");
+            // P6: values added before and after
+            expect(mut t, 6, inside[i] == g, f"P6 {what}, inside {inside[i]}");
+            // P7: a value holding more than half a range holds more than
+            // half of one of its halves
+            let whole = got[4 * q + i];
+            let left_half = got[5 * q + 2 * i];
+            let right_half = got[5 * q + 2 * i + 1];
+            expect(mut t, 7, whole == -1 or left_half == whole or right_half == whole, f"P7 {what}, at least {whole}, halves at {c.splits[i]}: {left_half} {right_half}");
+            if w == 0 {
+                t.answers += 1;
+                if g != -1 {
+                    t.found += 1;
+                }
+                t.check = (t.check * 31 + g + 1) % 1000000007;
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { answers: 0, found: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(8, 0) };
+    // 300 arrays in four kinds, 75 each, 8 queries each. Every choice the
+    // properties make is drawn before any arm answers.
+    let mut seed = 11571;
+    let mut cases: Vec[Case] = [];
+    for i in 0..300 {
+        let (arr, qs) = case_of(mut seed, i % 4);
+        let splits: Vec[i64] = qs.iter().map(|(l, r, _)| if l == r { l } else { l + next_random(mut seed) % (r - l) }).collect();
+        let mut a = 1 + 2 * (next_random(mut seed) % 10000);
+        while a % 5 == 0 {
+            a += 2;
+        }
+        let rename = (a, next_random(mut seed) % 20000);
+        let before: Vec[i32] = (0..next_random(mut seed) % 21).map(|_| (1 + next_random(mut seed) % 20000) as i32).collect();
+        let after: Vec[i32] = (0..next_random(mut seed) % 21).map(|_| (1 + next_random(mut seed) % 20000) as i32).collect();
+        cases.push(Case { arr, qs, splits, rename, before, after });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"300 arrays, {t.answers} queries ({t.found} answered): checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..8).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

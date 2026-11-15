@@ -1,0 +1,148 @@
+// LeetCode #1157: Online Majority Element In Subarray -- a Rust solution
+// as LeetCode's Rust users write it (a recursive segment tree of
+// Boyer-Moore pairs over `4 * n` nodes, `usize` indices, a `HashMap` of
+// each value's places filled with `entry().or_insert_with`, and
+// `partition_point` to count them), carried to Kāra by `karac fix`.
+
+struct MajorityChecker {
+    n: i64,
+    tree: Vec[(i32, i32)],
+    pos: Map[i32, Vec[i64]],
+}
+
+impl MajorityChecker {
+    fn new(arr: Vec[i32]) -> Self {
+        let n = arr.len();
+        let mut tree = Vec.filled(4 * n, (0, 0));
+        let mut pos: Map[i32, Vec[i64]] = Map.new();
+        for (i, x) in arr.iter().enumerate() {
+            pos.entry(x).or_insert_with(Vec.new).push(i);
+        }
+        MajorityChecker.build(mut tree, arr, 1, 0, n - 1);
+        MajorityChecker { n, tree, pos }
+    }
+
+    fn merge(a: (i32, i32), b: (i32, i32)) -> (i32, i32) {
+        if a.0 == b.0 {
+            (a.0, a.1 + b.1)
+        } else if a.1 >= b.1 {
+            (a.0, a.1 - b.1)
+        } else {
+            (b.0, b.1 - a.1)
+        }
+    }
+
+    fn build(tree: mut ref Vec[(i32, i32)], arr: Vec[i32], node: i64, l: i64, r: i64) {
+        if l == r {
+            tree[node] = (arr[l], 1);
+            return;
+        }
+        let m = (l + r) / 2;
+        MajorityChecker.build(mut tree, arr, node * 2, l, m);
+        MajorityChecker.build(mut tree, arr, node * 2 + 1, m + 1, r);
+        tree[node] = MajorityChecker.merge(tree[node * 2], tree[node * 2 + 1]);
+    }
+
+    fn find(self, node: i64, l: i64, r: i64, ql: i64, qr: i64) -> (i32, i32) {
+        if qr < l or r < ql {
+            return (0, 0);
+        }
+        if ql <= l and r <= qr {
+            return self.tree[node];
+        }
+        let m = (l + r) / 2;
+        MajorityChecker.merge(self.find(node * 2, l, m, ql, qr), self.find(node * 2 + 1, m + 1, r, ql, qr))
+    }
+
+    fn query(self, left: i32, right: i32, threshold: i32) -> i32 {
+        let (cand, _) = self.find(1, 0, self.n - 1, left, right);
+        if let Some(p) = self.pos.get(cand) {
+            let lo = p.partition_point(|i| i < left);
+            let hi = p.partition_point(|i| i <= right);
+            if (hi - lo) as i32 >= threshold {
+                return cand;
+            }
+        }
+        -1
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An array of `n` values: random over the first `k` values, or when `k`
+// is 0 a random value planted at about two places in three among random
+// values up to 20000.
+fn array(seed: mut ref i64, n: i64, k: i64) -> Vec[i32] {
+    if k == 0 {
+        let v = 1 + next_random(mut seed) % 20000;
+        (0..n).map(|_| if next_random(mut seed) % 3 < 2 { v } else { 1 + next_random(mut seed) % 20000 }).map(|x| x as i32).collect()
+    } else {
+        (0..n).map(|_| (1 + next_random(mut seed) % k) as i32).collect()
+    }
+}
+
+// `queries` random queries on `arr`, each with a threshold from the least
+// above half its range to all of it. Returns the sum and a checksum of
+// the answers.
+fn session(seed: mut ref i64, arr: Vec[i32], queries: i64) -> (i64, i64) {
+    let n = arr.len();
+    let checker = MajorityChecker.new(arr);
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..queries {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        let left = a.min(b);
+        let right = a.max(b);
+        let least = (right - left + 1) / 2 + 1;
+        let threshold = least + next_random(mut seed) % (right - left + 2 - least);
+        let got = checker.query(left as i32, right as i32, threshold as i32);
+        total += got;
+        check = (check * 31 + got + 1) % 1000000007;
+    }
+    (total, check)
+}
+
+fn main() {
+    // LeetCode's example
+    let c = MajorityChecker.new([1, 1, 2, 2, 1, 1]);
+    println(f"query(0, 5, 4) = {c.query(0, 5, 4)}, query(0, 3, 3) = {c.query(0, 3, 3)}, query(2, 3, 2) = {c.query(2, 3, 2)}");
+    // one value; two; a run asked in part and whole; values in turn,
+    // where only an odd range has a majority; the largest value
+    let one = MajorityChecker.new([7]);
+    println(f"query(0, 0, 1) = {one.query(0, 0, 1)}");
+    let two = MajorityChecker.new([1, 2]);
+    println(f"query(0, 1, 2) = {two.query(0, 1, 2)}, query(1, 1, 1) = {two.query(1, 1, 1)}");
+    let run = MajorityChecker.new([5, 5, 5, 5, 5]);
+    println(f"query(1, 3, 3) = {run.query(1, 3, 3)}, query(0, 4, 5) = {run.query(0, 4, 5)}");
+    let turn = MajorityChecker.new([1, 2, 1, 2, 1]);
+    println(f"query(0, 4, 3) = {turn.query(0, 4, 3)}, query(1, 3, 2) = {turn.query(1, 3, 2)}, query(0, 3, 3) = {turn.query(0, 3, 3)}");
+    let big = MajorityChecker.new([20000, 1, 20000]);
+    println(f"query(0, 2, 2) = {big.query(0, 2, 2)}, query(0, 2, 3) = {big.query(0, 2, 3)}");
+    // 300 random arrays of 1 to 60 values over 1 to 4 values or planted,
+    // 20 queries each
+    let mut seed = 1157;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let k = next_random(mut seed) % 5;
+        let arr = array(mut seed, n, k);
+        let (t, c) = session(mut seed, arr, 20);
+        total += t;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"300 random arrays: total {total}, checksum {check}");
+    // 20,000 values, the most the constraints allow, 10,000 queries each:
+    // over two values, a planted value, and all one value
+    for k in [2, 0, 1] {
+        let arr = array(mut seed, 20000, k);
+        let (t, c) = session(mut seed, arr, 10000);
+        println(f"20000 values, 10000 queries: total {t}, checksum {c}");
+    }
+}
