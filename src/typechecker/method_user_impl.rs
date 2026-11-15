@@ -2478,11 +2478,6 @@ impl<'a> super::TypeChecker<'a> {
 /// not exist (katas 2164 and 2165).
 pub(super) fn rust_sequence_method_twin(type_name: &str, method: &str) -> Option<&'static str> {
     Some(match (type_name, method) {
-        ("Slice" | "Array", "rotate_left" | "rotate_right") => {
-            "turning the elements is a `Vec` method; on part of one, \
-             `remove` the element and `insert` it at its new place, or turn \
-             a `Vec` of that part (library/collections.md)"
-        }
         ("VecDeque", "drain") => {
             "a `VecDeque` is emptied into a `Vec` by `mem.take(mut dq)` \
              and `into_iter().collect()`, or one element at a time by \

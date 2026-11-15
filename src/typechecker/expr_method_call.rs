@@ -272,6 +272,9 @@ pub(crate) const SLICE_MUTATING_METHODS: &[&str] = &[
     "fill",
     "iter_mut",
     "reverse",
+    // Library methods of `impl[T] Slice[T]` (B-2026-11-15-35).
+    "rotate_left",
+    "rotate_right",
     "sort",
     "sort_by",
     "sort_by_key",
@@ -2501,6 +2504,20 @@ impl<'a> super::TypeChecker<'a> {
                 return ty;
             }
             if let Some(type_name) = self.library_source_method_owner(&receiver, method) {
+                // A library `Slice` method that changes the elements in
+                // place (`rotate_left`) takes a `mut Slice[T]`, as the
+                // native ones do: a read-only view, `let mut` or not, is
+                // refused the same way. The receiver of a `mut ref self`
+                // method of `Slice` is the mutable one (B-2026-11-15-35).
+                if SLICE_MUTATING_METHODS.contains(&method)
+                    && matches!(
+                        Self::peel_borrow(&obj_ty),
+                        Type::Slice { mutable: false, .. }
+                    )
+                    && !(self.current_fn_mut_self && matches!(object.kind, ExprKind::SelfValue))
+                {
+                    self.read_only_slice_method_error(method, object, span);
+                }
                 self.record_method_callee(
                     SpanKey::from_span(span),
                     format!("{type_name}.{method}"),
@@ -2753,6 +2770,23 @@ impl<'a> super::TypeChecker<'a> {
         // A `ref Slice[T]` receiver reaches the same methods (`s.len()` with
         // `s: ref Slice[i64]`), which used to fall through untyped.
         let slice_recv = match &obj_ty {
+            // The receiver of a `Slice[T]` method declared `mut ref self` is
+            // the `mut Slice[T]` the method needs (library/collections.md's
+            // "Changing in place" lists `fn swap(mut ref self, ..)` for it),
+            // so its body changes the elements it views: `rotate_left` is
+            // three passes of `self.swap` (B-2026-11-15-35).
+            t if self.current_fn_mut_self
+                && matches!(object.kind, ExprKind::SelfValue)
+                && matches!(Self::peel_borrow(t), Type::Slice { .. }) =>
+            {
+                let Type::Slice { element, .. } = Self::peel_borrow(t) else {
+                    unreachable!()
+                };
+                Type::Slice {
+                    element: element.clone(),
+                    mutable: true,
+                }
+            }
             Type::Ref(inner) | Type::MutRef(inner) if matches!(**inner, Type::Slice { .. }) => {
                 (**inner).clone()
             }

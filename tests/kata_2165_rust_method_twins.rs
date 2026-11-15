@@ -1,6 +1,7 @@
 //! Katas 2164 and 2165: Rust's `VecDeque::from(v)` and `dq.drain(..)`,
 //! `s.remove(i)` and `s.insert(i, c)` on a `String`, and a slice's
-//! `rotate_left` / `rotate_right` were refused with a bare "no method" or
+//! `rotate_left` / `rotate_right` (since B-2026-11-15-35, methods of their
+//! own) were refused with a bare "no method" or
 //! "no associated function", which reads as if the operation did not
 //! exist. Each refusal now names the Kāra spelling.
 
@@ -59,34 +60,27 @@ fn kata_2165_string_remove_and_insert_name_vec_of_char() {
     }
 }
 
+/// B-2026-11-15-35 flipped the two rotation pins: `rotate_left` and
+/// `rotate_right` are now `Slice` methods too, so a part of a `Vec` and an
+/// array turn in place, as Rust's `[T]` does.
 #[test]
-fn kata_2165_slice_rotate_names_the_vec_method() {
+fn kata_2165_slice_rotate_is_a_slice_method() {
     let out = check(
         "rotate",
-        "fn main() {\n    let mut d: Vec[i64] = vec![1, 2, 3];\n    d[..2].rotate_left(1);\n    d[1..].rotate_right(1);\n    println(d[0]);\n}",
+        "fn main() {\n    let mut d: Vec[i64] = [1, 2, 3].to_vec();\n    d[..2].rotate_left(1);\n    d[1..].rotate_right(1);\n    println(d[0]);\n}",
     );
-    for m in ["rotate_left", "rotate_right"] {
-        assert!(
-            out.contains(&format!(
-                "no method '{m}' on type 'Slice': turning the elements is a `Vec` method"
-            )),
-            "{out}"
-        );
-    }
+    assert!(out.contains("All checks passed"), "{out}");
+    assert!(!out.contains("no method"), "{out}");
 }
 
 #[test]
-fn kata_2165_array_rotate_names_the_vec_method() {
+fn kata_2165_array_rotate_is_a_slice_method() {
     let out = check(
         "array",
         "fn main() {\n    let mut a: Array[i64, 3] = [1, 2, 3];\n    a.rotate_left(1);\n    println(a[0]);\n}",
     );
-    assert!(
-        out.contains(
-            "no method 'rotate_left' on type 'Array': turning the elements is a `Vec` method"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("All checks passed"), "{out}");
+    assert!(!out.contains("no method"), "{out}");
 }
 
 /// Kata 2168: Rust's `scan` over a lent array, written through its index

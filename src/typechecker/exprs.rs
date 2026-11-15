@@ -10171,6 +10171,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => return,
         };
+        self.collect_array_literal_fix(expr, object, &elem);
         let Some(item) = self.library_iter_item(object) else {
             return;
         };
@@ -10301,6 +10302,80 @@ impl<'a> super::TypeChecker<'a> {
             self.collect_literal_fixes
                 .insert(SpanKey::from_span(&expr.span), (fix, why));
         }
+    }
+
+    /// `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` into a
+    /// `Vec[Array[i64, 3]]`: the closure's list literal is checked before
+    /// the `collect` names its element, so it is a `Vec` (design.md § List
+    /// literals) and the bound is refused. The fix types the literal where
+    /// the closure makes it, `{ let r: Array[i64, 3] = [..]; r }`
+    /// (B-2026-11-15-38). Recorded for the `FromIterator` bound, which is
+    /// discharged later and uses it only if it is refused.
+    fn collect_array_literal_fix(&mut self, expr: &Expr, object: &Expr, elem: &Type) {
+        let elem = resolve_type_var_top(elem, &self.env.substitutions);
+        let Type::Array { element, size } = &elem else {
+            return;
+        };
+        let Some(n) = size.as_literal() else {
+            return;
+        };
+        if !type_is_fully_concrete(element) || contains_type_param(element) {
+            return;
+        }
+        let ExprKind::MethodCall { method, args, .. } = &object.kind else {
+            return;
+        };
+        if !matches!(method.as_str(), "map" | "filter_map") || args.len() != 1 {
+            return;
+        }
+        let ExprKind::Closure { body, .. } = &args[0].value.kind else {
+            return;
+        };
+        let mut tail: &Expr = body;
+        while let ExprKind::Block(b) = &tail.kind {
+            match &b.final_expr {
+                Some(t) => tail = t,
+                None => return,
+            }
+        }
+        // `filter_map`'s closure makes `Some([..])`.
+        if method != "map" {
+            match &tail.kind {
+                ExprKind::Call { callee, args } if args.len() == 1 => {
+                    let ExprKind::Identifier(name) = &callee.kind else {
+                        return;
+                    };
+                    if name != "Some" {
+                        return;
+                    }
+                    tail = &args[0].value;
+                }
+                _ => return,
+            }
+        }
+        let ExprKind::ArrayLiteral(items) = &tail.kind else {
+            return;
+        };
+        if i64::try_from(items.len()).ok() != Some(n) {
+            return;
+        }
+        let shown = type_display(&elem);
+        let text = crate::formatter::render_expr(tail);
+        self.collect_literal_fixes.insert(
+            SpanKey::from_span(&expr.span),
+            (
+                FixIt {
+                    span: tail.span,
+                    replacement: format!("{{ let r: {shown} = {text}; r }}"),
+                },
+                format!(
+                    "the closure's `{text}` is a `Vec` because a list literal is one unless \
+                     its use asks for an array (design.md § List literals), and the closure \
+                     is checked before the `collect` names `{shown}`; type the literal where \
+                     the closure makes it, `{{ let r: {shown} = {text}; r }}`"
+                ),
+            ),
+        );
     }
 
     pub(super) fn library_iter_item(&self, object: &Expr) -> Option<Type> {

@@ -74,6 +74,8 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `reverse` | `fn reverse(mut ref self)` | Reverses in place |
 | `fill` | `fn fill(mut ref self, val: T) where T: Clone` | Sets every element to a copy of `val` |
 | `swap` | `fn swap(mut ref self, i: i64, j: i64)` | Exchanges the elements at `i` and `j`. Neither value is destroyed, so no `Drop` body runs. Panics if either index is out of bounds; `i == j` does nothing. This is the way to exchange two elements: `let t = xs[i]; xs[i] = xs[j]; xs[j] = t` is rejected for a non-`Copy` `T` |
+| `rotate_left` | `fn rotate_left(mut ref self, mid: i64)` | Turns the elements `mid` places toward the front: the element at `mid` comes first. Panics if `mid` is outside `0..=len`. On a `Vec`, an array, or a `mut Slice[T]` (`v[a..b].rotate_left(1)`, B-2026-11-15-35) |
+| `rotate_right` | `fn rotate_right(mut ref self, k: i64)` | Turns the elements `k` places toward the back: the last `k` come first. Panics if `k` is outside `0..=len`. On a `Vec`, an array, or a `mut Slice[T]` (`v[a..b].rotate_right(1)`, B-2026-11-15-35) |
 | `clone_from_slice` | `fn clone_from_slice(mut ref self, src: Slice[T]) where T: Clone` | Overwrites every element with a clone of the matching element of `src`. Panics if the lengths differ. The element-wise copy for a non-`Copy` `T`: `v[a..b].clone_from_slice(other)` |
 | `split_at_mut` | `fn split_at_mut(mut ref self, mid: i64) -> (mut Slice[T], mut Slice[T])` | Two disjoint mutable halves, `[0, mid)` and `[mid, len)`. Panics if `mid > self.len()`. Both halves may be live at once because their ranges cannot overlap; the sequence itself may not be used while either is live. Handing one half to each task gives statically disjoint parallel writes |
 | `[]=` | `v[i] = x` | Index assignment through `IndexMut` ([design.md §9](../design.md#index-and-indexmut)). Panics if out of bounds |
@@ -97,8 +99,6 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `pop` | `fn pop(mut ref self) -> Option[T]` | Removes the last element |
 | `insert` | `fn insert(mut ref self, idx: i64, val: own T)` | Inserts at `idx`, shifting the rest. Panics if `idx > self.len()` |
 | `remove` | `fn remove(mut ref self, idx: i64) -> T` | Removes at `idx`, shifting the rest. Panics if out of bounds |
-| `rotate_left` | `fn rotate_left(mut ref self, mid: i64)` | Turns the elements `mid` places toward the front: the element at `mid` comes first. Panics if `mid` is outside `0..=len`. On a `Vec` only |
-| `rotate_right` | `fn rotate_right(mut ref self, k: i64)` | Turns the elements `k` places toward the back: the last `k` come first. Panics if `k` is outside `0..=len`. On a `Vec` only |
 | `remove_first` | `fn remove_first(mut ref self, pred: own MutFn(T) -> bool) -> Option[T]` | Removes and returns the first element satisfying `pred`. O(n) |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred` and drops the rest, in one pass |
 | `dedup` | `fn dedup(mut ref self) where T: PartialEq` | Drops consecutive equal elements |

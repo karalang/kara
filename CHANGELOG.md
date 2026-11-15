@@ -187,6 +187,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   list. It was refused as "cannot be projected through `.next` yet"
   (design.md § Frozen handles, B-2026-11-15-93).
 
+- `rotate_left` and `rotate_right` are `Slice` methods, so a part of a
+  `Vec` turns in place, Rust's `s[k..=r].rotate_left(1)`, as do an array
+  and a `mut Slice[T]` parameter; they were `Vec` methods only
+  (library/collections.md, B-2026-11-15-35).
+
 - `Request.bytes()`: a server's request body exactly as it was sent, as a
   `Vec[u8]`, for a binary upload, a protobuf or CBOR body, or a webhook
   signature check over the raw body; `body()` replaces each invalid UTF-8
@@ -1349,6 +1354,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   naming neither the seed nor the item type. The refusal is now at the seed,
   says the item is `ref i64`, and `karac fix` writes `Some(*x)`
   (B-2026-11-15-34).
+- **An array literal a `map` closure returns into a `Vec` of arrays gets
+  a fix.** `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` into a
+  `Vec[Array[i64, 3]]` is refused because the closure's literal is a
+  `Vec`, checked before the `collect` names its element; the refusal now
+  says so, and `karac fix` types the literal where the closure makes it,
+  `{ let r: Array[i64, 3] = [..]; r }` (B-2026-11-15-38).
+- **A value moved in the f-string that shows it is cloned by `karac
+  fix`.** `println(f"{v} -> {total(v)}")` with `total` taking `own` is
+  E0516, because `{v}` borrows `v` for the whole `println`; the fix now
+  writes `total(v.clone())`, where `karac fix` used to stop
+  (B-2026-11-15-40).
 - **`Option.as_mut()` exists.** The writable twin of `as_ref`
   (`if let Some(x) = o.as_mut() { *x += 1; }`, a linked-list walk with
   `cur = node.next.as_mut()`) was refused as an unknown method

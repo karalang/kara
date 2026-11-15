@@ -2844,6 +2844,7 @@ impl Pipeline {
                 shared_handle_copy_fix(&src, typed, &e)
                     .or_else(|| held_borrow_copy_fix(&src, typed, &e))
                     .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
+                    .or_else(|| moved_arg_clone_fix(&src, typed, &e))
             } else {
                 None
             };
@@ -4256,6 +4257,63 @@ fn arg_borrow_clone_fix(
             length: 0,
             line,
             column: column + key.1,
+        },
+        replacement: ".clone()".to_string(),
+    })
+}
+
+/// B-2026-11-15-40: the machine-applicable repair for an E0516 whose
+/// access is a move into a call's argument while a borrow no fix can copy
+/// is live (`println(f"{v} -> {total(v)}")`, where the f-string's `{v}`
+/// borrows `v` for the whole `println`): the moved argument is cloned,
+/// `total(v.clone())`, so the call takes a value of its own and the
+/// borrow is left alone.
+fn moved_arg_clone_fix(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    use crate::typechecker::types::Type;
+    if e.access != "move" || e.temporary.is_some() {
+        return None;
+    }
+    let place = e.place.as_deref()?;
+    let (line, column) = e.at?;
+    let line_start: usize = src
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)?)
+        .map(str::len)
+        .sum();
+    let offset = line_start + column.checked_sub(1)?;
+    // The access is the call; the moved argument is the place itself,
+    // spelled as written, the first one on the line after the call's start
+    // that sits between its `(` or `,` and its `,` or `)`.
+    let line_end = src[offset..].find('\n').map_or(src.len(), |n| offset + n);
+    let (key, at) = typed
+        .expr_types
+        .iter()
+        .filter(|(k, ty)| {
+            k.0 >= offset
+                && k.0 + k.1 <= line_end
+                && k.1 == place.len()
+                && src.get(k.0..k.0 + k.1) == Some(place)
+                && !matches!(ty, Type::Ref(_) | Type::MutRef(_))
+                && src[..k.0].trim_end().ends_with(['(', ','])
+                && src[k.0 + k.1..].trim_start().starts_with([',', ')'])
+        })
+        .map(|(k, _)| (k, k.0))
+        .min_by_key(|(_, at)| *at)?;
+    if !typed.clonable_expr_spans.contains(key) {
+        return None;
+    }
+    let column = column + (at - offset);
+    let offset = at;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset: offset + place.len(),
+            length: 0,
+            line,
+            column: column + place.len(),
         },
         replacement: ".clone()".to_string(),
     })
