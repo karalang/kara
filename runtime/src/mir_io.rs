@@ -1791,7 +1791,8 @@ unsafe fn header_pairs(headers: *const RawVec, n: usize) -> Vec<(String, String)
 /// `Request`'s methods, on the request `id` names (0 the current one):
 /// `op` 0 `path`, 1 `method`, 2 `body` and 6 `url`, each a `String` at
 /// `out`; 3 `header(name)`, 1 with its value at `out` or 0; 4 `headers`
-/// and 5 `query`, a `Vec[(String, String)]` at `out`.
+/// and 5 `query`, a `Vec[(String, String)]` at `out`; 7 `bytes`, the body
+/// as sent, a `Vec[u8]` at `out` (B-2026-11-15-25).
 ///
 /// # Safety
 ///
@@ -1824,6 +1825,8 @@ pub unsafe extern "C" fn karac_mir_http_request(
                     }
                 }
                 4 => pairs_of(out, &r.headers),
+                // A `Vec[u8]` is laid out as a `String` is.
+                7 => string_of(out, &r.body),
                 5 => pairs_of(out, &r.query()),
                 _ => string_of(out, url.as_bytes()),
             }

@@ -167,6 +167,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `Request.bytes()`: a server's request body exactly as it was sent, as a
+  `Vec[u8]`, for a binary upload, a protobuf or CBOR body, or a webhook
+  signature check over the raw body; `body()` replaces each invalid UTF-8
+  sequence (docs/library/io.md § HTTP server, B-2026-11-15-25).
+
 - The iterator `chars()` returns has `as_str()`, the text it has not yet
   read, as Rust's `Chars::as_str` (library/strings.md; kata 2129).
 

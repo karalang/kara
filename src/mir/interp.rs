@@ -17148,6 +17148,12 @@ impl<'a> Interp<'a> {
                 };
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
+            ("Request", "bytes") => {
+                let id = self.request_id(&args[0], name)?;
+                let raw = self.request_of(id).body.clone();
+                let bytes = raw.into_iter().map(|b| Value::Int(i128::from(b))).collect();
+                Ok(self.alloc_box("Vec", Value::Agg(bytes)))
+            }
             ("Request", "header") if args.len() == 2 => {
                 let id = self.request_id(&args[0], name)?;
                 let want = text_of(self, 1)?;

@@ -290,6 +290,13 @@ impl Request {
     #[compiler_builtin]
     fn body(ref self) -> String { "" }
 
+    // The request body exactly as it was sent, which `body()` is only when
+    // it is UTF-8 (`body()` replaces each invalid sequence by U+FFFD): a
+    // binary upload, a protobuf body, or the bytes a webhook's signature
+    // covers (docs/library/io.md § HTTP server, B-2026-11-15-25).
+    #[compiler_builtin]
+    fn bytes(ref self) -> Vec[u8] { Vec.new() }
+
     // Look up a request header by name (case-insensitive per
     // RFC 7230 § 3.2). Returns `Some(value)` if the header is present,
     // `None` otherwise. The returned String is freshly allocated per

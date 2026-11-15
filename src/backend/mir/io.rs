@@ -2011,6 +2011,7 @@ impl<'ctx> Cx<'ctx, '_> {
             "headers" => 4,
             "query" => 5,
             "url" => 6,
+            "bytes" => 7,
             _ => return Ok(None),
         };
         let (at, _) = self.behind_refs(&args[0])?;

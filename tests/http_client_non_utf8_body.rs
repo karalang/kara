@@ -113,12 +113,16 @@ fn compiled_non_utf8_body_is_a_valid_string_and_bytes_keeps_it() {
 /// decoded the same way: the compiled server's handler aborted in
 /// `body().chars()`.
 fn serve_and_post(mode: &str) -> String {
+    serve_and_post_src(mode, SERVER_SRC)
+}
+
+fn serve_and_post_src(mode: &str, src: &str) -> String {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!("karac-non-utf8-srv-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("main.kara");
-    std::fs::write(&file, SERVER_SRC).unwrap();
+    std::fs::write(&file, src).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_karac"))
         .arg(mode)
         .arg(&file)
@@ -184,4 +188,43 @@ fn interp_server_request_body_decodes_lossily() {
 #[test]
 fn compiled_server_request_body_is_a_valid_string() {
     assert_eq!(serve_and_post("__mir-llvm-run"), "len=7 65533 65 65533");
+}
+
+/// `Request.bytes()` is the request body exactly as it was sent
+/// (docs/library/io.md § HTTP server, B-2026-11-15-25): what a webhook's
+/// signature covers, where `body()` has U+FFFD in place of each invalid
+/// sequence. A request the program builds has its `with_body` text's bytes.
+const BYTES_SRC: &str = r#"
+struct Response { status: i64, body: String }
+
+fn handle(req: Request) -> Response {
+    let raw = req.bytes();
+    let mut out = f"n={raw.len()}";
+    for b in raw {
+        out = f"{out} {b}";
+    }
+    let built = Request.new("POST", "/x").with_body("hé").bytes();
+    Response { status: 200, body: f"{out} built={built.len()}" }
+}
+
+fn main() {
+    let _ = Server.serve("127.0.0.1:0", handle);
+}
+"#;
+
+#[test]
+fn interp_server_request_bytes_are_the_body_as_sent() {
+    assert_eq!(
+        serve_and_post_src("__mir-run", BYTES_SRC),
+        "n=3 255 65 195 built=3"
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn compiled_server_request_bytes_are_the_body_as_sent() {
+    assert_eq!(
+        serve_and_post_src("__mir-llvm-run", BYTES_SRC),
+        "n=3 255 65 195 built=3"
+    );
 }

@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 317 |
 | false-positive | 209 |
 | perf | 169 |
-| missing-feature | 160 |
+| missing-feature | 161 |
 | soundness | 69 |
 | miscompile | 64 |
 | run-vs-build | 39 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 466 |
-| mir-llvm | 231 |
-| mir | 194 |
+| mir-llvm | 232 |
+| mir | 195 |
 | cli | 116 |
 | parser | 83 |
 | ownership | 81 |
@@ -118,6 +118,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-16 | 2026-11-15 | mir-llvm | low | `(0..n).map(|_| ..).collect()` into a `Vec[i64]` costs about 28 instructions an item in a `karac build` binary against 4.4 for the push loop it stands for, and 30 against Rust's 13 when the closure writes a captured variable: kata 1582's bench draws its 2000 matrices of 100 x 100 that way and runs 1.55x checked Rust, the drawing 1.9x and the solving 0.85x | — |
 | B-2026-11-15-17 | 2026-11-15 | parser | low | A Rust file's `use std::...` lines mend one per `karac fix` round: after the first line's diagnostic, the parser's item recovery skipped to the next `fn`, past the other `use` lines, so `karac check` reported one and LeetCode's binary-tree template (`RefCell`, `VecDeque`, `Rc`) took three extra rounds | — |
 | B-2026-11-15-24 | 2026-11-15 | parser | low | A `///` doc comment before a method's receiver (`self`, `ref self`, `mut ref self`, `own self`) is a parse error naming `self` / `ref` as a reserved keyword; design.md §3 Doc comments says it is ignored | — |
+| B-2026-11-15-25 | 2026-11-15 | mir+mir-llvm | medium | A server has no way to read a request body as it was sent: `Request` has `body()` (a `String`, so a body that is not UTF-8 is decoded lossily, B-2026-11-15-8) but no `bytes()`, so a binary upload, a protobuf or CBOR body, or a webhook signature check over the raw body cannot be served | — |
 
 ### Relocated
 
