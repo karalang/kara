@@ -3196,11 +3196,12 @@ impl Parser {
             }
             let rest = source.get(at + whole.length..)?;
             let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
-            return Some(vec![
+            let (consts, mut edits) = self.hoisted_consts(item, at, text)?;
+            edits.extend([
                 crate::resolver::TextEdit {
                     offset: item,
                     length: 0,
-                    replacement: format!("{text}\n\n"),
+                    replacement: format!("{consts}{text}\n\n"),
                 },
                 crate::resolver::TextEdit {
                     offset: whole.offset,
@@ -3208,6 +3209,7 @@ impl Parser {
                     replacement: String::new(),
                 },
             ]);
+            return Some(edits);
         }
         let mut moved = String::new();
         for (i, line) in text.split('\n').enumerate() {
@@ -3226,18 +3228,89 @@ impl Parser {
         if source.get(end..end + 1) == Some("\n") {
             end += 1;
         }
-        Some(vec![
+        let (consts, mut edits) = self.hoisted_consts(item, at, text)?;
+        edits.extend([
             crate::resolver::TextEdit {
                 offset: item,
                 length: 0,
-                replacement: moved,
+                replacement: format!("{consts}{moved}"),
             },
             crate::resolver::TextEdit {
                 offset: line_start + base,
                 length: end - line_start,
                 replacement: String::new(),
             },
-        ])
+        ]);
+        Some(edits)
+    }
+
+    /// The `const`s a hoisted nested `fn` names that the body around it
+    /// declares before it (`const MOD: i64 = 1_000_000_007;` above Rust's
+    /// `fn dfs`): a Rust nested `fn` sees the items of the block around it,
+    /// so moving the `fn` alone leaves the name undefined (kata 1575). Each
+    /// such `const`, one line ending in `;`, moves to the top level with it:
+    /// the text to insert before the `fn`, and the edits that delete the
+    /// lines. A `const` that a top-level item of the same name would then
+    /// collide with refuses the fix (`None`). `at` and `text` are the
+    /// nested `fn`'s source-relative start and text.
+    fn hoisted_consts(
+        &self,
+        item: usize,
+        at: usize,
+        text: &str,
+    ) -> Option<(String, Vec<crate::resolver::TextEdit>)> {
+        let (source, base) = self.source.as_ref()?;
+        let from = item.checked_sub(*base)?;
+        let body = source.get(from..at)?;
+        let names_word = |hay: &str, name: &str| {
+            hay.match_indices(name).any(|(i, _)| {
+                let ident = |c: char| c.is_alphanumeric() || c == '_';
+                !hay[..i].chars().next_back().is_some_and(ident)
+                    && !hay[i + name.len()..].chars().next().is_some_and(ident)
+            })
+        };
+        let mut moved = String::new();
+        let mut edits = Vec::new();
+        let mut offset = from;
+        for line in body.split_inclusive('\n') {
+            let here = offset;
+            offset += line.len();
+            let trimmed = line.trim();
+            let Some(rest) = trimmed.strip_prefix("const ") else {
+                continue;
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty()
+                || !trimmed.ends_with(';')
+                || here == from
+                || !names_word(text, &name)
+            {
+                continue;
+            }
+            let top_level = source.lines().any(|l| {
+                l.strip_prefix("const ").is_some_and(|r| {
+                    r.starts_with(name.as_str())
+                        && !r[name.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                })
+            });
+            if top_level {
+                return None;
+            }
+            moved.push_str(trimmed);
+            moved.push('\n');
+            edits.push(crate::resolver::TextEdit {
+                offset: here + base,
+                length: line.len(),
+                replacement: String::new(),
+            });
+        }
+        if !moved.is_empty() {
+            moved.push('\n');
+        }
+        Some((moved, edits))
     }
 
     /// Whether the program uses Rust's `std::cmp::Reverse`: it imports it
