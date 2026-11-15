@@ -1337,6 +1337,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   a fix, `let clears = ref clears;` before the statement, and a `let f`
   bound the same way and called twice is refused as an `OnceFn` called
   again (B-2026-11-15-32).
+- **A borrowed `successors` seed is named at the seed.**
+  `successors(Some(x), |lap| Some(lap * 2))` with `x` a `ref i64` was
+  refused as E0509 on the closure ("the result borrows a temporary value"),
+  naming neither the seed nor the item type. The refusal is now at the seed,
+  says the item is `ref i64`, and `karac fix` writes `Some(*x)`
+  (B-2026-11-15-34).
 - **`Option.as_mut()` exists.** The writable twin of `as_ref`
   (`if let Some(x) = o.as_mut() { *x += 1; }`, a linked-list walk with
   `cur = node.next.as_mut()`) was refused as an unknown method

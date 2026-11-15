@@ -1117,7 +1117,97 @@ impl<'a> super::TypeChecker<'a> {
         self.method_call_ends.push(ends);
         let ty = self.infer_call_inner(callee, args, span);
         self.method_call_ends.pop();
+        self.refuse_borrowed_successors_seed(callee, args);
         ty
+    }
+
+    /// B-2026-11-15-34: `successors(Some(x), |lap| Some(lap * 2))` with `x` a
+    /// `ref i64` (a `for x in v.iter()` element) fixes the item type to
+    /// `ref i64`, so the closure must return a borrow that outlives it, and a
+    /// fresh `lap * 2` is not one: the MIR borrow check refused it as E0509
+    /// on the closure, naming neither the seed nor the item type. The seed is
+    /// where the fix goes, `Some(*x)`, which starts from the value.
+    fn refuse_borrowed_successors_seed(&mut self, callee: &Expr, args: &[CallArg]) {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return;
+        };
+        if name != "successors" || args.len() != 2 || self.local_scope.lookup(name).is_some() {
+            return;
+        }
+        let ExprKind::Call {
+            callee: some,
+            args: seed,
+        } = &args[0].value.kind
+        else {
+            return;
+        };
+        if !matches!(&some.kind, ExprKind::Identifier(s) if s == "Some") || seed.len() != 1 {
+            return;
+        }
+        let ExprKind::Closure { body, .. } = &args[1].value.kind else {
+            return;
+        };
+        let typed = |tc: &Self, e: &Expr| {
+            tc.expr_types
+                .get(&SpanKey::from_span(&e.span))
+                .map(|t| tc.resolved_now(t))
+        };
+        let Some(Type::Ref(item)) = typed(self, &seed[0].value) else {
+            return;
+        };
+        if !matches!(
+            *item,
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+        ) {
+            return;
+        }
+        // The closure's result, `Some(e)` (or a block ending in one), whose
+        // payload is a new value rather than a borrow.
+        let mut tail: &Expr = body;
+        while let ExprKind::Block(b) = &tail.kind {
+            let Some(t) = b.final_expr.as_deref() else {
+                return;
+            };
+            tail = t;
+        }
+        let ExprKind::Call {
+            callee: some_next,
+            args: next,
+        } = &tail.kind
+        else {
+            return;
+        };
+        if !matches!(&some_next.kind, ExprKind::Identifier(s) if s == "Some") || next.len() != 1 {
+            return;
+        }
+        if matches!(
+            typed(self, &next[0].value),
+            None | Some(Type::Ref(_) | Type::MutRef(_) | Type::TypeVar(_))
+        ) {
+            return;
+        }
+        let shown = type_display(&item);
+        let seed_span = seed[0].value.span;
+        let value = match &seed[0].value.kind {
+            ExprKind::Identifier(n) => format!("Some(*{n})"),
+            _ => "Some(*<seed>)".to_string(),
+        };
+        self.type_error_with_fix_it(
+            format!(
+                "the seed makes `successors`'s item a `ref {shown}`, so the closure must return \
+                 an `Option[ref {shown}]` that outlives it, but it returns a new \
+                 `Option[{shown}]`; start from the value: `{value}`"
+            ),
+            seed_span,
+            TypeErrorKind::TypeMismatch,
+            FixIt {
+                span: Span {
+                    length: 0,
+                    ..seed_span
+                },
+                replacement: "*".to_string(),
+            },
+        );
     }
 
     fn infer_call_inner(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
