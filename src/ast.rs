@@ -934,6 +934,13 @@ pub struct Program {
     /// Which way each constructor in [`Self::rust_heap_ctor`] pops, told
     /// from the heap it builds. Set by the PARSER (kata 2034).
     pub rust_heap_ctor_sides: RustHeapSides,
+    /// A Rust heap filled by `collect`, `let h: BinaryHeap<T> = it.collect();`,
+    /// keyed by the offset of the annotation's `BinaryHeap`, with the edit that
+    /// hands the collected items to `PriorityQueue.max_first_from(..)`: the
+    /// annotation's rename alone would make the heap pop the smallest first.
+    /// Set by the PARSER; the resolver reports it beside the rename
+    /// (B-2026-11-15-80, kata 2208).
+    pub rust_heap_collect: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Rust's `std::cmp::Reverse` around a heap's item, `heap.push(Reverse(x))`
     /// or `Some(Reverse(p))`, keyed by the offset of `Reverse`, with the edit
     /// that writes `x` in its place. Set by the PARSER from the

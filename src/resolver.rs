@@ -2617,6 +2617,12 @@ impl<'a> Resolver<'a> {
         let replacement = suggestion
             .as_ref()
             .map(|s| Self::name_only_replacement(name, &span, s));
+        // A heap filled by `collect` keeps Rust's largest-first order only
+        // when the collected items go to `PriorityQueue.max_first_from`
+        // (B-2026-11-15-80, kata 2208).
+        let collected = (name == "BinaryHeap")
+            .then(|| self.program.rust_heap_collect.get(&span.offset).cloned())
+            .flatten();
         self.errors.push(ResolveError {
             message,
             span,
@@ -2625,6 +2631,19 @@ impl<'a> Resolver<'a> {
             replacement,
             stub_hint: None,
         });
+        if let Some(edit) = collected {
+            self.errors.push(ResolveError {
+                message: "this `BinaryHeap` is filled by `collect`, and Rust's heap pops the \
+                          largest first while Kāra's `PriorityQueue` pops the smallest: \
+                          `PriorityQueue.max_first_from(..collect())` keeps the order"
+                    .to_string(),
+                span,
+                kind: ResolveErrorKind::UndefinedType,
+                suggestion: None,
+                replacement: Some(Box::new(edit)),
+                stub_hint: None,
+            });
+        }
     }
 
     fn record_resolution(&mut self, span: &Span, id: SymbolId) {

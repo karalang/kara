@@ -23488,6 +23488,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if matches!(self.strip_ty(rt), HK::Str) {
                     return self.builtin_method(e, "String.cmp", object, method, args, dest);
                 }
+                // At the total-order float wrappers `F64` / `F32`, whose `Ord`
+                // is the library's own: `Reverse[F64]` in a `PriorityQueue`
+                // was refused as not lowered (B-2026-11-15-78, kata 2208).
+                let (_, base) = self.strip_ty_full(rt);
+                if self.total_float_wrapper(base).is_some() {
+                    let key = format!("{}.cmp", self.tys().display(base));
+                    return self.builtin_method(e, &key, object, method, args, dest);
+                }
             }
             if let ("eq" | "partial_cmp" | "hash", [_]) = (method, args) {
                 let (_, base) = self.strip_ty_full(rt);

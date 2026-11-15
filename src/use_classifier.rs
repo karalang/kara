@@ -2036,14 +2036,41 @@ impl<'a> UseClassifier<'a> {
             // a Consume and fires a spurious "value 'span' moved here, used again
             // here". Surfaced by the self-hosted parser's renderer (a 20-arm
             // match destructuring node structs that all carry a `span: Span`).
-            (PatternKind::Struct { fields, .. }, Type::Named { name, .. }) => {
+            //
+            // A generic struct's field is typed at the value's arguments:
+            // `let Reverse { value: top } = heap.pop().unwrap()` over a
+            // `Reverse[i64]` binds an `i64`, not the declared `T`, which read
+            // as not `Copy` (B-2026-11-15-79, kata 2208).
+            (PatternKind::Struct { fields, .. }, Type::Named { name, args }) => {
                 if let Some(info) = self.tc.struct_info.get(name.as_str()) {
+                    let subs: std::collections::HashMap<String, crate::typechecker::SubstValue> =
+                        if !info.generic_params.is_empty()
+                            && info.generic_params.len() == args.len()
+                        {
+                            info.generic_params
+                                .iter()
+                                .cloned()
+                                .zip(
+                                    args.iter()
+                                        .cloned()
+                                        .map(crate::typechecker::SubstValue::Type),
+                                )
+                                .collect()
+                        } else {
+                            std::collections::HashMap::new()
+                        };
                     for fp in fields {
                         let field_ty = info
                             .fields
                             .iter()
                             .find(|(fname, _, _)| fname == &fp.name)
-                            .map(|(_, ft, _)| ft.clone());
+                            .map(|(_, ft, _)| {
+                                if subs.is_empty() {
+                                    ft.clone()
+                                } else {
+                                    crate::typechecker::inference::substitute_type_params(ft, &subs)
+                                }
+                            });
                         match (&fp.pattern, field_ty) {
                             (Some(sub), Some(ft)) => self.assign_binding_types(sub, &ft),
                             // Shorthand `{ field }` binds the field name directly.

@@ -3770,6 +3770,61 @@ impl super::Parser {
         self.rust_box_new.insert(box_at, edit);
     }
 
+    /// `let h: BinaryHeap<T> = it.collect();`, the value ending at `end`: record
+    /// the edit that writes `PriorityQueue.max_first_from(it.collect())`, for
+    /// the resolver to attach beside the annotation's rename
+    /// ([`crate::ast::Program::rust_heap_collect`]). A heap of `Reverse` items
+    /// pops the smallest first and takes the plain rename.
+    pub(super) fn note_rust_heap_collect(
+        &mut self,
+        ty: Option<&crate::ast::TypeExpr>,
+        value: &Expr,
+        end: usize,
+    ) {
+        let Some(crate::ast::TypeExpr {
+            kind: crate::ast::TypeKind::Path(path),
+            ..
+        }) = ty
+        else {
+            return;
+        };
+        if path.segments.len() != 1 || path.segments[0] != "BinaryHeap" {
+            return;
+        }
+        let reversed = path.generic_args.as_ref().is_some_and(|args| {
+            matches!(args.first(), Some(crate::ast::GenericArg::Type(t))
+                if matches!(&t.kind, crate::ast::TypeKind::Path(p)
+                    if p.segments.last().is_some_and(|s| s == "Reverse")))
+        });
+        if reversed {
+            return;
+        }
+        let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+            return;
+        };
+        if method != "collect" || !args.is_empty() {
+            return;
+        }
+        let Some((source, base)) = self.source.as_ref() else {
+            return;
+        };
+        let start = value.span.offset;
+        let Some(text) = start
+            .checked_sub(*base)
+            .zip(end.checked_sub(*base))
+            .and_then(|(s, e)| source.get(s..e))
+        else {
+            return;
+        };
+        let text = text.trim_end();
+        let edit = crate::resolver::TextEdit {
+            offset: start,
+            length: text.len(),
+            replacement: format!("PriorityQueue.max_first_from({text})"),
+        };
+        self.rust_heap_collect.insert(path.span.offset, edit);
+    }
+
     /// Rust's `BinaryHeap.new()` / `BinaryHeap.from(v)`, whose `BinaryHeap`
     /// starts at `at`: record the edit that writes Kāra's largest-first
     /// constructor, for the resolver to attach if `BinaryHeap` turns out

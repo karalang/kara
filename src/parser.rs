@@ -398,6 +398,8 @@ pub struct Parser {
     pub(crate) expr_stmt_semis: rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::token::Span>,
     /// See [`crate::ast::Program::rust_heap_ctor`].
     pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// See [`crate::ast::Program::rust_heap_collect`].
+    pub(crate) rust_heap_collect: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::parse_target_edits`].
     pub(crate) parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::range_arg_edits`].
@@ -742,6 +744,7 @@ impl Parser {
             foreign_calls: rustc_hash::FxHashMap::default(),
             expr_stmt_semis: rustc_hash::FxHashMap::default(),
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
+            rust_heap_collect: rustc_hash::FxHashMap::default(),
             parse_target_edits: rustc_hash::FxHashMap::default(),
             range_arg_edits: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
@@ -1186,6 +1189,7 @@ impl Parser {
             expr_stmt_semis: std::mem::take(&mut self.expr_stmt_semis),
             rust_heap_ctor_sides: self.rust_heap_ctor_sides(),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
+            rust_heap_collect: std::mem::take(&mut self.rust_heap_collect),
             rust_reverse_wraps: if self.rust_reverse_stays() {
                 rustc_hash::FxHashMap::default()
             } else {

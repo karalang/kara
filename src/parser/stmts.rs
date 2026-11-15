@@ -1113,7 +1113,9 @@ impl super::Parser {
             });
         }
 
+        let semi = self.current_span();
         self.expect(&Token::Semicolon)?;
+        self.note_rust_heap_collect(ty.as_ref(), &value, semi.offset);
 
         Some(Stmt {
             id: crate::ids::NodeId::DUMMY,
