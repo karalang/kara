@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 312 |
-| false-positive | 205 |
+| diagnostics | 314 |
+| false-positive | 207 |
 | perf | 168 |
 | missing-feature | 160 |
 | soundness | 68 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 462 |
+| typecheck | 465 |
 | mir-llvm | 228 |
-| mir | 192 |
+| mir | 194 |
 | cli | 115 |
 | ownership | 81 |
 | parser | 81 |
@@ -122,6 +122,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-6 | 2026-11-15 | runtime | medium | `CString.to_str()` returns an empty `Str` on wasm_wasi while `to_string()` and `len()` are right: `karac_mir_cstr_to_string` wrote the view's two words as `usize`, so on wasm32 the length went into the pointer's upper half and the length word stayed zero | — |
 | B-2026-11-15-7 | 2026-11-15 | interp+mir-llvm | low | `VecDeque.truncate` drops the removed elements back to front, where collections.md says it drops them from index `len` to the back and every other element drop runs front to back: `[1, 2, 3].truncate(0)` drops 3, 2, 1 | — |
 | B-2026-11-15-8 | 2026-11-15 | mir+mir-llvm | high | A compiled program's HTTP `Response.body()` (and `HttpError.body()`) of a body that is not UTF-8 is a `String` holding the raw bytes, which breaks String's UTF-8 invariant: `body().chars()` hits `unreachable_unchecked` in the runtime (Rust's UB check aborts the program); the interpreter replaces each bad sequence with U+FFFD | — |
+| B-2026-11-15-12 | 2026-11-15 | typecheck | low | Rust's `*guard` on a `MutexGuard` (`*m.lock() = v`, `take(mut *m.lock())`) is refused with "unary '*' requires 'ref T' ..." and no fix; the guard's value is its `value` field | — |
+| B-2026-11-15-13 | 2026-11-15 | typecheck | low | `unwrap_or((ref line, ""))` against `(Str, Str)`, which karac fix writes for Rust's `(&line, "")`, is refused ("expected '(Str, Str)', found '(ref String, String)'") with no hint and no fix | — |
+| B-2026-11-15-14 | 2026-11-15 | typecheck+mir | medium | Rust's `const X: &[T] = &[..]` becomes `const X: Slice[T] = [..]`, which the spec does not allow and `for x in X` fails to build ("a constant used at another type is not lowered yet"); and a view of an `Array` constant (`MX.iter()` items, a `Str` kept from them) is refused as borrowing a temporary, though core semantics §5.3 says a view of a constant borrows nothing | — |
+| B-2026-11-15-15 | 2026-11-15 | mir | medium | A binding of a loop item destructured through its `Option` (`for (n, _) in arr.iter() { kept.push(n) }` over an `Array`) keeps the item borrowed: "write of _15 while it is borrowed" at the next `next()`, though the same loop over a `Vec` passes | — |
 
 ### Relocated
 

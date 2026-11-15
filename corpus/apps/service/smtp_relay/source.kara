@@ -1,0 +1,817 @@
+// smtp_relay: an SMTP relay (RFC 5321) and the mail exchangers it delivers
+// to. The relay speaks ESMTP with PIPELINING and SIZE, takes AUTH PLAIN,
+// refuses to relay for a client that has not authenticated, delivers to its
+// own mailboxes, and queues the rest: it walks each domain's exchangers in
+// preference order, retries a temporary failure on a backoff schedule
+// against a logical clock, gives up after the maximum age, and returns a
+// bounce to a local sender. Every socket binds port 0; a lab table maps the
+// exchangers' documentation addresses (192.0.2.x) to the sockets they got.
+
+import std.sync.{TaskGroup, Mutex};
+import std.net.{TcpListener, TcpStream};
+import std.io.BufReader;
+import std.encoding.{base64_encode, base64_decode};
+
+const LOCAL_DOMAIN: Str = "relay.test";
+const MAX_SIZE: i64 = 10240;
+const RETRY: Array[i64, 4] = [300, 900, 1800, 3600];
+const MAX_AGE: i64 = 5400;
+const USERS: Array[(Str, Str), 1] = [("alice", "secret")];
+const LOCAL_BOXES: Array[Str, 2] = ["alice", "carol"];
+
+// (domain, preference, exchanger, address)
+const MX: Array[(Str, u16, Str, Str), 7] = [
+    ("example.org", 10, "mx1.example.org", "192.0.2.10"),
+    ("flaky.test", 20, "mx2.flaky.test", "192.0.2.21"),
+    ("flaky.test", 10, "mx1.flaky.test", "192.0.2.20"),
+    ("strict.test", 10, "mx.strict.test", "192.0.2.30"),
+    ("slow.test", 10, "mx.slow.test", "192.0.2.40"),
+    ("nowhere.test", 10, "mx.nowhere.test", "192.0.2.99"),
+    ("big.test", 10, "mx.big.test", "192.0.2.50"),
+];
+
+// ------------------------------------------------------------ line I/O
+
+struct Conn {
+    r: BufReader[TcpStream],
+    w: TcpStream,
+}
+
+impl Conn {
+    fn new(sock: own TcpStream) -> Conn {
+        Conn { r: BufReader.new(sock.try_clone().unwrap()), w: sock }
+    }
+
+    fn line(mut ref self) -> Option[String] {
+        let mut s = String.new();
+        match self.r.read_line(mut s) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(s.strip_suffix("\r\n").unwrap_or(s).to_string()),
+        }
+    }
+
+    fn send(mut ref self, text: Str) {
+        let _ = self.w.write_all(text.bytes());
+    }
+
+    /// A whole reply, its lines joined by " | ".
+    fn reply(mut ref self) -> (u16, String) {
+        let mut lines: Vec[String] = Vec.new();
+        loop {
+            let line = match self.line() {
+                Some(l) => l,
+                None => return (0, "(closed)"),
+            };
+            let more = line.len() >= 4 and line.bytes()[3] == b'-';
+            lines.push(line);
+            if not more {
+                break;
+            }
+        }
+        let code: u16 = u16.parse(lines.last().unwrap()[..3]).unwrap();
+        (code, lines.join(" | "))
+    }
+
+    /// The DATA lines up to the lone dot, unstuffed, joined by CRLF.
+    fn read_data(mut ref self) -> String {
+        let mut out: Vec[String] = Vec.new();
+        while let Some(line) = self.line() {
+            if line == "." {
+                break;
+            }
+            if line.starts_with(".") {
+                out.push(line[1..].to_string());
+            } else {
+                out.push(line);
+            }
+        }
+        out.join("\r\n")
+    }
+}
+
+fn stuff(data: Str) -> String {
+    let mut out = String.new();
+    for l in data.split("\r\n") {
+        if l.starts_with(".") {
+            out.push('.');
+        }
+        out.push_str(l);
+        out.push_str("\r\n");
+    }
+    out.push_str(".\r\n");
+    out
+}
+
+/// `FROM:<a@b> SIZE=9` -> ("a@b", {"SIZE": "9"}).
+fn addr_of(arg: Str, prefix: Str) -> Option[(String, Map[String, String])] {
+    if not arg.to_uppercase().starts_with(prefix) {
+        return None;
+    }
+    let rest = arg[prefix.len()..].trim();
+    if not rest.starts_with("<") {
+        return None;
+    }
+    let close = rest.find(">")?;
+    let addr = rest[1..close].to_string();
+    let mut params = Map.new();
+    for p in rest[close + 1..].split_whitespace() {
+        let (k, v) = p.split_once("=").unwrap_or((p, ""));
+        params.insert(k.to_uppercase(), v.to_string());
+    }
+    Some((addr, params))
+}
+
+fn size_param(params: Map[String, String]) -> i64 {
+    params.get("SIZE").map(|s| usize.parse(s).unwrap()).unwrap_or(0) as i64
+}
+
+fn domain_of(addr: Str) -> String {
+    match addr.rfind("@") {
+        Some(i) => addr[i + 1..].to_lowercase(),
+        None => String.new(),
+    }
+}
+
+fn local_part(addr: Str) -> String {
+    addr.split("@").next().unwrap().to_lowercase()
+}
+
+fn has_mx(domain: Str) -> bool {
+    MX.iter().any(|m| m.0 == domain)
+}
+
+// ------------------------------------------------------------ downstream exchangers
+
+struct Exchanger {
+    name: String,
+    kind: Str,
+    connections: i64,
+    accepted: i64,
+    inbox: Vec[(String, Vec[String], String)],
+    size_limit: i64,
+}
+
+impl Exchanger {
+    fn new(name: Str, kind: Str) -> Exchanger {
+        Exchanger {
+            name: name.to_string(),
+            kind,
+            connections: 0,
+            accepted: 0,
+            inbox: Vec.new(),
+            size_limit: if kind == "big" { 1000 } else { 0 },
+        }
+    }
+
+    /// One connection; true when it was the shutdown.
+    fn session(mut ref self, conn: mut ref Conn) -> bool {
+        self.connections += 1;
+        if self.kind == "busy" {
+            conn.send(f"421 4.3.2 {self.name} busy, try another\r\n");
+            if let Some(line) = conn.line() {
+                if line.to_uppercase() == "STOP" {
+                    self.connections -= 1; // the shutdown connection is not a delivery
+                    return true;
+                }
+            }
+            return false;
+        }
+        conn.send(f"220 {self.name} ESMTP\r\n");
+        let mut sender = String.new();
+        let mut rcpts: Vec[String] = Vec.new();
+        loop {
+            let line = match conn.line() {
+                Some(l) => l,
+                None => return false,
+            };
+            let (verb, arg) = line.split_once(" ").unwrap_or((line.as_str(), ""));
+            match verb.to_uppercase().as_str() {
+                "STOP" => {
+                    self.connections -= 1;
+                    return true;
+                }
+                "EHLO" => {
+                    let mut ext = [f"250-{self.name}", "250-8BITMIME"];
+                    if self.size_limit > 0 {
+                        ext.push(f"250-SIZE {self.size_limit}");
+                    }
+                    ext.push("250 PIPELINING");
+                    conn.send(f"{ext.join("\r\n")}\r\n");
+                }
+                "MAIL" => {
+                    let (addr, params) = addr_of(arg, "FROM:").unwrap();
+                    let size = size_param(params);
+                    if self.size_limit > 0 and size > self.size_limit {
+                        conn.send(f"552 5.3.4 message size {size} exceeds fixed maximum {self.size_limit}\r\n");
+                        continue;
+                    }
+                    sender = addr;
+                    rcpts.clear();
+                    conn.send("250 2.1.0 ok\r\n");
+                }
+                "RCPT" => {
+                    let rcpt = addr_of(arg, "TO:").unwrap().0;
+                    if self.kind == "strict" and not rcpt.starts_with("frank@") {
+                        conn.send(f"550 5.1.1 <{rcpt}>: user unknown\r\n");
+                    } else if self.kind == "greylist" and self.connections <= 2 {
+                        conn.send(f"451 4.7.1 <{rcpt}>: greylisted, try again later\r\n");
+                    } else {
+                        conn.send("250 2.1.5 ok\r\n");
+                        rcpts.push(rcpt);
+                    }
+                }
+                "DATA" => {
+                    conn.send("354 end data with <CR><LF>.<CR><LF>\r\n");
+                    let data = conn.read_data();
+                    self.accepted += 1;
+                    self.inbox.push((sender.clone(), rcpts.clone(), data));
+                    let tag = self.name.split(".").next().unwrap().to_uppercase();
+                    conn.send(f"250 2.0.0 ok: queued as {tag}-{self.accepted}\r\n");
+                }
+                "QUIT" => {
+                    conn.send("221 2.0.0 bye\r\n");
+                    return false;
+                }
+                _ => conn.send("502 5.5.2 unknown command\r\n"),
+            }
+        }
+    }
+}
+
+fn kind_of(name: Str) -> Str {
+    match name {
+        "mx1.flaky.test" => "busy",
+        "mx.strict.test" => "strict",
+        "mx.slow.test" => "greylist",
+        "mx.big.test" => "big",
+        _ => "plain",
+    }
+}
+
+struct Lab {
+    exchangers: Mutex[Vec[(i64, Exchanger)]],
+    relay: Mutex[Option[Relay]],
+}
+
+fn serve_exchanger(lab: Lab, listener: TcpListener, index: i64, mx: own Exchanger) {
+    let mut mx = mx;
+    loop {
+        let sock = listener.accept().unwrap();
+        let mut conn = Conn.new(sock);
+        if mx.session(mut conn) {
+            break;
+        }
+    }
+    lab.exchangers.lock().value.push((index, mx));
+}
+
+// ------------------------------------------------------------ the relay
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Status {
+    Pending,
+    Sent,
+    Bounced,
+}
+
+#[derive(Clone)]
+struct Recipient {
+    addr: String,
+    status: Status,
+    attempts: i64,
+    next: i64,
+    last: String,
+}
+
+#[derive(Clone)]
+struct Message {
+    qid: String,
+    sender: String,
+    rcpts: Vec[Recipient],
+    data: String,
+    queued_at: i64,
+}
+
+struct Relay {
+    lab: Map[String, String],
+    now: i64,
+    queue: Vec[Message],
+    next_qid: i64,
+    boxes: Map[String, Vec[(String, String, String)]],
+    log: Vec[String],
+}
+
+impl Relay {
+    fn new(lab: own Map[String, String]) -> Relay {
+        let mut boxes = Map.new();
+        for b in LOCAL_BOXES {
+            boxes.insert(b.to_string(), Vec.new());
+        }
+        Relay { lab, now: 0, queue: Vec.new(), next_qid: 1, boxes, log: Vec.new() }
+    }
+
+    fn deliver_local(mut ref self, qid: Str, sender: Str, rcpt: Str, data: Str) {
+        self.boxes
+            .get_mut(local_part(rcpt))
+            .unwrap()
+            .push((qid.to_string(), sender.to_string(), data.to_string()));
+        self.log.push(f"{qid} to=<{rcpt}> relay=local status=sent (delivered to mailbox)");
+    }
+
+    fn accept(mut ref self, helo: Str, user: Option[String], sender: Str, rcpts: Slice[String], data: Str) -> String {
+        let qid = f"Q{self.next_qid}";
+        self.next_qid += 1;
+        let via = match user {
+            Some(u) => f" (authenticated as {u})",
+            None => String.new(),
+        };
+        let stamped = f"Received: from {helo}{via}\r\n\tby {LOCAL_DOMAIN} with ESMTP id {qid}; t={self.now}\r\n{data}";
+        let mut remote = Vec.new();
+        for r in rcpts {
+            if domain_of(r) == LOCAL_DOMAIN {
+                self.deliver_local(qid, sender, r, stamped);
+            } else {
+                remote.push(Recipient {
+                    addr: r.clone(),
+                    status: Status.Pending,
+                    attempts: 0,
+                    next: 0,
+                    last: String.new(),
+                });
+            }
+        }
+        if not remote.is_empty() {
+            self.queue.push(Message {
+                qid: qid.clone(),
+                sender: sender.to_string(),
+                rcpts: remote,
+                data: stamped,
+                queued_at: self.now,
+            });
+        }
+        qid
+    }
+
+    // -- the client side
+
+    /// Delivers one domain's recipients (indices into msg.rcpts); returns the
+    /// exchanger it settled on and each address's final reply.
+    fn attempt(self, msg: Message, domain: Str, group: Slice[i64]) -> (String, Map[String, (u16, String)]) {
+        let size = msg.data.len();
+        let mut hosts: Vec[(u16, Str, Str)] = MX.iter().filter(|m| m.0 == domain).map(|m| (m.1, m.2, m.3)).collect();
+        hosts.sort();
+        let mut last: Option[(String, u16, String)] = None;
+        for (_pref, name, ip) in hosts {
+            let label = f"{name}[{ip}]";
+            let sock = match TcpStream.connect(self.lab[ip]) {
+                Ok(s) => s,
+                Err(_) => {
+                    last = Some((label, 421, "4.4.1 connection refused"));
+                    continue;
+                }
+            };
+            let mut conn = Conn.new(sock);
+            let (code, text) = conn.reply();
+            if code != 220 {
+                last = Some((label, code, text));
+                continue;
+            }
+            conn.send(f"EHLO {LOCAL_DOMAIN}\r\n");
+            conn.reply();
+            conn.send(f"MAIL FROM:<{msg.sender}> SIZE={size}\r\n");
+            let (code, text) = conn.reply();
+            let mut results = Map.new();
+            if code != 250 {
+                for i in group {
+                    results.insert(msg.rcpts[i].addr.clone(), (code, text.clone()));
+                }
+            } else {
+                let mut ok = Vec.new();
+                for i in group {
+                    let addr = ref msg.rcpts[i].addr;
+                    conn.send(f"RCPT TO:<{addr}>\r\n");
+                    let (c, t) = conn.reply();
+                    if c == 250 {
+                        ok.push(i);
+                    }
+                    results.insert(addr.clone(), (c, t));
+                }
+                if not ok.is_empty() {
+                    conn.send("DATA\r\n");
+                    conn.reply();
+                    conn.send(stuff(msg.data));
+                    let (c, t) = conn.reply();
+                    for i in ok {
+                        results.insert(msg.rcpts[i].addr.clone(), (c, t.clone()));
+                    }
+                }
+            }
+            conn.send("QUIT\r\n");
+            conn.reply();
+            return (label, results);
+        }
+        let (label, code, text) = last.unwrap();
+        let results = group.iter().map(|i| (msg.rcpts[i].addr.clone(), (code, text.clone()))).collect();
+        (label, results)
+    }
+
+    fn run_queue(mut ref self) -> String {
+        let mut (sent, deferred, bounced) = (0, 0, 0);
+        let queue = take(mut self.queue);
+        for msg in queue {
+            let mut msg = msg.clone();
+            let due: Vec[i64] = (0..msg.rcpts.len())
+                .filter(|i| msg.rcpts[i].status == Status.Pending and msg.rcpts[i].next <= self.now)
+                .collect();
+            let mut failed: Vec[i64] = Vec.new();
+            let mut domains: Vec[String] = Vec.new();
+            for i in ref due {
+                let d = domain_of(msg.rcpts[i].addr);
+                if not domains.contains(d) {
+                    domains.push(d);
+                }
+            }
+            for d in ref domains {
+                let group: Vec[i64] = due.iter().cloned().filter(|i| domain_of(msg.rcpts[i].addr) == *d).collect();
+                if self.now - msg.queued_at >= MAX_AGE {
+                    for i in ref group {
+                        let r = mut ref msg.rcpts[i];
+                        r.status = Status.Bounced;
+                        r.last = f"delivery time expired after {r.attempts} attempts: {r.last}";
+                        self.log.push(f"{msg.qid} to=<{r.addr}> status=expired ({r.last})");
+                        failed.push(i);
+                        bounced += 1;
+                    }
+                    continue;
+                }
+                let (label, results) = self.attempt(msg, d, group);
+                let delay = self.now - msg.queued_at;
+                for i in ref group {
+                    let (code, text) = results[msg.rcpts[i].addr].clone();
+                    let r = mut ref msg.rcpts[i];
+                    r.attempts += 1;
+                    r.last = text.clone();
+                    if code == 250 {
+                        r.status = Status.Sent;
+                        sent += 1;
+                    } else if code >= 500 {
+                        r.status = Status.Bounced;
+                        failed.push(i);
+                        bounced += 1;
+                    } else {
+                        r.next = self.now + RETRY[r.attempts.min(RETRY.len()) - 1];
+                        deferred += 1;
+                    }
+                    let (word, note) = match r.status {
+                        Status.Pending => ("deferred", f", retry at {r.next}"),
+                        Status.Sent => ("sent", String.new()),
+                        Status.Bounced => ("bounced", String.new()),
+                    };
+                    self.log.push(f"{msg.qid} to=<{r.addr}> relay={label} delay={delay} status={word} ({text}){note}");
+                }
+            }
+            if not failed.is_empty() and not msg.sender.is_empty() {
+                self.bounce(msg, failed);
+            }
+            if msg.rcpts.iter().any(|r| r.status == Status.Pending) {
+                self.queue.push(msg);
+            }
+        }
+        f"250 2.0.0 queue run at t={self.now}: {sent} sent, {deferred} deferred, {bounced} bounced, {self.queue.len()} queued"
+    }
+
+    fn bounce(mut ref self, msg: Message, failed: Slice[i64]) {
+        let mut lines = [
+            f"From: MAILER-DAEMON@{LOCAL_DOMAIN}",
+            f"To: {msg.sender}",
+            "Subject: Undelivered Mail Returned to Sender",
+            f"X-Original-Queue-Id: {msg.qid}",
+            String.new(),
+            f"This is the mail system at {LOCAL_DOMAIN}.",
+            "Your message could not be delivered to:",
+            String.new(),
+        ];
+        for i in failed {
+            lines.push(f"<{msg.rcpts[i].addr}>: {msg.rcpts[i].last}");
+        }
+        lines.push(String.new());
+        lines.push("--- original headers ---");
+        for l in msg.data.split("\r\n") {
+            if l.is_empty() {
+                break;
+            }
+            lines.push(l.to_string());
+        }
+        let qid = f"Q{self.next_qid}";
+        self.next_qid += 1;
+        if domain_of(msg.sender) == LOCAL_DOMAIN {
+            self.deliver_local(qid, "", msg.sender, lines.join("\r\n"));
+        }
+    }
+
+    // -- the server side
+
+    /// One client connection; true when it was XSTOP.
+    fn session(mut ref self, conn: mut ref Conn) -> bool {
+        conn.send(f"220 {LOCAL_DOMAIN} ESMTP relay\r\n");
+        let mut helo: Option[String] = None;
+        let mut user: Option[String] = None;
+        let mut sender: Option[String] = None;
+        let mut rcpts: Vec[String] = Vec.new();
+        loop {
+            let line = match conn.line() {
+                Some(l) => l,
+                None => return false,
+            };
+            let (verb, arg) = line.split_once(" ").unwrap_or((line.as_str(), ""));
+            match verb.to_uppercase().as_str() {
+                "EHLO" => {
+                    let h = arg.trim().to_string();
+                    conn.send(f"250-{LOCAL_DOMAIN} hello {h}\r\n250-PIPELINING\r\n250-SIZE {MAX_SIZE}\r\n250-8BITMIME\r\n250 AUTH PLAIN\r\n");
+                    helo = Some(h);
+                    sender = None;
+                    rcpts.clear();
+                }
+                "AUTH" => {
+                    let (mech, b64) = arg.split_once(" ").unwrap_or((arg, ""));
+                    if helo.is_none() {
+                        conn.send("503 5.5.1 EHLO first\r\n");
+                    } else if mech.to_uppercase() != "PLAIN" {
+                        conn.send("504 5.5.4 unrecognized authentication type\r\n");
+                    } else {
+                        let parts: Vec[String] = match base64_decode(b64) {
+                            Ok(bytes) => match String.from_utf8(bytes) {
+                                Ok(s) => s.split("\0").map(|p| p.to_string()).collect(),
+                                Err(_) => Vec.new(),
+                            },
+                            Err(_) => Vec.new(),
+                        };
+                        if parts.len() != 3 {
+                            conn.send("501 5.5.2 cannot decode response\r\n");
+                        } else if USERS.iter().any(|(u, p)| *u == parts[1] and *p == parts[2]) {
+                            user = Some(parts[1].clone());
+                            conn.send("235 2.7.0 authentication successful\r\n");
+                        } else {
+                            conn.send("535 5.7.8 authentication failed\r\n");
+                        }
+                    }
+                }
+                "MAIL" => {
+                    if helo.is_none() {
+                        conn.send("503 5.5.1 EHLO first\r\n");
+                    } else if let Some((addr, params)) = addr_of(arg, "FROM:") {
+                        if size_param(params) > MAX_SIZE {
+                            conn.send(f"552 5.3.4 message size exceeds fixed maximum {MAX_SIZE}\r\n");
+                        } else {
+                            sender = Some(addr);
+                            rcpts.clear();
+                            conn.send("250 2.1.0 ok\r\n");
+                        }
+                    } else {
+                        conn.send("501 5.5.4 syntax: MAIL FROM:<address>\r\n");
+                    }
+                }
+                "RCPT" => {
+                    if sender.is_none() {
+                        conn.send("503 5.5.1 need MAIL first\r\n");
+                    } else if let Some((rcpt, _)) = addr_of(arg, "TO:") {
+                        let d = domain_of(rcpt);
+                        if d == LOCAL_DOMAIN and not self.boxes.contains_key(local_part(rcpt)) {
+                            conn.send(f"550 5.1.1 <{rcpt}>: no such mailbox\r\n");
+                        } else if d != LOCAL_DOMAIN and user.is_none() {
+                            conn.send(f"554 5.7.1 <{rcpt}>: relay access denied\r\n");
+                        } else if d != LOCAL_DOMAIN and not has_mx(d) {
+                            conn.send(f"550 5.1.2 <{rcpt}>: no mail exchanger for {d}\r\n");
+                        } else {
+                            rcpts.push(rcpt);
+                            conn.send("250 2.1.5 ok\r\n");
+                        }
+                    } else {
+                        conn.send("501 5.5.4 syntax: RCPT TO:<address>\r\n");
+                    }
+                }
+                "DATA" => {
+                    if rcpts.is_empty() {
+                        conn.send("554 5.5.1 no valid recipients\r\n");
+                        continue;
+                    }
+                    conn.send("354 end data with <CR><LF>.<CR><LF>\r\n");
+                    let data = conn.read_data();
+                    if data.len() > MAX_SIZE {
+                        conn.send("552 5.3.4 message too big\r\n");
+                    } else {
+                        let qid = self.accept(
+                            helo.as_deref().unwrap(),
+                            user,
+                            sender.as_deref().unwrap(),
+                            rcpts,
+                            data,
+                        );
+                        conn.send(f"250 2.0.0 ok: queued as {qid}\r\n");
+                    }
+                    sender = None;
+                    rcpts.clear();
+                }
+                "RSET" => {
+                    sender = None;
+                    rcpts.clear();
+                    conn.send("250 2.0.0 ok\r\n");
+                }
+                "NOOP" => conn.send("250 2.0.0 ok\r\n"),
+                "XRUN" => {
+                    self.now = i64.parse(arg).unwrap();
+                    let report = self.run_queue();
+                    conn.send(f"{report}\r\n");
+                }
+                "QUIT" => {
+                    conn.send("221 2.0.0 bye\r\n");
+                    return false;
+                }
+                "XSTOP" => {
+                    conn.send("221 2.0.0 stopping\r\n");
+                    return true;
+                }
+                _ => conn.send("502 5.5.2 unknown command\r\n"),
+            }
+        }
+    }
+}
+
+fn serve_relay(lab: Lab, listener: TcpListener, relay: own Relay) {
+    let mut relay = relay;
+    loop {
+        let sock = listener.accept().unwrap();
+        let mut conn = Conn.new(sock);
+        if relay.session(mut conn) {
+            break;
+        }
+    }
+    lab.relay.lock().value = Some(relay);
+}
+
+// ------------------------------------------------------------ the client
+
+struct Client {
+    name: String,
+    conn: Conn,
+}
+
+impl Client {
+    fn connect(name: Str, addr: Str) -> Client {
+        let mut conn = Conn.new(TcpStream.connect(addr).unwrap());
+        println(f"{name} S: {conn.reply().1}");
+        Client { name: name.to_string(), conn }
+    }
+
+    fn cmd(mut ref self, line: Str) {
+        self.conn.send(f"{line}\r\n");
+        println(f"{self.name} C: {line}");
+        println(f"{self.name} S: {self.conn.reply().1}");
+    }
+
+    fn pipeline(mut ref self, lines: Slice[String]) {
+        let pieces: Vec[String] = lines.iter().map(|l| f"{l}\r\n").collect();
+        let all = pieces.join("");
+        self.conn.send(all);
+        for l in lines {
+            println(f"{self.name} C: {l}");
+            println(f"{self.name} S: {self.conn.reply().1}");
+        }
+    }
+
+    fn data(mut ref self, text: Str) {
+        self.conn.send(stuff(text));
+        println(f"{self.name} C: ({text.split("\r\n").count()} lines of data)");
+        println(f"{self.name} S: {self.conn.reply().1}");
+    }
+
+    fn close(mut ref self) {
+        self.cmd("QUIT");
+    }
+}
+
+fn plain(user: Str, password: Str) -> String {
+    base64_encode(f"\0{user}\0{password}".bytes())
+}
+
+fn message(subject: Str, to: Str, body: Slice[Str]) -> String {
+    let mut lines = ["From: alice@relay.test", f"To: {to}", f"Subject: {subject}", String.new()];
+    lines.extend(body.iter().map(|l| l.to_string()));
+    lines.join("\r\n")
+}
+
+fn show_mail(prefix: Str, data: Str) {
+    for l in data.split("\r\n") {
+        println(f"{prefix}| {l}");
+    }
+}
+
+fn main() {
+    let lab = Lab { exchangers: Mutex.new(Vec.new()), relay: Mutex.new(None) };
+    let mut table: Map[String, String] = Map.new();
+    let mut running: Vec[String] = Vec.new();
+    let group = TaskGroup.new();
+    for (i, (_domain, _pref, name, ip)) in MX.iter().enumerate() {
+        let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+        table.insert(ip.to_string(), listener.local_addr().unwrap());
+        if *name == "mx.nowhere.test" {
+            drop(listener); // nothing listens there: connection refused
+            continue;
+        }
+        let mx = Exchanger.new(name, kind_of(name));
+        group.spawn(|| serve_exchanger(lab, listener, i, mx));
+        running.push(ip.to_string());
+    }
+    let relay = Relay.new(table.clone());
+    let rl = TcpListener.bind("127.0.0.1:0").unwrap();
+    let raddr = rl.local_addr().unwrap();
+    group.spawn(|| serve_relay(lab, rl, relay));
+
+    println("== session 1: alice relays");
+    let mut a = Client.connect("alice", raddr);
+    a.cmd("MAIL FROM:<alice@relay.test>");
+    a.cmd("EHLO client.test");
+    a.cmd("MAIL FROM:<alice@relay.test>");
+    a.cmd("RCPT TO:<bob@example.org>");
+    a.cmd("RCPT TO:<zed@relay.test>");
+    a.cmd("RSET");
+    a.cmd(f"AUTH PLAIN {plain("alice", "wrong")}");
+    a.cmd("AUTH PLAIN !!notbase64");
+    a.cmd("AUTH LOGIN");
+    a.cmd(f"AUTH PLAIN {plain("alice", "secret")}");
+    let body: Vec[Str] = ["Hello all,", "", ".a line that starts with a dot", "..and one with two", "", "-- alice"];
+    let rcpts = [
+        "bob@example.org",
+        "dan@example.org",
+        "erin@flaky.test",
+        "frank@strict.test",
+        "nobody@strict.test",
+        "gina@slow.test",
+        "hal@nowhere.test",
+        "carol@relay.test",
+        "ike@unknown.test",
+    ];
+    let text = message("Quarterly numbers", rcpts[..3].join(", "), body);
+    let mut lines = [f"MAIL FROM:<alice@relay.test> SIZE={text.len()}"];
+    lines.extend(rcpts.iter().map(|r| f"RCPT TO:<{r}>"));
+    lines.push("DATA");
+    a.pipeline(lines);
+    a.data(text);
+    let row = "x".repeat(70);
+    let rows: Vec[Str] = (0..20).map(|_| row.as_str()).collect();
+    let big = message("Attachment", "ivy@big.test", rows);
+    a.pipeline(["MAIL FROM:<alice@relay.test>", "RCPT TO:<ivy@big.test>", "DATA"]);
+    a.data(big);
+    a.cmd("MAIL FROM:<alice@relay.test> SIZE=20000");
+    for t in [0, 300, 1200, 3000, 6600] {
+        a.cmd(f"XRUN {t}");
+    }
+    a.close();
+
+    println("== session 2: a stranger");
+    let mut s = Client.connect("stranger", raddr);
+    s.cmd("EHLO evil.test");
+    s.cmd("RCPT TO:<carol@relay.test>");
+    s.cmd("MAIL FROM:<spam@evil.test>");
+    s.cmd("RCPT TO:<x@example.org>");
+    s.cmd("DATA");
+    s.cmd("RCPT TO:<carol@relay.test>");
+    s.cmd("DATA");
+    s.data("Subject: hi\r\n\r\nnot spam, promise");
+    s.cmd("VRFY carol");
+    s.close();
+
+    for ip in ref running {
+        let mut stop = Conn.new(TcpStream.connect(table[ip]).unwrap());
+        let _ = stop.line();
+        stop.send("STOP\r\n");
+    }
+    let mut admin = Client.connect("admin", raddr);
+    admin.cmd("XSTOP");
+    drop(admin);
+    drop(group);
+
+    let relay = lab.relay.lock().value.take().unwrap();
+    println("== relay log");
+    for l in ref relay.log {
+        println(f"{l}");
+    }
+    for b in LOCAL_BOXES {
+        let mail = ref relay.boxes[*b];
+        println(f"== mailbox {b}: {mail.len()} messages");
+        for (qid, sender, data) in mail {
+            println(f"-- {qid} from=<{sender}>");
+            show_mail("  ", data);
+        }
+    }
+    let mut done = take(mut lab.exchangers.lock().value);
+    done.sort_by_key(|(i, _)| i);
+    for (_, mx) in ref done {
+        println(f"== {mx.name}: {mx.connections} connections, {mx.inbox.len()} messages");
+        for (sender, rcpts, data) in ref mx.inbox {
+            let to: Vec[String] = rcpts.iter().map(|r| f"<{r}>").collect();
+            println(f"-- from=<{sender}> to={to.join(",")}");
+            show_mail("  ", data);
+        }
+    }
+}

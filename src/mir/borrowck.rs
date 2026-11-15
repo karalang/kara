@@ -952,10 +952,21 @@ fn collect_loans(body: &Body, tys: &TyInterner) -> Vec<Loan> {
     for (bi, block) in body.blocks.iter().enumerate() {
         for (si, s) in block.statements.iter().enumerate() {
             if let StatementKind::Assign(_, Rvalue::Ref(kind, place)) = &s.kind {
-                let through_shared_ref = place.projection.first() == Some(&ProjElem::Deref)
-                    && matches!(tys.kind(body.local(place.local).ty), TyKind::Ref(_));
-                let through_mut_ref = place.projection.first() == Some(&ProjElem::Deref)
-                    && matches!(tys.kind(body.local(place.local).ty), TyKind::MutRef(_));
+                // The reference the place is first reached through, held
+                // in its local itself or in a part of it (`(*(_15 as
+                // Some).0).0`, a binding of a `for` loop's item):
+                // overwriting the local writes the reference, not what it
+                // points to (B-2026-11-15-15).
+                let first_deref = place.projection.iter().position(|e| *e == ProjElem::Deref);
+                let deref_of = first_deref.and_then(|i| {
+                    let prefix = Place {
+                        local: place.local,
+                        projection: place.projection[..i].to_vec(),
+                    };
+                    place_ty(body, tys, &prefix).ok().map(|pt| tys.kind(pt.ty))
+                });
+                let through_shared_ref = matches!(deref_of, Some(TyKind::Ref(_)));
+                let through_mut_ref = matches!(deref_of, Some(TyKind::MutRef(_)));
                 loans.push(Loan {
                     kind: *kind,
                     place: place.clone(),

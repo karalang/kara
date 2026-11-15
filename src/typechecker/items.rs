@@ -6118,6 +6118,29 @@ impl<'a> super::TypeChecker<'a> {
         // `let` and a module-level `let` both accept.
         self.check_expr(&c.value, &declared_ty);
         self.literal_value_at_declared_type(&c.value, &declared_ty);
+        // Rust's `const NAMES: &[&str] = &["a", "b"]`, which `karac fix`
+        // writes `Slice[Str] = [..]`: a constant's list literal is an
+        // `Array` (design.md § Constants, "Allowed initializers"), so the
+        // fix names its length (B-2026-11-15-14).
+        if let (Type::Slice { .. }, ExprKind::ArrayLiteral(elems)) = (&declared_ty, &c.value.kind) {
+            let text = crate::formatter::render_type_expr(&c.ty);
+            if text.starts_with("Slice[") && text.ends_with(']') {
+                let array = format!("Array[{}, {}]", &text[6..text.len() - 1], elems.len());
+                self.type_error_with_fix_it(
+                    format!(
+                        "a constant's list literal is an `Array`, not a `Slice` (design.md \
+                         § Constants): each use builds the value, and a `Slice` only views \
+                         one; write `{array}`"
+                    ),
+                    c.ty.span,
+                    TypeErrorKind::TypeMismatch,
+                    FixIt {
+                        span: c.ty.span,
+                        replacement: array,
+                    },
+                );
+            }
+        }
         // A constant has a value only when its initializer reaches one
         // without coming back to it (design.md § Constants,
         // B-2026-11-06-19): a cycle is refused once, at the first-declared

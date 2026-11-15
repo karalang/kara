@@ -5876,6 +5876,46 @@ impl<'a> TypeChecker<'a> {
         ])
     }
 
+    /// A tuple literal at `span` checked against a tuple type whose `Str`
+    /// slots it fills with `ref x` over a `String`: the edits that write each
+    /// such element `x.as_str()` (B-2026-11-15-13). None when any mismatched
+    /// slot is something else.
+    fn tuple_ref_string_edits(
+        &self,
+        expected: &Type,
+        found: &Type,
+        span: Span,
+    ) -> Option<Vec<crate::resolver::TextEdit>> {
+        let want = inference::resolve_type_var_top(expected, &self.env.substitutions);
+        let got = inference::resolve_type_var_top(found, &self.env.substitutions);
+        let (Type::Tuple(want), Type::Tuple(got)) = (&want, &got) else {
+            return None;
+        };
+        let (_, elems) = self.tuple_literal_spans.get(&SpanKey::from_span(&span))?;
+        if want.len() != got.len() || want.len() != elems.len() {
+            return None;
+        }
+        let mut edits = Vec::new();
+        for ((w, g), at) in want.iter().zip(got).zip(elems) {
+            let w = inference::resolve_type_var_top(w, &self.env.substitutions);
+            let g = inference::resolve_type_var_top(g, &self.env.substitutions);
+            // A string literal takes a `Str` slot once the rest match
+            // (`retype_literal`).
+            let literal = g == Type::Str
+                && self
+                    .string_literal_spans
+                    .contains_key(&SpanKey::from_span(at));
+            if literal || types_compatible(&w, &g) {
+                continue;
+            }
+            if !exprs::is_str_view(&w) {
+                return None;
+            }
+            edits.extend(self.ref_string_as_str_edits(&g, *at)?);
+        }
+        (!edits.is_empty()).then_some(edits)
+    }
+
     /// The branches of an `if` or `match` that do not join because some are
     /// `ref x` over a `String` and the rest are `Str` views or string
     /// literals: the edits that write each `ref x` as `x.as_str()`, after
@@ -8380,6 +8420,26 @@ impl<'a> TypeChecker<'a> {
                     .insert(SpanKey::from_span(&span), edits);
                 return false;
             }
+        }
+        // `unwrap_or((ref line, ""))` for a `(Str, Str)`: Rust's `(&line, "")`.
+        // A `ref String` element is a `Str` only as a call argument, so each
+        // such element is written `line.as_str()` (B-2026-11-15-13).
+        if let Some(edits) = self.tuple_ref_string_edits(expected, found, span) {
+            self.type_error_with_types(
+                format!(
+                    "expected '{}', found '{}': a `ref String` is a `Str` only as a call \
+                     argument, not as a tuple's element; `.as_str()` views the `String` as a `Str`",
+                    type_display(expected),
+                    type_display(found)
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+                expected,
+                found,
+            );
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&span), edits);
+            return false;
         }
         // An unannotated collection's element or key takes a `Copy`
         // reference's value (design.md §8, B-2026-11-08-19).

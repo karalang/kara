@@ -1,0 +1,243 @@
+== session 1: alice relays
+alice S: 220 relay.test ESMTP relay
+alice C: MAIL FROM:<alice@relay.test>
+alice S: 503 5.5.1 EHLO first
+alice C: EHLO client.test
+alice S: 250-relay.test hello client.test | 250-PIPELINING | 250-SIZE 10240 | 250-8BITMIME | 250 AUTH PLAIN
+alice C: MAIL FROM:<alice@relay.test>
+alice S: 250 2.1.0 ok
+alice C: RCPT TO:<bob@example.org>
+alice S: 554 5.7.1 <bob@example.org>: relay access denied
+alice C: RCPT TO:<zed@relay.test>
+alice S: 550 5.1.1 <zed@relay.test>: no such mailbox
+alice C: RSET
+alice S: 250 2.0.0 ok
+alice C: AUTH PLAIN AGFsaWNlAHdyb25n
+alice S: 535 5.7.8 authentication failed
+alice C: AUTH PLAIN !!notbase64
+alice S: 501 5.5.2 cannot decode response
+alice C: AUTH LOGIN
+alice S: 504 5.5.4 unrecognized authentication type
+alice C: AUTH PLAIN AGFsaWNlAHNlY3JldA==
+alice S: 235 2.7.0 authentication successful
+alice C: MAIL FROM:<alice@relay.test> SIZE=185
+alice S: 250 2.1.0 ok
+alice C: RCPT TO:<bob@example.org>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<dan@example.org>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<erin@flaky.test>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<frank@strict.test>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<nobody@strict.test>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<gina@slow.test>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<hal@nowhere.test>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<carol@relay.test>
+alice S: 250 2.1.5 ok
+alice C: RCPT TO:<ike@unknown.test>
+alice S: 550 5.1.2 <ike@unknown.test>: no mail exchanger for unknown.test
+alice C: DATA
+alice S: 354 end data with <CR><LF>.<CR><LF>
+alice C: (10 lines of data)
+alice S: 250 2.0.0 ok: queued as Q1
+alice C: MAIL FROM:<alice@relay.test>
+alice S: 250 2.1.0 ok
+alice C: RCPT TO:<ivy@big.test>
+alice S: 250 2.1.5 ok
+alice C: DATA
+alice S: 354 end data with <CR><LF>.<CR><LF>
+alice C: (24 lines of data)
+alice S: 250 2.0.0 ok: queued as Q2
+alice C: MAIL FROM:<alice@relay.test> SIZE=20000
+alice S: 552 5.3.4 message size exceeds fixed maximum 10240
+alice C: XRUN 0
+alice S: 250 2.0.0 queue run at t=0: 4 sent, 2 deferred, 2 bounced, 1 queued
+alice C: XRUN 300
+alice S: 250 2.0.0 queue run at t=300: 0 sent, 2 deferred, 0 bounced, 1 queued
+alice C: XRUN 1200
+alice S: 250 2.0.0 queue run at t=1200: 1 sent, 1 deferred, 0 bounced, 1 queued
+alice C: XRUN 3000
+alice S: 250 2.0.0 queue run at t=3000: 0 sent, 1 deferred, 0 bounced, 1 queued
+alice C: XRUN 6600
+alice S: 250 2.0.0 queue run at t=6600: 0 sent, 0 deferred, 1 bounced, 0 queued
+alice C: QUIT
+alice S: 221 2.0.0 bye
+== session 2: a stranger
+stranger S: 220 relay.test ESMTP relay
+stranger C: EHLO evil.test
+stranger S: 250-relay.test hello evil.test | 250-PIPELINING | 250-SIZE 10240 | 250-8BITMIME | 250 AUTH PLAIN
+stranger C: RCPT TO:<carol@relay.test>
+stranger S: 503 5.5.1 need MAIL first
+stranger C: MAIL FROM:<spam@evil.test>
+stranger S: 250 2.1.0 ok
+stranger C: RCPT TO:<x@example.org>
+stranger S: 554 5.7.1 <x@example.org>: relay access denied
+stranger C: DATA
+stranger S: 554 5.5.1 no valid recipients
+stranger C: RCPT TO:<carol@relay.test>
+stranger S: 250 2.1.5 ok
+stranger C: DATA
+stranger S: 354 end data with <CR><LF>.<CR><LF>
+stranger C: (3 lines of data)
+stranger S: 250 2.0.0 ok: queued as Q6
+stranger C: VRFY carol
+stranger S: 502 5.5.2 unknown command
+stranger C: QUIT
+stranger S: 221 2.0.0 bye
+admin S: 220 relay.test ESMTP relay
+admin C: XSTOP
+admin S: 221 2.0.0 stopping
+== relay log
+Q1 to=<carol@relay.test> relay=local status=sent (delivered to mailbox)
+Q1 to=<bob@example.org> relay=mx1.example.org[192.0.2.10] delay=0 status=sent (250 2.0.0 ok: queued as MX1-1)
+Q1 to=<dan@example.org> relay=mx1.example.org[192.0.2.10] delay=0 status=sent (250 2.0.0 ok: queued as MX1-1)
+Q1 to=<erin@flaky.test> relay=mx2.flaky.test[192.0.2.21] delay=0 status=sent (250 2.0.0 ok: queued as MX2-1)
+Q1 to=<frank@strict.test> relay=mx.strict.test[192.0.2.30] delay=0 status=sent (250 2.0.0 ok: queued as MX-1)
+Q1 to=<nobody@strict.test> relay=mx.strict.test[192.0.2.30] delay=0 status=bounced (550 5.1.1 <nobody@strict.test>: user unknown)
+Q1 to=<gina@slow.test> relay=mx.slow.test[192.0.2.40] delay=0 status=deferred (451 4.7.1 <gina@slow.test>: greylisted, try again later), retry at 300
+Q1 to=<hal@nowhere.test> relay=mx.nowhere.test[192.0.2.99] delay=0 status=deferred (4.4.1 connection refused), retry at 300
+Q3 to=<alice@relay.test> relay=local status=sent (delivered to mailbox)
+Q2 to=<ivy@big.test> relay=mx.big.test[192.0.2.50] delay=0 status=bounced (552 5.3.4 message size 1594 exceeds fixed maximum 1000)
+Q4 to=<alice@relay.test> relay=local status=sent (delivered to mailbox)
+Q1 to=<gina@slow.test> relay=mx.slow.test[192.0.2.40] delay=300 status=deferred (451 4.7.1 <gina@slow.test>: greylisted, try again later), retry at 1200
+Q1 to=<hal@nowhere.test> relay=mx.nowhere.test[192.0.2.99] delay=300 status=deferred (4.4.1 connection refused), retry at 1200
+Q1 to=<gina@slow.test> relay=mx.slow.test[192.0.2.40] delay=1200 status=sent (250 2.0.0 ok: queued as MX-1)
+Q1 to=<hal@nowhere.test> relay=mx.nowhere.test[192.0.2.99] delay=1200 status=deferred (4.4.1 connection refused), retry at 3000
+Q1 to=<hal@nowhere.test> relay=mx.nowhere.test[192.0.2.99] delay=3000 status=deferred (4.4.1 connection refused), retry at 6600
+Q1 to=<hal@nowhere.test> status=expired (delivery time expired after 4 attempts: 4.4.1 connection refused)
+Q5 to=<alice@relay.test> relay=local status=sent (delivered to mailbox)
+Q6 to=<carol@relay.test> relay=local status=sent (delivered to mailbox)
+== mailbox alice: 3 messages
+-- Q3 from=<>
+  | From: MAILER-DAEMON@relay.test
+  | To: alice@relay.test
+  | Subject: Undelivered Mail Returned to Sender
+  | X-Original-Queue-Id: Q1
+  | 
+  | This is the mail system at relay.test.
+  | Your message could not be delivered to:
+  | 
+  | <nobody@strict.test>: 550 5.1.1 <nobody@strict.test>: user unknown
+  | 
+  | --- original headers ---
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q1; t=0
+  | From: alice@relay.test
+  | To: bob@example.org, dan@example.org, erin@flaky.test
+  | Subject: Quarterly numbers
+-- Q4 from=<>
+  | From: MAILER-DAEMON@relay.test
+  | To: alice@relay.test
+  | Subject: Undelivered Mail Returned to Sender
+  | X-Original-Queue-Id: Q2
+  | 
+  | This is the mail system at relay.test.
+  | Your message could not be delivered to:
+  | 
+  | <ivy@big.test>: 552 5.3.4 message size 1594 exceeds fixed maximum 1000
+  | 
+  | --- original headers ---
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q2; t=0
+  | From: alice@relay.test
+  | To: ivy@big.test
+  | Subject: Attachment
+-- Q5 from=<>
+  | From: MAILER-DAEMON@relay.test
+  | To: alice@relay.test
+  | Subject: Undelivered Mail Returned to Sender
+  | X-Original-Queue-Id: Q1
+  | 
+  | This is the mail system at relay.test.
+  | Your message could not be delivered to:
+  | 
+  | <hal@nowhere.test>: delivery time expired after 4 attempts: 4.4.1 connection refused
+  | 
+  | --- original headers ---
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q1; t=0
+  | From: alice@relay.test
+  | To: bob@example.org, dan@example.org, erin@flaky.test
+  | Subject: Quarterly numbers
+== mailbox carol: 2 messages
+-- Q1 from=<alice@relay.test>
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q1; t=0
+  | From: alice@relay.test
+  | To: bob@example.org, dan@example.org, erin@flaky.test
+  | Subject: Quarterly numbers
+  | 
+  | Hello all,
+  | 
+  | .a line that starts with a dot
+  | ..and one with two
+  | 
+  | -- alice
+-- Q6 from=<spam@evil.test>
+  | Received: from evil.test
+  | 	by relay.test with ESMTP id Q6; t=6600
+  | Subject: hi
+  | 
+  | not spam, promise
+== mx1.example.org: 1 connections, 1 messages
+-- from=<alice@relay.test> to=<bob@example.org>,<dan@example.org>
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q1; t=0
+  | From: alice@relay.test
+  | To: bob@example.org, dan@example.org, erin@flaky.test
+  | Subject: Quarterly numbers
+  | 
+  | Hello all,
+  | 
+  | .a line that starts with a dot
+  | ..and one with two
+  | 
+  | -- alice
+== mx2.flaky.test: 1 connections, 1 messages
+-- from=<alice@relay.test> to=<erin@flaky.test>
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q1; t=0
+  | From: alice@relay.test
+  | To: bob@example.org, dan@example.org, erin@flaky.test
+  | Subject: Quarterly numbers
+  | 
+  | Hello all,
+  | 
+  | .a line that starts with a dot
+  | ..and one with two
+  | 
+  | -- alice
+== mx1.flaky.test: 1 connections, 0 messages
+== mx.strict.test: 1 connections, 1 messages
+-- from=<alice@relay.test> to=<frank@strict.test>
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q1; t=0
+  | From: alice@relay.test
+  | To: bob@example.org, dan@example.org, erin@flaky.test
+  | Subject: Quarterly numbers
+  | 
+  | Hello all,
+  | 
+  | .a line that starts with a dot
+  | ..and one with two
+  | 
+  | -- alice
+== mx.slow.test: 3 connections, 1 messages
+-- from=<alice@relay.test> to=<gina@slow.test>
+  | Received: from client.test (authenticated as alice)
+  | 	by relay.test with ESMTP id Q1; t=0
+  | From: alice@relay.test
+  | To: bob@example.org, dan@example.org, erin@flaky.test
+  | Subject: Quarterly numbers
+  | 
+  | Hello all,
+  | 
+  | .a line that starts with a dot
+  | ..and one with two
+  | 
+  | -- alice
+== mx.big.test: 1 connections, 0 messages

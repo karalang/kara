@@ -512,6 +512,7 @@ fn lower_program_inner<'a>(
         signatures_only_from,
         comptime_eval: roots.is_some(),
         literal_statics: FxHashMap::default(),
+        const_statics: FxHashMap::default(),
         literal_queue: Vec::new(),
         values_statics: FxHashMap::default(),
         values_queue: Vec::new(),
@@ -1424,6 +1425,10 @@ struct Lcx<'a> {
     /// The statics holding a literal lent to a `ref T` slot (core
     /// semantics §5.3), by type and spelling.
     literal_statics: FxHashMap<(Ty, String), u32>,
+    /// The statics holding a constant that is lent as a place (core
+    /// semantics §5.3: a view of a constant borrows nothing), by
+    /// definition (B-2026-11-15-14).
+    const_statics: FxHashMap<DefId, u32>,
     /// Literal statics whose initializer is still to be built.
     literal_queue: Vec<(&'a Expr, Ty, String)>,
     /// The static holding a C-like enum's variants in declaration order,
@@ -2628,6 +2633,28 @@ impl<'a> Lcx<'a> {
         self.statics.insert(d, (idx, t, b.is_mut));
         self.static_queue.push((d, init));
         Some((idx, t, b.is_mut))
+    }
+
+    /// The static holding the constant `d`, whose initializer `value` has
+    /// type `t`: one per constant, its value computed before `main` like a
+    /// module binding's, so a view of it borrows nothing (core semantics
+    /// §5.3, B-2026-11-15-14).
+    fn const_static(&mut self, d: DefId, value: &'a Expr, t: Ty) -> u32 {
+        if let Some(&i) = self.const_statics.get(&d) {
+            return i;
+        }
+        let i = self.program.statics.len() as u32;
+        let name = format!("const{}", self.const_statics.len());
+        let init = format!("static.{name}");
+        self.program.statics.push(StaticDef {
+            name,
+            ty: t,
+            mutable: false,
+            init: init.clone(),
+        });
+        self.const_statics.insert(d, i);
+        self.default_queue.push((value, t, init));
+        i
     }
 
     /// The static holding the literal `e` of type `t`: one per type and
@@ -7942,6 +7969,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     },
                 },
                 Some(&Res::Def(d)) if self.lcx.statics.contains_key(&d) => Ok(self.static_place(d)),
+                Some(&Res::Def(d)) if !mutable => match self.const_static_place(e, d)? {
+                    Some(p) => Ok(p),
+                    None => self.temp_place(e),
+                },
                 _ => self.temp_place(e),
             },
             // `F.value.x` with an uppercase local `F`, which the parser
@@ -8038,6 +8069,35 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The place of a module binding that lives in a static: `*_t`, with
     /// `_t` the static's borrow.
+    /// The constant `d`, named by `e` and lent as a place, in its static:
+    /// an `Array` or tuple of values that need no drop, used at its own
+    /// type (`MX.iter()`, `for x in NAMES`). A view of it borrows nothing,
+    /// as core semantics §5.3 has a view of a constant do; any other
+    /// constant is built in a temporary at each use (B-2026-11-15-14).
+    fn const_static_place(&mut self, e: &'a Expr, d: DefId) -> R<Option<Place>> {
+        let Some(value) = self.lcx.consts.get(&d).copied() else {
+            return Ok(None);
+        };
+        let t = self.expr_ty(value)?;
+        if self.expr_ty(e)? != t
+            || self.needs_drop(t)
+            || !matches!(self.tys().tcx().kind(t), HK::Array { .. } | HK::Tuple(_))
+        {
+            return Ok(None);
+        }
+        let i = self.lcx.const_static(d, value, t);
+        let rt = self.tys().tcx().reference(t, false);
+        let l = self.temp(rt);
+        self.assign(
+            l,
+            Rvalue::Use(Operand::Const(Const {
+                ty: rt,
+                kind: ConstKind::Static(i),
+            })),
+        );
+        Ok(Some(Place::local(l).project(ProjElem::Deref)))
+    }
+
     fn static_place(&mut self, d: DefId) -> Place {
         let (i, t, mutable) = self.lcx.statics[&d];
         let rt = self.tys().tcx().reference(t, mutable);

@@ -6133,6 +6133,39 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `*g` with `g` a `MutexGuard[T]`: refused, with the two edits that
+    /// make it `g.value` (drop the `*`, append `.value`). A guard has no
+    /// `Deref`; its value is a field (design.md § No user `Deref`,
+    /// B-2026-11-15-12).
+    fn mutex_guard_deref_fix(&mut self, span: &Span, operand: &Expr) {
+        let message = "unary '*' on a 'MutexGuard': a guard has no `Deref`, and its value \
+                       is its `value` field, so `*g` is `g.value` \
+                       (docs/library/concurrency.md § `Mutex[T]`)"
+            .to_string();
+        // Where `.value` goes: after the operand, when the operand ends
+        // where a postfix can follow it.
+        let Some(end) = to_string_fix(operand).map(|f| f.span.offset) else {
+            self.type_error(message, *span, TypeErrorKind::InvalidUnaryOp);
+            return;
+        };
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(span),
+            vec![
+                crate::resolver::TextEdit {
+                    offset: span.offset,
+                    length: operand.span.offset - span.offset,
+                    replacement: String::new(),
+                },
+                crate::resolver::TextEdit {
+                    offset: end,
+                    length: 0,
+                    replacement: ".value".to_string(),
+                },
+            ],
+        );
+        self.type_error(message, *span, TypeErrorKind::InvalidUnaryOp);
+    }
+
     /// v2 core (strict commands): is `operand` a view the checker binds at
     /// its element type, so that `*operand` reads through a borrow?
     fn core_deref_of_view(&self, operand: &Expr) -> bool {
@@ -6510,6 +6543,18 @@ impl<'a> super::TypeChecker<'a> {
                 // The item of a refused `flatten` has no type; the refusal
                 // already said what to write.
                 Type::TypeVar(_) if self.flatten_hinted => Type::Error,
+                // Rust's `*guard = v` / `mut *guard`: a guard has no `Deref`
+                // (design.md § No user `Deref`); its value is the `value`
+                // field, so `*g` is `g.value`. Typed as the guarded value, so
+                // the rest of the expression checks against it.
+                Type::Named { name, mut args }
+                    if name == "MutexGuard"
+                        && args.len() == 1
+                        && operand.span.offset > span.offset =>
+                {
+                    self.mutex_guard_deref_fix(span, operand);
+                    args.pop().unwrap_or(Type::Error)
+                }
                 _ => {
                     let message = format!(
                         "unary '*' requires 'ref T', 'mut ref T', or a raw pointer \

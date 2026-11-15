@@ -1001,6 +1001,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Vec[i32]` argument, were refused as 'found Vec[i64]' (design.md §8,
   B-2026-11-08-88).
 
+- A view of a constant lent as a place (`for (d, name) in MX.iter()`, a
+  `Str` kept from it or from a function given it) borrows nothing, as core
+  semantics §5.3 says: the constant lives in a static rather than in a
+  temporary of the statement, which such a view was refused for outliving
+  (B-2026-11-15-14). A binding of a loop item destructured through its
+  `Option` (`for (n, _) in arr.iter()`, then `kept.push(n)`) no longer keeps
+  the loop's item borrowed, as one bound from a reference held directly did
+  not (B-2026-11-15-15).
+- The interpreter's UDP `recv_from` on Windows: a datagram longer than the
+  1-byte readiness peek is ready (Winsock reports `WSAEMSGSIZE` where Linux
+  truncates), so the receive reads it instead of failing.
+
 ### Performance
 
 - **Collecting a `chain` of integer ranges allocates once.**
@@ -1134,6 +1146,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`.iter().map(|(_, n)| *n)`), is refused by the check with a fix that writes
   `n.clone()`, or a tuple's parts one by one. Only the build refused it, with
   no fix (B-2026-11-14-26).
+- Rust's `*guard` on a lock (`*m.lock() = v`, `take(mut *m.lock())`) is
+  refused with a fix that writes the guard's `value` field, since a guard has
+  no `Deref` (B-2026-11-15-12).
+- A `ref x` over a `String` in a tuple wanted as `(Str, ..)`, which `karac fix`
+  writes for Rust's `unwrap_or((&line, ""))`, gets a fix to `x.as_str()`; it
+  was refused with no hint (B-2026-11-15-13).
+- `const NAMES: Slice[T] = [..]`, which `karac fix` writes for Rust's
+  `&[T] = &[..]`, is refused at the declaration with a fix to `Array[T, N]`; a
+  `for` loop over it used to fail the build (B-2026-11-15-14).
 - A value read out of a tuple a literal was pushed into
   (`graph[a].push((b, 0))`, then `for (next, color) in graph[n]`) and narrowed
   into an `i32` names that literal, and `karac fix` writes its suffix
