@@ -182,6 +182,25 @@ pub(crate) fn starts_upper(s: &str) -> bool {
     s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// The longest module of Kāra's own library (`std.random`, `std.crypto.sha2`)
+/// that `names` starts with and goes past, when it declares the function
+/// named next, as its segments. `std.cmp.max` is not one: `std.cmp` holds
+/// `Reverse`, and `max` is the prelude's.
+fn kara_std_module<'n>(names: &[&'n str]) -> Option<Vec<&'n str>> {
+    crate::prelude::GATED_STDLIB_SOURCES
+        .iter()
+        .filter(|(path, src)| {
+            path.len() >= 2 && names.len() > path.len() && names[..path.len()] == **path && {
+                let f = names[path.len()];
+                [format!("fn {f}("), format!("fn {f}[")]
+                    .iter()
+                    .any(|d| src.contains(d.as_str()))
+            }
+        })
+        .max_by_key(|(path, _)| path.len())
+        .map(|(path, _)| names[..path.len()].to_vec())
+}
+
 /// Whether segment `at` of a Rust path is a module Kāra's own expressions
 /// name, followed by one of its functions (`std::fs::read_to_string` is
 /// `fs.read_to_string`, `std.env.args` is `env.args`): the fix that deletes
@@ -1573,7 +1592,10 @@ impl Parser {
     /// (`mem.take`, `mem.swap`). The resolver reports it only when the root
     /// is undeclared, so a local named `std` (a standard deviation) is left
     /// alone.
-    fn rust_std_paths(&self) -> rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit)> {
+    #[allow(clippy::type_complexity)]
+    fn rust_std_paths(
+        &self,
+    ) -> rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit, Option<String>)> {
         const ROOTS: &[&str] = &["std", "core", "alloc", "cmp", "collections"];
         const PRIMITIVES: &[&str] = &[
             "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
@@ -1605,6 +1627,44 @@ impl Parser {
                 continue;
             }
             let names: Vec<&str> = segments.iter().filter_map(|&k| name_at(k)).collect();
+            // `std.random.next_u64()`: a module of Kāra's own library, which
+            // is imported rather than reached by its path, so dropping the
+            // path would name a function nothing declares (B-2026-11-15-19).
+            // `std.process.exit` stays `process.exit`, which needs no import.
+            let kara_std = (!kara_module_call(&names, 1)).then(|| kara_std_module(&names));
+            if let Some(module) = kara_std.flatten() {
+                let start = self.tokens[i].span.offset;
+                let leaf = module.last().copied().unwrap_or_default();
+                let rest = names[module.len()..].join(".");
+                let path = module.join(".");
+                // `import std.random;`, the module itself (not a list from it).
+                let imported = self.tokens.windows(2 * module.len() + 1).any(|w| {
+                    matches!(w[0].token, Token::Import)
+                        && !matches!(w[2 * module.len()].token, Token::Dot)
+                        && module.iter().enumerate().all(|(k, seg)| {
+                            matches!(&w[1 + 2 * k].token, Token::Identifier { name, .. } if name == seg)
+                                && (k + 1 == module.len()
+                                    || matches!(w[2 + 2 * k].token, Token::Dot))
+                        })
+                });
+                let message = format!(
+                    "`{}` is a path into Kāra's `{path}` module, which a program imports: \
+                     `import {path};` and then `{leaf}.{rest}`, or `import {path}.{{{}}};` and \
+                     then `{}`",
+                    names.join("."),
+                    names[module.len()],
+                    names[module.len()..].join("."),
+                );
+                let keep = self.tokens[segments[module.len() - 1]].span.offset;
+                let edit = crate::resolver::TextEdit {
+                    offset: start,
+                    length: keep - start,
+                    replacement: String::new(),
+                };
+                let import = (!imported).then(|| format!("import {path};\n"));
+                out.insert(start, (message, edit, import));
+                continue;
+            }
             let mut dropped = 0;
             while dropped < names.len() - 1
                 && !starts_upper(names[dropped])
@@ -1628,7 +1688,7 @@ impl Parser {
                 length: keep - start,
                 replacement: String::new(),
             };
-            out.insert(start, (message, edit));
+            out.insert(start, (message, edit, None));
         }
         out
     }

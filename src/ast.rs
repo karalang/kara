@@ -958,7 +958,11 @@ pub struct Program {
     /// segments Kāra has no use for (`std.`, `cmp.`, `collections.`; `mem.`
     /// is Kāra's own and stays). Set by the PARSER from the tokens; the
     /// resolver reports it when the root turns out undeclared (kata 2076).
-    pub rust_std_paths: rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit)>,
+    /// With the `import` line to add at the top, for a module of Kāra's
+    /// own library the program does not import yet.
+    #[allow(clippy::type_complexity)]
+    pub rust_std_paths:
+        rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit, Option<String>)>,
     /// Every `recv.parse()` with no arguments, keyed by the call's offset:
     /// the call's span, with the receiver's text as the replacement. Set by
     /// the PARSER; when only a later use names the target (`let x: f64 =

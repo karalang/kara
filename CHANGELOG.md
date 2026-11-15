@@ -1160,6 +1160,21 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `collect` does not convert its items, and `karac fix` widens them: the
   `map` closure's body becomes `(b - 96) as i64`, or a `.map(|x| x as i64)`
   goes before the `collect` when there is no such body (B-2026-11-14-12).
+- A `FileSystem` fake whose handle method uses a resource overridden where
+  one of its files is used is refused by the check, naming the method and
+  the resource, also when that override is nested inside the `FileSystem`
+  one: a `close` that prints, under a nested `with_provider[Stdout]`, used to
+  print to the real stdout (core semantics §14.11, B-2026-11-15-18).
+- `std.random.next_u64()` says the function is reached through its module,
+  `import std.random;` and then `random.next_u64()`, and `karac fix` writes
+  the import and the shortened call; it used to suggest `next_u64()`, which
+  nothing declares. The same for `std.uuid` and Kāra's other `std` modules
+  (B-2026-11-15-19).
+- `karac explain` knows 17 more codes, among them `E_INT_AS_BOOL`, `E_SHAPE`,
+  `W_DEPENDENCY_YANKED` and the runtime's
+  `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY`. The test that checks every minted
+  code is catalogued no longer stops at an out-of-line test module, and
+  reads warnings and runtime codes too (B-2026-11-15-20).
 - A value computed from a fill's elements, `let l = pre[k + 1] - pre[i]`,
   refused at an `i32` `max` names the fill's literal and `karac fix` writes
   `0i32` there, as it already did for a read of the fill itself

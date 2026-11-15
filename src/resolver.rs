@@ -2257,13 +2257,34 @@ impl<'a> Resolver<'a> {
     /// guess, with a fix where the rewrite is certain (B-2026-11-07-40).
     fn report_foreign_name(&mut self, name: &str, span: Span) -> bool {
         // `std.mem.take(..)`: Rust's path written with dots (kata 2076).
-        if let Some((message, edit)) = self.program.rust_std_paths.get(&span.offset).cloned() {
+        if let Some((message, edit, import)) =
+            self.program.rust_std_paths.get(&span.offset).cloned()
+        {
+            // A module of Kāra's library not yet imported: the import and the
+            // shortened call are one fix (B-2026-11-15-19).
+            let replacement = match import {
+                Some(line) => {
+                    self.error_fix_diffs.insert(
+                        SpanKey::from_span(&span),
+                        vec![
+                            TextEdit {
+                                offset: 0,
+                                length: 0,
+                                replacement: line,
+                            },
+                            edit,
+                        ],
+                    );
+                    None
+                }
+                None => Some(Box::new(edit)),
+            };
             self.errors.push(ResolveError {
                 message,
                 span,
                 kind: ResolveErrorKind::UndefinedName,
                 suggestion: None,
-                replacement: Some(Box::new(edit)),
+                replacement,
                 stub_hint: None,
             });
             return true;

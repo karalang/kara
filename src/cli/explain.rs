@@ -1152,6 +1152,73 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E_CHAR_AS_NARROW_INT",
         ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
     ),
+    // B-2026-11-15-20: minted in typechecker.rs past its out-of-line
+    // `#[cfg(test)] mod tests;`, which the guard below used to stop at.
+    (
+        "E_INT_AS_BOOL",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_INT_AS_CHAR",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_FLOAT_AS_BOOL",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_INT_TO_PTR_CAST_FORBIDDEN",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_PTR_TO_INT_CAST_FORBIDDEN",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_REF_TO_RAW_PTR_CAST_FORBIDDEN",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_PTR_CAST_REQUIRES_UNSAFE",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_REFINEMENT_CAST_SOURCE_MISMATCH",
+        ty("InvalidCast", Some(DiagnosticClass::InvalidCast)),
+    ),
+    (
+        "E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_IMPL_TARGET_NOT_DISTINGUISHABLE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_IMPL_TRAIT_ASSOC_MISMATCH",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_IMPL_TRAIT_MISSING_BOUND",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_SHAPE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_IMPL_TRAIT_MULTIPLE_WITNESSES",
+        ty(
+            "ImplTraitMultipleWitnesses",
+            Some(DiagnosticClass::TypeMismatch),
+        ),
+    ),
+    ("E_MISSING_NON_EXHAUSTIVE", ty("MissingNonExhaustive", None)),
+    ("W_DEPENDENCY_YANKED", phased("dep_resolution", "Warning")),
+    (
+        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
+        phased("runtime", "StringSliceNotAtCharBoundary"),
+    ),
     ("E_CODEGEN_HINT_ON_CLOSURE", parse("Syntax")),
     ("E_COLD_INLINE_ALWAYS_CONFLICT", parse("Syntax")),
     ("E_COMPTIME_ERROR", phased("comptime", "ComptimeError")),
@@ -1975,6 +2042,20 @@ const fn res(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
 /// and names the section, so the prose has a source to be checked against.
 const CODE_PROSE: &[(&str, &str)] = &[
     (
+        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
+        "A runtime error: a string was sliced by a byte range (`s[a..b]`) whose \
+         ends do not fall between UTF-8 characters, so the slice would cut a \
+         character in two. Slice at a boundary (`s.char_indices()` gives each \
+         character's byte offset), or work in characters with `s.chars()`.",
+    ),
+    (
+        "W_DEPENDENCY_YANKED",
+        "A warning from the build: `kara.lock` pins a dependency to a version \
+         its registry has since yanked. The build still uses it, so the lock \
+         stays reproducible, but a yanked release should not be relied on: \
+         move to a version the registry still offers and update the lock.",
+    ),
+    (
         "E0001",
         "The parser could not read this part of the file as Kāra. The message \
          says what went wrong at the marked position. Common causes are an \
@@ -2114,7 +2195,7 @@ fn lookup_code(code: &str) -> Vec<CodeEntry> {
 /// explain` reads it as a code, not as the class name its UPPER_SNAKE shape
 /// would otherwise make it.
 pub fn is_symbolic_code(name: &str) -> bool {
-    name.starts_with("E_") && !lookup_code(name).is_empty()
+    (name.starts_with("E_") || name.starts_with("W_")) && !lookup_code(name).is_empty()
 }
 
 fn unknown_code_message(code: &str) -> String {
@@ -4662,27 +4743,50 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         walk(&root, &mut files);
+        // The runtime mints the codes of its own panics (`runtime error:
+        // E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: ..`).
+        let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/src");
+        walk(&runtime, &mut files);
         let mut out = Vec::new();
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
-            // Cut at the first test module.
+            // Cut at the first INLINE test module, `mod tests {`. An
+            // out-of-line one, `#[cfg(test)] mod tests;`, holds nothing of
+            // this file, and cutting there once left 9000 lines of
+            // typechecker.rs unscanned (B-2026-11-15-20).
             let mut end = text.len();
             let mut at = 0;
             while let Some(hit) = text[at..].find("#[cfg(test)]") {
                 let start = at + hit;
                 let rest = text[start + "#[cfg(test)]".len()..].trim_start();
-                if rest.starts_with("mod ") || rest.starts_with("pub mod ") {
-                    end = start;
-                    break;
+                let rest = rest.strip_prefix("pub ").unwrap_or(rest);
+                if let Some(m) = rest.strip_prefix("mod ") {
+                    let after = m.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_');
+                    if after.trim_start().starts_with('{') {
+                        end = start;
+                        break;
+                    }
                 }
                 at = start + 1;
             }
-            let file = path.strip_prefix(&root).unwrap().display().to_string();
+            let file = path
+                .strip_prefix(&root)
+                .or_else(|_| path.strip_prefix(&runtime))
+                .unwrap()
+                .display()
+                .to_string();
             for line in text[..end].lines() {
                 if line.trim_start().starts_with("//") {
                     continue;
                 }
-                for (open, close) in [("\"E_", b'"'), ("error[E_", b']')] {
+                for (open, close) in [
+                    ("\"E_", b'"'),
+                    ("error[E_", b']'),
+                    ("\"W_", b'"'),
+                    ("warning[W_", b']'),
+                    ("runtime error: E_", b':'),
+                    ("\"E_", b':'),
+                ] {
                     let b = line.as_bytes();
                     let mut at = 0;
                     while let Some(hit) = line[at..].find(open) {
@@ -4738,6 +4842,12 @@ mod tests {
             "E_TEST_BLOCK_NOT_TOP_LEVEL",
             "E_CHAR_AS_NARROW_INT",
             "E_INSTALL_HOME_UNSET",
+            // Past typechecker.rs's out-of-line test module, a warning, and
+            // a runtime panic's code (B-2026-11-15-20).
+            "E_INT_AS_BOOL",
+            "E_SHAPE",
+            "W_DEPENDENCY_YANKED",
+            "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
         ] {
             assert!(is_symbolic_code(code), "{code}");
         }

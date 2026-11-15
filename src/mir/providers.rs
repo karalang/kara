@@ -24,7 +24,7 @@
 //! (field-less) default where it is made, as the builder does for a program
 //! that never binds the resource.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::effects::{Access, ResourceDecl};
 use super::interp::Program;
@@ -472,6 +472,10 @@ pub fn specialise(
         queue: Vec::new(),
         carried: BTreeMap::new(),
         refused: Vec::new(),
+        current: String::new(),
+        around: BTreeMap::new(),
+        file_uses: Vec::new(),
+        handle_refused: BTreeSet::new(),
     };
     // A body that reaches only resources with a default runs against the
     // defaults under its own name; it is also the template of its copies.
@@ -519,6 +523,7 @@ pub fn specialise(
             program.bodies.remove(&name);
         }
     }
+    s.judge_file_uses();
     Ok(s.refused)
 }
 
@@ -536,6 +541,24 @@ struct Spec<'p> {
     carried: BTreeMap<String, Carried>,
     /// What the overrides cannot do, each once.
     refused: Vec<Refused>,
+    /// The body being rewritten, and per body copy the resources bound
+    /// around a call that reaches it, which its own environment leaves
+    /// out when it does not use them (B-2026-11-15-18).
+    current: String,
+    around: BTreeMap<String, BTreeSet<String>>,
+    /// The program's uses of a file of a bound `FileSystem` provider: the
+    /// site, the provider's type, the handle methods it can run and the
+    /// resources bound in the body's own environment. Judged once every
+    /// copy's `around` is known.
+    file_uses: Vec<(
+        super::effects::NoProvider,
+        Ty,
+        &'static [&'static str],
+        BTreeSet<String>,
+    )>,
+    /// A provider type and a resource its handle methods use that its
+    /// binding site already refused.
+    handle_refused: BTreeSet<(Ty, String)>,
 }
 
 /// One body being rewritten under one environment.
@@ -553,7 +576,14 @@ impl Spec<'_> {
     /// The name of `template`'s copy under `env` (restricted to what it
     /// needs), queued if it is new.
     fn request(&mut self, template: &str, env: &Env) -> Result<String, String> {
+        let mut around = self.around.get(&self.current).cloned().unwrap_or_default();
+        around.extend(
+            env.iter()
+                .filter(|(_, b)| matches!(b, Binding::Bound(_)))
+                .map(|(r, _)| r.clone()),
+        );
         let (env, name) = self.copy_name(template, env)?;
+        self.around.entry(name.clone()).or_default().extend(around);
         if name != template && self.queued.insert(name.clone(), ()).is_none() {
             self.queue.push((template.to_string(), env, name.clone()));
         }
@@ -591,6 +621,7 @@ impl Spec<'_> {
     /// Rewrites `body`, a copy of `template`, under `env`.
     fn rewrite(&mut self, template: &str, body: &mut Body, env: &Env) -> Result<(), String> {
         let needs = self.needs.get(template).cloned().unwrap_or_default();
+        self.current = body.instance.name.clone();
         let mut fx = Fx {
             body,
             env: env.clone(),
@@ -649,6 +680,7 @@ impl Spec<'_> {
             self.carry_native(&mut fx, bb, template)?;
             self.check_values(&fx, bb)?;
             self.refuse_dyn(&fx, bb);
+            self.refuse_handle_uses(&fx, bb, template);
             let TerminatorKind::Call {
                 func:
                     Operand::Const(Const {
@@ -1456,6 +1488,114 @@ impl Spec<'_> {
         }
     }
 
+    /// A use of a file in the program, at `bb`, where a resource one of
+    /// the bound `FileSystem` provider's handle methods uses is overridden:
+    /// the library calls those methods with every other resource at its
+    /// default, so a fake's `close` that prints under a `Stdout` override
+    /// would print to the real stdout (core semantics §14.11,
+    /// B-2026-11-15-18). An opening or other `File` call can run any of
+    /// them, a file's drop runs `close`. The library's own uses are the
+    /// program's call's, not reported again.
+    fn refuse_handle_uses(&mut self, fx: &Fx, bb: BasicBlock, template: &str) {
+        const R: &str = "FileSystem";
+        if self.sigs.get(template).is_some_and(|s| s.library) {
+            return;
+        }
+        let Some(Binding::Bound(t)) = fx.env.get(R).copied() else {
+            return;
+        };
+        // An opening, or an operation on an open file: what runs the
+        // provider's handle methods (`FileSystem.read_to_string` and the
+        // other path operations call the provider itself, in this scope).
+        let file_api = |name: &str| {
+            name == "FileSystem.open_file"
+                || [
+                    "FileSystem.file_",
+                    "File.",
+                    "OpenOptions.",
+                    "BufReader",
+                    "BufWriter",
+                ]
+                .iter()
+                .any(|p| name.starts_with(p))
+        };
+        let methods: &[&str] = match &fx.body.blocks[bb.index()].terminator.kind {
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                ..
+            } if file_api(&inst.name) => &["read_handle", "write_handle", "close"],
+            TerminatorKind::Drop { place, .. } => match place_ty(fx.body, self.tys, place) {
+                Ok(pt) if self.tys.display(pt.ty).contains("File") => &["close"],
+                _ => return,
+            },
+            _ => return,
+        };
+        let bound = fx
+            .env
+            .iter()
+            .filter(|(_, b)| matches!(b, Binding::Bound(_)))
+            .map(|(r, _)| r.clone())
+            .collect();
+        let site = super::effects::NoProvider {
+            instance: fx.body.instance.name.clone(),
+            block: bb,
+            span: fx.body.blocks[bb.index()].terminator.source_info.span,
+            resource: R.to_string(),
+        };
+        self.file_uses.push((site, t, methods, bound));
+    }
+
+    /// Each use of a file noted by [`Self::refuse_handle_uses`] where a
+    /// resource its provider's handle methods use is bound, around the
+    /// body or in it: refused, naming the method and the resource.
+    fn judge_file_uses(&mut self) {
+        const R: &str = "FileSystem";
+        let mut uses = std::mem::take(&mut self.file_uses);
+        // An opening before a drop, so the report points at the opening.
+        uses.sort_by_key(|u| std::cmp::Reverse(u.2.len()));
+        // One report per body and problem: its open and its drop are one.
+        let mut said: BTreeSet<(String, String)> = BTreeSet::new();
+        for (site, t, methods, bound) in uses {
+            let mut here = self.around.get(&site.instance).cloned().unwrap_or_default();
+            here.extend(bound);
+            for &m in methods {
+                let Some(method) = self.resources[R].impls.get(&t).and_then(|ms| ms.get(m)) else {
+                    continue;
+                };
+                for used in self.needs.get(method).into_iter().flat_map(|n| n.keys()) {
+                    if used == R
+                        || !here.contains(used)
+                        || self.handle_refused.contains(&(t, used.clone()))
+                    {
+                        continue;
+                    }
+                    let shown = method.split_once('.').map_or(m, |(_, n)| n);
+                    let text = format!(
+                        "`{}.{shown}` uses `{used}`, which is overridden where this file is \
+                         used; a file's `{m}` runs with every other resource at its default \
+                         (core semantics §14.11)",
+                        self.tys.display(t)
+                    );
+                    let why = Refusal::HandleUsesOverride { text };
+                    let at = super::effects::NoProvider {
+                        resource: used.clone(),
+                        ..site.clone()
+                    };
+                    let Refusal::HandleUsesOverride { text } = &why else {
+                        unreachable!()
+                    };
+                    if said.insert((at.instance.clone(), text.clone())) {
+                        self.refused.push((at, why));
+                    }
+                }
+            }
+        }
+    }
+
     /// The handle methods of the `FileSystem` provider type `pt` that a
     /// `FileSystem.enter` registers, specialised for `env`, the resources
     /// around `site`. The interpreter calls the first three; the compiled
@@ -1494,6 +1634,7 @@ impl Spec<'_> {
                          semantics {rule})"
                     );
                     self.refuse(fx, bb, used, Refusal::HandleUsesOverride { text });
+                    self.handle_refused.insert((pt, used.clone()));
                 }
             }
             let name = self.request(&method, env)?;
