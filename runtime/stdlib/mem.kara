@@ -32,6 +32,13 @@ pub fn replace[T](dest: mut ref T, value: own T) -> T { value }
 // `<Concrete>.default` (codegen, via the monomorph's type substitution).
 pub fn take[T: Default](dest: mut ref T) -> T { replace(dest, T.default()) }
 
+// The all-zeros `T` (design.md §15 `mem.zeroed()`), in safe code: `Pod`
+// is the bound under which the zero bits are a valid `T`. `T` comes from
+// the expected type. The MIR builder makes the value (`mem_call`); the
+// stub body is never lowered.
+#[compiler_builtin]
+pub fn zeroed[T: Pod]() -> T { zeroed() }
+
 // End a value's life early: `x` moves in and drops when `drop` returns, so a
 // `BufWriter` flushes and a file closes there (library/README.md § The
 // prelude; core-semantics.md §7). An ordinary function: the move and the

@@ -1355,6 +1355,7 @@ impl TypeEnv {
             "Ord" => return self.type_supports_ord(ty),
             "Hash" => return self.type_supports_hash(ty),
             "Default" => return self.type_supports_default(ty),
+            "Pod" => return self.type_supports_pod(ty),
             "Fn" | "MutFn" | "OnceFn" => return Self::type_supports_fn_trait(ty, trait_name),
             // The scalars and strings display without an impl-table entry,
             // so `impl[T: Display] Slice[T]` (the library's `join`) takes

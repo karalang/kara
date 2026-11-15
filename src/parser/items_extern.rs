@@ -395,6 +395,22 @@ impl super::Parser {
 
         self.expect(&Token::Semicolon)?;
 
+        // `#[kara_name("CFile")] type FILE;` is `CFile` to Kāra (design.md
+        // § Opaque foreign types): the type has no symbol, so the foreign
+        // name is kept only for the source's own sake (FF2).
+        let rebound = attributes
+            .iter()
+            .find(|a| a.is_bare("kara_name"))
+            .and_then(|a| a.string_arg())
+            .map(str::to_string);
+        let (name, foreign_name) = match rebound {
+            Some(k) => {
+                let name_span = self.span_from(&name_start);
+                self.check_ident_class(&k, IdentClass::Type, "opaque foreign type", name_span);
+                (k, Some(name))
+            }
+            None => (name, None),
+        };
         Some(OpaqueTypeDecl {
             span: self.span_from(&start),
             attributes,
@@ -402,6 +418,7 @@ impl super::Parser {
             is_pub,
             is_private,
             name,
+            foreign_name,
         })
     }
 

@@ -287,7 +287,7 @@ pub struct FrozenHints {
 fn crossing(name: &str) -> String {
     format!(
         "a parameter or return type of the `extern \"C\"` function `{name}` other than an \
-         integer, `bool`, `f32`, `f64` or raw pointer"
+         integer, `bool`, `f32`, `f64`, raw pointer or plain-data struct"
     )
 }
 
@@ -3384,6 +3384,12 @@ impl<'a> Lcx<'a> {
                 // `CStr` / `CString`: opaque, their bytes held by the
                 // interpreter's natives.
                 (Vec::new(), vec![(name.clone(), Vec::new())], false, copy)
+            } else if matches!(self.defs.table.get(def).kind, DefKind::OpaqueType) {
+                // `type FILE;` in an `unsafe extern` block (design.md §
+                // Opaque foreign types): only ever pointed at, so a type of
+                // no fields stands for it; the checker refuses a value of
+                // one (FF2).
+                (Vec::new(), vec![(name.clone(), Vec::new())], false, false)
             } else {
                 return Err(format!("no definition for type `{name}`"));
             };
@@ -19404,18 +19410,44 @@ impl<'l, 'a> Bx<'l, 'a> {
                 "an `extern` call with the wrong number of arguments",
             );
         }
+        // A type `extern_ty` does not spell (a `#[repr(C)]` struct, a
+        // `#[repr(transparent)]` wrapper, a pointer to either) is the one
+        // the checker gave the argument or the call (FF3, FF5).
         let mut params = Vec::with_capacity(args.len());
-        for p in &decl.params {
-            match self.lcx.extern_ty(&p.ty) {
-                Some(t) => params.push(t),
-                None => return self.unsupported(p.ty.span, &crossing(&decl.name)),
-            }
+        for (p, a) in decl.params.iter().zip(args) {
+            let unit = self.unit();
+            let t = match self.lcx.extern_ty(&p.ty) {
+                Some(t) => match self.tys().tcx().kind(t) {
+                    HK::RawPtr { pointee, mutable } if pointee == unit => {
+                        let at = self.expr_ty(&a.value)?;
+                        match self.tys().tcx().kind(at) {
+                            HK::RawPtr { mutable: m, .. } if m == mutable => at,
+                            _ => t,
+                        }
+                    }
+                    _ => t,
+                },
+                None => {
+                    let at = self.expr_ty(&a.value)?;
+                    if !crate::mir::c_abi::crosses(self.tys(), at) {
+                        return self.unsupported(p.ty.span, &crossing(&decl.name));
+                    }
+                    at
+                }
+            };
+            params.push(t);
         }
         let ret = match &decl.return_type {
             None => self.unit(),
             Some(t) => match self.lcx.extern_ty(t) {
                 Some(t) => t,
-                None => return self.unsupported(t.span, &crossing(&decl.name)),
+                None => {
+                    let rt = self.place_type(&dest);
+                    if !crate::mir::c_abi::crosses(self.tys(), rt) {
+                        return self.unsupported(t.span, &crossing(&decl.name));
+                    }
+                    rt
+                }
             },
         };
         let mut ops = Vec::with_capacity(args.len());
@@ -21708,6 +21740,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.call_native("mem.replace", ops, dest);
                 Ok(true)
             }
+            // `mem.zeroed()` (design.md §15, FF4): the all-zeros `T` the
+            // `Pod` bound admits, built field by field, so each backend
+            // makes it as it makes any other value.
+            ("zeroed", []) => {
+                let t = self.place_type(&dest);
+                self.zero_into(e, t, dest)?;
+                Ok(true)
+            }
             // `drop(x)` (B-2026-11-09-72): `x` moves in and is dropped at
             // the call, as the library's empty body would at its end.
             ("drop", [a]) => {
@@ -21731,6 +21771,75 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => Ok(false),
         }
+    }
+
+    /// `dest = ` the all-zeros value of the `Pod` type `t` (`mem.zeroed`):
+    /// a zero scalar, or a tuple, array or struct of zeroed parts.
+    fn zero_into(&mut self, e: &'a Expr, t: Ty, dest: Place) -> R<()> {
+        let tcx = self.tys().tcx();
+        match tcx.kind(t) {
+            HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool => {
+                let kind = if matches!(tcx.kind(t), HK::Float(_)) {
+                    ConstKind::Float(0)
+                } else {
+                    ConstKind::Scalar(0)
+                };
+                let c = Operand::Const(Const { ty: t, kind });
+                self.assign(dest, Rvalue::Use(c));
+            }
+            HK::Unit => {
+                self.assign(dest, Rvalue::Use(unit_const(t)));
+            }
+            HK::Tuple(l) => {
+                let parts = tcx.list(l);
+                let mut ops = Vec::with_capacity(parts.len());
+                for p in parts {
+                    let v = self.temp(p);
+                    self.zero_into(e, p, Place::local(v))?;
+                    ops.push(Operand::Move(Place::local(v)));
+                }
+                self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
+            }
+            HK::Array {
+                elem,
+                len: crate::ty::ArrayLen::Known(n),
+            } => {
+                let v = self.temp(elem);
+                self.zero_into(e, elem, Place::local(v))?;
+                let ops = (0..n).map(|_| Operand::Copy(Place::local(v))).collect();
+                self.assign(dest, Rvalue::Aggregate(AggregateKind::Array(elem), ops));
+            }
+            HK::Adt { .. } => {
+                let Some((adt, _)) = tcx.adt_of(t) else {
+                    return self.unsupported(e.span, "`mem.zeroed()` of this type");
+                };
+                if adt.is_enum {
+                    return self.unsupported(e.span, "`mem.zeroed()` of an enum");
+                }
+                let n = adt.variants[0].fields.len() as u32;
+                let mut ops = Vec::with_capacity(n as usize);
+                for f in 0..n {
+                    let Some(ft) = self.tys().tcx().field_ty(t, None, f) else {
+                        return self.unsupported(e.span, "`mem.zeroed()` of this type");
+                    };
+                    let v = self.temp(ft);
+                    self.zero_into(e, ft, Place::local(v))?;
+                    ops.push(Operand::Move(Place::local(v)));
+                }
+                self.assign(
+                    dest,
+                    Rvalue::Aggregate(
+                        AggregateKind::Adt {
+                            ty: t,
+                            variant: VariantIdx(0),
+                        },
+                        ops,
+                    ),
+                );
+            }
+            _ => return self.unsupported(e.span, "`mem.zeroed()` of a type that is not `Pod`"),
+        }
+        Ok(())
     }
 
     /// The prelude's `min(a, b)`, `max(a, b)` and `clamp(v, low, high)` on

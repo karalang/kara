@@ -28,6 +28,8 @@ impl<'a> super::TypeChecker<'a> {
             "Debug",
             "Default",
             "Iterator",
+            // design.md §15 `mem.zeroed` (FF4).
+            "Pod",
         ];
         // `Numeric` and `GpuSafe` are built-in *marker* traits satisfied
         // structurally (not user-derivable, not impl-able). `Numeric` is

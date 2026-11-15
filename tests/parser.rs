@@ -5582,14 +5582,15 @@ fn test_extern_block_mixed_fn_and_opaque_type() {
 
 #[test]
 fn test_extern_block_opaque_type_kara_name_skips_class_check() {
-    // CN-8: `#[kara_name = "..."]` rebinds the foreign symbol name
-    // and should suppress the Kāra-side identifier-class check
-    // (mirrors the existing `kara_name` escape on extern fn names).
+    // CN-8: `#[kara_name("...")]` gives a non-conforming foreign name its
+    // Kāra name (design.md § Opaque foreign types: `#[kara_name("CFile")]
+    // type FILE;` is `CFile` in Kāra). The foreign name skips the class
+    // check; the Kāra name is the type's name (FF2).
     let prog = parse_ok(
         r#"
         unsafe extern "C" {
-            #[kara_name("FILE")]
-            pub type File;
+            #[kara_name("File")]
+            pub type FILE;
         }
         "#,
     );
@@ -5600,6 +5601,7 @@ fn test_extern_block_opaque_type_kara_name_skips_class_check() {
         panic!("expected ExternItem::OpaqueType");
     };
     assert_eq!(o.name, "File");
+    assert_eq!(o.foreign_name.as_deref(), Some("FILE"));
     assert!(o.attributes.iter().any(|a| a.is_bare("kara_name")));
 }
 

@@ -178,6 +178,22 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Type {
         match method {
+            // `s.as_ptr()`: the address of the first of its UTF-8 bytes,
+            // with no NUL after them (design.md §15; FF2): a C string
+            // still goes through `CString`.
+            "as_ptr" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'as_ptr' takes no arguments, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Pointer {
+                    is_mut: false,
+                    inner: Box::new(Type::UInt(UIntSize::U8)),
+                }
+            }
             // `s.as_str()`: the whole string as a `Str` view
             // (docs/library/strings.md).
             "as_str" => {

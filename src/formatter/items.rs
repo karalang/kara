@@ -1142,7 +1142,7 @@ impl super::Formatter {
         self.write_indent();
         self.write_visibility(o.visibility());
         self.write_str("type ");
-        self.write_ident(&o.name);
+        self.write_ident(o.foreign_name.as_ref().unwrap_or(&o.name));
         self.write_str(";\n");
     }
 

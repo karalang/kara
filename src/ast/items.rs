@@ -1388,7 +1388,12 @@ pub struct OpaqueTypeDecl {
     pub doc_comment: Option<String>,
     pub is_pub: bool,
     pub is_private: bool,
+    /// The Kāra-visible name: the `#[kara_name("...")]` rebinding when
+    /// there is one (CN-8), else the foreign name.
     pub name: String,
+    /// The foreign name a `#[kara_name]` rebinds (`FILE` of
+    /// `#[kara_name("CFile")] type FILE;`), which only the source keeps.
+    pub foreign_name: Option<String>,
 }
 
 // ── Type Aliases ─────────────────────────────────────────────────

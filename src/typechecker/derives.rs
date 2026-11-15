@@ -1201,6 +1201,8 @@ impl<'a> super::TypeChecker<'a> {
         self.validate_derived_trait("Hash", |this, ty| this.type_supports_hash(ty));
         self.validate_derived_trait("Ord", |this, ty| this.type_supports_ord(ty));
         self.validate_derived_trait("PartialOrd", |this, ty| this.type_supports_partial_ord(ty));
+        self.validate_derived_trait("Pod", |this, ty| this.env.type_supports_pod(ty));
+        self.validate_derive_pod_on_enums();
         self.validate_derive_default();
         self.validate_derive_display_on_enums();
     }
@@ -1942,6 +1944,33 @@ impl<'a> super::TypeChecker<'a> {
     /// call site stays stable); it currently has nothing to reject.
     pub(super) fn validate_derive_display_on_enums(&mut self) {}
 
+    /// design.md §15 `mem.zeroed`: an enum is not `Pod`, since the
+    /// all-zeros bits need not be one of its variants (FF4).
+    fn validate_derive_pod_on_enums(&mut self) {
+        let found: Vec<(String, Span)> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::EnumDef(d) if extract_derived_traits(&d.attributes).contains("Pod") => {
+                    Some((d.name.clone(), d.span))
+                }
+                _ => None,
+            })
+            .collect();
+        for (name, span) in found {
+            self.type_error(
+                format!(
+                    "enum '{name}' cannot derive Pod: `Pod` holds when the all-zeros bits are a \
+                     valid value, which design.md §15 grants the integers, floats, `bool`, and \
+                     tuples, arrays and structs of `Pod`, not an enum; remove `Pod` from the derive"
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+    }
+
     /// Validate `#[derive(Arithmetic)]` usage:
     /// - Reject on struct/enum (must use manual impls).
     /// - Reject on distinct types whose base type is non-numeric.
@@ -2225,6 +2254,24 @@ impl<'a> super::TypeChecker<'a> {
 /// the same answer for the same type and bound (B-2026-10-05-43). Each
 /// `TypeChecker` method of the same name delegates here.
 impl super::env::TypeEnv {
+    /// design.md §15 `mem.zeroed()`'s bound: the all-zeros bits are a valid
+    /// value of `ty`. The integers, floats, `bool` and `()`, and tuples,
+    /// arrays and `#[derive(Pod)]` structs of them (FF4). A reference, a
+    /// raw or function pointer, a `char`, an enum or a library type is not.
+    pub(super) fn type_supports_pod(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Unit => true,
+            Type::Tuple(parts) => parts.iter().all(|t| self.type_supports_pod(t)),
+            Type::Array { element, .. } => self.type_supports_pod(element),
+            Type::Named { name, .. } => self
+                .structs
+                .get(name)
+                .is_some_and(|s| s.derived_traits.contains("Pod")),
+            Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => true,
+            _ => false,
+        }
+    }
+
     /// If `ty` is a `distinct type`, return whether it derives ANY of
     /// `wanted` (so the caller's trait gate is satisfied), wrapped in
     /// `Some`; `None` when `ty` is not a distinct type (caller continues its

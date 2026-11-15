@@ -10626,6 +10626,8 @@ impl<'a> super::TypeChecker<'a> {
             // arms above. Without this a `T: Default` bound (std.mem `take`,
             // any user `fn f[T: Default]`) rejects every concrete arg.
             "Default" => return self.type_supports_default(ty),
+            // design.md §15: `mem.zeroed`'s bound (FF4).
+            "Pod" => return self.env.type_supports_pod(ty),
             // Built-in marker trait for primitive numeric types (SIMD lane
             // elements + `fn f[T: Numeric]`). See `type_supports_numeric`.
             "Numeric" => return self.type_supports_numeric(ty),

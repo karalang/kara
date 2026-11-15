@@ -897,6 +897,7 @@ fn run_with(
         http_requests: rustc_hash::FxHashMap::default(),
         built_requests: Vec::new(),
         free_requests: Vec::new(),
+        pinned_texts: Default::default(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -1444,6 +1445,9 @@ struct Interp<'a> {
     built_requests: Vec<Option<(String, crate::http1::Request)>>,
     /// The slots of `built_requests` dropped requests left.
     free_requests: Vec<usize>,
+    /// The texts `as_ptr` gave the address of a copy of (`text_address`),
+    /// kept until the run ends.
+    pinned_texts: rustc_hash::FxHashMap<String, Box<[u8]>>,
 }
 
 /// Where a native copy of interpreter values came from: `count` scalars of
@@ -1457,6 +1461,8 @@ struct NativeCopy {
     width: usize,
     signed: bool,
     bools: bool,
+    /// A struct pointee, copied whole at its C layout.
+    record: Option<Ty>,
 }
 
 /// The value of type `it` that C returned in the integer register `r`: its
@@ -3061,6 +3067,17 @@ impl<'a> Interp<'a> {
                     })
                     .collect();
                 Ok(self.alloc_box("String", Value::Str(out)))
+            }
+            // `s.as_ptr()` (design.md §15; FF2): the address of the text's
+            // first UTF-8 byte, a native address as C's pointers are. A
+            // `String` in its box gives its own buffer; a `Str` view held
+            // by value gives a copy the interpreter keeps for the rest of
+            // the run, one per distinct text.
+            ("String", "as_ptr") => {
+                let Some(v) = args.first() else {
+                    return err(format!("{name} takes its string"));
+                };
+                Ok(Value::Int(self.text_address(v)?))
             }
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
@@ -12681,6 +12698,29 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// The native address of the bytes of the text `v` holds or refers
+    /// to (`as_ptr`).
+    fn text_address(&mut self, v: &Value) -> R<i128> {
+        if let Value::Ref(a) = v {
+            if let Value::Str(s) = self.slot_ref(a)? {
+                return Ok(s.as_ptr() as i128);
+            }
+        }
+        if !matches!(v, Value::Str(_)) {
+            if let Ok(id) = self.box_behind(v) {
+                if let Value::Str(s) = &self.live(id)?.value {
+                    return Ok(s.as_ptr() as i128);
+                }
+            }
+        }
+        let text = self.string_at(v)?;
+        let kept = self
+            .pinned_texts
+            .entry(text)
+            .or_insert_with_key(|t| t.clone().into_bytes().into_boxed_slice());
+        Ok(kept.as_ptr() as i128)
+    }
+
     fn string_at(&mut self, v: &Value) -> R<String> {
         if let Value::Str(s) = v {
             return Ok(s.clone());
@@ -16812,44 +16852,198 @@ impl<'a> Interp<'a> {
     /// A pointer C returns is a plain address.
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     fn foreign_call(&mut self, name: &str, sig: &ExternSig, args: Vec<Value>) -> R<Value> {
+        use super::c_abi;
         let f = match super::foreign::symbol(name) {
             Ok(f) => f,
             Err(e) => return err(e),
         };
+        // A one-scalar struct (a `#[repr(transparent)]` wrapper, a
+        // `distinct type`) crosses as its scalar (FF3).
+        let mut params = Vec::with_capacity(args.len());
+        let mut vals = Vec::with_capacity(args.len());
+        for (v, &t) in args.iter().zip(&sig.params) {
+            let (v, t) = self.peel_scalar_struct(v.clone(), t);
+            vals.push(v);
+            params.push(t);
+        }
+        let (ret, wraps) = self.peel_scalar_ty(sig.ret);
+        let is_struct = |me: &Self, t: Ty| matches!(me.tys.kind(t), TyKind::Adt(_));
+        if !params.iter().any(|&t| is_struct(self, t)) && !is_struct(self, ret) {
+            let r = self.foreign_scalars(name, f, &params, ret, &vals)?;
+            return Ok(Self::wrap_scalar(r, wraps));
+        }
+        let Some(abi) = c_abi::Abi::host() else {
+            return err(format!(
+                "`{name}`: a struct crosses to C by value on the interpreter only on \
+                 x86-64 and AArch64 Unix; compile it"
+            ));
+        };
+        // The result's classification first: on x86-64 a hidden result
+        // pointer takes the first integer register.
+        let ret_pass = if is_struct(self, ret) {
+            match c_abi::classify(self.tys, abi, ret, true, abi.registers()) {
+                Some(p) => Some(p),
+                None => return err(format!("`{name}`: its return type cannot cross from C")),
+            }
+        } else {
+            None
+        };
+        let int_regs: usize = match (abi, &ret_pass) {
+            (c_abi::Abi::SysV, Some(c_abi::Pass::Sret)) => 5,
+            _ => 6,
+        };
+        let mut words: Vec<u64> = Vec::new();
+        let mut floats: Vec<f64> = Vec::new();
+        let mut copies: Vec<(Vec<u8>, Option<NativeCopy>)> = Vec::new();
+        let mut kept: Vec<Vec<u8>> = Vec::new();
+        let mut stack: Vec<u64> = Vec::new();
+        for (v, &t) in vals.iter().zip(&params) {
+            if is_struct(self, t) {
+                let size = self.c_size(name, t)?;
+                let mut bytes = vec![0u8; size.div_ceil(8) * 8 + 8];
+                self.c_encode(name, v, t, &mut bytes, 0)?;
+                let free = (
+                    int_regs.saturating_sub(words.len()),
+                    8usize.saturating_sub(floats.len()),
+                );
+                match c_abi::classify(self.tys, abi, t, false, free) {
+                    Some(c_abi::Pass::Regs(pieces)) => {
+                        for p in pieces {
+                            let mut w = [0u8; 8];
+                            let at = p.offset as usize;
+                            w[..p.size as usize].copy_from_slice(&bytes[at..at + p.size as usize]);
+                            let w = u64::from_ne_bytes(w);
+                            if p.float {
+                                floats.push(f64::from_bits(w));
+                            } else {
+                                words.push(w);
+                            }
+                        }
+                    }
+                    Some(c_abi::Pass::Indirect) => {
+                        words.push(bytes.as_ptr() as u64);
+                        kept.push(bytes);
+                    }
+                    // On the stack in whole eightbytes, after the arguments
+                    // before it that went there (x86-64 only).
+                    Some(c_abi::Pass::Stack)
+                        if super::layout::layout(self.tys, t).is_some_and(|l| l.align <= 8) =>
+                    {
+                        for k in 0..size.div_ceil(8) {
+                            let mut w = [0u8; 8];
+                            w.copy_from_slice(&bytes[k * 8..k * 8 + 8]);
+                            stack.push(u64::from_ne_bytes(w));
+                        }
+                    }
+                    _ => {
+                        return err(format!(
+                            "`{name}`: a `{}` argument goes on the stack, which the \
+                             interpreter does not pass to C yet; compile it",
+                            self.tys.display(t)
+                        ))
+                    }
+                }
+                continue;
+            }
+            let (word, float) = self.c_scalar_arg(name, v, t, &mut copies)?;
+            let sysv = abi == c_abi::Abi::SysV;
+            match float {
+                Some(x) if sysv && floats.len() == 8 => stack.push(x.to_bits()),
+                Some(x) => floats.push(x),
+                None if sysv && words.len() == int_regs => stack.push(word),
+                None => words.push(word),
+            }
+        }
+        let shape = match &ret_pass {
+            None if matches!(self.tys.kind(ret), TyKind::Float(_)) => {
+                super::foreign::RetShape::Float
+            }
+            None => super::foreign::RetShape::Word,
+            Some(c_abi::Pass::Sret) => super::foreign::RetShape::Memory(self.c_size(name, ret)?),
+            Some(c_abi::Pass::Regs(pieces)) => {
+                let hfa = abi == c_abi::Abi::Aapcs64 && pieces.iter().all(|p| p.float);
+                match pieces.as_slice() {
+                    _ if hfa => super::foreign::RetShape::Hfa {
+                        n: pieces.len(),
+                        f32: pieces[0].size == 4,
+                    },
+                    [p] if p.float => super::foreign::RetShape::Float,
+                    [_] => super::foreign::RetShape::Word,
+                    [a, b] => super::foreign::RetShape::Pair(a.float, b.float),
+                    _ => return err(format!("`{name}`: its return type cannot cross from C")),
+                }
+            }
+            Some(_) => return err(format!("`{name}`: its return type cannot cross from C")),
+        };
+        // SAFETY: each argument is in the register the platform's C ABI
+        // puts it in (`c_abi`), and the result is read as that ABI returns
+        // it; what C does through a pointer is the program's `unsafe`
+        // contract.
+        let r = unsafe { super::foreign::call_shaped(f, &words, &floats, &stack, shape) };
+        let r = match r {
+            Ok(r) => r,
+            Err(e) => return err(format!("`{name}`: {e}")),
+        };
+        drop(kept);
+        for (bytes, back) in copies {
+            if let Some(c) = back {
+                self.read_back(&bytes, &c)?;
+            }
+        }
+        let v = match ret_pass {
+            None => {
+                let w = u64::from_ne_bytes(r[..8].try_into().unwrap_or([0; 8]));
+                self.c_scalar_result(name, w, ret)?
+            }
+            Some(c_abi::Pass::Regs(pieces)) => {
+                let size = self.c_size(name, ret)?;
+                let mut bytes = vec![0u8; size.div_ceil(8) * 8 + 8];
+                let mut at = 0;
+                for p in &pieces {
+                    let width = if p.float && p.size == 4 && abi == c_abi::Abi::Aapcs64 {
+                        4
+                    } else {
+                        8
+                    };
+                    let o = p.offset as usize;
+                    bytes[o..o + p.size as usize].copy_from_slice(&r[at..at + p.size as usize]);
+                    at += width;
+                }
+                self.c_decode(name, &bytes, ret, 0)?
+            }
+            Some(_) => self.c_decode(name, &r, ret, 0)?,
+        };
+        Ok(Self::wrap_scalar(v, wraps))
+    }
+
+    /// The scalar-only call [`Self::foreign_call`] makes when no struct
+    /// crosses by value.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn foreign_scalars(
+        &mut self,
+        name: &str,
+        f: *const std::ffi::c_void,
+        params: &[Ty],
+        ret: Ty,
+        args: &[Value],
+    ) -> R<Value> {
         let mut words = Vec::with_capacity(args.len());
         // The `f32` / `f64` arguments, in their own registers.
         let mut floats = Vec::new();
         // Each native copy, and where a `*mut` one is read back to.
         let mut copies: Vec<(Vec<u8>, Option<NativeCopy>)> = Vec::new();
-        for (v, &t) in args.iter().zip(&sig.params) {
-            let word = match (self.tys.kind(t), v) {
-                (TyKind::Float(ft), Value::Float(x)) => {
-                    floats.push(match ft {
-                        crate::mir::ty::FloatTy::F32 => super::foreign::f32_slot(*x as f32),
-                        _ => *x,
-                    });
-                    continue;
-                }
-                (TyKind::RawPtr { mutable, pointee }, Value::Ref(at)) => {
-                    let (bytes, copy) = self.native_copy(name, at, pointee)?;
-                    copies.push((bytes, mutable.then_some(copy)));
-                    copies.last().map_or(0, |(b, _)| b.as_ptr() as u64)
-                }
-                (_, Value::Int(i)) => *i as u64,
-                (_, Value::Bool(b)) => u64::from(*b),
-                (_, other) => {
-                    return err(format!(
-                        "`{name}`: the argument {other:?} cannot cross to C"
-                    ))
-                }
-            };
-            words.push(word);
+        for (v, &t) in args.iter().zip(params) {
+            let (word, float) = self.c_scalar_arg(name, v, t, &mut copies)?;
+            match float {
+                Some(x) => floats.push(x),
+                None => words.push(word),
+            }
         }
-        let float_ret = matches!(self.tys.kind(sig.ret), TyKind::Float(_));
+        let float_ret = matches!(self.tys.kind(ret), TyKind::Float(_));
         // SAFETY: the lowering admits only integer, `bool`, pointer, `f32`
-        // and `f64` parameters, the first three in integer registers and
-        // the floats in float ones; what C does through a pointer is the
-        // program's `unsafe` contract.
+        // and `f64` parameters here, the first three in integer registers
+        // and the floats in float ones; what C does through a pointer is
+        // the program's `unsafe` contract.
         let r = if floats.is_empty() && !float_ret {
             unsafe { super::foreign::call(f, &words) }.map(super::foreign::Ret::Int)
         } else {
@@ -16865,23 +17059,216 @@ impl<'a> Interp<'a> {
             }
         }
         let r = match r {
-            super::foreign::Ret::Float(x) => {
-                return Ok(Value::Float(match self.tys.kind(sig.ret) {
-                    TyKind::Float(crate::mir::ty::FloatTy::F32) => {
-                        f64::from(super::foreign::f32_of(x))
-                    }
-                    _ => x,
-                }))
-            }
+            super::foreign::Ret::Float(x) => x.to_bits(),
             super::foreign::Ret::Int(r) => r,
         };
-        match self.tys.kind(sig.ret) {
+        self.c_scalar_result(name, r, ret)
+    }
+
+    /// A scalar argument's integer register word, or its float register
+    /// image (`Some`).
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn c_scalar_arg(
+        &self,
+        name: &str,
+        v: &Value,
+        t: Ty,
+        copies: &mut Vec<(Vec<u8>, Option<NativeCopy>)>,
+    ) -> R<(u64, Option<f64>)> {
+        Ok(match (self.tys.kind(t), v) {
+            (TyKind::Float(ft), Value::Float(x)) => {
+                let x = match ft {
+                    crate::mir::ty::FloatTy::F32 => super::foreign::f32_slot(*x as f32),
+                    _ => *x,
+                };
+                (0, Some(x))
+            }
+            (TyKind::RawPtr { mutable, pointee }, Value::Ref(at)) => {
+                let (bytes, copy) = self.native_copy(name, at, pointee)?;
+                copies.push((bytes, mutable.then_some(copy)));
+                (copies.last().map_or(0, |(b, _)| b.as_ptr() as u64), None)
+            }
+            (_, Value::Int(i)) => (*i as u64, None),
+            (_, Value::Bool(b)) => (u64::from(*b), None),
+            (_, other) => {
+                return err(format!(
+                    "`{name}`: the argument {other:?} cannot cross to C"
+                ))
+            }
+        })
+    }
+
+    /// The scalar of type `ret` in the result register image `r`.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn c_scalar_result(&self, name: &str, r: u64, ret: Ty) -> R<Value> {
+        match self.tys.kind(ret) {
             TyKind::Unit => Ok(Value::Unit),
             TyKind::Bool => Ok(Value::Bool(r as u8 != 0)),
             TyKind::Int(it) => Ok(Value::Int(from_c_word(r, it))),
             TyKind::RawPtr { .. } => Ok(Value::Int(i128::from(r))),
+            TyKind::Float(crate::mir::ty::FloatTy::F32) => Ok(Value::Float(f64::from(
+                super::foreign::f32_of(f64::from_bits(r)),
+            ))),
+            TyKind::Float(_) => Ok(Value::Float(f64::from_bits(r))),
             _ => err(format!("`{name}`: its return type cannot cross from C")),
         }
+    }
+
+    /// `v` of type `t`, or the scalar inside it when `t` is a struct of one
+    /// scalar field (through nested ones).
+    fn peel_scalar_struct(&self, v: Value, t: Ty) -> (Value, Ty) {
+        let (inner, depth) = self.peel_scalar_ty(t);
+        let mut v = v;
+        for _ in 0..depth {
+            v = match v {
+                Value::Agg(mut xs) if xs.len() == 1 => xs.pop().unwrap_or(Value::Unit),
+                other => return (other, t),
+            };
+        }
+        (v, inner)
+    }
+
+    /// The scalar a one-scalar struct `t` crosses as, and how many structs
+    /// deep it is (0 when `t` is no such struct).
+    fn peel_scalar_ty(&self, t: Ty) -> (Ty, usize) {
+        match super::c_abi::single_scalar(self.tys, t) {
+            Some(s) if s != t => {
+                let mut depth = 0;
+                let mut at = t;
+                while at != s {
+                    depth += 1;
+                    at = match self.tys.field_ty(at, None, 0) {
+                        Some(f) => f,
+                        None => return (t, 0),
+                    };
+                }
+                (s, depth)
+            }
+            _ => (t, 0),
+        }
+    }
+
+    fn wrap_scalar(v: Value, depth: usize) -> Value {
+        let mut v = v;
+        for _ in 0..depth {
+            v = Value::Agg(vec![v]);
+        }
+        v
+    }
+
+    /// The size of the C type `t` in bytes.
+    fn c_size(&self, name: &str, t: Ty) -> R<usize> {
+        match super::layout::layout(self.tys, t) {
+            Some(l) => Ok(l.size as usize),
+            None => err(format!(
+                "`{name}`: a `{}` has no C layout",
+                self.tys.display(t)
+            )),
+        }
+    }
+
+    /// Writes `v`, of the plain C type `t`, into `buf` at `off`, as C lays
+    /// it out (`layout`).
+    fn c_encode(&self, name: &str, v: &Value, t: Ty, buf: &mut [u8], off: usize) -> R<()> {
+        let size = self.c_size(name, t)?;
+        match (self.tys.kind(t), v) {
+            (TyKind::Float(crate::mir::ty::FloatTy::F32), Value::Float(x)) => {
+                buf[off..off + 4].copy_from_slice(&(*x as f32).to_bits().to_ne_bytes());
+            }
+            (TyKind::Float(_), Value::Float(x)) => {
+                buf[off..off + 8].copy_from_slice(&x.to_bits().to_ne_bytes());
+            }
+            (TyKind::Int(_) | TyKind::RawPtr { .. }, Value::Int(n)) => {
+                buf[off..off + size].copy_from_slice(&n.to_ne_bytes()[..size]);
+            }
+            (TyKind::Bool, Value::Bool(b)) => buf[off] = u8::from(*b),
+            (TyKind::Array(e, _), Value::Agg(xs)) => {
+                let w = self.c_size(name, e)?;
+                for (i, x) in xs.iter().enumerate() {
+                    self.c_encode(name, x, e, buf, off + i * w)?;
+                }
+            }
+            (TyKind::Adt(_), Value::Agg(xs)) => {
+                for (i, x) in xs.iter().enumerate() {
+                    let (Some(ft), Some(at)) = (
+                        self.tys.field_ty(t, None, i as u32),
+                        super::layout::field_offset(self.tys, t, None, i as u32),
+                    ) else {
+                        return err(format!("`{name}`: a field of `{}`", self.tys.display(t)));
+                    };
+                    self.c_encode(name, x, ft, buf, off + at as usize)?;
+                }
+            }
+            (TyKind::RawPtr { .. }, Value::Ref(_)) => {
+                return err(format!(
+                    "`{name}`: a pointer into a Kāra value inside a `{}` crosses to C only \
+                     when compiled",
+                    self.tys.display(t)
+                ))
+            }
+            (_, other) => {
+                return err(format!(
+                    "`{name}`: {other:?} cannot cross to C as a `{}`",
+                    self.tys.display(t)
+                ))
+            }
+        }
+        Ok(())
+    }
+
+    /// The value of the plain C type `t` C left in `buf` at `off`.
+    fn c_decode(&self, name: &str, buf: &[u8], t: Ty, off: usize) -> R<Value> {
+        let size = self.c_size(name, t)?;
+        let word = |n: usize| -> u64 {
+            let mut w = [0u8; 8];
+            w[..n.min(8)].copy_from_slice(&buf[off..off + n.min(8)]);
+            u64::from_ne_bytes(w)
+        };
+        Ok(match self.tys.kind(t) {
+            TyKind::Float(crate::mir::ty::FloatTy::F32) => {
+                Value::Float(f64::from(f32::from_bits(word(4) as u32)))
+            }
+            TyKind::Float(_) => Value::Float(f64::from_bits(word(8))),
+            TyKind::Int(_) if size == 16 => {
+                let mut w = [0u8; 16];
+                w.copy_from_slice(&buf[off..off + 16]);
+                Value::Int(i128::from_ne_bytes(w))
+            }
+            TyKind::Int(it) => Value::Int(from_c_word(word(size), it)),
+            TyKind::RawPtr { .. } => Value::Int(i128::from(word(8))),
+            TyKind::Bool => Value::Bool(buf[off] != 0),
+            TyKind::Array(e, n) => {
+                let w = self.c_size(name, e)?;
+                let mut xs = Vec::with_capacity(n as usize);
+                for i in 0..n as usize {
+                    xs.push(self.c_decode(name, buf, e, off + i * w)?);
+                }
+                Value::Agg(xs)
+            }
+            TyKind::Adt(_) => {
+                let n = match self.tys.tcx().adt_of(t) {
+                    Some((adt, _)) => adt.variants[0].fields.len() as u32,
+                    None => 0,
+                };
+                let mut xs = Vec::with_capacity(n as usize);
+                for i in 0..n {
+                    let (Some(ft), Some(at)) = (
+                        self.tys.field_ty(t, None, i),
+                        super::layout::field_offset(self.tys, t, None, i),
+                    ) else {
+                        return err(format!("`{name}`: a field of `{}`", self.tys.display(t)));
+                    };
+                    xs.push(self.c_decode(name, buf, ft, off + at as usize)?);
+                }
+                Value::Agg(xs)
+            }
+            _ => {
+                return err(format!(
+                    "`{name}`: a `{}` cannot cross from C",
+                    self.tys.display(t)
+                ))
+            }
+        })
     }
 
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
@@ -16896,6 +17283,24 @@ impl<'a> Interp<'a> {
     /// C string from a `CString` finds its end.
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     fn native_copy(&self, name: &str, at: &Addr, pointee: Ty) -> R<(Vec<u8>, NativeCopy)> {
+        // A `#[repr(C)]` struct, laid out as C lays it out (`gmtime_r`'s
+        // `*mut Tm`; FF5): the one value pointed at.
+        if super::c_abi::plain_struct(self.tys, pointee) {
+            let size = self.c_size(name, pointee)?;
+            let mut bytes = vec![0u8; size + 8];
+            let v = self.slot_ref(at)?.clone();
+            self.c_encode(name, &v, pointee, &mut bytes, 0)?;
+            let copy = NativeCopy {
+                base: at.clone(),
+                start: None,
+                count: 1,
+                width: size,
+                signed: false,
+                bools: false,
+                record: Some(pointee),
+            };
+            return Ok((bytes, copy));
+        }
         let (width, signed) = match self.tys.kind(pointee) {
             TyKind::Int(it) => ((it.bits() / 8) as usize, it.signed()),
             TyKind::Bool | TyKind::Unit => (1, false),
@@ -16942,6 +17347,7 @@ impl<'a> Interp<'a> {
             width,
             signed,
             bools: matches!(self.tys.kind(pointee), TyKind::Bool),
+            record: None,
         };
         Ok((bytes, copy))
     }
@@ -16949,6 +17355,11 @@ impl<'a> Interp<'a> {
     /// Writes what C left in a native copy back into the values it copied.
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     fn read_back(&mut self, bytes: &[u8], c: &NativeCopy) -> R<()> {
+        if let Some(t) = c.record {
+            let v = self.c_decode("a C call", bytes, t, 0)?;
+            *self.slot_mut(&c.base)? = v;
+            return Ok(());
+        }
         for k in 0..c.count {
             let raw = &bytes[k * c.width..(k + 1) * c.width];
             let mut wide = [0u8; 16];

@@ -1257,6 +1257,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, c.into())?;
             }
+            // `s.as_ptr()` (design.md §15): the address of the first byte.
+            ("as_ptr", [s]) => {
+                let (p, _) = self.str_parts(s)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, p.into())?;
+            }
             ("bytes" | "as_str", [s]) => {
                 // A view of the text's own bytes; the borrow keeps it alive
                 // and unchanged for as long as the view is used.

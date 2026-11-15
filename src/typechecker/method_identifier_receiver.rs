@@ -105,6 +105,33 @@ impl<'a> super::TypeChecker<'a> {
             {
                 return Some(self.infer_ptr_construction(method, args, span));
             }
+            // The read-only queries take either kind of raw pointer, as in
+            // Rust: `ptr.is_null(p)` of the `*mut CFile` `fopen` returns
+            // (design.md §15; FF2). Nothing is weakened: the pointer is
+            // only read.
+            if mod_name == "ptr"
+                && self.local_scope.lookup("ptr").is_none()
+                && matches!(method, "is_null" | "addr" | "expose")
+                && args.len() == 1
+            {
+                let at = self.infer_expr(&args[0].value);
+                if !matches!(at, Type::Pointer { .. } | Type::Error | Type::TypeVar(_)) {
+                    self.type_error(
+                        format!(
+                            "'ptr.{method}' expects a raw pointer (`*const T` or `*mut T`), \
+                             found '{}'",
+                            type_display(&at)
+                        ),
+                        args[0].value.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                return Some(if method == "is_null" {
+                    Type::Bool
+                } else {
+                    Type::UInt(UIntSize::Usize)
+                });
+            }
             if mod_name == "ptr" && self.local_scope.lookup("ptr").is_none() {
                 let dotted = format!("ptr.{}", method);
                 if let Some(sig) = self.env.functions.get(&dotted).cloned() {

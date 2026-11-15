@@ -2590,7 +2590,7 @@ fn rewrite_wrapping_from(expr: &mut Expr) {
 /// (core-semantics.md §3.7: `mem.take(place)`, `mem.replace(place, value)`,
 /// `mem.swap(a, b)`). They are prelude functions, so the qualified call is
 /// the bare one (B-2026-10-13-25).
-const MEM_FNS: &[&str] = &["swap", "replace", "take"];
+const MEM_FNS: &[&str] = &["swap", "replace", "take", "zeroed"];
 
 type MemFns = std::collections::HashSet<&'static str>;
 

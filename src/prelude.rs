@@ -2540,6 +2540,20 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
     ),
 ];
 
+/// Whether `item` is the plain `import std.mem;`.
+fn is_std_mem_import(item: &Item) -> bool {
+    let Item::Import(imp) = item else {
+        return false;
+    };
+    let plain = |it: &crate::ast::ImportItem| it.name == "mem" && it.alias.is_none();
+    !imp.is_wildcard
+        && match (imp.path.as_slice(), imp.items.as_slice()) {
+            ([std], [it]) => std == "std" && plain(it),
+            ([std, mem], []) => std == "std" && mem == "mem",
+            _ => false,
+        }
+}
+
 /// The [`LIBRARY_GLOBAL_MODULES`] entry for `path`: its implemented and its
 /// specified-only items.
 pub fn library_global_module(
@@ -2581,6 +2595,10 @@ pub fn library_module_item_error(
 }
 
 pub fn expand_gated_stdlib_imports(program: &mut Program) {
+    // `import std.mem;` names the module whose functions every program
+    // already calls as `mem.f(..)` (design.md §15 `mem.zeroed`), so it binds
+    // nothing new and is dropped (FF4).
+    program.items.retain(|item| !is_std_mem_import(item));
     // `import std.path;` + `path.f(..)` → `import std.path.{f};` + `f(..)`.
     crate::module_binding::expand_single_file_std_module_bindings(program);
     let mut appended: Vec<Item> = Vec::new();
@@ -2892,6 +2910,10 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // T.default())`), not a `#[compiler_builtin]`; it monomorphizes per
     // concrete `T`. Registered here so the bare identifier resolves.
     "take",
+    // `std.mem::zeroed[T: Pod]() -> T` (design.md §15, FF4): the all-zeros
+    // `T`, built by the MIR builder (`mem_call`). Registered here so the
+    // bare identifier resolves.
+    "zeroed",
     // `std.mem::drop[T](x: own T)` — ends a value's life early; an ordinary
     // body (B-2026-11-09-72). Registered here so the bare identifier resolves.
     "drop",
