@@ -7896,6 +7896,12 @@ impl<'a> super::TypeChecker<'a> {
                     // An item is read as a value (`ItemValues`): a `ref` to a
                     // `Copy` part is the part (`(x, x * 2)` over `v.iter()`).
                     let want: Vec<Type> = want.iter().map(|t| self.read_as_value(t)).collect();
+                    // An item type an earlier error poisoned was reported
+                    // where that error happened; naming `FromIterator[<error>]`
+                    // as well only repeats it (kata 1162, B-2026-11-15-48).
+                    if want.iter().any(super::items::type_mentions_error) {
+                        continue;
+                    }
                     // `collect` into an `Option` or `Result` gathers the
                     // payloads into the collection inside, which must take
                     // them: `Option[ref i64]` items do not make an
@@ -8713,7 +8719,8 @@ impl<'a> super::TypeChecker<'a> {
                                 .iter()
                                 .flatten()
                                 .chain(want.iter())
-                                .all(type_is_fully_concrete);
+                                .all(type_is_fully_concrete)
+                            && !want.iter().any(super::items::type_mentions_error);
                         if decidable && !all_impls.contains(&want) {
                             let render = |v: &[Type]| {
                                 v.iter().map(type_display).collect::<Vec<_>>().join(", ")

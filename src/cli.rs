@@ -4113,9 +4113,12 @@ fn held_borrow_copy_fix(
     let let_head =
         regex::Regex::new(r"^\s*let\s+(mut\s+)?[A-Za-z_]\w*(\s*:[^=;]*)?\s*=\s*").unwrap();
     // Or the scrutinee of a `while let` / `if let` (`while let Some(top) =
-    // stack.last() {`), whose pattern holds the borrow until the body ends.
+    // stack.last() {`), whose pattern holds the borrow until the body ends,
+    // or of a `match` (`match at.kids.get(name) {`, kata 1166, B-2026-11-15-49),
+    // whose arms' bindings hold it.
     let cond_head =
-        regex::Regex::new(r"^\s*(\}\s*else\s+)?(while|if)\s+let\s+[^=;{]*?=\s*").unwrap();
+        regex::Regex::new(r"^\s*(?:(\}\s*else\s+)?(while|if)\s+let\s+[^=;{]*?=\s*|match\s+)")
+            .unwrap();
     let conditional = src
         .get(line_start..loan)
         .is_some_and(|h| !let_head.is_match(h) && cond_head.is_match(h));

@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 324 |
+| diagnostics | 328 |
 | false-positive | 211 |
 | perf | 169 |
-| missing-feature | 164 |
+| missing-feature | 165 |
 | soundness | 69 |
 | miscompile | 64 |
 | run-vs-build | 39 |
-| other | 34 |
-| codegen-gap | 30 |
+| other | 38 |
+| codegen-gap | 31 |
 | crash | 30 |
 | leak | 4 |
 | use-after-free | 3 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 476 |
+| typecheck | 478 |
 | mir-llvm | 234 |
-| mir | 198 |
-| cli | 121 |
+| mir | 199 |
+| cli | 127 |
 | parser | 85 |
 | ownership | 81 |
 | interp | 59 |
@@ -87,7 +87,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | effect | 34 |
 | resolver | 27 |
 | codegen | 22 |
-| other | 7 |
+| other | 8 |
 | autopar | 5 |
 | lexer | 1 |
 ## Current state
@@ -124,6 +124,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-36 | 2026-11-15 | parser+cli | medium | Rust's `impl fmt::Display for T { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}{}", a, b) } }` is a `karac fix` dead end: after the `use`, `&self` and `&mut` fixes, the `fmt::` paths in the impl header and the parameter type stay parse errors with no fix ("Expected `{`, found `::`"), and `write!` says only that Kāra has no macros, with nothing on Kāra's `Display`, whose one method is `to_string(ref self) -> String` | — |
 | B-2026-11-15-38 | 2026-11-15 | typecheck | medium | A list literal returned by a closure (`d.iter().map(|e| [e[0], e[1], 1 - e[2]]).collect()` into a `Vec[Array[i64, 3]]`) is a `Vec`, so the `collect` fails ("`Vec[Array[i64, 3]]` implements `FromIterator[Array[i64, 3]]`, not `FromIterator[Vec[i64]]`") with no fix, and a closure cannot declare its return type (`|e| -> Array[i64, 3] { .. }` is refused as Rust syntax), so the only spelling is a typed `let` inside the closure | — |
 | B-2026-11-15-40 | 2026-11-15 | typecheck+cli | medium | `println(f"{v} -> {total(v)}")` with `v` owned and `total(v: own Vec[i64])` is refused with E0516 ("cannot move `v` while it is still borrowed") and no machine fix, though the message names `.clone()`; in kata 2202 it is where `karac fix`'s own `own` edits end, three rounds after a bare parameter was stored in a struct field | — |
+| B-2026-11-15-48 | 2026-11-15 | typecheck | low | A `collect()` after a misspelt method in its `map` closure reports a second, cascading error naming the poisoned type: `trait bound `C: FromIterator[<error>]` is not satisfied` | — |
+| B-2026-11-15-49 | 2026-11-15 | cli | low | A `match` over an `Option[ref T]` of a `shared` or `Copy` value gets no machine fix for E0516, though the message names the repair and an `if let` or `while let` over the same call gets `.cloned()` | — |
+| B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
 
 ### Relocated
 
@@ -1255,6 +1258,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-31 | typecheck | low | Rust's `v.sort_by_cached_key(\|x\| key(x))` is refused with a bare "no method 'sort_by_cached_key' on type 'Vec'" and no fix, though `sort_unstable_by_… | c93ef18010 |
 | B-2026-11-15-37 | typecheck+cli | low | `return nodes.get(v);` from a `-> Option[TreeNode]` is refused with a bare "expected 'Option[TreeNode]', found 'Option[ref TreeNode]'" and no fix, th… | 809d1c0c18 |
 | B-2026-11-15-39 | mir+mir-llvm | high | `for a in 1..3usize { let s = a + a; println(f"{s % a}"); }` passes `karac check` and then stops both backends with "invalid MIR: main: bb5[2]: binar… | cad67cae2b |
+| B-2026-11-15-41 | cli | medium | A `karac repl` cell ending in a bare expression printed nothing (`1 + 2`, `x * 2`, `binary_search(nums, 7)`, where the book shows `Some(3)`), and wit… | 92d18d909c |
+| B-2026-11-15-42 | cli | low | `karac repl`'s `:effects` printed about 200 lines of the standard library's effect table in Rust Debug form (`Arena.new: Effect { verb: Allocates, re… | 92d18d909c |
+| B-2026-11-15-43 | cli | medium | `karac repl`'s `:save` wrote cells the REPL had refused into `main` (s2: a `println(s)` after `s` moved), so the saved file failed `karac check`; a b… | 92d18d909c |
+| B-2026-11-15-44 | cli | low | `karac repl`'s `:type x` printed `<error>` for every session binding (`:type [1,2]` worked): the expression was typed alone, without the session's bi… | 92d18d909c |
+| B-2026-11-15-45 | cli | low | `karac repl`'s `:help` said a mutation does not survive to the next cell and that bindings are recomputed (source replay) every cell; the REPL keeps… | 92d18d909c |
+| B-2026-11-15-46 | other | low | The book's REPL transcript (ch01b) failed as written: its `binary_search` uses `usize`, which the checker now refuses, so every later cell met an und… | 92d18d909c |
+| B-2026-11-15-47 | mir | low | A `()` passed for a generic parameter that borrows (`fn f[T](v: T)`, `f(())`, or a unit-valued `if` such as `f(if c { () } else { () })`) was invalid… | 92d18d909c |
 
 </details>
 

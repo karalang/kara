@@ -13197,7 +13197,7 @@ fn references_self_outside_old(expr: &Expr) -> bool {
 /// The un-inferred element of `Vec[Type::Error]` is nested, not the type
 /// itself, so a bare `matches!(ty, Type::Error)` misses exactly the case
 /// B-2026-08-25-31 is about.
-fn type_mentions_error(ty: &Type) -> bool {
+pub(super) fn type_mentions_error(ty: &Type) -> bool {
     match ty {
         Type::Error => true,
         Type::Named { args, .. } => args.iter().any(type_mentions_error),
