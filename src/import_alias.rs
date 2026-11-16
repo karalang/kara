@@ -58,36 +58,18 @@ use crate::desugar::{
     subst_block, subst_expr, subst_leading_type_name, subst_trait_bound, subst_type_expr,
     subst_where_constraint,
 };
+use crate::token::Span;
 /// Every name `items` binds as a VALUE anywhere — parameters, `let`
 /// patterns, closure params, match / if-let / while-let / for patterns.
 ///
-/// Half of `module_rename`'s shadow guard, and what makes rewriting a bare
-/// `Identifier` safe: if the module never binds the name as a value, an
-/// identifier spelling it cannot be a local.
-///
-/// Conservative on purpose — a binding ANYWHERE in the module disables that
-/// alias's rewrite for the whole module. Over-approximating costs nothing
-/// (the program was rejected outright before) and can never redirect a
-/// variable reference, which is the failure mode that matters.
+/// Conservative on purpose: the names a module could mean by a bare word
+/// anywhere, which decides when a member reached through a module binding
+/// is contested and takes an alias. Whether one written identifier IS a
+/// local is [`local_uses`]'s answer, which the rewrites read (B-2026-11-16-6).
 ///
 /// Takes `&mut` only to reuse the mutable child walk; it mutates nothing.
 pub(crate) fn bound_value_names(items: &mut [Item]) -> HashSet<String> {
     collect_value_bindings(items, /* include_item_level */ true)
-}
-
-/// [`bound_value_names`] minus the names of module-level `const` / `let`
-/// ITEMS — every name bound by a parameter, `let`, closure parameter, or
-/// pattern, and nothing else.
-///
-/// This is the guard for renaming a module's OWN declaration (see
-/// `module_rename`), where the two sets differ in a way that matters:
-/// `bound_value_names` reports a `const LIMIT` as a value binding, which is
-/// true and is what an import alias needs to know, but a rename of that very
-/// declaration must not be disabled by the declaration itself. What has to
-/// block a rename is a LOCAL of the same name, which could otherwise be
-/// rewritten along with the references to the item.
-pub(crate) fn local_value_bindings(items: &mut [Item]) -> HashSet<String> {
-    collect_value_bindings(items, /* include_item_level */ false)
 }
 
 fn collect_value_bindings(items: &mut [Item], include_item_level: bool) -> HashSet<String> {
@@ -253,6 +235,232 @@ fn collect_expr_bindings(e: &mut Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// Where a module's locals hide a module-scope name: design.md § Imports
+/// binds an import's last segment (or its alias) for the whole file, and a
+/// local of the same name hides it only inside the local's own scope
+/// (B-2026-11-16-6). The flat-unit rewrites read this instead of giving up
+/// a name the module binds as a value anywhere, which erased an import from
+/// every use in the file the moment one function had a parameter, a `let`, a
+/// pattern or a closure parameter of its name.
+#[derive(Debug, Default)]
+pub(crate) struct LocalUses {
+    /// The offset of every `Identifier` expression that names a local in
+    /// scope where it is written.
+    uses: HashSet<usize>,
+    /// Each local binding's name, with the span of the pattern (or parameter,
+    /// or statement) that introduced it.
+    binds: Vec<(String, Span)>,
+}
+
+impl LocalUses {
+    /// Whether the identifier `name` written at `offset` is a local: a use of
+    /// one in scope, or the binding that introduces one.
+    pub(crate) fn hides(&self, offset: usize, name: &str) -> bool {
+        self.uses.contains(&offset)
+            || self
+                .binds
+                .iter()
+                .any(|(n, s)| n == name && offset >= s.offset && offset < s.offset + s.length)
+    }
+
+    /// Whether the `Identifier` expression at `offset` names a local.
+    pub(crate) fn is_local_use(&self, offset: usize) -> bool {
+        self.uses.contains(&offset)
+    }
+}
+
+/// [`LocalUses`] of `items`. Takes `&mut` only to reuse the mutable child
+/// walk; it mutates nothing.
+pub(crate) fn local_uses(items: &mut [Item]) -> LocalUses {
+    let mut w = ScopeWalk::default();
+    for item in items {
+        match item {
+            Item::Function(f) => w.function(&f.params, &mut f.body),
+            Item::ImplBlock(b) => {
+                for ii in &mut b.items {
+                    if let ImplItem::Method(m) = ii {
+                        w.function(&m.params, &mut m.body);
+                    }
+                }
+            }
+            Item::TraitDef(t) => {
+                for ti in &mut t.items {
+                    if let TraitItem::Method(m) = ti {
+                        if let Some(b) = m.body.as_mut() {
+                            w.function(&m.params, b);
+                        }
+                    }
+                }
+            }
+            Item::TestCase(t) => w.block(&mut t.body),
+            Item::ConstDecl(c) => w.expr(&mut c.value),
+            Item::ModuleBinding(m) => w.expr(&mut m.value),
+            _ => {}
+        }
+    }
+    w.out
+}
+
+#[derive(Default)]
+struct ScopeWalk {
+    /// The names bound by the scopes enclosing the walk, innermost last.
+    scopes: Vec<HashSet<String>>,
+    out: LocalUses,
+}
+
+impl ScopeWalk {
+    fn bind(&mut self, p: &Pattern) {
+        let mut spans = Vec::new();
+        pattern_binding_spans(p, &mut spans);
+        for (name, span) in spans {
+            if let Some(top) = self.scopes.last_mut() {
+                top.insert(name.clone());
+            }
+            self.out.binds.push((name, span));
+        }
+    }
+
+    fn function(&mut self, params: &[Param], body: &mut Block) {
+        self.scopes.push(HashSet::new());
+        for p in params {
+            self.bind(&p.pattern);
+        }
+        self.block(body);
+        self.scopes.pop();
+    }
+
+    fn block(&mut self, b: &mut Block) {
+        self.scopes.push(HashSet::new());
+        for stmt in &mut b.stmts {
+            match &mut stmt.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    self.expr(value);
+                    self.bind(pattern);
+                }
+                StmtKind::LetElse {
+                    pattern,
+                    value,
+                    else_block,
+                    ..
+                } => {
+                    self.expr(value);
+                    self.block(else_block);
+                    self.bind(pattern);
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    if let Some(top) = self.scopes.last_mut() {
+                        top.insert(name.clone());
+                    }
+                    self.out.binds.push((name.clone(), stmt.span));
+                }
+                StmtKind::Expr(e) => self.expr(e),
+                StmtKind::Assign { target, value, .. }
+                | StmtKind::CompoundAssign { target, value, .. } => {
+                    self.expr(target);
+                    self.expr(value);
+                }
+                StmtKind::MultiAssign {
+                    targets, values, ..
+                } => {
+                    for e in targets.iter_mut().chain(values.iter_mut()) {
+                        self.expr(e);
+                    }
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.block(body),
+            }
+        }
+        if let Some(e) = b.final_expr.as_mut() {
+            self.expr(e);
+        }
+        self.scopes.pop();
+    }
+
+    fn scoped(&mut self, p: &Pattern, body: impl FnOnce(&mut Self)) {
+        self.scopes.push(HashSet::new());
+        self.bind(p);
+        body(self);
+        self.scopes.pop();
+    }
+
+    fn expr(&mut self, e: &mut Expr) {
+        match &mut e.kind {
+            ExprKind::Identifier(n) => {
+                if self.scopes.iter().any(|s| s.contains(n.as_str())) {
+                    self.out.uses.insert(e.span.offset);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.expr(scrutinee);
+                for arm in arms.iter_mut() {
+                    self.scoped(&arm.pattern.clone(), |w| {
+                        if let Some(g) = arm.guard.as_mut() {
+                            w.expr(g);
+                        }
+                        w.expr(&mut arm.body);
+                    });
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                self.expr(value);
+                self.scoped(pattern, |w| w.block(then_block));
+                if let Some(b) = else_branch.as_mut() {
+                    self.expr(b);
+                }
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                self.expr(value);
+                self.scoped(pattern, |w| w.block(body));
+            }
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                self.expr(iterable);
+                self.scoped(pattern, |w| w.block(body));
+            }
+            ExprKind::Closure { params, body, .. } => {
+                self.scopes.push(HashSet::new());
+                for p in params.iter() {
+                    self.bind(&p.pattern);
+                }
+                self.expr(body);
+                self.scopes.pop();
+            }
+            _ => {
+                let cell = std::cell::RefCell::new(&mut *self);
+                walk_expr_children(e, &mut |c| cell.borrow_mut().expr(c), &mut |b| {
+                    cell.borrow_mut().block(b)
+                });
+            }
+        }
+    }
+}
+
+/// Each binding of `p` with its leaf's span, every alternative of an `|`
+/// pattern included (a binding is written once in each).
+fn pattern_binding_spans(p: &Pattern, out: &mut Vec<(String, Span)>) {
+    match &p.kind {
+        PatternKind::Or(alts) => {
+            for a in alts {
+                pattern_binding_spans(a, out);
+            }
+        }
+        _ => out.extend(p.binding_name_spans()),
+    }
+}
+
 /// Names declared by `items` — `module_rename`'s shadowing guard, and the raw
 /// material for its collision search.
 pub(crate) fn declared_names(items: &[Item]) -> HashSet<String> {
@@ -294,11 +502,27 @@ pub(crate) fn declared_names(items: &[Item]) -> HashSet<String> {
     out
 }
 
+/// The substitution [`rewrite_item`] applies: the names to rewrite, and the
+/// identifiers that name a local in scope and so keep their spelling
+/// (B-2026-11-16-6).
+struct Subst<'a> {
+    map: &'a HashMap<String, TypeExpr>,
+    hidden: &'a LocalUses,
+}
+
+impl std::ops::Deref for Subst<'_> {
+    type Target = HashMap<String, TypeExpr>;
+    fn deref(&self) -> &Self::Target {
+        self.map
+    }
+}
+
 /// Rewrite every aliased reference in `item` to its canonical name.
-pub(crate) fn rewrite_item(item: &mut Item, subst: &HashMap<String, TypeExpr>) {
+pub(crate) fn rewrite_item(item: &mut Item, subst: &HashMap<String, TypeExpr>, hidden: &LocalUses) {
     if subst.is_empty() {
         return;
     }
+    let subst = &Subst { map: subst, hidden };
     match item {
         Item::Function(f) => rewrite_function(f, subst),
         Item::StructDef(s) => {
@@ -447,7 +671,7 @@ pub(crate) fn rewrite_item(item: &mut Item, subst: &HashMap<String, TypeExpr>) {
 /// The map's values are `TypeExpr`s because that is what the type-level
 /// substitution helpers consume; the name-shaped positions (effect resources,
 /// effect groups) only ever want the leading segment back out.
-fn rewrite_name(name: &mut String, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_name(name: &mut String, subst: &Subst<'_>) {
     if let Some(TypeExpr {
         kind: TypeKind::Path(p),
         ..
@@ -461,7 +685,7 @@ fn rewrite_name(name: &mut String, subst: &HashMap<String, TypeExpr>) {
 
 /// An effect clause names RESOURCES (`writes(Db)`) and effect GROUPS
 /// (`with io`), both of which are module-scoped declarations a rename can move.
-fn rewrite_effects(effects: Option<&mut EffectList>, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_effects(effects: Option<&mut EffectList>, subst: &Subst<'_>) {
     let Some(effects) = effects else { return };
     for item in &mut effects.items {
         match item {
@@ -472,7 +696,7 @@ fn rewrite_effects(effects: Option<&mut EffectList>, subst: &HashMap<String, Typ
     }
 }
 
-fn rewrite_effect_verb(v: &mut EffectVerb, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_effect_verb(v: &mut EffectVerb, subst: &Subst<'_>) {
     for r in &mut v.resources {
         rewrite_path_segments(&mut r.path, subst);
         if let Some(p) = r.param.as_mut() {
@@ -481,7 +705,7 @@ fn rewrite_effect_verb(v: &mut EffectVerb, subst: &HashMap<String, TypeExpr>) {
     }
 }
 
-fn rewrite_provider_bound(b: &mut ProviderBound, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_provider_bound(b: &mut ProviderBound, subst: &Subst<'_>) {
     rewrite_name(&mut b.name, subst);
     for a in b.args.iter_mut().flatten() {
         if let GenericArg::Type(t) = a {
@@ -490,7 +714,7 @@ fn rewrite_provider_bound(b: &mut ProviderBound, subst: &HashMap<String, TypeExp
     }
 }
 
-fn rewrite_extern_fn(f: &mut ExternFunction, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_extern_fn(f: &mut ExternFunction, subst: &Subst<'_>) {
     for p in &mut f.params {
         p.ty = subst_type_expr(&p.ty, subst);
     }
@@ -500,7 +724,7 @@ fn rewrite_extern_fn(f: &mut ExternFunction, subst: &HashMap<String, TypeExpr>) 
     rewrite_effects(f.effects.as_mut(), subst);
 }
 
-fn rewrite_function(f: &mut Function, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_function(f: &mut Function, subst: &Subst<'_>) {
     rewrite_generic_params(f.generic_params.as_mut(), subst);
     rewrite_where(f.where_clause.as_mut(), subst);
     for p in &mut f.params {
@@ -516,7 +740,7 @@ fn rewrite_function(f: &mut Function, subst: &HashMap<String, TypeExpr>) {
     rewrite_block(&mut f.body, subst);
 }
 
-fn rewrite_trait_method(m: &mut TraitMethod, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_trait_method(m: &mut TraitMethod, subst: &Subst<'_>) {
     rewrite_generic_params(m.generic_params.as_mut(), subst);
     rewrite_where(m.where_clause.as_mut(), subst);
     for p in &mut m.params {
@@ -534,7 +758,7 @@ fn rewrite_trait_method(m: &mut TraitMethod, subst: &HashMap<String, TypeExpr>) 
     }
 }
 
-fn rewrite_generic_params(g: Option<&mut GenericParams>, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_generic_params(g: Option<&mut GenericParams>, subst: &Subst<'_>) {
     let Some(g) = g else { return };
     for gp in &mut g.params {
         for b in &mut gp.bounds {
@@ -546,7 +770,7 @@ fn rewrite_generic_params(g: Option<&mut GenericParams>, subst: &HashMap<String,
     }
 }
 
-fn rewrite_where(w: Option<&mut WhereClause>, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_where(w: Option<&mut WhereClause>, subst: &Subst<'_>) {
     let Some(w) = w else { return };
     for c in &mut w.constraints {
         // Generic ARGUMENTS + projected types via desugar's helper …
@@ -569,7 +793,7 @@ fn rewrite_where(w: Option<&mut WhereClause>, subst: &HashMap<String, TypeExpr>)
 /// param can never be the trait itself — an import alias can
 /// (`import m.{Doer as D}` + `T: D`), so the bound's own path is rewritten
 /// here too.
-fn rewrite_bound(b: &mut TraitBound, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_bound(b: &mut TraitBound, subst: &Subst<'_>) {
     subst_trait_bound(b, subst);
     rewrite_path_segments(&mut b.path, subst);
 }
@@ -578,11 +802,11 @@ fn rewrite_bound(b: &mut TraitBound, subst: &HashMap<String, TypeExpr>) {
 /// `subst_leading_type_name`'s type-param use, a BARE single segment is a
 /// legitimate alias reference (`D`, `Widget`), so there is no
 /// `qualified_only` gate.
-fn rewrite_path_segments(segments: &mut [String], subst: &HashMap<String, TypeExpr>) {
+fn rewrite_path_segments(segments: &mut [String], subst: &Subst<'_>) {
     subst_leading_type_name(segments, subst, /* qualified_only */ false);
 }
 
-fn rewrite_block(block: &mut Block, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_block(block: &mut Block, subst: &Subst<'_>) {
     subst_block(block, subst);
     // `subst_block` covers types and expressions but not PATTERNS — a type
     // param cannot appear in one, an aliased enum/struct name can
@@ -595,12 +819,12 @@ fn rewrite_block(block: &mut Block, subst: &HashMap<String, TypeExpr>) {
     }
 }
 
-fn rewrite_expr(e: &mut Expr, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_expr(e: &mut Expr, subst: &Subst<'_>) {
     subst_expr(e, subst);
     rewrite_expr_patterns(e, subst);
 }
 
-fn rewrite_stmt_patterns(stmt: &mut Stmt, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_stmt_patterns(stmt: &mut Stmt, subst: &Subst<'_>) {
     match &mut stmt.kind {
         StmtKind::Let { pattern, value, .. } => {
             rewrite_pattern(pattern, subst);
@@ -634,7 +858,7 @@ fn rewrite_stmt_patterns(stmt: &mut Stmt, subst: &HashMap<String, TypeExpr>) {
     }
 }
 
-fn rewrite_block_patterns(block: &mut Block, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_block_patterns(block: &mut Block, subst: &Subst<'_>) {
     for stmt in &mut block.stmts {
         rewrite_stmt_patterns(stmt, subst);
     }
@@ -646,17 +870,19 @@ fn rewrite_block_patterns(block: &mut Block, subst: &HashMap<String, TypeExpr>) 
 /// Walk to every pattern reachable from `e`. Only the pattern-bearing
 /// expression forms need naming here; everything else recurses through the
 /// generic child walk below.
-fn rewrite_expr_patterns(e: &mut Expr, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_expr_patterns(e: &mut Expr, subst: &Subst<'_>) {
     // A bare `Identifier` naming an aliased item — the shape a FUNCTION alias
     // takes (`import m.{mk as build};` + `build(9)`), which `subst_expr`
     // leaves alone because for its original trait-type-param use an
     // identifier is always a value, never a type (B-2026-07-29-23).
     //
-    // Safe unconditionally HERE because the substitution's builder has already
-    // dropped any name the module binds as a value — see `bound_value_names`
-    // and `local_value_bindings`. So an identifier matching a live entry cannot
-    // be a local variable, parameter, closure param, or pattern binding.
+    // An identifier that names a local in scope where it is written keeps
+    // its spelling ([`local_uses`]): a local hides an import only inside its
+    // own scope (B-2026-11-16-6).
     if let ExprKind::Identifier(n) = &mut e.kind {
+        if subst.hidden.is_local_use(e.span.offset) {
+            return;
+        }
         if let Some(TypeExpr {
             kind: TypeKind::Path(p),
             ..
@@ -850,7 +1076,7 @@ pub(crate) fn walk_expr_children(
     }
 }
 
-fn rewrite_pattern(p: &mut Pattern, subst: &HashMap<String, TypeExpr>) {
+fn rewrite_pattern(p: &mut Pattern, subst: &Subst<'_>) {
     match &mut p.kind {
         PatternKind::TupleVariant { path, patterns } => {
             rewrite_path_segments(path, subst);

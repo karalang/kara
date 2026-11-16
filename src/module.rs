@@ -1183,7 +1183,11 @@ fn expand_module_binding_imports(m: &mut Module, known: &std::collections::HashS
         }
     }
     let shadowed = crate::module_binding::shadowed_names(&mut m.items);
-    binds.retain(|name, _| !shadowed.contains(name));
+    // An item of the module's own owns the name everywhere. A local of it
+    // hides the binding only where it is in scope, which the strip's own
+    // scope walk reads (design.md § Imports, B-2026-11-16-6).
+    let declared = crate::import_alias::declared_names(&m.items);
+    binds.retain(|name, _| !declared.contains(name));
     if binds.is_empty() {
         return;
     }

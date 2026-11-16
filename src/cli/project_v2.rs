@@ -969,11 +969,13 @@ impl Flat {
             if quals.is_empty() {
                 continue;
             }
-            let bound = crate::import_alias::bound_value_names(&mut f.items.clone());
-            let quals = live_qualifiers(quals, &bound);
+            let mut items = f.items.clone();
+            let bound = crate::import_alias::bound_value_names(&mut items);
+            let hidden = crate::import_alias::local_uses(&mut items);
+            let quals: Vec<_> = quals.iter().collect();
             let mut toks = Vec::new();
             idents(&f.text, 0, &mut toks);
-            let uses = qualified_uses(tree, f, &toks, &quals);
+            let uses = live_uses(qualified_uses(tree, f, &toks, &quals), &toks, &hidden);
             if uses.iter().all(|u| u.member.is_none()) {
                 continue;
             }
@@ -1018,14 +1020,10 @@ impl Flat {
                     continue;
                 }
                 let module = &tree.modules[origin];
-                // The root keeps its names, and a linkage name or one the
-                // module also binds as a local cannot be rewritten, as in
-                // `module_rename::plan`.
-                if origin == tree.root
-                    || crate::module_rename::name_is_linkage(module, &name)
-                    || crate::import_alias::local_value_bindings(&mut module.items.clone())
-                        .contains(&name)
-                {
+                // The root keeps its names, and a linkage name cannot be
+                // rewritten, as in `module_rename::plan`. A local of the name
+                // keeps its spelling where it is in scope (`flat_names`).
+                if origin == tree.root || crate::module_rename::name_is_linkage(module, &name) {
                     continue;
                 }
                 let taken = taken.get_or_insert_with(|| {
@@ -1181,14 +1179,17 @@ fn idents(src: &str, base: usize, out: &mut Vec<Ident>) {
     }
 }
 
-/// The module imports of a file that are qualifiers in its text: those it
-/// does not also bind as a value, as the legacy merge's rewrite deferred
-/// to them, so `connection.v` on a local `connection` is a field access.
-fn live_qualifiers<'q>(
-    quals: &'q [(String, Vec<String>)],
-    bound: &std::collections::HashSet<String>,
-) -> Vec<&'q (String, Vec<String>)> {
-    quals.iter().filter(|(q, _)| !bound.contains(q)).collect()
+/// The qualified uses whose qualifier names the module: `connection.v` on a
+/// local `connection` in scope is a field access, and a local hides the
+/// module only inside its own scope (design.md § Imports, B-2026-11-16-6).
+fn live_uses(
+    uses: Vec<Qualified>,
+    toks: &[Ident],
+    hidden: &crate::import_alias::LocalUses,
+) -> Vec<Qualified> {
+    uses.into_iter()
+        .filter(|u| !hidden.is_local_use(toks[u.first].offset))
+        .collect()
 }
 
 /// A use of a module binding as a qualifier (`connection.open`,
@@ -1263,14 +1264,13 @@ fn flat_names(
     quals: &[(String, Vec<String>)],
 ) -> Result<Vec<Edit>, String> {
     let mut items = f.items.clone();
-    let bound = crate::import_alias::bound_value_names(&mut items);
-    let locals = crate::import_alias::local_value_bindings(&mut items);
-    let quals = live_qualifiers(quals, &bound);
+    let hidden = crate::import_alias::local_uses(&mut items);
+    let quals: Vec<_> = quals.iter().collect();
     let mut toks = Vec::new();
     idents(&f.text, 0, &mut toks);
     let mut edits = Vec::new();
     let mut skip = vec![false; toks.len()];
-    for u in qualified_uses(tree, f, &toks, &quals) {
+    for u in live_uses(qualified_uses(tree, f, &toks, &quals), &toks, &hidden) {
         edits.push(blank(&f.text, toks[u.first].offset, u.end));
         skip[u.first..u.member.map_or(u.first + 1, |m| m + 1)].fill(true);
         let (Some(m), Some(member)) = (u.module, u.member) else {
@@ -1284,7 +1284,7 @@ fn flat_names(
         }
     }
     for (t, _) in toks.iter().zip(&skip).filter(|(_, s)| !**s) {
-        if t.after_dot || (t.before_colon && !t.declared) || locals.contains(&t.name) {
+        if t.after_dot || (t.before_colon && !t.declared) || hidden.hides(t.offset, &t.name) {
             continue;
         }
         if let Some(flat) = subst.get(&t.name) {

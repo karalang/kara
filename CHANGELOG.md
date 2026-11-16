@@ -526,6 +526,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A local hides an import only inside its own scope. In a package, a
+  parameter, `let`, `for`, `match` or closure binding with an imported
+  name (an alias, a module, or a name two modules declare) erased the
+  import from the whole file: `import a.load as ld;` beside
+  `fn other(ld: i64)` made `ld()` in `main` an undefined name. The import
+  now stays bound wherever no such local is in scope, and the local stays
+  the local where it is (B-2026-11-16-6).
 - The playground's checker, which runs without the library, accepts a
   trait default method that calls `self.req()` in an impl for one
   instantiation of a generic type (`impl Tr for Pr[i64]`), as `karac check`

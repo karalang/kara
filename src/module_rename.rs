@@ -47,13 +47,12 @@
 //!   program, which is exactly what design.md's `#[unsafe(no_mangle)]` exists to
 //!   prevent. Two modules declaring the same foreign function keep the duplicate
 //!   they always had.
-//! * **A name the module also binds as a local keeps its name.** Rewriting
-//!   references is syntactic, so a `let helper = …` sharing the item's name
-//!   would be rewritten with it. Such a module is left alone rather than risking
-//!   a silently redirected variable — the same conservative guard the alias
-//!   rewrite has always used. It degrades gently: the collision is broken as
-//!   soon as ONE declarer moves, so a program only keeps its pre-existing
-//!   duplicate error when every module declaring the name is guarded.
+//! * **A local keeps its name where it is in scope.** A `let helper = …`
+//!   sharing the item's name is not rewritten with the references to the
+//!   item: the rewrites read [`crate::import_alias::local_uses`], which knows
+//!   which identifiers name a local in scope. This was once a guard that left
+//!   the whole module alone when it bound the name anywhere, which erased an
+//!   import from every use in the file (B-2026-11-16-6).
 
 use std::collections::{HashMap, HashSet};
 
@@ -160,21 +159,13 @@ pub fn plan(tree: &ProgramTree) -> FlatRenames {
         return renames; // the overwhelmingly common case — nothing to do
     }
 
-    // Only now that a collision is known to exist, pay for the guard set:
-    // `local_value_bindings` walks every function body in the module.
-    let mut locals_of: HashMap<ModuleId, HashSet<String>> = HashMap::new();
-    for &id in &ids {
-        let mut items = tree.module(id).items.clone();
-        locals_of.insert(id, crate::import_alias::local_value_bindings(&mut items));
-    }
-
     for name in colliding {
         for &id in &declared_by[name] {
             if id == tree.root {
                 continue; // the root keeps every name it declares
             }
-            if locals_of[&id].contains(name) || name_is_linkage(tree.module(id), name) {
-                continue; // see the module doc's two guards
+            if name_is_linkage(tree.module(id), name) {
+                continue; // see the module doc's guard
             }
             let fresh = qualified_name(name, &tree.module(id).path, &mut taken);
             renames
@@ -293,10 +284,11 @@ pub fn flatten_module_items(tree: &ProgramTree, id: ModuleId, renames: &FlatRena
         .cloned()
         .collect();
 
-    // Both guard sets read the module's ORIGINAL names, so they are taken
-    // before any declaration moves.
+    // Both read the module's ORIGINAL names, so they are taken before any
+    // declaration moves: the names it declares, which own their spelling
+    // everywhere, and its locals, which own it only where in scope (B-2026-11-16-6).
     let local_names = crate::import_alias::declared_names(&items);
-    let bound_values = crate::import_alias::bound_value_names(&mut items);
+    let hidden = crate::import_alias::local_uses(&mut items);
 
     let mut subst: HashMap<String, TypeExpr> = HashMap::new();
     if let Some(own) = renames.per_module.get(&id) {
@@ -307,10 +299,10 @@ pub fn flatten_module_items(tree: &ProgramTree, id: ModuleId, renames: &FlatRena
             }
         }
     }
-    add_import_subst(tree, m, renames, &local_names, &bound_values, &mut subst);
+    add_import_subst(tree, m, renames, &local_names, &mut subst);
 
     for item in &mut items {
-        crate::import_alias::rewrite_item(item, &subst);
+        crate::import_alias::rewrite_item(item, &subst, &hidden);
     }
     items
 }
@@ -328,21 +320,17 @@ fn add_import_subst(
     m: &module::Module,
     renames: &FlatRenames,
     local_names: &HashSet<String>,
-    bound_values: &HashSet<String>,
     subst: &mut HashMap<String, TypeExpr>,
 ) {
     for imp in &m.imports {
         for item in &imp.items {
             let bound = item.alias.clone().unwrap_or_else(|| item.name.clone());
-            // A local declaration or a local value binding owns the name;
-            // rewriting a reference to the import's target would silently
-            // redirect it. This module's OWN rename is already in `subst` and
-            // is not affected — that entry IS the declaration. Same guard, and
-            // the same reason, as the alias rewrite has always applied.
-            if subst.contains_key(&bound)
-                || local_names.contains(&bound)
-                || bound_values.contains(&bound)
-            {
+            // A local declaration owns the name; rewriting a reference to
+            // the import's target would silently redirect it. This module's
+            // OWN rename is already in `subst` and is not affected — that
+            // entry IS the declaration. A local value binding owns the name
+            // only where it is in scope, which `rewrite_item` reads.
+            if subst.contains_key(&bound) || local_names.contains(&bound) {
                 continue;
             }
             // Follow `pub import` re-exports to the module that really

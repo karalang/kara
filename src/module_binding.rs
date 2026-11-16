@@ -335,9 +335,8 @@ struct Stripper<'a> {
     refs: ModuleRefs,
     /// The value names bound by the scopes enclosing the walk, innermost
     /// last. A `<bound>.x` whose root is one of them reaches a local, not the
-    /// module. Project mode never needs it (its bindings are already dropped
-    /// for any name bound as a value anywhere, see [`shadowed_names`]); the
-    /// single-file desugar ([`expand_single_file_std_module_bindings`]) does.
+    /// module, in project mode (B-2026-11-16-6) and in the single-file desugar
+    /// ([`expand_single_file_std_module_bindings`]) alike.
     locals: Vec<Vec<String>>,
 }
 

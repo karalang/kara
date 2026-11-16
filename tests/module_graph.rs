@@ -2753,11 +2753,12 @@ fn the_replacement_name_follows_the_module_path() {
     );
 }
 
-/// A module that also binds the name as a LOCAL is left alone — the rewrite is
-/// syntactic, so renaming there could redirect the variable. One renameable
-/// declarer is enough to break the collision, so the program still builds.
+/// A module that also binds the name as a LOCAL gives the declaration up like
+/// any other: the rewrite keeps a local's spelling only where the local is in
+/// scope, so it cannot redirect the variable (B-2026-11-16-6). This pinned
+/// the old guard, which left such a module's declaration alone.
 #[test]
-fn a_module_that_binds_the_name_locally_is_not_renamed() {
+fn a_module_that_binds_the_name_locally_is_renamed_too() {
     let d = ScratchDir::new("rename-shadow-guard");
     d.write(
         "src/main.kara",
@@ -2777,12 +2778,12 @@ fn a_module_that_binds_the_name_locally_is_not_renamed() {
     let w = walked(d.root());
     let built = build_program_tree(&w).expect("build tree");
     assert!(
-        flat_declared_names(&built.tree, &["alpha"]).contains(&"helper".to_string()),
-        "alpha binds `helper` as a local, so its declaration keeps the name",
+        flat_declared_names(&built.tree, &["alpha"]).contains(&"helper__alpha".to_string()),
+        "alpha's local `helper` no longer keeps its declaration's name",
     );
     assert!(
         flat_declared_names(&built.tree, &["beta"]).contains(&"helper__beta".to_string()),
-        "beta has no such local, so it is the one that moves",
+        "beta moves as before",
     );
 }
 

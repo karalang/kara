@@ -24930,8 +24930,8 @@ fn test_build_project_accepts_aliased_type_and_trait_imports() {
 #[test]
 fn test_build_project_alias_rewrite_yields_to_a_shadowing_local() {
     // B-2026-07-29-23 guard. Rewriting a bare `Identifier` is only safe
-    // because an alias the module binds as a VALUE anywhere is dropped from
-    // the substitution entirely (`import_alias::bound_value_names`).
+    // because one that names a local in scope keeps its spelling
+    // (`import_alias::local_uses`, B-2026-11-16-6).
     // Without that, `let build: i64 = 42;` would have its READS rewritten to
     // the imported function's name — turning a loud rejection into a
     // miscompile, which is the one outcome worse than the original bug.
