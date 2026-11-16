@@ -1,0 +1,9 @@
+source = "docs/library/encoding.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): docs/library/encoding.md: RFC 4648 test vectors for Base64, the URL-safe alphabet without padding, decode errors (padding required, nonzero trailing bits, bytes outside the alphabet, whitespace), hex in either case, percent-encoding of everything outside the unreserved set and percent_decode keeping +, and DecodeError Display. Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

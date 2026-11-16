@@ -1,0 +1,21 @@
+import std.encoding.{base64_decode, base64url_decode, DecodeError};
+
+fn show(r: Result[Vec[u8], DecodeError]) -> String {
+    match r {
+        Ok(v) => f"ok{v}",
+        Err(DecodeError.InvalidByte(at)) => f"byte@{at}",
+        Err(DecodeError.InvalidLength) => "len",
+        Err(_) => "other",
+    }
+}
+
+fn main() {
+    for t in ["Z===", "====", "Zg=a", "Zm9=", "Zm9v====", "=Zg=", "Zg==\n", "Zm8=Zm8="] {
+        print(f"{t.trim()}:{show(base64_decode(t))} ");
+    }
+    println("");
+    for t in ["Zg=", "Z===", "Zm8", "Zm9", "Zm9v=", "Zh", "Zm9=", "Zg=="] {
+        print(f"{t}:{show(base64url_decode(t))} ");
+    }
+    println("");
+}

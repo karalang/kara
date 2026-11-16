@@ -1,0 +1,32 @@
+fn main() {
+    let r: String = "".chars().rev().collect();
+    println(f"[{r}]");
+    let l: Vec[Str] = "\r\n".lines().collect();
+    println(f"{l.len()}");
+    let l2: Vec[Str] = "a\rb\n".lines().collect();
+    println(f"{l2.len()} {l2[0].len()}");
+    let ws = "\u{3000}\u{a0}x\u{2003}\u{85}";
+    println(f"{ws.trim().len()} {ws.trim_start().len()} {ws.trim_end().len()}");
+    let sw: Vec[Str] = "a\u{3000}b\u{a0}c".split_whitespace().collect();
+    println(sw.len());
+    println("ﬁ".to_uppercase());
+    println("ΣΑΣ".to_lowercase());
+    println(f"{"aéb".rsplit_once("é")} {"a::b::c".rsplit_once("::")} {"a::b::c".split_once("::")}");
+    let mut t = "aé😀".to_string();
+    t.retain(|c| c != 'é');
+    println(f"{t} {t.len()}");
+    println(f"{t.pop()} {t} {t.len()}");
+    let mut u = "日本".to_string();
+    u.truncate(3);
+    println(u);
+    let sp: Vec[Str] = "a--b----c".split("--").collect();
+    println(f"{sp}");
+    let rs: Vec[Str] = "x".splitn(-3, ",").collect();
+    println(rs.len());
+    let n: Vec[Str] = "".splitn(2, ",").collect();
+    println(n.len());
+    println(f"{"abc".find("abcd")} {"".find("")} {"".find("a")}");
+    println(f"{"é".char_at(0)} {"".char_at(0)}");
+    let mi: Vec[(i64, Str)] = "".match_indices("").collect();
+    println(f"{mi}");
+}

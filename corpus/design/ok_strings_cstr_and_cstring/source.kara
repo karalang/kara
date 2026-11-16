@@ -1,0 +1,19 @@
+fn main() {
+    let c = c"hi";
+    println(f"{c.len()} {c.is_empty()} {c.bytes()} {c.to_str()} {c.to_string()}");
+    let e = c"";
+    println(f"{e.len()} {e.is_empty()}");
+    let s = "abc".to_string();
+    match s.to_cstring() {
+        Ok(cs) => println(f"{cs.len()} {cs.to_str()}"),
+        Err(_) => println("nul"),
+    }
+    let z = "a\0b".to_string();
+    println(z.to_cstring().is_err());
+    let raw: Vec[u8] = [255, 1];
+    match CString.from_bytes(raw) {
+        Ok(cs) => println(f"{cs.len()} {cs.to_str().is_err()} {cs.to_string().is_err()}"),
+        Err(_) => println("nul"),
+    }
+    println(CString.from_bytes([1, 0]).is_err());
+}

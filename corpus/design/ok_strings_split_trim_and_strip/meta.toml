@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): split_once, rsplit_once, split_at, strip_prefix, strip_suffix, split (empty separator: an empty piece, each char, an empty piece), splitn (n <= 0 makes none), lines (a \r\n ends a line), split_whitespace and the trims. A Vec[Str] renders its elements through Display, so an empty piece shows as nothing. Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

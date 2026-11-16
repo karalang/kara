@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): contains, starts_with, ends_with, find, rfind (an empty pattern is found at the end), match_indices (an empty pattern matches at every char boundary, the end included) and matches (no overlap: aaaa has 2 of aa). Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

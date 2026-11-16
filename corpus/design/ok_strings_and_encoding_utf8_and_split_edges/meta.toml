@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): splitn with an empty separator, try_with_capacity and try_reserve past isize::MAX are Err, from_utf8 refuses overlong, surrogate and past-U+10FFFF sequences, from_utf8_lossy replaces each maximal invalid prefix (surrogate bytes are three U+FFFD, a truncated 4-byte sequence one), a MutFn retain predicate, split from both ends with a self-overlapping separator, and the decoders on non-ASCII text. Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

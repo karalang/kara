@@ -1,0 +1,5 @@
+fn main() {
+    let s = "héllo".to_string();
+    println(s[0..2]);
+    println("unreached");
+}

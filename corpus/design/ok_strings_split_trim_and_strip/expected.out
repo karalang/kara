@@ -1,0 +1,12 @@
+Some((k, v=w)) Some((k=v, w)) None Some((, ))
+(hé, llo) (, abc) (abc, )
+Some(x) None Some(ab) Some(a) Some()
+[a, b, , c, ]
+[]
+[, a, b, c, ]
+[a, b,c] [] [a,b,c] [a, b, c]
+[one, two, three, , four]
+[]
+[a, b, c]
+[]
+[x y] [x ] [  x] []

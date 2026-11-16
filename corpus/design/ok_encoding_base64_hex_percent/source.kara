@@ -1,0 +1,56 @@
+import std.encoding.{base64_encode, base64_decode, base64url_encode, base64url_decode, hex_encode, hex_decode, percent_encode, percent_decode, DecodeError};
+
+fn show(r: Result[Vec[u8], DecodeError]) -> String {
+    match r {
+        Ok(v) => f"ok{v}",
+        Err(DecodeError.InvalidByte(at)) => f"byte@{at}",
+        Err(DecodeError.InvalidLength) => "len",
+        Err(_) => "other",
+    }
+}
+
+fn main() {
+    for t in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+        print(f"{base64_encode(t.bytes())} ");
+    }
+    println("");
+    let bin: Vec[u8] = [0xfb, 0xff, 0xfe];
+    println(f"{base64_encode(bin)} {base64url_encode(bin)} {base64url_encode("f".bytes())} {base64url_encode("".bytes())}");
+    println(show(base64_decode("aGVsbG8=")));
+    println(show(base64_decode("")));
+    println(show(base64_decode("aGVsbG8")));
+    println(show(base64_decode("aGVsbG9=")));
+    println(show(base64_decode("aGV$bG8=")));
+    println(show(base64_decode("aGVs bG8=")));
+    println(show(base64_decode("Zg==")));
+    println(show(base64_decode("Zh==")));
+    println(show(base64_decode("Zg=")));
+    println(show(base64_decode("Z===")));
+    println(show(base64_decode("Zg==Zg==")));
+    println(show(base64_decode("-_-_")));
+    println(show(base64url_decode("-_-_")));
+    println(show(base64url_decode("Zg")));
+    println(show(base64url_decode("Zg==")));
+    println(show(base64url_decode("+/+/")));
+    println(show(base64url_decode("Z")));
+    println(hex_encode([0, 15, 16, 255]));
+    println(hex_encode([]));
+    println(show(hex_decode("00ff10")));
+    println(show(hex_decode("ABcd")));
+    println(show(hex_decode("abc")));
+    println(show(hex_decode("zz")));
+    println(show(hex_decode("0g")));
+    println(show(hex_decode("")));
+    println(percent_encode("a b/c?d=e&f~g-h_i.j".bytes()));
+    println(percent_encode("é+%".bytes()));
+    println(percent_encode([0, 255]));
+    println(show(percent_decode("a%20b+c")));
+    println(show(percent_decode("%e9%C3%a9")));
+    println(show(percent_decode("abc%")));
+    println(show(percent_decode("ab%4")));
+    println(show(percent_decode("ab%zz")));
+    println(show(percent_decode("")));
+    let e: DecodeError = DecodeError.InvalidByte(3);
+    println(f"{e}");
+    println(f"{DecodeError.InvalidLength}");
+}

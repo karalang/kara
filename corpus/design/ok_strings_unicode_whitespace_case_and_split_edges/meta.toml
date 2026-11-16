@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): trim and split_whitespace on Unicode White_Space (U+3000, U+00A0, U+2003, U+0085), lines on \r\n and a lone \r, final-sigma lowercasing, ﬁ uppercasing to FI, retain and pop on multi-byte text, truncate at a char boundary, splitn with a negative n and on empty text, find on empty text. Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

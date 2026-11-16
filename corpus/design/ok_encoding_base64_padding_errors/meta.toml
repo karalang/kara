@@ -1,0 +1,9 @@
+source = "B-2026-11-16-5"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/encoding.md DecodeError: InvalidLength when the length cannot hold whole bytes or the padding is wrong, InvalidByte(at) for a byte that cannot appear where it is. More than two trailing = is wrong padding: Z===, ==== and Zm9v==== are InvalidLength (they were InvalidByte at the third =, B-2026-11-16-5). An = before the end (Zm8=Zm8=, =Zg=) is InvalidByte at it; nonzero bits after the last whole byte are InvalidByte at the last digit; the URL-safe decoder takes text with or without padding but not partial padding."

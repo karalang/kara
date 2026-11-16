@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): c\"...\" literals (len, is_empty, bytes, to_str, to_string), String.to_cstring (a NUL fails) and CString.from_bytes over bytes that need not be UTF-8. Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

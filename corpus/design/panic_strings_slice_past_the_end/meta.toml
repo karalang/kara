@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["design", "library", "strings", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md (2026-11-16): s[3..9] on a 6-byte string panics: string slice bounds out of range. Same message and exit 101 on interp, mir-llvm and ASan."

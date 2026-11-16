@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["design", "library", "strings", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md (2026-11-16): split_at(2) on héllo: byte 2 is inside é, so it panics as s[a..b] does. Same message and exit 101 on interp, mir-llvm and ASan."

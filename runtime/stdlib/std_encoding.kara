@@ -75,8 +75,10 @@ fn base64_decode_with(text: Str, url: bool, pad_required: bool) -> Result[Vec[u8
         n = n - 1;
         pads = pads + 1;
     }
+    // More than two `=` is padding no length needs: `InvalidLength`, as
+    // docs/library/encoding.md has it (B-2026-11-16-5).
     if pads > 2 {
-        return Err(DecodeError.InvalidByte(n + 2));
+        return Err(DecodeError.InvalidLength);
     }
     if n % 4 == 1 {
         return Err(DecodeError.InvalidLength);

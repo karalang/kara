@@ -1,0 +1,20 @@
+2 [] [abc]
+3 [bc]
+true
+true
+true
+true
+true
+3
+1
+a�b
+4
+bdf 6
+abc
+len
+byte@0
+len
+ok[195, 169, 65]
+2 [] [a] 2 [a] []
+[c, b, a]
+Some(a) Some(d) Some(b) Some(c) None

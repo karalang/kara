@@ -1,0 +1,25 @@
+fn main() {
+    println(f"{"k=v=w".split_once("=")} {"k=v=w".rsplit_once("=")} {"kv".split_once("=")} {"=".split_once("=")}");
+    println(f"{"héllo".split_at(3)} {"abc".split_at(0)} {"abc".split_at(3)}");
+    println(f"{"prefix-x".strip_prefix("prefix-")} {"x".strip_prefix("y")} {"ab".strip_prefix("")} {"ab".strip_suffix("b")} {"ab".strip_suffix("ab")}");
+    let p: Vec[Str] = "a,b,,c,".split(",").collect();
+    println(f"{p}");
+    let q: Vec[Str] = "".split(",").collect();
+    println(f"{q}");
+    let r: Vec[Str] = "abc".split("").collect();
+    println(f"{r}");
+    let n2: Vec[Str] = "a,b,c".splitn(2, ",").collect();
+    let n0: Vec[Str] = "a,b,c".splitn(0, ",").collect();
+    let n1: Vec[Str] = "a,b,c".splitn(1, ",").collect();
+    let n9: Vec[Str] = "a,b,c".splitn(9, ",").collect();
+    println(f"{n2} {n0} {n1} {n9}");
+    let l: Vec[Str] = "one\ntwo\r\nthree\n\nfour\n".lines().collect();
+    println(f"{l}");
+    let l2: Vec[Str] = "".lines().collect();
+    println(f"{l2}");
+    let w: Vec[Str] = "  a \t b\n\nc  ".split_whitespace().collect();
+    println(f"{w}");
+    let w2: Vec[Str] = "   ".split_whitespace().collect();
+    println(f"{w2}");
+    println(f"[{"  x y \n".trim()}] [{"  x ".trim_start()}] [{"  x ".trim_end()}] [{"   ".trim()}]");
+}

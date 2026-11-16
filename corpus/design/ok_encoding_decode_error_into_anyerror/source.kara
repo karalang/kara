@@ -1,0 +1,12 @@
+import std.encoding.{hex_decode, base64_decode};
+
+fn go(t: Str) -> Result[i64, AnyError] {
+    let v = hex_decode(t)?;
+    let w = base64_decode("Zg==")?;
+    Ok(v.len() + w.len())
+}
+
+fn main() {
+    match go("0a0b") { Ok(n) => println(n), Err(e) => println(f"err {e}") }
+    match go("0x") { Ok(n) => println(n), Err(e) => println(f"err {e}") }
+}

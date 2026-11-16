@@ -1,0 +1,22 @@
+fn main() {
+    let s = "héllo wörld";
+    let e = "";
+    println(f"{s.len()} {e.len()} {s.is_empty()} {e.is_empty()}");
+    println(s.chars().count());
+    let r: String = s.chars().rev().collect();
+    println(r);
+    for (i, c) in "aé€😀".char_indices() {
+        print(f"{i}:{c} ");
+    }
+    println("");
+    let rev: Vec[(i64, char)] = "aé€".char_indices().rev().collect();
+    println(f"{rev}");
+    let b = "é".bytes();
+    println(f"{b.len()} {b[0]} {b[1]}");
+    println(f"{s.char_at(1)} {s.char_at(10)} {s.char_at(11)} {s.char_at(-1)}");
+    let mut it = "abc".chars();
+    let _ = it.next();
+    println(it.as_str());
+    println(e.chars().count());
+    println(e.char_at(0).is_none());
+}

@@ -1,0 +1,38 @@
+ Zg== Zm8= Zm9v Zm9vYg== Zm9vYmE= Zm9vYmFy 
++//+ -__- Zg 
+ok[104, 101, 108, 108, 111]
+ok[]
+len
+byte@6
+byte@3
+len
+ok[102]
+byte@1
+len
+len
+byte@2
+byte@0
+ok[251, 255, 191]
+ok[102]
+ok[102]
+byte@0
+len
+000f10ff
+
+ok[0, 255, 16]
+ok[171, 205]
+len
+byte@0
+byte@1
+ok[]
+a%20b%2Fc%3Fd%3De%26f~g-h_i.j
+%C3%A9%2B%25
+%00%FF
+ok[97, 32, 98, 43, 99]
+ok[233, 195, 169]
+byte@3
+byte@2
+byte@2
+ok[]
+invalid byte at offset 3
+invalid length

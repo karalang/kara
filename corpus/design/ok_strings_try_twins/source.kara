@@ -1,0 +1,8 @@
+fn main() {
+    let mut s = String.new();
+    match s.try_push_str("ab") { Ok(_) => println("ps"), Err(_) => println("e") }
+    match s.try_push('é') { Ok(_) => println("p"), Err(_) => println("e") }
+    match s.try_reserve(4) { Ok(_) => println("r"), Err(_) => println("e") }
+    match String.try_with_capacity(8) { Ok(t) => println(f"wc{t.len()}"), Err(_) => println("e") }
+    println(s);
+}

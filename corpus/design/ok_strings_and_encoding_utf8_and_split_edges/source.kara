@@ -1,0 +1,45 @@
+import std.encoding.{hex_decode, base64_decode, percent_decode, DecodeError};
+
+fn show(r: Result[Vec[u8], DecodeError]) -> String {
+    match r {
+        Ok(v) => f"ok{v}",
+        Err(DecodeError.InvalidByte(at)) => f"byte@{at}",
+        Err(DecodeError.InvalidLength) => "len",
+        Err(_) => "other",
+    }
+}
+
+fn main() {
+    let a: Vec[Str] = "abc".splitn(2, "").collect();
+    println(f"{a.len()} [{a[0]}] [{a[1]}]");
+    let b: Vec[Str] = "abc".splitn(3, "").collect();
+    println(f"{b.len()} [{b[2]}]");
+    println(String.try_with_capacity(9223372036854775807).is_err());
+    let mut s = String.new();
+    println(s.try_reserve(9223372036854775807).is_err());
+    println(String.from_utf8([0xC0, 0x80]).is_err());
+    println(String.from_utf8([0xED, 0xA0, 0x80]).is_err());
+    println(String.from_utf8([0xF4, 0x90, 0x80, 0x80]).is_err());
+    println(String.from_utf8_lossy([0xED, 0xA0, 0x80]).chars().count());
+    println(String.from_utf8_lossy([0xF0, 0x9F, 0x98]).chars().count());
+    println(String.from_utf8_lossy([0x61, 0xF0, 0x9F, 0x98, 0x62]));
+    s.push('\u{10FFFF}');
+    println(s.len());
+    let mut k = 0;
+    let mut t = "abcdef".to_string();
+    t.retain(|c| { k += 1; k % 2 == 0 });
+    println(f"{t} {k}");
+    let u = "a".to_string() + "b".to_string() + "c".to_string();
+    println(u);
+    println(show(hex_decode("é0")));
+    println(show(hex_decode("éé")));
+    println(show(base64_decode("Zé==")));
+    println(show(percent_decode("é%41")));
+    let x: Vec[Str] = "aaa".split("aa").collect();
+    let y: Vec[Str] = "aaa".split("aa").rev().collect();
+    println(f"{x.len()} [{x[0]}] [{x[1]}] {y.len()} [{y[0]}] [{y[1]}]");
+    let z: Vec[Str] = "a,b,c".split(",").rev().collect();
+    println(f"{z}");
+    let mut it = "a,b,c,d".split(",");
+    println(f"{it.next()} {it.next_back()} {it.next()} {it.next_back()} {it.next()}");
+}

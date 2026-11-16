@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): replace (an empty from matches at every boundary), Unicode case mapping (straße to STRASSE, İ lowercases to 3 bytes), to_string and clone of a Str, s[a..b] views, and substring saturating out-of-range, negative and inverted bounds. Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

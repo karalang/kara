@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): String.new, with_capacity(-1), push of multi-byte chars, from_utf8, from_utf8_lossy (an incomplete sequence is one U+FFFD), as_str, extend over chars and over Strings, retain, pop, truncate (past the end does nothing, negative empties), reserve, clear and + (both operands stay usable). Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

@@ -1,0 +1,9 @@
+source = "docs/library/strings.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/strings.md and encoding.md (2026-11-16): len, is_empty, chars (count, rev, as_str), char_indices (and from the back), bytes and char_at, on multi-byte text and the empty string. Byte lengths by hand: héllo wörld is 13 bytes, 11 scalars. Checked against Rust's str semantics and RFC 4648 / 3986 by hand; interp, mir-llvm and ASan agree."

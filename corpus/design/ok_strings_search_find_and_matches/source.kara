@@ -1,0 +1,14 @@
+fn main() {
+    let s = "abcabcab";
+    println(f"{s.contains("ca")} {s.contains("")} {s.contains("x")} {"".contains("")}");
+    println(f"{s.starts_with("ab")} {s.starts_with("")} {s.ends_with("ab")} {s.ends_with("abx")}");
+    println(f"{s.find("c")} {s.find("")} {s.find("z")} {s.rfind("ab")} {s.rfind("")} {"".rfind("")}");
+    let m: Vec[(i64, Str)] = "aaaa".match_indices("aa").collect();
+    println(f"{m}");
+    let m2: Vec[(i64, Str)] = "aé".match_indices("").collect();
+    println(f"{m2}");
+    println(f"{"aaaa".matches("aa").count()} {s.matches("ab").count()} {"".matches("").count()}");
+    let ms: Vec[Str] = "a1b22c333".matches("2").collect();
+    println(f"{ms}");
+    println(f"{"héllo".find("l")} {"日本語".find("語")}");
+}
