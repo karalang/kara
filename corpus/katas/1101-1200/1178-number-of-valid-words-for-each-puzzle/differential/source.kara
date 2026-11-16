@@ -1,0 +1,377 @@
+// LeetCode #1178: Number of Valid Words for Each Puzzle -- the
+// differential: the six arms against the statement read literally, and six
+// properties of what they return.
+
+// ---- valid_words.kara ----
+
+fn a0_find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    let mut count: Map[i64, i64] = Map.new();
+    for w in words.iter() {
+        let mut mask = 0;
+        for c in w.bytes().iter() {
+            mask |= 1 << (c - b'a');
+        }
+        *count.entry(mask).or_insert(0) += 1;
+    }
+    let mut answer = Vec.new();
+    for p in puzzles.iter() {
+        let bytes = p.bytes();
+        let first = 1 << (bytes[0] - b'a');
+        let mut rest = 0;
+        for c in bytes.iter().skip(1) {
+            rest |= 1 << (c - b'a');
+        }
+        let mut total = 0;
+        let mut sub = rest;
+        loop {
+            total += count.get_or(sub | first, 0);
+            if sub == 0 {
+                break;
+            }
+            sub = (sub - 1) & rest;
+        }
+        answer.push(total);
+    }
+    answer
+}
+
+// ---- valid_words_sorted.kara ----
+
+fn a1_find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    let mut masks: Vec[i64] = words
+        .iter()
+        .map(|w| w.bytes().iter().fold(0, |m, c| m | (1 << (c - b'a'))))
+        .collect();
+    masks.sort();
+    // each distinct set once, with how many words have it
+    let mut sets: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for m in masks.iter() {
+        if sets.len() > 0 and sets[sets.len() - 1] == m {
+            counts[counts.len() - 1] += 1;
+        } else {
+            sets.push(m);
+            counts.push(1);
+        }
+    }
+    let mut answer = Vec.new();
+    for p in puzzles.iter() {
+        let letters: Vec[i64] = p.bytes().iter().map(|c| 1 << (c - b'a')).collect();
+        let mut total = 0;
+        for pick in 0..64 {
+            let mut set = letters[0];
+            for j in 0..6 {
+                if pick & (1 << j) != 0 {
+                    set |= letters[j + 1];
+                }
+            }
+            if let Some(i) = sets.binary_search(set) {
+                total += counts[i];
+            }
+        }
+        answer.push(total);
+    }
+    answer
+}
+
+// ---- valid_words_trie.kara ----
+
+struct A2Node {
+    next: Array[i64, 26],
+    ends: i64,
+}
+
+fn a2_walk(nodes: Vec[A2Node], at: i64, allowed: i64, first: i64, seen_first: bool) -> i64 {
+    let mut total = if seen_first { nodes[at].ends } else { 0 };
+    for c in 0..26 {
+        let child = nodes[at].next[c];
+        if child != 0 and allowed & (1 << c) != 0 {
+            total += a2_walk(nodes, child, allowed, first, seen_first or c == first);
+        }
+    }
+    total
+}
+
+fn a2_find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    let mut nodes: Vec[A2Node] = [A2Node { next: [0; 26], ends: 0 }];
+    for w in words.iter() {
+        let mut has = [false; 26];
+        for c in w.bytes().iter() {
+            has[c - b'a'] = true;
+        }
+        let mut at = 0;
+        for c in 0..26 {
+            if has[c] {
+                if nodes[at].next[c] == 0 {
+                    nodes.push(A2Node { next: [0; 26], ends: 0 });
+                    nodes[at].next[c] = nodes.len() - 1;
+                }
+                at = nodes[at].next[c];
+            }
+        }
+        nodes[at].ends += 1;
+    }
+    puzzles
+        .iter()
+        .map(|p| {
+            let bytes = p.bytes();
+            let allowed = bytes.iter().fold(0, |m, c| m | (1 << (c - b'a')));
+            a2_walk(nodes, 0, allowed, bytes[0] - b'a', false)
+        })
+        .collect()
+}
+
+// ---- valid_words_dfs.kara ----
+
+fn a3_letter_set(w: Str) -> i64 {
+    let mut mask = 0;
+    for c in w.bytes().iter() {
+        mask |= 1 << (c - b'a');
+    }
+    mask
+}
+
+fn a3_choose(count: Map[i64, i64], letters: Slice[u8], j: i64, set: i64) -> i64 {
+    if j == letters.len() {
+        return count.get_or(set, 0);
+    }
+    a3_choose(count, letters, j + 1, set) + a3_choose(count, letters, j + 1, set | (1 << (letters[j] - b'a')))
+}
+
+fn a3_find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    let mut count: Map[i64, i64] = Map.new();
+    for w in words.iter() {
+        let m = a3_letter_set(w);
+        count[m] = count.get_or(m, 0) + 1;
+    }
+    let mut answer = Vec.new();
+    for p in puzzles.iter() {
+        let letters = p.bytes();
+        answer.push(a3_choose(count, letters, 1, 1 << (letters[0] - b'a')));
+    }
+    answer
+}
+
+// ---- valid_words_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i32] {
+        let mut freq: Map[i32, i32] = Map.new();
+        for w in ref words {
+            let mut mask = 0;
+            for b in w.bytes() {
+                mask |= 1 << (b - b'a');
+            }
+            *freq.entry(mask).or_insert(0) += 1;
+        }
+        let mut res: Vec[i32] = Vec.with_capacity(puzzles.len());
+        for p in ref puzzles {
+            let p = p.bytes();
+            let first = 1 << (p[0] - b'a');
+            let mut mask = 0;
+            for b in p[1..] {
+                mask |= 1 << (b - b'a');
+            }
+            let mut sub = mask;
+            let mut cnt: i32 = 0;
+            loop {
+                cnt += freq.get(sub | first).unwrap_or(0);
+                if sub == 0 {
+                    break;
+                }
+                sub = (sub - 1) & mask;
+            }
+            res.push(cnt);
+        }
+        res
+    }
+}
+
+fn a4_find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    A4Solution.find_num_of_valid_words(words, puzzles).into_iter().map(|x| x as i64).collect()
+}
+
+// ---- valid_words_chain.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i32] {
+        let mut count = Map.new();
+        for w in words.iter() {
+            let m = w.chars().fold(0u32, |m, c| m | 1 << (c as u32 as u8 - b'a'));
+            *count.entry(m).or_insert(0) += 1;
+        }
+        puzzles
+            .iter()
+            .map(|p| {
+                let bits: Vec[u32] = p.chars().map(|c| 1u32 << (c as u32 as u8 - b'a')).collect();
+                (0..1u32 << 6)
+                    .map(|pick| {
+                        let set = (0..6)
+                            .filter(|j| ((pick >> j) & 1) == 1)
+                            .fold(bits[0], |s, j| s | bits[j + 1]);
+                        *count.get(set).unwrap_or(0)
+                    })
+                    .sum()
+            })
+            .collect()
+    }
+}
+
+fn a5_find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    A5Solution.find_num_of_valid_words(words, puzzles).into_iter().map(|x| x as i64).collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(w: i64, words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    match w {
+        0 => a0_find_num_of_valid_words(words, puzzles),
+        1 => a1_find_num_of_valid_words(words, puzzles),
+        2 => a2_find_num_of_valid_words(words, puzzles),
+        3 => a3_find_num_of_valid_words(words, puzzles),
+        4 => a4_find_num_of_valid_words(words, puzzles),
+        _ => a5_find_num_of_valid_words(words, puzzles),
+    }
+}
+
+// The statement read literally: a word is valid for a puzzle when it holds
+// the puzzle's first letter and every letter of it is in the puzzle, each
+// word checked letter by letter against each puzzle.
+fn literal(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    let mut answer = Vec.new();
+    for p in puzzles.iter() {
+        let letters = p.bytes();
+        let mut valid = 0;
+        for w in words.iter() {
+            let bytes = w.bytes();
+            if bytes.contains(letters[0]) and bytes.iter().all(|c| letters.contains(c)) {
+                valid += 1;
+            }
+        }
+        answer.push(valid);
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `k` distinct letters from the first `m`, in a random order.
+fn distinct(seed: mut ref i64, m: i64, k: i64) -> Vec[u8] {
+    let mut letters: Vec[u8] = (0..m).map(|i| b'a' + i as u8).collect();
+    for i in 0..k {
+        let j = i + next_random(mut seed) % (m - i);
+        letters.swap(i, j);
+    }
+    letters.truncate(k);
+    letters
+}
+
+fn text(bytes: Vec[u8]) -> String {
+    String.from_utf8(bytes).unwrap()
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: Vec[i64], want: Vec[i64]) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 400 problems over the first 7 to 10 letters: 1 to 25 words of 1 to
+    // 9 letters drawn from 1 to 8 of them, and 1 to 8 puzzles; the first
+    // five problems have one word, and every fourth word is spelled from a
+    // puzzle's own letters, so that valid words come up often
+    let mut seed = 11780;
+    for plan in 0..400 {
+        let m = 7 + next_random(mut seed) % 4;
+        let puzzles: Vec[Vec[u8]] = (0..1 + next_random(mut seed) % 8).map(|_| distinct(mut seed, m, 7)).collect();
+        let n = if plan < 5 { 1 } else { 1 + next_random(mut seed) % 25 };
+        let mut words: Vec[Vec[u8]] = Vec.new();
+        for i in 0..n {
+            let set = if i % 4 == 3 {
+                let p = puzzles[next_random(mut seed) % puzzles.len()].clone();
+                let k = 1 + next_random(mut seed) % 7;
+                let mut s: Vec[u8] = Vec.new();
+                for j in 0..k {
+                    s.push(p[(j + next_random(mut seed) % 2 * 3) % 7]);
+                }
+                s
+            } else {
+                distinct(mut seed, m, 1 + next_random(mut seed) % m.min(8))
+            };
+            let len = 1 + next_random(mut seed) % 9;
+            words.push((0..len).map(|_| set[next_random(mut seed) % set.len()]).collect());
+        }
+        let ws: Vec[String] = words.iter().map(|w| text(w)).collect();
+        let ps: Vec[String] = puzzles.iter().map(|p| text(p)).collect();
+        // each puzzle's last six letters shuffled, its first kept
+        let mut shuffled: Vec[String] = Vec.new();
+        for p in puzzles.iter() {
+            let mut q = p.clone();
+            for i in (2..7).rev() {
+                let j = 1 + next_random(mut seed) % i;
+                q.swap(i, j);
+            }
+            shuffled.push(text(q));
+        }
+        // the words in the other order, each spelled backwards
+        let backwards: Vec[String] = words.iter().rev().map(|w| text(w.iter().rev().collect())).collect();
+        // every word twice
+        let mut twice = ws.clone();
+        twice.extend(ws.clone());
+        // the alphabet shuffled, each letter sent to another
+        let mut perm: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+        for i in (1..26).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            perm.swap(i, j);
+        }
+        let rename = |w: Vec[u8]| text(w.iter().map(|c| perm[c - b'a']).collect());
+        let renamed_words: Vec[String] = words.iter().map(|w| rename(w)).collect();
+        let renamed_puzzles: Vec[String] = puzzles.iter().map(|p| rename(p)).collect();
+        let want = literal(ws, ps);
+        let star = arm(0, ws, ps);
+        for w in 0..6 {
+            let a = arm(w, ws, ps);
+            for x in a.iter() {
+                t.check = (t.check * 131 + x + 1) % 1000000007;
+            }
+            // P1: the statement read literally
+            expect(mut t, w, 1, plan, a, want);
+            // P2: a puzzle's other six letters in any order
+            expect(mut t, w, 2, plan, arm(w, ws, shuffled), a);
+            // P3: neither the words' order nor their letters' order matters
+            expect(mut t, w, 3, plan, arm(w, backwards, ps), a);
+            // P4: every word twice, every count twice
+            expect(mut t, w, 4, plan, arm(w, twice, ps), a.iter().map(|x| 2 * x).collect());
+            // P5: the letters renamed, the answers the same
+            expect(mut t, w, 5, plan, arm(w, renamed_words, renamed_puzzles), a);
+            // P6: the ★ arm's answer
+            expect(mut t, w, 6, plan, a, star);
+        }
+    }
+    println(f"400 problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

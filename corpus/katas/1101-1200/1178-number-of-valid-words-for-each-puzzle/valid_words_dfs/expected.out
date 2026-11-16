@@ -1,0 +1,5 @@
+example 1: [1, 1, 3, 2, 4, 0]
+example 2: [0, 1, 3, 2, 0]
+small: [3, 5, 1, 1, 0]
+300 random problems: 2524 valid in all, checksum 880543908
+100000 words, 10000 puzzles: 47287380 valid in all, checksum 988285863

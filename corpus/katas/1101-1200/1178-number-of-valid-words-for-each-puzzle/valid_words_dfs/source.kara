@@ -1,0 +1,107 @@
+// LeetCode #1178: Number of Valid Words for Each Puzzle -- the subsets of
+// each puzzle's other six letters chosen by recursion, one letter in or
+// out at a time, every finished set (with the first letter) looked up in
+// a `Map` of the words' letter sets. O(total letters + 64 per puzzle).
+
+fn letter_set(w: Str) -> i64 {
+    let mut mask = 0;
+    for c in w.bytes().iter() {
+        mask |= 1 << (c - b'a');
+    }
+    mask
+}
+
+fn choose(count: Map[i64, i64], letters: Slice[u8], j: i64, set: i64) -> i64 {
+    if j == letters.len() {
+        return count.get_or(set, 0);
+    }
+    choose(count, letters, j + 1, set) + choose(count, letters, j + 1, set | (1 << (letters[j] - b'a')))
+}
+
+fn find_num_of_valid_words(words: Vec[String], puzzles: Vec[String]) -> Vec[i64] {
+    let mut count: Map[i64, i64] = Map.new();
+    for w in words.iter() {
+        let m = letter_set(w);
+        count[m] = count.get_or(m, 0) + 1;
+    }
+    let mut answer = Vec.new();
+    for p in puzzles.iter() {
+        let letters = p.bytes();
+        answer.push(choose(count, letters, 1, 1 << (letters[0] - b'a')));
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `k` distinct letters from the first `m`, in a random order.
+fn distinct(seed: mut ref i64, m: i64, k: i64) -> Vec[u8] {
+    let mut letters: Vec[u8] = (0..m).map(|i| b'a' + i as u8).collect();
+    for i in 0..k {
+        let j = i + next_random(mut seed) % (m - i);
+        letters.swap(i, j);
+    }
+    letters.truncate(k);
+    letters
+}
+
+// A word of 4 to `longest` letters drawn from 1 to 7 distinct letters of
+// the first `m`.
+fn word(seed: mut ref i64, m: i64, longest: i64) -> String {
+    let set = distinct(mut seed, m, 1 + next_random(mut seed) % 7);
+    let len = 4 + next_random(mut seed) % (longest - 3);
+    String.from_utf8((0..len).map(|_| set[next_random(mut seed) % set.len()]).collect()).unwrap()
+}
+
+fn puzzle(seed: mut ref i64, m: i64) -> String {
+    String.from_utf8(distinct(mut seed, m, 7)).unwrap()
+}
+
+fn strings(list: Vec[Str]) -> Vec[String] {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+fn main() {
+    // LeetCode's two examples
+    let words = strings(["aaaa", "asas", "able", "ability", "actt", "actor", "access"]);
+    let puzzles = strings(["aboveyz", "abrodyz", "abslute", "absoryz", "actresz", "gaswxyz"]);
+    println(f"example 1: {find_num_of_valid_words(words, puzzles)}");
+    let words = strings(["apple", "pleas", "please"]);
+    let puzzles = strings(["aelwxyz", "aelpxyz", "aelpsxy", "saelpxy", "xaelpsy"]);
+    println(f"example 2: {find_num_of_valid_words(words, puzzles)}");
+    // a word of the first letter alone; one with a letter the puzzle lacks;
+    // one word three times; a first letter no word has; every letter of
+    // the puzzle in one word
+    let words = strings(["aaaa", "aaab", "abcz", "bbbb", "bbbb", "bbbb", "abcdefg"]);
+    let puzzles = strings(["abcdefg", "bacdefg", "zabcdef", "gfedcba", "hijklmn"]);
+    println(f"small: {find_num_of_valid_words(words, puzzles)}");
+    // 300 random problems: 1 to 30 words over the first 9 letters, 1 to
+    // 10 puzzles of 7 distinct letters of the first 10
+    let mut seed = 1178;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let words: Vec[String] = (0..1 + next_random(mut seed) % 30).map(|_| word(mut seed, 9, 12)).collect();
+        let puzzles: Vec[String] = (0..1 + next_random(mut seed) % 10).map(|_| puzzle(mut seed, 10)).collect();
+        for a in find_num_of_valid_words(words, puzzles).iter() {
+            total += a;
+            check = (check * 131 + a + 1) % 1000000007;
+        }
+    }
+    println(f"300 random problems: {total} valid in all, checksum {check}");
+    // 100000 words of 4 to 50 letters and 10000 puzzles, the constraints'
+    // most, over the first 12 letters
+    let words: Vec[String] = (0..100000).map(|_| word(mut seed, 12, 50)).collect();
+    let puzzles: Vec[String] = (0..10000).map(|_| puzzle(mut seed, 12)).collect();
+    let answer = find_num_of_valid_words(words, puzzles);
+    let mut check = 0;
+    for a in answer.iter() {
+        check = (check * 131 + a + 1) % 1000000007;
+    }
+    println(f"100000 words, 10000 puzzles: {answer.iter().sum()} valid in all, checksum {check}");
+}
