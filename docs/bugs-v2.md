@@ -114,9 +114,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-197 | 2026-11-16 | mir-llvm | low | `karac build --target=wasm_wasi` of a program that uses std.crypto (sha256, hmac_sha256, constant_time_eq) stops at wasm-ld with `undefined symbol: karac_crypto_mir` instead of a refusal naming std.crypto | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
-| B-2026-11-16-47 | 2026-11-16 | mir | low | Every panic printed an `Error return trace:` holding only the panic's own place, though no `?` propagated an error, on the interpreter and compiled (`panic("x")` alone prints `Error return trace:\n  f.kara:2:5`) | — |
-| B-2026-11-16-48 | 2026-11-16 | cli | low | `karac check`/`build --output=json` write a resource-less effect as `panics()` in `program_effects` and `public_function_effects`, a spelling the language does not accept (`panics`) | — |
-| B-2026-11-16-49 | 2026-11-16 | cli | low | A clean `karac build --output=json` success object has no `diagnostics` key, where design.md § 17's document always carries the array (empty on a clean build) | — |
 
 ### Relocated
 
@@ -1391,6 +1388,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-203 | typecheck | medium | The pre-v1 `r.read_to_string().unwrap_or(x)` on a child's pipe left "expects 1 argument(s), found 0" with no machine fix, plus an `i64` cascade (`no… | fa56486e69 |
 | B-2026-11-16-204 | typecheck | low | The pre-v1 `ws.recv_text(mut buf)` said only "no method 'recv_text' on type 'WebSocket'", with nothing naming `recv()` and `WsMessage` | fa56486e69 |
 | B-2026-11-16-205 | typecheck | low | `karac fix` deletes `as u64` from `ans * i as u64` over a `usize` `i` (lossless_cast) in the same round that makes `i` an `i64` (`n as usize` to `n a… | 13f42dda1f |
+| B-2026-11-16-47 | mir | low | Every panic printed an `Error return trace:` holding only the panic's own place, though no `?` propagated an error, on the interpreter and compiled (… | 96de92b3d3 |
+| B-2026-11-16-48 | cli | low | `karac check`/`build --output=json` write a resource-less effect as `panics()` in `program_effects` and `public_function_effects`, a spelling the lan… | fbd0d70d4e |
+| B-2026-11-16-49 | cli | low | A clean `karac build --output=json` success object has no `diagnostics` key, where design.md § 17's document always carries the array (empty on a cle… | 9d3350fc6e |
 
 </details>
 
