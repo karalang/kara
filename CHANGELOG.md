@@ -1206,6 +1206,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `mut ref` parameter that can hold no handle (a `mut ref i64`) no longer
   keeps every count: kata 298's tree walk now executes Rust's instruction
   count (B-2026-11-16-242).
+- A `Map` or `Set` that loses and gains keys in turn (a sliding window)
+  stays the same size: an insert fills the slot the latest removal left
+  rather than appending, a removal empties its index cell where no probe
+  can have passed it, and a rebuilt index keeps as many free cells as live
+  ones. Kata 220 went from 1.78x Rust's wall time to 1.51x, 340 from 1.80x
+  to 1.59x, 391 from 2.17x to 1.87x (B-2026-11-16-243).
 - **`karac run` walks a plain recursive value in linear time.** A boxed
   field's value (`next` in `struct ListNode { val: i64, next:
   Option[ListNode] }`) now sits in a heap slot of its own in the

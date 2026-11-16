@@ -1190,6 +1190,11 @@ pub const PART_GATE: usize = 64;
 /// power of two dividing [`MERGE_BLOCK`].
 pub const SMALL_RUN: usize = 4;
 
+/// The holes a hashed table keeps before a removal closes them, at least:
+/// runtime/src/mir_map.rs's `COMPACT_MIN_HOLES`, so both backends keep one
+/// slot order (B-2026-11-16-243).
+const COMPACT_MIN_HOLES: usize = 32;
+
 /// A merge sort of at most this many elements is one insertion sort
 /// ([`Interp::merge_order`]), as Rust's stable sort is: no scratch buffer
 /// and no merges. The compiled sort and runtime/src/mir.rs `SMALL_SORT`
@@ -1200,6 +1205,10 @@ pub const SMALL_SORT: usize = 20;
 #[derive(Default)]
 struct Holes {
     at: rustc_hash::FxHashSet<usize>,
+    /// The holes, the latest last: the next insert fills the latest, as
+    /// runtime/src/mir_map.rs's `free` does, so both backends keep one
+    /// slot order (B-2026-11-16-243).
+    stack: Vec<usize>,
     /// The slot of each entry, in order, built by the first `entry_at`
     /// after a change.
     live: Option<Vec<usize>>,
@@ -10117,7 +10126,9 @@ impl<'a> Interp<'a> {
     ) -> R<usize> {
         let n = self.vec_elems(id)?.len();
         if !sorted {
-            return Ok(n);
+            // A hashed table fills its latest hole ([`Holes::stack`]).
+            let hole = self.table_holes.get(&id).and_then(|h| h.stack.last());
+            return Ok(hole.copied().unwrap_or(n));
         }
         if self.has_user_cmp(key_ty) {
             // By the key type's own `cmp` (B-2026-10-06-109), or a tuple's
@@ -10929,6 +10940,31 @@ impl<'a> Interp<'a> {
             _ => None,
         };
         let len = self.vec_elems(id)?.len();
+        // A hashed table's hole, which [`Interp::insert_at`] chose, is
+        // filled in place; nothing moves.
+        let hole = self
+            .table_holes
+            .get_mut(&id)
+            .is_some_and(|h| h.stack.last() == Some(&at) && h.at.remove(&at));
+        if hole {
+            self.vec_elems(id)?[at] = entry;
+            if let Some(h) = self.table_holes.get_mut(&id) {
+                h.stack.pop();
+                h.live = None;
+                if h.at.is_empty() {
+                    self.table_holes.remove(&id);
+                }
+            }
+            if let Some(slot) = self.key_index.get_mut(&id) {
+                match (slot.as_mut(), r) {
+                    (Some(ix), Some(r)) => {
+                        ix.insert(r, at);
+                    }
+                    _ => *slot = None,
+                }
+            }
+            return Ok(());
+        }
         self.vec_elems(id)?.insert(at, entry);
         if let Some(h) = self.table_holes.get_mut(&id) {
             h.live = None;
@@ -10952,9 +10988,11 @@ impl<'a> Interp<'a> {
     }
 
     /// Removes and returns the entry in slot `i` of table `id`. A sorted
-    /// table closes the gap; an insertion-ordered one leaves a hole
-    /// ([`Interp::table_holes`]), dropping trailing holes at once and
-    /// closing the rest when they outnumber the entries.
+    /// table closes the gap; a hashed one leaves a hole
+    /// ([`Interp::table_holes`]), as runtime/src/mir_map.rs's
+    /// `remove_slot` does: the last slot of a table with no holes is
+    /// dropped instead, and the holes close once they outnumber both the
+    /// entries and 32 (B-2026-11-16-243).
     fn table_remove(&mut self, id: AllocId, i: usize, is_map: bool, sorted: bool) -> R<Value> {
         if sorted {
             let removed = self.vec_elems(id)?.remove(i);
@@ -10985,19 +11023,17 @@ impl<'a> Interp<'a> {
                 }
             }
         }
-        let mut n = self.vec_elems(id)?.len();
+        let n = self.vec_elems(id)?.len();
+        if i + 1 == n && !self.table_holes.contains_key(&id) {
+            self.vec_elems(id)?.truncate(n - 1);
+            return Ok(removed);
+        }
         let h = self.table_holes.entry(id).or_default();
         h.at.insert(i);
+        h.stack.push(i);
         h.live = None;
-        while n > 0 && h.at.remove(&(n - 1)) {
-            n -= 1;
-        }
         let holes = h.at.len();
-        if holes == 0 {
-            self.table_holes.remove(&id);
-        }
-        self.vec_elems(id)?.truncate(n);
-        if holes * 2 > n {
+        if holes > (n - holes).max(COMPACT_MIN_HOLES) {
             self.close_holes(id)?;
         }
         Ok(removed)
@@ -11123,7 +11159,7 @@ impl<'a> Interp<'a> {
             return self.bounds(id, i, false);
         }
         let n = self.vec_elems(id)?.len();
-        let Some(Holes { at, live }) = self.table_holes.get_mut(&id) else {
+        let Some(Holes { at, live, .. }) = self.table_holes.get_mut(&id) else {
             unreachable!("checked above")
         };
         let live = live.get_or_insert_with(|| (0..n).filter(|j| !at.contains(j)).collect());

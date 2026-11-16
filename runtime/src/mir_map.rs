@@ -116,6 +116,12 @@ pub struct MirMap {
     /// one, `buf` is null (compiled code's sign to index through
     /// [`karac_mir_map_at`]), `cap` 0, and `slots` its length.
     tree: *mut tree::Tree,
+    /// The holes of a hashed table, the latest last: the next insert
+    /// fills the latest rather than appending, so a table that loses and
+    /// gains keys in turn (a sliding window) stays the same size and never
+    /// compacts (B-2026-11-16-243). The interpreter keeps the same stack
+    /// (`Holes::stack`), so both walk one order under a pinned seed.
+    free: LeanVec<u32>,
 }
 
 const NO_PAIR: u64 = u64::MAX;
@@ -269,11 +275,19 @@ impl MirMap {
     /// Room in `index` for one more slot.
     fn index_reserve(&mut self) {
         if (self.index_used + 1) * 8 > self.ncells * 7 {
-            // Twice as many cells as live slots once full, or the same
-            // number again when deleted cells filled it.
-            let want = ((self.len() + 1) * 8 / 7 + 1)
-                .next_power_of_two()
-                .max(INLINE_CELLS);
+            // Room for the live slots and one more, and twice that when
+            // they would fill more than half of it: a rebuild then leaves
+            // at least as many free cells as live ones, so removals (each
+            // may leave a deleted cell) rebuild it at most once per that
+            // many, as hashbrown's `reserve_rehash` does. Sized to the
+            // live slots alone, a window of keys just under a power of two
+            // rebuilt its index every few dozen removals (kata 220,
+            // B-2026-11-16-243).
+            let need = self.len() + 1;
+            let mut want = (need * 8 / 7 + 1).next_power_of_two().max(INLINE_CELLS);
+            if need * 2 > want * 7 / 8 {
+                want *= 2;
+            }
             self.reindex(want);
         }
     }
@@ -373,7 +387,15 @@ impl MirMap {
         }
     }
 
-    /// Forgets slot `sl` (hash `hv`) in `index`.
+    /// Forgets slot `sl` (hash `hv`) in `index`. The cell goes back to
+    /// [`CTRL_EMPTY`] when no probe can have passed it: a probe goes on
+    /// past a group only when all [`GROUP`] of its cells were taken, so a
+    /// cell whose run of taken cells (back from it and on from it) is
+    /// shorter than a group was never inside such a window. Hashbrown's
+    /// erase makes the same test. Every removal left a deleted cell, so a
+    /// table that keeps a sliding window of keys (kata 220's buckets, 340's
+    /// counts) filled its index with them and rebuilt it every few hundred
+    /// removals (B-2026-11-16-243).
     fn index_take(&mut self, hv: u64, sl: usize) {
         let mask = self.ncells - 1;
         let tag = ctrl_tag(hv);
@@ -385,7 +407,16 @@ impl MirMap {
                 let i = first_cell(pos, m, mask);
                 // SAFETY: `i < ncells`.
                 if unsafe { *self.cells.add(i) } == tag && self.slot_in(i) == sl {
-                    self.set_ctrl(i, CTRL_DELETED);
+                    // The taken cells just before `i`, and from `i` on.
+                    let before = match_empty(self.group(i.wrapping_sub(GROUP) & mask));
+                    let after = match_empty(self.group(i));
+                    let run = (before.leading_zeros() / 8 + after.trailing_zeros() / 8) as usize;
+                    if run < GROUP {
+                        self.set_ctrl(i, CTRL_EMPTY);
+                        self.index_used -= 1;
+                    } else {
+                        self.set_ctrl(i, CTRL_DELETED);
+                    }
                     return;
                 }
                 m &= m - 1;
@@ -638,6 +669,7 @@ impl MirMap {
         }
         self.slots = w;
         self.holes = 0;
+        self.free.clear();
         self.dead.clear();
         self.live.get_mut().clear();
         self.stale_live();
@@ -931,6 +963,7 @@ fn empty(entry_size: usize) -> *mut MirMap {
             pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
             unkeyed: false,
             tree: std::ptr::null_mut(),
+            free: LeanVec::new(),
         })
     };
     h
@@ -997,20 +1030,28 @@ unsafe fn insert(
         debug_assert!(m.slots == 0);
         m.hashed = true;
     }
-    m.grow();
+    // A hashed table with a hole fills its latest (B-2026-11-16-243).
+    let reuse = match (cmp, hash) {
+        (None, Some(_)) if m.holes > 0 => m.free.pop().map(|s| s as usize),
+        _ => None,
+    };
+    if reuse.is_none() {
+        m.grow();
+    }
     if hash.is_some() {
         m.index_reserve();
     }
     let es = m.entry_size;
-    let at = match cmp {
+    let at = match (reuse, cmp) {
+        (Some(s), _) => s,
         // SAFETY: as above.
-        Some(cmp) => unsafe { search(m, entry, cmp) }.unwrap_or_else(|i| i),
-        None => m.slots,
+        (None, Some(cmp)) => unsafe { search(m, entry, cmp) }.unwrap_or_else(|i| i),
+        (None, None) => m.slots,
     };
     // SAFETY: `grow` made room for one more slot after `slots`; a sorted
     // table has no holes, so its indices are its slots.
     unsafe {
-        if at < m.slots {
+        if at < m.slots && reuse.is_none() {
             std::ptr::copy(m.slot_ptr(at), m.slot_ptr(at + 1), (m.slots - at) * es);
         }
         // A word-sized entry (an `i64` set's) as one move rather than a
@@ -1027,12 +1068,22 @@ unsafe fn insert(
             _ => std::ptr::copy_nonoverlapping(entry, m.slot_ptr(at), es),
         }
     }
-    m.slots += 1;
-    if !m.dead.is_empty() {
-        m.dead.push(false);
-    }
-    if m.holes > 0 {
-        m.add_live(at, 1);
+    if reuse.is_some() {
+        // The entries after the hole move up one index.
+        m.forget();
+        m.dead[at] = false;
+        m.holes -= 1;
+        if m.holes > 0 {
+            m.add_live(at, 1);
+        }
+    } else {
+        m.slots += 1;
+        if !m.dead.is_empty() {
+            m.dead.push(false);
+        }
+        if m.holes > 0 {
+            m.add_live(at, 1);
+        }
     }
     if let Some(hv) = hash {
         // A slot must fit the low half of an `index` cell. Not `assert!`,
@@ -1267,6 +1318,7 @@ unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
         m.holes += 1;
         m.add_live(s, -1);
     }
+    m.free.push(s as u32);
     // A small table keeps up to `COMPACT_MIN_HOLES` holes: compacting it
     // after every few removes (a sliding window over k keys) cost more
     // than the holes do (B-2026-10-24-6).
@@ -1305,6 +1357,7 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
     }
     m.index_used = 0;
     m.dead.clear();
+    m.free.clear();
     m.holes = 0;
     m.live.get_mut().clear();
     m.stale_live();
@@ -1363,6 +1416,59 @@ mod tests {
         a.cmp(&b) as i32
     }
 
+    /// A hashed table's slots as the runtime keeps them: a removal leaves
+    /// a hole (the last slot of a table with none is dropped instead), an
+    /// insert fills the latest hole or appends, and the holes close once
+    /// they outnumber both the entries and [`COMPACT_MIN_HOLES`]. The
+    /// interpreter keeps the same policy (B-2026-11-16-243).
+    #[derive(Default)]
+    struct Slots {
+        slots: Vec<Option<i64>>,
+        free: Vec<usize>,
+    }
+
+    impl Slots {
+        /// Inserts `k`, returning its index.
+        fn insert(&mut self, k: i64) -> usize {
+            let s = match self.free.pop() {
+                Some(s) => {
+                    self.slots[s] = Some(k);
+                    s
+                }
+                None => {
+                    self.slots.push(Some(k));
+                    self.slots.len() - 1
+                }
+            };
+            self.slots[..s].iter().flatten().count()
+        }
+
+        /// Removes the entry at index `i`, returning it.
+        fn remove(&mut self, i: usize) -> i64 {
+            let s = (0..self.slots.len())
+                .filter(|&s| self.slots[s].is_some())
+                .nth(i)
+                .unwrap();
+            let k = self.slots[s].take().unwrap();
+            if s + 1 == self.slots.len() && self.free.is_empty() {
+                self.slots.pop();
+                return k;
+            }
+            self.free.push(s);
+            let len = self.slots.len() - self.free.len();
+            if self.free.len() > len.max(COMPACT_MIN_HOLES) {
+                self.slots.retain(Option::is_some);
+                self.free.clear();
+            }
+            k
+        }
+
+        /// The entries in index order.
+        fn order(&self) -> Vec<i64> {
+            self.slots.iter().flatten().copied().collect()
+        }
+    }
+
     /// An `es`-byte entry: the key, then bytes that name it.
     fn entry(k: i64, es: usize) -> Vec<u8> {
         let mut e = k.to_le_bytes().to_vec();
@@ -1386,6 +1492,7 @@ mod tests {
                 };
                 for round in 0..3i64 {
                     let mut model: Vec<i64> = Vec::new();
+                    let mut slots = Slots::default();
                     for n in 0..40i64 {
                         // Keys out of order, so a sorted table shifts.
                         let k = (n * 17 + round) % 97;
@@ -1395,16 +1502,26 @@ mod tests {
                         let e = entry(k, es);
                         // SAFETY: a live (or null) table of `es`-byte entries.
                         unsafe { karac_mir_map_insert(&mut h, es as u64, e.as_ptr(), hf, cf) };
-                        model.push(k);
                         if sorted {
+                            model.push(k);
                             model.sort();
+                        } else {
+                            slots.insert(k);
+                            model = slots.order();
                         }
                         if n % 3 == 2 {
                             let i = (n as usize * 7) % model.len();
                             let mut out = vec![0u8; es];
                             // SAFETY: as above.
                             unsafe { karac_mir_map_remove(h, i as i64, out.as_mut_ptr()) };
-                            assert_eq!(out, entry(model.remove(i), es));
+                            let gone = if sorted {
+                                model.remove(i)
+                            } else {
+                                let k = slots.remove(i);
+                                model = slots.order();
+                                k
+                            };
+                            assert_eq!(out, entry(gone, es));
                         }
                         for (i, k) in model.iter().enumerate() {
                             // SAFETY: as above.
@@ -1488,6 +1605,77 @@ mod tests {
         }
     }
 
+    /// Every key's hash in one of three places, so probes run long and a
+    /// removal must leave a deleted cell where one passed.
+    unsafe extern "C" fn crowd(k: *const u8) -> u64 {
+        // SAFETY: the table's keys are `i64`s.
+        let k = unsafe { k.cast::<i64>().read_unaligned() } as u64;
+        ((k % 3) << 3) | (k.wrapping_mul(0x9E37_79B9_7F4A_7C15) & (0x7f << 57))
+    }
+
+    /// A sliding window of keys (insert the newest, remove the oldest)
+    /// finds every key in the window and none before it, with removals
+    /// that empty their cell and ones that must leave it deleted, and the
+    /// emptied cells keep the index near the window's size
+    /// (B-2026-11-16-243).
+    #[test]
+    fn a_sliding_window_reclaims_its_cells() {
+        for (hash, w, spread) in [(mix as HashFn, 300i64, true), (crowd as HashFn, 40, false)] {
+            let mut h: *mut MirMap = std::ptr::null_mut();
+            for k in 0..20_000i64 {
+                // SAFETY: a live (or null) table of `i64` entries.
+                unsafe {
+                    karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None)
+                };
+                if k >= w {
+                    let old = k - w;
+                    // SAFETY: as above.
+                    let at = unsafe {
+                        karac_mir_map_find(
+                            h,
+                            (&old as *const i64).cast(),
+                            Some(hash),
+                            Some(eq),
+                            None,
+                        )
+                    };
+                    assert!(at >= 0, "key {old}");
+                    let mut out = 0i64;
+                    // SAFETY: as above; `at` is an index of the table.
+                    unsafe { karac_mir_map_remove(h, at, (&mut out as *mut i64).cast()) };
+                    assert_eq!(out, old);
+                }
+                if k % 997 == 0 {
+                    for q in (k - 2 * w).max(0)..=k {
+                        // SAFETY: as above.
+                        let f = unsafe {
+                            karac_mir_map_find(
+                                h,
+                                (&q as *const i64).cast(),
+                                Some(hash),
+                                Some(eq),
+                                None,
+                            )
+                        };
+                        assert_eq!(f >= 0, q > k - w, "at {k} probe {q}");
+                    }
+                    // SAFETY: as above.
+                    let m = unsafe { &*h };
+                    assert!(m.index_used * 8 <= m.ncells * 7);
+                }
+            }
+            // SAFETY: as above.
+            unsafe {
+                assert_eq!(karac_mir_map_len(h), w);
+                if spread {
+                    // Spread keys free nearly every cell they leave.
+                    assert!((*h).index_used < 2 * w as usize, "{}", (*h).index_used);
+                }
+                karac_mir_map_free(h);
+            }
+        }
+    }
+
     /// A small table is one allocation, its entries and index in the
     /// header's room; a table that never loses an entry records no holes.
     #[test]
@@ -1516,12 +1704,14 @@ mod tests {
         }
     }
 
-    /// Removing from a hashed table keeps indices dense and in insertion
-    /// order, against a `Vec` model, through holes and compactions.
+    /// Removing from a hashed table keeps indices dense, and an insert
+    /// fills the latest hole, against the [`Slots`] model, through holes,
+    /// refills and compactions (B-2026-11-16-243).
     #[test]
-    fn remove_keeps_insertion_order() {
+    fn remove_and_insert_keep_the_slot_order() {
         let mut h: *mut MirMap = std::ptr::null_mut();
-        let mut model: Vec<i64> = Vec::new();
+        let mut slots = Slots::default();
+        let mut refilled = false;
         let mut next = 0i64;
         let mut rng = 12345u64;
         let (mut holed, mut compacted) = (false, false);
@@ -1532,8 +1722,9 @@ mod tests {
             next += 1;
             // SAFETY: a live (or null) table of `i64` entries.
             unsafe { karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None) };
-            model.push(k);
+            slots.insert(k);
         }
+        let mut model = slots.order();
         for step in 0..4000 {
             rng ^= rng << 13;
             rng ^= rng >> 7;
@@ -1542,12 +1733,16 @@ mod tests {
             if len == 0 || rng % 5 < 2 || (step > 2500 && rng % 5 < 1) {
                 let k = next;
                 next += 1;
-                // SAFETY: a live (or null) table of `i64` entries.
+                // SAFETY: a live table of `i64` entries.
+                let before = unsafe { (*h).holes };
+                // SAFETY: as above.
                 let i = unsafe {
                     karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None)
                 };
-                assert_eq!(i as usize, model.len());
-                model.push(k);
+                // SAFETY: as above.
+                refilled |= unsafe { (*h).holes } < before;
+                assert_eq!(i as usize, slots.insert(k));
+                model = slots.order();
             } else {
                 let i = (rng / 5) as usize % len;
                 let mut out = 0i64;
@@ -1564,7 +1759,8 @@ mod tests {
                     assert_eq!(f as usize, i);
                     karac_mir_map_remove(h, i as i64, (&mut out as *mut i64).cast());
                 }
-                assert_eq!(out, model.remove(i));
+                assert_eq!(out, slots.remove(i));
+                model = slots.order();
                 // A removed key, and one never added, are absent.
                 for gone in [out, next] {
                     // SAFETY: as above.
@@ -1596,8 +1792,8 @@ mod tests {
             }
         }
         assert!(
-            holed && compacted,
-            "the walk never left holes or closed them"
+            holed && compacted && refilled,
+            "the walk never left holes, refilled them or closed them"
         );
         // SAFETY: as above.
         unsafe { karac_mir_map_free(h) };
