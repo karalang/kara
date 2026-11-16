@@ -1111,7 +1111,7 @@ let z: f64 = a;       // OK: a binding widens i32 to f64
 | `i8` … `i32`, `u8` … `u32` | `f64` | Implicit at a binding or an argument. **`as` required** as an operand of an arithmetic or comparison operator ([Mixed-width operands](#mixed-width-operands)). |
 | `iN` | `uM` | **`as` required.** The source bits are read as two's complement, then sign-extended or truncated to width M. `(-1i8) as u8 == 255`, `(-1i32) as u64 == 0xFFFFFFFF_FFFFFFFFu64`. |
 | `iN` / `uN` | narrower `iM` / `uM` | **`as` required.** Keeps the low M bits; the sign of the result follows the target type. `0x1FFi32 as u8 == 0xFFu8`, `(-1i32) as u8 == 0xFFu8`, `300i32 as i8 == 44i8`. |
-| `iN` / `uN` | `f32` / `f64`, lossy | **`as` required.** IEEE 754 round-to-nearest-even. `i64.MAX as f64` rounds to `9.223372036854776e18`, just above `i64.MAX`. |
+| `iN` / `uN` | `f32` / `f64`, lossy | **`as` required.** IEEE 754 round-to-nearest-even. `i64.MAX as f64` rounds to `9.223372036854776e+18`, just above `i64.MAX`, written as [float printing](library/core-types.md) writes it (review-thread ruling 2026-11-16). |
 | `f64` | `f32` | **`as` required.** IEEE 754 round-to-nearest-even; overflow gives `±Infinity`. (`f32` to `f64` is implicit.) |
 | `f32` / `f64` | `iN` / `uN` | **`as` required. Saturates**; see [Float to integer conversion](#float-to-integer-conversion). |
 | `bool` | `iN` / `uN` | **`as` required.** `false` is `0`, `true` is `1`. The reverse (`iN as bool`) is rejected; write `n != 0`. |
@@ -1853,7 +1853,7 @@ match flag {
 
 **`let PAT = expr` needs an irrefutable pattern**: the one-row matrix `[PAT]` must cover every value of the type, that is `U([PAT], _)` is false. A refutable pattern is rejected with a diagnostic suggesting `if let` or `let…else`.
 
-**`if let` and `while let` are not checked for exhaustiveness.** They test one pattern, which is expected to be refutable. An irrefutable pattern there is a warning (the `else` branch is unreachable, or the loop never ends by a failed match), not an error.
+**`if let` and `while let` are not checked for exhaustiveness.** They test one pattern, which is expected to be refutable. An irrefutable pattern there is a warning, `irrefutable_let_pattern` (the `else` branch is unreachable, or the loop never ends by a failed match), not an error. The same warning covers `let … else` with an irrefutable pattern, whose `else` block is dead code (review-thread ruling 2026-11-16).
 
 **`let…else`** takes a refutable pattern. Its `else` block must diverge, which the type checker verifies by giving the block type `Never`. No exhaustiveness check is needed, because the `else` block handles every other value.
 
@@ -2364,7 +2364,7 @@ Every parameter has one declared mode, written in its type. Modes are never infe
 
 Receivers follow the same rule: `self` is borrowed, `own self` is owned (consuming), and `mut ref self` is an exclusive borrow. Methods of a `shared` type take `self` only.
 
-- **`ref T` is a redundant spelling.** In a parameter, `x: ref T` means the same as `x: T`. It compiles with a warning, and `karac fix` removes the `ref`. `ref` is still written in return types, fields and locals ([Returns, `ref` returns and views](#returns-ref-returns-and-views)).
+- **`ref T` is a redundant spelling.** In a parameter, `x: ref T` means the same as `x: T`. The `redundant_ref_param` style lint flags it; like every style lint it is `allow` by default in `check`, `build` and `run` (§17), and `karac fix` removes the `ref` (review-thread ruling 2026-11-16). `ref` is still written in return types, fields and locals ([Returns, `ref` returns and views](#returns-ref-returns-and-views)).
 - **A reference passes to a borrowed parameter.** A bare `x: T` accepts a `T`, a `ref T` or a `mut ref T`, so a function holding `r: ref Config` calls `show(r)` directly ([core-semantics.md §4.1](core-semantics.md#4-parameters-calls-and-patterns)).
 - **An `escaping` parameter is owned**, and `own` is not written beside it ([Escaping function values](#escaping-function-values)).
 - **Function types use the same forms.** `Fn(own T) -> R` takes an owned argument; a bare argument type borrows ([Function types and kinds](#function-types-and-kinds)).

@@ -10945,7 +10945,7 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
-    fn core_expr_is_temp(&self, e: &Expr) -> bool {
+    pub(super) fn core_expr_is_temp(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Call { .. }
             | ExprKind::MethodCall { .. }
@@ -12090,8 +12090,14 @@ impl<'a> super::TypeChecker<'a> {
                 // the inner `Option.Some(y)` is refutable.
                 // A tuple pattern over a value that is no tuple is a type
                 // mismatch, reported as one; it is not also refutable.
-                let tuple_mismatch = matches!(pattern.kind, PatternKind::Tuple(_))
-                    && !matches!(expected_ty, Type::Tuple(_) | Type::Error | Type::TypeVar(_));
+                // Nor is one of the wrong arity, `a, b = (1, 2, 3)`
+                // (B-2026-11-16-307).
+                let tuple_mismatch = match (&pattern.kind, &expected_ty) {
+                    (PatternKind::Tuple(ps), Type::Tuple(ts)) => ps.len() != ts.len(),
+                    (PatternKind::Tuple(_), Type::Error | Type::TypeVar(_)) => false,
+                    (PatternKind::Tuple(_), _) => true,
+                    _ => false,
+                };
                 if !tuple_mismatch
                     && !self.holds_struct_spelled_as_tuple(pattern)
                     && !self.is_irrefutable_pattern(pattern, &expected_ty)
@@ -12388,6 +12394,7 @@ impl<'a> super::TypeChecker<'a> {
                 let prev_bp =
                     std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
                 self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
+                self.warn_irrefutable_let(pattern, &dispatch_ty, super::patterns::LetForm::Else);
                 self.current_scrutinee_borrow_projection = prev_bp;
                 self.current_scrutinee_core_borrowed = prev_core;
                 self.current_scrutinee_mut_self = prev_ms;

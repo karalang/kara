@@ -420,10 +420,15 @@ impl super::Parser {
                 self.advance();
                 match self.parse_negated_literal()? {
                     LiteralPattern::Integer(v, sfx) => self.finish_integer_pattern(v, sfx, start),
-                    lit => Some(Pattern {
-                        id: crate::ids::NodeId::DUMMY,
-                        kind: PatternKind::Literal(lit),
-                        span: self.span_from(&start),
+                    lit => Some({
+                        if matches!(lit, LiteralPattern::Float(..)) {
+                            self.refuse_float_range();
+                        }
+                        Pattern {
+                            id: crate::ids::NodeId::DUMMY,
+                            kind: PatternKind::Literal(lit),
+                            span: self.span_from(&start),
+                        }
                     }),
                 }
             }
@@ -484,6 +489,7 @@ impl super::Parser {
             }
             &Token::Float(n, sfx) => {
                 self.advance();
+                self.refuse_float_range();
                 Some(Pattern {
                     id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Literal(LiteralPattern::Float(n, sfx)),
@@ -846,6 +852,30 @@ impl super::Parser {
     /// type checks happen at typecheck). The path's const-ness is NOT
     /// verified here — a non-const path resolves to
     /// `E_RANGE_PATTERN_BOUND_NOT_CONST` at typecheck.
+    /// After a float literal in a pattern: `0.0..=1.0` is refused with
+    /// design.md's reason, not a parse error at the `..=` (B-2026-11-16-308).
+    /// The range is consumed, so parsing goes on from the `=>`.
+    fn refuse_float_range(&mut self) {
+        if !matches!(self.peek_token_ref(), Token::DotDotEq | Token::DotDot) {
+            return;
+        }
+        self.error(
+            "float range patterns are not supported: NaN has no place in the ordering a \
+             range needs (design.md § Range patterns); match with a guard, \
+             `x if x >= lo and x <= hi =>`",
+        );
+        self.advance();
+        if matches!(self.peek_token_ref(), Token::Minus) {
+            self.advance();
+        }
+        if matches!(
+            self.peek_token_ref(),
+            Token::Float(..) | Token::Integer(..) | Token::Identifier { .. }
+        ) {
+            self.advance();
+        }
+    }
+
     fn parse_range_bound(&mut self) -> Option<RangeBound> {
         let bound_start = self.current_span();
         if let Token::Identifier { .. } = self.peek_token_ref() {

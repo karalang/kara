@@ -124,3 +124,113 @@ fn types_exprs_parenthesized_and_joined_comparisons_check() {
     );
     assert!(ok, "{out}");
 }
+
+// Review-thread rulings 2026-11-16 on the pass above.
+
+#[test]
+fn types_exprs_irrefutable_let_else_warns() {
+    let (ok, out) = check(
+        "letelse",
+        "fn main() {\n    let t = (1, 2);\n    let (a, b) = t else { return; };\n    println(f\"{a} {b}\");\n}\n",
+    );
+    assert!(ok, "{out}");
+    assert!(out.contains("irrefutable `let ... else` pattern"), "{out}");
+}
+
+#[test]
+fn types_exprs_ref_of_a_temporary_names_the_temporary_rule() {
+    let (ok, out) = check(
+        "reftemp",
+        "fn make_value() -> String { \"hi\" }\nfn main() {\n    let r = ref make_value();\n    println(r);\n}\n",
+    );
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("a reference to a temporary outlives its statement"),
+        "{out}"
+    );
+    assert!(!out.contains("E_REF_OPERAND_UNSUPPORTED"), "{out}");
+}
+
+#[test]
+fn types_exprs_ref_of_a_temporary_fix_binds_it_first() {
+    let dir = file(
+        "reftempfix",
+        "fn make_value() -> String { \"hi\" }\nfn main() {\n    let r = ref make_value();\n    println(r);\n}\n",
+    );
+    let fix = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&dir)
+        .args(["fix", "main.kara"])
+        .output()
+        .unwrap();
+    let fixed = std::fs::read_to_string(dir.join("main.kara")).unwrap();
+    assert!(
+        fixed.contains("let value = make_value();\n    let r = ref value;"),
+        "{fixed}\n{}",
+        String::from_utf8_lossy(&fix.stderr)
+    );
+    let ok = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&dir)
+        .args(["check", "main.kara"])
+        .output()
+        .unwrap();
+    assert!(ok.status.success(), "{fixed}");
+}
+
+#[test]
+fn types_exprs_empty_match_names_every_variant() {
+    let (ok, out) = check(
+        "emptymatch",
+        "enum E { A, B(i64), C }\nfn f(e: E) -> i64 { match e { } }\nfn main() { println(f\"{f(E.A)}\"); }\n",
+    );
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("patterns `A`, `B(_)`, `C` not covered"),
+        "{out}"
+    );
+    assert!(!out.contains("missing variants: _"), "{out}");
+}
+
+#[test]
+fn types_exprs_parallel_assignment_arity_is_one_error() {
+    let (ok, out) = check(
+        "parallel",
+        "fn main() {\n    let mut a = 0;\n    let mut b = 0;\n    a, b = (1, 2, 3);\n    println(f\"{a} {b}\");\n}\n",
+    );
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("tuple pattern has 2 element(s) but type has 3"),
+        "{out}"
+    );
+    assert!(!out.contains("refutable pattern"), "{out}");
+}
+
+#[test]
+fn types_exprs_float_range_pattern_is_refused_with_the_reason() {
+    let (ok, out) = check(
+        "floatrange",
+        "fn main() {\n    let x = 0.5;\n    let s = match x { 0.0..=1.0 => 1, _ => 2 };\n    println(f\"{s}\");\n}\n",
+    );
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("float range patterns are not supported"),
+        "{out}"
+    );
+    assert!(!out.contains("Expected `=>`"), "{out}");
+}
+
+#[test]
+fn types_exprs_default_naming_a_parameter_is_one_error() {
+    for (tag, main) in [
+        ("defuncalled", "fn main() {}\n"),
+        ("defcalled", "fn main() { println(f\"{d(1)}\"); }\n"),
+    ] {
+        let src = format!("fn d(a: i64; b: i64 = a) -> i64 {{ a + b }}\n{main}");
+        let (ok, out) = check(tag, &src);
+        assert!(!ok, "{out}");
+        assert_eq!(out.matches("error[").count(), 1, "{out}");
+        assert!(
+            out.contains("default parameter value must not reference another parameter ('a')"),
+            "{out}"
+        );
+    }
+}

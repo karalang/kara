@@ -687,7 +687,7 @@ pub(crate) fn try_fill(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<Cal
                 let j = (cursor..n).find(|&k| info.names[k].as_deref() == Some(label.as_str()))?;
                 for k in cursor..j {
                     spliced.push(out.len());
-                    out.push(synthesize_arg(info.defaults[k].as_ref()?, &info.names[k]));
+                    out.push(synthesize_default(info, k, &out)?);
                 }
                 out.push(arg.clone());
                 cursor = j + 1;
@@ -696,7 +696,7 @@ pub(crate) fn try_fill(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<Cal
     }
     for k in cursor..n {
         spliced.push(out.len());
-        out.push(synthesize_arg(info.defaults[k].as_ref()?, &info.names[k]));
+        out.push(synthesize_default(info, k, &out)?);
     }
     if spliced.is_empty() {
         return None;
@@ -745,7 +745,7 @@ fn fill_named(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<CallArg>> {
         let k = info.named_from + i;
         out.push(match g {
             Some(a) => a,
-            None => synthesize_arg(info.defaults[k].as_ref()?, &info.names[k]),
+            None => synthesize_default(info, k, &out)?,
         });
     }
     Some(out)
@@ -1096,6 +1096,43 @@ fn wrap_in_block(expr: &mut Expr, stmts: Vec<Stmt>) {
 /// Build the spliced argument for an omitted parameter: a clone of the
 /// declaration's default expression, labeled with the parameter's name when
 /// it has one. Declaration spans are kept (see the module doc).
+/// The argument spliced in for parameter `k`'s default. A default that names
+/// an earlier parameter is refused at its declaration ("must not reference
+/// another parameter", design.md § Default Parameter Values); its copy here
+/// reads that parameter's argument instead, so the call adds no unresolved
+/// name of its own and the declaration's error is the one reported
+/// (B-2026-11-16-309).
+fn synthesize_default(info: &FnDefaultInfo, k: usize, out: &[CallArg]) -> Option<CallArg> {
+    struct Siblings<'a> {
+        names: &'a [Option<String>],
+        out: &'a [CallArg],
+        k: usize,
+    }
+    impl crate::span_visitor::MutVisitor for Siblings<'_> {
+        fn span(&mut self, _span: &mut crate::token::Span) {}
+        fn expr(&mut self, e: &mut Expr) {
+            let ExprKind::Identifier(name) = &e.kind else {
+                return;
+            };
+            let j = (0..self.k.min(self.out.len()))
+                .find(|&j| self.names[j].as_deref() == Some(name.as_str()));
+            if let Some(j) = j {
+                *e = self.out[j].value.clone();
+            }
+        }
+    }
+    let mut arg = synthesize_arg(info.defaults[k].as_ref()?, &info.names[k]);
+    crate::span_visitor::walk_expr_mut_with(
+        &mut arg.value,
+        &mut Siblings {
+            names: &info.names,
+            out,
+            k,
+        },
+    );
+    Some(arg)
+}
+
 fn synthesize_arg(default: &Expr, name: &Option<String>) -> CallArg {
     CallArg {
         label: name.clone(),

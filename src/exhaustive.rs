@@ -559,6 +559,26 @@ pub fn missing_match_witnesses(
             break;
         };
         let pat = witness_vec.into_iter().next().unwrap_or(Pat::Wildcard);
+        // An empty `match e { }` on an enum: no arm names a constructor, so
+        // the usefulness witness is `_`. The missing arms are every variant
+        // (B-2026-11-16-306).
+        if matches!(pat, Pat::Wildcard) && matrix.rows.is_empty() {
+            if let (Type::Named { .. }, Some(ctors)) =
+                (scrutinee_type, enumerate_ctors(scrutinee_type, env))
+            {
+                if !ctors.is_empty() && ctors.iter().all(|c| matches!(c, PatCtor::Variant(_))) {
+                    for ctor in ctors.into_iter().take(cap) {
+                        let args = vec![Pat::Wildcard; ctor_arity(&ctor, scrutinee_type, env)];
+                        out.push(render_witness(
+                            &Pat::Ctor { ctor, args },
+                            scrutinee_type,
+                            env,
+                        ));
+                    }
+                    break;
+                }
+            }
+        }
         out.push(render_witness(&pat, scrutinee_type, env));
         if matches!(pat, Pat::Wildcard) {
             break;

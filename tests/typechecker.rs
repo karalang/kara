@@ -112,9 +112,11 @@ fn main() { let r = ref make(); println(f"{r}"); }
 "#,
     );
     assert!(
-        errs.iter()
-            .any(|e| e.message.contains("E_REF_OPERAND_UNSUPPORTED")),
-        "borrowing a call result must be a typecheck error; got {errs:?}"
+        errs.iter().any(|e| e
+            .message
+            .contains("a reference to a temporary outlives its statement")),
+        "borrowing a call result must be a typecheck error, the temporary-borrow one \
+         (review-thread ruling 2026-11-16); got {errs:?}"
     );
     assert!(
         errs.iter().any(|e| e.kind.is_run_fatal()),

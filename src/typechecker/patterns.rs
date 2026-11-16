@@ -220,7 +220,7 @@ impl<'a> super::TypeChecker<'a> {
         let prev_core = std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
         let prev_bp = std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
         self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
-        self.warn_irrefutable_let(pattern, &dispatch_ty, false);
+        self.warn_irrefutable_let(pattern, &dispatch_ty, LetForm::If);
         self.current_scrutinee_borrow_projection = prev_bp;
         self.current_scrutinee_core_borrowed = prev_core;
         self.current_scrutinee_mut_self = prev_ms;
@@ -3255,6 +3255,13 @@ impl<'a> super::TypeChecker<'a> {
                             "non-exhaustive match: patterns {} not covered",
                             all.join(", ")
                         )
+                    } else if let [only] = witnesses.as_slice() {
+                        // A one-variant enum under an empty `match` (B-2026-11-16-306).
+                        if witness == "_" && only != "_" {
+                            format!("non-exhaustive match: missing variants: {only}")
+                        } else {
+                            message
+                        }
                     } else {
                         message
                     };
@@ -4401,16 +4408,24 @@ impl<'a> super::TypeChecker<'a> {
     /// for exhaustiveness, but an irrefutable pattern there is a warning,
     /// since the `else` branch can never run or the loop never ends by a
     /// failed match (B-2026-11-16-245).
-    pub(super) fn warn_irrefutable_let(&mut self, pat: &Pattern, ty: &Type, is_while: bool) {
+    pub(super) fn warn_irrefutable_let(&mut self, pat: &Pattern, ty: &Type, form: LetForm) {
         if matches!(ty, Type::Error | Type::Never) || !self.is_irrefutable_pattern(pat, ty) {
             return;
         }
-        let msg = if is_while {
-            "irrefutable `while let` pattern: it matches every value, so the loop never \
-             ends by a failed match; write `loop` with a `let`"
-        } else {
-            "irrefutable `if let` pattern: it matches every value, so the `else` branch \
-             never runs; write a plain `let`"
+        let msg = match form {
+            LetForm::While => {
+                "irrefutable `while let` pattern: it matches every value, so the loop never \
+                 ends by a failed match; write `loop` with a `let`"
+            }
+            LetForm::If => {
+                "irrefutable `if let` pattern: it matches every value, so the `else` branch \
+                 never runs; write a plain `let`"
+            }
+            // Review-thread ruling 2026-11-16 (B-2026-11-16-304).
+            LetForm::Else => {
+                "irrefutable `let ... else` pattern: it matches every value, so the `else` \
+                 block never runs; write a plain `let`"
+            }
         };
         self.type_lint_warning(
             msg.to_string(),
@@ -4942,4 +4957,12 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.record_expr_type(&expr.span, want);
     }
+}
+
+/// Which refutable-`let` form [`TypeChecker::warn_irrefutable_let`] reports.
+#[derive(Clone, Copy)]
+pub(super) enum LetForm {
+    If,
+    While,
+    Else,
 }

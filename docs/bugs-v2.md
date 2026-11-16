@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 398 |
-| false-positive | 234 |
+| diagnostics | 426 |
+| false-positive | 235 |
 | missing-feature | 182 |
-| perf | 178 |
+| perf | 179 |
+| other | 82 |
 | soundness | 75 |
 | miscompile | 73 |
-| other | 58 |
 | run-vs-build | 50 |
 | crash | 35 |
 | codegen-gap | 33 |
@@ -76,19 +76,19 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 531 |
+| typecheck | 551 |
 | mir-llvm | 266 |
 | mir | 228 |
-| cli | 163 |
-| parser | 93 |
-| ownership | 90 |
+| cli | 182 |
+| parser | 95 |
+| ownership | 91 |
 | interp | 83 |
-| runtime | 50 |
-| resolver | 36 |
+| runtime | 51 |
+| resolver | 38 |
 | effect | 36 |
+| other | 26 |
 | codegen | 22 |
-| other | 8 |
-| autopar | 5 |
+| autopar | 6 |
 | lexer | 1 |
 ## Current state
 
@@ -111,6 +111,60 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-243 | 2026-11-16 | mir-llvm | low | A hashed `Map` or `Set` that removes about as often as it inserts (a sliding window, a toggle set) pays the ordered table's holes, compaction and index rebuild on top of the probe: kata 220, 340 and 391 run 1.6-2.0x Rust's instructions | — |
+| B-2026-11-16-254 | 2026-11-16 | typecheck | medium | `drop(x)` of a captured outer value inside a `par` branch is refused as a move out of a borrowed place, while passing it to an `own` parameter or moving it with `let` in the same branch is accepted | — |
+| B-2026-11-16-255 | 2026-11-16 | typecheck | medium | Prefix collection literals `Vec[1, 2]`, `Set[1, 2]`, `Map["a": 1]`, `Array[0; 4]` are accepted with no diagnostic, though design.md §5 says there is no `Vec[...]` or `Set[...]` prefix literal; book ch09 teaches all four | — |
+| B-2026-11-16-256 | 2026-11-16 | typecheck | low | `effect group io = reads(FileSystem) + writes(FileSystem) + reads(Env);` checks with no diagnostic, though effect groups are deferred (design.md scope list, deferred.md §Effect Groups); book ch11 teaches it as current | — |
+| B-2026-11-16-257 | 2026-11-16 | parser | medium | A module-level `layout swarm: Vec[Particle] { group hot { x, y } cold { name } }` is accepted but binds nothing (`swarm` in main is E0100 undefined), and inside a function it is a parse error; layout blocks are deferred and `layout` is not a keyword in v1 (design.md line 279), yet book ch15 teaches them as working | — |
+| B-2026-11-16-258 | 2026-11-16 | resolver | low | A module file named `src/Db.kara` is accepted and `import Db.one;` resolves, though design.md CN-2 makes a Type-class module file name a compile error (its own example: `src/DbClient.kara`); book ch13 repeats the rule | — |
+| B-2026-11-16-259 | 2026-11-16 | typecheck | low | `b as char` with `b: u8` is accepted and gives the character, while design.md §5's cast table rejects every `iN`/`uN` to `char` cast (E_INT_AS_CHAR) and book ch09b says `b as char` is rejected; the compiler allows u8 on purpose since legacy B-2026-07-24-3, so the spec and book need a ruling | — |
+| B-2026-11-16-260 | 2026-11-16 | typecheck | low | `struct HTTPClient` checks with no diagnostic; design.md CN-4 says Type names treat acronyms as words (`HttpClient`, not `HTTPClient`) but does not say whether that is an error or a lint, and book ch02 lists it among the compile errors | — |
+| B-2026-11-16-261 | 2026-11-16 | typecheck | low | `#[noblock]` and `@noblock` on an extern fn are accepted, though neither is in design.md's attribute table (an unknown bare attribute is E_UNKNOWN_ATTRIBUTE and `@` is not attribute syntax), and the attribute no longer does what appendix D says since an extern with no `with` clause has every effect | — |
+| B-2026-11-16-262 | 2026-11-16 | typecheck | low | `#[derive(Display(...))]` accepts any argument silently: `Display(bogus_arg)` and appendix C's `Display(all_fields)` check and change nothing, while design.md names only the casing argument (`Display(snake_case)`, enums) | — |
+| B-2026-11-16-263 | 2026-11-16 | other | medium | [doc-only] Book ch01, ch03 and appendix A still teach pre-D5 parameter modes: `name: String` 'owned by default', `karac explain greet` suggesting `ref String`, 'the compiler infers by reference', and `own` 'rarely needed — owned is the default' | — |
+| B-2026-11-16-264 | 2026-11-16 | other | medium | [doc-only] Book ch04, ch10 and appendix B teach a pipe operator `|>`, which design.md line 369 says does not exist (the compiler refuses it with E0520); appendix B also lists `::` as the path separator and `@` as the attribute prefix | — |
+| B-2026-11-16-265 | 2026-11-16 | other | medium | [doc-only] Book ch07 teaches optional chaining `user.address?.city?.name` that 'short-circuits to None', which design.md line 369 rules out (no `?.`), and says public functions that can panic must declare it, which design.md §12 contradicts | — |
+| B-2026-11-16-266 | 2026-11-16 | other | medium | [doc-only] Book examples that no longer compile: ch06 `get_name(user: Option[User])` moves `name` out of a borrowed parameter (E0200), ch08 `sort[i32](data)` writes call-site type arguments (E0200), ch02 module-level `let MAX_RETRIES = 5;` (E_MODULE_LET) | — |
+| B-2026-11-16-267 | 2026-11-16 | other | low | [doc-only] Book ch02, ch09b and ch13 name the borrowed string type `StringSlice` (design.md has only `Str`), and ch02 calls `i64 as i32` 'widening — always safe' though it truncates | — |
+| B-2026-11-16-268 | 2026-11-16 | other | medium | [doc-only] Book ch14 and ch20 describe par fail-fast cancellation and a crash JSON file (KARA_CRASH_DIR, `karac debug <file>`, 'panic while unwinding (drop)'); design.md says par branches are never cancelled (source-earliest error) and a panic aborts with no drops and no crash file | — |
+| B-2026-11-16-269 | 2026-11-16 | other | low | [doc-only] Book ch18 says `#[repr(C)]` structs do not cross an import yet, but a libc `div` returning `#[repr(C)] struct DivT { quot: i32, rem: i32 }` works on both lanes; ch16 says importing your own module into its `_test.kara` is a cycle error, but it checks and the test passes | — |
+| B-2026-11-16-270 | 2026-11-16 | other | low | [doc-only] Appendix A and C are stale: `use` listed as a keyword (it is not one), `dyn` 'not yet implemented' (it works), `defer` '(success path)' (it also runs on the `?` error path), `providers` listed (not a keyword in v1); `#[derive(Display)]` 'pub fields only' with a `Display(all_fields)` option (design: all fields) | — |
+| B-2026-11-16-271 | 2026-11-16 | other | low | [doc-only] Book code blocks that emit warnings on `karac check`: undocumented_unsafe (appendix D lines 63 and 114), redundant_suffix (ch02 line 79 `0i64`, ch03 line 83), prelude_shadow (ch05 line 114 redefines Option/Result), unused_mut (ch14 line 54 `let mut pool: TaskGroup`) | — |
+| B-2026-11-16-274 | 2026-11-16 | autopar | medium | Auto-par refuses to run parallax_lite's three provider writes (`record_a(); record_b(); record_c();`, writes(MetricsA/B/C)) as tasks, calling the provider borrows conflicting, while a written `par { record_a(), record_b(), record_c() }` over the same calls checks and runs 2.7x faster | — |
+| B-2026-11-16-275 | 2026-11-16 | runtime | low | The HTTP server labels every response `content-type: application/json` whatever the body: the README's own `Server.serve` example answers `/hello` as JSON, and the shortener's 302 and plain-text usage page carry it too; library/io.md does not say so | — |
+| B-2026-11-16-276 | 2026-11-16 | other | low | [doc-only] README's `karac fix archive.kara` transcript says 'applied 1 fix(es)', but the fix applies 3 (the example's two `.to_string()` calls are removed too); the ownership section shows `error[ownership]` where the compiler prints `error[E_SLICE_BORROW_CONFLICT]` | — |
+| B-2026-11-16-277 | 2026-11-16 | other | medium | [doc-only] README's Performance section is stale against the kara-katas feed it cites: it says 444 programs, 21 over 2x Rust and worst #163 at 10.2x; the feed now has 744 programs, 40 over 2x, worst #676 at 19.6x (the medians still hold) | — |
+| B-2026-11-16-278 | 2026-11-16 | other | medium | [doc-only] Eight examples a visitor will try do not build on 0.8 and their READMEs do not say so: interop/ (exported C ABI), fathom, plume, iris and slipstream's browser builds (wasm_browser, wasm-threads), and four files tests/example_corpus.rs lists as known broken | — |
+| B-2026-11-16-279 | 2026-11-16 | other | medium | [doc-only] The parallelism examples' READMEs promise speedups that do not reproduce: phase0's bench.sh times two hand-written Rust files yet prints 'The compiler parallelized it automatically ... 2.9x faster'; parallax_lite's recipe fails (E0419) and its 2.81x/15.88x tables do not reproduce; parallax shows no difference | — |
+| B-2026-11-16-280 | 2026-11-16 | other | low | [doc-only] Smaller example README drift: tangle says `Editor.set`'s `cell` reports `mut_ref` (it reports `own`); interop-zlib says `./zpipe` (the binary is dist/native/zpipe) and relies on `#[noblock]` and a `blocks` default that no longer hold; cartographer's committed graph.js is stale | — |
+| B-2026-11-16-281 | 2026-11-16 | other | low | [doc-only] First-run docs gaps: the book has no install section (ch00/ch01 never say how to get karac), the release tarball README lists `--target=wasm_browser` (not in 0.8), group_anagrams' output order changes per run, and 13 examples emit check warnings | — |
+| B-2026-11-16-282 | 2026-11-16 | cli | medium | `karac run --example <NAME>` compiles a project example's src/main.kara as a lone file, so 6 of the 9 project examples fail (E0207, E0200, E0516 'a type that failed to check is not lowered yet') although `karac run` inside each package works | — |
+| B-2026-11-16-283 | 2026-11-16 | cli | medium | `karac run --output=json` on a program whose `main` returns `Err` prints two separate JSON objects on stdout (`{"error":"boom"}` then `{"error_return_trace":[...]}`), so the output is not one JSON document, and neither matches design.md §17's error-return-trace shape | — |
+| B-2026-11-16-284 | 2026-11-16 | typecheck+cli | low | `#[test(requires: [UserDB])]` on a resource that is not program-rooted is reported as E0419 'no provider for UserDB' at `<generated>:47:30` inside the test harness, not as core-semantics §14.13's error naming R at the attribute; a `#[with_provider]` case then also warns `unused_mut` on the harness's own `let mut __karac_p0` at `<generated>:23` | — |
+| B-2026-11-16-285 | 2026-11-16 | cli | medium | `karac migrate shared-to-par` writes code that does not parse: it wraps uses in `lock self.n { ... }` blocks (`lock` is not a v1 keyword, design.md line 279) and renames a free function's parameter `c` to `self` | — |
+| B-2026-11-16-286 | 2026-11-16 | cli | low | `karac build --output=jsonl` on a failing build never emits `phase_skipped` for `codegen`, and a program whose effect phase reported an error gets `program_effects: []`, which is neither its effect set nor the `null` design.md §17 reserves for an unreached effect phase | — |
+| B-2026-11-16-287 | 2026-11-16 | cli | low | `karac help` and flags drift from behaviour: `--sequential` is listed as 'Disable parallel execution in par blocks' but `run` refuses it and `build` calls it unknown; `install` documents `path = ...` but only `path=...` parses; `cache key --pkg x` is refused (only `--pkg=x`); `fix` exits 0 on a file that still has an error; `debug` renders crash files nothing writes | — |
+| B-2026-11-16-288 | 2026-11-16 | cli | low | Malformed values of KARAC_HASH_SEED and KARAC_THREADS are ignored silently (`KARAC_HASH_SEED=abc` gives a fresh order each run; `KARAC_THREADS=0` runs one thread, `=abc` the default), unlike KARAC_OPT_LEVEL / KARAC_TARGET_CPU / KARAC_TARGET_FEATURES, which refuse; and KARA_BACKTRACE=1 (design.md § main error exit) is read nowhere | — |
+| B-2026-11-16-289 | 2026-11-16 | other | low | [doc-only] design.md describes `karac explain --edition <NEXT>` and `karac fix --edition <NEXT>` in the present tense (§4 editions, §3 `r#name`), but both are 'unknown flag'; with one edition (2026) there is nothing to migrate yet, so the text should say they arrive with the first edition boundary | — |
+| B-2026-11-16-290 | 2026-11-16 | resolver+cli | medium | The value-position did-you-mean offers the built-in `print` (`prnt`, `point` -> `print`) as a machine fix, and `karac fix` applies it into a fresh E0100 'print is a built-in function and cannot be used as a value'; `format` gets 'did you mean forget' | — |
+| B-2026-11-16-291 | 2026-11-16 | ownership+cli | medium | E0213's machine fix rewrites `fn bad() -> ref Holder` to `-> Holder`, and the fixed file fails with E0516 x2 | — |
+| B-2026-11-16-292 | 2026-11-16 | typecheck+cli | medium | E0254 (not CrossTask) fix adds `+ CrossTask` to `-> dyn Bump` on a function whose concrete type holds a non-CrossTask `S`, and the fixed file fails with E0200 'D is not CrossTask: it holds S' | — |
+| B-2026-11-16-293 | 2026-11-16 | typecheck+cli | medium | E0288 (receiver stronger than the trait's) fix rewrites `fn look(mut ref self)` to `fn look(self)` while the body does `self.n += 1`, and the fixed file fails with E0517 | — |
+| B-2026-11-16-294 | 2026-11-16 | typecheck+cli | low | E_INDEX_MOVE_NON_COPY fix rewrites `v[0]` to `v[0].clone()` where the element is an unbounded type parameter, and the fixed file fails with E0236 'no method clone on type parameter T' | — |
+| B-2026-11-16-295 | 2026-11-16 | typecheck+cli | medium | The E0520 shared->sync migration fix rewrites the fields to `Mutex[i64]` but leaves the literal `Counter { val: 0, count: 0, tag: 0 }`, so the fixed file fails with E0200 at the two wrapped fields | — |
+| B-2026-11-16-296 | 2026-11-16 | cli | medium | 275 of the 491 codes `karac explain` knows have no prose of their own: their entry prints only phase/kind and either the class's generic paragraph or 'class: OTHER - this diagnostic has no class page yet' | — |
+| B-2026-11-16-297 | 2026-11-16 | cli | medium | Class-level prose mis-describes the code: deferred-feature, archived and lint codes inherit the paragraph of an unrelated class (E_TAIT_NOT_IMPLEMENTED_YET reads 'Method-call dispatch found no matching impl'; E_DEFERRED_M4A, E_ARCHIVED, E_TRY_BLOCK_NOT_IMPLEMENTED_YET read as TYPE_MISMATCH) | — |
+| B-2026-11-16-298 | 2026-11-16 | typecheck+cli | medium | Deferred-feature stubs emit wire code E0200 (class TYPE_MISMATCH) and put the catalogued symbolic code only inside the message text (`try { }` -> E0200 'try block syntax is recognized...'; a trait-alias bound -> E0200 'trait alias B is recognized but not yet expanded'), so `explain <code>` from the JSON never reaches E_TRY_BLOCK_NOT_IMPLEMENTED_YET / E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET | — |
+| B-2026-11-16-299 | 2026-11-16 | typecheck+cli | medium | One warning code covers several unrelated lints (W0295: redundant_clone, unused_mut, irrefutable_let_pattern, unreachable_errdefer; W0291: lossless_cast and redundant_cast; W0299: f16_software_emulated, map_value_clone_reinsert), and `karac explain` accepts neither the lint name nor tells them apart | — |
+| B-2026-11-16-300 | 2026-11-16 | cli | low | `karac explain --help` says parse / effect / ownership codes 'are not catalogued yet', but they are (explain E0003, E0400, E0500 work) and the E9999 message says every numbered code has an entry | — |
+| B-2026-11-16-301 | 2026-11-16 | typecheck+cli | low | E0208 (comparison without the trait) offers the `#[derive]` machine fix at an `==` site but none at a `<` / `>` site | — |
+| B-2026-11-16-302 | 2026-11-16 | other | low | [doc-only] design.md's streaming-phase-events example shows code E0099, which the compiler never emits (parse errors are E0001/E0002) and explain does not know | — |
+| B-2026-11-16-303 | 2026-11-16 | other | low | 389 of the 491 codes `karac explain` knows are produced by no corpus program under `karac check` (102 distinct codes appear over all 21918 sources), so most catalogue entries have no pin that the code is reachable or that its text matches | — |
+| B-2026-11-16-304 | 2026-11-16 | typecheck | low | An irrefutable `let ... else` pattern gives no warning; irrefutable_let_pattern covers it too (review ruling) | — |
+| B-2026-11-16-305 | 2026-11-16 | typecheck | low | `let r = ref make_value()` says 'only `ref <sequence>[i]` is supported in 0.8' instead of the temporary-borrow error and its fix | — |
+| B-2026-11-16-306 | 2026-11-16 | typecheck | low | An empty `match e { }` on an enum says 'missing variants: _' instead of naming the variants | — |
+| B-2026-11-16-307 | 2026-11-16 | typecheck | low | `a, b = (1, 2, 3)` adds a spurious E0222 'refutable pattern in `let` binding' next to the arity error | — |
+| B-2026-11-16-308 | 2026-11-16 | parser | low | A float range pattern `0.0..=1.0` is a parse error at `..=`, not the spec's 'float ranges are not supported' | — |
+| B-2026-11-16-309 | 2026-11-16 | typecheck | low | A default naming an earlier parameter gets a duplicate 'not a known const' error, or only 'undefined name' once the function is called | — |
 
 ### Relocated
 

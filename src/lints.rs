@@ -278,8 +278,8 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         name: "irrefutable_let_pattern",
         default_level: LintLevel::Warn,
         description:
-            "An `if let` or `while let` pattern matches every value of its type, so the \
-             `else` branch is unreachable or the loop never ends by a failed match.",
+            "An `if let`, `while let` or `let ... else` pattern matches every value of its type, so the \
+             `else` is unreachable or the loop never ends by a failed match.",
     },
     LintInfo {
         name: "refinement_domain_too_wide",

@@ -6457,6 +6457,18 @@ impl<'a> super::TypeChecker<'a> {
                     || self.cli_lint_overrides.core_places
                     || self.library_methods_from_source)
                     && is_named_place_projection(operand);
+                // `let r = ref make_value();` is the §5.5 error, not a 0.8
+                // limit: the temporary is dropped at the `;` and there is no
+                // lifetime extension. It gets that wording and the fix that
+                // binds the temporary first (review-thread ruling 2026-11-16,
+                // B-2026-11-16-305).
+                if !matches!(operand.kind, ExprKind::Index { .. })
+                    && !core_place
+                    && self.core_expr_is_temp(operand)
+                {
+                    self.ref_of_temporary_error(operand, span);
+                    return Type::Error;
+                }
                 if !matches!(operand.kind, ExprKind::Index { .. }) && !core_place {
                     self.type_error(
                         "error[E_REF_OPERAND_UNSUPPORTED]: only `ref <sequence>[i]` is \
@@ -7778,5 +7790,73 @@ fn is_literal_tree(e: &Expr) -> bool {
         } => is_literal_tree(operand),
         ExprKind::Binary { left, right, .. } => is_literal_tree(left) && is_literal_tree(right),
         _ => false,
+    }
+}
+
+impl super::TypeChecker<'_> {
+    /// A `ref` of a temporary (design.md § References; core-semantics.md
+    /// §5.5): `let v_src = <temp>;` goes before the statement, and the
+    /// borrow is taken of that binding.
+    fn ref_of_temporary_error(&mut self, operand: &Expr, span: &Span) {
+        let message = "a reference to a temporary outlives its statement \
+             (core-semantics.md §5.5): `ref` borrows a temporary that is dropped at \
+             the `;`, and there is no temporary lifetime extension. Bind the \
+             temporary to a variable first"
+            .to_string();
+        // Run-fatal, as the operand refusal it replaces is: `karac run`
+        // must not execute it (E0283).
+        self.type_error(message, *span, TypeErrorKind::RefOperandUnsupported);
+        let Some(stmt) = self.current_stmt else {
+            return;
+        };
+        if stmt.offset > operand.span.offset {
+            return;
+        }
+        let text = crate::formatter::render_expr(operand);
+        if text.contains('\n') {
+            return;
+        }
+        let stem = match &operand.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                ExprKind::Path { segments, .. } => segments.last().cloned(),
+                _ => None,
+            },
+            ExprKind::MethodCall { method, .. } => Some(method.clone()),
+            _ => None,
+        };
+        // A method call's own span is its receiver's; it ends at its `)`.
+        let end = match &operand.kind {
+            ExprKind::MethodCall {
+                args_close_span, ..
+            } if args_close_span.length > 0 => args_close_span.offset + args_close_span.length,
+            _ => operand.span.offset + operand.span.length,
+        };
+        // `make_value()` binds `value`, `s.to_uppercase()` binds `uppercase`.
+        let fresh = match stem {
+            Some(s) => ["make_", "get_", "to_", "new_", "build_", "create_"]
+                .iter()
+                .find_map(|p| s.strip_prefix(p).filter(|r| !r.is_empty()))
+                .map_or_else(|| format!("{s}_value"), str::to_string),
+            None => "value".to_string(),
+        };
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(span),
+            vec![
+                crate::resolver::TextEdit {
+                    offset: stmt.offset,
+                    length: 0,
+                    replacement: format!(
+                        "let {fresh} = {text};\n{}",
+                        " ".repeat(stmt.column.saturating_sub(1))
+                    ),
+                },
+                crate::resolver::TextEdit {
+                    offset: span.offset,
+                    length: end.saturating_sub(span.offset),
+                    replacement: format!("ref {fresh}"),
+                },
+            ],
+        );
     }
 }

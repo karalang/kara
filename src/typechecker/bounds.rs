@@ -1132,9 +1132,17 @@ impl<'a> super::TypeChecker<'a> {
                 // because it has no single-`ConstValue` representation
                 // for composites — but default-param validation is a
                 // shape check, not a value resolution).
-                self.validate_default_value_is_const(default_expr, &param_ty);
-                // Verify the default does not reference sibling parameters
+                // Verify the default does not reference sibling parameters.
+                // That error says what is wrong, so the generic "not a known
+                // const" one is not added for the same name (B-2026-11-16-309).
                 let own_names: Vec<String> = param.pattern.binding_names();
+                let names_sibling = sibling_names.iter().any(|sibling| {
+                    !own_names.contains(sibling)
+                        && Self::expr_references_name(default_expr, sibling)
+                });
+                if !names_sibling {
+                    self.validate_default_value_is_const(default_expr, &param_ty);
+                }
                 for sibling in &sibling_names {
                     if !own_names.contains(sibling)
                         && Self::expr_references_name(default_expr, sibling)
