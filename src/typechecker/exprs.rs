@@ -7293,6 +7293,34 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether no block along a literal tree's branches holds a statement:
+    /// `if c { 1 } else { 0 }`, not `{ for x in v { return 2; } 0 }`.
+    fn literal_tree_has_no_statements(e: &Expr) -> bool {
+        let block = |b: &Block| {
+            b.stmts.is_empty()
+                && b.final_expr
+                    .as_deref()
+                    .is_none_or(Self::literal_tree_has_no_statements)
+        };
+        match &e.kind {
+            ExprKind::Block(b) => block(b),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                block(then_block)
+                    && else_branch
+                        .as_deref()
+                        .is_none_or(Self::literal_tree_has_no_statements)
+            }
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .all(|a| Self::literal_tree_has_no_statements(&a.body)),
+            _ => true,
+        }
+    }
+
     /// [`Self::is_literal_tree`] with every integer literal's value in
     /// `peer`'s range: `if c { 300 } else { 2 }` does not take `u8`.
     pub(super) fn literal_tree_fits(e: &Expr, peer: &Type) -> bool {
@@ -16881,7 +16909,22 @@ impl<'a> super::TypeChecker<'a> {
                 // closure — its type belongs to the closure's return type.
                 self.closure_return_types
                     .push(super::ClosureReturnFrame::default());
-                let body_ty = self.infer_expr(body);
+                // A body that is a join of literals (`|s| if s < lo { -1 }
+                // else { 1 }`) is a literal (design.md §8), left open for a
+                // use of the closure's result to fix, as a `let`'s value is
+                // (kata 1176, B-2026-11-16-211): Rust types it from that use. A block with a
+                // statement stays closed, since a statement may `return`
+                // a value the open literal would then conflict with.
+                let open_join = matches!(
+                    body.kind,
+                    ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::Match { .. }
+                ) && Self::is_literal_tree(body, &Type::Int(IntSize::I64))
+                    && Self::literal_tree_has_no_statements(body);
+                let body_ty = if open_join {
+                    self.infer_expr_open(body)
+                } else {
+                    self.infer_expr(body)
+                };
                 if !matches!(body.kind, ExprKind::Block(_)) {
                     self.warn_closure_tail_copy(body, &body_ty);
                 }

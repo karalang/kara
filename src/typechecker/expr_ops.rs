@@ -441,10 +441,18 @@ impl<'a> super::TypeChecker<'a> {
         (right_e, right): (&Expr, &Type),
         span: &Span,
     ) -> bool {
+        // design.md § Mixed-width operands covers the comparisons: where one
+        // side holds every value of the other (`count_ones() / 2 <= k` over
+        // `k: u32`, an `i64` beside a `u32`, kata 1177, B-2026-11-16-212), the narrower widens
+        // and MIR lowering widens it, as for the arithmetic arm
+        // (B-2026-11-03-12). Only a pair neither side holds (`u32` and
+        // `i32`, `u64` and `i64`) mixes signedness.
         let mixed = matches!(
             (left, right),
             (Type::Int(_), Type::UInt(_)) | (Type::UInt(_), Type::Int(_))
-        ) && Self::unsuffixed_num_literal(left_e, right).is_none()
+        ) && !int_cast_preserves_all_values(left, right)
+            && !int_cast_preserves_all_values(right, left)
+            && Self::unsuffixed_num_literal(left_e, right).is_none()
             && Self::unsuffixed_num_literal(right_e, left).is_none();
         if mixed {
             self.note_pointer_int_mix(left, right);
