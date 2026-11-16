@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-36 | 2026-11-15 | parser+cli | medium | Rust's `impl fmt::Display for T { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}{}", a, b) } }` is a `karac fix` dead end: after the `use`, `&self` and `&mut` fixes, the `fmt::` paths in the impl header and the parameter type stay parse errors with no fix ("Expected `{`, found `::`"), and `write!` says only that Kāra has no macros, with nothing on Kāra's `Display`, whose one method is `to_string(ref self) -> String` | — |
 | B-2026-11-15-38 | 2026-11-15 | typecheck | medium | A list literal returned by a closure (`d.iter().map(|e| [e[0], e[1], 1 - e[2]]).collect()` into a `Vec[Array[i64, 3]]`) is a `Vec`, so the `collect` fails ("`Vec[Array[i64, 3]]` implements `FromIterator[Array[i64, 3]]`, not `FromIterator[Vec[i64]]`") with no fix, and a closure cannot declare its return type (`|e| -> Array[i64, 3] { .. }` is refused as Rust syntax), so the only spelling is a typed `let` inside the closure | — |
 | B-2026-11-15-40 | 2026-11-15 | typecheck+cli | medium | `println(f"{v} -> {total(v)}")` with `v` owned and `total(v: own Vec[i64])` is refused with E0516 ("cannot move `v` while it is still borrowed") and no machine fix, though the message names `.clone()`; in kata 2202 it is where `karac fix`'s own `own` edits end, three rounds after a bare parameter was stored in a struct field | — |
-| B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
 
 ### Relocated
 
@@ -1265,6 +1264,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-47 | mir | low | A `()` passed for a generic parameter that borrows (`fn f[T](v: T)`, `f(())`, or a unit-valued `if` such as `f(if c { () } else { () })`) was invalid… | 92d18d909c |
 | B-2026-11-15-48 | typecheck | low | A `collect()` after a misspelt method in its `map` closure reports a second, cascading error naming the poisoned type: `trait bound `C: FromIterator[… | 1bdebaaa70 |
 | B-2026-11-15-49 | cli | low | A `match` over an `Option[ref T]` of a `shared` or `Copy` value gets no machine fix for E0516, though the message names the repair and an `if let` or… | 1bdebaaa70 |
+| B-2026-11-15-50 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `po… | 88d7d6ee97 |
 | B-2026-11-15-51 | mir-llvm | medium | `karac build --target=x86_64-unknown-linux-musl` prints "Built" for a binary that cannot run: the clang --target fallback linked against the host gli… | 109b0d6051 |
 | B-2026-11-15-52 | cli | low | `--target=thumbv7em-none-eabihf` fails at link asking for a runtime archive built for that triple, which cannot work (the runtime needs std), and a b… | 109b0d6051 |
 | B-2026-11-15-53 | parser | low | `#[cfg(target: "native")]` says "unknown attribute `cfg` .. | 109b0d6051 |
