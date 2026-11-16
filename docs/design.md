@@ -4545,15 +4545,15 @@ Errors are values. A recoverable failure is a `Result`, and a bug or an unrecove
 ```json
 {
   "error_return_trace": [
-    { "file": "src/db.kara", "line": 84, "expr": "db.find(id)?",
+    { "file": "src/db.kara", "line": 84, "column": 14, "expr": "db.find(id)?",
       "context": "while loading user 42" },
-    { "file": "src/api.kara", "line": 12, "expr": "process_user(id)?",
+    { "file": "src/api.kara", "line": 12, "column": 5, "expr": "process_user(id)?",
       "context": null }
   ]
 }
 ```
 
-A site with `.context()` fills `"context"`; a bare `?` leaves it `null`. Release builds omit `error_return_trace`, because recording it costs time at every `?`. A context message survives release builds, because it is part of the error value.
+Each frame names the `?` site's file, line and column (review-thread ruling 2026-11-16). A site with `.context()` fills `"context"`; a bare `?` leaves it `null`. Release builds omit `error_return_trace`, because recording it costs time at every `?`. A context message survives release builds, because it is part of the error value.
 
 ### `Error` and `AnyError`
 
@@ -5233,12 +5233,13 @@ fn calculate(x: f64, y: f64) -> f64 { ... }    // no effects
 | `allocates(R)` | yes, usually `Heap` | allocates from `R` | nothing |
 | `panics` | no | may end the process ([§10](#10-errors-and-panics)) | nothing |
 | `blocks` | no | may park the OS thread | nothing |
+| `suspends` | no | may yield the task at a suspension point | nothing |
 
 `reads`, `writes`, `sends` and `receives` are the conflict verbs. `allocates` and `panics` are capabilities that never conflict, and both are [default-permitted](#default-permitted-effects). `blocks` is an [execution effect](#blocks): it says where a function may wait, not what it touches.
 
-A second execution effect, `suspends` (the task may yield cooperatively), returns with coroutines in the [services track](deferred.md#m4a-services).
+`suspends` is the second execution effect: the task may yield cooperatively, so its thread runs other tasks while it waits (a socket read, `time.sleep` on the task pool). Like `blocks` it takes no resource, never conflicts, is inferred for private functions and declared on public ones; a declared `blocks` admits a `suspends` effect, never the reverse ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). The standard library's waiting primitives declare both (`time.sleep` is `reads(Clock) blocks suspends`). (Review-thread ruling 2026-11-16.)
 
-**Syntax.** An effect clause follows the return type: `fn f(x: T) -> U with reads(A) writes(B)`. Effects are written side by side, and a verb may list several resources: `reads(UserDb, OrderDb)`. Every effect word, `with` excepted, is a contextual keyword: `reads`, `writes`, `sends`, `receives`, `allocates`, `panics` and `blocks` are ordinary identifiers outside an effect clause ([§3](#3-lexical-structure)).
+**Syntax.** An effect clause follows the return type: `fn f(x: T) -> U with reads(A) writes(B)`. Effects are written side by side, and a verb may list several resources: `reads(UserDb, OrderDb)`. Every effect word, `with` excepted, is a contextual keyword: `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks` and `suspends` are ordinary identifiers outside an effect clause ([§3](#3-lexical-structure)).
 
 ### Conflict rules
 
@@ -5554,7 +5555,7 @@ The bare form must be the broad one. `panics` and `blocks` take no resource, so 
 
 **`dbg()`** prints an expression's file, line, source text and value to stderr, then returns the value, so it can wrap any expression. It is removed from release builds (`karac build --release`). Use `print`/`println` (`writes(Stdout)`) or `eprintln` (`writes(Stderr)`) for intended output, and `dbg` for temporary instrumentation.
 
-- **Terminal format** (the default), one line per call. Inside a `par` branch the line carries a task id, so interleaved output can be filtered:
+- **Terminal format** (the default), one line per call. Inside a `par` branch the line carries a task id, so interleaved output can be filtered. It is the id `std.log` records carry: tasks are numbered from 1 in the order they are spawned, a `par` block's branches in source order ([library/log.md](library/log.md); review-thread ruling 2026-11-16):
 
   ```
   let result = dbg(compute(x));
@@ -5663,7 +5664,7 @@ fn audit(db: OrderDb) {
 
 ### Trait methods and generic calls
 
-**A trait method may declare an effect clause.** The clause is a ceiling: each impl's method must stay within it, and a call through a type-parameter bound has the clause's effects, whatever the instance's impl does. Impls may narrow, never widen; this is effect-set subtyping at the method slot.
+**A trait method may declare an effect clause.** The clause is a ceiling: each impl's method must stay within it, and a call through a type-parameter bound has the clause's effects, whatever the instance's impl does. Generic code is checked against the trait's signature: a call through the bound is charged the clause and nothing else, so an impl that may panic or allocate (default-permitted, [above](#default-permitted-effects)) adds neither to the generic caller (review-thread ruling 2026-11-16). Impls may narrow, never widen; this is effect-set subtyping at the method slot.
 
 ```kara
 pub trait Storage {
@@ -7258,9 +7259,9 @@ When `?` propagates an `Err` through several call frames, debug builds record th
     "severity": "runtime_error",
     "message": "Err(DbError.ConnectionTimeout) propagated to top level",
     "error_return_trace": [
-      { "file": "src/db.kara",   "line": 84, "expr": "conn.query(sql)?" },
-      { "file": "src/repo.kara", "line": 31, "expr": "db.find_user(id)?" },
-      { "file": "src/api.kara",  "line": 12, "expr": "repo.get_user(id)?" }
+      { "file": "src/db.kara",   "line": 84, "column": 9, "expr": "conn.query(sql)?", "context": null },
+      { "file": "src/repo.kara", "line": 31, "column": 5, "expr": "db.find_user(id)?", "context": null },
+      { "file": "src/api.kara",  "line": 12, "column": 5, "expr": "repo.get_user(id)?", "context": null }
     ]
   }]
 }
@@ -7269,7 +7270,7 @@ When `?` propagates an `Err` through several call frames, debug builds record th
 - **Debug builds only.** `--release` strips the bookkeeping. There is no knob: this is a development tool.
 - **Implementation.** A thread-local ring buffer of `(file, line, expr_text)` entries, 64 deep by default. Each `?` site calls a compiler-generated intrinsic that pushes an entry on `Err` and clears the buffer on `Ok`.
 - **A handled error ends its trace.** An `Err` consumed by anything other than `?` (a `match`, `if let`, `let ... else` or `while let` on the `Result`, or a method that consumes it without panicking: `unwrap_or`, `unwrap_or_else`, `unwrap_or_default`, `ok`, `err`, `is_ok`, `is_err`, `is_ok_and`, `is_err_and`) clears the buffer, so a later panic does not print a trace the program already dealt with. `unwrap` and `expect` keep it, since their panic is that error's; `map_err`, `and_then` and `or_else` keep it, since the error travels on to a later `?`.
-- **Depth limit.** When the buffer is full, the oldest entry is dropped and the output sets `"trace_truncated": true`. The trace always shows the most recent frames.
+- **Depth limit.** When the buffer is full, the oldest entry is dropped and the trace becomes `{"frames": [...], "truncated": true}`. The trace always shows the most recent frames.
 - **A chain split across parallel tasks reports that it is unavailable.** The buffer is per thread, so when a `?` chain runs across `par` branches or `TaskGroup` tasks on the worker pool, no single buffer holds the whole chain. The output then reads `Error return trace: unavailable (the ? chain was split across parallel tasks)` instead of a fragment, because which frames land on the exiting thread varies from run to run. Carrying the trace across tasks is deferred.
 
 ### Streaming phase events

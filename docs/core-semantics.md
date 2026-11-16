@@ -588,7 +588,7 @@ Pins: `ok_closure_kinds`, `err_once_called_twice`, `err_fn_kind_mismatch`.
 
 **No** `Drop` body, `defer` or `errdefer` runs, and every other task ends with the process. `catch_panic`, `panic = "unwind"` and `extern "C-unwind"` do not exist.
 
-Pin: `panic_runs_no_drops`. Today the interpreter runs the `defer` before the error message.
+Pin: `panic_runs_no_drops`. (The note that the interpreter ran the `defer` first is deleted: no lane does; review-thread ruling 2026-11-16.)
 
 **10.3 Errors are values.** `Result` with `?` returns through the normal path, so drops, `defer`s and `errdefer`s run (§7.6–§7.7).
 

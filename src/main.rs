@@ -12,6 +12,7 @@ fn main() {
     // calls inside `execute` are process-wide, so exit codes are
     // unaffected; a panic unwinds to `join` and is re-raised so the
     // process still dies loudly with the original payload.
+    quiet_broken_pipe();
     let handle = std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
@@ -23,6 +24,44 @@ fn main() {
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
+}
+
+/// A closed reader on karac's own stdout (`karac check f.kara | head`) is a
+/// quiet end, not a crash: `println!` panics on EPIPE, and the hook turns
+/// that panic into the process ending as the reader's SIGPIPE would end it
+/// (128 + 13 = 141 to the shell, so `set -o pipefail` still sees it), with
+/// no message. The interpreter's `console_written` does the same for a
+/// program's output. Review-thread ruling 2026-11-16 (B-2026-11-16-224).
+#[cfg(not(target_arch = "wasm32"))]
+fn quiet_broken_pipe() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if msg.contains("Broken pipe") && msg.contains("failed printing to") {
+            #[cfg(unix)]
+            {
+                extern "C" {
+                    fn signal(sig: i32, handler: usize) -> usize;
+                    fn raise(sig: i32) -> i32;
+                }
+                const SIGPIPE: i32 = 13;
+                const SIG_DFL: usize = 0;
+                // SAFETY: restoring a signal's default disposition, then
+                // raising the signal it ends the process on.
+                unsafe {
+                    signal(SIGPIPE, SIG_DFL);
+                    raise(SIGPIPE);
+                }
+            }
+            std::process::exit(141);
+        }
+        default(info);
+    }));
 }
 
 // `karac` the binary is native-only — the wasm32 build is for the

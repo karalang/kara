@@ -48,7 +48,7 @@ Each record has a `Level`, ordered `Debug < Info < Warn < Error`. `log.init` set
 
 Each record carries the span context of the task that logged it: a trace ID, a span ID and a task ID. When a `par` block, a `par for` loop or a `TaskGroup` starts tasks, each child inherits its parent's trace and span, so log entries carry them without the program threading them by hand.
 
-- **`task_id`** is a positive `i64` the runtime gives each task when it starts. It is unique within the process and never reused, and the numbers say nothing about the order tasks started in. Code outside every task, such as `main` before it starts one, has `task_id` `None`.
+- **`task_id`** is a positive `i64` the runtime gives each task when it starts. It is unique within the process and never reused. Tasks are numbered from 1 in the order they are spawned, so a `par` block's branches take consecutive ids in source order, and every lane numbers them the same (review-thread ruling 2026-11-16). Code outside every task, such as `main` before it starts one, has `task_id` `None`.
 - **`trace_id` and `span_id`** are `None` until the program starts a trace. An API to start a trace or a span, and to read one from an incoming request's `traceparent` header, is deferred ([deferred.md](../deferred.md)); until it lands both are always `None`.
 
 ```json

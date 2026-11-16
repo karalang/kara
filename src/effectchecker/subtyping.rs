@@ -527,14 +527,10 @@ impl<'a> super::EffectChecker<'a> {
                 if !declared_admits(&slot_effects, &te.effect) && !is_transparent {
                     let effect_str = effect_text(&te.effect);
                     let mut message = format!(
-                        "argument {} has effect {} not declared in slot [{}]",
+                        "argument {} has effect {} not declared in slot `with {}`",
                         i + 1,
                         effect_str,
-                        if slot_str.is_empty() {
-                            "pure".to_string()
-                        } else {
-                            slot_str.join(", ")
-                        },
+                        slot_clause(&slot_str),
                     );
                     if let Some(ref sig) = monomorphized {
                         message.push_str(&format!("; callee: {sig}"));
@@ -1114,14 +1110,10 @@ impl<'a> super::EffectChecker<'a> {
             }
             let effect_str = effect_text(&te.effect);
             let message = format!(
-                "{} has effect {} not declared in slot [{}]",
+                "{} has effect {} not declared in slot `with {}`",
                 subject,
                 effect_str,
-                if slot_str.is_empty() {
-                    "pure".to_string()
-                } else {
-                    slot_str.join(", ")
-                },
+                slot_clause(&slot_str),
             );
             self.errors.push(EffectError {
                 message,
@@ -1387,5 +1379,16 @@ impl<'a> super::EffectChecker<'a> {
             | ExprKind::OffsetOf { .. }
             | ExprKind::Error => {}
         }
+    }
+}
+
+/// A function-type slot's clause as source writes it: `()` for the empty
+/// clause, else the effects side by side (`reads(Clock) blocks`). Review-
+/// thread ruling 2026-11-16 (B-2026-11-16-227).
+fn slot_clause(slot: &[String]) -> String {
+    if slot.is_empty() {
+        "()".to_string()
+    } else {
+        slot.join(" ")
     }
 }

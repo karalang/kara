@@ -3060,7 +3060,7 @@ fn test_let_annotation_wider_value_rejected() {
         "message should name the offending binding; got: {msg}"
     );
     assert!(
-        msg.contains("writes(UserDB)") && msg.contains("[pure]"),
+        msg.contains("writes(UserDB)") && msg.contains("`with ()`"),
         "message should name the effect and the declared slot; got: {msg}"
     );
 }
@@ -3244,7 +3244,7 @@ fn test_multi_effect_slot_renders_in_a_stable_order() {
         .map(|e| e.message.clone())
         .expect("expected a slot violation naming both declared effects");
     assert!(
-        msg.contains("[reads(Alpha), reads(Zeta)]"),
+        msg.contains("`with reads(Alpha) reads(Zeta)`"),
         "slot list must render sorted and stable; got: {msg}"
     );
 }

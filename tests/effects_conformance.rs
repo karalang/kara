@@ -13,6 +13,11 @@
 //! - `dbg` inside a `par` branch carried no task id, and
 //!   `KARAC_DBG_OUTPUT=json` left it in the terminal format
 //!   (B-2026-11-16-217), on every lane.
+//! - Review-thread rulings 2026-11-16: a `par` branch's task id counts
+//!   from 1 in source order on every lane (B-2026-11-16-225); a call through
+//!   a bound is charged the trait's clause only (B-2026-11-16-226); an
+//!   empty slot is written `with ()` (B-2026-11-16-227); a closed reader on
+//!   karac's stdout ends it quietly with SIGPIPE's 141 (B-2026-11-16-224).
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -193,4 +198,68 @@ fn effects_dbg_structured_output_is_one_object_per_call() {
             "{lane}: {err}"
         );
     }
+}
+
+#[test]
+fn effects_dbg_task_ids_count_from_one_on_every_lane() {
+    let dir = file("dbgids", DBG);
+    for lane in dbg_lanes() {
+        let out = karac(&dir, &[lane, "main.kara"], &[("KARAC_DBG_OUTPUT", "json")]);
+        let err = text(&out.stderr);
+        let mut ids: Vec<u64> = err
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter_map(|o| o["task_id"].as_u64())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2], "{lane}: {err}");
+    }
+}
+
+#[test]
+fn effects_a_bound_call_is_charged_the_trait_clause_only() {
+    let dir = file("boundonly", STORE);
+    let q = text(&karac(&dir, &["query", "effects", "main.kara.get"], &[]).stdout);
+    let v: serde_json::Value = serde_json::from_str(q.trim()).unwrap();
+    // `A.load`'s `k + 1` may panic; `Store.load`'s clause says only
+    // `reads(Clock)`, and that is what `get` is checked against.
+    assert_eq!(
+        v["inferred_effects"],
+        serde_json::json!([{"verb": "reads", "resource": "Clock"}]),
+        "{q}"
+    );
+}
+
+#[test]
+fn effects_an_empty_slot_is_written_with_unit_clause() {
+    let src = "struct Bus {\n    hs: Vec[Fn(i64) -> i64 with ()],\n}\nfn main() {\n    let mut b = Bus { hs: Vec.new() };\n    b.hs.push(|x| { println(\"io\"); x + 1 });\n}\n";
+    let dir = file("unitslot", src);
+    let out = karac(&dir, &["check", "main.kara"], &[]);
+    let err = text(&out.stderr) + &text(&out.stdout);
+    assert!(
+        err.contains("has effect writes(Stdout) not declared in slot `with ()`"),
+        "{err}"
+    );
+    assert!(!err.contains("[pure]"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn effects_a_closed_reader_ends_karac_quietly() {
+    use std::os::unix::process::ExitStatusExt;
+    let dir = file("epipe", NAP);
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&dir)
+        .args(["check", "--output=json", "main.kara"])
+        .stdout(writer)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.signal() == Some(13) || out.status.code() == Some(141),
+        "{:?}",
+        out.status
+    );
+    assert_eq!(text(&out.stderr), "");
 }

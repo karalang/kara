@@ -991,7 +991,7 @@ impl<'a> super::EffectChecker<'a> {
     /// The seeded ceilings a method call on a value of a type parameter is
     /// charged: each bound's trait method that writes its clause
     /// (`bound_ceiling_keys`, B-2026-11-06-29). The instance's method is
-    /// charged besides, as before; it cannot exceed the ceiling.
+    /// not charged besides (B-2026-11-16-226).
     fn bound_ceiling_charges(
         &self,
         receiver: &Expr,
@@ -1430,13 +1430,20 @@ impl<'a> super::EffectChecker<'a> {
                 let ambient_routed = precise.is_none()
                     && matches!(&object.kind, ExprKind::Identifier(n)
                         if matches!(n.as_str(), "env" | "clock" | "rand" | "stdin" | "stdout" | "stderr" | "fs"));
+                // A call through a bound whose trait method writes a clause
+                // is charged that clause and nothing else: generic code is
+                // checked against the trait's signature, never against the
+                // impls the program happens to have (review-thread ruling
+                // 2026-11-16, B-2026-11-16-226).
+                let ceilings = method_sym
+                    .map(|m| self.bound_ceiling_charges(object, m, bounds))
+                    .unwrap_or_default();
                 let deferred = through_dyn
                     || ambient_routed
+                    || !ceilings.is_empty()
                     || method_sym.is_some_and(|m| self.defer_bound_method_call(object, m, bounds));
-                if let Some(m) = method_sym {
-                    for key in self.bound_ceiling_charges(object, m, bounds) {
-                        calls.push((key, expr.span));
-                    }
+                for key in ceilings {
+                    calls.push((key, expr.span));
                 }
                 if !deferred {
                     if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {

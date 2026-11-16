@@ -1774,7 +1774,10 @@ unsafe fn spawn(group: *mut u8, poll: TaskPoll, a: *mut u8, b: *mut u8, site: Op
             );
             (e.cur().map_or(0, |c| c.log_id), id)
         } else {
-            (id, up)
+            // Numbered from 1 in spawn order, the root not counted (it
+            // spawns first and logs as 0): the interpreter's numbering
+            // (review-thread ruling 2026-11-16, B-2026-11-16-225).
+            (id - 1, up)
         };
         e.push(Task {
             id,
