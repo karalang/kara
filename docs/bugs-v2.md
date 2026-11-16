@@ -60,8 +60,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 359 |
 | false-positive | 224 |
+| perf | 175 |
 | missing-feature | 175 |
-| perf | 169 |
 | soundness | 72 |
 | miscompile | 70 |
 | other | 51 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 505 |
-| mir-llvm | 243 |
+| mir-llvm | 249 |
 | mir | 219 |
 | cli | 145 |
 | parser | 91 |
@@ -1350,6 +1350,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-178 | typecheck+mir | medium | `#[derive(Copy, Clone)]` on a struct that holds itself (`next: Option[Node]`) overflows karac's stack, and `karac fix` offers that derive for `Some(n… | 756fad5000 |
 | B-2026-11-16-179 | interp+mir-llvm | low | std.path `parent`, `file_name`, `extension` and `stem` read a trailing `.` component as the last component (`"a/."` gave parent `a` and file name Non… | 5ebaabec71 |
 | B-2026-11-16-180 | typecheck | medium | A dependency's trait the file never imported still supplied its methods: with import kdep.util.W; alone, W { v: 1 }.show() resolved through kdep's Sh… | ec7adfe00e |
+| B-2026-11-16-7 | mir-llvm | low | `(0..n).map(\|_\| . | 817ac3649e |
+| B-2026-11-16-8 | mir-llvm | low | `f64.total_cmp` / `f32.total_cmp` is a runtime call (`karac_mir_total_cmp`) per comparison, so a `PriorityQueue[Reverse[F64]]` costs 2.43x checked Ru… | 817ac3649e |
+| B-2026-11-16-9 | mir-llvm | low | `"aeiou".contains(c.to_string())` in a loop costs 3.37x checked Rust: the hoisted literal is a zeroed global filled at startup, so its length is unkn… | 817ac3649e |
+| B-2026-11-16-10 | mir-llvm | low | `i64.parse(token)` of a word (`"box"`) calls the runtime's parser to learn it is not a number: kata 2042's token scan costs 2.55x checked Rust | 817ac3649e |
+| B-2026-11-16-11 | mir-llvm | low | `String.from_utf8([col, row].to_vec()).unwrap()` copies the fresh `Vec` into a new allocation and frees it: kata 2194 costs 1.85x checked Rust | 817ac3649e |
+| B-2026-11-16-12 | mir-llvm | low | A `sort_by` comparator `nums[b].cmp(nums[a]).then(a.cmp(b))` branches on `nums[b] > nums[a]` inside the merge: kata 2099 runs 2.2x checked Rust's wal… | 817ac3649e |
 
 </details>
 
