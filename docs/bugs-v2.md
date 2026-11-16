@@ -117,8 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-200 | 2026-11-16 | resolver | low | An import of a module that only other platforms' files define (poller_macos.kara alone, on Linux) was a bare E0112 unknown module, without design.md § 4's note listing the platforms that define it | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
-| B-2026-11-16-203 | 2026-11-16 | typecheck | medium | The pre-v1 `r.read_to_string().unwrap_or(x)` on a child's pipe left "expects 1 argument(s), found 0" with no machine fix, plus an `i64` cascade (`no method 'trim' on type 'i64'`) wherever the text was used | — |
-| B-2026-11-16-204 | 2026-11-16 | typecheck | low | The pre-v1 `ws.recv_text(mut buf)` said only "no method 'recv_text' on type 'WebSocket'", with nothing naming `recv()` and `WsMessage` | — |
 
 ### Relocated
 
@@ -1387,6 +1385,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-193 | interp | medium | The MIR interpreter loses every std.log record from TaskGroup tasks spawned inside auto-parallelized statements, and reports their call values leaked… | 4ade899ce2 |
 | B-2026-11-16-194 | interp | low | In the MIR interpreter a std.log call made inside a custom Backend's own `emit` goes back into that backend instead of to the default JSON backend on… | 4ade899ce2 |
 | B-2026-11-16-195 | interp+mir-llvm | medium | A loan released into a different pool (`p.release(conn_from_q)`) is dropped but still counts toward its own pool's max_connections, so that pool lose… | 4ade899ce2 |
+| B-2026-11-16-203 | typecheck | medium | The pre-v1 `r.read_to_string().unwrap_or(x)` on a child's pipe left "expects 1 argument(s), found 0" with no machine fix, plus an `i64` cascade (`no… | fa56486e69 |
+| B-2026-11-16-204 | typecheck | low | The pre-v1 `ws.recv_text(mut buf)` said only "no method 'recv_text' on type 'WebSocket'", with nothing naming `recv()` and `WsMessage` | fa56486e69 |
 
 </details>
 
