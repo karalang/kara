@@ -113,10 +113,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
 | B-2026-11-16-223 | 2026-11-16 | mir | low | An error's `?` frames outlive the error value: an `Err` that is only printed and dropped leaves its frame in a later trace (review-thread ruling 2026-11-16 item 3) | — |
-| B-2026-11-16-224 | 2026-11-16 | cli | low | karac exits 101 with a panic message when the reader of its stdout closes (`karac check --output=json f.kara | head -c 1`) | — |
-| B-2026-11-16-225 | 2026-11-16 | mir-llvm | low | Compiled lanes number `par` branches' task ids from 2 (`std.log` `task_id`, dbg `task:N`); the interpreter from 1 | — |
-| B-2026-11-16-226 | 2026-11-16 | effect | low | A call through a type-parameter bound is charged the instance's impl besides the trait's clause: `get[T: Store]` gets `panics` from `A.load` | — |
-| B-2026-11-16-227 | 2026-11-16 | cli | low | An empty function-type slot is written `[pure]` in its diagnostic; the source writes `with ()` | — |
 
 ### Relocated
 
@@ -1412,6 +1408,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-219 | cli | medium | A package's [build] targets did not choose what a plain karac build builds, and karac run ran a package whose targets leave out native | e0cefb3802 |
 | B-2026-11-16-220 | cli | low | [package].version accepted any string ("one", "1.0") though design.md § 4 makes it a semver version | e0cefb3802 |
 | B-2026-11-16-221 | cli | low | Text diagnostics named the phase (error[typecheck], error[effect], error[ownership]) where --output=json reports the catalogue code (E0221, E0400, E0… | e0cefb3802 |
+| B-2026-11-16-224 | cli | low | karac exits 101 with a panic message when the reader of its stdout closes (`karac check --output=json f.kara \| head -c 1`) | b921a4e5a2 |
+| B-2026-11-16-225 | mir-llvm | low | Compiled lanes number `par` branches' task ids from 2 (`std.log` `task_id`, dbg `task:N`); the interpreter from 1 | b921a4e5a2 |
+| B-2026-11-16-226 | effect | low | A call through a type-parameter bound is charged the instance's impl besides the trait's clause: `get[T: Store]` gets `panics` from `A.load` | b921a4e5a2 |
+| B-2026-11-16-227 | cli | low | An empty function-type slot is written `[pure]` in its diagnostic; the source writes `with ()` | b921a4e5a2 |
 
 </details>
 
