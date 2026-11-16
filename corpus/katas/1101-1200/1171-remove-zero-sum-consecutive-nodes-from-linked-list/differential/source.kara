@@ -1,0 +1,415 @@
+// LeetCode #1171: Remove Zero Sum Consecutive Nodes from Linked List -- a
+// differential over the five arms. Each answer is checked against the
+// statement read literally and against five properties that do not compute
+// it; see the README.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+// ---- remove_zero_sum.kara ----
+
+fn a0_remove_zero_sum_sublists(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut last: Map[i64, ListNode] = Map.new();
+    let mut sum = 0;
+    let mut cur = Some(dummy);
+    while let Some(node) = cur {
+        sum += node.val;
+        last[sum] = node;
+        cur = node.next;
+    }
+    sum = 0;
+    cur = Some(dummy);
+    while let Some(node) = cur {
+        sum += node.val;
+        node.next = last[sum].next;
+        cur = node.next;
+    }
+    dummy.next
+}
+
+// ---- remove_zero_sum_stack.kara ----
+
+fn a1_remove_zero_sum_sublists(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut stack: Vec[(i64, ListNode)] = [(0, dummy)];
+    let mut place: Map[i64, i64] = Map.new();
+    place[0] = 0;
+    let mut cur = dummy.next;
+    while let Some(node) = cur {
+        let sum = stack[stack.len() - 1].0 + node.val;
+        cur = node.next;
+        match place.get(sum).cloned() {
+            Some(k) => {
+                while stack.len() - 1 > k {
+                    let (s, _) = stack.pop().unwrap();
+                    place.remove(s);
+                }
+                stack[k].1.next = cur;
+            }
+            None => {
+                place[sum] = stack.len();
+                stack.push((sum, node));
+            }
+        }
+    }
+    dummy.next
+}
+
+// ---- remove_zero_sum_scan.kara ----
+
+fn a2_remove_zero_sum_sublists(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy;
+    while let Some(start) = prev.next {
+        let mut sum = 0;
+        let mut end = Some(start);
+        let mut cut = false;
+        while let Some(node) = end {
+            sum += node.val;
+            if sum == 0 {
+                prev.next = node.next;
+                cut = true;
+                break;
+            }
+            end = node.next;
+        }
+        if not cut {
+            prev = start;
+        }
+    }
+    dummy.next
+}
+
+// ---- remove_zero_sum_array.kara ----
+
+fn a3_remove_zero_sum_sublists(head: Option[ListNode]) -> Option[ListNode] {
+    let mut values = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    // sums[i]: the running sum before values[i]
+    let mut sums = [0];
+    for v in values.iter() {
+        sums.push(sums[sums.len() - 1] + v);
+    }
+    let mut last: Map[i64, i64] = Map.new();
+    for (i, s) in sums.iter().enumerate() {
+        last[s] = i;
+    }
+    let mut kept = Vec.new();
+    let mut i = last[0];
+    while i < values.len() {
+        kept.push(values[i]);
+        i = last[sums[i + 1]];
+    }
+    let mut out: Option[ListNode] = None;
+    for v in kept.iter().rev() {
+        out = Some(ListNode { val: v, next: out });
+    }
+    out
+}
+
+// ---- remove_zero_sum_solution.kara ----
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct A4ListNode {
+    pub val: i32,
+    pub next: Option[A4ListNode],
+}
+
+impl A4ListNode {
+    #[inline]
+    fn new(val: i32) -> Self {
+        A4ListNode { next: None, val }
+    }
+}
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_remove_zero_sum_sublists(head: Option[A4ListNode]) -> Option[A4ListNode] {
+        let mut vals: Vec[i32] = Vec.new();
+        let mut cur = ref head;
+        while let Some(node) = cur {
+            vals.push(node.val);
+            cur = ref node.next;
+        }
+        let mut stack: Vec[(i32, i32)] = [(0, 0)];
+        let mut seen: Map[i32, i64] = Map.new();
+        seen.insert(0, 0);
+        for v in vals.iter() {
+            let sum = stack.last().unwrap().0 + v;
+            if let Some(k) = seen.get(sum).cloned() {
+                while stack.len() - 1 > k {
+                    let (s, _) = stack.pop().unwrap();
+                    seen.remove(s);
+                }
+            } else {
+                seen.insert(sum, stack.len());
+                stack.push((sum, v));
+            }
+        }
+        let mut dummy = A4ListNode.new(0);
+        let mut tail = mut ref dummy;
+        for (_, v) in stack.iter().skip(1) {
+            tail.next = Some(A4ListNode.new(v));
+            tail = tail.next.as_mut().unwrap();
+        }
+        dummy.next
+    }
+}
+
+// ---- remove_zero_sum_fold.kara ----
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct A5ListNode {
+    pub val: i32,
+    pub next: Option[A5ListNode],
+}
+
+impl A5ListNode {
+    #[inline]
+    fn new(val: i32) -> Self {
+        A5ListNode { next: None, val }
+    }
+}
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn a5_remove_zero_sum_sublists(head: Option[A5ListNode]) -> Option[A5ListNode] {
+        let mut vals: Vec[i32] = Vec.new();
+        let mut cur = ref head;
+        while let Some(node) = cur {
+            vals.push(node.val);
+            cur = ref node.next;
+        }
+        let mut stack: Vec[(i32, i32)] = [(0, 0)];
+        let mut seen: Map[i32, i64] = Map.new();
+        seen.insert(0, 0);
+        for v in vals.iter() {
+            let sum = stack.last().unwrap().0 + v;
+            if let Some(k) = seen.get(sum).cloned() {
+                while stack.len() - 1 > k {
+                    let (s, _) = stack.pop().unwrap();
+                    seen.remove(s);
+                }
+            } else {
+                seen.insert(sum, stack.len());
+                stack.push((sum, v));
+            }
+        }
+        stack
+            .iter()
+            .skip(1)
+            .rev()
+            .fold(None, |next, (_, v)| Some(A5ListNode { val: v, next }))
+    }
+}
+
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, values: Vec[i64]) -> Vec[i64] {
+    let mut out = Vec.new();
+    if w == 4 {
+        let mut head: Option[A4ListNode] = None;
+        for v in values.iter().rev() {
+            head = Some(A4ListNode { val: v as i32, next: head });
+        }
+        let mut cur = A4Solution.a4_remove_zero_sum_sublists(head);
+        while let Some(node) = cur {
+            if out.len() > values.len() {
+                break;
+            }
+            out.push(node.val as i64);
+            cur = node.next;
+        }
+        return out;
+    }
+    if w == 5 {
+        let mut head: Option[A5ListNode] = None;
+        for v in values.iter().rev() {
+            head = Some(A5ListNode { val: v as i32, next: head });
+        }
+        let mut cur = A5Solution.a5_remove_zero_sum_sublists(head);
+        while let Some(node) = cur {
+            if out.len() > values.len() {
+                break;
+            }
+            out.push(node.val);
+            cur = node.next;
+        }
+        return out;
+    }
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: v, next: head });
+    }
+    let mut cur = match w {
+        0 => a0_remove_zero_sum_sublists(head),
+        1 => a1_remove_zero_sum_sublists(head),
+        2 => a2_remove_zero_sum_sublists(head),
+        _ => a3_remove_zero_sum_sublists(head),
+    };
+    // An answer longer than the list means the arm linked a cycle: stop
+    // there, and P1 reports it.
+    while let Some(node) = cur {
+        if out.len() > values.len() {
+            break;
+        }
+        out.push(node.val);
+        cur = node.next;
+    }
+    out
+}
+
+// The statement read literally: the answer is what is left after deleting
+// consecutive sequences that sum to 0 until there are none. So no run of
+// the answer sums to 0, and the answer is the values with runs that each
+// sum to 0 taken out before, between and after its values, which, taken
+// out one at a time, are each consecutive when they go. Its values are
+// matched to the earliest places that allow it: the sum of the values
+// before a place must be the sum of the answer before its value.
+fn literal(values: Vec[i64], answer: Vec[i64]) -> bool {
+    for i in 0..answer.len() {
+        let mut s = 0;
+        for j in i..answer.len() {
+            s += answer[j];
+            if s == 0 {
+                return false;
+            }
+        }
+    }
+    let mut before = 0;
+    let mut wanted = 0;
+    let mut k = 0;
+    for v in values.iter() {
+        if k < answer.len() and before == wanted and v == answer[k] {
+            wanted += v;
+            k += 1;
+        }
+        before += v;
+    }
+    k == answer.len() and before == wanted
+}
+
+struct Case {
+    values: Vec[i64],
+    // P5's front pair
+    pair: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let vs = ref c.values;
+    let negated: Vec[i64] = vs.iter().map(|v| -v).collect();
+    let doubled: Vec[i64] = vs.iter().map(|v| 2 * v).collect();
+    let mut paired = [c.pair, -c.pair];
+    paired.extend(vs.iter().cloned());
+    let mut mirrored = vs.clone();
+    mirrored.extend(vs.iter().rev().map(|v| -v));
+    let mut first: Vec[i64] = Vec.new();
+    for a in 0..6 {
+        let got = arm(a, vs);
+        let what = f"arm {a}, case {t.cases} {vs} -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, literal(vs, got), f"P1 {what}");
+        // P2: the answer has nothing left to remove
+        let again = arm(a, got);
+        expect(mut t, 2, again == got, f"P2 {what}, again: {again}");
+        // P3: every value negated negates the answer
+        let ng = arm(a, negated);
+        let want: Vec[i64] = got.iter().map(|v| -v).collect();
+        expect(mut t, 3, ng == want, f"P3 {what}, negated: {ng}");
+        // P4: every value doubled doubles the answer
+        let db = arm(a, doubled);
+        let want: Vec[i64] = got.iter().map(|v| 2 * v).collect();
+        expect(mut t, 4, db == want, f"P4 {what}, doubled: {db}");
+        // P5: a pair that sums to 0 in front changes nothing
+        let pr = arm(a, paired);
+        expect(mut t, 5, pr == got, f"P5 {what}, after {c.pair}, {-c.pair}: {pr}");
+        // P6: the list followed by itself reversed and negated leaves nothing
+        let mr = arm(a, mirrored);
+        expect(mut t, 6, mr.is_empty(), f"P6 {what}, mirrored: {mr}");
+        if a == 0 {
+            first = got;
+        }
+    }
+    t.cases += 1;
+    let mut h = 0;
+    for x in first.iter() {
+        h = (h * 131 + x + 1001) % 1000000007;
+    }
+    t.check = (t.check * 31 + h) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 600 lists in four kinds, 150 each: 1 to 8 values within 2; 1 to 30
+    // within 5; 30 to 120 within 50; and 1 to 40 values that are each 1 or
+    // -1 or a few of them, so that sums come back often and runs overlap.
+    // Every value is within 500, so P4's doubles stay within the
+    // constraints' 1000. Every choice the properties make is drawn before
+    // any arm answers.
+    let mut seed = 11711;
+    let mut cases: Vec[Case] = Vec.new();
+    for i in 0..600 {
+        let kind = i % 4;
+        let (lo, hi, spread) = match kind {
+            0 => (1, 8, 2),
+            1 => (1, 30, 5),
+            2 => (30, 120, 50),
+            _ => (1, 40, 1),
+        };
+        let n = lo + next_random(mut seed) % (hi - lo + 1);
+        let values: Vec[i64] = (0..n)
+            .map(|_| {
+                if kind == 3 {
+                    let size = 1 + next_random(mut seed) % 3;
+                    if next_random(mut seed) % 2 == 0 { size } else { -size }
+                } else {
+                    next_random(mut seed) % (2 * spread + 1) - spread
+                }
+            })
+            .collect();
+        let pair = 1 + next_random(mut seed) % 500;
+        cases.push(Case { values, pair });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} lists: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

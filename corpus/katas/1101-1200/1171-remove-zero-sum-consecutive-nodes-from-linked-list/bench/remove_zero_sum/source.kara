@@ -1,0 +1,79 @@
+// LeetCode #1171: Remove Zero Sum Consecutive Nodes from Linked List -- the
+// ★ arm's bench: prefix sums in two passes, the last node of each running
+// sum kept in a map, every node linked past the run after it.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn remove_zero_sum_sublists(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut last: Map[i64, ListNode] = Map.new();
+    let mut sum = 0;
+    let mut cur = Some(dummy);
+    while let Some(node) = cur {
+        sum += node.val;
+        last[sum] = node;
+        cur = node.next;
+    }
+    sum = 0;
+    cur = Some(dummy);
+    while let Some(node) = cur {
+        sum += node.val;
+        node.next = last[sum].next;
+        cur = node.next;
+    }
+    dummy.next
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64, kind: i64) -> i64 {
+    match kind {
+        0 => next_random(mut seed) % 5 - 2,
+        1 => next_random(mut seed) % 11 - 5,
+        2 => next_random(mut seed) % 101 - 50,
+        _ => {
+            let size = 1 + next_random(mut seed) % 3;
+            if next_random(mut seed) % 2 == 0 { size } else { -size }
+        }
+    }
+}
+
+fn main() {
+    // 32 lists of 1000 values, the constraints' most, in four kinds (within
+    // 2, within 5, within 50, and 1 to 3 either way), built once; each round
+    // gives one value of every list a new value, builds the list and
+    // removes its zero-sum runs
+    let rounds = 400;
+    let mut seed = 1171;
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    for l in 0..32 {
+        lists.push((0..1000).map(|_| random_value(mut seed, l % 4)).collect());
+    }
+    let mut kept = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for l in 0..32 {
+            let i = next_random(mut seed) % 1000;
+            lists[l][i] = random_value(mut seed, l % 4);
+            let mut head: Option[ListNode] = None;
+            for v in lists[l].iter().rev() {
+                head = Some(ListNode { val: v, next: head });
+            }
+            let mut cur = remove_zero_sum_sublists(head);
+            while let Some(node) = cur {
+                kept += 1;
+                check = (check * 131 + node.val + 1001) % 1000000007;
+                cur = node.next;
+            }
+        }
+    }
+    println(f"{rounds} rounds over 32 lists of 1000 values: {kept} kept, checksum {check}");
+}

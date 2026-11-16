@@ -1,0 +1,111 @@
+// LeetCode #1171: Remove Zero Sum Consecutive Nodes from Linked List -- the
+// ★ arm, prefix sums in two passes: a run sums to zero exactly when the
+// running sums before and after it are equal, so the first pass keeps the
+// last node at which each running sum is reached, and the second links each
+// node past every node up to that last one. O(n).
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn remove_zero_sum_sublists(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut last: Map[i64, ListNode] = Map.new();
+    let mut sum = 0;
+    let mut cur = Some(dummy);
+    while let Some(node) = cur {
+        sum += node.val;
+        last[sum] = node;
+        cur = node.next;
+    }
+    sum = 0;
+    cur = Some(dummy);
+    while let Some(node) = cur {
+        sum += node.val;
+        node.next = last[sum].next;
+        cur = node.next;
+    }
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_vec(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: v, next: head });
+    }
+    head
+}
+
+fn to_vec(head: Option[ListNode]) -> Vec[i64] {
+    let mut out = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        out.push(node.val);
+        cur = node.next;
+    }
+    out
+}
+
+fn removed(values: Vec[i64]) -> Vec[i64] {
+    to_vec(remove_zero_sum_sublists(from_vec(values)))
+}
+
+fn show(values: Vec[i64]) {
+    println(f"{values} -> {removed(values)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digest(xs: Vec[i64]) -> i64 {
+    let mut h = 0;
+    for x in xs.iter() {
+        h = (h * 131 + x + 1001) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // LeetCode's examples; a zero alone; a list left whole; one that goes
+    // entirely; a run that comes back after it goes; two answers allowed,
+    // the leftmost kept
+    show([1, 2, -3, 3, 1]);
+    show([1, 2, 3, -3, 4]);
+    show([1, 2, 3, -3, -2]);
+    show([0]);
+    show([5, 7, -1]);
+    show([4, -4, 2, -2]);
+    show([1, -1, 1]);
+    show([2, 0, 3, -3, 1, -1, 0, 2]);
+    // 300 random lists of 1 to 30 values from -3 to 3, so that zero sums
+    // are common
+    let mut seed = 1171;
+    let mut kept = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let values: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 7 - 3).collect();
+        let got = removed(values);
+        kept += got.len();
+        check = (check * 31 + digest(got)) % 1000000007;
+    }
+    println(f"300 random lists: {kept} kept, checksum {check}");
+    // 1000 nodes, the constraints' most: values from -1000 to 1000, from -5
+    // to 5, and a list that climbs to 500 and comes back down but for its
+    // last step
+    for spread in [1000, 5] {
+        let values: Vec[i64] = (0..1000).map(|_| next_random(mut seed) % (2 * spread + 1) - spread).collect();
+        let got = removed(values);
+        println(f"1000 values within {spread}: {got.len()} kept, checksum {digest(got)}");
+    }
+    let mut values: Vec[i64] = Vec.filled(500, 1);
+    values.extend(Vec.filled(499, -1));
+    values.push(2);
+    let got = removed(values);
+    println(f"up 500 and down 499, then 2: {got}");
+}
