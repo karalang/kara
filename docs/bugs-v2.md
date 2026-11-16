@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 364 |
+| diagnostics | 365 |
 | false-positive | 226 |
+| missing-feature | 176 |
 | perf | 175 |
-| missing-feature | 175 |
 | soundness | 72 |
 | miscompile | 71 |
 | other | 53 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 510 |
 | mir-llvm | 252 |
 | mir | 221 |
-| cli | 145 |
+| cli | 147 |
 | parser | 92 |
 | ownership | 88 |
 | interp | 70 |
@@ -110,6 +110,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
+| B-2026-11-16-45 | 2026-11-16 | cli | low | `karac test` emits `test_fail` without the required `location` field when a test fails before its body runs: `provider_construction_failed` (a `#[with_provider]` constructor returned `Err` or panicked), `requires_and_with_provider_conflict`, and `unsatisfied_requires` under `--all` | — |
+| B-2026-11-16-46 | 2026-11-16 | cli | medium | A successful `karac build --output=jsonl` prints one untyped `{"status":"ok","output":...}` line instead of the event stream (no `build_start`, phase events, warnings as `diagnostic` events or `build_complete`), and `karac build --output=json`'s success object has no `program_effects` | — |
 
 ### Relocated
 

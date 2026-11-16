@@ -65,6 +65,12 @@ pub(super) struct DiscoveredTest {
     /// the kara.toml `[test].timeout_seconds`, the `KARAC_TEST_TIMEOUT_SECS`
     /// env var, and finally the 30 s default (phase-7 line 847 sub-step 3).
     pub(super) timeout_seconds: Option<u64>,
+    /// Where the case is declared: its file as reports show it, and the line
+    /// and column of `test`. A `test_fail` whose failure has no place of its
+    /// own (a fixture refused before the body ran, a fault with no position)
+    /// points here, since `location` is a required field (design.md § Runner
+    /// output, B-2026-11-16-45).
+    pub(super) location: (String, usize, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +200,11 @@ pub(super) fn lower_and_discover_test_cases(tree: &mut ProgramTree) -> Vec<Disco
             continue;
         }
         let label = module_label(&module.path);
+        let file = module
+            .test_file
+            .as_deref()
+            .map(super::project_v2::shown)
+            .unwrap_or_default();
         let mut new_items: Vec<Item> = Vec::with_capacity(module.items.len());
         for item in module.items.drain(..) {
             match item {
@@ -210,6 +221,7 @@ pub(super) fn lower_and_discover_test_cases(tree: &mut ProgramTree) -> Vec<Disco
                         requires: extract_requires(&tc.attributes),
                         with_providers: extract_with_providers(&tc.attributes),
                         timeout_seconds: extract_timeout_seconds(&tc.attributes),
+                        location: (file.clone(), tc.span.line, tc.span.column),
                     });
                     new_items.push(Item::Function(lower_test_case_to_function(&tc, mangled)));
                 }
@@ -691,10 +703,22 @@ pub(super) fn test_fail_unsatisfied_requires_fields(
         missing.join(", "),
     );
     format!(
-        "\"test\":{},\"duration_ms\":0,\"reason\":\"unsatisfied_requires\",\"resources\":{},\"message\":{}",
+        "\"test\":{},\"duration_ms\":0,{},\"reason\":\"unsatisfied_requires\",\"resources\":{},\"message\":{}",
         json_string(&t.qualified),
+        case_location_field(t),
         json_string_array(missing),
         json_string(&message),
+    )
+}
+
+/// The `location` field of a `test_fail` that points at the case itself.
+pub(super) fn case_location_field(t: &DiscoveredTest) -> String {
+    let (file, line, col) = &t.location;
+    format!(
+        "\"location\":{{\"file\":{},\"line\":{},\"col\":{}}}",
+        json_string(file),
+        line,
+        col
     )
 }
 
@@ -723,13 +747,14 @@ pub(super) fn test_fail_fields(
         json_string(&t.qualified),
         duration_ms
     );
-    if let Some(span) = &outcome.span {
-        s.push_str(&format!(
+    match &outcome.span {
+        Some(span) => s.push_str(&format!(
             ",\"location\":{{\"file\":{},\"line\":{},\"col\":{}}}",
             json_string(file_path),
             span.line,
             span.column,
-        ));
+        )),
+        None => s.push_str(&format!(",{}", case_location_field(t))),
     }
     let message = outcome.message.as_deref().unwrap_or("test failed");
     s.push_str(&format!(",\"message\":{}", json_string(message)));
@@ -816,8 +841,9 @@ pub(super) fn test_fail_conflict_fields(t: &DiscoveredTest, conflicts: &[String]
         conflicts.join(", "),
     );
     format!(
-        "\"test\":{},\"duration_ms\":0,\"reason\":\"requires_and_with_provider_conflict\",\"resources\":{},\"message\":{}",
+        "\"test\":{},\"duration_ms\":0,{},\"reason\":\"requires_and_with_provider_conflict\",\"resources\":{},\"message\":{}",
         json_string(&t.qualified),
+        case_location_field(t),
         json_string_array(conflicts),
         json_string(&message),
     )
@@ -839,8 +865,9 @@ pub(super) fn test_fail_provider_construction_fields(
         resource, message
     );
     format!(
-        "\"test\":{},\"duration_ms\":0,\"reason\":\"provider_construction_failed\",\"resource\":{},\"message\":{}",
+        "\"test\":{},\"duration_ms\":0,{},\"reason\":\"provider_construction_failed\",\"resource\":{},\"message\":{}",
         json_string(&t.qualified),
+        case_location_field(t),
         json_string(resource),
         json_string(&wrapped),
     )
