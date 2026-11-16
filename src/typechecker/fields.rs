@@ -535,7 +535,9 @@ impl<'a> super::TypeChecker<'a> {
                         replacement: "()".to_string(),
                     },
                 ),
-                "code" if exit_status => self.type_error(
+                // The fix keeps the old field's meaning, -1 when a signal
+                // ended the process (B-2026-11-16-184).
+                "code" if exit_status => self.type_error_with_fix_it(
                     format!(
                         "{message}; `code` is a method now: `code()` is an `Option[i32]`, \
                          `None` when a signal ended the process (the old field's -1 is \
@@ -543,6 +545,14 @@ impl<'a> super::TypeChecker<'a> {
                     ),
                     *span,
                     TypeErrorKind::UndefinedField,
+                    super::FixIt {
+                        span: Span {
+                            offset: span.offset + span.length,
+                            length: 0,
+                            ..*span
+                        },
+                        replacement: "().unwrap_or(-1)".to_string(),
+                    },
                 ),
                 _ => self.type_error(message, *span, TypeErrorKind::UndefinedField),
             }

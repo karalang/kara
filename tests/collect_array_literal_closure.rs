@@ -14,8 +14,11 @@ fn karac(args: &[&str]) -> std::process::Output {
         .expect("karac")
 }
 
+/// B-2026-11-16-181 flipped this pin: the `collect`'s element reaches the
+/// `map` closure before its body is checked, so the literal is the array
+/// and the program checks with no fix.
 #[test]
-fn an_array_literal_returned_by_a_map_closure_is_typed_by_the_fix() {
+fn an_array_literal_returned_by_a_map_closure_follows_the_collect() {
     let src = "fn main() {
     let a: Array[i64, 3] = [1, 2, 0];
     let b: Array[i64, 3] = [3, 4, 1];
@@ -24,6 +27,10 @@ fn an_array_literal_returned_by_a_map_closure_is_typed_by_the_fix() {
     d.push(b);
     let swapped: Vec[Array[i64, 3]] = d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect();
     println(f\"{swapped}\");
+    let kept: Vec[Array[i64, 3]] = d.iter().filter_map(|e| {
+        if e[2] == 0 { Some([e[1], e[0], 1]) } else { None }
+    }).collect();
+    println(f\"{kept}\");
 }
 ";
     let dir = std::env::temp_dir().join(format!("karac-collectarr-{}", std::process::id()));
@@ -35,22 +42,11 @@ fn an_array_literal_returned_by_a_map_closure_is_typed_by_the_fix() {
     let check = karac(&["check", p]);
     let text = String::from_utf8_lossy(&check.stdout).into_owned()
         + &String::from_utf8_lossy(&check.stderr);
-    assert!(!check.status.success(), "{text}");
-    assert!(
-        text.contains("a list literal is one unless its use asks for an array"),
-        "{text}"
-    );
-    let fix = karac(&["fix", p]);
-    assert!(fix.status.success());
-    let after = std::fs::read_to_string(&f).unwrap();
-    assert!(
-        after.contains("map(|e| { let r: Array[i64, 3] = [e[1], e[0], 1 - e[2]]; r })"),
-        "{after}"
-    );
+    assert!(check.status.success(), "{text}");
     let run = karac(&["run", "--interp", p]);
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
-        "[[2, 1, 1], [4, 3, 0]]\n",
+        "[[2, 1, 1], [4, 3, 0]]\n[[2, 1, 1]]\n",
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );

@@ -1962,6 +1962,11 @@ pub struct ImplTraitCaptures {
 /// `TypeCheckResult::node_generic_frame_proj_traits`.
 pub type ProjTraits = FxHashMap<(String, String), String>;
 
+/// A `par` block written as statements (B-2026-11-16-182): the block, each
+/// statement's start and its expression (a `let`'s value), and a tail that
+/// is the tuple of the `let`s' names.
+pub type ParStmtBranches = (Span, Vec<(usize, Span)>, Option<Span>);
+
 #[derive(Default, Clone)]
 pub struct TypeCheckResult {
     /// Every impl the checker registered (user, library and baked), for
@@ -2377,6 +2382,13 @@ pub struct TypeCheckResult {
     /// resolver's and ownership checker's `error_fix_diffs` are: `karac fix`
     /// applies each, and `--output=json` renders it as `fix_diff`.
     pub error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// The statement form of a `par` block refused under the core rules
+    /// (§11.1), keyed by the error's span: the block, and each statement's
+    /// start and its expression (a `let`'s value), when every statement is
+    /// an expression or an unannotated `let`, for the CLI to turn into the
+    /// comma form from the source text; and a tail that is the tuple of the
+    /// `let`s' names, which the comma form gives as it is (B-2026-11-16-182).
+    pub par_stmt_branches: FxHashMap<SpanKey, ParStmtBranches>,
     /// The STATIC TYPE of each `dbg(x)` argument, keyed by the ARGUMENT's span
     /// (B-2026-08-23-18).
     ///
@@ -3575,6 +3587,11 @@ pub struct TypeChecker<'a> {
     /// a number among them, or a list of numbers, is open as a `let`'s
     /// value is (`TypeChecker::open_closure_values`, B-2026-11-11-86).
     pub(super) open_closure_values: FxHashSet<crate::ids::NodeId>,
+    /// The result a `map` / `filter_map` closure gives, when the `collect`
+    /// its adaptor feeds names an array element: `d.iter().map(|e| [..])`
+    /// collected into a `Vec[Array[i64, 3]]` checks the closure's literal
+    /// against `Array[i64, 3]` (design.md § List literals, B-2026-11-16-181).
+    pub(super) closure_result_hints: FxHashMap<crate::ids::NodeId, Type>,
     /// The arguments of every call and method call met so far: a
     /// `collect()` there may collect into a `Vec[T]` for a `Slice[T]` slot,
     /// since the temporary outlives the call (B-2026-11-15-21).
@@ -3739,6 +3756,8 @@ pub struct TypeChecker<'a> {
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// See [`TypeCheckResult::par_stmt_branches`].
+    pub(super) par_stmt_branches: FxHashMap<SpanKey, ParStmtBranches>,
     /// Each tuple literal's elements by its span (B-2026-11-09-96).
     pub(super) tuple_literal_elems: FxHashMap<SpanKey, Vec<TupleElem>>,
     /// A `match`/`if let` over `v.last_mut()` or `v.first_mut()`, keyed by
@@ -4617,6 +4636,7 @@ impl<'a> TypeChecker<'a> {
             held_open_literals: Vec::new(),
             open_tuple_literal: None,
             open_closure_values: FxHashSet::default(),
+            closure_result_hints: FxHashMap::default(),
             call_arg_exprs: FxHashSet::default(),
             open_match_arms: false,
             compound_assign_target: None,
@@ -4668,6 +4688,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
+            par_stmt_branches: FxHashMap::default(),
             tuple_literal_elems: FxHashMap::default(),
             end_mut_rewrites: FxHashMap::default(),
             end_mut_let_rewrites: FxHashMap::default(),
@@ -5311,6 +5332,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: self.fn_value_callee_types,
             fn_value_param_types: self.fn_value_param_types,
             error_fix_diffs: self.error_fix_diffs,
+            par_stmt_branches: self.par_stmt_branches,
             dbg_arg_types: self.dbg_arg_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,

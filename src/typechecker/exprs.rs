@@ -1901,7 +1901,11 @@ impl<'a> super::TypeChecker<'a> {
             self.open_literal_expr = Some(expr.id);
             self.open_collection_let = Some(expr.id);
         }
+        let hinted = self.note_collect_closure_result(expr, expected);
         let mut ty = self.check_expr_inner(expr, expected);
+        if let Some(id) = hinted {
+            self.closure_result_hints.remove(&id);
+        }
         self.open_literal_expr = saved_open;
         self.open_collection_let = saved_collection;
         self.collect_fixes_literal_items(expr, expected);
@@ -2806,6 +2810,60 @@ impl<'a> super::TypeChecker<'a> {
             first.span,
             TypeErrorKind::RemovedInCore,
         );
+        // Statements that are each an expression (`a();`, `{ .. }`) are the
+        // branches already: the fix separates them with commas, which the
+        // CLI writes from the source text. An unannotated `let` is its value,
+        // and its pattern a part of the tuple the block's value is bound to,
+        // `let (a, b) = par { f(), g() };`, so the names it binds stay in
+        // scope after the block as they were. An annotated one, whose type
+        // may be what types its value, has no mechanical rewrite.
+        let branches: Option<Vec<(usize, Span)>> = block
+            .stmts
+            .iter()
+            .map(|s| match &s.kind {
+                StmtKind::Expr(e) => Some((e.span.offset, e.span)),
+                StmtKind::Let {
+                    ty: None, value, ..
+                } => Some((s.span.offset, value.span)),
+                _ => None,
+            })
+            .collect();
+        // A tail that gathers the `let`s' values (`let (a, b) = par { let a =
+        // f(); let b = g(); (a, b) }`) is what the comma form gives, so it
+        // goes; any other tail beside a `let` has no mechanical rewrite.
+        let names: Vec<Option<String>> = block
+            .stmts
+            .iter()
+            .map(|s| match &s.kind {
+                StmtKind::Let { pattern, .. } => match pattern.binding_names().as_slice() {
+                    [n] => Some(n.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let tail = match &block.final_expr {
+            None => None,
+            Some(t) => match &t.kind {
+                ExprKind::Tuple(items)
+                    if items.len() == names.len()
+                        && items.iter().zip(&names).all(|(e, n)| {
+                            matches!((&e.kind, n), (ExprKind::Identifier(i), Some(n)) if i == n)
+                        }) =>
+                {
+                    Some(t.span)
+                }
+                // With no `let`, a tail is the last branch as it is.
+                _ if names.iter().all(Option::is_none) => None,
+                _ => return,
+            },
+        };
+        if let Some(branches) = branches {
+            self.par_stmt_branches.insert(
+                SpanKey::from_span(&first.span),
+                (block.span, branches, tail),
+            );
+        }
     }
 
     /// The parameter of an iterator adaptor's closure that receives the
@@ -4445,7 +4503,46 @@ impl<'a> super::TypeChecker<'a> {
                 // (`B` from `acc: Option[i64]`) is checked against as that
                 // type, so `Some(x)` reads a scalar `x: ref i64` as its value
                 // as it does against a declared `Option[i64]`.
-                let ret_now = resolve_type_var_top(expected_ret, &self.env.substitutions);
+                // The element a `collect` names for the array this closure
+                // returns: its open result is that type before the body is
+                // checked, so a list literal there is the array.
+                let mut ret_now = resolve_type_var_top(expected_ret, &self.env.substitutions);
+                if let Some(hint) = self.closure_result_hints.get(&expr.id).cloned() {
+                    match ret_now {
+                        Type::TypeVar(_) => {
+                            unify_types(
+                                expected_ret,
+                                &hint,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            );
+                            ret_now = hint;
+                        }
+                        // A library adaptor's own parameter (`map`'s `U`),
+                        // solved from the closure's type once it is checked.
+                        Type::TypeParam(_) => ret_now = hint,
+                        // `filter_map`'s `Option[U]`.
+                        Type::Named { ref name, ref args }
+                            if name == "Option"
+                                && matches!(
+                                    args.first(),
+                                    Some(Type::TypeParam(_) | Type::TypeVar(_))
+                                )
+                                && matches!(&hint, Type::Named { name: h, .. } if h == "Option") =>
+                        {
+                            if contains_type_var(&ret_now) {
+                                unify_types(
+                                    expected_ret,
+                                    &hint,
+                                    &mut self.env.substitutions,
+                                    &mut self.env.const_substitutions,
+                                );
+                            }
+                            ret_now = hint;
+                        }
+                        _ => {}
+                    }
+                }
                 // A return type the callee leaves open (`map`'s `OutV`) is
                 // no type for a number the closure gives: an unsuffixed
                 // literal, or a list of them, is open as a `let`'s value is,
@@ -10302,6 +10399,67 @@ impl<'a> super::TypeChecker<'a> {
             self.collect_literal_fixes
                 .insert(SpanKey::from_span(&expr.span), (fix, why));
         }
+    }
+
+    /// `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` checked against
+    /// a `Vec[Array[i64, 3]]`: the `map` closure's result is that element,
+    /// so its list literal is the array (design.md § List literals: a
+    /// literal follows the type its use asks for). Recorded before the
+    /// receiver is checked, for the closure to read; the closure's id, to
+    /// forget once the `collect` is checked.
+    fn note_collect_closure_result(
+        &mut self,
+        expr: &Expr,
+        expected: &Type,
+    ) -> Option<crate::ids::NodeId> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return None;
+        };
+        if method != "collect" || !args.is_empty() {
+            return None;
+        }
+        let want = resolve_type_var_top(expected, &self.env.substitutions);
+        let elem = match Self::peel_borrow(&want) {
+            Type::Named { name, args }
+                if matches!(name.as_str(), "Vec" | "VecDeque" | "Set" | "SortedSet")
+                    && !args.is_empty() =>
+            {
+                resolve_type_var_top(&args[0], &self.env.substitutions)
+            }
+            _ => return None,
+        };
+        let Type::Array { element, .. } = &elem else {
+            return None;
+        };
+        if !type_is_fully_concrete(element) || contains_type_param(element) {
+            return None;
+        }
+        let ExprKind::MethodCall { method, args, .. } = &object.kind else {
+            return None;
+        };
+        if args.len() != 1 {
+            return None;
+        }
+        let hint = match method.as_str() {
+            "map" => elem.clone(),
+            "filter_map" => Type::Named {
+                name: "Option".to_string(),
+                args: vec![elem.clone()],
+            },
+            _ => return None,
+        };
+        let closure = &args[0].value;
+        if !matches!(closure.kind, ExprKind::Closure { .. }) {
+            return None;
+        }
+        self.closure_result_hints.insert(closure.id, hint);
+        Some(closure.id)
     }
 
     /// `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` into a

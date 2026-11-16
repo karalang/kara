@@ -10941,8 +10941,10 @@ fn test_fix_applies_concurrent_plain_struct_migration() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // 1 `par ` insert + 1 `mut ` strip + 2 `Mutex[`/`]` wraps = 4 edits.
-    assert!(stdout.contains("applied 4 fix"), "stdout: {stdout}");
+    // 1 `par ` insert + 1 `mut ` strip + 2 `Mutex[`/`]` wraps = 4 edits,
+    // and the `par` block's comma form (two `;` to `,` and a `;` after the
+    // block, B-2026-11-16-182) = 7.
+    assert!(stdout.contains("applied 7 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct State"),
@@ -10988,7 +10990,8 @@ fn test_fix_applies_concurrent_shared_struct_migration() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("applied 7 fix"), "stdout: {stdout}");
+    // Plus the `par` block's comma form, 3 more (B-2026-11-16-182).
+    assert!(stdout.contains("applied 10 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct Counter"),

@@ -1412,12 +1412,23 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   naming neither the seed nor the item type. The refusal is now at the seed,
   says the item is `ref i64`, and `karac fix` writes `Some(*x)`
   (B-2026-11-15-34).
-- **An array literal a `map` closure returns into a `Vec` of arrays gets
-  a fix.** `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` into a
-  `Vec[Array[i64, 3]]` is refused because the closure's literal is a
-  `Vec`, checked before the `collect` names its element; the refusal now
-  says so, and `karac fix` types the literal where the closure makes it,
-  `{ let r: Array[i64, 3] = [..]; r }` (B-2026-11-15-38).
+- **`karac fix` rewrites a `par` block written as statements.** `par {
+  a(); b(); }` and `par { let _a = read(c); let _b = read(c); }` were
+  refused (core semantics §11.1) with no fix; the fix writes the comma form,
+  `par { a(), b() }`, keeping each `let`'s value as its branch. An annotated
+  `let` is left to the author (B-2026-11-16-182).
+- **A `let` that keeps a view of a temporary gets a fix.** `let req:
+  Vec[Str] = line.substring(a, b).split(" ").collect();` is refused (§5.5);
+  `karac fix` now binds the temporary first, `let req_src =
+  line.substring(a, b);`, and takes the view of that (B-2026-11-16-183).
+- The legacy `ExitStatus.code` field gets the fix its message names,
+  `code().unwrap_or(-1)` (B-2026-11-16-184).
+- **An array literal a `map` closure returns into a `Vec` of arrays is
+  that array.** `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` checked
+  against a `Vec[Array[i64, 3]]` was refused as `FromIterator[Vec[i64]]`;
+  the `collect`'s element now reaches the closure before its body is
+  checked, as for `filter_map`'s `Some([..])`, so it checks and runs
+  (design.md § List literals, B-2026-11-15-38, B-2026-11-16-181).
 - **A value moved in the f-string that shows it is cloned by `karac
   fix`.** `println(f"{v} -> {total(v)}")` with `total` taking `own` is
   E0516, because `{v}` borrows `v` for the whole `println`; the fix now

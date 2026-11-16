@@ -1734,6 +1734,7 @@ impl Pipeline {
         self.report_missing_library_imports();
         self.widen_redundant_suffix_fixes();
         self.widen_unreachable_arm_fixes();
+        self.par_statement_fixes();
         self.report_style_lints();
     }
 
@@ -2066,6 +2067,33 @@ impl Pipeline {
             }
             fix.span.length += fix.span.offset - start;
             fix.span.offset = start;
+        }
+    }
+
+    /// The comma form of a `par` block written as statements (core-semantics
+    /// §11.1): each branch statement's `;` becomes a `,`, and a block branch
+    /// with none (`{ v.push(1); }`) gets one after it. When a branch is a
+    /// `let`, the block's value is bound to the tuple of the branches'
+    /// patterns, `let (a, b) = par { f(), g() };` (`_` for a branch that is an
+    /// expression), so its names stay in scope after the block; that needs
+    /// the `par` to start its statement. The typechecker records the spans;
+    /// the text is read from the source here (B-2026-11-16-182).
+    fn par_statement_fixes(&mut self) {
+        let (Some(source), Some(typed)) = (self.source.as_ref(), self.typed.as_mut()) else {
+            return;
+        };
+        let branches = std::mem::take(&mut typed.par_stmt_branches);
+        for (key, (block, spans, tail)) in branches {
+            if !typed
+                .errors
+                .iter()
+                .any(|e| crate::resolver::SpanKey::from_span(&e.span) == key && e.fix_it.is_none())
+            {
+                continue;
+            }
+            if let Some(edits) = par_comma_form(source, &block, &spans, tail) {
+                typed.error_fix_diffs.insert(key, edits);
+            }
         }
     }
 
@@ -4317,6 +4345,103 @@ fn moved_arg_clone_fix(
         },
         replacement: ".clone()".to_string(),
     })
+}
+
+/// B-2026-11-16-182: the edits that turn a `par` block's statements into
+/// its comma form; see `par_statement_fixes`.
+fn par_comma_form(
+    source: &str,
+    block: &crate::token::Span,
+    spans: &[(usize, crate::token::Span)],
+    tail: Option<crate::token::Span>,
+) -> Option<Vec<crate::resolver::TextEdit>> {
+    use crate::resolver::TextEdit;
+    let mut edits = Vec::new();
+    let mut patterns = Vec::new();
+    for (start, s) in spans {
+        if *start < s.offset {
+            // `let <pattern> = <value>;`: the pattern goes to the tuple.
+            let head = source.get(*start..s.offset)?;
+            let pattern = head
+                .trim()
+                .strip_prefix("let")?
+                .trim()
+                .strip_suffix('=')?
+                .trim();
+            if pattern.is_empty() || pattern.contains('\n') {
+                return None;
+            }
+            patterns.push(pattern.to_string());
+            edits.push(TextEdit {
+                offset: *start,
+                length: s.offset - start,
+                replacement: String::new(),
+            });
+        } else {
+            patterns.push("_".to_string());
+        }
+        let end = s.offset + s.length;
+        let rest = source.get(end..)?;
+        let gap = rest.len() - rest.trim_start().len();
+        if rest.trim_start().starts_with(';') {
+            edits.push(TextEdit {
+                offset: end + gap,
+                length: 1,
+                replacement: ",".to_string(),
+            });
+        } else {
+            edits.push(TextEdit {
+                offset: end,
+                length: 0,
+                replacement: ",".to_string(),
+            });
+        }
+    }
+    // Whether the `par` starts its statement: only indentation before it.
+    // Its statement form was `()`, so there it ends with a `;` (a tail
+    // `par` would otherwise give the enclosing block the branches' tuple).
+    let par_at = source
+        .get(..block.offset)?
+        .trim_end()
+        .strip_suffix("par")
+        .map(str::len)?;
+    let line_start = source[..par_at].rfind('\n').map_or(0, |i| i + 1);
+    let starts_stmt = source[line_start..par_at].trim().is_empty();
+    // A tail gathering the `let`s' values is the comma form's own value:
+    // it goes, from the last branch's separator to its end, and the block
+    // keeps the binding it had.
+    if let Some(t) = tail {
+        let last = edits.last()?;
+        let from = last.offset + last.length;
+        edits.push(TextEdit {
+            offset: from,
+            length: (t.offset + t.length).checked_sub(from)?,
+            replacement: String::new(),
+        });
+        edits.sort_by_key(|e| e.offset);
+        return Some(edits);
+    }
+    let named = patterns.iter().any(|p| p != "_");
+    if named && (patterns.len() < 2 || !starts_stmt) {
+        return None;
+    }
+    if named {
+        edits.push(TextEdit {
+            offset: par_at,
+            length: 0,
+            replacement: format!("let ({}) = ", patterns.join(", ")),
+        });
+    }
+    let block_end = block.offset + block.length;
+    if starts_stmt && !source.get(block_end..)?.trim_start().starts_with(';') {
+        edits.push(TextEdit {
+            offset: block_end,
+            length: 0,
+            replacement: ";".to_string(),
+        });
+    }
+    edits.sort_by_key(|e| e.offset);
+    Some(edits)
 }
 
 fn mir_check_message(e: &crate::mir::BorrowError) -> String {

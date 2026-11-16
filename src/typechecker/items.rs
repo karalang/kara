@@ -10847,6 +10847,64 @@ impl<'a> super::TypeChecker<'a> {
         None
     }
 
+    /// B-2026-11-16-183: the fix for a `let` that keeps a view of a
+    /// temporary (`let req: Vec[Str] = line.substring(a, b).split(" ")
+    /// .collect();`, §5.5): the temporary is bound by a `let` of its own
+    /// before the statement, `let req_src = line.substring(a, b);`, and the
+    /// view is taken of that binding, which lives as long as the block.
+    fn core_bind_temp_first_fix(
+        &self,
+        pattern: &Pattern,
+        value: &Expr,
+        temp: &Span,
+    ) -> Option<Vec<crate::resolver::TextEdit>> {
+        fn find<'e>(e: &'e Expr, at: &Span) -> Option<&'e Expr> {
+            if e.span.offset == at.offset && e.span.length == at.length {
+                return Some(e);
+            }
+            match &e.kind {
+                ExprKind::MethodCall { object, args, .. } => {
+                    find(object, at).or_else(|| args.iter().find_map(|a| find(&a.value, at)))
+                }
+                ExprKind::Call { callee, args } => {
+                    find(callee, at).or_else(|| args.iter().find_map(|a| find(&a.value, at)))
+                }
+                ExprKind::FieldAccess { object, .. } => find(object, at),
+                ExprKind::Index { object, index } => find(object, at).or_else(|| find(index, at)),
+                _ => None,
+            }
+        }
+        let stmt = self.current_stmt?;
+        if stmt.offset > value.span.offset {
+            return None;
+        }
+        let names = pattern.binding_names();
+        let [name] = names.as_slice() else {
+            return None;
+        };
+        let temp_expr = find(value, temp)?;
+        let text = crate::formatter::render_expr(temp_expr);
+        if text.contains('\n') {
+            return None;
+        }
+        let fresh = format!("{name}_src");
+        Some(vec![
+            crate::resolver::TextEdit {
+                offset: stmt.offset,
+                length: 0,
+                replacement: format!(
+                    "let {fresh} = {text};\n{}",
+                    " ".repeat(stmt.column.saturating_sub(1))
+                ),
+            },
+            crate::resolver::TextEdit {
+                offset: temp.offset,
+                length: temp.length,
+                replacement: fresh,
+            },
+        ])
+    }
+
     /// v2 core §5.5: whether `e` produces a temporary that owns its value
     /// (one with no named place), as opposed to a place or a view.
     /// v2 core §5.5: a `ref` binding in a `let` (or `let … else`) pattern
@@ -11910,7 +11968,14 @@ impl<'a> super::TypeChecker<'a> {
                                     TypeErrorKind::TypeMismatch,
                                     fix,
                                 ),
-                                None => self.type_error(message, temp, TypeErrorKind::TypeMismatch),
+                                None => {
+                                    let fix = self.core_bind_temp_first_fix(pattern, value, &temp);
+                                    self.type_error(message, temp, TypeErrorKind::TypeMismatch);
+                                    if let Some(edits) = fix {
+                                        self.error_fix_diffs
+                                            .insert(SpanKey::from_span(&temp), edits);
+                                    }
+                                }
                             },
                         }
                     }
