@@ -60,12 +60,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 395 |
 | false-positive | 234 |
-| missing-feature | 181 |
+| missing-feature | 182 |
 | perf | 178 |
 | soundness | 75 |
-| miscompile | 72 |
+| miscompile | 73 |
 | other | 58 |
-| run-vs-build | 49 |
+| run-vs-build | 50 |
 | crash | 34 |
 | codegen-gap | 33 |
 | leak | 4 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 527 |
-| mir-llvm | 265 |
-| mir | 227 |
+| typecheck | 528 |
+| mir-llvm | 266 |
+| mir | 228 |
 | cli | 162 |
 | parser | 93 |
 | ownership | 90 |
-| interp | 80 |
+| interp | 82 |
 | runtime | 50 |
 | resolver | 36 |
 | effect | 36 |
@@ -110,9 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
-| B-2026-11-16-232 | 2026-11-16 | interp | low | A function whose declared return type names its `map` adapter's closure as `Fn(i64) -> i64` over a `VecIter[i64]` crashes the MIR interpreter (`deref of non-reference Int(1)` in the closure) while `karac build` prints the right answer: the closure is lowered taking `ref i64`, the type the iterator yields, not the `i64` the erased type declares | — |
-| B-2026-11-16-239 | 2026-11-16 | resolver | low | Two `unsafe extern` blocks declaring the same opaque type are a hard `already defined` error, where design.md §15 makes the duplicate `warning[W_OPAQUE_TYPE_REDECLARED]` because the C side has the final word | — |
-| B-2026-11-16-240 | 2026-11-16 | interp | low | `ptr.addr` / `ptr.expose` of a pointer to a Kāra local stop the MIR interpreter (`the address of a value the interpreter holds is not known here`), so design.md §15's tagging and round-trip examples run only compiled | — |
 | B-2026-11-16-243 | 2026-11-16 | mir-llvm | low | A hashed `Map` or `Set` that removes about as often as it inserts (a sliding window, a toggle set) pays the ordered table's holes, compaction and index rebuild on top of the probe: kata 220, 340 and 391 run 1.6-2.0x Rust's instructions | — |
 
 ### Relocated
@@ -1420,17 +1417,23 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-229 | typecheck | low | An open `Vec.new()` / `Vec.with_capacity(..)` / `VecDeque` binding whose element type its pushes fixed to `i64`, refused at a use that wants `Vec[i32… | 26ae8bff93 |
 | B-2026-11-16-230 | typecheck | medium | A literal assigned through `*` to an open `T` (`*count.entry(m).or_insert(0) = 1`, or `let r = m.entry(k).or_insert(0); *r = 5`) fixes the map's open… | 5ed35584c3 |
 | B-2026-11-16-231 | mir | medium | A closure passed to `with_span(span, body)` captured its locals by move in MIR though the parameter is `own OnceFn() -> T`, not `escaping`: `karac ch… | 2b5fa50f3f |
+| B-2026-11-16-232 | interp | low | A function whose declared return type names its `map` adapter's closure as `Fn(i64) -> i64` over a `VecIter[i64]` crashes the MIR interpreter (`deref… | 492130ffba |
 | B-2026-11-16-233 | mir+mir-llvm+interp | high | A C-like enum declared `#[repr(intN)]` or `#[repr(C)]` was one byte holding its variant index: a `#[repr(C)]` struct holding one was laid out unlike… | 2b5fa50f3f |
 | B-2026-11-16-234 | typecheck | medium | An `unsafe { }` block did not pass its `let`'s annotation to its tail, so design.md §15's own `let recovered: *const u32 = unsafe { ptr.from_exposed(… | 2b5fa50f3f |
 | B-2026-11-16-235 | ownership | medium | `ptr.mut(x)` of a `let` without `mut` passed check, so a write through the pointer changed a binding declared immutable (it printed 9 for `let x = 3`… | 2b5fa50f3f |
 | B-2026-11-16-236 | cli | low | The `undocumented_unsafe` lint accepted a bare `// Safety:` with nothing after the colon, where design.md §15 requires at least one word | 2b5fa50f3f |
 | B-2026-11-16-237 | typecheck | low | `E.try_from(9)` with an unsuffixed literal was refused as `expects its #[repr] type i32, got i64`, so design.md §15's TryFrom could be called only on… | 2b5fa50f3f |
 | B-2026-11-16-238 | interp | low | The MIR interpreter passed C one element of an array of `#[repr(C)]` structs (`s1_arr_read(ptr.const(arr[0]), 3)`), so C indexing past the pointer re… | 2b5fa50f3f |
+| B-2026-11-16-239 | resolver | low | Two `unsafe extern` blocks declaring the same opaque type are a hard `already defined` error, where design.md §15 makes the duplicate `warning[W_OPAQ… | 492130ffba |
+| B-2026-11-16-240 | interp | low | `ptr.addr` / `ptr.expose` of a pointer to a Kāra local stop the MIR interpreter (`the address of a value the interpreter holds is not known here`), s… | 492130ffba |
 | B-2026-11-16-241 | mir-llvm | low | A read-only walk over a `shared` value's `mut` vector field takes and gives back the field's borrow flag at every node, through the runtime's flag ta… | d4f87d8b6f |
 | B-2026-11-16-242 | mir-llvm | low | A handle bound out of a borrowed node's `mut` field (`match n.left { Some(c) => . | d4f87d8b6f |
 | B-2026-11-16-244 | typecheck | medium | A range pattern's bounds are not checked against the scrutinee's type: `'a'..='z'` on an i64 is accepted and matches 100 | 62faab9326 |
 | B-2026-11-16-245 | typecheck | low | An irrefutable `if let` or `while let` pattern gives no warning; design.md § Pattern exhaustiveness says it is one | 62faab9326 |
 | B-2026-11-16-246 | parser | medium | Comparisons chain: `a == false == false` and `1 < 2 == true` are accepted; design.md § Operators and precedence says they do not chain | 62faab9326 |
+| B-2026-11-16-247 | typecheck | low | `discriminant()` of a bare `#[repr(C)]` enum returned `u32`, so `Red = -1` read 4294967295 and would not bind to an `i32`, where a `#[repr(C)]` enum… | 492130ffba |
+| B-2026-11-16-248 | interp | low | `ptr.const(f)` of `f: ref Foo`, a reference to an opaque C object made from a `*mut Foo`, stopped the MIR interpreter (`deref of non-reference`) whil… | 492130ffba |
+| B-2026-11-16-249 | mir+mir-llvm+interp | low | `char` could not cross an `extern "C"` signature (`E0516 .. | 492130ffba |
 
 </details>
 
