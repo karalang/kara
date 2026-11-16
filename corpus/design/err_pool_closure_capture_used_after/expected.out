@@ -1,0 +1,1 @@
+ERROR at line 8: value 'made' was moved into an escaping closure

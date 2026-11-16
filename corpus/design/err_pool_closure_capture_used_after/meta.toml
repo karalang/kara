@@ -1,0 +1,9 @@
+source = "docs/library/pool.md"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["design", "library", "pool", "closure"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "Pool.new stores its create_fn, so the parameter is `escaping Fn` (review-thread ruling 2026-11-16, B-2026-11-16-196): the closure captures `made` by move (core-semantics §9.3) and a later use of `made` is E0500. Before, the library declared it `own Fn`, check passed, and every run lane stopped in MIR's move check. expected.out is the design-pin form: the line and a substring of the first error."

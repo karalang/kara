@@ -1,0 +1,9 @@
+import std.pool.{Pool};
+import std.sync.{Atomic};
+struct Conn { id: i64 }
+enum ConnectError { Refused }
+fn main() {
+    let made = Atomic.new(0);
+    let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: made.fetch_add(1) + 1 }), 1, 1);
+    println(made.load());
+}

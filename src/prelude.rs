@@ -2737,6 +2737,18 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
         let Some(mut expansion) = gated_items_for_import(&imp.path, &imp.items) else {
             continue;
         };
+        // The `escaping` keyword lives beside the tree, keyed by the type's
+        // span: the module's own set comes with its items, or a spliced
+        // `escaping Fn(..)` parameter reads as non-escaping and a closure
+        // passed to it is never checked as escaping (B-2026-11-16-196).
+        if let Some((_, module)) = GATED_STDLIB_PROGRAMS
+            .iter()
+            .find(|(p, _)| p.as_slice() == imp.path.as_slice())
+        {
+            program
+                .escaping_fn_types
+                .extend(module.escaping_fn_types.iter().cloned());
+        }
         privatize_unlisted_types(&mut expansion, &imp.path, &imp.items, &own_names);
         // Drop exactly the import items that expanded; keep the rest.
         let expanded_names: Vec<&str> = expansion

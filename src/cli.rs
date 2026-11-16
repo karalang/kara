@@ -1644,6 +1644,38 @@ impl Pipeline {
                 .with_lone_file(self.strict_core && !in_package)
                 .resolve(),
         );
+        self.refuse_modules_the_target_lacks();
+    }
+
+    /// `std.crypto`'s digests and comparison are runtime natives over `ring`,
+    /// which only the native runtime archive carries: on a wasm target the
+    /// import is refused here, naming the module and the target, rather than
+    /// failing at wasm-ld on an undefined `karac_crypto_mir`
+    /// (B-2026-11-16-197; a pure wasm digest is in docs/deferred.md).
+    fn refuse_modules_the_target_lacks(&mut self) {
+        if !crate::target::active_target_is_wasm() {
+            return;
+        }
+        let Some(r) = self.resolved.as_mut() else {
+            return;
+        };
+        for (path, span) in &self.gated_imports {
+            if path == "std.crypto" || path.starts_with("std.crypto.") {
+                r.errors.push(crate::resolver::ResolveError {
+                    message: format!(
+                        "`{path}` is not available on target `{}`: its digests are native \
+                         code that only the native runtime carries (docs/library/crypto.md); \
+                         build for a native target",
+                        crate::target::active_target()
+                    ),
+                    span: *span,
+                    kind: crate::resolver::ResolveErrorKind::UndefinedName,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
     }
 
     fn has_resolve_errors(&self) -> bool {

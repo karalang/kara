@@ -66,7 +66,7 @@ impl[T, E] Pool[T, E] {
     /// one; at most `max_connections` exist at once; at most `max_waiters`
     /// callers wait in `acquire` at once.
     #[compiler_builtin]
-    pub fn new(create_fn: own Fn() -> Result[T, E], max_connections: i64, max_waiters: i64) -> Pool[T, E] {
+    pub fn new(create_fn: escaping Fn() -> Result[T, E], max_connections: i64, max_waiters: i64) -> Pool[T, E] {
         Pool { handle_id: 0 }
     }
 
@@ -88,7 +88,7 @@ impl[T, E] Pool[T, E] {
     /// no longer counts toward `max_connections`. The check's parameter
     /// borrows the value.
     #[compiler_builtin]
-    pub fn with_health_check(own self, check: own Fn(T) -> bool) -> Pool[T, E] {
+    pub fn with_health_check(own self, check: escaping Fn(T) -> bool) -> Pool[T, E] {
         Pool { handle_id: 0 }
     }
 

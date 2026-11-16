@@ -1,0 +1,9 @@
+source = "docs/library/pool.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "pool", "closure"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "The other direction of B-2026-11-16-196: a pool returned from the function whose local its create_fn captured is sound, because the escaping closure moved the local in. interp, mir-llvm and ASan agree."

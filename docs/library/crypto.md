@@ -82,4 +82,4 @@ Git's object ids are another.
 
 ## Targets
 
-The digests are available on native targets. They are not yet available on WebAssembly targets: a program that imports `std.crypto` fails to link there.
+The digests are available on native targets. They are not yet available on WebAssembly targets: `karac check` and `karac build` refuse an import of `std.crypto` or any of its submodules on `wasm_wasi`, naming the module and the target (review-thread ruling 2026-11-16). A digest written for wasm is in [deferred.md](../deferred.md#stdcrypto).

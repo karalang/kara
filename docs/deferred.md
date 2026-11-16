@@ -930,6 +930,8 @@ Whether Kāra grows a language-level query mechanism — either an embedded quer
 
 **Shipped so far:** the interoperability digests that existing protocols require, SHA-256/384/512, HMAC over each, and `constant_time_eq`, with SHA-1 in `std.crypto.legacy` ([library/crypto.md](library/crypto.md)). They are backed by `ring`, not libsodium. Everything in the table below is still to come, and BLAKE3 remains the default general hash for new designs.
 
+**On WebAssembly (review-thread ruling 2026-11-16, B-2026-11-16-197):** the shipped digests and `constant_time_eq` are `ring` natives that only the native runtime carries, so a wasm build refuses `std.crypto` at check. Scheduled: a pure implementation of SHA-1, SHA-256/384/512, HMAC and `constant_time_eq` in the wasm runtime archives (or in Kāra), checked against the same NIST and RFC 4231 vectors as `corpus/design/ok_crypto_known_answer_vectors`. When it lands, the refusal goes and that pin leaves `REFUSED_ON_WASM` in `tests/mir_wasm_core_corpus.rs`.
+
 Constant-time cryptographic primitives. Cryptography is one of the few domains where a wrong stdlib choice causes real-world security incidents — algorithm agility, side-channel-safe implementations, and a narrow default-secure API surface matter more than flexibility.
 
 The implementation delegates to a vetted C library (libsodium or similar) for the primitives themselves, rather than implementing raw cryptographic algorithms in Kāra.

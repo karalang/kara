@@ -28,12 +28,11 @@ const REFUSED_ON_WASM: &[(&str, &str)] = &[
         "core/par_real_clients",
         "does not provide resource 'Network'",
     ),
-    // `std.crypto`'s digests come with the runtime's `tls` feature (`ring`),
-    // which no wasm archive carries, and the build stops at wasm-ld rather
-    // than with a refusal (B-2026-11-16-197).
+    // `std.crypto`'s digests are native code only the native runtime
+    // carries, so the import is refused on wasm (B-2026-11-16-197).
     (
         "design/ok_crypto_known_answer_vectors",
-        "undefined symbol: karac_crypto_mir",
+        "is not available on target `wasm_wasi`",
     ),
 ];
 

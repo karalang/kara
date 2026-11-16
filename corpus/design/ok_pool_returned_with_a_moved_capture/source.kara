@@ -1,0 +1,13 @@
+import std.time.{Duration};
+import std.pool.{Pool};
+import std.sync.{Atomic};
+struct Conn { id: i64 }
+enum ConnectError { Refused }
+fn mk() -> Pool[Conn, ConnectError] {
+    let made = Atomic.new(0);
+    Pool.new(|| Ok(Conn { id: made.fetch_add(1) + 1 }), 1, 1)
+}
+fn main() {
+    let p = mk();
+    match p.acquire(Duration.ms(1)) { Ok(c) => println(c.val.id), Err(_) => println("e") }
+}

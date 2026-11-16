@@ -37,10 +37,10 @@ fn main() {
 
 | Method | Signature | Notes |
 |---|---|---|
-| `new` | `fn new(create_fn: own Fn() -> Result[T, E], max_connections: i64, max_waiters: i64) -> Pool[T, E]` | An empty pool. `create_fn` makes a value when the pool needs a new one; at most `max_connections` exist at once; at most `max_waiters` callers wait in `acquire` at once. |
+| `new` | `fn new(create_fn: escaping Fn() -> Result[T, E], max_connections: i64, max_waiters: i64) -> Pool[T, E]` | An empty pool. `create_fn` makes a value when the pool needs a new one; at most `max_connections` exist at once; at most `max_waiters` callers wait in `acquire` at once. |
 | `acquire` | `fn acquire(ref self, timeout: Duration) -> Result[PooledConnection[T], PoolError[E]]` | Lends out a value. It reuses an idle one first; otherwise, below `max_connections`, it calls `create_fn`, and an `Err(e)` from it is `CreateFailed(e)`; otherwise it waits up to `timeout` for a value to come back, and fails with `Timeout`. When `max_waiters` callers are already waiting, it fails with `Busy` at once. |
 | `release` | `fn release(ref self, conn: own PooledConnection[T])` | Gives `conn` back now rather than when it drops. A value lent out by a different pool is dropped, not added to this one, and no longer counts toward its own pool's `max_connections`. |
-| `with_health_check` | `fn with_health_check(own self, check: own Fn(T) -> bool) -> Pool[T, E]` | Registers a check that `acquire` runs on each idle value before reusing it, and returns the pool. A value that fails is dropped and no longer counts toward `max_connections`, and `acquire` makes a new one. Values `create_fn` has just made are not checked. The check's parameter borrows the value, so it cannot keep or consume it. Chain it off `new`: `Pool.new(connect, 8, 16).with_health_check(\|c\| c.ping())`. |
+| `with_health_check` | `fn with_health_check(own self, check: escaping Fn(T) -> bool) -> Pool[T, E]` | Registers a check that `acquire` runs on each idle value before reusing it, and returns the pool. A value that fails is dropped and no longer counts toward `max_connections`, and `acquire` makes a new one. Values `create_fn` has just made are not checked. The check's parameter borrows the value, so it cannot keep or consume it. Chain it off `new`: `Pool.new(connect, 8, 16).with_health_check(\|c\| c.ping())`. |
 | `close` | `fn close(ref self)` | Shuts the pool down. Its idle values drop at once, each loan's value drops when it comes back, and every later `acquire` fails with `PoolClosed`. |
 
 ## Giving values back
