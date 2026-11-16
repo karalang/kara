@@ -1421,6 +1421,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   writes its `runtime_errors` record with `"kind":"deadlock"`. It printed a
   bare `error: deadlock: ...` line with no location and no JSON record
   (B-2026-11-16-202).
+- An error's `?` frames end with the error: an `Err` the program printed
+  or ignored, then dropped at the end of its statement or its binding's
+  scope, no longer starts a later error's return trace. A `?` or `return`
+  that carries the error on keeps its frames (B-2026-11-16-223).
 - Rust ports found by the modbus_server app: `use std::io::{Read, Write};`
   (and `BufRead`, `Seek`) is deleted, since Kāra's `read`, `write_all` and
   `read_line` are methods of the handle with no trait to import, and

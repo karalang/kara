@@ -1188,6 +1188,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ns = self.int_arg(&args[0])?;
                 self.rt("sleep_ns", &[ns.into()])
             }
+            // A `Result` local's end that `trace_drops` did not resolve
+            // (B-2026-11-16-223): it ends nothing.
+            (crate::mir::trace_drops::MARKER, "") => Ok(()),
             // The bracket around a `requires` / `ensures` predicate, which
             // an abort inside it reads (B-2026-10-25-23).
             ("contract_enter" | "contract_exit", "") => {

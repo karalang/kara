@@ -44,6 +44,7 @@ pub mod rare_exits;
 pub mod rc_borrow;
 pub mod rc_pairs;
 pub mod syntax;
+pub mod trace_drops;
 pub mod ty;
 pub mod validate;
 

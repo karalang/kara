@@ -1089,7 +1089,7 @@ fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 13] = [
+const BUILDER_NATIVES: [&str; 14] = [
     "format",
     "format_spec",
     "panic_message",
@@ -1099,6 +1099,7 @@ const BUILDER_NATIVES: [&str; 13] = [
     "contract_exit",
     "error_trace_push",
     "error_trace_clear",
+    crate::mir::trace_drops::MARKER,
     "table_unkeyed",
     "dbg",
     "debug_string",
@@ -3658,6 +3659,10 @@ enum ScopeEntry<'a> {
     /// `R.exit` ends it on every exit from the block (core semantics
     /// §14.11, §14.12).
     FsExit(Local, &'static str),
+    /// A `Result` local of traced code whose value, if it still holds it
+    /// and it is an `Err`, ends that error's return trace when the scope
+    /// ends (`trace_drops`, B-2026-11-16-223).
+    TraceDrop(Local),
 }
 
 /// An iterator type's `next`, instantiated for a `for` loop: its definition,
@@ -4051,6 +4056,10 @@ struct Bx<'l, 'a> {
     hash_stack: Vec<Ty>,
     /// Building a cancel exit, whose calls get none of their own.
     in_cancel_exit: bool,
+    /// Building an exit that carries an error out: the `Err` locals it
+    /// drops do not end the trace, which the error going out continues
+    /// (B-2026-11-16-223).
+    in_error_exit: bool,
 }
 
 type R<T> = Result<T, ()>;
@@ -4123,6 +4132,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             eq_stack: Vec::new(),
             hash_stack: Vec::new(),
             in_cancel_exit: false,
+            in_error_exit: false,
         }
     }
 
@@ -5419,6 +5429,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.needs_drop(t) {
             self.schedule(ScopeEntry::Drop(Place::local(l)));
         }
+        self.trace_drop(l, t, e.span);
         Ok(l)
     }
 
@@ -5468,7 +5479,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.needs_drop(t) {
             self.schedule(ScopeEntry::Drop(Place::local(l)));
         }
+        let at = self.b.source_info().span;
+        self.trace_drop(l, t, at);
         l
+    }
+
+    /// Marks the end of the `Result` local `l` (of type `t`, made at `at`)
+    /// in traced code, so an `Err` it still holds there ends its trace
+    /// (design.md § Error return traces, B-2026-11-16-223). Scheduled
+    /// after the local's drop, so it runs before it.
+    fn trace_drop(&mut self, l: Local, t: Ty, at: Span) {
+        let is_result = self
+            .tys()
+            .tcx()
+            .adt_of(t)
+            .is_some_and(|(adt, _)| adt.name == "Result");
+        if is_result && self.lcx.user_questions && self.traces_question(at) {
+            self.schedule(ScopeEntry::TraceDrop(l));
+        }
     }
 
     /// Takes back the drops of the locals `ls` that [`Self::schedule`] put
@@ -5544,6 +5572,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.b.push(bb, StatementKind::StorageDead(*l));
             }
             ScopeEntry::Unreverse(v, mt, native) => self.reverse_vec(*v, *mt, native),
+            ScopeEntry::TraceDrop(_) if self.in_error_exit => {}
+            ScopeEntry::TraceDrop(l) => {
+                let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+                let n = Operand::Const(Const {
+                    ty: i64_t,
+                    kind: ConstKind::Scalar(l.index() as u128),
+                });
+                let t = self.unit();
+                let u = self.temp(t);
+                self.call_native(crate::mir::trace_drops::MARKER, vec![n], Place::local(u));
+            }
             ScopeEntry::FsExit(id, r) => {
                 let t = self.unit();
                 let u = self.temp(t);
@@ -7052,6 +7091,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.needs_drop(t) {
             self.schedule(ScopeEntry::Drop(Place::local(l)));
         }
+        let at = self.b.source_info().span;
+        self.trace_drop(l, t, at);
     }
 
     /// Bind the names of an irrefutable pattern by moving (or copying) the
@@ -13191,6 +13232,13 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Leaves with the error `value` for `ret`: from the function, or, in a
     /// `par` branch, from the branch into its error slot.
     fn error_exit(&mut self, ret: Place, value: Rvalue) -> R<()> {
+        let outer = std::mem::replace(&mut self.in_error_exit, true);
+        let r = self.error_exit_inner(ret, value);
+        self.in_error_exit = outer;
+        r
+    }
+
+    fn error_exit_inner(&mut self, ret: Place, value: Rvalue) -> R<()> {
         match self.par_try.last().copied().flatten() {
             Some(slot) if slot.discard => {
                 let t = self.b.local_ty(slot.pending);
@@ -17579,7 +17627,45 @@ impl<'l, 'a> Bx<'l, 'a> {
                     },
                     err_bb,
                 );
-                self.exit_to(0, true)?;
+                let outer = std::mem::replace(&mut self.in_error_exit, true);
+                let r = self.exit_to(0, true);
+                self.in_error_exit = outer;
+                r?;
+                self.diverge(TerminatorKind::Return);
+                self.cur = ok_bb;
+                self.exit_to(0, false)?;
+                self.diverge(TerminatorKind::Return);
+            }
+            // A returned `Err` continues its trace: the `Err` locals the
+            // exit drops leave it (B-2026-11-16-223).
+            (false, Some(err))
+                if !self.in_error_exit
+                    && self.par_exit.is_none()
+                    && self
+                        .scopes
+                        .iter()
+                        .flatten()
+                        .any(|e| matches!(e, ScopeEntry::TraceDrop(_))) =>
+            {
+                let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+                let err_bb = self.b.new_block();
+                let ok_bb = self.b.new_block();
+                let d = self.temp(isize_t);
+                self.assign(d, Rvalue::Discriminant(value));
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(d)),
+                        targets: SwitchTargets {
+                            values: vec![(err as u128, err_bb)],
+                            otherwise: ok_bb,
+                        },
+                    },
+                    err_bb,
+                );
+                self.in_error_exit = true;
+                let r = self.exit_to(0, false);
+                self.in_error_exit = false;
+                r?;
                 self.diverge(TerminatorKind::Return);
                 self.cur = ok_bb;
                 self.exit_to(0, false)?;
@@ -31810,6 +31896,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
                 ));
             }
         }
+        // An `Err` local's end, where it still holds its value, ends the
+        // trace (B-2026-11-16-223): decided once the checks have passed.
+        crate::mir::trace_drops::resolve(body, &lowered.tys);
         crate::mir::elaborate_drops(body, &mut lowered.tys)
             .map_err(|e| format!("elaborate {}: {e}", body.instance.name))?;
         // §6.2's run-time borrow flags, on the elaborated body.

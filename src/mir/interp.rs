@@ -1731,6 +1731,11 @@ impl<'a> Interp<'a> {
             }
             return Ok(Value::Unit);
         }
+        // A `Result` local's end that `trace_drops` did not resolve (a body
+        // elaborated outside the pipeline): it ends nothing.
+        if name == crate::mir::trace_drops::MARKER {
+            return Ok(Value::Unit);
+        }
         let program: &'a Program = self.program;
         if let Some(sig) = program.externs.get(name) {
             if sig.host {
