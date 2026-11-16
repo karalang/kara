@@ -110,12 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
-| B-2026-11-16-186 | 2026-11-16 | typecheck | low | `karac fix` never rewrote the legacy `Stdio.Piped` / `Stdio.Null` / `Stdio.Inherit` to the constructors that docs/library/io.md:581 says it does: on the MIR pipeline the rewrite found no `piped` method, because library pruning had dropped it | — |
-| B-2026-11-16-187 | 2026-11-16 | resolver | low | A type that a gated library module defines, named without its import (`Pool[Conn, E]`, `PoolError`), got no import fix. As a type it was offered the nearest visible name instead (see B-2026-11-16-191) | — |
-| B-2026-11-16-188 | 2026-11-16 | ownership | low | An escaping closure that captures a bare parameter (`fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }`) is refused with "take `p` by value (`own`)", but carried no fix, although the parameter borrows only because it is bare | — |
-| B-2026-11-16-189 | 2026-11-16 | typecheck | low | `assert_eq` / `assert_ne` on the program's own struct or enum without `Debug` says to add `#[derive(Debug)]` but carried no fix | — |
-| B-2026-11-16-190 | 2026-11-16 | resolver | medium | Two imports of one gated library module (`import std.pool.{Pool};` then `import std.pool.{PoolError};`) are refused with "conflicting impl: `PoolError` already implements `Error`": each import line spliced the module items it reaches, so `PoolError`'s impl came in twice | — |
-| B-2026-11-16-191 | 2026-11-16 | resolver | medium | An undefined type was machine-renamed to a primitive or a value binding: `Pool[Conn]` became `bool[Conn]`, and in the same program `pool[Conn]` (the local `pool`), because the undefined-type did-you-mean drew on every visible name | — |
 
 ### Relocated
 
@@ -1374,6 +1368,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-185 | parser | medium | `karac fix` carries Rust's `BinaryHeap<Reverse<usize>>`, read through `while let Some(&Reverse(i)) = heap.peek()`, to a smallest-first `PriorityQueue… | 3091098c58 |
 | B-2026-11-16-45 | cli | low | `karac test` emits `test_fail` without the required `location` field when a test fails before its body runs: `provider_construction_failed` (a `#[wit… | 3b3777c885 |
 | B-2026-11-16-46 | cli | medium | A successful `karac build --output=jsonl` prints one untyped `{"status":"ok","output":...}` line instead of the event stream (no `build_start`, phase… | 70c9592fce |
+| B-2026-11-16-186 | typecheck | low | `karac fix` never rewrote the legacy `Stdio.Piped` / `Stdio.Null` / `Stdio.Inherit` to the constructors that docs/library/io.md:581 says it does: on… | e0d36b037a |
+| B-2026-11-16-187 | resolver | low | A type that a gated library module defines, named without its import (`Pool[Conn, E]`, `PoolError`), got no import fix | e0d36b037a |
+| B-2026-11-16-188 | ownership | low | An escaping closure that captures a bare parameter (`fn make(p: String) -> Fn(i64) -> i64 { \|n\| p.len() + n }`) is refused with "take `p` by value (`… | e0d36b037a |
+| B-2026-11-16-189 | typecheck | low | `assert_eq` / `assert_ne` on the program's own struct or enum without `Debug` says to add `#[derive(Debug)]` but carried no fix | e0d36b037a |
+| B-2026-11-16-190 | resolver | medium | Two imports of one gated library module (`import std.pool.{Pool};` then `import std.pool.{PoolError};`) are refused with "conflicting impl: `PoolErro… | e0d36b037a |
+| B-2026-11-16-191 | resolver | medium | An undefined type was machine-renamed to a primitive or a value binding: `Pool[Conn]` became `bool[Conn]`, and in the same program `pool[Conn]` (the… | e0d36b037a |
 
 </details>
 
