@@ -361,6 +361,11 @@ fn s15_a_redeclared_opaque_type_warns_and_compiles() {
     assert!(json.contains("\"W_OPAQUE_TYPE_REDECLARED\""), "{json}");
     assert!(json.contains("\"severity\":\"warning\""), "{json}");
     assert!(out.status.success(), "{json}");
+    // The interpreter calls C only on Unix (fflush is libc's).
+    if !cfg!(unix) {
+        eprintln!("SKIP s15_a_redeclared_opaque_type_warns_and_compiles run: needs a Unix libc");
+        return;
+    }
     let run = karac(dir.path(), &["__mir-run", "main.kara"]);
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),

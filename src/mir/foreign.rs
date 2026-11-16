@@ -186,6 +186,11 @@ pub unsafe fn call(f: *const c_void, args: &[u64]) -> Result<u64, String> {
     })
 }
 
+/// The integer argument registers a C function reads: six on x86-64
+/// System V, eight (x0 to x7) on AArch64.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const INT_REGS: usize = if cfg!(target_arch = "aarch64") { 8 } else { 6 };
+
 /// A C function's result register: an integer one, or a float one for an
 /// `f32` / `f64` result.
 pub enum Ret {
@@ -217,36 +222,63 @@ pub unsafe fn call_mixed(
 ) -> Result<Ret, String> {
     type W = u64;
     type F = f64;
-    if ints.len() > 6 || floats.len() > 8 {
+    if ints.len() > INT_REGS || floats.len() > 8 {
         return Err(format!(
-            "{} integer and {} float arguments (at most six and eight cross to C yet)",
+            "{} integer and {} float arguments (at most {INT_REGS} and eight cross to C yet)",
             ints.len(),
             floats.len()
         ));
     }
-    let mut i = [0u64; 6];
+    let mut i = [0u64; 8];
     i[..ints.len()].copy_from_slice(ints);
     let mut x = [0f64; 8];
     x[..floats.len()].copy_from_slice(floats);
     // SAFETY: the caller's contract; the extra slots are registers the
     // function does not read.
     Ok(if float_ret {
-        let g = std::mem::transmute::<
-            *const std::ffi::c_void,
-            extern "C" fn(W, W, W, W, W, W, F, F, F, F, F, F, F, F) -> F,
-        >(f);
-        Ret::Float(g(
-            i[0], i[1], i[2], i[3], i[4], i[5], x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
-        ))
+        Ret::Float(regs_call::<F>(f, &i, &x))
     } else {
-        let g = std::mem::transmute::<
-            *const std::ffi::c_void,
-            extern "C" fn(W, W, W, W, W, W, F, F, F, F, F, F, F, F) -> W,
-        >(f);
-        Ret::Int(g(
-            i[0], i[1], i[2], i[3], i[4], i[5], x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
-        ))
+        Ret::Int(regs_call::<W>(f, &i, &x))
     })
+}
+
+/// Calls `f` with every integer and float argument register loaded from
+/// `i` and `x`, the result read as a `T`: six integer registers on x86-64
+/// System V, eight (x0 to x7) on AArch64, and eight float ones on both.
+///
+/// # Safety
+///
+/// As for [`call_mixed`].
+#[cfg(target_arch = "aarch64")]
+unsafe fn regs_call<T>(f: *const std::ffi::c_void, i: &[u64; 8], x: &[f64; 8]) -> T {
+    type W = u64;
+    type F = f64;
+    let g = std::mem::transmute::<
+        *const std::ffi::c_void,
+        extern "C" fn(W, W, W, W, W, W, W, W, F, F, F, F, F, F, F, F) -> T,
+    >(f);
+    g(
+        i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7], x[0], x[1], x[2], x[3], x[4], x[5], x[6],
+        x[7],
+    )
+}
+
+/// [`regs_call`] on x86-64.
+///
+/// # Safety
+///
+/// As for [`call_mixed`].
+#[cfg(target_arch = "x86_64")]
+unsafe fn regs_call<T>(f: *const std::ffi::c_void, i: &[u64; 8], x: &[f64; 8]) -> T {
+    type W = u64;
+    type F = f64;
+    let g = std::mem::transmute::<
+        *const std::ffi::c_void,
+        extern "C" fn(W, W, W, W, W, W, F, F, F, F, F, F, F, F) -> T,
+    >(f);
+    g(
+        i[0], i[1], i[2], i[3], i[4], i[5], x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
+    )
 }
 
 /// The registers a C function's result comes back in, for
@@ -305,9 +337,9 @@ pub unsafe fn call_shaped(
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct Blob<const N: usize>([u64; N]);
-    if ints.len() > 6 || floats.len() > 8 {
+    if ints.len() > INT_REGS || floats.len() > 8 {
         return Err(format!(
-            "{} integer and {} float arguments (at most six and eight cross to C yet)",
+            "{} integer and {} float arguments (at most {INT_REGS} and eight cross to C yet)",
             ints.len(),
             floats.len()
         ));
@@ -318,7 +350,7 @@ pub unsafe fn call_shaped(
             stack.len()
         ));
     }
-    let mut i = [0u64; 6];
+    let mut i = [0u64; 8];
     i[..ints.len()].copy_from_slice(ints);
     let mut x = [0f64; 8];
     x[..floats.len()].copy_from_slice(floats);
@@ -329,7 +361,7 @@ pub unsafe fn call_shaped(
     // integer register is taken, so the blob goes on the stack.
     unsafe fn go_n<T, const N: usize>(
         f: *const std::ffi::c_void,
-        i: &[u64; 6],
+        i: &[u64; 8],
         x: &[f64; 8],
         s: &[u64],
         five: bool,
@@ -358,7 +390,7 @@ pub unsafe fn call_shaped(
     }
     unsafe fn go<T>(
         f: *const std::ffi::c_void,
-        i: &[u64; 6],
+        i: &[u64; 8],
         x: &[f64; 8],
         s: &[u64],
         five: bool,
@@ -372,13 +404,9 @@ pub unsafe fn call_shaped(
             };
         }
         blob!(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16);
-        let g = std::mem::transmute::<
-            *const std::ffi::c_void,
-            extern "C" fn(W, W, W, W, W, W, F, F, F, F, F, F, F, F) -> T,
-        >(f);
-        g(
-            i[0], i[1], i[2], i[3], i[4], i[5], x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
-        )
+        // AArch64's `sret` pointer goes in x8, apart from the argument
+        // registers.
+        regs_call::<T>(f, i, x)
     }
     let w = |v: u64| v.to_ne_bytes().to_vec();
     let d = |v: f64| v.to_bits().to_ne_bytes().to_vec();

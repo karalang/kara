@@ -50,8 +50,18 @@ fn backends() -> &'static [&'static str] {
     }
 }
 
-/// Runs `file` on every backend and requires `want` from each.
+/// Runs `file` on every backend and requires `want` from each. The
+/// programs call a Unix libc (glibc on Linux), so off Unix this is a named
+/// skip: the interpreter's `extern "C"` runs there only compiled, and the
+/// programs' C types (`long`, `FILE` paths) are Unix's.
 fn runs_as(file: &Path, want: &str) {
+    if !cfg!(unix) {
+        eprintln!(
+            "SKIP {}: the probe's FFI programs need a Unix libc",
+            file.display()
+        );
+        return;
+    }
     for b in backends() {
         let out = karac(&[b, file.to_str().unwrap()]);
         assert_eq!(

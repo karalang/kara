@@ -17578,9 +17578,12 @@ impl<'a> Interp<'a> {
         } else {
             None
         };
+        // x86-64 has six integer argument registers, one of them taken by
+        // a hidden result pointer; AArch64 has eight, and its result
+        // pointer goes in x8, apart from them.
         let int_regs: usize = match (abi, &ret_pass) {
             (c_abi::Abi::SysV, Some(c_abi::Pass::Sret)) => 5,
-            _ => 6,
+            _ => abi.registers().0,
         };
         let mut words: Vec<u64> = Vec::new();
         let mut floats: Vec<f64> = Vec::new();
