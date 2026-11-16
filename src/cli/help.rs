@@ -350,8 +350,8 @@ OPTIONS:
                             KARAC_TARGET_CPU env var > `[profile.release]
                             target-cpu` in kara.toml > the per-target
                             default baseline (aarch64-darwin: apple-m1,
-                            x86_64-linux: x86-64, aarch64-linux:
-                            generic+v8a, x86_64-darwin: core2).
+                            x86_64: x86-64-v2, aarch64-linux:
+                            generic+v8a,+outline-atomics).
                             Widening the baseline narrows the deploy
                             set in exchange for sharper codegen.
                             Accepts `--target-cpu <name>` too.

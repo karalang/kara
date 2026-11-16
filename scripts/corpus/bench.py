@@ -66,9 +66,21 @@ def stripped_size(exe: Path, tmp: Path) -> int | None:
     return copy.stat().st_size if r.returncode == 0 else None
 
 
+def pin_bench_isa(env: dict) -> None:
+    """Build at the v3 level the published comparisons use (rustc -C
+    target-cpu=x86-64-v3); a plain build is x86-64-v2 now (B-2026-11-16-201)."""
+    import platform
+    m = platform.machine().lower()
+    if m in ("x86_64", "amd64"):
+        env.setdefault("KARAC_TARGET_CPU", "x86-64-v3")
+    elif m in ("aarch64", "arm64"):
+        env.setdefault("KARAC_TARGET_FEATURES", "+v8.4a")
+
+
 def measure(entry: Path, backend: str, args, meta: dict) -> dict:
     flags, env_extra = BUILDS[backend]
     env = dict(os.environ)
+    pin_bench_isa(env)
     env.update(env_extra)
     env.update({"KARAC_HASH_SEED": "1", **{k: str(v) for k, v in meta.get("env", {}).items()}})
     want = expected(entry)

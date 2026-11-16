@@ -35,6 +35,13 @@ if [ "${SKIP_BUILD:-}" != 1 ]; then
     cargo rustc -p karac-runtime --release --crate-type staticlib >&2
 fi
 
+# A plain build is x86-64-v2 / generic aarch64 now (B-2026-11-16-201); the
+# comparisons are with rustc -C target-cpu=x86-64-v3, so the bench pins the
+# v3 level it always measured at, apple-m1 + v8.4a on a Mac.
+case "$(uname -m)" in
+    x86_64 | amd64) export KARAC_TARGET_CPU="${KARAC_TARGET_CPU:-x86-64-v3}" ;;
+    aarch64 | arm64) export KARAC_TARGET_FEATURES="${KARAC_TARGET_FEATURES:-+v8.4a}" ;;
+esac
 KARAC="$KARA/target/release/karac" OUT="$OUT" REPS="$REPS" \
     SHA="$(git rev-parse --short HEAD)" exec python3 - <<'PY'
 import os, platform, re, resource, subprocess, sys, time

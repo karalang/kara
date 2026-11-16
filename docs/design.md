@@ -6917,11 +6917,11 @@ Within the `native` target, karac keeps a **per-target-triple CPU baseline table
 |---|---|---|---|
 | `aarch64-apple-darwin` | `apple-m1` | (M1 ISA implied by CPU) | Apple-controlled fleet; M1 is the lowest shipping Apple Silicon. M2/M3/M4/M5 are supersets. |
 | `aarch64-unknown-linux-gnu` | `generic` | `+v8a,+outline-atomics` | Fleet variance (Pi, Graviton 1–4, NXP, Ampere) requires a conservative default. |
-| `x86_64-unknown-linux-gnu` | `x86-64` | (none) | Original AMD64 baseline; broadest server compatibility. |
-| `x86_64-apple-darwin` | `core2` | (none) | Matches `rustc` for the Intel-Mac target. |
+| `x86_64-unknown-linux-gnu` | `x86-64-v2` | (none) | The x86_64 floor: SSE4.2 and POPCNT, on every x86_64 CPU since about 2009 and the baseline of current server distributions. |
+| `x86_64-apple-darwin` | `x86-64-v2` | (none) | The same floor; every Intel Mac macOS still supports is above it. |
 | _(any other triple)_ | `generic` | (none) | Safe fallback: a portable binary beats one that will not load. |
 
-**Contract.** A `karac build` with no override produces a binary that runs on every CPU the target triple promises. Raising the baseline (`apple-m1` to `apple-m4`, `x86-64` to `x86-64-v3`) narrows the deploy set for sharper code. That is the user's explicit choice, never a silent default change.
+**Contract.** A `karac build` with no override produces a binary that runs on every CPU the target triple promises, with `x86-64-v2` as the x86_64 floor (review-thread ruling 2026-11-16, B-2026-11-16-201). Raising the baseline (`apple-m1` to `apple-m4`, `x86-64-v2` to `x86-64-v3`) narrows the deploy set for sharper code. That is the user's explicit choice, never a silent default change. Kāra's published benchmarks build with `x86-64-v3` named, beside `rustc -C target-cpu=x86-64-v3` and `clang -march=x86-64-v3`, so their comparisons stay like for like.
 
 **CPU override**, in precedence order:
 1. `--target-cpu=<name>` on `karac build`, in single-file and project mode;

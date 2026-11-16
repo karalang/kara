@@ -2054,22 +2054,14 @@ pub(super) fn manifest_release_field_for(
 }
 
 /// Resolve the arch-portable `cpu-baseline` level to its concrete native
-/// `(target-cpu, target-features)` override, applying the design default `v3`
-/// when no explicit level is declared. Native non-wasm only — wasm gets no CPU
-/// baseline (`(None, None)`). The mapped value is the LOWEST tier of the CPU /
-/// feature chains, so an explicit `--target-cpu` / `KARAC_TARGET_CPU` /
-/// `[profile.release] target-cpu` (or `[profile.release] cpu-baseline`) always wins.
-///
-/// **Deploy-baseline commitment (design.md § Multiversioning > `cpu-baseline`,
-/// default `"v3"`):** a default `karac build` now targets `x86-64-v3` on x86-64
-/// (Haswell+, ~2013 — excludes pre-Haswell) and `+v8.4a` on aarch64 (Apple M1+,
-/// Graviton 3+). This narrows the deploy set for sharper codegen — the design's
-/// single-binary-distribution posture. Pre-baseline hardware opts down with
-/// `[profile.release] cpu-baseline = "v1" | "v2"` (or an explicit `--target-cpu`). The
-/// codegen / asan / abi test harnesses drive `compile_to_object*` directly (not
-/// this CLI path), so they stay on the per-target `generic` default and the
-/// heavy CI legs are unaffected; the CLI-spawned build tests run on x86 (v3) and
-/// `macos-latest` (Apple M1+, ≥ v8.4), both at or above the baseline.
+/// `(target-cpu, target-features)` override. With no level declared it is
+/// `(None, None)`: the per-target table (`default_cpu_and_features`) is the
+/// default, `x86-64-v2` on x86_64, `generic` `+v8a,+outline-atomics` on aarch64
+/// Linux and `apple-m1` on aarch64 macOS (design.md § CPU baseline; review-thread
+/// ruling 2026-11-16, B-2026-11-16-201). A default build runs on every CPU the
+/// triple promises; a higher level is the user's explicit choice. Native non-wasm
+/// only. An explicit `--target-cpu` / `KARAC_TARGET_CPU` / `[profile.release]
+/// target-cpu` always wins over the level.
 #[cfg(feature = "llvm")]
 pub(super) fn resolve_native_cpu_baseline(
     explicit: Option<&str>,
@@ -2077,7 +2069,9 @@ pub(super) fn resolve_native_cpu_baseline(
     if crate::target::active_target_is_wasm() {
         return (None, None);
     }
-    let level = explicit.unwrap_or("v3");
+    let Some(level) = explicit else {
+        return (None, None);
+    };
     // A cross build's baseline is its target's architecture's.
     let arch = crate::target::cross_triple()
         .and_then(|t| t.split('-').next())

@@ -422,6 +422,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- A plain `karac build` targets `x86-64-v2` on x86_64 (Linux and macOS),
+  `generic` `+v8a,+outline-atomics` on aarch64 Linux and `apple-m1` on
+  aarch64 macOS, as design.md § CPU baseline's table says. 0.8.1 defaulted
+  to `x86-64-v3` (AVX2) and `+v8.4a`, so a default binary died with SIGILL
+  on a pre-Haswell or AVX-less x86 host and on Graviton 2 or a Raspberry
+  Pi 4. Name the higher level with `--target-cpu=x86-64-v3`,
+  `KARAC_TARGET_CPU`, or `cpu-baseline = "v3"` in `[profile.release]`; the
+  bench harnesses now do (B-2026-11-16-201).
 - `BufReader.lines()` ends at its first error: it yields the `Err`
   once and then stops, where it returned the same `Err` for ever from a
   stream that keeps failing, so a `for` that only reported the error never

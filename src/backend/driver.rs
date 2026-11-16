@@ -2339,8 +2339,8 @@ pub(crate) fn default_cpu_and_features(triple: &str) -> (&'static str, &'static 
     match (is_aarch64, is_x86_64, is_darwin, is_linux) {
         (true, false, true, false) => ("apple-m1", ""),
         (true, false, false, true) => ("generic", "+v8a,+outline-atomics"),
-        (false, true, false, true) => ("x86-64", ""),
-        (false, true, true, false) => ("core2", ""),
+        (false, true, false, true) => ("x86-64-v2", ""),
+        (false, true, true, false) => ("x86-64-v2", ""),
         _ => ("generic", ""),
     }
 }
@@ -2848,10 +2848,16 @@ For example, llc -mcpu=mycpu -mattr=+feature1,-feature2
     }
 
     #[test]
-    fn x86_64_linux_defaults_to_x86_64_baseline() {
+    fn x86_64_defaults_to_the_v2_baseline() {
+        // design.md § CPU baseline: x86-64-v2 is the x86_64 floor on Linux
+        // and macOS alike (review-thread ruling 2026-11-16, B-2026-11-16-201).
         assert_eq!(
             default_cpu_and_features("x86_64-unknown-linux-gnu"),
-            ("x86-64", "")
+            ("x86-64-v2", "")
+        );
+        assert_eq!(
+            default_cpu_and_features("x86_64-apple-darwin"),
+            ("x86-64-v2", "")
         );
     }
 

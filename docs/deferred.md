@@ -3688,7 +3688,7 @@ fn store_simd[T, const N: i64](t: mut ref Tensor[T, [?]], offset: i64, mask: Mas
 
 ### Multiversioning: `cpu-baseline` and `#[multiversion]`
 
-> v1 sets the CPU baseline per target with `--target-cpu` and a per-target table ([design.md §16](design.md#cpu-baseline)). The `cpu-baseline` manifest knob below is this track's proposal and must be reconciled with that table when it returns.
+> v1 sets the CPU baseline per target with `--target-cpu` and a per-target table ([design.md §16](design.md#cpu-baseline)). The `cpu-baseline` manifest knob below is this track's proposal and must be reconciled with that table when it returns. Reconciled for v1 by the review-thread ruling 2026-11-16 (B-2026-11-16-201): the knob's levels are accepted, but with no level the table is the default, `x86-64-v2` on x86_64, so the "Default: `v3`" below is not v1's.
 
 CPU-feature variance across deployment hardware is handled by two complementary mechanisms:
 

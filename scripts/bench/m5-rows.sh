@@ -47,6 +47,13 @@ if [ "${SKIP_BUILD:-}" != 1 ]; then
     build_runtime >&2
 fi
 KARAC="$KARA/target/release/karac"
+# A plain build is x86-64-v2 / generic aarch64 now (B-2026-11-16-201); the
+# comparisons are with rustc -C target-cpu=x86-64-v3, so the bench pins the
+# v3 level it always measured at, apple-m1 + v8.4a on a Mac.
+case "$(uname -m)" in
+    x86_64 | amd64) export KARAC_TARGET_CPU="${KARAC_TARGET_CPU:-x86-64-v3}" ;;
+    aarch64 | arm64) export KARAC_TARGET_FEATURES="${KARAC_TARGET_FEATURES:-+v8.4a}" ;;
+esac
 
 LEGACY_KARAC="${LEGACY_KARAC:-}"
 if [ -z "$LEGACY_KARAC" ]; then

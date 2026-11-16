@@ -103,8 +103,20 @@ def programs(args) -> list[dict]:
     return out
 
 
+def pin_bench_isa(env: dict) -> None:
+    """Build at the v3 level the published comparisons use (rustc -C
+    target-cpu=x86-64-v3); a plain build is x86-64-v2 now (B-2026-11-16-201)."""
+    import platform
+    m = platform.machine().lower()
+    if m in ("x86_64", "amd64"):
+        env.setdefault("KARAC_TARGET_CPU", "x86-64-v3")
+    elif m in ("aarch64", "arm64"):
+        env.setdefault("KARAC_TARGET_FEATURES", "+v8.4a")
+
+
 def build(karac: str, src: Path, out: Path, par: bool, timeout: float) -> dict:
     env = dict(os.environ)
+    pin_bench_isa(env)
     for k in ("KARAC_AUTO_PAR", "KARAC_AUTO_PAR_DEBUG"):
         env.pop(k, None)
     env["KARAC_AUTO_PAR"] = "1" if par else "0"

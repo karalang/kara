@@ -117,11 +117,11 @@ const CPUS_WITH_NATIVE_F16: &[&str] = &["apple-m1", "sapphirerapids"];
 /// the list above, and the same `bf16` carve-out.
 ///
 /// This list exists so the DEFAULT build path is decided by measurement
-/// rather than by the fail-open fallback. `karac build` always installs a
-/// CPU override — `resolve_native_cpu_baseline` applies `cpu-baseline =
-/// "v3"` when nothing is configured — so "no explicit `--target-cpu`" is
-/// not the same as "no CPU override set", and treating an unlisted CPU as
-/// native would have silenced the lint on every ordinary build. Measured:
+/// rather than by the fail-open fallback. A `cpu-baseline` level in the
+/// manifest installs a CPU override without any `--target-cpu`, so "no
+/// explicit `--target-cpu`" is not the same as "no CPU override set", and
+/// treating an unlisted CPU as native would silence the lint on those
+/// builds. Measured:
 /// x86-64, -v2, -v3 and -v4 all promote (no `avx512fp16` at any level), as
 /// does aarch64 `generic` at `+v8.2a` / `+v8.4a` / `+v8.6a` — an arch
 /// version does not imply the OPTIONAL `FEAT_FP16`.
@@ -161,8 +161,7 @@ pub fn baseline_cpu_and_features() -> (&'static str, &'static str) {
     match (std::env::consts::ARCH, std::env::consts::OS) {
         ("aarch64", "macos") => ("apple-m1", ""),
         ("aarch64", _) => ("generic", "+v8a,+outline-atomics"),
-        ("x86_64", "macos") => ("core2", ""),
-        ("x86_64", _) => ("x86-64", ""),
+        ("x86_64", _) => ("x86-64-v2", ""),
         _ => ("generic", ""),
     }
 }
