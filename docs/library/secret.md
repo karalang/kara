@@ -44,6 +44,8 @@ let inner_mut: mut ref String = tok.expose_mut(); // in-place change
 A struct with a `Secret[T]` field can derive `Debug` or `Display`; the derived impl prints the field as `<redacted>`:
 
 ```kara
+import std.secret.{Secret};
+
 #[derive(Debug)]
 struct User {
     name: String,

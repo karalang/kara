@@ -50,8 +50,22 @@
       "reason": "package: imports of the chapter's own modules, which a single file cannot have",
       "first_diagnostic": "unknown module `db.connection`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
     },
+    "2d5ae165540b": {
+      "where": "docs/book/src/ch19-secrets.md:47",
+      "heading": "Handling Secrets > The accidents that no longer compile",
+      "outcome": "REJECTED",
+      "reason": "as written: the chapter shows this refusal on purpose, and the ```text block after it gives the message",
+      "first_diagnostic": "type 'Secret[String]' does not implement PartialEq, so == and != do not apply to it"
+    },
+    "5f5bdf92ee54": {
+      "where": "docs/book/src/ch19-secrets.md:61",
+      "heading": "Handling Secrets > The accidents that no longer compile",
+      "outcome": "REJECTED",
+      "reason": "as written: the chapter shows this refusal on purpose, and the ```text block after it gives the message",
+      "first_diagnostic": "cannot implement `Display` for `Secret[T]` — the wrapper deliberately withholds this trait so a secret cannot be printed, serialized, or structurally compared by accident (see design.md § Secret Type). Read the value with `.expose()` where you genuinely need it; for equality use the constant-time `.ct_eq(...)`, and rely on the built-in `Zeroize`/`Drop` for wiping"
+    },
     "6e3b84b61afa": {
-      "where": "docs/library/collections.md:161",
+      "where": "docs/library/collections.md:166",
       "heading": "Collections > `Map[K, V, H]`",
       "outcome": "REJECTED",
       "reason": "fragment: one chained call over `self.table`, `key` and `row` from the surrounding prose",
@@ -72,7 +86,7 @@
       "first_diagnostic": "unknown module `data`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
     },
     "866d552a9220": {
-      "where": "docs/library/io.md:650",
+      "where": "docs/library/io.md:669",
       "heading": "Input and output > Examples",
       "outcome": "RUN-FAILED",
       "reason": "as written: the tool skeleton exits 1 with its usage line when run without an argument",

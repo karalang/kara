@@ -44,20 +44,24 @@ Authorization: Bearer sk-live-abc123
 The point of the wrapper is what it *refuses* to do. Comparing two secrets with `==` doesn't type-check:
 
 ```kara,ignore
+import std.secret.{Secret};
+
 let a = Secret.new("x");
 let b = Secret.new("y");
 println(a == b);
 ```
 
 ```text
-error[typecheck]: 'Secret[String]' does not implement PartialEq; add #[derive(PartialEq)]
+error[typecheck]: type 'Secret[String]' does not implement PartialEq, so == and != do not apply to it
 ```
 
-The suggestion to `#[derive(PartialEq)]` is a dead end *on purpose* — deriving it is itself blocked:
+Writing the missing trait yourself is a dead end *on purpose*: the wrapper refuses it.
 
 ```kara,ignore
+import std.secret.{Secret};
+
 impl Display for Secret[String] {
-    fn fmt(ref self) -> String { "leak" }
+    fn to_string(ref self) -> String { "leak" }
 }
 ```
 

@@ -5003,6 +5003,8 @@ The diff puts each `mut` field in an `Atomic[T]` or a `Mutex[T]`. The programmer
 **Performance note: types that are mostly single-task.** A `sync` type pays an atomic count on every handle operation, in single-task code too. For a type that is mostly used in one task, keep the mutable state in a plain struct behind one `Mutex`: code holding the guard works on the plain struct with no atomic traffic.
 
 ```kara
+import std.time.{Instant};
+
 struct SessionState { request_count: i64, last_active: Instant }   // plain
 
 sync struct Session {
