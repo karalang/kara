@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 372 |
+| diagnostics | 376 |
 | false-positive | 227 |
-| missing-feature | 176 |
+| missing-feature | 178 |
 | perf | 175 |
 | soundness | 72 |
 | miscompile | 71 |
-| other | 54 |
+| other | 55 |
 | run-vs-build | 44 |
 | crash | 34 |
 | codegen-gap | 33 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 513 |
-| mir-llvm | 255 |
+| typecheck | 515 |
+| mir-llvm | 257 |
 | mir | 222 |
-| cli | 147 |
+| cli | 149 |
 | parser | 92 |
 | ownership | 89 |
-| interp | 73 |
+| interp | 74 |
 | runtime | 50 |
+| resolver | 35 |
 | effect | 35 |
-| resolver | 34 |
 | codegen | 22 |
 | other | 8 |
 | autopar | 5 |
@@ -112,6 +112,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-196 | 2026-11-16 | typecheck+mir | low | `karac check` accepts a closure passed to an `own Fn` parameter that stores it (`Pool.new(|| Ok(Conn { id: made.fetch_add(1) }), 1, 1)`) and a later use of the captured `made`; every run lane then stops with the internal `move check main: use of _1, which may have been moved` | — |
 | B-2026-11-16-197 | 2026-11-16 | mir-llvm | low | `karac build --target=wasm_wasi` of a program that uses std.crypto (sha256, hmac_sha256, constant_time_eq) stops at wasm-ld with `undefined symbol: karac_crypto_mir` instead of a refusal naming std.crypto | — |
+| B-2026-11-16-198 | 2026-11-16 | cli | medium | karac run --manifest <path> file.kara read the manifest but gave the file none of its dependencies: import dep.hello; was an unknown module, against design.md § 4 Finding the package (--manifest path forces a manifest) | — |
+| B-2026-11-16-199 | 2026-11-16 | cli | low | karac build --target-cpu=native was refused as an unknown CPU though design.md § CPU baseline offers it, and --target-cpu=help printed its header twice with no wasm32 registry | — |
+| B-2026-11-16-200 | 2026-11-16 | resolver | low | An import of a module that only other platforms' files define (poller_macos.kara alone, on Linux) was a bare E0112 unknown module, without design.md § 4's note listing the platforms that define it | — |
+| B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
+| B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
+| B-2026-11-16-203 | 2026-11-16 | typecheck | medium | The pre-v1 `r.read_to_string().unwrap_or(x)` on a child's pipe left "expects 1 argument(s), found 0" with no machine fix, plus an `i64` cascade (`no method 'trim' on type 'i64'`) wherever the text was used | — |
+| B-2026-11-16-204 | 2026-11-16 | typecheck | low | The pre-v1 `ws.recv_text(mut buf)` said only "no method 'recv_text' on type 'WebSocket'", with nothing naming `recv()` and `WsMessage` | — |
 
 ### Relocated
 

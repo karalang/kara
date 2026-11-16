@@ -1368,6 +1368,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`poller_macos.kara` alone, on Linux) is `E0112` naming those platforms
   and their files, as design.md § 4 Missing platforms says, rather than a
   bare unknown module with a "did you mean" (B-2026-11-16-200).
+- The pre-v1 `r.read_to_string().unwrap_or(x)` on a child's pipe, whose
+  `read_to_string` now appends to a `String` it is given, is one error whose
+  fix spells the buffer out: `{ let mut text = String.new(); match
+  r.read_to_string(mut text) { Ok(_) => text, Err(_) => x } }`, and
+  `.unwrap()` / `.expect(m)` keep their panic. It was "expects 1
+  argument(s), found 0" with no fix and an `i64` error at every use of the
+  text (B-2026-11-16-203). `ws.recv_text(mut buf)` names `recv()` and the
+  `WsMessage` it returns (B-2026-11-16-204).
 - Rust ports found by the modbus_server app: `use std::io::{Read, Write};`
   (and `BufRead`, `Seek`) is deleted, since Kāra's `read`, `write_all` and
   `read_line` are methods of the handle with no trait to import, and

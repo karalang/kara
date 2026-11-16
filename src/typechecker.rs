@@ -99,6 +99,7 @@ mod method_temp_receiver;
 mod method_ufcs;
 mod method_user_impl;
 mod method_vec_mutation;
+mod old_read_to_string;
 mod patterns;
 mod refinement_elision;
 mod rust_binary_search;

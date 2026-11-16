@@ -1926,6 +1926,12 @@ impl<'a> super::TypeChecker<'a> {
         // arms below.
         args_close_span: &Span,
     ) -> Type {
+        if let Some(t) = self.mend_old_read_to_string(object, method, args, args_close_span) {
+            return t;
+        }
+        if let Some(t) = self.explain_old_ws_recv(object, method, args) {
+            return t;
+        }
         self.settle_receiver_for_specialized_impl(object, method);
         self.note_timeout_duration_arg(method, args);
         if let ("drain", [arg]) = (method, args) {
