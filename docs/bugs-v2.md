@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 357 |
+| diagnostics | 358 |
 | false-positive | 224 |
 | missing-feature | 174 |
 | perf | 169 |
+| soundness | 71 |
 | miscompile | 70 |
-| soundness | 70 |
 | other | 50 |
 | run-vs-build | 42 |
 | crash | 33 |
@@ -77,12 +77,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 501 |
-| mir-llvm | 240 |
+| mir-llvm | 242 |
 | mir | 217 |
 | cli | 145 |
 | parser | 91 |
 | ownership | 88 |
-| interp | 64 |
+| interp | 66 |
 | runtime | 50 |
 | effect | 35 |
 | resolver | 31 |
@@ -1343,6 +1343,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-170 | parser | low | Rust's `use std::io::{Read, Write};` and `Shutdown` in a `std::net` import mend to imports of names Kāra does not have, with no fix, and `sock.shutdo… | 9cbbd28e56 |
 | B-2026-11-16-171 | mir | medium | An array literal of arrays passed as a `Slice[Slice[u8]]` (`pdu([[5], be16(n)])`) passes `karac check` and stops at "invalid MIR: array element of th… | 9cbbd28e56 |
 | B-2026-11-16-172 | typecheck+mir | low | Rust's `parts.concat()` over a `Slice[Slice[u8]]` takes the deprecated `Display` join, whose fix writes `join("")`, which does not check (`Slice[u8]`… | 9cbbd28e56 |
+| B-2026-11-16-174 | interp+mir-llvm | low | Json.deserialize reports text that is not JSON with its own message and a position one column past Json.parse's, prefixed with the field before the f… | 3d28b388dc |
+| B-2026-11-16-175 | interp+mir-llvm | medium | A derived Deserialize takes the last value of a repeated field (`{"a":1,"a":2}` reads a = 2), so text can pass a validator that read the first copy (… | 3d28b388dc |
 
 </details>
 
