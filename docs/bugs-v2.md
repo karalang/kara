@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 391 |
-| false-positive | 230 |
+| false-positive | 231 |
 | missing-feature | 181 |
 | perf | 175 |
 | soundness | 73 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 522 |
+| typecheck | 523 |
 | mir-llvm | 261 |
 | mir | 225 |
 | cli | 161 |
@@ -113,8 +113,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
 | B-2026-11-16-223 | 2026-11-16 | mir | low | An error's `?` frames outlive the error value: an `Err` that is only printed and dropped leaves its frame in a later trace (review-thread ruling 2026-11-16 item 3) | — |
-| B-2026-11-16-228 | 2026-11-16 | typecheck | medium | A literal in a `ref T` slot whose `T` is still open (`*count.get(k).unwrap_or(0)` over an unannotated `Map` counted with `*count.entry(m).or_insert(0) += 1`) is typed `i64` on its own and fixes the map's open counts to `i64`, so a later `i32` use (kata 1178's Rust chain arm summing into `Vec<i32>`) is refused with no fix | — |
-| B-2026-11-16-229 | 2026-11-16 | typecheck | low | An open `Vec.new()` / `Vec.with_capacity(..)` / `VecDeque` binding whose element type its pushes fixed to `i64`, refused at a use that wants `Vec[i32]` (a nested numeric mismatch), names the annotation in prose only: no machine fix writes `: Vec[i32]` on the binding | — |
+| B-2026-11-16-230 | 2026-11-16 | typecheck | medium | A literal assigned through `*` to an open `T` (`*count.entry(m).or_insert(0) = 1`, or `let r = m.entry(k).or_insert(0); *r = 5`) fixes the map's open values to `i64`, so a later `i32` use is refused as a narrowing; `v[i] = 7` on an open `Vec` already leaves the element open | — |
 
 ### Relocated
 
@@ -1414,6 +1413,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-225 | mir-llvm | low | Compiled lanes number `par` branches' task ids from 2 (`std.log` `task_id`, dbg `task:N`); the interpreter from 1 | b921a4e5a2 |
 | B-2026-11-16-226 | effect | low | A call through a type-parameter bound is charged the instance's impl besides the trait's clause: `get[T: Store]` gets `panics` from `A.load` | b921a4e5a2 |
 | B-2026-11-16-227 | cli | low | An empty function-type slot is written `[pure]` in its diagnostic; the source writes `with ()` | b921a4e5a2 |
+| B-2026-11-16-228 | typecheck | medium | A literal in a `ref T` slot whose `T` is still open (`*count.get(k).unwrap_or(0)` over an unannotated `Map` counted with `*count.entry(m).or_insert(0… | 26ae8bff93 |
+| B-2026-11-16-229 | typecheck | low | An open `Vec.new()` / `Vec.with_capacity(..)` / `VecDeque` binding whose element type its pushes fixed to `i64`, refused at a use that wants `Vec[i32… | 26ae8bff93 |
 
 </details>
 
