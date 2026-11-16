@@ -110,7 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
-| B-2026-11-16-185 | 2026-11-16 | parser | medium | `karac fix` carries Rust's `BinaryHeap<Reverse<usize>>`, read through `while let Some(&Reverse(i)) = heap.peek()`, to a smallest-first `PriorityQueue` of `Reverse` values, which pops the LARGEST index: a silent wrong answer after two rounds | — |
 
 ### Relocated
 
@@ -1366,6 +1365,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-42 | mir | medium | A closure argument's captures were held by any call result or `mut ref` pointee that could hold a reference: `let f = it.find(\|z\| *z == t); t = 3; us… | 31d41b74ba |
 | B-2026-11-16-43 | interp+mir-llvm | low | `u8.parse("-0")` (any unsigned type, and `from_str_radix`) was `Err(InvalidDigit)`; review ruled minus zero is zero, so it is `Ok(0)`, as `i64.parse(… | 331a01c410 |
 | B-2026-11-16-44 | interp+mir-llvm | low | `char.from_digit`'s panic for a radix outside 2..=36 said "the radix is not in 2..=36" without the radix, where `to_digit` and `is_digit` print it ("… | 331a01c410 |
+| B-2026-11-16-185 | parser | medium | `karac fix` carries Rust's `BinaryHeap<Reverse<usize>>`, read through `while let Some(&Reverse(i)) = heap.peek()`, to a smallest-first `PriorityQueue… | 3091098c58 |
 
 </details>
 
