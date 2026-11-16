@@ -114,9 +114,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-239 | 2026-11-16 | resolver | low | Two `unsafe extern` blocks declaring the same opaque type are a hard `already defined` error, where design.md §15 makes the duplicate `warning[W_OPAQUE_TYPE_REDECLARED]` because the C side has the final word | — |
 | B-2026-11-16-240 | 2026-11-16 | interp | low | `ptr.addr` / `ptr.expose` of a pointer to a Kāra local stop the MIR interpreter (`the address of a value the interpreter holds is not known here`), so design.md §15's tagging and round-trip examples run only compiled | — |
 | B-2026-11-16-243 | 2026-11-16 | mir-llvm | low | A hashed `Map` or `Set` that removes about as often as it inserts (a sliding window, a toggle set) pays the ordered table's holes, compaction and index rebuild on top of the probe: kata 220, 340 and 391 run 1.6-2.0x Rust's instructions | — |
-| B-2026-11-16-244 | 2026-11-16 | typecheck | medium | A range pattern's bounds are not checked against the scrutinee's type: `'a'..='z'` on an i64 is accepted and matches 100 | — |
-| B-2026-11-16-245 | 2026-11-16 | typecheck | low | An irrefutable `if let` or `while let` pattern gives no warning; design.md § Pattern exhaustiveness says it is one | — |
-| B-2026-11-16-246 | 2026-11-16 | parser | medium | Comparisons chain: `a == false == false` and `1 < 2 == true` are accepted; design.md § Operators and precedence says they do not chain | — |
 
 ### Relocated
 
@@ -1431,6 +1428,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-238 | interp | low | The MIR interpreter passed C one element of an array of `#[repr(C)]` structs (`s1_arr_read(ptr.const(arr[0]), 3)`), so C indexing past the pointer re… | 2b5fa50f3f |
 | B-2026-11-16-241 | mir-llvm | low | A read-only walk over a `shared` value's `mut` vector field takes and gives back the field's borrow flag at every node, through the runtime's flag ta… | d4f87d8b6f |
 | B-2026-11-16-242 | mir-llvm | low | A handle bound out of a borrowed node's `mut` field (`match n.left { Some(c) => . | d4f87d8b6f |
+| B-2026-11-16-244 | typecheck | medium | A range pattern's bounds are not checked against the scrutinee's type: `'a'..='z'` on an i64 is accepted and matches 100 | 62faab9326 |
+| B-2026-11-16-245 | typecheck | low | An irrefutable `if let` or `while let` pattern gives no warning; design.md § Pattern exhaustiveness says it is one | 62faab9326 |
+| B-2026-11-16-246 | parser | medium | Comparisons chain: `a == false == false` and `1 < 2 == true` are accepted; design.md § Operators and precedence says they do not chain | 62faab9326 |
 
 </details>
 
