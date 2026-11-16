@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 382 |
+| diagnostics | 386 |
 | false-positive | 229 |
-| missing-feature | 178 |
+| missing-feature | 179 |
 | perf | 175 |
 | soundness | 72 |
 | miscompile | 71 |
@@ -78,8 +78,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 520 |
 | mir-llvm | 260 |
-| mir | 223 |
-| cli | 151 |
+| mir | 224 |
+| cli | 155 |
 | parser | 92 |
 | ownership | 89 |
 | interp | 76 |
@@ -112,6 +112,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
+| B-2026-11-16-213 | 2026-11-16 | cli | low | `karac explain` / `query effects` and the impl-ceiling and public-declaration diagnostics write a resource-less effect as `blocks()` / `suspends()` | — |
+| B-2026-11-16-214 | 2026-11-16 | cli | low | A derivation step into a library function places the library's line in the user's file (`f10.kara:180 sleep declares blocks`) | — |
+| B-2026-11-16-215 | 2026-11-16 | cli | low | A derivation names the checker's internal keys: `mk calls __builtin_heap_alloc`, `ovf calls __builtin_int_overflow` | — |
+| B-2026-11-16-216 | 2026-11-16 | cli | low | A derivation through a type-parameter bound names `__bound_ceiling.Store.load` | — |
+| B-2026-11-16-217 | 2026-11-16 | mir | low | `dbg` in a `par` branch carries no task id, and `KARAC_DBG_OUTPUT=json` / `karac run --output=json` leave `dbg` in the terminal format, on every lane | — |
 
 ### Relocated
 
