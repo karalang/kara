@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 169 |
 | soundness | 71 |
 | miscompile | 70 |
-| other | 50 |
+| other | 51 |
 | run-vs-build | 42 |
 | crash | 34 |
 | codegen-gap | 32 |
@@ -77,12 +77,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 504 |
-| mir-llvm | 242 |
+| mir-llvm | 243 |
 | mir | 219 |
 | cli | 145 |
 | parser | 91 |
 | ownership | 88 |
-| interp | 66 |
+| interp | 67 |
 | runtime | 50 |
 | effect | 35 |
 | resolver | 31 |
@@ -1348,6 +1348,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-176 | typecheck | low | `v.iter().skip(1).rev()` and `take(n).rev()` are refused: `IterSkip` and `IterTake` were not `DoubleEndedIterator` or `ExactSizeIterator` | 756fad5000 |
 | B-2026-11-16-177 | typecheck+mir | low | `let mut cur = head; while let Some(node) = cur { cur = node.next; }` over a borrowed list is refused by the MIR's move check with no fix; the fix is… | 756fad5000 |
 | B-2026-11-16-178 | typecheck+mir | medium | `#[derive(Copy, Clone)]` on a struct that holds itself (`next: Option[Node]`) overflows karac's stack, and `karac fix` offers that derive for `Some(n… | 756fad5000 |
+| B-2026-11-16-179 | interp+mir-llvm | low | std.path `parent`, `file_name`, `extension` and `stem` read a trailing `.` component as the last component (`"a/."` gave parent `a` and file name Non… | 5ebaabec71 |
 
 </details>
 
