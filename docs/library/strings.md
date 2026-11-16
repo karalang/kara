@@ -57,11 +57,11 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 | `split_at` | `fn split_at(self, mid: i64) -> (Str, Str)` | The text before and after byte `mid`, both views into `self`. Panics if `mid` is past the end or falls inside a multi-byte code point, as `s[a..b]` does |
 | `strip_prefix` | `fn strip_prefix(self, prefix: Str) -> Option[Str]` | The text after `prefix`, a view into `self`; `None` when it does not start with `prefix` |
 | `strip_suffix` | `fn strip_suffix(self, suffix: Str) -> Option[Str]` | The text before `suffix`, a view into `self`; `None` when it does not end with `suffix` |
-| `split` | `fn split(self, sep: Str) -> impl Iterator[Item = Str]` | Lazy; each piece is a view into `self` |
+| `split` | `fn split(self, sep: Str) -> impl Iterator[Item = Str]` | Lazy; each piece is a view into `self`. Empty text is one empty piece: `"".split(",")` yields `""` once (review-thread ruling 2026-11-16) |
 | `splitn` | `fn splitn(self, n: i64, sep: Str) -> impl Iterator[Item = Str]` | At most `n` pieces, as `split` makes them; the last holds the rest of the text. `n <= 0` makes none |
-| `lines` | `fn lines(self) -> impl Iterator[Item = Str]` | Lazy; splits at line ends |
-| `split_whitespace` | `fn split_whitespace(self) -> impl Iterator[Item = Str]` | Lazy; splits at runs of whitespace |
-| `trim` | `fn trim(self) -> Str` | Strips leading and trailing whitespace; a view into `self`, like the splitters |
+| `lines` | `fn lines(self) -> impl Iterator[Item = Str]` | Lazy; splits at line ends. Only `\n` and `\r\n` end a line; a lone `\r` is text. A final line end makes no empty last line (review-thread ruling 2026-11-16) |
+| `split_whitespace` | `fn split_whitespace(self) -> impl Iterator[Item = Str]` | Lazy; splits at runs of whitespace, as `trim` reads it. Empty or all-whitespace text yields no pieces, unlike `split` (review-thread ruling 2026-11-16) |
+| `trim` | `fn trim(self) -> Str` | Strips leading and trailing whitespace; a view into `self`, like the splitters. Whitespace is Unicode `White_Space`: U+3000, U+00A0 and U+0085 are stripped as well as ASCII space, tab and line ends (review-thread ruling 2026-11-16) |
 | `trim_start` | `fn trim_start(self) -> Str` | Strips leading whitespace only; a view into `self` |
 | `trim_end` | `fn trim_end(self) -> Str` | Strips trailing whitespace only; a view into `self` |
 | `replace` | `fn replace(self, from: Str, to: Str) -> String` | Replaces every occurrence |
