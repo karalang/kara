@@ -138,10 +138,9 @@ fn run_v2_json_output_carries_the_runtime_reports() {
             stdout.contains("\"line\":5,\"col\":16},\"kind\":\"index_out_of_bounds\"}]}\n"),
             "{lane:?}: {stdout}"
         );
-        assert!(
-            stdout.contains("{\"error_return_trace\":[{\"file\":"),
-            "{lane:?}: {stdout}"
-        );
+        // No `?` propagated an error, so a bare panic has no trace
+        // (B-2026-11-16-47).
+        assert!(!stdout.contains("error_return_trace"), "{lane:?}: {stdout}");
         assert_eq!(text(&out.stderr), "", "{lane:?}");
         assert_eq!(out.status.code(), Some(101), "{lane:?}");
 

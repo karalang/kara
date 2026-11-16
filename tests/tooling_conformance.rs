@@ -6,6 +6,10 @@
 //!   (B-2026-11-16-46). The stream now runs `build_start` through the checks'
 //!   phases, then `codegen`, then `build_complete` with `output`; a failure
 //!   in code generation or at link is the `codegen` phase's diagnostic.
+//! - Every panic printed `Error return trace:` naming its own place, with no
+//!   `?` behind it (B-2026-11-16-47). A bare panic now prints no trace.
+//! - `program_effects` wrote a resource-less effect as `panics()`
+//!   (B-2026-11-16-48); it is `panics`, as source writes it.
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -154,5 +158,63 @@ fn main() { let p = P.new(); println(p.beta()); }\n";
     assert_eq!(String::from_utf8_lossy(&twice.stdout), formatted);
     let check = karac(&dir, &["fmt", "--check", "main.kara"], &[]);
     assert_eq!(check.status.code(), Some(0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tooling_only_a_propagated_error_prints_a_trace() {
+    let (dir, _) = file(
+        "trace",
+        "fn f() -> Result[i64, String] { Err(\"e\") }\n\
+fn g() -> Result[i64, String] {\n    let v = f()?;\n    Ok(v)\n}\n\
+fn main() {\n    let v: Vec[i64] = [];\n    if v.len() == 0 { g().unwrap(); }\n    panic(\"bare\");\n}\n",
+    );
+    let (_, bare) = file("trace-bare", "fn main() {\n    panic(\"bare\");\n}\n");
+    let mut lanes = vec!["__mir-run"];
+    if LLVM {
+        lanes.push("__mir-llvm-run");
+    }
+    for lane in lanes {
+        let out = karac(&dir, &[lane, "main.kara"], &[]);
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        if err.contains("undefined reference") {
+            continue;
+        }
+        assert_eq!(out.status.code(), Some(101), "{lane}: {err}");
+        assert!(
+            err.contains("Error return trace:\n  main.kara:3:13"),
+            "{lane}: {err}"
+        );
+        let out = karac(
+            &bare.parent().unwrap().to_path_buf(),
+            &[lane, "main.kara"],
+            &[],
+        );
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(101), "{lane}: {err}");
+        assert!(
+            err.contains("runtime error: bare\n  at main.kara:2:5"),
+            "{lane}: {err}"
+        );
+        assert!(!err.contains("Error return trace"), "{lane}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(bare.parent().unwrap());
+}
+
+#[test]
+fn tooling_program_effects_write_a_bare_verb_bare() {
+    let (dir, _) = file(
+        "panics",
+        "fn main() {\n    let v: Vec[i64] = [1];\n    println(v[0]);\n    assert(v.len() == 1);\n}\n",
+    );
+    let out = karac(&dir, &["check", "--output=json", "main.kara"], &[]);
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let effects = doc["program_effects"].as_array().unwrap();
+    assert!(effects.contains(&Value::from("panics")), "{doc}");
+    assert!(
+        effects.iter().all(|e| !e.as_str().unwrap().ends_with("()")),
+        "{doc}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

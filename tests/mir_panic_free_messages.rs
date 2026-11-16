@@ -146,7 +146,7 @@ fn main() {
         "unwrap",
         src,
         101,
-        "runtime error: called unwrap() on Err\n  at main.kara:7:20\nError return trace:\n  main.kara:7:20\n",
+        "runtime error: called unwrap() on Err\n  at main.kara:7:20\n",
     );
 }
 
@@ -166,7 +166,7 @@ fn mir_formatted_panic_reports_without_the_panic_hook() {
         "panic",
         src,
         101,
-        "runtime error: boom 7\n  at main.kara:5:13\nError return trace:\n  main.kara:5:13\n",
+        "runtime error: boom 7\n  at main.kara:5:13\n",
     );
 }
 
@@ -179,7 +179,7 @@ fn mir_substring_cut_reports_without_the_panic_hook() {
         "substring",
         src,
         101,
-        "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..11 does not fall on UTF-8 char boundaries of \"a'b\\\"c\\\\d\\ne1\u{e9}\"\n  at main.kara:5:13\nError return trace:\n  main.kara:5:13\n",
+        "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..11 does not fall on UTF-8 char boundaries of \"a'b\\\"c\\\\d\\ne1\u{e9}\"\n  at main.kara:5:13\n",
     );
 }
 
@@ -192,6 +192,6 @@ fn mir_slice_and_index_range_report_without_the_panic_hook() {
         "slice",
         src,
         101,
-        "runtime error: string slice bounds 0..11 out of range (len 7)\n  at main.kara:6:13\nError return trace:\n  main.kara:6:13\n",
+        "runtime error: string slice bounds 0..11 out of range (len 7)\n  at main.kara:6:13\n",
     );
 }

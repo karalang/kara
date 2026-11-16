@@ -3471,10 +3471,15 @@ pub unsafe extern "C" fn karac_mir_error_trace_clear(live: *const std::sync::ato
 }
 
 /// The error return trace as the diagnostic it goes with prints it, ending
-/// at a panic's own place `last` when there is one, or nothing when it has
-/// no frame (design.md § Error return traces, § Panic record).
+/// at a panic's own place `last` when there is one, or nothing when no `?`
+/// propagated an error (design.md § Error return traces, § Panic record).
 fn error_trace_text(last: Option<&str>) -> String {
     ERROR_TRACE.with(|t| {
+        // A trace is the path of an error `?` propagated; a bare panic has
+        // none, so its own place alone is no trace (B-2026-11-16-47).
+        if t.frames.is_empty() {
+            return String::new();
+        }
         // Frames of more than one task: no one order of them is the chain
         // (design.md § Error return traces, B-2026-10-25-30).
         if t.frames.iter().any(|f| f.2 != t.frames[0].2) {
@@ -3577,7 +3582,8 @@ pub unsafe extern "C" fn karac_mir_abort_at(
         unsafe { rich(ptr, len, at, at_len) }
     }
     // None of the parts `rich_abort` adds was set: the message and the
-    // place, and the error return trace that is the place alone.
+    // place. No `?` propagated an error, so there is no trace
+    // (B-2026-11-16-47).
     // SAFETY: the caller's contract.
     let (msg, at) = unsafe { (bytes(ptr, len as usize), bytes(at, at_len as usize)) };
     let mut report = LeanVec::<u8>::new();
@@ -3594,7 +3600,7 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     });
     report.push(b'\n');
     if !at.is_empty() {
-        for part in [&b"  at "[..], at, b"\nError return trace:\n  ", at, b"\n"] {
+        for part in [&b"  at "[..], at, b"\n"] {
             report.extend_from_slice(part);
         }
     }

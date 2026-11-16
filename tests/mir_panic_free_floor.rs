@@ -90,7 +90,7 @@ fn mir_overflow_abort_reports_without_the_panic_hook() {
     // The interpreter's wording (`karac __mir-run`).
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "runtime error: integer overflow\n  at main.kara:2:5\nError return trace:\n  main.kara:2:5\n"
+        "runtime error: integer overflow\n  at main.kara:2:5\n"
     );
     assert!(!links_panic_hook(&exe), "std's panic hook is linked");
 }
@@ -106,7 +106,7 @@ fn mir_formatted_panic_message_still_reports_in_full() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "start\n");
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "runtime error: too big: 7\n  at main.kara:5:9\nError return trace:\n  main.kara:5:9\n"
+        "runtime error: too big: 7\n  at main.kara:5:9\n"
     );
 }
 

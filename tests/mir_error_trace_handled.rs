@@ -81,7 +81,7 @@ fn mir_error_trace_is_cleared_by_a_match_on_the_err() {
         "match",
         &src,
         101,
-        "runtime error: index out of bounds\n  at {f}:7:13\nError return trace:\n  {f}:7:13\n",
+        "runtime error: index out of bounds\n  at {f}:7:13\n",
     );
 }
 

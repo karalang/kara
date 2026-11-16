@@ -35,8 +35,7 @@ fn main() {
 }
 "#;
 
-const WANT: &str =
-    "runtime error: called unwrap() on None\n  at main.kara:10:17\nError return trace:\n  main.kara:10:17\n";
+const WANT: &str = "runtime error: called unwrap() on None\n  at main.kara:10:17\n";
 
 /// Four tasks on four workers calling `unwrap` at another line do not move
 /// the reported place of the one that aborts, built or run on the JIT.

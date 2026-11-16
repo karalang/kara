@@ -383,16 +383,16 @@ fn mir_build_reports_where_a_panic_happened() {
         (
             "fn pick(v: ref Vec[i64], i: i64) -> i64 {\n    v[i]\n}\n\
              fn main() {\n    let v = vec![1, 2, 3];\n    println(f\"{pick(v, 7)}\");\n}\n",
-            "runtime error: index out of bounds\n  at {f}:2:5\nError return trace:\n  {f}:2:5\n",
+            "runtime error: index out of bounds\n  at {f}:2:5\n",
         ),
         (
             "fn main() {\n    let o: Option[i64] = None;\n    println(\"before\");\n    \
              let x = o.unwrap();\n    println(f\"{x}\");\n}\n",
-            "runtime error: called unwrap() on None\n  at {f}:4:13\nError return trace:\n  {f}:4:13\n",
+            "runtime error: called unwrap() on None\n  at {f}:4:13\n",
         ),
         (
             "fn main() {\n    let x = 3;\n    if x > 2 { panic(\"too big\"); }\n}\n",
-            "runtime error: too big\n  at {f}:3:16\nError return trace:\n  {f}:3:16\n",
+            "runtime error: too big\n  at {f}:3:16\n",
         ),
     ];
     for (src, want) in cases {
@@ -9058,7 +9058,7 @@ fn main() {
 }
 "#;
     let out = "noisy 3\nword a\npt 1\nopt 2\nopt 0\nnoisy 5\npt 1\npassed\npt 2\n";
-    let err = "runtime error: assertion failed: pt(2) == P { x: 3, name: \"q\".to_string() }\n  left:  P { x: 2, name: \"p\" }\n  right: P { x: 3, name: \"q\" }\n  at {f}:21:9\nError return trace:\n  {f}:21:9\n";
+    let err = "runtime error: assertion failed: pt(2) == P { x: 3, name: \"q\".to_string() }\n  left:  P { x: 2, name: \"p\" }\n  right: P { x: 3, name: \"q\" }\n  at {f}:21:9\n";
     let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
     assert_eq!(interp.output, out, "__mir-run");
     assert_eq!(interp.stderr, err.replace("{f}", "<unknown>"), "__mir-run");

@@ -33,8 +33,7 @@ fn main() {
 "#;
 
 const OUT: &str = "499500\n5\n";
-const ERR: &str =
-    "runtime error: index out of bounds\n  at main.kara:2:5\nError return trace:\n  main.kara:2:5\n";
+const ERR: &str = "runtime error: index out of bounds\n  at main.kara:2:5\n";
 
 fn dir() -> PathBuf {
     let d = std::env::temp_dir().join(format!("karac-site-arg-{}", std::process::id()));

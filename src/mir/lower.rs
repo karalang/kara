@@ -32487,7 +32487,7 @@ fn main() {
             assert!(matches!(r.outcome, interp::Outcome::Aborted(_)), "{src}");
             assert_eq!(
                 r.stderr,
-                format!("runtime error: {msg}\n  at <unknown>:{at}\nError return trace:\n  <unknown>:{at}\n"),
+                format!("runtime error: {msg}\n  at <unknown>:{at}\n"),
                 "{src}"
             );
         }

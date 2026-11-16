@@ -13719,6 +13719,11 @@ impl<'a> Interp<'a> {
     /// when it has no frame (design.md § Error return traces, § Panic
     /// record).
     fn error_trace_text(&self, last: Option<&str>) -> String {
+        // A trace is the path of an error `?` propagated; a bare panic has
+        // none, so its own place alone is no trace (B-2026-11-16-47).
+        if self.error_trace.is_empty() {
+            return String::new();
+        }
         // Frames of more than one task: no one order of them is the chain
         // (design.md § Error return traces, B-2026-10-25-30).
         if self
