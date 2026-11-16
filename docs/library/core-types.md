@@ -158,7 +158,7 @@ match i64.parse(line.trim()) {
 
 `.ok()` turns the result into an `Option` when the error is not needed.
 
-`parse` ignores whitespace before and after the number, so `i64.parse(" 5\n")` is `Ok(5)` and a line read with its newline parses as it is. A sign may come only first: `"+5"` parses, `"-"` and `"1-2"` fail with `InvalidDigit`, and a negative number for an unsigned type fails with `Underflow`.
+`parse` ignores whitespace before and after the number, so `i64.parse(" 5\n")` is `Ok(5)` and a line read with its newline parses as it is. A sign may come only first: `"+5"` parses, `"-"` and `"1-2"` fail with `InvalidDigit`, and a negative number for an unsigned type fails with `Underflow`. A minus zero is zero, not negative: `u8.parse("-0")` is `Ok(0)`, as `i64.parse("-0")` is (review-thread ruling 2026-11-16).
 
 Every `parse` returns the one error type, a prelude enum:
 
