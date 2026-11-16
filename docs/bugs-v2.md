@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 224 |
 | missing-feature | 175 |
 | perf | 169 |
-| soundness | 71 |
+| soundness | 72 |
 | miscompile | 70 |
 | other | 51 |
 | run-vs-build | 42 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 504 |
+| typecheck | 505 |
 | mir-llvm | 243 |
 | mir | 219 |
 | cli | 145 |
@@ -1349,6 +1349,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-177 | typecheck+mir | low | `let mut cur = head; while let Some(node) = cur { cur = node.next; }` over a borrowed list is refused by the MIR's move check with no fix; the fix is… | 756fad5000 |
 | B-2026-11-16-178 | typecheck+mir | medium | `#[derive(Copy, Clone)]` on a struct that holds itself (`next: Option[Node]`) overflows karac's stack, and `karac fix` offers that derive for `Some(n… | 756fad5000 |
 | B-2026-11-16-179 | interp+mir-llvm | low | std.path `parent`, `file_name`, `extension` and `stem` read a trailing `.` component as the last component (`"a/."` gave parent `a` and file name Non… | 5ebaabec71 |
+| B-2026-11-16-180 | typecheck | medium | A dependency's trait the file never imported still supplied its methods: with import kdep.util.W; alone, W { v: 1 }.show() resolved through kdep's Sh… | ec7adfe00e |
 
 </details>
 
