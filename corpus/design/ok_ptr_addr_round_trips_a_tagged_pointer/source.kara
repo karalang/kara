@@ -1,0 +1,20 @@
+// design.md §15, Pointer provenance: a tag set in the low bit and cleared
+// again, and an exposed address round-tripped, name the same place.
+fn main() {
+    let mut x: i64 = 41;
+    let p: *mut i64 = ptr.mut(x);
+    let a = ptr.addr(p as *const i64);
+    let tagged: *mut i64 = ptr.with_addr_mut(p, a | 1);
+    println(ptr.addr(tagged as *const i64) & 1);
+    let clean: *mut i64 = ptr.with_addr_mut(tagged, ptr.addr(tagged as *const i64) & ~1);
+    // Safety: clean is p with its tag cleared, so it points at x.
+    unsafe { *clean = *clean + 1; }
+    println(x);
+    let e = ptr.expose(p as *const i64);
+    // Safety: e is p's exposed address.
+    let back: *mut i64 = unsafe { ptr.from_exposed_mut(e) };
+    // Safety: back is p again.
+    unsafe { *back = *back * 2; }
+    println(x);
+    println(a % 8);
+}

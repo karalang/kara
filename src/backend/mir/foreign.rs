@@ -33,6 +33,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ext = (i.bits() < 32).then_some(if i.signed() { "signext" } else { "zeroext" });
                 (self.int_ty(i.bits()).into(), ext)
             }
+            // `char` is C's `char32_t`, a full 32-bit integer.
+            TyKind::Char => (self.int_ty(32).into(), None),
             TyKind::RawPtr { .. } => (self.ptr_ty().into(), None),
             // A float travels in a float register, with no extension
             // (B-2026-10-31-32).

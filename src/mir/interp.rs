@@ -922,6 +922,7 @@ fn run_with(
         http_bodies: rustc_hash::FxHashMap::default(),
         http_error_responses: rustc_hash::FxHashMap::default(),
         http_requests: rustc_hash::FxHashMap::default(),
+        exposed_addrs: Vec::new(),
         built_requests: Vec::new(),
         free_requests: Vec::new(),
         pinned_texts: Default::default(),
@@ -1490,6 +1491,12 @@ struct Interp<'a> {
     /// at 0), which `Request`'s methods read: a server answers each
     /// connection in a task of its own (B-2026-10-25-41).
     http_requests: rustc_hash::FxHashMap<usize, crate::http1::Request>,
+    /// The places whose address `ptr.addr` / `ptr.expose` read: place `k`
+    /// has the made-up address `SYNTH_ADDR_BASE + k * SYNTH_ADDR_STRIDE`,
+    /// so an address that comes back unchanged (a tag set and then
+    /// cleared, a round trip through `usize`) is that place again
+    /// (B-2026-11-16-240).
+    exposed_addrs: Vec<Addr>,
     /// The requests a program built (`Request.new`, core semantics
     /// §14.12), by `__id` - 1: its URL and the request, until the
     /// `Request` drops.
@@ -1512,9 +1519,19 @@ struct NativeCopy {
     width: usize,
     signed: bool,
     bools: bool,
+    /// A `char` pointee: C's `char32_t` (review-thread ruling 2026-11-16).
+    chars: bool,
     /// A struct pointee, copied whole at its C layout.
     record: Option<Ty>,
 }
+
+/// Where the made-up addresses of `Interp::exposed_addrs` start, and how far
+/// apart they are: aligned to a page, so a program's tag bits stay clear of
+/// the address, and non-canonical on every 64-bit host (bits 48 to 62 set,
+/// bit 63 clear), so no pointer C hands back can be mistaken for one. Below
+/// `i64::MAX`, so the address survives a signed cast.
+const SYNTH_ADDR_BASE: i128 = 0x7ff0_0000_0000_0000;
+const SYNTH_ADDR_STRIDE: i128 = 0x1000;
 
 /// The value of type `it` that C returned in the integer register `r`: its
 /// low bits, sign-extended for a signed type. Pure, so not cfg-gated:
@@ -4739,7 +4756,24 @@ impl<'a> Interp<'a> {
         } else {
             name
         };
-        let args = self.read_lent_args(&name, args, env.is_some())?;
+        let mut lent = Vec::new();
+        let args = self.read_lent_args(&name, args, env.is_some(), &mut lent)?;
+        let ret = self.call_erased_body(name, env, args, by_value, start);
+        for slot in lent {
+            self.free_slot(slot);
+        }
+        ret
+    }
+
+    /// The body of [`Self::call_erased_as`], once its arguments are read.
+    fn call_erased_body(
+        &mut self,
+        name: String,
+        env: Option<(AllocId, Ty)>,
+        args: Vec<Value>,
+        by_value: bool,
+        start: bool,
+    ) -> R<Value> {
         let Some((slot, env_ty)) = env else {
             return self.call(&name, args);
         };
@@ -4797,12 +4831,44 @@ impl<'a> Interp<'a> {
     /// type whose `Copy` parameter is lent (`Fn(ref i64)`, a generic
     /// `Fn(V)` at `V = i64`) holds a body that takes it as a copy
     /// (core-semantics.md §5.10; codegen's thunk, B-2026-10-20-19).
-    fn read_lent_args(&mut self, name: &str, mut args: Vec<Value>, env: bool) -> R<Vec<Value>> {
+    ///
+    /// The other way round too: a `Copy` scalar passed to a body that
+    /// borrows it (a closure over a `VecIter[i64]`'s `ref i64` items, erased
+    /// as `Fn(i64) -> i64`) is lent from a slot of its own, which `lent`
+    /// collects for the caller to free after the call (B-2026-11-16-232).
+    fn read_lent_args(
+        &mut self,
+        name: &str,
+        mut args: Vec<Value>,
+        env: bool,
+        lent: &mut Vec<AllocId>,
+    ) -> R<Vec<Value>> {
         let program: &'a Program = self.program;
         let Some(body) = program.bodies.get(name) else {
             return Ok(args);
         };
         for (arg, l) in args.iter_mut().zip(body.args().skip(usize::from(env))) {
+            let borrows = matches!(
+                self.tys.kind(body.local(l).ty),
+                TyKind::Ref(_) | TyKind::MutRef(_)
+            );
+            let scalar = matches!(
+                arg,
+                Value::Int(_) | Value::Bool(_) | Value::Float(_) | Value::Char(_)
+            );
+            if borrows && scalar {
+                let slot = self.alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: arg.copy(),
+                });
+                lent.push(slot);
+                *arg = Value::Ref(Addr {
+                    root: Root::Heap(slot),
+                    path: Path::new(),
+                });
+                continue;
+            }
             let lent = matches!(arg, Value::Ref(_))
                 && !matches!(
                     self.tys.kind(body.local(l).ty),
@@ -14869,7 +14935,14 @@ impl<'a> Interp<'a> {
             Rvalue::Use(o) => Ok(self.operand(body, o)?.0),
             Rvalue::Ref(_, p) => match self.fast_addr(body, p) {
                 Some(addr) => Ok(Value::Ref(addr)),
-                None => Ok(Value::Ref(self.resolve_read(body, p)?.0)),
+                // A reference to what a native pointer points at (an
+                // opaque C object, `ref *p`) is that address, as compiled:
+                // `ptr.const` of it gives the pointer back (review-thread
+                // ruling 2026-11-16).
+                None => match self.native_ref_target(body, p) {
+                    Some(at) => Ok(Value::Int(i128::from(at))),
+                    None => Ok(Value::Ref(self.resolve_read(body, p)?.0)),
+                },
             },
             Rvalue::Retain(p) => {
                 let (addr, _) = self.resolve_read(body, p)?;
@@ -14932,11 +15005,20 @@ impl<'a> Interp<'a> {
                 }
             }
             // A raw pointer is the address the reference held.
-            Rvalue::Cast(CastKind::RefToPtr | CastKind::PtrToPtr | CastKind::IntToPtr, o, _) => {
+            Rvalue::Cast(CastKind::RefToPtr | CastKind::PtrToPtr, o, _) => {
                 Ok(self.operand(body, o)?.0)
             }
+            // An address `ptr.addr` made is its place again.
+            Rvalue::Cast(CastKind::IntToPtr, o, _) => match self.operand(body, o)?.0 {
+                Value::Int(n) => Ok(match self.exposed_place(n) {
+                    Some(at) => Value::Ref(at),
+                    None => Value::Int(n),
+                }),
+                v => Ok(v),
+            },
             Rvalue::Cast(CastKind::PtrToInt, o, _) => match self.operand(body, o)?.0 {
                 Value::Int(at) => Ok(Value::Int(at)),
+                Value::Ref(at) => Ok(Value::Int(self.expose_place(at))),
                 _ => err(
                     "the address of a value the interpreter holds is not known here; \
                      `karac build` gives it one",
@@ -15185,6 +15267,27 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// The native address a borrow of `p` takes: `*q` where `q`, a raw
+    /// pointer or a reference made from one, holds a C address. Only the
+    /// address is taken, nothing is read, so a reference holding an
+    /// address passes it on (`ptr.const(f)` of an opaque `f: ref Foo`,
+    /// B-2026-11-16-248).
+    fn native_ref_target(&self, body: &Body, p: &Place) -> Option<u64> {
+        let [ProjElem::Deref] = p.projection.as_slice() else {
+            return None;
+        };
+        if !matches!(
+            self.tys.kind(body.local(p.local).ty),
+            TyKind::RawPtr { .. } | TyKind::Ref(_) | TyKind::MutRef(_)
+        ) {
+            return None;
+        }
+        match self.frames.last()?.locals[p.local.index()] {
+            Value::Int(at) => Some(at as u64),
+            _ => None,
+        }
+    }
+
     /// The scalar of type `t` at the native address `at`.
     fn native_load(&self, at: u64, t: Ty) -> R<Value> {
         let size = self.native_size(at, t)?;
@@ -15231,6 +15334,13 @@ impl<'a> Interp<'a> {
         if at == 0 {
             return err("a read or write through a null pointer");
         }
+        if self.in_exposed_range(i128::from(at)) {
+            return err(format!(
+                "a read or write at {at:#x}, an address made from a Kāra value's \
+                 `ptr.addr` that names no place: the interpreter reads a value only \
+                 through its exact address; `karac build` gives it real memory"
+            ));
+        }
         match self.tys.kind(t) {
             TyKind::Int(it) => Ok(it.bits() as usize / 8),
             TyKind::Bool => Ok(1),
@@ -15242,6 +15352,32 @@ impl<'a> Interp<'a> {
                 self.tys.display(t)
             )),
         }
+    }
+
+    /// The made-up address of the place `at` (see `exposed_addrs`).
+    fn expose_place(&mut self, at: Addr) -> i128 {
+        let k = match self.exposed_addrs.iter().position(|a| *a == at) {
+            Some(k) => k,
+            None => {
+                self.exposed_addrs.push(at);
+                self.exposed_addrs.len() - 1
+            }
+        };
+        SYNTH_ADDR_BASE + k as i128 * SYNTH_ADDR_STRIDE
+    }
+
+    /// The place whose made-up address is exactly `n`.
+    fn exposed_place(&self, n: i128) -> Option<Addr> {
+        if !self.in_exposed_range(n) || (n - SYNTH_ADDR_BASE) % SYNTH_ADDR_STRIDE != 0 {
+            return None;
+        }
+        let k = usize::try_from((n - SYNTH_ADDR_BASE) / SYNTH_ADDR_STRIDE).ok()?;
+        self.exposed_addrs.get(k).cloned()
+    }
+
+    fn in_exposed_range(&self, n: i128) -> bool {
+        n >= SYNTH_ADDR_BASE
+            && n < SYNTH_ADDR_BASE + self.exposed_addrs.len() as i128 * SYNTH_ADDR_STRIDE
     }
 
     fn int_binop(&self, op: BinOp, a: i128, b: i128, ty: Ty) -> R<(Value, bool)> {
@@ -17644,6 +17780,7 @@ impl<'a> Interp<'a> {
             }
             (_, Value::Int(i)) => (*i as u64, None),
             (_, Value::Bool(b)) => (u64::from(*b), None),
+            (_, Value::Char(c)) => (u64::from(u32::from(*c)), None),
             (_, other) => {
                 return err(format!(
                     "`{name}`: the argument {other:?} cannot cross to C"
@@ -17658,6 +17795,7 @@ impl<'a> Interp<'a> {
         match self.tys.kind(ret) {
             TyKind::Unit => Ok(Value::Unit),
             TyKind::Bool => Ok(Value::Bool(r as u8 != 0)),
+            TyKind::Char => Ok(Value::Char(Self::c_char32(r)?)),
             TyKind::Int(it) => Ok(Value::Int(from_c_word(r, it))),
             TyKind::RawPtr { .. } => Ok(Value::Int(i128::from(r))),
             TyKind::Float(crate::mir::ty::FloatTy::F32) => Ok(Value::Float(f64::from(
@@ -17751,6 +17889,19 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// The `char` C handed back as the `char32_t` in the low 32 bits of
+    /// `r`. A value that is no Unicode scalar value is refused rather than
+    /// made into a `char` no Kāra program could hold.
+    fn c_char32(r: u64) -> R<char> {
+        let n = r as u32;
+        match char::from_u32(n) {
+            Some(c) => Ok(c),
+            None => err(format!(
+                "C handed back {n:#x} as a `char`, which is no Unicode scalar value"
+            )),
+        }
+    }
+
     /// The size of the C type `t` in bytes.
     fn c_size(&self, name: &str, t: Ty) -> R<usize> {
         match super::layout::layout(self.tys, t) {
@@ -17777,6 +17928,9 @@ impl<'a> Interp<'a> {
                 buf[off..off + size].copy_from_slice(&n.to_ne_bytes()[..size]);
             }
             (TyKind::Bool, Value::Bool(b)) => buf[off] = u8::from(*b),
+            (TyKind::Char, Value::Char(c)) => {
+                buf[off..off + 4].copy_from_slice(&u32::from(*c).to_ne_bytes());
+            }
             (TyKind::Adt(_), Value::Variant(..))
                 if super::c_abi::c_enum_int(self.tys, t).is_some() =>
             {
@@ -17838,6 +17992,7 @@ impl<'a> Interp<'a> {
             TyKind::Int(it) => Value::Int(from_c_word(word(size), it)),
             TyKind::RawPtr { .. } => Value::Int(i128::from(word(8))),
             TyKind::Bool => Value::Bool(buf[off] != 0),
+            TyKind::Char => Value::Char(Self::c_char32(word(4))?),
             TyKind::Adt(_) if super::c_abi::c_enum_int(self.tys, t).is_some() => {
                 let it = super::c_abi::c_enum_int(self.tys, t).map(|i| self.tys.kind(i));
                 let n = match it {
@@ -17929,6 +18084,7 @@ impl<'a> Interp<'a> {
                 width: size,
                 signed: false,
                 bools: false,
+                chars: false,
                 record: Some(pointee),
             };
             return Ok((bytes, copy));
@@ -17936,6 +18092,7 @@ impl<'a> Interp<'a> {
         let (width, signed) = match self.tys.kind(pointee) {
             TyKind::Int(it) => ((it.bits() / 8) as usize, it.signed()),
             TyKind::Bool | TyKind::Unit => (1, false),
+            TyKind::Char => (4, false),
             _ => {
                 return err(format!(
                     "`{name}`: a pointer to {} cannot cross to C yet",
@@ -17943,7 +18100,7 @@ impl<'a> Interp<'a> {
                 ))
             }
         };
-        let scalar = |v: &Value| matches!(v, Value::Int(_) | Value::Bool(_));
+        let scalar = |v: &Value| matches!(v, Value::Int(_) | Value::Bool(_) | Value::Char(_));
         let mut parent = at.clone();
         let within = match parent.path.pop() {
             Some(i) => match self.slot_ref(&parent)? {
@@ -17963,6 +18120,7 @@ impl<'a> Interp<'a> {
             let n: i128 = match c {
                 Value::Int(n) => *n,
                 Value::Bool(b) => i128::from(*b),
+                Value::Char(c) => i128::from(u32::from(*c)),
                 other => {
                     return err(format!(
                         "`{name}`: a pointer to {other:?} cannot cross to C"
@@ -17979,6 +18137,7 @@ impl<'a> Interp<'a> {
             width,
             signed,
             bools: matches!(self.tys.kind(pointee), TyKind::Bool),
+            chars: matches!(self.tys.kind(pointee), TyKind::Char),
             record: None,
         };
         Ok((bytes, copy))
@@ -18009,6 +18168,8 @@ impl<'a> Interp<'a> {
             }
             let v = if c.bools {
                 Value::Bool(n != 0)
+            } else if c.chars {
+                Value::Char(Self::c_char32(n as u64)?)
             } else {
                 Value::Int(n)
             };

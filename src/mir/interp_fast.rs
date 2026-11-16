@@ -2503,13 +2503,16 @@ impl<'a> Interp<'a> {
         target: BasicBlock,
     ) -> Option<R<Option<BasicBlock>>> {
         let (name, body, env_by_ref, values) = self.erased_callees[ix];
-        // A closure that takes its environment by value, or a reference
-        // argument lent to a parameter that takes a copy: the general call.
+        // A closure that takes its environment by value, a reference
+        // argument lent to a parameter that takes a copy, or a scalar
+        // passed to a parameter that borrows it (B-2026-11-16-232): the
+        // general call, which adapts both.
         if !env_by_ref
             || args.len() + 1 != body.arg_count
             || args.iter().enumerate().any(|(i, a)| {
                 matches!(a, Arg::Tuple(..) | Arg::Move(_))
                     || matches!(a, Arg::Ref(..)) && values >> i & 1 == 1
+                    || matches!(a, Arg::Scalar(_)) && values >> i & 1 == 0
             })
         {
             return None;

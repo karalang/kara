@@ -89,11 +89,13 @@ struct Leaf {
 }
 
 /// Whether `t` may cross an `extern "C"` signature: an integer, `bool`,
-/// `f32`, `f64` or raw pointer, or a struct of those (and of fixed arrays
+/// `char`, `f32`, `f64` or raw pointer, or a struct of those (and of fixed arrays
 /// and structs of them) laid out as C lays it out.
 pub fn crosses(tys: &TyInterner, t: Ty) -> bool {
     match tys.kind(t) {
-        TyKind::Int(_) | TyKind::Bool | TyKind::RawPtr { .. } => true,
+        // `char` crosses as `uint32_t` (C's `char32_t`), a Unicode scalar
+        // value (review-thread ruling 2026-11-16, B-2026-11-16-249).
+        TyKind::Int(_) | TyKind::Bool | TyKind::Char | TyKind::RawPtr { .. } => true,
         TyKind::Float(f) => matches!(f, FloatTy::F32 | FloatTy::F64),
         TyKind::Adt(_) => plain_struct(tys, t) || c_enum_int(tys, t).is_some(),
         _ => false,
@@ -165,9 +167,11 @@ pub fn single_scalar(tys: &TyInterner, t: Ty) -> Option<Ty> {
                 }
                 t = tys.field_ty(t, None, 0)?;
             }
-            TyKind::Int(_) | TyKind::Bool | TyKind::RawPtr { .. } | TyKind::Float(_) => {
-                return Some(t)
-            }
+            TyKind::Int(_)
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::RawPtr { .. }
+            | TyKind::Float(_) => return Some(t),
             _ => return None,
         }
     }
@@ -180,7 +184,7 @@ fn leaves(tys: &TyInterner, t: Ty, base: u64, out: &mut Vec<Leaf>) -> Option<()>
             size: layout::layout(tys, t)?.size,
             float: Some(f),
         }),
-        TyKind::Int(_) | TyKind::Bool | TyKind::RawPtr { .. } => out.push(Leaf {
+        TyKind::Int(_) | TyKind::Bool | TyKind::Char | TyKind::RawPtr { .. } => out.push(Leaf {
             offset: base,
             size: layout::layout(tys, t)?.size,
             float: None,

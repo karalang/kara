@@ -3758,8 +3758,8 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         // `u32` when no `#[repr]` is declared — the spec's "conservative"
-        // default. A `#[repr(C)]` / `#[repr(align(N))]` head is not an integer
-        // repr and leaves the default in place.
+        // default. A `#[repr(align(N))]` head is not an integer repr and
+        // leaves the default in place; `#[repr(C)]` takes `i32` below.
         let declared_repr = super::repr_arg_head_names(&e.attributes)
             .into_iter()
             .find(|n| {
@@ -3769,10 +3769,14 @@ impl<'a> super::TypeChecker<'a> {
                 )
             });
         let repr_declared = declared_repr.is_some();
-        let repr = declared_repr.unwrap_or_else(|| "u32".to_string());
         let repr_c = super::repr_arg_head_names(&e.attributes)
             .iter()
             .any(|n| n == "C");
+        // A bare `#[repr(C)]` enum is a C `int` (§15), so `discriminant()`
+        // returns `i32` and `Red = -1` reads -1 (review-thread ruling
+        // 2026-11-16, B-2026-11-16-247). `repr_declared` stays false: `#[repr(C)]` alone does
+        // not opt into `try_from`.
+        let repr = declared_repr.unwrap_or_else(|| if repr_c { "i32" } else { "u32" }.to_string());
 
         // Same constant environment `check_enum_discriminants` folds against,
         // so a declared `Audio = BASE + 1` resolves identically here and there.

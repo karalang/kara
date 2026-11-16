@@ -6434,7 +6434,7 @@ distinct type Fd = i32;   // same layout as i32: safe for FFI newtypes
 
 C-like enums (no payload) expose their discriminant and variant list at runtime through a small, generated surface. Serialisers, command-line parsers, protocol encoders and FFI glue need it.
 
-**`.discriminant()`.** Every C-like enum gets a generated `fn discriminant(self) -> D`, where `D` is the repr type (`u8` for `#[repr(u8)]`, `i32` for `#[repr(i32)]`, and `u32` for a C-like enum without `#[repr]`). The method is a read, has no effect, and is available wherever the enum is nameable. A method is used rather than an `as u8` cast because the cast would have to work on every enum-to-integer conversion, mixing the safe case (read the number you chose) with cases that need `unsafe`. A dedicated name keeps call sites self-documenting.
+**`.discriminant()`.** Every C-like enum gets a generated `fn discriminant(self) -> D`, where `D` is the repr type (`u8` for `#[repr(u8)]`, `i32` for `#[repr(i32)]` and for `#[repr(C)]`, a C `int`, and `u32` for a C-like enum without `#[repr]`). So `#[repr(C)] enum E { A = -1 }` gives `E.A.discriminant() == -1` (review-thread ruling 2026-11-16). The method is a read, has no effect, and is available wherever the enum is nameable. A method is used rather than an `as u8` cast because the cast would have to work on every enum-to-integer conversion, mixing the safe case (read the number you chose) with cases that need `unsafe`. A dedicated name keeps call sites self-documenting.
 
 ```kara
 #[repr(u8)]
@@ -6542,14 +6542,16 @@ The compiler does not check that the `match` literals equal the declared discrim
 - an `enum` with more than one variant, or with a payload-less variant: `error[E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT]`;
 - `#[repr(transparent)]` combined with any other repr (`#[repr(C)]`, `#[repr(intN)]`): `error[E_REPR_TRANSPARENT_EXCLUSIVE]`. `transparent` *is* the layout claim; another repr would contradict or duplicate it.
 
-**Zero-sized neighbours.** A transparent struct may carry further fields **only if each has size zero and alignment one**: `PhantomData[T]`, `()`, `Array[T, 0]`, an empty unit struct. The non-zero-sized field's layout becomes the struct's layout; the companions matter only to the type system (for example, `PhantomData[T]` ties the wrapper to `T`). The rule is per field: two non-zero-sized fields are rejected even if their sizes add up to one field's worth.
+**Zero-sized neighbours.** A transparent struct may carry further fields **only if each has size zero and alignment one**: `()`, `Array[T, 0]`, an empty unit struct. The non-zero-sized field's layout becomes the struct's layout; the companions matter only to the type system (for example, a unit-struct field tags the wrapper with what its number means). The rule is per field: two non-zero-sized fields are rejected even if their sizes add up to one field's worth.
 
 ```kara
-// OK: exactly one non-zero-sized field; PhantomData carries no bytes.
+struct Celsius {}
+
+// OK: exactly one non-zero-sized field; the unit struct carries no bytes.
 #[repr(transparent)]
-struct Tagged[T] {
-    inner: i32,
-    _marker: PhantomData[T],
+struct Reading {
+    raw: i32,
+    _unit: Celsius,
 }
 ```
 
@@ -6597,6 +6599,8 @@ unsafe extern "C" {
 `"C"` is the only ABI in v1. Other ABI strings are reserved: writing one is a "not yet supported" compile error, never a silent fallback to `"C"`. A panic never crosses the boundary: a panic aborts the process ([core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8)). Exporting Kāra functions under the C ABI is deferred to the systems track.
 
 `usize` and `isize` exist for FFI signatures; idiomatic Kāra uses `i64` for sizes ([§5](#5-types)).
+
+**What crosses.** A parameter or result of an `extern "C"` function is an integer, `bool` (C's `bool`), `char`, `f32`, `f64`, a raw pointer, a C-like `#[repr(C)]` or `#[repr(intN)]` enum (as its C integer, holding the declared discriminant), or a `#[repr(C)]` struct of these and of fixed arrays of them. A `#[repr(transparent)]` struct or a `distinct type` crosses as its one field. `char` crosses as `uint32_t`, C's `char32_t`: a Unicode scalar value, so a C function that hands back a value outside that range is a broken contract, and the interpreter reports it (review-thread ruling 2026-11-16).
 
 #### `unsafe extern` blocks
 
@@ -6702,7 +6706,7 @@ unsafe extern "C" {
 | Pointer types `*const Foo`, `*mut Foo` | Permitted wherever a pointer type is. |
 | Reference types `ref Foo`, `mut ref Foo`, and a borrowed parameter `x: Foo` | Permitted; references are sized pointers and the borrow rules apply normally. |
 | FFI signatures using the above | Permitted as parameter, return and field types, whenever the type is behind a pointer or reference. |
-| `ptr.const(...)` / `ptr.mut(...)` on a place of type `Foo` | **Not** permitted. No place of type `Foo` can exist in Kāra code; opaque values only enter as `*mut Foo` from FFI. |
+| `ptr.const(r)` / `ptr.mut(r)` where `r` is a `ref Foo`, a `mut ref Foo` or a borrowed parameter `r: Foo` | Permitted, and gives the address of the C object `r` refers to: the same pointer the reference was made from. `ptr.mut` needs a `mut ref Foo`, as for any type. No other place of type `Foo` can exist in Kāra code, since opaque values only enter as `*mut Foo` from FFI (review-thread ruling 2026-11-16). |
 
 **Forbidden operations**, each rejected at typecheck:
 - By-value bindings (`let f: CFile = ...`): `error[E_OPAQUE_TYPE_REQUIRES_INDIRECTION]: opaque foreign type 'CFile' has no known size; values of opaque types must appear behind a pointer or reference (*mut CFile, ref CFile, mut ref CFile)`.

@@ -3152,6 +3152,7 @@ pub(crate) fn resolve_error_code(kind: &crate::resolver::ResolveErrorKind) -> &'
         crate::resolver::ResolveErrorKind::LayoutReprCIgnored => "W0151",
         crate::resolver::ResolveErrorKind::LayoutReprCOnPubStruct => "E0151",
         crate::resolver::ResolveErrorKind::FloatInSerializedType => "W0152",
+        crate::resolver::ResolveErrorKind::OpaqueTypeRedeclared => "W_OPAQUE_TYPE_REDECLARED",
         crate::resolver::ResolveErrorKind::UndefinedName => "E0100",
         crate::resolver::ResolveErrorKind::DuplicateDefinition => "E0101",
         crate::resolver::ResolveErrorKind::ReservedIdentifier => "E0102",

@@ -11,6 +11,8 @@
 //!   `#[repr(C)]` structs, so C indexing past the pointer read zeros.
 //! - B-2026-11-16-236: a `// Safety:` comment with no word after it
 //!   documented an `unsafe` block.
+//! - Review-thread rulings 2026-11-16: `char` crosses as `uint32_t`, and
+//!   `ptr.const` of a reference to an opaque C object is its address.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -134,6 +136,15 @@ typedef struct { uint8_t kind; Color c; uint16_t n; } Tagged;
 Tagged tagged_bump(Tagged t) { t.c = next_color(t.c); t.n += 1; return t; }
 void tagged_fill(Tagged *t) { t->kind = 3; t->c = BLUE; t->n = 77; }
 uint8_t small_enum_twice(uint8_t e) { return e * 2; }
+uint32_t char_next(uint32_t c) { return c + 1; }
+void chars_upper(uint32_t *cs, int64_t n) { for (int64_t i = 0; i < n; i++) if (cs[i] >= 'a' && cs[i] <= 'z') cs[i] -= 32; }
+typedef struct { uint32_t ch; uint8_t width; } Glyph;
+Glyph glyph_of(uint32_t c) { Glyph g = { c, c > 0xFFFF ? 2 : 1 }; return g; }
+uint32_t glyph_char(Glyph g) { return g.ch; }
+typedef struct Handle { int64_t v; } Handle;
+static Handle the_handle = { 42 };
+Handle *handle_get(void) { return &the_handle; }
+int64_t handle_value(const Handle *h) { return h->v; }
 "##;
 
 const LAY_KARA: &str = r##"#[repr(C)] struct S1 { a: u8, b: u16, c: u8 }
@@ -269,6 +280,45 @@ fn s15_repr_enums_cross_to_c_by_value_and_inside_structs() {
     );
 }
 
+/// `char` crosses as `uint32_t` (C's `char32_t`), by value, behind a
+/// pointer and inside a struct; and a reference to an opaque C object gives
+/// its address back through `ptr.const` (review-thread rulings 2026-11-16).
+const CHAR_KARA: &str = r##"#[repr(C)] struct Glyph { ch: char, width: u8 }
+/// # Safety
+/// liblay.so, built from lay.c.
+unsafe extern "C" {
+    type Handle;
+    pure fn char_next(c: char) -> char;
+    fn chars_upper(cs: *mut char, n: i64);
+    pure fn glyph_of(c: char) -> Glyph;
+    pure fn glyph_char(g: Glyph) -> char;
+    fn handle_get() -> *mut Handle;
+    fn handle_value(h: *const Handle) -> i64;
+}
+fn addr_of(h: ref Handle) -> *const Handle { ptr.const(h) }
+fn main() {
+    println(char_next('a'));
+    println(char_next('\u{1F5FF}'));
+    let mut cs: Array[char, 3] = ['k', 'ā', 'r'];
+    chars_upper(ptr.mut(cs[0]), 3);
+    println(f"{cs[0]}{cs[1]}{cs[2]}");
+    let g = glyph_of('😀');
+    println(f"{g.ch} {g.width} {glyph_char(Glyph { ch: 'z', width: 1 })}");
+    let h = handle_get();
+    // Safety: handle_get returns a live static.
+    let p = unsafe { addr_of(*h) };
+    println(f"{ptr.addr(p) == ptr.addr(h as *const Handle)} {handle_value(p)}");
+}
+"##;
+
+#[test]
+fn s15_char_crosses_as_char32_and_an_opaque_ref_gives_its_address() {
+    let Some(dir) = project("char", CHAR_KARA) else {
+        return;
+    };
+    runs_as(dir.path(), "b\n😀\nKāR\n😀 2 z\ntrue 42\n");
+}
+
 #[test]
 fn s15_a_safety_comment_needs_a_word_after_the_colon() {
     let dir = Scratch::new("safety-word");
@@ -292,4 +342,30 @@ fn s15_a_safety_comment_needs_a_word_after_the_colon() {
         let err = run(&src);
         assert!(!err.contains("undocumented_unsafe"), "{src}\n{err}");
     }
+}
+
+/// Two `unsafe extern` blocks declaring the same opaque type warn
+/// `W_OPAQUE_TYPE_REDECLARED` and still compile (design.md §15,
+/// B-2026-11-16-239); a redeclared opaque type was a hard duplicate error.
+#[test]
+fn s15_a_redeclared_opaque_type_warns_and_compiles() {
+    let dir = Scratch::new("opaque-redeclared");
+    let src = "/// # Safety\n/// CFile is libc's FILE.\nunsafe extern \"C\" { type CFile; }\n\
+               /// # Safety\n/// The same FILE.\nunsafe extern \"C\" {\n    type CFile;\n    \
+               fn fflush(f: *mut CFile) -> i32;\n}\n\
+               fn main() {\n    // Safety: a null stream flushes every stream.\n    \
+               println(unsafe { fflush(ptr.null_mut()) });\n}\n";
+    std::fs::write(dir.path().join("main.kara"), src).unwrap();
+    let out = karac(dir.path(), &["check", "--output=json", "main.kara"]);
+    let json = String::from_utf8_lossy(&out.stdout);
+    assert!(json.contains("\"W_OPAQUE_TYPE_REDECLARED\""), "{json}");
+    assert!(json.contains("\"severity\":\"warning\""), "{json}");
+    assert!(out.status.success(), "{json}");
+    let run = karac(dir.path(), &["__mir-run", "main.kara"]);
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "0\n",
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 }

@@ -2458,6 +2458,29 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_opaque_foreign_type(&mut self, o: &OpaqueTypeDecl) {
+        // A redeclared opaque type is a warning, and the first declaration
+        // stands (design.md §15, B-2026-11-16-239).
+        let scope = self.table.current_scope_id();
+        if let Some(first) = self
+            .table
+            .lookup_in_scope(scope, &o.name)
+            .filter(|s| matches!(s.kind, SymbolKind::OpaqueForeignType))
+        {
+            let message = format!(
+                "opaque foreign type '{}' is already declared at {}:{}; both declarations \
+                 must name the same C type",
+                o.name, first.span.line, first.span.column
+            );
+            self.errors.push(ResolveError {
+                message,
+                span: o.span,
+                kind: ResolveErrorKind::OpaqueTypeRedeclared,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
         if let Err(err) =
             self.table
                 .define(o.name.clone(), SymbolKind::OpaqueForeignType, o.span, true)

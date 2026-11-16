@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "unsafe-ffi", "s15"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "B-2026-11-16-247: discriminant() of a bare #[repr(C)] enum returned u32, so Red = -1 read 4294967295 and would not bind to an i32. A #[repr(C)] enum is a C int, so it returns i32 (review-thread ruling 2026-11-16); #[repr(intN)] keeps intN and no repr keeps u32."

@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "iterators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-232: a function returning its map adapter as IterMap[VecIter[i64], Fn(i64) -> i64, i64] crashed the MIR interpreter, because the closure borrows the ref i64 items while the erased Fn(i64) call passes the i64; the interpreter now lends the value from a slot of its own, as compiled code does."

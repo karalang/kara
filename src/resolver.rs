@@ -793,6 +793,13 @@ pub enum ResolveErrorKind {
     /// must not silence it, or the FFI contract it protects becomes
     /// suppressible.
     LayoutReprCOnPubStruct,
+    /// `W_OPAQUE_TYPE_REDECLARED` — a second `type Foo;` in an `unsafe
+    /// extern { }` block, where `Foo` is already an opaque foreign type in
+    /// the same scope. design.md §15 makes it a warning, not the duplicate
+    /// definition error, because the C side has the final word on whether
+    /// both mean the same C type (B-2026-11-16-239). NOTE severity: the
+    /// program still compiles, and the first declaration is the one used.
+    OpaqueTypeRedeclared,
     /// `float_in_serialized_type` (B-2026-08-21-2) — an `f32`/`f64` field in a
     /// `#[derive(Serialize)]` / `#[derive(Deserialize)]` struct. design.md
     /// § Floating point > Serialization: "JSON has no NaN encoding,
@@ -1013,6 +1020,7 @@ pub fn resolve_kind_is_note(kind: &ResolveErrorKind) -> bool {
         ResolveErrorKind::LayoutUnassignedFields
             | ResolveErrorKind::LayoutReprCIgnored
             | ResolveErrorKind::FloatInSerializedType
+            | ResolveErrorKind::OpaqueTypeRedeclared
     )
 }
 

@@ -1,0 +1,5 @@
+fn mk(v: ref Vec[i64]) -> IterMap[VecIter[i64], Fn(i64) -> i64, i64] {
+    let s = "ab".to_string();
+    v.iter().map(|x| x + s.len())
+}
+fn main() { let v: Vec[i64] = [1, 2]; let out: Vec[i64] = mk(v).collect(); println(f"{out}"); }

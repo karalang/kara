@@ -1215,6 +1215,13 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     ("E_MISSING_NON_EXHAUSTIVE", ty("MissingNonExhaustive", None)),
     ("W_DEPENDENCY_YANKED", phased("dep_resolution", "Warning")),
+    // design.md §15: a second `type Foo;` naming the same opaque type warns
+    // rather than erroring, because the C side has the final word
+    // (B-2026-11-16-239).
+    (
+        "W_OPAQUE_TYPE_REDECLARED",
+        res("OpaqueTypeRedeclared", None),
+    ),
     (
         "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
         phased("runtime", "StringSliceNotAtCharBoundary"),
@@ -2047,6 +2054,14 @@ const CODE_PROSE: &[(&str, &str)] = &[
          ends do not fall between UTF-8 characters, so the slice would cut a \
          character in two. Slice at a boundary (`s.char_indices()` gives each \
          character's byte offset), or work in characters with `s.chars()`.",
+    ),
+    (
+        "W_OPAQUE_TYPE_REDECLARED",
+        "A warning (design.md §15, Opaque foreign types): two `unsafe extern` \
+         blocks declare the same opaque type `type Foo;`. Both must name the \
+         same C type, which only the C side can confirm, so the program still \
+         compiles and the first declaration is the one used. Keep one \
+         declaration and import it where the others were.",
     ),
     (
         "W_DEPENDENCY_YANKED",
@@ -3621,6 +3636,7 @@ fn concept_for_kind(kind: &str) -> Option<&'static str> {
         "LayoutUnassignedFields"
         | "LayoutReprCIgnored"
         | "LayoutReprCOnPubStruct"
+        | "OpaqueTypeRedeclared"
         | "ReprTransparentInvalid"
         | "DiscriminantInvalid"
         | "ExternSignatureInvalid"

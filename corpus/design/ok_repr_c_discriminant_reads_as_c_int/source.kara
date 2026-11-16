@@ -1,0 +1,12 @@
+#[repr(C)] enum Color { Red = -1, Green = 40 }
+#[repr(i8)] enum Small { A = -3, B = 7 }
+enum Plain { X, Y }
+fn main() {
+    let d: i32 = Color.Red.discriminant();
+    println(d);
+    println(Color.Green.discriminant());
+    let s: i8 = Small.A.discriminant();
+    println(s);
+    let p: u32 = Plain.Y.discriminant();
+    println(p);
+}
