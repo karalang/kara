@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 370 |
+| diagnostics | 372 |
 | false-positive | 227 |
 | missing-feature | 176 |
 | perf | 175 |
 | soundness | 72 |
 | miscompile | 71 |
-| other | 53 |
-| run-vs-build | 42 |
+| other | 54 |
+| run-vs-build | 44 |
 | crash | 34 |
-| codegen-gap | 32 |
+| codegen-gap | 33 |
 | leak | 4 |
 | use-after-free | 3 |
 | double-free | 2 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 512 |
-| mir-llvm | 252 |
-| mir | 221 |
+| typecheck | 513 |
+| mir-llvm | 255 |
+| mir | 222 |
 | cli | 147 |
 | parser | 92 |
 | ownership | 89 |
-| interp | 70 |
+| interp | 73 |
 | runtime | 50 |
 | effect | 35 |
 | resolver | 34 |
@@ -110,6 +110,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
+| B-2026-11-16-196 | 2026-11-16 | typecheck+mir | low | `karac check` accepts a closure passed to an `own Fn` parameter that stores it (`Pool.new(|| Ok(Conn { id: made.fetch_add(1) }), 1, 1)`) and a later use of the captured `made`; every run lane then stops with the internal `move check main: use of _1, which may have been moved` | — |
+| B-2026-11-16-197 | 2026-11-16 | mir-llvm | low | `karac build --target=wasm_wasi` of a program that uses std.crypto (sha256, hmac_sha256, constant_time_eq) stops at wasm-ld with `undefined symbol: karac_crypto_mir` instead of a refusal naming std.crypto | — |
 
 ### Relocated
 
@@ -1374,6 +1376,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-189 | typecheck | low | `assert_eq` / `assert_ne` on the program's own struct or enum without `Debug` says to add `#[derive(Debug)]` but carried no fix | e0d36b037a |
 | B-2026-11-16-190 | resolver | medium | Two imports of one gated library module (`import std.pool.{Pool};` then `import std.pool.{PoolError};`) are refused with "conflicting impl: `PoolErro… | e0d36b037a |
 | B-2026-11-16-191 | resolver | medium | An undefined type was machine-renamed to a primitive or a value binding: `Pool[Conn]` became `bool[Conn]`, and in the same program `pool[Conn]` (the… | e0d36b037a |
+| B-2026-11-16-192 | mir-llvm | medium | Dropping a `Secret[String]` frees its buffer with the secret's bytes still in it: the zeroize-on-drop that secret.md and std/secret.kara describe was… | 4ade899ce2 |
+| B-2026-11-16-193 | interp | medium | The MIR interpreter loses every std.log record from TaskGroup tasks spawned inside auto-parallelized statements, and reports their call values leaked… | 4ade899ce2 |
+| B-2026-11-16-194 | interp | low | In the MIR interpreter a std.log call made inside a custom Backend's own `emit` goes back into that backend instead of to the default JSON backend on… | 4ade899ce2 |
+| B-2026-11-16-195 | interp+mir-llvm | medium | A loan released into a different pool (`p.release(conn_from_q)`) is dropped but still counts toward its own pool's max_connections, so that pool lose… | 4ade899ce2 |
 
 </details>
 
