@@ -273,6 +273,15 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              can never execute.",
     },
     LintInfo {
+        // design.md § Exhaustiveness (B-2026-11-16-245): `if let` / `while
+        // let` test a pattern expected to be refutable.
+        name: "irrefutable_let_pattern",
+        default_level: LintLevel::Warn,
+        description:
+            "An `if let` or `while let` pattern matches every value of its type, so the \
+             `else` branch is unreachable or the loop never ends by a failed match.",
+    },
+    LintInfo {
         name: "refinement_domain_too_wide",
         default_level: LintLevel::Warn,
         description:

@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 393 |
+| diagnostics | 395 |
 | false-positive | 234 |
 | missing-feature | 181 |
 | perf | 178 |
-| soundness | 74 |
+| soundness | 75 |
 | miscompile | 72 |
 | other | 58 |
 | run-vs-build | 49 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 525 |
+| typecheck | 527 |
 | mir-llvm | 265 |
 | mir | 227 |
 | cli | 162 |
-| parser | 92 |
+| parser | 93 |
 | ownership | 90 |
 | interp | 80 |
 | runtime | 50 |
@@ -114,6 +114,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-239 | 2026-11-16 | resolver | low | Two `unsafe extern` blocks declaring the same opaque type are a hard `already defined` error, where design.md §15 makes the duplicate `warning[W_OPAQUE_TYPE_REDECLARED]` because the C side has the final word | — |
 | B-2026-11-16-240 | 2026-11-16 | interp | low | `ptr.addr` / `ptr.expose` of a pointer to a Kāra local stop the MIR interpreter (`the address of a value the interpreter holds is not known here`), so design.md §15's tagging and round-trip examples run only compiled | — |
 | B-2026-11-16-243 | 2026-11-16 | mir-llvm | low | A hashed `Map` or `Set` that removes about as often as it inserts (a sliding window, a toggle set) pays the ordered table's holes, compaction and index rebuild on top of the probe: kata 220, 340 and 391 run 1.6-2.0x Rust's instructions | — |
+| B-2026-11-16-244 | 2026-11-16 | typecheck | medium | A range pattern's bounds are not checked against the scrutinee's type: `'a'..='z'` on an i64 is accepted and matches 100 | — |
+| B-2026-11-16-245 | 2026-11-16 | typecheck | low | An irrefutable `if let` or `while let` pattern gives no warning; design.md § Pattern exhaustiveness says it is one | — |
+| B-2026-11-16-246 | 2026-11-16 | parser | medium | Comparisons chain: `a == false == false` and `1 < 2 == true` are accepted; design.md § Operators and precedence says they do not chain | — |
 
 ### Relocated
 

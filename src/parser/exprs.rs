@@ -502,6 +502,11 @@ impl super::Parser {
             self.block_like_postfix_error(&lhs);
         }
 
+        // The span of a comparison this climb built: a comparison operator
+        // right after one is a chain, which design.md § Operators and
+        // precedence refuses ("no chaining", B-2026-11-16-246). A parenthesized comparison
+        // comes from its own climb, so it never matches.
+        let mut built_comparison: Option<Span> = None;
         loop {
             // Check for postfix operators first
             match self.peek_token_ref() {
@@ -1129,6 +1134,18 @@ impl super::Parser {
                 break;
             }
 
+            let is_comparison = matches!(
+                op,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+            );
+            if is_comparison && built_comparison == Some(lhs.span) {
+                self.error(
+                    "comparisons do not chain: `a < b < c` and `a == b == c` are errors \
+                     (design.md § Operators and precedence); write `a < b and b < c`, \
+                     or parenthesize the comparison the second operator applies to",
+                );
+            }
+
             // B-2026-08-01-25 — `&&`/`||` are not Kāra. The operator token is
             // about to be consumed (exactly once per source position, unlike
             // the peek above), so this is the spot that emits the diagnostic
@@ -1196,6 +1213,7 @@ impl super::Parser {
                     right: Box::new(rhs),
                 },
             };
+            built_comparison = is_comparison.then_some(span);
         }
 
         Some(lhs)

@@ -220,6 +220,7 @@ impl<'a> super::TypeChecker<'a> {
         let prev_core = std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
         let prev_bp = std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
         self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
+        self.warn_irrefutable_let(pattern, &dispatch_ty, false);
         self.current_scrutinee_borrow_projection = prev_bp;
         self.current_scrutinee_core_borrowed = prev_core;
         self.current_scrutinee_mut_self = prev_ms;
@@ -2763,6 +2764,39 @@ impl<'a> super::TypeChecker<'a> {
             end.and_then(|b| self.resolve_range_bound_value(b, scrut_ty, false))
         };
 
+        // Each bound must be of the scrutinee's kind, as a literal pattern
+        // is: a `char` range never matches an integer, nor an integer range
+        // a `char` (design.md § Range patterns; B-2026-11-16-244).
+        let char_scrutinee = match scrut_int {
+            Type::Char => Some(true),
+            Type::Int(_) | Type::UInt(_) => Some(false),
+            _ => None,
+        };
+        // Bounds that disagree with each other get the same-type
+        // diagnostic below instead.
+        let bounds_conflict =
+            matches!((&lo, &hi), (Some(l), Some(h)) if range_bounds_type_conflict(l, h));
+        if let (Some(want_char), false) = (char_scrutinee, bounds_conflict) {
+            let wrong = [&lo, &hi]
+                .into_iter()
+                .flatten()
+                .find(|b| matches!(b.1, Type::Char) != want_char)
+                .map(|b| b.1.clone());
+            if let Some(found) = wrong {
+                self.type_error(
+                    format!(
+                        "expected '{}', found '{}': a range pattern's bounds have the \
+                         scrutinee's type",
+                        type_display(scrut_int),
+                        type_display(&found)
+                    ),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return;
+            }
+        }
+
         if let (Some(lo), Some(hi)) = (&lo, &hi) {
             // Type-matching (slice 5): char-vs-int family mismatch, or two
             // explicitly-typed integer bounds of differing width, are
@@ -4361,6 +4395,29 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+    }
+
+    /// design.md § Exhaustiveness: `if let` and `while let` are not checked
+    /// for exhaustiveness, but an irrefutable pattern there is a warning,
+    /// since the `else` branch can never run or the loop never ends by a
+    /// failed match (B-2026-11-16-245).
+    pub(super) fn warn_irrefutable_let(&mut self, pat: &Pattern, ty: &Type, is_while: bool) {
+        if matches!(ty, Type::Error | Type::Never) || !self.is_irrefutable_pattern(pat, ty) {
+            return;
+        }
+        let msg = if is_while {
+            "irrefutable `while let` pattern: it matches every value, so the loop never \
+             ends by a failed match; write `loop` with a `let`"
+        } else {
+            "irrefutable `if let` pattern: it matches every value, so the `else` branch \
+             never runs; write a plain `let`"
+        };
+        self.type_lint_warning(
+            msg.to_string(),
+            pat.span,
+            TypeErrorKind::StyleLint,
+            "irrefutable_let_pattern",
+        );
     }
 
     // ── Irrefutability Check for Parameter Patterns ──────────────

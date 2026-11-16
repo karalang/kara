@@ -240,9 +240,9 @@ fn s6_ranges_do_not_chain() {
 /// none inside a delimiter.
 #[test]
 fn s6_formatter_keeps_a_head_struct_literal_parenthesized() {
-    let src = "struct P { x: i64 }\nfn f(p: P) -> i64 { p.x }\nfn main() {\n    let p = P { x: 0 };\n    if let P { x } = (P { x: 1 }) { println(x); }\n    while f(P { x: 2 }) == 0 { break; }\n    for v in (P { x: 3 }).x..4 { println(v); }\n}\n";
+    let src = "struct P { x: i64 }\nfn f(p: P) -> i64 { p.x }\nfn main() {\n    let p = P { x: 0 };\n    if let P { x: 1 } = (P { x: 1 }) { println(1); }\n    while f(P { x: 2 }) == 0 { break; }\n    for v in (P { x: 3 }).x..4 { println(v); }\n}\n";
     let once = karac::format_source(src).expect("formats");
-    assert!(once.contains("if let P { x } = (P {"), "{once}");
+    assert!(once.contains("if let P { x: 1 } = (P {"), "{once}");
     assert!(once.contains("while f(P {"), "{once}");
     assert!(once.contains("for v in (P {"), "{once}");
     let twice = karac::format_source(&once).expect("the formatted program parses");
