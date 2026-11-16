@@ -451,6 +451,8 @@ pub unsafe extern "C" fn karac_mir_buf(
             let out = unsafe { std::slice::from_raw_parts_mut(ptr, n) };
             r.read(out).map(|k| k as i64)
         }
+        // A `LinesIter` that has yielded an error ends there.
+        (5, _) if lines_ended(handle) => return -2,
         (5, KaracBuf::Reader(r) | KaracBuf::SockReader(r, _)) => {
             let mut s = Vec::new();
             match r.read_until(b'\n', &mut s) {
@@ -506,8 +508,33 @@ pub unsafe extern "C" fn karac_mir_buf(
             unsafe { value.write(v) };
             -1
         }
-        // SAFETY: the caller's contract.
-        Err(e) => unsafe { io_error_code(&e, msg) },
+        Err(e) => {
+            if op == 5 {
+                end_lines(handle);
+            }
+            // SAFETY: the caller's contract.
+            unsafe { io_error_code(&e, msg) }
+        }
+    }
+}
+
+/// The buffered readers whose `LinesIter` has yielded an error: its `next`
+/// returns `None` from then on, so a `for` over it ends (review-thread
+/// ruling 2026-11-16, B-2026-11-16-209). The reader's own reads are
+/// unchanged. A handle leaves the list when it is freed.
+static LINES_ENDED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+fn lines_ended(handle: *mut std::ffi::c_void) -> bool {
+    LINES_ENDED
+        .lock()
+        .is_ok_and(|v| v.contains(&(handle as usize)))
+}
+
+fn end_lines(handle: *mut std::ffi::c_void) {
+    if let Ok(mut v) = LINES_ENDED.lock() {
+        if !v.contains(&(handle as usize)) {
+            v.push(handle as usize);
+        }
     }
 }
 
@@ -619,6 +646,9 @@ pub unsafe extern "C" fn karac_mir_env_var(out: *mut RawVec, p: *const u8, n: u6
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_buf_free(handle: *mut std::ffi::c_void) {
     if !handle.is_null() {
+        if let Ok(mut v) = LINES_ENDED.lock() {
+            v.retain(|&h| h != handle as usize);
+        }
         // SAFETY: the caller's contract.
         drop(unsafe { Box::from_raw(handle.cast::<KaracBuf>()) });
     }
@@ -669,6 +699,9 @@ unsafe fn announce_port(ptr: *mut u8, len: i64, fd: i64) {
     if requested.is_some_and(|a| a.port() == 0) {
         // SAFETY: `fd` is the listener the bind just made.
         if let Ok(local) = unsafe { borrowed::<std::net::TcpListener>(fd) }.local_addr() {
+            // A write to stderr: what stdout holds goes first (io.md §
+            // Buffering), as the interpreter's does.
+            crate::mir::out_flush();
             eprintln!("BOUND_PORT={}", local.port());
         }
     }
@@ -1752,6 +1785,7 @@ pub unsafe extern "C" fn karac_mir_http_wire(
         body,
         &pairs,
         with_request(http1::Request::keep_alive),
+        with_request(http1::Request::http10),
     );
     // SAFETY: the caller's contract; a `Vec[u8]` is laid out as a `String`.
     unsafe { string_of(out, &wire) };

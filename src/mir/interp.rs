@@ -861,6 +861,8 @@ fn run_with(
         net_extents: Vec::new(),
         fake_sockets: Vec::new(),
         bufs: Vec::new(),
+        lines_ended: Vec::new(),
+        lines_failed_now: false,
         buf_windows: Default::default(),
         procs: Procs::default(),
         sockets: Sockets::default(),
@@ -1319,6 +1321,13 @@ struct Interp<'a> {
     fake_sockets: Vec<Option<(usize, i128)>>,
     /// The `BufReader`s and `BufWriter`s, by id - 1; `None` once dropped.
     bufs: Vec<Option<Buf>>,
+    /// The buffered readers whose `LinesIter` has yielded an error: its
+    /// `next` is `None` from then on (review-thread ruling 2026-11-16,
+    /// B-2026-11-16-209). Ids are never reused.
+    lines_ended: Vec<i128>,
+    /// Set by a `LinesIter`'s `next` that yields an error, for
+    /// [`Self::buf_method`] to record in `lines_ended`.
+    lines_failed_now: bool,
     /// A `BufReader`'s window, by its id: the box of bytes the last
     /// `fill_buf` returned a view of, refilled in place by the next one
     /// (the view borrows the reader, so none is alive then) and freed with
@@ -6380,6 +6389,9 @@ impl<'a> Interp<'a> {
         if method == "lines" {
             return Ok(Value::Agg(vec![Value::Int(id)]));
         }
+        if method == "next" && self.lines_ended.contains(&id) {
+            return self.option(ret, None);
+        }
         let slot = usize::try_from(id - 1).ok();
         let Some(Some(mut b)) = slot.and_then(|i| self.bufs.get_mut(i)).map(Option::take) else {
             return err(format!("{name} of a closed reader or writer"));
@@ -6388,6 +6400,9 @@ impl<'a> Interp<'a> {
             let res = self.provided_buf_op(name, method, id, &mut b, &args[1..], ret);
             if let Some(i) = slot {
                 self.bufs[i] = Some(b);
+            }
+            if std::mem::take(&mut self.lines_failed_now) {
+                self.lines_ended.push(id);
             }
             return res;
         }
@@ -6413,6 +6428,9 @@ impl<'a> Interp<'a> {
         let res = self.buf_op(name, method, &mut b, &args[1..], ret);
         if let Some(i) = slot {
             self.bufs[i] = Some(b);
+        }
+        if std::mem::take(&mut self.lines_failed_now) {
+            self.lines_ended.push(id);
         }
         res
     }
@@ -6452,6 +6470,7 @@ impl<'a> Interp<'a> {
                         // A `LinesIter`'s `next` yields the failure as
                         // `Some(Err(..))`.
                         Err(f) if method == "next" => {
+                            self.lines_failed_now = true;
                             let inner = self.option_payload(ret, name)?;
                             let item = self.fail_into(inner, f)?;
                             return self.option(ret, Some(item));
@@ -6494,7 +6513,10 @@ impl<'a> Interp<'a> {
                             let line = self.alloc_box("String", Value::Str(s));
                             self.variant_named(inner, None, "Ok", vec![line])?
                         }
-                        Err(e) => self.io_err(inner, e)?,
+                        Err(e) => {
+                            self.lines_failed_now = true;
+                            self.io_err(inner, e)?
+                        }
                     };
                     return self.option(ret, Some(item));
                 }
@@ -7106,7 +7128,10 @@ impl<'a> Interp<'a> {
                         let line = self.alloc_box("String", Value::Str(s));
                         self.variant_named(inner, None, "Ok", vec![line])?
                     }
-                    Err(e) => self.io_err(inner, e)?,
+                    Err(e) => {
+                        self.lines_failed_now = true;
+                        self.io_err(inner, e)?
+                    }
                 };
                 return self.option(ret, Some(item));
             }
@@ -17942,14 +17967,15 @@ impl<'a> Interp<'a> {
                 let rty = self.deref_ty(arg_tys.first().copied(), name)?;
                 let resp = self.through_refs(&args[0])?;
                 let (status, body, headers) = self.response_parts(&resp, rty, name)?;
-                let keep = self.served().keep_alive();
-                let wire = crate::http1::response_bytes(status, body.as_bytes(), &headers, keep);
+                let (keep, http10) = (self.served().keep_alive(), self.served().http10());
+                let wire =
+                    crate::http1::response_bytes(status, body.as_bytes(), &headers, keep, http10);
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__wire_fixed") => {
                 let body = self.string_at(&args[0])?;
-                let keep = self.served().keep_alive();
-                let wire = crate::http1::response_bytes(200, body.as_bytes(), &[], keep);
+                let (keep, http10) = (self.served().keep_alive(), self.served().http10());
+                let wire = crate::http1::response_bytes(200, body.as_bytes(), &[], keep, http10);
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__keep_alive") => Ok(Value::Bool(self.served().keep_alive())),

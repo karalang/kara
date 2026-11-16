@@ -153,6 +153,7 @@ pub unsafe extern "C" fn karac_mir_tls(
                     Ok(l) => {
                         if at.port() == 0 && std::env::var_os("KARAC_ANNOUNCE_PORT").is_some() {
                             if let Ok(local) = l.local_addr() {
+                                crate::mir::out_flush();
                                 eprintln!("BOUND_PORT={}", local.port());
                             }
                         }

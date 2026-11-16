@@ -1538,7 +1538,8 @@ fn file_and_socket_functions_take_str() {
 /// B-2026-10-14-45 — `BufReader` / `BufWriter` (docs/library/io.md §
 /// Buffered I/O): `read_line` appends and counts in `i64`, `for line in
 /// r.lines()` drops the `\n` / `\r\n` and stops at the end (or a `break`),
-/// a bad line is `Err(InvalidUtf8)` and the next one still reads, `?` on
+/// a bad line is `Err(InvalidUtf8)` and ends the iteration (review-thread
+/// ruling 2026-11-16, B-2026-11-16-209), `?` on
 /// the `File` inside the constructor, a small capacity, `read` / `consume`
 /// / `read_to_string`, and a `BufWriter` that flushes when it drops.
 const BUFFERED: &str = r#"fn count(path: Str) -> Result[i64, IoError] {
@@ -1629,7 +1630,7 @@ fn buffered_readers_and_writers_run() {
     let (interp, built) = interp_and_build(dir.path(), &src);
     assert_eq!(
         interp,
-        "2 [a]\n<b>\n<c>\nwrote 6\nhi\nthere\ntail\nread 3 104\n10 [here\ntail\n]\n5\nnotfound\nutf8\nok i\n"
+        "2 [a]\n<b>\n<c>\nwrote 6\nhi\nthere\ntail\nread 3 104\n10 [here\ntail\n]\n5\nnotfound\nutf8\n"
     );
     if let Some(built) = built {
         assert_eq!(built, interp);

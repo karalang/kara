@@ -396,6 +396,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `BufReader.lines()` ends at its first error: it yields the `Err`
+  once and then stops, where it returned the same `Err` for ever from a
+  stream that keeps failing, so a `for` that only reported the error never
+  ended. This departs from Rust on purpose; the reader itself still reads
+  (B-2026-11-16-209).
 - The HTTP client's 3xx answers and timeout follow docs/library/io.md §
   HTTP client on both backends. A 3xx it does not follow (a 300, a 304, a
   redirect with no `Location`) is an `Err` that keeps the response, where
@@ -538,6 +543,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A compiled program that printed to standard output and then announced
+  its port under `KARAC_ANNOUNCE_PORT` wrote `BOUND_PORT=<n>` to stderr
+  while its stdout still held what it had printed, so a harness that waited
+  for the port and then read stdout saw nothing; io.md § Buffering says
+  stdout is written out before anything goes to stderr (B-2026-11-16-208).
+- The HTTP server answers an HTTP/1.0 request whose connection it keeps
+  (`Connection: keep-alive`) with `connection: keep-alive`. The response
+  said nothing, and a 1.0 client reads such a response as the last on its
+  connection (B-2026-11-16-210).
 - A local hides an import only inside its own scope. In a package, a
   parameter, `let`, `for`, `match` or closure binding with an imported
   name (an alias, a module, or a name two modules declare) erased the

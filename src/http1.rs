@@ -41,6 +41,9 @@ pub struct Request {
     pub body: Vec<u8>,
     /// Whether the connection stays open after the response.
     keep_alive: bool,
+    /// An HTTP/1.0 request, whose connection stays open only when the
+    /// response says `connection: keep-alive`.
+    http10: bool,
 }
 
 impl Request {
@@ -90,6 +93,11 @@ impl Request {
     pub fn keep_alive(&self) -> bool {
         self.keep_alive
     }
+
+    /// Whether the request is HTTP/1.0.
+    pub fn http10(&self) -> bool {
+        self.http10
+    }
 }
 
 /// `+` is a space and `%XX` the byte it names; a malformed escape stays as
@@ -119,12 +127,15 @@ fn form_decode(s: &str) -> String {
 /// A response's bytes: the status line, `headers` (with a JSON
 /// `content-type` when they give none, and the body's `content-length` in
 /// place of any they give), `connection: close` unless `keep_alive`, and
-/// the body.
+/// the body. An HTTP/1.0 connection kept open says so, `connection:
+/// keep-alive`, since a 1.0 client otherwise reads the response as the
+/// last (review-thread ruling 2026-11-16, B-2026-11-16-210).
 pub fn response_bytes(
     status: i64,
     body: &[u8],
     headers: &[(String, String)],
     keep_alive: bool,
+    http10: bool,
 ) -> Vec<u8> {
     let mut head = format!("HTTP/1.1 {status} {}\r\n", reason(status));
     let mut typed = false;
@@ -141,6 +152,8 @@ pub fn response_bytes(
     head.push_str(&format!("content-length: {}\r\n", body.len()));
     if !keep_alive {
         head.push_str("connection: close\r\n");
+    } else if http10 {
+        head.push_str("connection: keep-alive\r\n");
     }
     head.push_str("\r\n");
     let mut wire = head.into_bytes();
@@ -211,6 +224,7 @@ pub fn parse_request(buf: &[u8], eof: bool) -> Parse {
             .push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
     }
     let connection = req.header("connection").map(str::to_ascii_lowercase);
+    req.http10 = http10;
     req.keep_alive = match http10 {
         true => connection.as_deref() == Some("keep-alive"),
         false => connection.as_deref() != Some("close"),
