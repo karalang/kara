@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 377 |
+| diagnostics | 380 |
 | false-positive | 227 |
 | missing-feature | 178 |
 | perf | 175 |
@@ -78,8 +78,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 516 |
 | mir-llvm | 257 |
-| mir | 222 |
-| cli | 149 |
+| mir | 223 |
+| cli | 151 |
 | parser | 92 |
 | ownership | 89 |
 | interp | 74 |
@@ -114,6 +114,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-197 | 2026-11-16 | mir-llvm | low | `karac build --target=wasm_wasi` of a program that uses std.crypto (sha256, hmac_sha256, constant_time_eq) stops at wasm-ld with `undefined symbol: karac_crypto_mir` instead of a refusal naming std.crypto | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
+| B-2026-11-16-47 | 2026-11-16 | mir | low | Every panic printed an `Error return trace:` holding only the panic's own place, though no `?` propagated an error, on the interpreter and compiled (`panic("x")` alone prints `Error return trace:\n  f.kara:2:5`) | — |
+| B-2026-11-16-48 | 2026-11-16 | cli | low | `karac check`/`build --output=json` write a resource-less effect as `panics()` in `program_effects` and `public_function_effects`, a spelling the language does not accept (`panics`) | — |
+| B-2026-11-16-49 | 2026-11-16 | cli | low | A clean `karac build --output=json` success object has no `diagnostics` key, where design.md § 17's document always carries the array (empty on a clean build) | — |
 
 ### Relocated
 

@@ -2644,6 +2644,15 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     diags
 }
 
+/// An effect as source writes it: `writes(Stdout)`, and a verb with no
+/// resource bare, `panics` rather than `panics()` (B-2026-11-16-48).
+fn effect_text(e: &crate::effectchecker::Effect) -> String {
+    match e.resource.is_empty() {
+        true => effect_verb_str(&e.verb).to_string(),
+        false => format!("{}({})", effect_verb_str(&e.verb), e.resource),
+    }
+}
+
 pub(super) fn program_effects_json(pipeline: &Pipeline) -> String {
     match &pipeline.effects {
         Some(effects) => {
@@ -2651,11 +2660,7 @@ pub(super) fn program_effects_json(pipeline: &Pipeline) -> String {
             let mut all_effects: Vec<String> = Vec::new();
             if let Some(main_effects) = effects.inferred_effects.get("main") {
                 for te in &main_effects.effects {
-                    all_effects.push(format!(
-                        "{}({})",
-                        effect_verb_str(&te.effect.verb),
-                        te.effect.resource
-                    ));
+                    all_effects.push(effect_text(&te.effect));
                 }
             }
             if all_effects.is_empty() {
@@ -2696,13 +2701,7 @@ pub(super) fn public_function_effects_json(pipeline: &Pipeline) -> String {
                 .map(|set| {
                     set.effects
                         .iter()
-                        .map(|te| {
-                            format!(
-                                "{}({})",
-                                effect_verb_str(&te.effect.verb),
-                                te.effect.resource
-                            )
-                        })
+                        .map(|te| effect_text(&te.effect))
                         .collect()
                 })
                 .unwrap_or_default();
