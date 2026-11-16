@@ -193,6 +193,53 @@ pub(super) fn check_v2_or_exit(
     pipeline
 }
 
+/// `karac build --output=jsonl`'s check: the event stream as the checks
+/// run, held open on a pass so code generation reports into it and
+/// `build_complete` comes last (design.md § Streaming phase events,
+/// B-2026-11-16-46). An error closes the stream and fails the command. A
+/// package the module boundaries refuse takes [`check_v2`]'s path.
+pub(super) fn check_v2_streamed(
+    filename: &str,
+    source: &str,
+    project: Option<&super::project_v2::Amalgam>,
+    manifest: Option<&manifest::Manifest>,
+    lint_overrides: crate::lints::CliLintOverrides,
+) -> Pipeline {
+    if project.is_some_and(|a| a.refusal.is_some()) {
+        return check_v2(
+            filename,
+            source,
+            project,
+            manifest,
+            lint_overrides,
+            OutputMode::Jsonl,
+        );
+    }
+    let mut lint_overrides = lint_overrides;
+    if let Some(m) = manifest {
+        lint_overrides.apply_manifest_lints(&m.lints);
+    }
+    if let Some(a) = project {
+        lint_overrides.hidden_traits = a.hidden.clone();
+        crate::trait_scope::set_program(a.hidden.clone());
+    }
+    let mut pipeline = v2_pipeline(filename, source, manifest, lint_overrides);
+    let tail = match project {
+        None => super::diag_json::stream_checks_jsonl(&mut pipeline, &[filename.to_string()], None),
+        Some(a) => super::diag_json::stream_checks_jsonl(
+            &mut pipeline,
+            &a.files(),
+            Some(&|d| a.remap_json_text(filename, d)),
+        ),
+    };
+    if tail.errors > 0 {
+        super::diag_json::finish_stream_jsonl(&tail, false, "");
+        process::exit(1);
+    }
+    super::diag_json::hold_stream(tail);
+    pipeline
+}
+
 /// The text diagnostics, their places mapped back to the package's files
 /// when the program is a package's combined source.
 pub(super) fn print_diagnostics(pipeline: &Pipeline, project: Option<&super::project_v2::Amalgam>) {

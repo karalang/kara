@@ -642,14 +642,23 @@ fn build(
         }),
     };
     let check = || {
-        let checked = super::run_v2::check_v2(
-            filename,
-            &source,
-            project.as_ref(),
-            manifest,
-            a.lint_overrides.clone(),
-            output,
-        );
+        let checked = match output {
+            OutputMode::Jsonl => super::run_v2::check_v2_streamed(
+                filename,
+                &source,
+                project.as_ref(),
+                manifest,
+                a.lint_overrides.clone(),
+            ),
+            _ => super::run_v2::check_v2(
+                filename,
+                &source,
+                project.as_ref(),
+                manifest,
+                a.lint_overrides.clone(),
+                output,
+            ),
+        };
         if a.monomorphization_budget.is_enabled() {
             enforce_monomorphization_budget(
                 &checked,
@@ -659,10 +668,11 @@ fn build(
             );
         }
         // The check's warnings ride the JSON success object under
-        // `diagnostics`, only when there are some; a package's summary
-        // already has the key.
+        // `diagnostics`, after the batch document's effect fields
+        // (B-2026-11-16-46); the stream has already carried them.
+        let head = super::diag_json::effects_fields(&checked).0;
         let warnings: Vec<String> = match output {
-            OutputMode::Text => Vec::new(),
+            OutputMode::Text | OutputMode::Jsonl => Vec::new(),
             _ => collect_diagnostics(&checked)
                 .entries
                 .iter()
@@ -672,7 +682,7 @@ fn build(
                 })
                 .collect(),
         };
-        warnings
+        (warnings, head)
     };
     crate::mir::interp::set_source_name(filename);
     if let Some(p) = &project {
@@ -681,22 +691,32 @@ fn build(
     // The MIR builder runs a front end of its own, so it lowers the program
     // while the check runs (B-2026-10-31-7).
     #[cfg(feature = "llvm")]
-    let (warnings, built_mir) = super::run_v2::checked_alongside(check, || {
+    let ((warnings, head), built_mir) = super::run_v2::checked_alongside(check, || {
         crate::mir::lower::build_source_in_order_later(&source)
     });
     #[cfg(not(feature = "llvm"))]
-    let warnings = check();
-    let fields: Option<String> = match fields {
-        Some(f) => Some(f.replace(
-            "\"diagnostics\":[],",
-            &format!("\"diagnostics\":[{}],", warnings.join(",")),
-        )),
-        None if !warnings.is_empty() => Some(format!("\"diagnostics\":[{}],", warnings.join(","))),
-        None => None,
-    };
+    let (warnings, head) = check();
+    // The success object carries the batch document's effect fields
+    // (design.md § Structured compiler output, B-2026-11-16-46), after a
+    // package's summary and before `output`. `diagnostics` comes only when
+    // there are warnings, as before, unless a package's summary has the key.
+    let fields: Option<String> = (output == OutputMode::Json).then(|| {
+        let diagnostics = match warnings.is_empty() {
+            true => format!("{head},"),
+            false => format!("{head},\"diagnostics\":[{}],", warnings.join(",")),
+        };
+        match fields {
+            Some(f) => f.replace(
+                "\"diagnostics\":[],",
+                &format!("{head},\"diagnostics\":[{}],", warnings.join(",")),
+            ),
+            None => diagnostics,
+        }
+    });
     let fields = fields.as_deref();
     #[cfg(feature = "llvm")]
     {
+        super::diag_json::start_codegen_phase();
         let fail = |msg: String| -> ! {
             fail_with(&msg, output);
             process::exit(1);
@@ -774,7 +794,13 @@ fn build(
         }
         match output {
             OutputMode::Text => println!("Built: {exe}"),
-            _ => println!(
+            OutputMode::Jsonl => {
+                super::diag_json::close_held_stream(
+                    None,
+                    &format!(",\"output\":{}", json_string(exe)),
+                );
+            }
+            OutputMode::Json => println!(
                 "{{\"status\":\"ok\",{}\"output\":{}}}",
                 fields.unwrap_or(""),
                 json_string(exe)
@@ -787,6 +813,10 @@ fn build(
     #[cfg(not(feature = "llvm"))]
     if let Some(f) = fields {
         println!("{{\"status\":\"ok\",{}}}", f.trim_end_matches(','));
+    }
+    #[cfg(not(feature = "llvm"))]
+    if output == OutputMode::Jsonl {
+        super::diag_json::close_held_stream(None, "");
     }
     #[cfg(not(feature = "llvm"))]
     eprintln!(

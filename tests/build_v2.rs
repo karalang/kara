@@ -95,9 +95,17 @@ fn build_v2_builds_a_file() {
     assert_eq!(named.status.code(), Some(0), "{}", text(&named.stderr));
     if LLVM {
         assert_eq!(ran(&dir.join("hello")), "hi 9223372036854775807\n");
-        assert_eq!(
-            text(&named.stdout),
-            "{\"status\":\"ok\",\"output\":\"other\"}\n"
+        // The batch document's fields ride the success object
+        // (B-2026-11-16-46).
+        let doc: serde_json::Value = serde_json::from_slice(&named.stdout).unwrap();
+        assert_eq!(doc["status"], "ok", "{doc}");
+        assert_eq!(doc["output"], "other", "{doc}");
+        assert!(doc.get("diagnostics").is_none(), "{doc}");
+        assert!(
+            doc["program_effects"]
+                .as_array()
+                .is_some_and(|e| e.contains(&serde_json::json!("writes(Stdout)"))),
+            "{doc}"
         );
         assert_eq!(ran(&dir.join("other")), "hi 9223372036854775807\n");
     }

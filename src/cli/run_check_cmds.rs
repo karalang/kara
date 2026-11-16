@@ -2416,6 +2416,11 @@ pub(super) fn resolve_build_target(target: Option<&str>) -> &'static str {
 /// Emit a single-file-build error respecting the output mode (text to stderr,
 /// a minimal one-line JSON diagnostic under `--output=json`).
 pub(super) fn emit_build_error(msg: &str, output: OutputMode) {
+    // A `karac build` stream held open for code generation ends with this
+    // error as its `codegen` diagnostic (B-2026-11-16-46).
+    if output == OutputMode::Jsonl && super::diag_json::close_held_stream(Some(msg), "") {
+        return;
+    }
     match output {
         OutputMode::Json | OutputMode::Jsonl => {
             println!(

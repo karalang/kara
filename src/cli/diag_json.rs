@@ -3377,6 +3377,31 @@ fn stream_pipeline_jsonl(
     files: &[String],
     remap: Option<&dyn Fn(&str) -> String>,
 ) {
+    let tail = stream_checks_jsonl(pipeline, files, remap);
+    finish_stream_jsonl(&tail, tail.errors == 0, "");
+}
+
+/// A stream whose checks are out and whose `build_complete` is not:
+/// `karac build` runs code generation between the two (design.md § Streaming
+/// phase events, B-2026-11-16-46).
+pub(super) struct StreamTail {
+    build_id: String,
+    pub(super) errors: usize,
+    warnings: usize,
+    /// `program_effects`, `null` when the effect checker did not run.
+    effects: String,
+    /// How many diagnostics are out, so the next one is `d{emitted + 1}`.
+    emitted: usize,
+    /// Whether `codegen`'s `phase_start` is out.
+    codegen: bool,
+}
+
+/// The stream's events from `build_start` through the checks' last phase.
+pub(super) fn stream_checks_jsonl(
+    pipeline: &mut Pipeline,
+    files: &[String],
+    remap: Option<&dyn Fn(&str) -> String>,
+) -> StreamTail {
     let build_id = open_jsonl_stream(files);
     let mut stream = JsonlStream {
         remap,
@@ -3388,19 +3413,79 @@ fn stream_pipeline_jsonl(
     // diagnostics come last in the batch, so they report last here.
     stream.start("comptime");
     stream.complete(pipeline, "comptime");
+    StreamTail {
+        build_id,
+        errors: stream.total_errors,
+        warnings: stream.total_warnings,
+        effects: program_effects_json(pipeline),
+        emitted: stream.emitted,
+        codegen: false,
+    }
+}
 
-    // `null` when the effect checker did not run.
-    let effects = program_effects_json(pipeline);
+/// The stream's `build_complete`, with `extra` fields (`,"k":v`) after the
+/// documented ones.
+pub(super) fn finish_stream_jsonl(tail: &StreamTail, success: bool, extra: &str) {
     emit_jsonl_event(
         "build_complete",
         &format!(
-            "\"build_id\":{build_id},\"success\":{},\"total_errors\":{},\"total_warnings\":{},\"program_effects\":{}",
-            stream.total_errors == 0,
-            stream.total_errors,
-            stream.total_warnings,
-            effects,
+            "\"build_id\":{},\"success\":{success},\"total_errors\":{},\"total_warnings\":{},\"program_effects\":{}{extra}",
+            tail.build_id, tail.errors, tail.warnings, tail.effects,
         ),
     );
+}
+
+/// The `karac build` stream whose checks passed and whose code generation
+/// has not finished; [`emit_build_error`] closes it on a failure.
+static OPEN_STREAM: std::sync::Mutex<Option<StreamTail>> = std::sync::Mutex::new(None);
+
+/// Hold `tail` open for code generation.
+pub(super) fn hold_stream(tail: StreamTail) {
+    *OPEN_STREAM.lock().unwrap_or_else(|e| e.into_inner()) = Some(tail);
+}
+
+/// `codegen`'s `phase_start`, when a stream is held open.
+#[cfg(feature = "llvm")]
+pub(super) fn start_codegen_phase() {
+    if let Some(t) = OPEN_STREAM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_mut()
+    {
+        t.codegen = true;
+        emit_jsonl_event("phase_start", "\"phase\":\"codegen\"");
+    }
+}
+
+/// Close a held stream: `codegen` completes with `error` as its one
+/// diagnostic, or with none, then `build_complete`. `false` when no stream
+/// was held, so the caller reports as it would without one.
+pub(super) fn close_held_stream(error: Option<&str>, extra: &str) -> bool {
+    let Some(mut t) = OPEN_STREAM.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        return false;
+    };
+    if !t.codegen {
+        emit_jsonl_event("phase_start", "\"phase\":\"codegen\"");
+    }
+    let errors = usize::from(error.is_some());
+    if let Some(msg) = error {
+        t.emitted += 1;
+        emit_jsonl_event(
+            "diagnostic",
+            &format!(
+                "\"id\":\"d{}\",\"severity\":\"error\",\"primary\":true,\"phase\":\"codegen\",\"concept\":\"compilation/pipeline\",\"message\":{}",
+                t.emitted,
+                json_string(msg)
+            ),
+        );
+    }
+    emit_jsonl_event(
+        "phase_complete",
+        &format!("\"phase\":\"codegen\",\"errors\":{errors},\"warnings\":0,\"notes\":0"),
+    );
+    t.errors += errors;
+    finish_stream_jsonl(&t, t.errors == 0, extra);
+    true
 }
 
 /// The three lints B-2026-08-18-2 moved onto the compile path, as
