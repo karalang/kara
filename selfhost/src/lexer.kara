@@ -47,6 +47,9 @@ struct Lexer {
     line: i64,
     column: i64,
     start_column: i64,
+    // The line the current token starts on: a token spanning lines (a
+    // `"""` string) is reported where it begins, as `src/lexer.rs` does.
+    start_line: i64,
 }
 
 impl Lexer {
@@ -63,6 +66,7 @@ impl Lexer {
             line: 1,
             column: 1,
             start_column: 1,
+            start_line: 1,
         }
     }
 
@@ -118,7 +122,7 @@ impl Lexer {
         SpannedToken {
             token: token,
             span: Span {
-                line: self.line,
+                line: self.start_line,
                 column: self.start_column,
                 offset: self.start,
                 length: self.current - self.start,
@@ -179,6 +183,7 @@ impl Lexer {
         self.skip_whitespace();
         self.start = self.current;
         self.start_column = self.column;
+        self.start_line = self.line;
 
         if self.is_at_end() {
             return self.make_spanned(Token.Eof);

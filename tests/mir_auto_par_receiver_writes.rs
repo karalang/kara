@@ -126,7 +126,10 @@ fn mir_auto_par_twin_takes_a_mut_ref_param_compiled() {
     }
 }
 
-/// The encoder's appends all write `out`, so they stay in order.
+/// The encoder's appends all write `out`, so they stay in order. The
+/// generated codec carries the schema string's span, which starts on line 2
+/// (a token spanning lines used to be reported on its last line, 10:
+/// B-2026-11-16-338).
 #[test]
 fn mir_auto_par_keeps_appends_to_one_buffer_in_order() {
     let path = write("proto", PROTO);
@@ -136,7 +139,7 @@ fn mir_auto_par_keeps_appends_to_one_buffer_in_order() {
     assert!(!err.contains("statements as tasks: Doc.encode"), "{err}");
     assert!(
         err.contains(
-            "auto-par: in order: Doc.encode@10: Dependence { first: 0, second: 1, local: \"out\" }"
+            "auto-par: in order: Doc.encode@2: Dependence { first: 0, second: 1, local: \"out\" }"
         ),
         "{err}"
     );

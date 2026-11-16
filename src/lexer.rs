@@ -23,6 +23,13 @@ pub struct Lexer<'a> {
     line: usize,
     column: usize,
     start_column: usize,
+    /// The line the current token starts on: a token that spans lines (a
+    /// multi-line string, an unterminated literal) is reported where it
+    /// begins, with `start_column` on the same line.
+    start_line: usize,
+    /// Where a block comment that reached the end of the file opened
+    /// (offset, line, column), for the error token the next scan returns.
+    unterminated_comment: Option<(usize, usize, usize)>,
 }
 
 /// The error for a backslash in an f-string hole's expression, the habit
@@ -96,6 +103,8 @@ impl<'a> Lexer<'a> {
             line: 1,
             column: 1,
             start_column: 1,
+            start_line: 1,
+            unterminated_comment: None,
         }
     }
 
@@ -104,6 +113,23 @@ impl<'a> Lexer<'a> {
         self.skip_whitespace();
         self.start = self.current;
         self.start_column = self.column;
+        self.start_line = self.line;
+
+        if let Some((offset, line, column)) = self.unterminated_comment.take() {
+            return SpannedToken {
+                token: Token::Error(
+                    "Unterminated block comment: this `/*` has no matching `*/` (block \
+                     comments nest, so each `/*` inside it needs its own `*/`)"
+                        .to_string(),
+                ),
+                span: Span {
+                    line,
+                    column,
+                    offset,
+                    length: 2,
+                },
+            };
+        }
 
         if self.is_at_end() {
             return self.make_spanned(Token::EOF);
@@ -568,6 +594,23 @@ impl<'a> Lexer<'a> {
             let text: String = self.token_text().chars().filter(|&c| c != '_').collect();
             let suffix = self.try_float_suffix();
             match text.parse::<f64>() {
+                // design.md §3: a literal's value is checked against the
+                // range of its type, so one that rounds to infinity is an
+                // error rather than `inf`. Without a suffix the bound is
+                // `f64`'s, which every narrower float shares.
+                Ok(v) if float_literal_overflows(v, suffix) => {
+                    let (ty, max) = match suffix {
+                        Some(FloatSuffix::F32) => ("f32", "3.4028235e38"),
+                        Some(FloatSuffix::F16) => ("f16", "65504.0"),
+                        Some(FloatSuffix::BF16) => ("bf16", "3.3895314e38"),
+                        _ => ("f64", "1.7976931348623157e308"),
+                    };
+                    let lit = self.token_text().to_string();
+                    self.make_spanned(Token::Error(format!(
+                        "float literal `{lit}` is out of range for '{ty}' (the largest \
+                         finite value is {max}); write `{ty}.INFINITY` for infinity"
+                    )))
+                }
                 Ok(v) => self.make_spanned(Token::Float(v, suffix)),
                 Err(_) => self.make_spanned(Token::Error("Invalid float literal".to_string())),
             }
@@ -760,7 +803,7 @@ impl<'a> Lexer<'a> {
     /// have been consumed. Produces a `Token::CStringLiteral` with the
     /// raw byte sequence (no trailing NUL — codegen appends one) plus the
     /// textual `source_len` so `len()` / `as_bytes()` can answer without
-    /// re-walking the source. Supports `\n`, `\t`, `\r`, `\\`, `\"`,
+    /// re-walking the source. Supports `\n`, `\t`, `\r`, `\\`, `\'`, `\"`,
     /// `\xHH` hex byte, and `\u{...}` Unicode-codepoint escapes (the last
     /// encoded as UTF-8 bytes). Any escape that produces an interior `0x00`
     /// byte is rejected with `error[E_INTERIOR_NUL_IN_C_STRING]` per
@@ -796,6 +839,10 @@ impl<'a> Lexer<'a> {
                     b'\\' => {
                         self.advance();
                         bytes.push(b'\\');
+                    }
+                    b'\'' => {
+                        self.advance();
+                        bytes.push(b'\'');
                     }
                     b'"' => {
                         self.advance();
@@ -974,8 +1021,8 @@ impl<'a> Lexer<'a> {
     }
 
     /// One escape sequence in a string body; the cursor is ON the `\`.
-    /// `\n \t \r \\ \" \0 \u{..} \xHH`, shared by `"..."`, `"""` and
-    /// `f"..."`.
+    /// `\n \t \r \\ \' \" \0 \u{..} \xHH` (design.md §3 String
+    /// literals), shared by `"..."`, `"""` and `f"..."`.
     fn string_escape(&mut self) -> Result<char, String> {
         self.advance(); // consume backslash
         if self.is_at_end() {
@@ -986,6 +1033,7 @@ impl<'a> Lexer<'a> {
             b't' => '\t',
             b'r' => '\r',
             b'\\' => '\\',
+            b'\'' => '\'',
             b'"' => '"',
             b'0' => '\0',
             b'u' => {
@@ -1036,6 +1084,36 @@ impl<'a> Lexer<'a> {
                 return self.make_spanned(Token::Error("Unterminated raw string".to_string()));
             }
             if self.peek() == b'"' && (1..=hashes).all(|k| self.peek_at(k) == b'#') {
+                // `r"""…"""`: design.md §3 gives a raw string no
+                // triple-quoted form, and it would otherwise lex as the empty
+                // `r""` and a plain string after it.
+                if hashes == 0 && self.current == body_start && self.peek_at(1) == b'"' {
+                    // Take the whole `r"""…"""`, so lexing goes on after it.
+                    self.advance();
+                    self.advance();
+                    while !self.is_at_end()
+                        && !(self.peek() == b'"'
+                            && self.peek_at(1) == b'"'
+                            && self.peek_at(2) == b'"')
+                    {
+                        if self.peek() == b'\n' {
+                            self.line += 1;
+                            self.column = 0;
+                        }
+                        self.consume_codepoint();
+                    }
+                    for _ in 0..3 {
+                        if !self.is_at_end() {
+                            self.advance();
+                        }
+                    }
+                    return self.make_spanned(Token::Error(
+                        "a raw string has no triple-quoted form (design.md §3 String \
+                         literals): write `r\"...\"`, which may span lines, or `\"\"\"...\"\"\"` \
+                         for a dedented multi-line string with escapes"
+                            .to_string(),
+                    ));
+                }
                 let value = self.slice_text(body_start, self.current).to_string();
                 self.advance(); // closing `"`
                 for _ in 0..hashes {
@@ -1100,6 +1178,11 @@ impl<'a> Lexer<'a> {
                 b'\'' => {
                     self.advance();
                     '\''
+                }
+                // design.md §3: the text-literal escapes, `\"` included.
+                b'"' => {
+                    self.advance();
+                    '"'
                 }
                 b'0' => {
                     self.advance();
@@ -1729,6 +1812,73 @@ impl<'a> Lexer<'a> {
         })
     }
 
+    /// Consume a quoted body whose opening quote `q` is at the cursor,
+    /// through its closing quote or the end of the file; backslash escapes
+    /// skip the byte after them unless `raw`. For an error token that takes
+    /// the whole misprefixed literal, so lexing goes on after it.
+    fn skip_quoted_body(&mut self, q: u8, raw: bool) {
+        self.advance(); // opening quote
+        while !self.is_at_end() && self.peek() != q {
+            if self.peek() == b'\n' {
+                self.line += 1;
+                self.column = 0;
+            }
+            if !raw && self.peek() == b'\\' {
+                self.advance();
+                if self.is_at_end() {
+                    break;
+                }
+                if self.peek() == b'\n' {
+                    self.line += 1;
+                    self.column = 0;
+                }
+            }
+            self.consume_codepoint();
+        }
+        if !self.is_at_end() {
+            self.advance(); // closing quote
+        }
+    }
+
+    /// design.md §3 Prefixes: `f`, `r`, `b` and `c` do not combine (`rf`,
+    /// `br`, `rb`, `cr`, ...), and the lexer reports a combination touching
+    /// the quote with a focused error rather than lexing an identifier and a
+    /// string. `c'x'` is refused the same way: a C `char` is a byte.
+    fn misprefixed_literal(&mut self, text: &str) -> Option<SpannedToken> {
+        let b = text.as_bytes();
+        let combo = b.len() >= 2
+            && b.iter().all(|c| b"frbc".contains(c))
+            && (0..b.len()).all(|i| !b[i + 1..].contains(&b[i]));
+        if combo && self.peek() == b'"' {
+            let raw = b.contains(&b'r');
+            self.skip_quoted_body(b'"', raw);
+            return Some(self.make_spanned(Token::Error(format!(
+                "`{text}\"...\"` is not a literal form: string prefixes do not combine \
+                 in v1 (design.md §3 String literals); `f`, `r`, `b` and `c` each stand \
+                 alone, so write one of them"
+            ))));
+        }
+        let char_closes = match self.peek_at(1) {
+            b'\\' => true,
+            b'\'' | b'\n' | b'\0' => false,
+            lead => {
+                let w = utf8_byte_len(lead).unwrap_or(1);
+                self.peek_at(1 + w) == b'\''
+            }
+        };
+        if text == "c" && self.peek() == b'\'' && char_closes {
+            self.skip_quoted_body(b'\'', false);
+            return Some(
+                self.make_spanned(Token::Error(
+                    "there is no `c'...'` literal: a C `char` is a byte, so write `b'A'` \
+                 (design.md §3 C-string literals)"
+                        .to_string(),
+                )),
+            );
+        }
+        None
+    }
+
     fn identifier(&mut self) -> SpannedToken {
         let mut non_ascii_seen: Option<char> = None;
         loop {
@@ -1749,6 +1899,13 @@ impl<'a> Lexer<'a> {
             return self.make_spanned(Token::Error(format!(
                 "non-ASCII identifier (containing '{nc}') is deferred to a future edition; identifiers must be ASCII in 0.8"
             )));
+        }
+
+        if matches!(self.peek(), b'"' | b'\'') {
+            let text = self.token_text().to_string();
+            if let Some(err) = self.misprefixed_literal(&text) {
+                return err;
+            }
         }
 
         let text = self.token_text();
@@ -1890,6 +2047,7 @@ impl<'a> Lexer<'a> {
                 }
                 b'/' if self.peek_next() == b'*' => {
                     // Block comment (with nesting)
+                    let opened = (self.current, self.line, self.column);
                     self.advance(); // consume '/'
                     self.advance(); // consume '*'
                     let mut depth = 1;
@@ -1909,6 +2067,9 @@ impl<'a> Lexer<'a> {
                             }
                             self.advance();
                         }
+                    }
+                    if depth > 0 {
+                        self.unterminated_comment = Some(opened);
                     }
                 }
                 _ => break,
@@ -2075,7 +2236,7 @@ impl<'a> Lexer<'a> {
         SpannedToken {
             token,
             span: Span {
-                line: self.line,
+                line: self.start_line,
                 column: self.start_column,
                 offset: self.start,
                 length: self.current - self.start,
@@ -2091,6 +2252,19 @@ struct TripleLayout {
     body_end: usize,
     indent: usize,
     close_end: usize,
+}
+
+/// Whether the float literal `v` rounds to infinity in the type its
+/// suffix names (`f64` without one).
+fn float_literal_overflows(v: f64, suffix: Option<FloatSuffix>) -> bool {
+    match suffix {
+        Some(FloatSuffix::F32) => (v as f32).is_infinite(),
+        // (2 - 2^-11) * 2^15 and (2 - 2^-8) * 2^127: the midpoints past each
+        // type's largest finite value, from which round-to-nearest gives inf.
+        Some(FloatSuffix::F16) => v.abs() >= 65520.0,
+        Some(FloatSuffix::BF16) => v.abs() >= 3.396_177_529_230_4e38,
+        _ => v.is_infinite(),
+    }
 }
 
 fn is_alpha(c: u8) -> bool {
@@ -2259,9 +2433,26 @@ pub fn suggest_name_for_class(name: &str, target: IdentClass) -> Option<String> 
         IdentClass::Const => suggest_const_name(name),
     };
     if suggestion != name && classify_ident(&suggestion) == target {
-        Some(suggestion)
+        escape_if_keyword(suggestion)
     } else {
         None
+    }
+}
+
+/// `name` as it must be written to name an identifier: `r#name` when it
+/// spells a keyword (`r#Async` renamed to Value class is `r#async`, not the
+/// reserved word), and `None` for a structural marker no escape admits.
+fn escape_if_keyword(name: String) -> Option<String> {
+    let plain = matches!(
+        Lexer::new(&name).next_token().token,
+        Token::Identifier { name: ref n, .. } if *n == name
+    );
+    if plain {
+        Some(name)
+    } else if unescapable_marker_spelling(&name).is_some() {
+        None
+    } else {
+        Some(format!("r#{name}"))
     }
 }
 

@@ -203,6 +203,11 @@ impl super::Formatter {
         self.format_attributes(&f.attributes);
         self.write_indent();
         self.write_visibility(f.visibility());
+        // An FFI export (`extern "C" fn`): dropping the ABI turned it into a
+        // plain function with no external symbol.
+        if let Some(abi) = &f.abi {
+            write!(self.output, "extern \"{abi}\" ").unwrap();
+        }
         // Declaration modifiers, in the order the parser accepts them
         // (`pub comptime unsafe fn`). Dropping either one rewrites the user's
         // declaration into a different one — `karac fmt` must never do that,
@@ -425,6 +430,13 @@ impl super::Formatter {
                 self.write_str(", ");
             }
             self.write_path(&r.path);
+            // A partition key (`writes(Db[id])`, design.md §12): dropping it
+            // widened the effect to the whole resource.
+            if let Some(key) = &r.param {
+                self.write_str("[");
+                self.format_expr(key);
+                self.write_str("]");
+            }
         }
         self.write_str(")");
     }

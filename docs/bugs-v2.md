@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 441 |
-| false-positive | 245 |
-| missing-feature | 183 |
-| perf | 181 |
-| other | 96 |
+| diagnostics | 448 |
+| false-positive | 246 |
+| missing-feature | 185 |
+| perf | 182 |
+| other | 110 |
+| miscompile | 81 |
 | soundness | 81 |
-| miscompile | 78 |
-| run-vs-build | 53 |
-| crash | 44 |
+| run-vs-build | 55 |
+| crash | 46 |
 | codegen-gap | 33 |
 | use-after-free | 9 |
 | leak | 4 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 573 |
-| mir-llvm | 279 |
-| mir | 239 |
-| cli | 185 |
+| typecheck | 574 |
+| mir-llvm | 281 |
+| mir | 241 |
+| cli | 190 |
+| parser | 102 |
 | ownership | 99 |
-| parser | 96 |
-| interp | 86 |
-| runtime | 63 |
-| resolver | 39 |
+| interp | 87 |
+| runtime | 80 |
+| resolver | 40 |
 | effect | 38 |
 | other | 33 |
 | codegen | 22 |
@@ -156,6 +156,18 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-324 | 2026-11-16 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while design.md §5 says their width is the target's pointer width (32 on wasm32) | — |
 | B-2026-11-16-273 | 2026-11-16 | runtime+mir-llvm | medium | A `TaskGroup.new(limit: 2)` group ran up to four of its tasks at once on the ASan lane, where `spawn` blocks while `n` of its tasks are running (design.md §13 `TaskGroup`) | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
+| B-2026-11-16-336 | 2026-11-16 | parser | medium | The lexer refuses escapes design.md §3 lists: `\'` in a string, f-string, `"""` string or C-string (`Unknown escape sequence: \'`), and `\"` in a character literal | — |
+| B-2026-11-16-337 | 2026-11-16 | parser | low | Combined string prefixes (`rf"…"`, `br"…"`, `cr"…"`, …) lex as an identifier and a string, where design.md §3 says the lexer reports them with a focused error; `c'a'` and `r"""…"""` get the same generic `Expected ;` error | — |
+| B-2026-11-16-338 | 2026-11-16 | parser | low | A token that spans lines is reported at the line it ENDS on with the column it starts at: an unterminated literal points past the end of the file and a multi-line string's type error names its closing line | — |
+| B-2026-11-16-339 | 2026-11-16 | parser | medium | A float literal past its type's range is accepted as infinity: `1e400` is `inf`, and `1e39f32` (or `65520.0f16`) is an f32 (f16) infinity, where design.md §3 checks a literal's value against its type's range | — |
+| B-2026-11-16-340 | 2026-11-16 | typecheck | low | An unsuffixed float literal that a context types as `f32`/`f16`/`bf16` is not range-checked there: `let a: f32 = 1e39;` is accepted as an f32 infinity | — |
+| B-2026-11-16-341 | 2026-11-16 | parser | low | `|>` is a token the parser accepts and the typechecker refuses late, so its stage's own type errors are reported first: `1 |> f` with a 2-parameter `f` gives `expected 2 argument(s), found 1` before `there is no pipe operator` | — |
+| B-2026-11-16-342 | 2026-11-16 | parser | medium | One mistake, several errors or the wrong one: a missing `=>` in a match arm, an `else` with no `if`, a block missing its `}` before the next item, an unterminated block comment, and a misplaced `//!` | — |
+| B-2026-11-16-343 | 2026-11-16 | resolver | low | The case-class rename advice can name a keyword: `let r#Async = 1;` is told `consider renaming to `async``, which is reserved, where it must be `r#async` | — |
+| B-2026-11-16-344 | 2026-11-16 | cli | medium | `karac fmt` drops an FFI export's ABI: `extern "C" fn add_one(x: i32) -> i32` comes back as a plain `fn`, so the function loses its external symbol | — |
+| B-2026-11-16-345 | 2026-11-16 | cli | medium | `karac fmt` drops an effect's partition key: `with writes(Db[id])` comes back as `with writes(Db)`, widening the effect to the whole resource and serializing what ran in parallel | — |
+| B-2026-11-16-346 | 2026-11-16 | cli | medium | `karac fmt` drops a loop's attributes: `#[par_order_free]` before a `while`, `for` or `loop` disappears, changing what the concurrency analysis may do with the loop | — |
+| B-2026-11-16-347 | 2026-11-16 | cli | low | `karac fmt` rewrites a C-string's non-ASCII text as byte escapes: `c"héllo"` becomes `c"h\xc3\xa9llo"` and `c"k\u{101}ra"` becomes `c"k\xc4\x81ra"` | — |
 | B-2026-11-17-1 | 2026-11-17 | typecheck+runtime | medium | An f-string width has no upper bound below 2^64: `f"{n:10000000000000000000}"` passes `karac check`; the native build then grows memory until the OOM killer ends it (or aborts 'panic: out of memory', exit 134, at width 4294967296), and the interpreter aborts with Rust's 'memory allocation of N bytes failed' and a backtrace | — |
 | B-2026-11-17-2 | 2026-11-17 | parser | low | A `#` flag in a format spec (`{n:#x}`, `{n:#b}`) is refused as 'unsupported type `#` (expected one of x, X, o, b, d)', and `{n:+-5}` as 'unsupported type `-`', though neither is a type: the message should say the alternate form (`#`) is not in v1, or name the misplaced flag | — |
 | B-2026-11-17-3 | 2026-11-17 | other | low | [doc-only] strings.md does not say what the empty pattern does for find, contains, starts_with, ends_with, split, splitn, split_once, rsplit_once, strip_prefix/suffix and replace, nor design.md §3 what `+` and `0` do to NaN and inf; all lanes follow Rust (`"ab".split("")` is ["", "a", "b", ""], `split_once("")` is ("", s), `replace("", x)` inserts at every char boundary, `{nan:+}` is `NaN`, `{inf:08.2}` is `00000inf`) | — |
@@ -195,6 +207,26 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-41 | 2026-11-17 | runtime | medium | `Json.deserialize` accepts text that is not JSON, which `Json.parse` refuses: a leading zero (`[01]` reads 1), a bare fraction (`.5`), a raw tab inside a string, `1e400` (read as infinity and written back `null`), `-0` into an i64 or u64 field, and map keys `"01"` and `" 1"` for an i64 key | — |
 | B-2026-11-17-42 | 2026-11-17 | mir | medium | A derived `Serialize` on an enum whose struct variant has a field named `s` (`enum Un { S { s: i64 }, B }`) passes check, then fails on every lane: 'error[mir]: typecheck: 2:35: no method `serialize_variant_begin` on type `i64`'. The field binding shadows the derive's serializer parameter | — |
 | B-2026-11-17-43 | 2026-11-17 | runtime | low | Small JSON divergences from json.md: typed `Json.serialize` writes `\b` and `\f` as `\u0008` and `\u000c` (stringify and serde_json write `\b`, `\f`); a BOM before `[1]` is reported at column 3, not 1; and `"New"` for a newtype variant reports 'expected value at line 1 column 6' instead of naming the variant shape | — |
+| B-2026-11-17-44 | 2026-11-17 | runtime | high | The HTTP server frames a request that carries both Content-Length and Transfer-Encoding by the chunked coding and then keeps the connection, takes the first of two differing Content-Length headers, and accepts `Content-Length: +5`: each is a request-smuggling seam behind a proxy that frames the other way (RFC 9112 §6.1, §6.3) | — |
+| B-2026-11-17-45 | 2026-11-17 | runtime | high | A handler's response header name or value containing CR LF is written to the wire as is, so `("X-I", "a\r\nSet-Cookie: evil=1")` sends a second header (response splitting); neither io.md nor the server refuses or strips it | — |
+| B-2026-11-17-46 | 2026-11-17 | runtime | medium | The HTTP server accepts request heads that io.md's 'malformed request line or header is answered 400' should refuse: a space before the colon (`X-A : 1`), an empty header name, CR or NUL inside a value, NUL in the target, a version `HTTP/1.1x` or `HTTP/2.0`, and an HTTP/1.1 request with no Host or two Hosts all reach the handler | — |
+| B-2026-11-17-47 | 2026-11-17 | runtime | medium | The HTTP server sends a body where HTTP forbids one: the answer to a HEAD request carries the handler's body, and a 204 or 304 from the handler goes out with its body and a content-length, so a kept-alive client reads those bytes as the start of the next response | — |
+| B-2026-11-17-48 | 2026-11-17 | runtime | low | The HTTP server sends whatever status number and framing headers a handler returns: a status of 99, 1000 or -1 goes out as `HTTP/1.1 -1 `, a 101 goes out as an ordinary response with a body, a handler's `Transfer-Encoding: chunked` is sent next to the server's content-length over an unchunked body, and a handler's `Connection: close` is sent while the server keeps the connection open | — |
+| B-2026-11-17-49 | 2026-11-17 | runtime | high | `Server.serve` (and `serve_tls`, `serve_ws`, `serve_ws_tls`) returns for good when one `accept` fails with EMFILE, so a client that opens about as many idle connections as the process's file limit stops the whole server; since the server has no read timeout, ~1000 half-sent requests (the default `ulimit -n` 1024) end a Kāra service permanently | — |
+| B-2026-11-17-50 | 2026-11-17 | runtime | medium | The HTTP and WebSocket servers have no time or size limit on a connection: a half-sent request, a connection that sends nothing and an idle kept-alive connection all stay open indefinitely (checked at 70 s), and a 4 MB header or 1 MB request target is read whole and handed to the handler (no 431 or 414) | — |
+| B-2026-11-17-51 | 2026-11-17 | runtime | medium | The HTTP server re-parses a request from its first byte after every 8 KiB read, so reading a request head is quadratic in its size: a 4 MB header takes 39.9 s on the interpreter and 0.45 s compiled, against 2.7 s and 0.04 s for 1 MB | — |
+| B-2026-11-17-52 | 2026-11-17 | runtime | low | The HTTP server reads `Connection` as one exact word: `Connection: keep-alive, close` keeps the connection open and gets no `connection: close`, though the header is a comma-separated token list and `close` in it means close (RFC 9110 §7.6.1) | — |
+| B-2026-11-17-53 | 2026-11-17 | runtime | low | The HTTP server never answers `Expect: 100-continue`: a client that waits for the interim 100 before sending its body (curl does so for bodies over 1 MiB) stalls for its own timeout, 1 s for curl, on every such upload | — |
+| B-2026-11-17-54 | 2026-11-17 | runtime | high | The HTTP client lets a request's own `Content-Length` header override the body it sends: `.header("Content-Length", "1").body("hello")` sends 1 byte and drops 4 without an error, `"50"` with a 5-byte body leaves the server waiting for 45 more, and a `Host` header set by the program is sent as a second Host | — |
+| B-2026-11-17-55 | 2026-11-17 | mir+mir-llvm | low | An HTTP request with an empty method, `c.request("", url).send()`, is refused by the interpreter (`bad method: invalid HTTP method`) and sent as `GET` by a compiled program | — |
+| B-2026-11-17-56 | 2026-11-17 | runtime | low | The HTTP client mishandles three URL forms: an IPv6 literal `http://[::1]:18431/` fails with 'failed to lookup address information', a port of 99999 is accepted and connected to (refused) rather than refused as a bad URL, and `http://127.0.0.1:18431?x=1` (no path) is refused 'bad request: invalid format' | — |
+| B-2026-11-17-57 | 2026-11-17 | runtime | low | The WebSocket server echoes close codes RFC 6455 forbids on the wire (1005, 999, 5000) instead of failing the connection with 1002, accepts a close reason that is not UTF-8, and upgrades a handshake that is a POST, has Sec-WebSocket-Version 8 or none, or a key that is not 16 bytes of base64 | — |
+| B-2026-11-17-58 | 2026-11-17 | mir | low | When `Server.serve` stops because `accept` failed, the interpreter's HttpError says `accept failed: os error -1` where a compiled program says `os error 24`: the interpreter loses the errno | — |
+| B-2026-11-17-59 | 2026-11-17 | interp+mir-llvm+runtime | high | `env.set` with a name containing `=`, an empty name, or a NUL in the name or value crashes in Rust's `std::env::set_var` on every lane: the interpreter aborts karac itself (SIGABRT), a compiled program prints a Rust panic and dies by SIGSEGV, and the ASan build exits 101 with a Rust panic and no Kāra panic record; the program's buffered stdout is lost on the compiled lanes | — |
+| B-2026-11-17-60 | 2026-11-17 | cli | medium | `karac run prog.kara -- <arg>` aborts with SIGABRT (exit 134, a Rust `unwrap()` panic in std/src/env.rs) when an argument is not valid UTF-8, while the built binary of the same program runs and sees the argument with each invalid sequence replaced by U+FFFD | — |
+| B-2026-11-17-61 | 2026-11-17 | runtime | low | `spawn` fails with kinds io.md says it never returns: an executable that is not a valid binary or script gives `Other("Exec format error (os error 8))`, a `current_dir` that is a file gives `Other("Not a directory (os error 20)")`, and a NUL in the program, an argument or an env value gives `InvalidInput`; meanwhile an env key containing `=` or an empty key is accepted and passed on corrupted | — |
+| B-2026-11-17-62 | 2026-11-17 | runtime | low | A `PATH` set on the Command (`Command.new("tool").env("PATH", dir)`) is used to find the program, though io.md says a name without `/` is looked up on the parent's PATH | — |
+| B-2026-11-17-63 | 2026-11-17 | runtime | low | `exit(n)` and `ExitCode.from(n)` take an i32 but the process status keeps only its low 8 bits, so `exit(256)` and `ExitCode.from(256)` end the process with 0, success; -1 gives 255 and 300 gives 44, and neither io.md nor design.md §10 says so | — |
 
 ### Relocated
 

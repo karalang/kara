@@ -138,6 +138,25 @@ impl super::Formatter {
         true
     }
 
+    /// A loop's outer attributes (`#[par_order_free]`), each on its own line
+    /// above it at the statement's indentation; `karac fmt` dropped them,
+    /// which changed what the concurrency analysis may do with the loop.
+    fn format_loop_attributes(&mut self, attrs: &[Attribute]) {
+        if attrs.is_empty() {
+            return;
+        }
+        // At a statement's start the indentation is already written: take it
+        // back, since each attribute line writes its own.
+        let line_start = self.output.rfind('\n').map_or(0, |i| i + 1);
+        if self.output[line_start..].chars().all(|c| c == ' ') {
+            self.output.truncate(line_start);
+        } else {
+            self.write_str("\n");
+        }
+        self.format_attributes(attrs);
+        self.write_indent();
+    }
+
     pub(super) fn format_expr(&mut self, expr: &Expr) {
         // Inside its own delimiters an expression is out of a head's reach.
         if self.in_head
@@ -232,16 +251,30 @@ impl super::Formatter {
                 // formatter's job is to produce a syntactically
                 // equivalent literal; the lexer's escape rules apply
                 // when the byte is non-printable ASCII or non-ASCII.
+                // Text that is UTF-8 is written as the characters it is, so
+                // `c"héllo"` stays as written rather than becoming
+                // `c"h\xc3\xa9llo"`; only bytes that are not UTF-8 take `\xHH`.
                 self.write_str("c\"");
-                for &b in bytes {
-                    match b {
-                        b'"' => self.write_str("\\\""),
-                        b'\\' => self.write_str("\\\\"),
-                        b'\n' => self.write_str("\\n"),
-                        b'\r' => self.write_str("\\r"),
-                        b'\t' => self.write_str("\\t"),
-                        0x20..=0x7e => self.output.push(b as char),
-                        _ => write!(self.output, "\\x{:02x}", b).unwrap(),
+                for chunk in bytes.utf8_chunks() {
+                    for c in chunk.valid().chars() {
+                        match c {
+                            '"' => self.write_str("\\\""),
+                            '\\' => self.write_str("\\\\"),
+                            '\n' => self.write_str("\\n"),
+                            '\r' => self.write_str("\\r"),
+                            '\t' => self.write_str("\\t"),
+                            ' '..='~' => self.output.push(c),
+                            c if c.is_ascii() => {
+                                write!(self.output, "\\x{:02x}", c as u32).unwrap()
+                            }
+                            c if c.is_control() => {
+                                write!(self.output, "\\u{{{:x}}}", c as u32).unwrap()
+                            }
+                            c => self.output.push(c),
+                        }
+                    }
+                    for b in chunk.invalid() {
+                        write!(self.output, "\\x{:02x}", b).unwrap();
                     }
                 }
                 self.write_str("\"");
@@ -514,8 +547,9 @@ impl super::Formatter {
                 label,
                 condition,
                 body,
-                ..
+                attributes,
             } => {
+                self.format_loop_attributes(attributes);
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
                 }
@@ -529,8 +563,9 @@ impl super::Formatter {
                 pattern,
                 value,
                 body,
-                ..
+                attributes,
             } => {
+                self.format_loop_attributes(attributes);
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
                 }
@@ -547,8 +582,9 @@ impl super::Formatter {
                 iterable,
                 body,
                 par,
-                ..
+                attributes,
             } => {
+                self.format_loop_attributes(attributes);
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
                 }
@@ -568,7 +604,12 @@ impl super::Formatter {
                 self.write_str(" ");
                 self.format_block(body);
             }
-            ExprKind::Loop { label, body, .. } => {
+            ExprKind::Loop {
+                label,
+                body,
+                attributes,
+            } => {
+                self.format_loop_attributes(attributes);
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
                 }

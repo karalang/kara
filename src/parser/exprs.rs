@@ -2719,7 +2719,10 @@ impl super::Parser {
         self.expect(&Token::LeftBrace)?;
 
         let mut arms = Vec::new();
-        while !self.check(&Token::RightBrace) && !self.is_at_end() {
+        while !self.check(&Token::RightBrace)
+            && !self.is_at_end()
+            && self.unclosed_item_at != Some(self.pos)
+        {
             let arm_start = self.current_span();
             let m0 = self.pattern_muts.len();
             let pattern = self.parse_pattern()?;
@@ -2731,7 +2734,22 @@ impl super::Parser {
                 None
             };
 
-            self.expect(&Token::FatArrow)?;
+            // A missing `=>` (or `=` / `->` written for it) is reported once
+            // and the arm's body read on as if it were there, rather than the
+            // arm failing and its body cascading into a second error.
+            if !self.check(&Token::FatArrow)
+                && !matches!(
+                    self.peek_token_ref(),
+                    Token::Comma | Token::RightBrace | Token::Semicolon | Token::EOF
+                )
+            {
+                let _ = self.expect(&Token::FatArrow);
+                if matches!(self.peek_token_ref(), Token::Equal | Token::Arrow) {
+                    self.advance();
+                }
+            } else {
+                self.expect(&Token::FatArrow)?;
+            }
 
             let body_is_block = self.check(&Token::LeftBrace);
             let body = if body_is_block {
@@ -2760,7 +2778,11 @@ impl super::Parser {
                 break;
             }
         }
-        self.expect(&Token::RightBrace)?;
+        // An arm body whose `}` was missing closes at the item that follows
+        // (`unclosed_item_at`), and so does the match.
+        if self.unclosed_item_at != Some(self.pos) {
+            self.expect(&Token::RightBrace)?;
+        }
 
         Some(Expr {
             id: crate::ids::NodeId::DUMMY,

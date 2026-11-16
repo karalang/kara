@@ -27,6 +27,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   type and in no other parameter's bound (`fn who[T: Named]() -> String`)
   is refused at the declaration: no call can decide it, since a call takes
   no type arguments (B-2026-11-16-333).
+- A float literal past its type's range is an error: `1e400` was `inf`, and
+  `1e39f32` an `f32` infinity (design.md §3; B-2026-11-16-339). Write
+  `f64.INFINITY`. An unsuffixed literal that only its context makes `f32`
+  is not checked yet (B-2026-11-16-340).
 - `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
   as `"0.1.0"`), as design.md § 4 says; any string was accepted
   (B-2026-11-16-220).
@@ -586,6 +590,20 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `fn f() -> impl Iterator[Item = i64] { 0..3 }` was refused; the binding
   now types the witness's literals (`Item = i32` makes them `i32`)
   (B-2026-11-16-328).
+- The escapes design.md §3 lists are accepted: `\'` in a string, f-string,
+  `"""` string or C-string, and `\"` in a character literal, were
+  `Unknown escape sequence` (B-2026-11-16-336).
+- `karac fmt` keeps an FFI export's `extern "C"`, an effect's partition key
+  (`writes(Db[id])`) and a loop's attributes (`#[par_order_free]`), which it
+  dropped, changing the program; and it writes a C-string's non-ASCII text
+  as written rather than as `\xHH` bytes (B-2026-11-16-344 to -271).
+- One mistake, one error: combined string prefixes (`rf"…"`), `c'a'` and
+  `r"""…"""` get a focused error; a missing `=>` in a match arm, an
+  `else` with no `if`, a block missing its `}` before the next item, an
+  unterminated block comment and a misplaced `//!` no longer cascade into
+  further or misleading errors; a token spanning lines is reported
+  where it starts; and the rename advice for `r#Async` is `r#async`, not
+  the reserved `async` (B-2026-11-16-337, -262, -266, -267).
 - A compiled program that printed to standard output and then announced
   its port under `KARAC_ANNOUNCE_PORT` wrote `BOUND_PORT=<n>` to stderr
   while its stdout still held what it had printed, so a harness that waited

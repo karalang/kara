@@ -29,7 +29,48 @@ impl super::Parser {
         let mut stmts = Vec::new();
         let mut final_expr = None;
 
+        let mut closed = true;
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            // A missing `}`: an item keyword at the start of a line, after
+            // which the file reads on as items (`unclosed_before_item`).
+            // The innermost open block reports it; every block open there
+            // closes at it without a `}` of its own.
+            if self.unclosed_item_at == Some(self.pos) {
+                closed = false;
+                break;
+            }
+            if self.unclosed_before_item() {
+                let item = self.current_span();
+                self.error_at(
+                    &format!(
+                        "expected `}}` before this item: the block opened at {}:{} is not \
+                         closed, and this {} at the start of a line begins a new item",
+                        start.line,
+                        start.column,
+                        self.peek_token_ref().describe()
+                    ),
+                    item,
+                );
+                self.unclosed_item_at = Some(self.pos);
+                closed = false;
+                break;
+            }
+            if matches!(self.peek_token_ref(), Token::ModuleDocComment(_)) {
+                self.misplaced_module_doc();
+                continue;
+            }
+            // An `else` with no `if` before it: one error, and what follows
+            // (`{ … }` or `if …`) parses as the statement it reads as.
+            if self.check(&Token::Else) {
+                let at = self.current_span();
+                self.error_at(
+                    "`else` without an `if`: an `else` follows the `}` of an `if` \
+                     block directly, with no `;` or statement between them",
+                    at,
+                );
+                self.advance();
+                continue;
+            }
             // `test "name" { … }` is a top-level item only. Catching it
             // here — before falling into the statement / expression
             // dispatch — replaces the generic two-tokens-without-operator
@@ -142,13 +183,62 @@ impl super::Parser {
             }
         }
 
-        self.expect(&Token::RightBrace)?;
+        if closed {
+            self.expect(&Token::RightBrace)?;
+        }
 
         Some(Block {
             stmts,
             final_expr,
             span: self.span_from(&start),
         })
+    }
+
+    /// Whether the token at the cursor is an item keyword that begins its
+    /// line (column 1) inside a body, with the rest of the file reading as
+    /// items after it: the body above is missing its `}`. A `fn` is that
+    /// only when the item it starts is followed by the end of the file or by
+    /// another line-starting token other than `}`; one followed by the body's
+    /// own `}` is a nested `fn`, which [`Self::hoist_nested_fn`] reports.
+    fn unclosed_before_item(&self) -> bool {
+        let here = self.current_span();
+        if here.column != 1 {
+            return false;
+        }
+        match self.peek_token_ref() {
+            Token::Struct | Token::Enum | Token::Impl | Token::Trait | Token::Pub => true,
+            Token::Fn => {
+                let mut i = self.pos;
+                while i < self.tokens.len()
+                    && !matches!(self.tokens[i].token, Token::LeftBrace | Token::EOF)
+                {
+                    i += 1;
+                }
+                let mut depth = 0usize;
+                while i < self.tokens.len() {
+                    match self.tokens[i].token {
+                        Token::LeftBrace => depth += 1,
+                        Token::RightBrace => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        Token::EOF => return true,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                match self.tokens.get(i + 1) {
+                    None => true,
+                    Some(t) => {
+                        matches!(t.token, Token::EOF)
+                            || (t.span.column == 1 && !matches!(t.token, Token::RightBrace))
+                    }
+                }
+            }
+            _ => false,
+        }
     }
 
     /// One top-level SCRIPT statement (script mode, design.md § Script mode):

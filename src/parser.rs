@@ -636,6 +636,10 @@ pub struct Parser {
     /// recognizers see the same `!` when recovery re-parses it (`expect` and
     /// the prefix parser), and each reported it (B-2026-10-20-5).
     pub(crate) macro_bangs_reported: rustc_hash::FxHashSet<usize>,
+    /// The token position of an item keyword that began a line inside a
+    /// body whose `}` is missing: every block open there closes at it, and
+    /// the item parses at the top level (one error, no cascade).
+    pub(crate) unclosed_item_at: Option<usize>,
     /// The keywords a binding was named by and recovered as `r#NAME`
     /// ([`Self::recover_keyword_as_ident`]): a later use of one before a `{`
     /// (`if and { .. }`) is that binding, and gets the same rename
@@ -800,6 +804,7 @@ impl Parser {
             pattern_muts: Vec::new(),
             amp_sigils: Vec::new(),
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
+            unclosed_item_at: None,
             escaped_bindings: rustc_hash::FxHashSet::default(),
             source: None,
             item_start: None,
@@ -956,11 +961,22 @@ impl Parser {
 
     // ── Program ──────────────────────────────────────────────────
 
+    /// A `//!` line after the file's first item (or inside a body): one
+    /// focused error, and the comment is skipped.
+    pub(crate) fn misplaced_module_doc(&mut self) {
+        let at = self.current_span();
+        self.error_at(
+            "`//!` documents the module and goes only at the top of the file, before \
+             any item (design.md §3 Doc comments); write `//` for a plain comment",
+            at,
+        );
+        self.advance();
+    }
+
     fn parse_program(&mut self) -> Program {
         // Consume any leading `//!` module-level doc comments. They may
-        // only appear before the first item; subsequent `//!` lines are
-        // a parse error, but for the v1 MVP we silently treat trailing
-        // `//!` as a regular line comment via the lexer's normal path.
+        // only appear before the first item; a later `//!` is a parse error
+        // (design.md §3 Doc comments, `misplaced_module_doc`).
         let mut module_doc_lines: Vec<String> = Vec::new();
         while let Token::ModuleDocComment(text) = self.peek_token() {
             module_doc_lines.push(text.clone());
@@ -989,6 +1005,10 @@ impl Parser {
         // "passed" `karac check` and did nothing under `run --interp`.
         let mut script_stmts: Vec<Stmt> = Vec::new();
         while !self.is_at_end() {
+            if matches!(self.peek_token_ref(), Token::ModuleDocComment(_)) {
+                self.misplaced_module_doc();
+                continue;
+            }
             let errs_before = self.errors.len();
             self.item_start = Some(self.current_span().offset);
             match self.parse_item() {
