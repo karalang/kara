@@ -54,8 +54,8 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `partition_point` | `fn partition_point(self, pred: own MutFn(T) -> bool) -> i64` | Index of the first element `pred` rejects, by binary search. The sequence must hold every element `pred` accepts before every one it rejects; `len()` when it accepts all. `v.partition_point(\|x\| x < t)` is where `t` would go in a sorted `v` |
 | `is_sorted` | `fn is_sorted(self) -> bool where T: Ord` | Non-strict ascending check: equal neighbours count as sorted, and 0 or 1 elements are sorted |
 | `split_at` | `fn split_at(self, mid: i64) -> (Slice[T], Slice[T])` | `[0, mid)` and `[mid, len)`. Panics if `mid > self.len()` |
-| `windows` | `fn windows(self, size: i64) -> Vec[Slice[T]]` | Every run of `size` consecutive elements |
-| `chunks` | `fn chunks(self, size: i64) -> Vec[Slice[T]]` | Consecutive runs of `size` elements; the last may be shorter |
+| `windows` | `fn windows(self, size: i64) -> Vec[Slice[T]]` | Every run of `size` consecutive elements. Panics with `windows: size must be positive` if `size <= 0` |
+| `chunks` | `fn chunks(self, size: i64) -> Vec[Slice[T]]` | Consecutive runs of `size` elements; the last may be shorter. Panics with `chunks: size must be positive` if `size <= 0` |
 | `split` | `fn split(self, pred: own MutFn(T) -> bool) -> Vec[Slice[T]]` | The runs between elements `pred` accepts, which are dropped: `[1, 0, 2, 3, 0].split(\|x\| x == 0)` is `[[1], [2, 3], []]`. Separators at either end or side by side give empty runs, so the result always has one more run than there are separators (review-thread ruling 2026-11-09, B-2026-11-08-47) |
 | `chunk_by` | `fn chunk_by(self, same: own MutFn(T, T) -> bool) -> Vec[Slice[T]]` | Consecutive runs in which `same` accepts each adjacent pair: `[1, 1, 2, 3, 3].chunk_by(\|a, b\| a == b)` is `[[1, 1], [2], [3, 3]]`. An empty slice gives no runs (review-thread ruling 2026-11-09, B-2026-11-09-37) |
 | `to_vec` | `fn to_vec(self) -> Vec[T] where T: Clone` | Owned copy |
@@ -106,7 +106,7 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `drain` | `fn drain(mut ref self, r: Range[i64]) -> VecIntoIter[T]` | Removes the elements at `start..end` (the end excluded), shifting the rest down, and returns them front to back. They are removed at once, so dropping the iterator unread still removes them. Panics if the range is reversed or past the end. Rust's `drain(a..)`, `drain(..b)`, `drain(a..=b)` and `drain(..)` are refused with the `start..end` that means the same as a fix |
 | `split_off` | `fn split_off(mut ref self, at: i64) -> Vec[T]` | Moves the elements from `at` on into a new `Vec` and returns it, leaving `[0, at)`. Panics if `at > self.len()` |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
-| `resize` | `fn resize(mut ref self, n: i64, val: own T) where T: Clone` | Sets the length to exactly `n`: truncates when shrinking, appends copies of `val` when growing. `n < 0` counts as 0. `val` is moved into the first new slot and cloned into the rest, and dropped when there is no new slot |
+| `resize` | `fn resize(mut ref self, n: i64, val: own T) where T: Clone` | Sets the length to exactly `n`: truncates when shrinking, appends copies of `val` when growing. `n < 0` counts as 0. `val` is cloned into every new slot but the last and moved into the last, as Rust's `resize` does, and dropped when there is no new slot (review-thread ruling 2026-11-16) |
 | `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Appends every item, in order. `a.extend(b)` moves every element of the `Vec` `b` onto the end of `a`. There is no `append`: a borrowed `b` is emptied onto `a` with `a.extend(mem.take(mut b))` |
 | `extend_from_slice` | `fn extend_from_slice(mut ref self, items: Slice[T]) where T: Clone` | Appends a clone of every element of `items`, in order, and leaves the source alone: `buf.extend_from_slice(s.bytes())` |
 | `capacity` | `fn capacity(self) -> i64` | A lower bound, not an allocator promise: `capacity() >= len()` always, and `capacity() >= len() + n` after `reserve(n)`. The exact value is unspecified, so compare with `>=` |
@@ -274,6 +274,8 @@ A ring buffer with O(1) push and pop at both ends.
 | Method | Signature | Notes |
 |---|---|---|
 | `new` | `fn new() -> VecDeque[T]` | Empty deque |
+| `with_capacity` | `fn with_capacity(cap: i64) -> VecDeque[T]` | Preallocates `cap` slots. `cap < 0` counts as 0, as for `Vec` |
+| `try_with_capacity` | `fn try_with_capacity(cap: i64) -> Result[VecDeque[T], AllocError]` | As `with_capacity`, with allocation failure as an `Err` ([Fallible twins](#fallible-allocation)) |
 | `push_back` | `fn push_back(mut ref self, val: own T)` | |
 | `push_front` | `fn push_front(mut ref self, val: own T)` | |
 | `pop_back` | `fn pop_back(mut ref self) -> Option[T]` | |
@@ -461,7 +463,7 @@ Both are ordinary `BuildHasher` types written in Kāra, like a user hasher, and 
 **What the built-in types feed.** The library's `Hash` impls feed these bytes, so a user hasher sees the same input on every backend:
 - an integer: its own width through `write_<width>` (`write_i64` for `i64`, `write_u8` for `u8`), native-endian;
 - `bool`: `write_u8` of 0 or 1; `char`: `write_u32` of its scalar value;
-- a float: `write_u64` of `to_bits()` (`f32` widened through `write_u32`), because tables compare floats by their bits, so `-0.0` and `0.0` are different keys and a NaN equals itself;
+- `F32` and `F64` ([design.md § Floats](../design.md)): `write_u32` / `write_u64` of the bits, because the wrappers compare by bits, so `-0.0` and `0.0` are different keys and NaN (canonicalized on construction) equals itself. The primitives `f32` and `f64` have no `Hash`, so `Map[f64, V]` is refused; wrap the key in `F64`;
 - `String` and `Str`: `write` of the UTF-8 bytes, then `write_u8(0xff)`, so `("ab", "c")` and `("a", "bc")` feed different bytes;
 - `Vec`, `Array` and `Slice`: `write_usize` of the length, then each element;
 - a tuple, and a `derive(Hash)` struct: each field in order; a `derive(Hash)` enum: `write_u32` of the variant's index, then its payload's fields in order;
