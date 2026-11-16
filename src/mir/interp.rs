@@ -3146,7 +3146,8 @@ impl<'a> Interp<'a> {
             ("char", "from_digit") => match args.as_slice() {
                 [Value::Int(n), Value::Int(r)] => {
                     if !(2..=36).contains(r) {
-                        self.panic_message = Some(FROM_DIGIT_RADIX.to_string());
+                        self.panic_message =
+                            Some(format!("char.from_digit: radix {r} is not in 2..=36"));
                         return self.native_panic();
                     }
                     let c = u32::try_from(*n)
@@ -10419,8 +10420,12 @@ impl<'a> Interp<'a> {
             text.parse::<f32>().ok().map(|f| Value::Float(f64::from(f)))
         } else {
             let (bits, signed) = int_width(ty).expect("checked by the caller");
-            let n = if !(2..=36).contains(&radix) || (!signed && text.starts_with('-')) {
+            let n = if !(2..=36).contains(&radix) {
                 None
+            } else if let Some(rest) = text.strip_prefix('-').filter(|_| !signed) {
+                // An unsigned type reads `-0` as 0: minus zero is not
+                // negative (core-types.md § Parsing; B-2026-11-16-43).
+                (!rest.is_empty() && rest.bytes().all(|b| b == b'0')).then_some(0)
             } else if bits == 128 && !signed {
                 // A `u128` is held as its bits.
                 u128::from_str_radix(text, radix as u32)
@@ -18933,10 +18938,6 @@ impl fmt::Display for MethodName<'_> {
 }
 
 /// `char` methods [`Interp::char_method`] implements.
-/// The panic of `char.from_digit` with a radix outside 2..=36, the same
-/// text on every backend (`src/backend/mir/num.rs`).
-pub const FROM_DIGIT_RADIX: &str = "char.from_digit: the radix is not in 2..=36";
-
 const CHAR_METHODS: &[&str] = &[
     "is_alphabetic",
     "is_numeric",

@@ -35,6 +35,7 @@ const CHAR_OPS: &[&str] = &[
     "to_ascii_uppercase",
     "is_digit",
     "to_digit",
+    "from_digit",
 ];
 
 fn e<T: ToString>(x: T) -> String {
@@ -504,7 +505,23 @@ impl<'ctx> Cx<'ctx, '_> {
         let ok = b
             .build_int_compare(IntPredicate::ULT, off, self.i64(35), "")
             .map_err(e)?;
-        self.abort_unless(ok, crate::mir::interp::FROM_DIGIT_RADIX)?;
+        // The runtime words the panic, with the radix, as the MIR
+        // interpreter does (B-2026-11-16-44).
+        let f = self.cur_fn()?;
+        let bad = self.llcx.append_basic_block(f, "from_digit.radix");
+        let good = self.llcx.append_basic_block(f, "from_digit.ok");
+        self.builder
+            .build_conditional_branch(ok, good, bad)
+            .map_err(e)?;
+        self.builder.position_at_end(bad);
+        let k = CHAR_OPS
+            .iter()
+            .position(|m| *m == "from_digit")
+            .ok_or("no from_digit char op")?;
+        let op = self.llcx.i32_type().const_int(k as u64, false);
+        self.rt_int("char", &[op.into(), self.i64(0).into(), r.into()], 64)?;
+        self.abort_with("explicit panic")?;
+        self.builder.position_at_end(good);
         let b = &self.builder;
         let kept = b
             .build_int_compare(IntPredicate::ULT, n, r, "")

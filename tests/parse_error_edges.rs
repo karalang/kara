@@ -3,8 +3,9 @@
 //! whitespace around the number, so a whitespace-only input is `Empty`, as
 //! `""` is, and `" -1 "` for `u8` is `Underflow`, as `"-1"` is; whitespace-only
 //! was `InvalidDigit` for an integer and `Invalid` for a float. An integer
-//! never reports `Invalid`: `u8.parse("-0")` and `"-00"` were `Invalid`, and
-//! are `InvalidDigit`, since `-0` is no value below the minimum. The
+//! never reports `Invalid`. `u8.parse("-0")` and `"-00"` are `Ok(0)`, since
+//! minus zero is not negative (review-thread ruling 2026-11-16,
+//! B-2026-11-16-43; they were `Invalid`, then `InvalidDigit`). The
 //! whitespace is Unicode's, as `str::trim`'s is, and the check keeps std's
 //! panic hook out of the binary (tests/mir_panic_free_natives.rs).
 
@@ -45,7 +46,7 @@ const SHOW: &str = "fn k[T](r: Result[T, ParseError]) -> String {\n    match r {
     Err(ParseError.Invalid) => \"Invalid\".to_string(),\n    }\n}\n";
 
 #[test]
-fn a_negative_zero_for_an_unsigned_type_is_an_invalid_digit() {
+fn a_negative_zero_for_an_unsigned_type_is_zero() {
     let src = format!(
         "{SHOW}fn main() {{\n    println(k(u8.parse(\"-0\")));\n    println(k(u8.parse(\"-00\")));\n    \
          println(k(u64.parse(\"-0\")));\n    println(k(u8.parse(\"-5x\")));\n    \
@@ -55,7 +56,7 @@ fn a_negative_zero_for_an_unsigned_type_is_an_invalid_digit() {
     runs_to(
         "neg-zero",
         &src,
-        "InvalidDigit\nInvalidDigit\nInvalidDigit\nInvalidDigit\nUnderflow\nOk\nOk\n",
+        "Ok\nOk\nOk\nInvalidDigit\nUnderflow\nOk\nOk\n",
     );
 }
 

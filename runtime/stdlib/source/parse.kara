@@ -95,8 +95,9 @@ fn parse_int_error(s: Str, signed: bool) -> ParseError {
     } else if negative and (signed or nonzero) {
         ParseError.Underflow
     } else if negative {
-        // `-0` is no value below the minimum, and an integer never reports
-        // `Invalid`: the `-` is the character that cannot appear.
+        // `-0` parses as 0 (B-2026-11-16-43), so no native sends it here;
+        // were one to, it is no value below the minimum, and an integer
+        // never reports `Invalid`.
         ParseError.InvalidDigit
     } else {
         ParseError.Overflow

@@ -3733,7 +3733,8 @@ pub extern "C" fn karac_mir_char(op: u32, c: i64, radix: i64) -> i64 {
     let name = CHAR_OPS.get((op & 0xff) as usize).copied().unwrap_or("");
     // A radix outside 2..=36 panics, worded as the MIR interpreter words it;
     // `i64::MIN` tells the caller to abort (B-2026-10-22-38).
-    if matches!(name, "is_digit" | "to_digit") && !(2..=36).contains(&radix) {
+    // `from_digit` asks only for this panic (B-2026-11-16-44).
+    if matches!(name, "is_digit" | "to_digit" | "from_digit") && !(2..=36).contains(&radix) {
         let msg = format!("char.{name}: radix {radix} is not in 2..=36");
         set_panic_message(msg);
         return i64::MIN;
@@ -3805,6 +3806,7 @@ const CHAR_OPS: &[&str] = &[
     "to_ascii_uppercase",
     "is_digit",
     "to_digit",
+    "from_digit",
 ];
 
 /// `i128.parse(s)` / `u128.parse(s)` and their `from_str_radix`: 1 with
@@ -3830,8 +3832,11 @@ pub unsafe extern "C" fn karac_mir_parse_int128(
     if !(2..=36).contains(&radix) {
         return 0;
     }
-    let got = match radix_digits(text.as_bytes(), radix as u32, signed != 0) {
-        Some((true, m)) => signed_of(true, m).map(i128::to_ne_bytes),
+    // An unsigned type reads `-0` as 0, and no other `-` (B-2026-11-16-43).
+    let got = match radix_digits(text.as_bytes(), radix as u32, true) {
+        Some((true, m)) if signed != 0 => signed_of(true, m).map(i128::to_ne_bytes),
+        Some((true, 0)) => Some(0u128.to_ne_bytes()),
+        Some((true, _)) => None,
         Some((false, m)) if signed != 0 => signed_of(false, m).map(i128::to_ne_bytes),
         Some((false, m)) => Some(m.to_ne_bytes()),
         None => None,
@@ -3946,7 +3951,8 @@ pub unsafe extern "C" fn karac_mir_parse_int(
         return 0;
     }
     let n = match short_decimal(raw, radix) {
-        Some((true, _)) if signed == 0 => return 0,
+        // `-0` is 0 for an unsigned type too; any other negative fails
+        // the fit test below (B-2026-11-16-43).
         Some((_, n)) => n,
         None => {
             // Invalid UTF-8 cannot parse, so it fails here rather than
@@ -3955,9 +3961,6 @@ pub unsafe extern "C" fn karac_mir_parse_int(
                 return 0;
             };
             let text = text.trim();
-            if signed == 0 && text.starts_with('-') {
-                return 0;
-            }
             match radix_digits(text.as_bytes(), radix as u32, true)
                 .and_then(|(neg, m)| signed_of(neg, m))
             {
@@ -5219,7 +5222,9 @@ mod tests {
             for (bits, signed) in [(64, true), (8, true), (8, false), (64, false)] {
                 let want = std::str::from_utf8(t).ok().and_then(|s| {
                     let s = s.trim();
-                    if !signed && s.starts_with('-') {
+                    // An unsigned type takes `-0`, as 0, and no other `-`.
+                    let minus_zero = s.len() > 1 && s[1..].bytes().all(|b| b == b'0');
+                    if !signed && s.starts_with('-') && !minus_zero {
                         return None;
                     }
                     let n = s.parse::<i128>().ok()?;

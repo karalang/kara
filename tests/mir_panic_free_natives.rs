@@ -212,7 +212,7 @@ fn main() {
 "#;
 
 /// Python: `int(text, radix)` within each type's range, else none.
-const PARSE_OUT: &str = "255\n-1295\n5\nnone\nnone\nnone\nnone\n9223372036854775807\n-9223372036854775808\nnone\nnone\n18446744073709551615\nnone\n-128\n-170141183460469231731687303715884105728\nnone\n340282366920938463463374607431768211455\nnone\n";
+const PARSE_OUT: &str = "255\n-1295\n5\nnone\nnone\nnone\nnone\n9223372036854775807\n-9223372036854775808\nnone\nnone\n18446744073709551615\n0\n-128\n-170141183460469231731687303715884105728\nnone\n340282366920938463463374607431768211455\nnone\n";
 
 /// Integer sorts of four widths (random, ascending, descending, and short
 /// enough for the insertion sort), a `Vec[String]` sort and a `sort_by`.

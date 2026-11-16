@@ -71,7 +71,7 @@ fn kata_2081_char_from_digit_radix_out_of_range_panics() {
         src,
         101,
         "",
-        "char.from_digit: the radix is not in 2..=36",
+        "char.from_digit: radix 37 is not in 2..=36",
     );
 }
 
