@@ -105,6 +105,26 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 _ => None,
             };
+            // `pos[(b - b'a') as usize]` over a `u8`: the index takes the
+            // `i64` the `u8` widens to by itself, so the whole cast goes,
+            // with its parentheses, rather than becoming an `as i64` that a
+            // second round drops (B-2026-11-15-50).
+            let key = crate::resolver::SpanKey::from_span(&e.span);
+            if self.program.index_casts.contains(&key) {
+                if let Some(edits) = self.narrow_usize_cast_removal(&e) {
+                    self.type_error(
+                        "this `as usize` makes a `usize` that mixes with `i64`, and `usize` \
+                         is for FFI signatures: Kāra writes sizes, lengths, counts and \
+                         indices as `i64` (design.md §5), and the index takes the `i64` \
+                         this value widens to by itself, so drop the `as usize`"
+                            .to_string(),
+                        e.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    self.error_fix_diffs.insert(key, edits);
+                    continue;
+                }
+            }
             if let Some(fix) = self.usize_cast_of_an_i64(&e).or_else(to_i64) {
                 let remedy = super::expr_ops::usize_cast_remedy(&fix);
                 self.type_error_with_fix_it(

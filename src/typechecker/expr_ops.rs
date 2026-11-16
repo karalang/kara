@@ -128,6 +128,84 @@ impl super::TypeChecker<'_> {
     /// lengths and indices are `i64` in Kāra (design.md §5; `usize` is for
     /// FFI), so the cast is Rust's `len()`-is-`usize` habit and deleting it
     /// is the fix. `None` unless the cast's operand ends where a fix can find.
+    /// `(x) as usize` or `x as usize` over an integer narrower than `i64`,
+    /// in a slot that takes an `i64`: the edits that delete the cast and,
+    /// when the operand is parenthesized, its parentheses (B-2026-11-15-50).
+    pub(super) fn narrow_usize_cast_removal(
+        &self,
+        e: &Expr,
+    ) -> Option<Vec<crate::resolver::TextEdit>> {
+        let ExprKind::Cast {
+            expr: inner,
+            ty: cast_ty,
+        } = &e.kind
+        else {
+            return None;
+        };
+        let ty = |x: &Expr| {
+            self.expr_types.get(&SpanKey::from_span(&x.span)).map(|t| {
+                match resolve_type_var_top(t, &self.env.substitutions) {
+                    Type::Ref(t) | Type::MutRef(t) => *t,
+                    t => t,
+                }
+            })
+        };
+        if ty(e) != Some(Type::UInt(UIntSize::Usize)) {
+            return None;
+        }
+        if !matches!(
+            ty(inner),
+            Some(
+                Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32)
+                    | Type::UInt(UIntSize::U8 | UIntSize::U16 | UIntSize::U32)
+            )
+        ) {
+            return None;
+        }
+        let to = e.span.offset + e.span.length;
+        if cast_ty.span.offset + cast_ty.span.length != to {
+            return None;
+        }
+        let edit = |offset: usize, length: usize| crate::resolver::TextEdit {
+            offset,
+            length,
+            replacement: String::new(),
+        };
+        // `(a - b) as usize` as a whole index or `let` value: nothing
+        // binds around it, so the parentheses go with the cast.
+        if let Some((whole, text)) = self
+            .program
+            .whole_value_casts
+            .get(&SpanKey::from_span(&e.span))
+        {
+            return Some(vec![crate::resolver::TextEdit {
+                offset: whole.offset,
+                length: whole.length,
+                replacement: text.clone(),
+            }]);
+        }
+        if let Some(from) = appended_cast_end_offset(inner) {
+            return (to > from).then(|| vec![edit(from, to - from)]);
+        }
+        // `b as usize`: a single term keeps its place without the cast.
+        let end = inner.span.offset + inner.span.length;
+        (!self
+            .program
+            .cast_operand_ends
+            .contains_key(&SpanKey::from_span(&e.span))
+            && matches!(
+                inner.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::TupleIndex { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::Call { .. }
+                    | ExprKind::Index { .. }
+            )
+            && to > end)
+            .then(|| vec![edit(end, to - end)])
+    }
+
     pub(super) fn usize_cast_of_an_i64(&self, e: &Expr) -> Option<FixIt> {
         let ExprKind::Cast {
             expr: inner,
@@ -163,6 +241,18 @@ impl super::TypeChecker<'_> {
             }
             _ => return None,
         }
+        // `let n: i64 = (a - b) as usize;`: a whole value needs no
+        // parentheses once the cast is gone (B-2026-11-15-50).
+        if let Some((whole, text)) = self
+            .program
+            .whole_value_casts
+            .get(&SpanKey::from_span(&e.span))
+        {
+            return Some(FixIt {
+                span: *whole,
+                replacement: text.clone(),
+            });
+        }
         let to = e.span.offset + e.span.length;
         let from = match appended_cast_end_offset(inner) {
             Some(from) => from,
@@ -190,10 +280,12 @@ impl super::TypeChecker<'_> {
 /// The words for a [`super::TypeChecker::usize_cast_of_an_i64`] fix: the
 /// cast goes when its operand is already `i64`, else its target becomes `i64`.
 pub(super) fn usize_cast_remedy(fix: &FixIt) -> &'static str {
-    if fix.replacement.is_empty() {
-        "drop the `as usize`"
-    } else {
+    // A deletion, or the operand's own text over a whole parenthesized
+    // value, drops the cast; only a retarget writes `i64`.
+    if fix.replacement == "i64" {
         "cast to `i64`"
+    } else {
+        "drop the `as usize`"
     }
 }
 

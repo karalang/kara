@@ -13387,12 +13387,25 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.note_pointer_int_mix(&source, &target);
         if target == Type::Int(IntSize::I64) {
+            // `pos[(b - b'a') as usize]` over a `u8`: the slot takes an
+            // `i64`, which a narrower integer widens to by itself, so the
+            // whole cast goes, its parentheses with it, in one round
+            // (B-2026-11-15-50).
+            if let Some(edits) = self.narrow_usize_cast_removal(expr) {
+                self.type_error(
+                    "implicit coercion from 'usize' to 'i64' would change sign — sizes, \
+                     lengths and indices are `i64` in Kāra (`usize` is for FFI), and the \
+                     value widens to `i64` by itself, so drop the `as usize`"
+                        .to_string(),
+                    expr.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                self.error_fix_diffs
+                    .insert(SpanKey::from_span(&expr.span), edits);
+                return;
+            }
             if let Some(fix) = self.usize_cast_of_an_i64(expr) {
-                let remedy = if fix.replacement.is_empty() {
-                    "drop the `as usize`"
-                } else {
-                    "cast to `i64`"
-                };
+                let remedy = super::expr_ops::usize_cast_remedy(&fix);
                 self.type_error_with_fix_it(
                     format!(
                         "implicit coercion from 'usize' to 'i64' would change sign — sizes, \

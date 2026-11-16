@@ -1018,6 +1018,11 @@ pub struct Program {
     /// `as T` takes the parentheses too and leaves `let run = j - i;`
     /// (kata 1128, B-2026-11-11-87).
     pub whole_value_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// A cast that is a whole index, `pos[(b - b'a') as usize]`, keyed by
+    /// its span: the slot takes an `i64`, so an `as usize` over a narrower
+    /// integer can go entirely rather than become `as i64`
+    /// (B-2026-11-15-50).
+    pub index_casts: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `MutFn(...)` types (`docs/core-semantics.md` §9.6), keyed by the
     /// function type's span. Kept beside the tree like
     /// [`Self::escaping_fn_types`]: the type is an ordinary non-once `FnType`

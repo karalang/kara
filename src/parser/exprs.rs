@@ -932,6 +932,14 @@ impl super::Parser {
                     }
                     let index_start = self.current_span();
                     let first = self.parse_expression()?;
+                    // Nothing binds around an index either, so a fix that
+                    // deletes `as T` from `v[(b - b'a') as i64]` takes the
+                    // parentheses too (B-2026-11-15-50).
+                    self.note_whole_value_cast(&index_start, &first);
+                    if matches!(first.kind, ExprKind::Cast { .. }) {
+                        self.index_casts
+                            .insert(crate::resolver::SpanKey::from_span(&first.span));
+                    }
                     let index = if self.check(&Token::Comma) {
                         let mut elems = vec![first];
                         while self.eat(&Token::Comma) {

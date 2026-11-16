@@ -412,6 +412,8 @@ pub struct Parser {
     pub(crate) paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
     /// See [`crate::ast::Program::whole_value_casts`].
     pub(crate) whole_value_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// See [`crate::ast::Program::index_casts`].
+    pub(crate) index_casts: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::mut_fn_types`].
     pub(crate) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::cross_task_fn_types`].
@@ -751,6 +753,7 @@ impl Parser {
             cast_operand_ends: rustc_hash::FxHashMap::default(),
             paren_casts: rustc_hash::FxHashMap::default(),
             whole_value_casts: rustc_hash::FxHashMap::default(),
+            index_casts: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
             fn_type_marker_points: rustc_hash::FxHashMap::default(),
@@ -1204,6 +1207,7 @@ impl Parser {
             cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
             paren_casts: std::mem::take(&mut self.paren_casts),
             whole_value_casts: std::mem::take(&mut self.whole_value_casts),
+            index_casts: std::mem::take(&mut self.index_casts),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
             fn_type_marker_points: std::mem::take(&mut self.fn_type_marker_points),
@@ -3485,16 +3489,57 @@ impl Parser {
             return;
         };
         let key = crate::resolver::SpanKey::from_span(&value.span);
-        if !self.cast_operand_ends.contains_key(&key)
-            || self.source_at(start.offset, 1) != Some("(")
+        let Some(&closed) = self.cast_operand_ends.get(&key) else {
+            return;
+        };
+        if self.source_at(start.offset, 1) != Some("(")
             || start.offset >= operand.span.offset
+            || closed < start.offset + 2
+            || self.source_at(closed - 1, 1) != Some(")")
         {
             return;
         }
         let end = value.span.offset + value.span.length;
-        let Some(text) = self.source_at(operand.span.offset, operand.span.length) else {
+        // The text between the `(` and its `)`, not the operand node's own
+        // span, which leaves out a leading parenthesis of its own:
+        // `((n >> 4) & 15) as i64` keeps `(n >> 4) & 15` (B-2026-11-15-50).
+        let Some(text) = self.source_at(start.offset + 1, closed - 1 - (start.offset + 1)) else {
             return;
         };
+        // The `(` must be the one that closes at `closed`.
+        let mut depth = 0usize;
+        for ch in text.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' if depth == 0 => return,
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            return;
+        }
+        // `(( c - b'b' )) as i64` keeps `c - b'b'`: each further pair that
+        // wraps the whole text goes too.
+        let mut text = text.trim();
+        while let Some(inner) = text.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+            let mut depth = 0usize;
+            if inner.chars().any(|ch| match ch {
+                '(' => {
+                    depth += 1;
+                    false
+                }
+                ')' if depth == 0 => true,
+                ')' => {
+                    depth -= 1;
+                    false
+                }
+                _ => false,
+            }) {
+                break;
+            }
+            text = inner.trim();
+        }
         let text = text.to_string();
         let whole = Span {
             offset: start.offset,
