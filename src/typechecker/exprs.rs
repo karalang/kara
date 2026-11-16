@@ -9822,18 +9822,13 @@ impl<'a> super::TypeChecker<'a> {
                 // (`v.iter().flatten()` on a `Vec[Vec[T]]`): name the
                 // spelling that walks each one.
                 if trait_name == "Iterator" {
-                    let walk = if matches!(resolved, Type::Ref(_) | Type::MutRef(_)) {
-                        "iter"
-                    } else {
-                        "into_iter"
-                    };
+                    let spelling = Self::flatten_spelling(&resolved);
                     let msg = format!(
                         "`flatten` needs items that are themselves iterators \
                          (docs/library/iterators.md: `where Self.Item: Iterator`), \
-                         and `{}` is not one: write `.flat_map(|v| v.{}())` in \
-                         place of `.flatten()`",
+                         and `{}` is not one: write `{spelling}` in place of \
+                         `.flatten()`",
                         type_display(&resolved),
-                        walk,
                     );
                     self.flatten_hinted = true;
                     // A receiver re-inferred for a chained closure reaches
@@ -9843,7 +9838,7 @@ impl<'a> super::TypeChecker<'a> {
                         .iter()
                         .any(|e| e.span == *discharge_span && e.message == msg)
                     {
-                        match self.flatten_fix(discharge_span, walk) {
+                        match self.flatten_fix(discharge_span, &spelling) {
                             Some(fix) => self.type_error_with_fix_it(
                                 msg,
                                 *discharge_span,

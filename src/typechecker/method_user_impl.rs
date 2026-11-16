@@ -295,13 +295,39 @@ impl<'a> super::TypeChecker<'a> {
     /// The fix for a `.flatten()` over collection items: the call, from its
     /// receiver's end to its `)`, becomes `.flat_map(|v| v.<walk>())`
     /// (B-2026-11-04-52).
-    pub(super) fn flatten_fix(&self, call: &Span, walk: &str) -> Option<FixIt> {
+    pub(super) fn flatten_fix(&self, call: &Span, spelling: &str) -> Option<FixIt> {
         self.flatten_calls
             .get(&SpanKey::from_span(call))
             .map(|span| FixIt {
                 span: *span,
-                replacement: format!(".flat_map(|v| v.{walk}())"),
+                replacement: spelling.to_string(),
             })
+    }
+
+    /// What to write in place of `.flatten()` over items of type `item`,
+    /// which are not iterators. A collection is walked with `iter` when the
+    /// items are references and `into_iter` when they are owned; an
+    /// `Option` or `Result` has no iterator, so its values are kept with
+    /// `filter_map`.
+    pub(super) fn flatten_spelling(item: &Type) -> String {
+        let (owned, by_ref) = match item {
+            Type::Ref(t) | Type::MutRef(t) => (t.as_ref(), true),
+            t => (t, false),
+        };
+        match (owned, by_ref) {
+            (Type::Named { name, .. }, false) if name == "Option" => ".filter_map(|v| v)".into(),
+            (Type::Named { name, .. }, true) if name == "Option" => {
+                ".filter_map(|v| v.as_ref())".into()
+            }
+            (Type::Named { name, .. }, false) if name == "Result" => {
+                ".filter_map(|v| v.ok())".into()
+            }
+            (Type::Named { name, .. }, true) if name == "Result" => {
+                ".filter_map(|v| v.clone().ok())".into()
+            }
+            (_, true) => ".flat_map(|v| v.iter())".into(),
+            (_, false) => ".flat_map(|v| v.into_iter())".into(),
+        }
     }
 
     pub(super) fn iter_hint_fix(object: &Expr, hop: &str) -> Option<FixIt> {
@@ -1849,12 +1875,13 @@ impl<'a> super::TypeChecker<'a> {
                     // say what to write, as the spec's own example does.
                     let mut flatten_fix = None;
                     if type_name == "IterFlatten" && bound_trait == "Iterator" {
-                        flatten_fix = self.flatten_fix(span, "iter");
+                        let spelling = Self::flatten_spelling(&concrete);
+                        flatten_fix = self.flatten_fix(span, &spelling);
                         msg = format!(
                             "`flatten` needs items that are themselves iterators \
                              (docs/library/iterators.md: `where Self.Item: Iterator`), \
-                             and `{}` is not one: write `.flat_map(|v| v.iter())` in \
-                             place of `.flatten()`",
+                             and `{}` is not one: write `{spelling}` in place of \
+                             `.flatten()`",
                             type_display(&concrete)
                         );
                     }
