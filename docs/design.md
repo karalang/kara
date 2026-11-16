@@ -778,7 +778,7 @@ Each `karac build --target X` produces one artifact. Building a matrix of target
 - It refuses if `kara.toml`, `src/main.kara` or `src/lib.kara` exists, unless `--force`. It never overwrites `README.md`, the test file or `.gitignore`, even with `--force`. It does not run `git init`.
 - It writes five files: `kara.toml` (`name`, `version = "0.1.0"`, `authors = []`, `edition = "2026"`, an empty `[dependencies]`), `src/main.kara` with `fn main() { println("Hello, world!"); }` or `src/lib.kara` with a documented `pub fn add(a: i64, b: i64) -> i64 { a + b }`, a matching `_test.kara` with one test, a `README.md` holding the title, and a `.gitignore` holding `/dist/`.
 
-**`karac new`.** `karac new <name> [--backend | --cli | --lib]` creates `./<name>/` and scaffolds into it, with `karac init`'s name rules and files. Its default is `--backend`: `src/main.kara` serves `127.0.0.1:8080` with `Server.serve_ws`, answering `/health`, echoing WebSocket messages on `/ws` and giving 404 elsewhere, and its test calls the handler directly with a `Request.new(..)` ([library/io.md](library/io.md)). `--cli` writes a small `wc`: `src/main.kara` reads the file named by `env.args()[1]` with `fs.read_to_string` and prints its lines, words and bytes, and `src/main_test.kara` runs it under `with_provider[FileSystem](..)` with an in-memory fake (§14.11). `--lib` is `karac init --lib`'s. `--data` is reserved and reports that its scaffold is deferred.
+**`karac new`.** `karac new <name> [--backend | --cli | --lib]` creates `./<name>/` and scaffolds into it, with `karac init`'s name rules and files. Its default is `--backend`: `src/main.kara` serves `127.0.0.1:8080` with `Server.serve_ws`, answering `/health`, echoing WebSocket messages on `/ws` and giving 404 elsewhere, and its test calls the handler directly with a `Request.new(..)` ([library/io.md](library/io.md)). `--cli` writes a small `wc`: `src/main.kara` reads the file named by `env.args()[1]` with `fs.read_to_string` and prints its lines, words and bytes, and `src/main_test.kara` runs it under `with_provider[FileSystem](..)` with an in-memory fake ([core-semantics.md §14.11](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20)). `--lib` is `karac init --lib`'s. `--data` is reserved and reports that its scaffold is deferred.
 
 **Command phasing.**
 
@@ -6034,7 +6034,7 @@ Behavior under overload (queueing or refusing excess work) and fairness between 
 
 ## 14. Testing
 
-Tests live in `_test.kara` files and run with `karac test`. `karac build` ignores these files.
+Tests live in `_test.kara` files and run with `karac test`. `karac build` ignores these files. `karac test` runs in a package: it finds the `kara.toml` from the working directory, as `karac build` with no path does, and refuses outside one (review-thread ruling 2026-11-16).
 
 ### Test blocks
 
@@ -6087,6 +6087,14 @@ Discovery by a name prefix (`test_`) fails silently in two ways: a test is skipp
 
 **Each test runs in its own process** ([core-semantics.md §10.4](core-semantics.md#10-panics-and-errors-c8)). A panic ends the process ([core-semantics.md §10.2](core-semantics.md#10-panics-and-errors-c8)), so a panicking test, including one whose assertion failed, fails alone, and the other tests still run. No state carries from one test to the next. On the JIT, `karac test`'s default, each case is a `karac_jit_runner` process of its own. Under `--interp` each case is a fresh run of the MIR interpreter inside `karac`, with the same outcome: a panic fails that case alone.
 
+### Test attributes
+
+Three attributes go on a test case (review-thread ruling 2026-11-16):
+
+- **`#[with_provider(R, e)]`** runs the body inside `with_provider[R](p, || body)`, with `p` evaluated afresh for each case ([core-semantics.md §14.8](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20)). Several stack, outermost first. If `e` panics or evaluates to `Err`, the case fails before its body runs, with reason `provider_construction_failed`.
+- **`#[test(requires: [R, ..])]`** names program-rooted resources the case uses for real ([core-semantics.md §14.13](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20)). A resource is available when `KARA_RESOURCE_<NAME>` is set and not empty, `<NAME>` being its path with `.` as `_`, upper-cased (`db.UserDB` is `KARA_RESOURCE_DB_USERDB`), or when the health-check command `kara.toml` gives it under `[test.resources]` succeeds. An unavailable one skips the case with reason `unsatisfied_requires`; `karac test --all` fails it instead. A resource in both `requires` and a `#[with_provider]` of the same case fails it with reason `requires_and_with_provider_conflict`.
+- **`#[test(timeout_seconds: N)]`** bounds the case's run. Without it the limit is `kara.toml`'s `[test] timeout_seconds`, else `KARAC_TEST_TIMEOUT_SECS`, else 30 seconds. A case that runs out is killed and reported by a `test_timeout` event.
+
 ### Runner output
 
 `karac test` writes **JSONL to stdout**: one JSON object per line, one event per object. Each line has a `"type"` field naming the event, with the same envelope as the compiler's streaming events ([§17 Tooling contract](#17-tooling-contract)), so one client can read every JSONL stream `karac` writes. This is a stable public contract: CI dashboards, editor plugins, AI tooling and flaky-test trackers depend on it. A text mode may come later as `--output=text`; JSONL is the default.
@@ -6095,17 +6103,18 @@ Discovery by a name prefix (`test_`) fails silently in two ways: a test is skipp
 |---|---|---|
 | `run_start` | `total_tests: int` | Once, at the start of the run, after discovery. |
 | `test_pass` | `test: string`, `duration_ms: int` | `test` is the case name, verbatim. |
-| `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional: `assertion: string` (the assertion's source text); `left: string` and `right: string` for `assert_eq` and `assert_ne`; `reason: string` for a failure that is not an assertion; `kind: string`, the [panic record](#panic-record)'s kind, when the test panicked. |
-| `test_skip` | `test: string`, `reason: string` | Reserved for skipped tests. Consumers must accept `reason` values they do not know. |
+| `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional: `assertion: string` (the assertion's source text); `left: string` and `right: string` for `assert_eq` and `assert_ne`; `reason: string` for a failure that is not an assertion; `kind: string`, the [panic record](#panic-record)'s kind, when the test panicked; `providers: [string]`, the resources the case's `#[with_provider]` attributes bound, on a failure its body reached. A failure before the body ran has `duration_ms: 0`, a `location` at the case's `test` keyword, and a `reason`: `provider_construction_failed` with `resource: string`, or `unsatisfied_requires` (under `--all`) or `requires_and_with_provider_conflict` with `resources: [string]`. |
+| `test_skip` | `test: string`, `reason: string` | A case skipped before it ran: today `unsatisfied_requires`, with `resources: [string]`. Consumers must accept `reason` values they do not know. |
+| `test_timeout` | `test: string`, `timeout_s: int`, `elapsed_ms: int` | A case killed at its time limit ([Test attributes](#test-attributes)). It counts as failed in `summary`. |
 | `summary` | `total: int`, `passed: int`, `failed: int`, `skipped: int`, `duration_ms: int` | Once, at the end of the run. |
 
 **Compatibility.** Later versions may add fields to an event, add event types, and add `test_skip` reasons. Consumers **must** ignore unknown fields and event types, and **must not** depend on the order of fields within a line. Field names and meanings do not change once shipped; a rename or a change of meaning is a breaking schema version.
 
-**Exit code.** `0` if every test passed or was skipped. Non-zero if any `test_fail` was emitted.
+**Exit code.** `0` if every test passed or was skipped. Non-zero if any `test_fail` or `test_timeout` was emitted.
 
 **Filtering.** `karac test <substring>` runs only the cases whose name contains `<substring>`. Filtering happens after discovery. Filtered-out tests produce no events (not even `test_skip`), and `run_start`'s `total_tests` counts only the tests that remain.
 
-Property tests, snapshot tests, fuzzing and benchmarks ([deferred.md](deferred.md#tooling)), and test attributes for services that need a live resource or a substitute implementation ([deferred.md](deferred.md#m4a-services)), are deferred.
+Property tests, snapshot tests, fuzzing and benchmarks ([deferred.md](deferred.md#tooling)), and a test that passes only by panicking (`should_panic`, [deferred.md](deferred.md#tooling)), are deferred.
 
 ---
 
@@ -7011,10 +7020,10 @@ In the compiler source this stage is `src/backend/` (MIR → LLVM, the AOT and A
 The streaming diagnostic protocol ([Streaming phase events](#streaming-phase-events)) reports these phases:
 
 ```
-lex → parse → resolve → typecheck → effect → ownership → concurrency → codegen
+lex → parse → resolve → typecheck → effect → ownership → codegen
 ```
 
-Phase names are part of the public contract: renaming one is a breaking change for any client of `--output=jsonl`. Internal iteration within a phase is not observable. Internal stages report under these names: desugaring reports as `parse`, and MIR building and borrow checking report as `ownership`. `karac check` reports four more, which clients treat as opaque: `lint` after `typecheck`, `provider_escape` and `simd_check` after `ownership`, and `comptime` last, since compile-time evaluation runs inside `resolve` and `typecheck` and the batch document lists its diagnostics last.
+Phase names are part of the public contract: renaming one is a breaking change for any client of `--output=jsonl`. Internal iteration within a phase is not observable. Internal stages report under these names: desugaring reports as `parse`, and MIR building and borrow checking report as `ownership`. The concurrency checks have no phase of their own: a `par` block's conflicts report under `typecheck`, and what may cross a task boundary under `effect` and `ownership` (review-thread ruling 2026-11-16). `codegen` is `karac build`'s alone. `karac check` reports four more, which clients treat as opaque: `lint` after `typecheck`, `provider_escape` and `simd_check` after `ownership`, and `comptime` last, since compile-time evaluation runs inside `resolve` and `typecheck` and the batch document lists its diagnostics last.
 
 ### Execution model
 
@@ -7144,6 +7153,8 @@ $ karac build --output=json
 }
 ```
 
+**On a passing build** the document is the same, with `"status": "ok"` first and `"output"`, the path written, last; `diagnostics` is there, empty when there are no warnings (review-thread ruling 2026-11-16).
+
 **One fix shape.** A machine-applicable fix is a hint whose `diff` names the source lines the fix touches, from `line`: `old` is those lines as they are and `new` is them after the fix, so a fix that edits two lines has one diff over both. Beside the hints, a diagnostic carries the byte-level edits the diffs summarize, the form `karac fix` applies and an editor applies in place: `replacement` `{offset, length, text}` for a fix of one edit, `fix_diff` `[{offset, length, text}, ...]` for a fix of several. Offsets are bytes of the diagnostic's `file`. Every phase, and a package as well as a file, reports a fix in this shape and no other.
 
 Diagnostic codes come from per-phase bands, and every code is catalogued for `karac explain` ([§2](#2-specification-layers)).
@@ -7154,7 +7165,7 @@ The JSON document is the compiler's only output channel for signal. Five rules g
 
 **1. Signal on stdout, noise on stderr.** The JSON document goes to stdout and holds only actionable information: errors, warnings and the `program_effects` summary. Build progress ("Compiling foo", "Linking..."), phase timings and cache messages go to stderr in human-readable form. AI agents read stdout and parse one JSON document with nothing to filter. Developers running `karac build` interactively see progress on stderr. Timings and profiling data, when requested, go to a separate file (`--emit-timings=timings.json`), never into the diagnostic stream.
 
-**2. Root-cause grouping with `primary` and `consequence_of`.** Every diagnostic carries an `"id"` and `"primary": true | false`. A consequence (caused by an earlier root error, such as `user.name` being inaccessible because `user` was moved) carries `"primary": false` and `"consequence_of": "<id>"`. AI agents fix primaries first; consequences often disappear once the root is fixed.
+**2. Root-cause grouping with `primary` and `consequence_of`.** Every diagnostic carries an `"id"` and `"primary": true | false`. A consequence (caused by an earlier root error in the same phase, such as `user.name` being inaccessible because `user` was moved) would carry `"primary": false` and `"consequence_of": "<id>"`. In v1 both are **reserved**: the compiler reports no consequences, because it stops at the first phase with errors ([Streaming phase events](#streaming-phase-events)) and reports each root error once within a phase, so every entry is `"primary": true` (review-thread ruling 2026-11-16). A client reads `primary` and `consequence_of` when present, so a later version can add consequences within one phase.
 
 ```json
 { "id": "d1", "primary": true,  "code": "E0500", "message": "`user` moved on line 38..." }
@@ -7178,7 +7189,7 @@ A hard cap, rather than stopping at the first error, lets AI agents apply indepe
 
 | Commitment | Errors | Warnings |
 |---|---|---|
-| `primary` / `consequence_of` | required | optional |
+| `primary` / `consequence_of` | `primary` required; `consequence_of` reserved | optional |
 | Cascade cap (20 per file) | errors only | no cap |
 | `concept` field | required | required |
 | `derivation` chain | when inferred | when inferred |
@@ -7267,7 +7278,7 @@ When `?` propagates an `Err` through several call frames, debug builds record th
 
 The batch `--output=json` document is emitted once, at the end of a build. A client that iterates quickly, or wants to act on one phase's result while the next runs, uses the streaming mode, which emits one event per line as the build progresses. Everything the batch mode produces is also in the stream, and a complete stream reconstructs the batch document.
 
-**Invocation.** `karac build --output=jsonl`. The name follows the JSON Lines convention.
+**Invocation.** `karac build --output=jsonl`, and `karac check --output=jsonl` for the checks alone. The name follows the JSON Lines convention. A build's stream runs the checks' phases, then `codegen`, which covers lowering, LLVM and the link: a failure there is `codegen`'s `diagnostic`, and a passing build's `build_complete` adds `output`, the path of what it wrote.
 
 **Format.** Each line is one JSON object, terminated by `\n` (not CRLF), UTF-8, not pretty-printed, with a `"type"` field naming the event. There is no wrapper object or array. The stream works with `tail -f` and line-by-line JSON parsers.
 
@@ -7278,9 +7289,10 @@ The batch `--output=json` document is emitted once, at the end of a build. A cli
 {"type":"phase_start","phase":"parse"}
 {"type":"diagnostic","phase":"parse","id":"d1","primary":true,"severity":"error","code":"E0099","message":"unexpected token `}`","file":"src/main.kara","line":12,"column":3}
 {"type":"phase_complete","phase":"parse","errors":1,"warnings":0,"notes":0}
+{"type":"phase_skipped","phase":"resolve","reason":"parse errors in input","blocking":["d1"]}
 {"type":"phase_skipped","phase":"typecheck","reason":"parse errors in input","blocking":["d1"]}
-{"type":"phase_skipped","phase":"effect","reason":"typecheck did not run","blocking":["d1"]}
-{"type":"phase_skipped","phase":"ownership","reason":"typecheck did not run","blocking":["d1"]}
+{"type":"phase_skipped","phase":"effect","reason":"parse errors in input","blocking":["d1"]}
+{"type":"phase_skipped","phase":"ownership","reason":"parse errors in input","blocking":["d1"]}
 {"type":"build_complete","build_id":"01HQ...","success":false,"total_errors":1,"total_warnings":0,"program_effects":null}
 ```
 
@@ -7299,14 +7311,12 @@ Sub-phase events (monomorphization requests, SCC rounds, cache hits, individual 
 
 **Observable phases.** One event pair (`phase_start` / `phase_complete`, or `phase_skipped`) per phase listed in [Observable phases](#observable-phases). Clients must accept phase names they do not recognize and treat them as opaque, so later versions can add phases without breaking old clients.
 
-**Fail-fast: the predecessor-usable-output rule.** Each phase runs unless its predecessor produced no usable output. "Usable" depends on the phase:
-- `lex` always runs.
-- `parse` runs even after lex errors; the parser recovers over the error tokens.
-- `resolve` runs if the parser produced a syntax tree for at least one top-level item.
-- `typecheck` runs if resolve resolved any items. Unresolved names cascade as typecheck errors, which is expected.
-- `effect` runs if typecheck produced any typed items.
-- `ownership` runs if typecheck produced any typed items; it does not depend on effect output.
-- `concurrency` runs if both `effect` and `ownership` completed.
+**Fail-fast at the first failing phase.** A phase that needs names or types does not run on a program whose earlier phase failed, so a client never reads errors that only cascade from an earlier one (review-thread ruling 2026-11-16):
+- `lex` and `parse` always run; the parser recovers over error tokens and reports every syntax error it finds.
+- `resolve` runs only if `parse` reported no error; so do `effect` and `provider_escape`.
+- `typecheck` runs only if `resolve` reported no error.
+- `ownership` runs only if `typecheck` ran. It runs after type errors, which are local, and does not depend on `effect`'s output.
+- `lint`, `simd_check` and `comptime` always run, over what the earlier phases produced.
 - `codegen` runs only if **every** analysis phase completed with zero errors.
 
 A skipped phase emits `phase_skipped` with a `reason` and the `blocking` diagnostic ids, so the client sees exactly which diagnostics cut the build short.
@@ -7379,6 +7389,28 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 
 **`karac explain`** explains a diagnostic code from the code catalogue, and a [concept id](#concept-ids) by the sections that specify it. For an item (`karac explain src/order.kara.process`, a method as `<file>.Type.method`), it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)). A function with a `with` clause is trusted for what it declares, so its derivation ends at the clause.
 
+### Language server
+
+`kara-lsp` (the `lsp/` workspace member) speaks the Language Server Protocol over stdio, over the same analysis `karac check` runs; it executes no user code. It serves these requests, and answers any other with `MethodNotFound` (review-thread ruling 2026-11-16):
+
+| Request or notification | What it does |
+|---|---|
+| `initialize` / `shutdown` | The handshake. Text sync is full-document. |
+| `textDocument/didOpen`, `didChange`, `didSave`, `didClose` | Check the document and publish its diagnostics (`textDocument/publishDiagnostics`); `didClose` clears them. A change inside one body re-checks that body. |
+| `textDocument/hover` | The inferred type of the expression under the cursor, and a function's effects. |
+| `textDocument/definition` | Where the name under the cursor is defined. |
+| `textDocument/references` | Every use of the symbol under the cursor in the document. |
+| `textDocument/rename` | Rename the symbol under the cursor in the document. |
+| `textDocument/documentSymbol` | The document's top-level items. |
+| `textDocument/completion` | A receiver's fields and methods after `.`. |
+| `textDocument/signatureHelp` | The called function's parameters, on `(` and `,`. |
+| `textDocument/inlayHint` | A `let` binding's inferred type and a private function's inferred effects. |
+| `textDocument/codeAction` | The diagnostics' machine-applicable fixes, the edits `karac fix` applies, as quick fixes. |
+| `textDocument/formatting` | `karac fmt`'s output, as one whole-document edit. |
+| `kara/renderCrashReport` | A custom request: `{"text": <crash report JSON>}` in, `{"rendered": <text>}` out, as `karac debug` renders it. |
+
+Positions are UTF-16, as the protocol requires. A diagnostic's `code` is its catalogue code (`E0500`), or its phase when it has none. Requests reach one document: references and rename do not cross files in v1.
+
 ### Debugger contract
 
 A debugger attaching to a Kāra binary needs more than DWARF: the runtime model of `par {}` blocks and `TaskGroup` tasks has shapes a generic stack walker cannot see. This subsection is the language-level contract between the compiler and runtime and any debugger, profiler or task inspector. Building those tools (gdb or lldb plugins, a DAP server, profiler interfaces, time-travel debugging) is out of scope for v1. The v1 deliverable is the contract and the runtime metadata, so that tools have a stable surface.
@@ -7409,7 +7441,7 @@ A panic produces one **panic record** ([core-semantics.md §10.2](core-semantics
 1. **Kind.** One of `explicit`, `index_out_of_bounds`, `overflow`, `div_by_zero`, `unwrap`, `borrow_conflict`, `assertion`, `alloc_failure`, `unreachable` and `deadlock`. The first nine cover the cases of [core-semantics.md §10.1](core-semantics.md#10-panics-and-errors-c8); `deadlock` is a `recv` on sequential `wasm_wasi` when no task can run ([Concurrency across targets](#concurrency-across-targets)). Kinds are only ever added. Tools deduplicate on the kind and the location.
 2. **Message.** The panic's message, or `"<no message>"`.
 3. **Location.** `file:line:col`. For a panic raised inside a standard-library function marked `#[track_caller]` ([§10](#10-errors-and-panics)), it is the caller's location.
-4. **Error-return trace.** The path of the error being propagated, in debug builds ([Error return traces](#error-return-traces)).
+4. **Error-return trace.** The path of the error being propagated, in debug builds ([Error return traces](#error-return-traces)). A panic with no `?` propagation behind it has none, and its report prints no `Error return trace:` (review-thread ruling 2026-11-16).
 
 **Where it goes.** A panic follows core-semantics.md §10.2's order:
 1. The record goes to stderr in human-readable form. Its text may change freely.

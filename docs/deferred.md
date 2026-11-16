@@ -6177,6 +6177,14 @@ The compiler and its runtime written in Kāra.
 
 Compiler commands, editor support, test-framework extensions, diagnostics, optimization infrastructure and interoperability tools beyond the v1 tooling contract ([design.md §17](design.md#17-tooling-contract)). Tooling changes no program's meaning, so items here can arrive in any order.
 
+### Expected-panic tests (`should_panic`)
+
+**Decision:** A test case that passes only when its body panics, optionally with a message it must contain, is post-v1 (review-thread ruling 2026-11-16). In v1 a case that panics fails.
+
+**Why deferred:** Each case already runs in its own process ([design.md §14 Isolation](design.md#isolation)), so the runner sees the panic record; what is undecided is the attribute's shape and whether it matches the message, the panic kind, or both.
+
+**Why non-breaking:** A new test attribute; `karac test`'s events already carry the panic record's `kind`.
+
 ### Hot Reloading
 
 **Decision:** Shared library reloading is the recommended approach. It requires a stable ABI and a state serialization design.
