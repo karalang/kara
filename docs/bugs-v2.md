@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 448 |
+| diagnostics | 450 |
 | false-positive | 246 |
-| missing-feature | 185 |
+| missing-feature | 188 |
 | perf | 182 |
-| other | 110 |
+| other | 111 |
 | miscompile | 81 |
 | soundness | 81 |
 | run-vs-build | 55 |
-| crash | 46 |
+| crash | 47 |
 | codegen-gap | 33 |
 | use-after-free | 9 |
 | leak | 4 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 574 |
+| typecheck | 578 |
 | mir-llvm | 281 |
-| mir | 241 |
+| mir | 242 |
 | cli | 190 |
-| parser | 102 |
+| parser | 103 |
 | ownership | 99 |
 | interp | 87 |
-| runtime | 80 |
+| runtime | 83 |
 | resolver | 40 |
 | effect | 38 |
 | other | 33 |
@@ -217,6 +217,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-61 | 2026-11-17 | runtime | low | `spawn` fails with kinds io.md says it never returns: an executable that is not a valid binary or script gives `Other("Exec format error (os error 8))`, a `current_dir` that is a file gives `Other("Not a directory (os error 20)")`, and a NUL in the program, an argument or an env value gives `InvalidInput`; meanwhile an env key containing `=` or an empty key is accepted and passed on corrupted | — |
 | B-2026-11-17-62 | 2026-11-17 | runtime | low | A `PATH` set on the Command (`Command.new("tool").env("PATH", dir)`) is used to find the program, though io.md says a name without `/` is looked up on the parent's PATH | — |
 | B-2026-11-17-63 | 2026-11-17 | runtime | low | `exit(n)` and `ExitCode.from(n)` take an i32 but the process status keeps only its low 8 bits, so `exit(256)` and `ExitCode.from(256)` end the process with 0, success; -1 gives 255 and 300 gives 44, and neither io.md nor design.md §10 says so | — |
+| B-2026-11-17-64 | 2026-11-17 | runtime | medium | On wasm_wasi the default `Map`/`Set` hasher is keyed with a fixed constant: a program iterates its keys in the same order on every run, and `KARAC_HASH_SEED` changes nothing, though collections.md says the key is 'a random value chosen once per process' and that KARAC_HASH_SEED pins it | — |
+| B-2026-11-17-65 | 2026-11-17 | typecheck+mir | medium | A `.hash(mut h)` call written in a program is refused for `F64`, `F32` and `()` (E0516 'hashing this type is not lowered yet') and for `i128`, `u128` and a tuple held in a local (E0236 'no method hash'), though all of them work as Map and Set keys and collections.md lists the bytes F64 feeds; so a hand-written `impl Hash` for a struct with an F64 field cannot delegate to it | — |
+| B-2026-11-17-66 | 2026-11-17 | typecheck+runtime | low | `SipHash13BuildHasher` and `FxBuildHasher` have no `build()` and do not satisfy a `B: BuildHasher` bound, though collections.md calls both 'ordinary BuildHasher types', so a program cannot compute the default hasher's digest or hand either hasher to generic code | — |
+| B-2026-11-17-67 | 2026-11-17 | typecheck | low | `Duration` and `Instant` have no text form: `println(f"took {t.elapsed()}")` is refused E0232 (no Display), Debug is not implemented yet, and time-random-env.md gives no format, so every timing message is written as `{d.as_ms()} ms` by hand | — |
+| B-2026-11-17-68 | 2026-11-17 | runtime | medium | On wasm_wasi, once `Regex.compile` has returned its size-limit error ('Compiled regex exceeds size limit of 10485760 bytes'), the program's next print kills the host: node exits by SIGSEGV (139), though the same program runs to the end on interp, llvm and asan | — |
+| B-2026-11-17-69 | 2026-11-17 | typecheck | low | A bare `ref String` arm beside a `Str` arm is refused with no fix: `match p.split_once(" ") { Some((w, _)) => w, None => p }` over `p` from `phrases.iter()` (the `.as_str()` edit covered only an arm that reads `ref x`), and `if let` / `else` had neither the fix nor the hint | — |
+| B-2026-11-17-70 | 2026-11-17 | parser | low | `karac fix` opens `from_iter(` inside a parenthesized receiver: `(0..n).flat_map(..).collect::<BTreeSet<_>>().into_iter()` becomes `(SortedSet.from_iter(0..n).flat_map(..))`, refused as no `flat_map` on `SortedSet`; the `parse::<T>()` fix took the same span | — |
 
 ### Relocated
 

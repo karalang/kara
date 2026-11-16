@@ -16560,15 +16560,34 @@ impl<'a> super::TypeChecker<'a> {
                         Some(joined) => joined,
                         None => {
                             if then_ty != Type::Error && else_ty != Type::Error {
+                                // `if let Some((_, w)) = p.rsplit_once(" ") { w } else { p }`
+                                // over a `ref String` `p`: the fix the `if`/`else`
+                                // above writes (kata 1181).
+                                let as_str = then_block.final_expr.as_deref().and_then(|t| {
+                                    self.ref_string_branch_edits(&[
+                                        (t, &then_ty),
+                                        (else_expr, &else_ty),
+                                    ])
+                                });
+                                let hint = if as_str.is_some() {
+                                    REF_STRING_BRANCH_HINT
+                                } else {
+                                    ""
+                                };
                                 self.type_error(
                                     format!(
-                                        "if let/else branches have incompatible types: '{}' and '{}'",
+                                        "if let/else branches have incompatible types: '{}' and '{}'{}",
                                         type_display(&then_ty),
-                                        type_display(&else_ty)
+                                        type_display(&else_ty),
+                                        hint
                                     ),
                                     expr.span,
                                     TypeErrorKind::BranchTypeMismatch,
                                 );
+                                if let Some(edits) = as_str {
+                                    self.error_fix_diffs
+                                        .insert(SpanKey::from_span(&expr.span), edits);
+                                }
                             }
                             then_ty
                         }

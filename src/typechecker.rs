@@ -6082,6 +6082,12 @@ impl<'a> TypeChecker<'a> {
                 _ => e,
             }
         }
+        // A bare place is written `.as_str()` only beside a `Str` view: among
+        // string literals alone, which are `String`s by default, the owned
+        // arms win and the borrowed one is cloned (core semantics §3.7).
+        let beside_view = branches.iter().any(|(_, t)| {
+            exprs::is_str_view(&inference::resolve_type_var_top(t, &self.env.substitutions))
+        });
         let mut edits = Vec::new();
         for (e, t) in branches {
             let t = inference::resolve_type_var_top(t, &self.env.substitutions);
@@ -6092,7 +6098,32 @@ impl<'a> TypeChecker<'a> {
             if t == Type::Str && matches!(e.kind, ExprKind::StringLit(_)) {
                 continue;
             }
-            edits.extend(self.ref_string_as_str_edits(&t, e.span)?);
+            if let Some(more) = self.ref_string_as_str_edits(&t, e.span) {
+                edits.extend(more);
+                continue;
+            }
+            // A `ref String` place written bare (`None => p` with `p` a
+            // `for` element over `phrases.iter()`, Rust's `&String` that
+            // coerces to `&str`): `p.as_str()` views it as a `Str` (kata
+            // 1181, B-2026-11-17-69).
+            let is_ref_string = matches!(&t, Type::Ref(inner)
+                if inference::resolve_type_var_top(inner, &self.env.substitutions) == Type::Str);
+            let binds_tight = matches!(
+                e.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::Index { .. }
+                    | ExprKind::Call { .. }
+                    | ExprKind::MethodCall { .. }
+            );
+            if !(is_ref_string && binds_tight && beside_view) {
+                return None;
+            }
+            edits.push(crate::resolver::TextEdit {
+                offset: e.span.offset + e.span.length,
+                length: 0,
+                replacement: ".as_str()".to_string(),
+            });
         }
         (!edits.is_empty()).then_some(edits)
     }

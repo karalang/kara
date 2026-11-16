@@ -4357,6 +4357,13 @@ impl super::Parser {
             .map(|i| self.tokens[i].span)
             .map(|s| s.offset + s.length)
             .filter(|&e| dot.is_some_and(|d| e <= d));
+        // Where the receiver's first token is: a parenthesized receiver
+        // keeps its inner span, so `(0..n).flat_map(..)` would start at `0`
+        // and a `from_iter(` written there lands inside the parentheses
+        // (kata 1181).
+        let receiver_start = dot.map_or(receiver.offset, |d| {
+            self.receiver_start_past_parens(receiver.offset, receiver_end.unwrap_or(d))
+        });
         self.advance();
         let open = self.pos;
         // One depth counter for both bracket kinds: the list is a type, so
@@ -4411,7 +4418,7 @@ impl super::Parser {
                         crate::resolver::SpanKey::from_span(&start),
                         vec![
                             crate::resolver::TextEdit {
-                                offset: receiver.offset,
+                                offset: receiver_start,
                                 length: 0,
                                 replacement: format!("{t}.from_iter("),
                             },
@@ -4466,7 +4473,7 @@ impl super::Parser {
                     crate::resolver::SpanKey::from_span(&start),
                     vec![
                         crate::resolver::TextEdit {
-                            offset: receiver.offset,
+                            offset: receiver_start,
                             length: 0,
                             replacement: format!("{t}.from_iter("),
                         },
@@ -4517,7 +4524,7 @@ impl super::Parser {
                     crate::resolver::SpanKey::from_span(&start),
                     vec![
                         crate::resolver::TextEdit {
-                            offset: receiver.offset,
+                            offset: receiver_start,
                             length: 0,
                             replacement: format!("{t}.parse("),
                         },
@@ -4598,6 +4605,46 @@ impl super::Parser {
     /// The bare collection a turbofish with `_` holes names
     /// (`Vec` for `Vec<_>`, `Map` for `HashMap<_, _>`), or `None` when the
     /// list is not a known collection with holes in its arguments.
+    /// The offset a receiver really starts at when it opens with a
+    /// parenthesized expression: each `(` just before its first token whose
+    /// `)` closes before `end`, where the receiver's last token ends, opens
+    /// only the receiver's head (`(0..n).flat_map(..)`), so the call opens
+    /// before it. One that closes at `end` wraps the whole receiver, so a
+    /// call opened inside it is whole (`(s.trim()).parse::<i64>()` ->
+    /// `(i64.parse(s.trim()))`), and one that closes after it is an outer
+    /// call's (`f(it.collect::<T>())`); both stay outside (kata 1181).
+    fn receiver_start_past_parens(&self, offset: usize, end: usize) -> usize {
+        let mut first = self.tokens.partition_point(|t| t.span.offset < offset);
+        if self.tokens.get(first).map(|t| t.span.offset) != Some(offset) {
+            return offset;
+        }
+        while first > 0 && self.tokens[first - 1].token == Token::LeftParen {
+            let mut depth: i64 = 0;
+            let mut closes_inside = false;
+            for t in &self.tokens[first - 1..] {
+                if t.span.offset + t.span.length >= end {
+                    break;
+                }
+                match t.token {
+                    Token::LeftParen => depth += 1,
+                    Token::RightParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            closes_inside = true;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !closes_inside {
+                break;
+            }
+            first -= 1;
+        }
+        self.tokens[first].span.offset
+    }
+
     fn turbofish_hole_collection(&self, open: usize, after: usize) -> Option<String> {
         let name = match &self.tokens.get(open + 1)?.token {
             Token::Identifier { name, .. } => name.clone(),
