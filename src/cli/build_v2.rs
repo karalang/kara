@@ -705,20 +705,14 @@ fn build(
     });
     #[cfg(not(feature = "llvm"))]
     let (warnings, head) = check();
-    // The success object carries the batch document's effect fields
-    // (design.md § Structured compiler output, B-2026-11-16-46), after a
-    // package's summary and before `output`. `diagnostics` comes only when
-    // there are warnings, as before, unless a package's summary has the key.
+    // The success object is the batch document (design.md § Structured
+    // compiler output): its effect fields and `diagnostics`, empty on a clean
+    // build (B-2026-11-16-49, review-thread ruling 2026-11-16), after a
+    // package's summary and before `output`.
     let fields: Option<String> = (output == OutputMode::Json).then(|| {
-        let diagnostics = match warnings.is_empty() {
-            true => format!("{head},"),
-            false => format!("{head},\"diagnostics\":[{}],", warnings.join(",")),
-        };
+        let diagnostics = format!("{head},\"diagnostics\":[{}],", warnings.join(","));
         match fields {
-            Some(f) => f.replace(
-                "\"diagnostics\":[],",
-                &format!("{head},\"diagnostics\":[{}],", warnings.join(",")),
-            ),
+            Some(f) => f.replace("\"diagnostics\":[],", &diagnostics),
             None => diagnostics,
         }
     });

@@ -25533,11 +25533,13 @@ fn build_renders_warnings_on_a_successful_build() {
 }
 
 /// The JSON lane of the same fix. Warnings ride the SUCCESS object under
-/// `diagnostics`, and only when there are some — a consumer reading
-/// `status`/`output` sees no new key on a clean build, which is what keeps the
-/// kata corpus and the Mend baselines reading this exactly as before.
+/// `diagnostics`, and a clean build's object has the key too, empty: the
+/// success object is design.md § 17's batch document (B-2026-11-16-49,
+/// flipped by review-thread ruling 2026-11-16 from "only when there are
+/// some"). The Mend harness reads a missing key and an empty array alike
+/// (`envelope.get("diagnostics", [])`), so its baselines do not move.
 #[test]
-fn build_json_carries_warnings_only_when_there_are_some() {
+fn build_json_carries_warnings_and_an_empty_list_when_clean() {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-build-warnings-json-{}-{}",
         std::process::id(),
@@ -25594,8 +25596,8 @@ fn build_json_carries_warnings_only_when_there_are_some() {
     // Without the llvm feature a clean file build prints no object at all.
     let built = tmp.join("clean.bin").exists();
     assert!(
-        (stdout.contains("\"status\":\"ok\"") || !built) && !stdout.contains("diagnostics"),
-        "a clean build's JSON must gain no `diagnostics` key: {stdout}"
+        !built || (stdout.contains("\"status\":\"ok\"") && stdout.contains("\"diagnostics\":[]")),
+        "a clean build's JSON carries an empty `diagnostics`: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

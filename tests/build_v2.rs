@@ -100,7 +100,7 @@ fn build_v2_builds_a_file() {
         let doc: serde_json::Value = serde_json::from_slice(&named.stdout).unwrap();
         assert_eq!(doc["status"], "ok", "{doc}");
         assert_eq!(doc["output"], "other", "{doc}");
-        assert!(doc.get("diagnostics").is_none(), "{doc}");
+        assert_eq!(doc["diagnostics"], serde_json::json!([]), "{doc}");
         assert!(
             doc["program_effects"]
                 .as_array()
