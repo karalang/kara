@@ -12708,6 +12708,36 @@ impl<'a> super::TypeChecker<'a> {
             // that owns a fresh value: a binding over a borrowed scrutinee
             // (`while let Some(n) = node.next { node = n; }`) is typed by
             // value here and is a borrow, so it is fine.
+            //
+            // `cur = node.next`, with `node` a borrow, would move the part
+            // out of it (§3.7), and only a borrow fits a `ref` local: the
+            // fix is `cur = ref node.next` (§5.1). Without it the MIR's move
+            // check reported the move with no fix (B-2026-11-16-177).
+            if matches!(
+                value.kind,
+                ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+            ) && self.rooted_in_borrow(value, true)
+            {
+                self.type_error_with_fix_it(
+                    format!(
+                        "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot take \
+                         this part of a borrowed value by value, which would move it out of \
+                         the borrowed place (core semantics §3.7); write `{name} = ref <place>` \
+                         to borrow it",
+                        type_display(&inner),
+                    ),
+                    value.span,
+                    TypeErrorKind::TypeMismatch,
+                    super::FixIt {
+                        span: Span {
+                            length: 0,
+                            ..value.span
+                        },
+                        replacement: "ref ".to_string(),
+                    },
+                );
+                return;
+            }
             let ExprKind::Identifier(src) = &value.kind else {
                 return;
             };

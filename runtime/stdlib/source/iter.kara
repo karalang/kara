@@ -439,6 +439,29 @@ impl[I: Iterator] Iterator for IterTake[I] {
     }
 }
 
+/// Rust's `Take` from the back: the items past the first `left` are
+/// dropped from the back of what it wraps first, so `v.iter().take(3).rev()`
+/// starts at `v[2]` (B-2026-11-16-176).
+impl[I: ExactSizeIterator + DoubleEndedIterator] DoubleEndedIterator for IterTake[I] {
+    fn next_back(mut ref self) -> Option[I.Item] {
+        if self.left <= 0 {
+            return None;
+        }
+        while self.it.len() > self.left {
+            self.it.next_back();
+        }
+        self.left = self.left - 1;
+        self.it.next_back()
+    }
+}
+
+impl[I: ExactSizeIterator] ExactSizeIterator for IterTake[I] {
+    fn len(ref self) -> i64 {
+        let n = self.it.len();
+        if n < self.left { n } else if self.left > 0 { self.left } else { 0 }
+    }
+}
+
 struct IterSkip[I] {
     it: I,
     left: i64,
@@ -471,6 +494,22 @@ impl[I: Iterator] Iterator for IterSkip[I] {
         let all = self.left + n;
         self.left = 0;
         self.it.advance_by(all)
+    }
+}
+
+/// Rust's `Skip` from the back: the back of what it wraps, until only the
+/// items still to skip are left there, so `v.iter().skip(1).rev()` ends at
+/// `v[1]` (B-2026-11-16-176).
+impl[I: ExactSizeIterator + DoubleEndedIterator] DoubleEndedIterator for IterSkip[I] {
+    fn next_back(mut ref self) -> Option[I.Item] {
+        if self.it.len() > self.left { self.it.next_back() } else { None }
+    }
+}
+
+impl[I: ExactSizeIterator] ExactSizeIterator for IterSkip[I] {
+    fn len(ref self) -> i64 {
+        let n = self.it.len() - self.left;
+        if n > 0 { n } else { 0 }
     }
 }
 

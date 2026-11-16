@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 358 |
+| diagnostics | 359 |
 | false-positive | 224 |
-| missing-feature | 174 |
+| missing-feature | 175 |
 | perf | 169 |
 | soundness | 71 |
 | miscompile | 70 |
 | other | 50 |
 | run-vs-build | 42 |
-| crash | 33 |
+| crash | 34 |
 | codegen-gap | 32 |
 | leak | 4 |
 | use-after-free | 3 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 501 |
+| typecheck | 504 |
 | mir-llvm | 242 |
-| mir | 217 |
+| mir | 219 |
 | cli | 145 |
 | parser | 91 |
 | ownership | 88 |
@@ -111,6 +111,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-173 | 2026-11-16 | typecheck+mir | low | `concat()` over a sequence of arrays (`Vec[Array[u8, 2]]`) still takes the deprecated `Display` join, where Rust's flattens; remainder of B-2026-11-16-172 | — |
+| B-2026-11-16-176 | 2026-11-16 | typecheck | low | `v.iter().skip(1).rev()` and `take(n).rev()` are refused: `IterSkip` and `IterTake` were not `DoubleEndedIterator` or `ExactSizeIterator` | — |
+| B-2026-11-16-177 | 2026-11-16 | typecheck+mir | low | `let mut cur = head; while let Some(node) = cur { cur = node.next; }` over a borrowed list is refused by the MIR's move check with no fix; the fix is `cur = ref node.next` | — |
+| B-2026-11-16-178 | 2026-11-16 | typecheck+mir | medium | `#[derive(Copy, Clone)]` on a struct that holds itself (`next: Option[Node]`) overflows karac's stack, and `karac fix` offers that derive for `Some(n) => n.next` over a borrowed list | — |
 
 ### Relocated
 

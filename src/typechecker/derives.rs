@@ -1039,6 +1039,27 @@ impl<'a> super::TypeChecker<'a> {
         let shrink = |trait_ok: &dyn Fn(&Type) -> bool, copy: bool| {
             let mut set: FxHashSet<&str> =
                 cands.iter().filter(|c| !copy || c.4).map(|c| c.0).collect();
+            // `Copy` is the smallest such set instead: a type that holds
+            // itself (`struct Node { next: Option[Node] }`) is boxed, so it
+            // is never `Copy`, while it may still clone (B-2026-11-16-178).
+            if copy {
+                let mut grown: FxHashSet<&str> = FxHashSet::default();
+                loop {
+                    let before = grown.len();
+                    for c in cands.iter().filter(|c| set.contains(c.0)) {
+                        if !grown.contains(c.0)
+                            && c.3
+                                .iter()
+                                .all(|t| trait_ok(&Self::stand_in_members(t, &grown, false)))
+                        {
+                            grown.insert(c.0);
+                        }
+                    }
+                    if grown.len() == before {
+                        return grown;
+                    }
+                }
+            }
             loop {
                 let before = set.len();
                 let failing: Vec<&str> = cands
@@ -1124,6 +1145,7 @@ impl<'a> super::TypeChecker<'a> {
             this.is_type_copy(ty)
                 || (this.library_methods_from_source && matches!(ty, Type::TypeParam(_)))
         });
+        self.reject_recursive_copy_derives();
         // Check distinct types: base type must be Copy.
         let distinct_items: Vec<_> = self
             .program
@@ -1152,6 +1174,120 @@ impl<'a> super::TypeChecker<'a> {
                     TypeErrorKind::TypeMismatch,
                 );
             }
+        }
+    }
+
+    /// A `Copy` type cannot hold itself: `struct Node { next: Option[Node] }`
+    /// is boxed, and a copy of it would have no end. The field check above
+    /// passes such a type, since its own derive makes the field `Copy`, and
+    /// the MIR's copy test then recursed until karac's stack overflowed
+    /// (B-2026-11-16-178).
+    fn reject_recursive_copy_derives(&mut self) {
+        fn holds(
+            tc: &super::TypeChecker<'_>,
+            ty: &Type,
+            target: &str,
+            seen: &mut FxHashSet<String>,
+        ) -> bool {
+            match ty {
+                Type::Named { name, args } => {
+                    if args.iter().any(|a| holds(tc, a, target, seen)) {
+                        return true;
+                    }
+                    if name == target {
+                        return true;
+                    }
+                    if !seen.insert(name.clone()) {
+                        return false;
+                    }
+                    if let Some(info) = tc.env.structs.get(name) {
+                        info.derived_traits.contains("Copy")
+                            && info
+                                .fields
+                                .iter()
+                                .any(|(_, t, _)| holds(tc, t, target, seen))
+                    } else if let Some(info) = tc.env.enums.get(name) {
+                        info.derived_traits.contains("Copy")
+                            && info.variants.iter().any(|(_, v)| match v {
+                                VariantTypeInfo::Unit => false,
+                                VariantTypeInfo::Tuple(ts) => {
+                                    ts.iter().any(|t| holds(tc, t, target, seen))
+                                }
+                                VariantTypeInfo::Struct(fs) => {
+                                    fs.iter().any(|(_, t)| holds(tc, t, target, seen))
+                                }
+                            })
+                    } else {
+                        false
+                    }
+                }
+                Type::Tuple(ts) => ts.iter().any(|t| holds(tc, t, target, seen)),
+                Type::Array { element, .. } => holds(tc, element, target, seen),
+                _ => false,
+            }
+        }
+        let mut found: Vec<(String, Span, String, Type)> = Vec::new();
+        for item in &self.program.items {
+            let (name, span, fields): (&String, Span, Vec<(String, Type)>) = match item {
+                Item::StructDef(s) => {
+                    let Some(info) = self.env.structs.get(&s.name) else {
+                        continue;
+                    };
+                    if !info.derived_traits.contains("Copy") {
+                        continue;
+                    }
+                    let fields = info
+                        .fields
+                        .iter()
+                        .map(|(n, t, _)| (n.clone(), t.clone()))
+                        .collect();
+                    (&s.name, s.span, fields)
+                }
+                Item::EnumDef(e) => {
+                    let Some(info) = self.env.enums.get(&e.name) else {
+                        continue;
+                    };
+                    if !info.derived_traits.contains("Copy") {
+                        continue;
+                    }
+                    let fields = info
+                        .variants
+                        .iter()
+                        .flat_map(|(vn, v)| match v {
+                            VariantTypeInfo::Unit => Vec::new(),
+                            VariantTypeInfo::Tuple(ts) => ts
+                                .iter()
+                                .enumerate()
+                                .map(|(i, t)| (format!("{vn}.{i}"), t.clone()))
+                                .collect(),
+                            VariantTypeInfo::Struct(fs) => fs
+                                .iter()
+                                .map(|(n, t)| (format!("{vn}.{n}"), t.clone()))
+                                .collect(),
+                        })
+                        .collect();
+                    (&e.name, e.span, fields)
+                }
+                _ => continue,
+            };
+            if let Some((field, ty)) = fields
+                .into_iter()
+                .find(|(_, t)| holds(self, t, name, &mut FxHashSet::default()))
+            {
+                found.push((name.clone(), span, field, ty));
+            }
+        }
+        for (name, span, field, ty) in found {
+            self.type_error(
+                format!(
+                    "'{name}' derives Copy but holds itself (field '{field}': '{}'): a type \
+                     that holds itself is boxed, so it cannot be `Copy`; derive `Clone` \
+                     instead and take a copy with `.clone()`",
+                    type_display(&ty)
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
         }
     }
 
