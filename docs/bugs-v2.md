@@ -111,9 +111,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-173 | 2026-11-16 | typecheck+mir | low | `concat()` over a sequence of arrays (`Vec[Array[u8, 2]]`) still takes the deprecated `Display` join, where Rust's flattens; remainder of B-2026-11-16-172 | — |
-| B-2026-11-16-176 | 2026-11-16 | typecheck | low | `v.iter().skip(1).rev()` and `take(n).rev()` are refused: `IterSkip` and `IterTake` were not `DoubleEndedIterator` or `ExactSizeIterator` | — |
-| B-2026-11-16-177 | 2026-11-16 | typecheck+mir | low | `let mut cur = head; while let Some(node) = cur { cur = node.next; }` over a borrowed list is refused by the MIR's move check with no fix; the fix is `cur = ref node.next` | — |
-| B-2026-11-16-178 | 2026-11-16 | typecheck+mir | medium | `#[derive(Copy, Clone)]` on a struct that holds itself (`next: Option[Node]`) overflows karac's stack, and `karac fix` offers that derive for `Some(n) => n.next` over a borrowed list | — |
 
 ### Relocated
 
@@ -1348,6 +1345,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-172 | typecheck+mir | low | Rust's `parts.concat()` over a `Slice[Slice[u8]]` takes the deprecated `Display` join, whose fix writes `join("")`, which does not check (`Slice[u8]`… | 9cbbd28e56 |
 | B-2026-11-16-174 | interp+mir-llvm | low | Json.deserialize reports text that is not JSON with its own message and a position one column past Json.parse's, prefixed with the field before the f… | 3d28b388dc |
 | B-2026-11-16-175 | interp+mir-llvm | medium | A derived Deserialize takes the last value of a repeated field (`{"a":1,"a":2}` reads a = 2), so text can pass a validator that read the first copy (… | 3d28b388dc |
+| B-2026-11-16-176 | typecheck | low | `v.iter().skip(1).rev()` and `take(n).rev()` are refused: `IterSkip` and `IterTake` were not `DoubleEndedIterator` or `ExactSizeIterator` | 756fad5000 |
+| B-2026-11-16-177 | typecheck+mir | low | `let mut cur = head; while let Some(node) = cur { cur = node.next; }` over a borrowed list is refused by the MIR's move check with no fix; the fix is… | 756fad5000 |
+| B-2026-11-16-178 | typecheck+mir | medium | `#[derive(Copy, Clone)]` on a struct that holds itself (`next: Option[Node]`) overflows karac's stack, and `karac fix` offers that derive for `Some(n… | 756fad5000 |
 
 </details>
 
