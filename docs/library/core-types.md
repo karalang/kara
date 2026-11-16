@@ -160,6 +160,8 @@ match i64.parse(line.trim()) {
 
 `parse` ignores whitespace before and after the number, so `i64.parse(" 5\n")` is `Ok(5)` and a line read with its newline parses as it is. A sign may come only first: `"+5"` parses, `"-"` and `"1-2"` fail with `InvalidDigit`, and a negative number for an unsigned type fails with `Underflow`. A minus zero is zero, not negative: `u8.parse("-0")` is `Ok(0)`, as `i64.parse("-0")` is (review-thread ruling 2026-11-16).
 
+A float `parse` also accepts the special values `inf`, `infinity` and `nan` in any letter case and with an optional sign, so `"NaN"`, `"-inf"` and `"+Infinity"` parse; a sign on `nan` is accepted and does not change the result (B-2026-11-16-325).
+
 Every `parse` returns the one error type, a prelude enum:
 
 ```kara
