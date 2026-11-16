@@ -1566,6 +1566,109 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// design.md §9 Derive: a derived `Clone`, `Debug` or `Display` goes
+    /// through each field's own impl, so every field needs one. 0.8.x has
+    /// cloned and rendered such a field by its shape, so a field without the
+    /// trait is a `deprecated` warning here, as an implied derive is
+    /// ([`Self::warn_implied_derives`]), and becomes an error in the next
+    /// minor release. A `Secret[T]` field renders as `<redacted>`
+    /// (library/secret.md), and a `Copy` field clones by copying.
+    pub(super) fn warn_derived_field_traits(&mut self) {
+        if self.compiling_stdlib {
+            return;
+        }
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let mut found = Vec::new();
+        for item in &self.program.items {
+            let (name, span, stdlib_origin, lints, is_enum) = match item {
+                Item::StructDef(d) => (&d.name, d.span, d.stdlib_origin, &d.lint_overrides, false),
+                Item::EnumDef(d) => (&d.name, d.span, d.stdlib_origin, &d.lint_overrides, true),
+                _ => continue,
+            };
+            if stdlib_origin || span.offset >= library {
+                continue;
+            }
+            let (derived, fields): (Vec<String>, Vec<(String, Type)>) = if is_enum {
+                let Some(info) = self.env.enums.get(name) else {
+                    continue;
+                };
+                let mut fields = Vec::new();
+                for (variant, v) in &info.variants {
+                    match v {
+                        VariantTypeInfo::Unit => {}
+                        VariantTypeInfo::Tuple(tys) => {
+                            fields.extend(tys.iter().enumerate().map(|(i, t)| {
+                                (format!("variant '{variant}' field '{i}'"), t.clone())
+                            }))
+                        }
+                        VariantTypeInfo::Struct(fs) => {
+                            fields.extend(fs.iter().map(|(n, t)| {
+                                (format!("variant '{variant}' field '{n}'"), t.clone())
+                            }))
+                        }
+                    }
+                }
+                (info.derived_traits.iter().cloned().collect(), fields)
+            } else {
+                let Some(info) = self.env.structs.get(name) else {
+                    continue;
+                };
+                (
+                    info.derived_traits.iter().cloned().collect(),
+                    info.fields
+                        .iter()
+                        .map(|(n, t, _)| (format!("field '{n}'"), t.clone()))
+                        .collect(),
+                )
+            };
+            for tr in ["Clone", "Debug", "Display"] {
+                if !derived.iter().any(|d| d == tr) {
+                    continue;
+                }
+                for (what, ty) in &fields {
+                    let secret = matches!(ty, Type::Named { name, .. } if name == "Secret");
+                    let ok = match tr {
+                        "Clone" => self.type_supports_clone(ty) || self.is_type_copy(ty),
+                        "Debug" => secret || self.type_supports_debug(ty),
+                        _ => secret || self.type_supports_display(ty),
+                    };
+                    if ok {
+                        continue;
+                    }
+                    let does = match tr {
+                        "Clone" => "clones",
+                        _ => "renders",
+                    };
+                    let kind = if is_enum { "enum" } else { "struct" };
+                    found.push((
+                        format!(
+                            "{kind} '{name}' derives {tr} but {what} has non-{tr} type '{}': a \
+                             derived `{tr}` goes through each field's own impl (design.md §9 \
+                             Derive). 0.8.x still {does} the field by its shape; this is \
+                             deprecated and becomes an error in the next minor release. \
+                             Implement or derive `{tr}` for '{}'",
+                            type_display(ty),
+                            type_display(ty),
+                        ),
+                        span,
+                        lints.clone(),
+                    ));
+                }
+            }
+        }
+        for (message, span, lints) in found {
+            self.lint_override_stack.push(lints);
+            self.type_lint_warning_with_fix(
+                message,
+                span,
+                TypeErrorKind::Deprecated,
+                "deprecated",
+                None,
+            );
+            self.lint_override_stack.pop();
+        }
+    }
+
     /// A bound's inline `Assoc = T` binding (`I: Iterator[Elem = i64]`) must
     /// name an associated type of the bound's trait (B-2026-11-06-27 item 6).
     /// The desugar pass hoisted each binding onto its item's `where` clause as

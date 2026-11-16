@@ -522,6 +522,8 @@ fn lower_program_inner<'a>(
         values_queue: Vec::new(),
         eq_queue: Vec::new(),
         eq_queued: FxHashSet::default(),
+        cmp_queue: Vec::new(),
+        cmp_queued: FxHashSet::default(),
         hash_queue: Vec::new(),
         hash_queued: FxHashSet::default(),
         hash_scanned: FxHashSet::default(),
@@ -784,6 +786,8 @@ fn lower_program_inner<'a>(
             lcx.lower_default_static(e, t, &name);
         } else if let Some((t, name)) = lcx.eq_queue.pop() {
             lcx.lower_derived_eq(t, &name);
+        } else if let Some((t, partial, ret, name)) = lcx.cmp_queue.pop() {
+            lcx.lower_derived_cmp(t, partial, ret, &name);
         } else if let Some((t, h, name)) = lcx.hash_queue.pop() {
             lcx.lower_derived_hash(t, h, &name);
         } else if !lcx.note_table_hashes() {
@@ -1456,6 +1460,12 @@ struct Lcx<'a> {
     /// itself (`shared struct Node { next: Option[Node] }`).
     eq_queue: Vec<(Ty, String)>,
     eq_queued: FxHashSet<Ty>,
+    /// Derived `cmp` (`false`) and `partial_cmp` (`true`) bodies to build,
+    /// for types whose ordering reaches itself
+    /// (`enum Tree { Leaf(i64), Node(Vec[Tree]) }`), with the body's
+    /// return type (`Ordering` or `Option[Ordering]`).
+    cmp_queue: Vec<(Ty, bool, Ty, String)>,
+    cmp_queued: FxHashSet<(Ty, bool)>,
     /// Derived `hash` bodies to build, by value type and hasher, for
     /// types whose hashing reaches itself (B-2026-10-31-25).
     hash_queue: Vec<(Ty, Ty, String)>,
@@ -2294,7 +2304,10 @@ impl<'a> Lcx<'a> {
                 self.note_table_hash(t);
             }
         }
-        self.queue.len() > before || !self.eq_queue.is_empty() || !self.hash_queue.is_empty()
+        self.queue.len() > before
+            || !self.eq_queue.is_empty()
+            || !self.cmp_queue.is_empty()
+            || !self.hash_queue.is_empty()
     }
 
     /// Record how a table of type `t` hashes its keys when that runs Kāra
@@ -2841,6 +2854,42 @@ impl<'a> Lcx<'a> {
             Place::local(Local::RETURN_PLACE),
         );
         if r.is_ok() {
+            let cur = bx.cur;
+            bx.b.terminate(cur, TerminatorKind::Return);
+        }
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
+    }
+
+    /// `T.cmp#derived(a: ref T, b: ref T) -> Ordering`, or with `partial`
+    /// `T.partial_cmp#derived(..) -> Option[Ordering]`: a derived ordering
+    /// built as its own body, which a comparison calls where it would
+    /// otherwise inline itself forever.
+    fn lower_derived_cmp(&mut self, t: Ty, partial: bool, ret: Ty, name: &str) {
+        let rt = self.tys.tcx().reference(t, false);
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, ret, Vec::new());
+        let a = bx.b.arg("a", rt);
+        let b = bx.b.arg("b", rt);
+        let (l, r) = (
+            Place::local(a).project(ProjElem::Deref),
+            Place::local(b).project(ProjElem::Deref),
+        );
+        let dest = Place::local(Local::RETURN_PLACE);
+        bx.cmp_stack.push(t);
+        let res = if partial {
+            bx.partial_cmp_with(Span::default(), l, r, t, dest, true)
+        } else {
+            bx.derived_cmp(Span::default(), l, r, t, dest)
+        };
+        if res.is_ok() {
             let cur = bx.cur;
             bx.b.terminate(cur, TerminatorKind::Return);
         }
@@ -4061,6 +4110,8 @@ struct Bx<'l, 'a> {
     pre_indices: FxHashMap<NodeId, Operand>,
     /// The types whose derived `==` is being inlined, outermost first.
     eq_stack: Vec<Ty>,
+    /// The types whose derived ordering is being inlined, outermost first.
+    cmp_stack: Vec<Ty>,
     /// The types whose derived `hash` is being inlined, outermost first.
     hash_stack: Vec<Ty>,
     /// Building a cancel exit, whose calls get none of their own.
@@ -4141,6 +4192,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             impl_target: None,
             pre_indices: FxHashMap::default(),
             eq_stack: Vec::new(),
+            cmp_stack: Vec::new(),
             hash_stack: Vec::new(),
             in_cancel_exit: false,
             in_error_exit: false,
@@ -10956,18 +11008,43 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.scalar_tuple_rel(&lp, &rp, lt, bin, &dest) {
             return Ok(());
         }
+        // The derived order, as `partial_cmp` gives it: a float pair that
+        // decides it unordered (a NaN) makes it `None`, and every operator
+        // is then false (design.md § Operator traits: `a <= b` is
+        // `partial_cmp(a, b).is_le()`). Without the flag a NaN pair read
+        // as `Equal`, and `<=` / `>=` answered true.
+        let bool_t = self.tys().bool();
+        let flag = self.temp(bool_t);
+        self.assign(flag, Rvalue::Use(bool_const(bool_t, false)));
         let o = self.temp(ot);
-        self.cmp_places(left.span, lp, rp, lt, Place::local(o))?;
+        let outer = self.unordered.replace(flag);
+        let res = self.cmp_places(left.span, lp, rp, lt, Place::local(o));
+        self.unordered = outer;
+        res?;
         let disc = self.temp(isize_t);
         self.assign(disc, Rvalue::Discriminant(Place::local(o)));
         let want = Operand::Const(Const {
             ty: isize_t,
             kind: ConstKind::Scalar(want as u128),
         });
+        let (unordered, ordered, join) =
+            (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(flag)),
+                targets: SwitchTargets::if_else(unordered, ordered),
+            },
+            unordered,
+        );
+        self.assign(dest.clone(), Rvalue::Use(bool_const(bool_t, false)));
+        self.goto(join);
+        self.cur = ordered;
         self.assign(
             dest,
             Rvalue::BinaryOp(op, Operand::Copy(Place::local(disc)), want),
         );
+        self.goto(join);
+        self.cur = join;
         Ok(())
     }
 
@@ -11189,22 +11266,135 @@ impl<'l, 'a> Bx<'l, 'a> {
                     );
                     return Ok(());
                 }
-                let (adt, _) = self.tys().tcx().adt_of(t).expect("an ADT");
-                if !adt.is_enum {
-                    let n = adt.variants.first().map_or(0, |v| v.fields.len());
-                    let mut parts = Vec::new();
-                    for i in 0..n as u32 {
-                        let Some(ft) = self.tys().tcx().field_ty(t, None, i) else {
-                            return self.unsupported(span, "ordering this type");
-                        };
-                        parts.push((l.clone().field(i, ft), r.clone().field(i, ft), ft));
-                    }
-                    return self.lex_cmp(span, parts, dest);
+                if self.cmp_stack.contains(&t) {
+                    // The ordering reaches its own type: call the derived
+                    // body, built once, rather than inline it again.
+                    return self.call_derived_cmp(span, l, r, t, dest);
                 }
-                self.enum_cmp(span, l, r, t, &adt, dest)
+                self.cmp_stack.push(t);
+                let res = self.derived_cmp(span, l, r, t, dest);
+                self.cmp_stack.pop();
+                res
             }
             _ => self.unsupported(span, "ordering this type"),
         }
+    }
+
+    /// `dest = l.cmp(r)` by a derived `Ord`: field by field, or variant and
+    /// then payload.
+    fn derived_cmp(&mut self, span: Span, l: Place, r: Place, t: Ty, dest: Place) -> R<()> {
+        let Some((adt, _)) = self.tys().tcx().adt_of(t) else {
+            return self.unsupported(span, "ordering this type");
+        };
+        if !adt.is_enum {
+            let n = adt.variants.first().map_or(0, |v| v.fields.len());
+            let mut parts = Vec::new();
+            for i in 0..n as u32 {
+                let Some(ft) = self.tys().tcx().field_ty(t, None, i) else {
+                    return self.unsupported(span, "ordering this type");
+                };
+                parts.push((l.clone().field(i, ft), r.clone().field(i, ft), ft));
+            }
+            return self.lex_cmp(span, parts, dest);
+        }
+        self.enum_cmp(span, l, r, t, &adt, dest)
+    }
+
+    /// `dest = l.cmp(r)` for a type whose derived ordering is already being
+    /// inlined further out: a call to its own body. Under a derived
+    /// `partial_cmp` the call is to `T.partial_cmp#derived`, and a `None`
+    /// from it sets the unordered flag and counts as `Equal`, as an
+    /// unordered float pair does in [`Self::cmp_places`].
+    fn call_derived_cmp(&mut self, span: Span, l: Place, r: Place, t: Ty, dest: Place) -> R<()> {
+        let (ot, [_, equal, _]) = self.ordering_ty(span)?;
+        let Some(opt_t) = self.option_of(ot) else {
+            return self.unsupported(span, "a `partial_cmp` with no `Option`");
+        };
+        let partial = self.unordered.is_some();
+        let ty_name = self.tys().display(t);
+        let (name, ret) = if partial {
+            (format!("{ty_name}.partial_cmp#derived"), opt_t)
+        } else {
+            (format!("{ty_name}.cmp#derived"), ot)
+        };
+        if self.lcx.cmp_queued.insert((t, partial)) {
+            self.lcx.cmp_queue.push((t, partial, ret, name.clone()));
+        }
+        let lo = self.ref_to(l, t);
+        let ro = self.ref_to(r, t);
+        let func = self.fn_operand(&name, DefId(u32::MAX), Vec::new());
+        let Some(flag) = self.unordered else {
+            let next = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::Call {
+                    func,
+                    args: vec![lo, ro],
+                    destination: dest,
+                    target: Some(next),
+                    unwind: UnwindAction::Abort,
+                },
+                next,
+            );
+            return Ok(());
+        };
+        let some = self
+            .tys()
+            .tcx()
+            .adt_of(opt_t)
+            .and_then(|(a, _)| a.variants.iter().position(|v| v.name == "Some"));
+        let Some(some) = some else {
+            return self.unsupported(span, "a `partial_cmp` with no `Option`");
+        };
+        let res = self.temp(opt_t);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: vec![lo, ro],
+                destination: Place::local(res),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        let (isize_t, bool_t) = {
+            let tcx = self.tys().tcx();
+            (tcx.intern(HK::Int(IntSize::I64)), tcx.intern(HK::Bool))
+        };
+        let disc = self.temp(isize_t);
+        self.assign(disc, Rvalue::Discriminant(Place::local(res)));
+        let is_some = self.temp(bool_t);
+        self.assign(
+            is_some,
+            Rvalue::BinaryOp(
+                BinOp::Eq,
+                Operand::Copy(Place::local(disc)),
+                Operand::Const(Const {
+                    ty: isize_t,
+                    kind: ConstKind::Scalar(some as u128),
+                }),
+            ),
+        );
+        let (yes, no, join) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(is_some)),
+                targets: SwitchTargets::if_else(yes, no),
+            },
+            yes,
+        );
+        let payload = Place::local(res)
+            .project(ProjElem::Downcast(VariantIdx(some as u32)))
+            .field(0, ot);
+        self.assign(dest.clone(), Rvalue::Use(Operand::Copy(payload)));
+        self.goto(join);
+        self.cur = no;
+        self.assign(flag, Rvalue::Use(bool_const(bool_t, true)));
+        let kind = self.adt_aggregate(ot, equal);
+        self.assign(dest, Rvalue::Aggregate(kind, Vec::new()));
+        self.goto(join);
+        self.cur = join;
+        Ok(())
     }
 
     /// `dest = l.partial_cmp(r)` for two places of a type whose `PartialOrd`
@@ -11214,6 +11404,21 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// differs, so a float pair is reached only when every pair before it
     /// is equal, and an unordered one is then the deciding pair.
     fn partial_cmp_places(&mut self, span: Span, l: Place, r: Place, t: Ty, dest: Place) -> R<()> {
+        self.partial_cmp_with(span, l, r, t, dest, false)
+    }
+
+    /// [`Self::partial_cmp_places`]; with `direct`, the order inside is the
+    /// derived one of `t` itself ([`Self::derived_cmp`]), which is what
+    /// `T.partial_cmp#derived`'s own body computes.
+    fn partial_cmp_with(
+        &mut self,
+        span: Span,
+        l: Place,
+        r: Place,
+        t: Ty,
+        dest: Place,
+        direct: bool,
+    ) -> R<()> {
         let (ot, _) = self.ordering_ty(span)?;
         let Some(opt_t) = self.option_of(ot) else {
             return self.unsupported(span, "a `partial_cmp` with no `Option`");
@@ -11232,7 +11437,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.assign(flag, Rvalue::Use(bool_const(bool_t, false)));
         let o = self.temp(ot);
         let outer = self.unordered.replace(flag);
-        let r_ = self.cmp_places(span, l, r, t, Place::local(o));
+        let r_ = if direct {
+            self.derived_cmp(span, l, r, t, Place::local(o))
+        } else {
+            self.cmp_places(span, l, r, t, Place::local(o))
+        };
         self.unordered = outer;
         r_?;
         let (yes, no, join) = (self.b.new_block(), self.b.new_block(), self.b.new_block());

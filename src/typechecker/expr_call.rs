@@ -1210,7 +1210,12 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
-    fn infer_call_inner(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+    pub(super) fn infer_call_inner(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
         // `old(e)` in an `ensures` clause is `e` as it was at entry, of
         // `e`'s type: `old(b) - amount` is an `i64` (B-2026-10-31-30).
         if let (true, ExprKind::Identifier(n), [a]) = (self.in_ensures, &callee.kind, args) {
@@ -1352,6 +1357,63 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.type_error(
                         DEFAULT_NAMES_NO_TYPE.to_string(),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    self.record_expr_type(span, &Type::Error);
+                    return Type::Error;
+                }
+                // The same for any trait's associated function: `Make.name()`
+                // says which trait, not which type's impl, so it is called
+                // on the type, `P.name()` (design.md §9 Associated
+                // functions). It too was typed as an error with no
+                // diagnostic, and `karac check` printed MIR's "a type that
+                // failed to check is not lowered yet".
+                if self.local_scope.lookup(name).is_none()
+                    && self.env.traits.contains_key(name.as_str())
+                    && !self.env.structs.contains_key(name.as_str())
+                    && !self.env.enums.contains_key(name.as_str())
+                    && self.trait_method_takes_self(name, method) == Some(false)
+                {
+                    // `let p: P = Make.name()`: a `Self` the expected type
+                    // fixes picks that type's impl of the trait, even beside
+                    // an inherent `P.name()` (review-thread ruling
+                    // 2026-11-16).
+                    if let Some(ty) = self.trait_call_by_expected(name, method, callee, args, span)
+                    {
+                        return ty;
+                    }
+                    if let Some(fixed) = self.expected_self(name, method, span) {
+                        self.type_error(
+                            format!(
+                                "`{name}.{method}()` takes `Self` from the expected type, \
+                                 `{}`, which does not implement `{name}` (design.md §9 \
+                                 Associated functions)",
+                                type_display(&fixed)
+                            ),
+                            *span,
+                            TypeErrorKind::TraitBoundNotSatisfied,
+                        );
+                        self.record_expr_type(span, &Type::Error);
+                        return Type::Error;
+                    }
+                    let implementors = self.impl_candidates_for_trait(name);
+                    let example = implementors.first().map_or("T", String::as_str);
+                    let annotate = if self.trait_fn_returns_self(name, method) {
+                        format!(
+                            ", or annotate the binding with the type, `let x: {example} = \
+                             {name}.{method}(..)`"
+                        )
+                    } else {
+                        String::new()
+                    };
+                    self.type_error(
+                        format!(
+                            "`{name}.{method}()` names no type: `{name}` is implemented per \
+                             type, and its associated function `{method}` is called on the \
+                             type whose impl runs, `{example}.{method}(..)`{annotate} \
+                             (design.md §9 Associated functions)"
+                        ),
                         *span,
                         TypeErrorKind::NoMethodFound,
                     );

@@ -75,11 +75,30 @@ impl super::Parser {
                     message: format!("error[{code}]: {msg}"),
                     span: body_span,
                 });
-                // Skip the offending item — advance one token at a time
-                // until we see a `}` or matched-fn end (recovery is
-                // intentionally conservative; a marker trait body is
-                // expected to be empty in practice).
-                self.advance();
+                // Skip the offending item whole, so it is reported once: up
+                // to its `;`, or through its `{ .. }` body, stopping at the
+                // trait's own `}`. Stepping one token at a time reported a
+                // "cannot have a body" error at every token of the item.
+                let mut depth = 0usize;
+                while !self.is_at_end() {
+                    if depth == 0 && self.check(&Token::RightBrace) {
+                        break;
+                    }
+                    if depth == 0 && self.check(&Token::Semicolon) {
+                        self.advance();
+                        break;
+                    }
+                    if self.check(&Token::LeftBrace) || self.check(&Token::LeftParen) {
+                        depth += 1;
+                    } else if self.check(&Token::RightBrace) || self.check(&Token::RightParen) {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 && self.check(&Token::RightBrace) {
+                            self.advance();
+                            break;
+                        }
+                    }
+                    self.advance();
+                }
             }
             self.expect(&Token::RightBrace)?;
             true

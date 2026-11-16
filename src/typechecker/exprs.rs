@@ -1536,6 +1536,24 @@ impl<'a> super::TypeChecker<'a> {
                 self.fix_default_default(expr, callee, expected, errors_before);
                 return ty;
             }
+            if let ExprKind::Path {
+                segments,
+                generic_args: None,
+            } = &callee.kind
+            {
+                if let [name, _] = segments.as_slice() {
+                    if self.env.traits.contains_key(name.as_str())
+                        && self.local_scope.lookup(name).is_none()
+                    {
+                        let outer = self
+                            .trait_call_expected
+                            .replace((SpanKey::from_span(&expr.span), expected.clone()));
+                        let ty = self.check_expr_unexplained(expr, expected);
+                        self.trait_call_expected = outer;
+                        return ty;
+                    }
+                }
+            }
         }
         if let ExprKind::MethodCall {
             object,
@@ -2071,7 +2089,7 @@ impl<'a> super::TypeChecker<'a> {
         // The checking-position constructor paths (`Ok(1)` against a
         // `Result`) never reach `infer_expr`, which records the callee.
         if let ExprKind::Call { callee, .. } = &expr.kind {
-            if !expr.id.is_dummy() {
+            if !expr.id.is_dummy() && !self.routed_trait_calls.contains(&expr.id) {
                 self.node_call_callees.entry(expr.id).or_insert(callee.id);
             }
         }
@@ -9919,7 +9937,7 @@ impl<'a> super::TypeChecker<'a> {
     /// has no env entries (built-in traits like `Eq` / `Ord` / `Hash`
     /// where the impls are implicit rather than materialised in
     /// `env.impls`) — the caller suppresses the note in that case.
-    fn impl_candidates_for_trait(&self, trait_name: &str) -> Vec<String> {
+    pub(super) fn impl_candidates_for_trait(&self, trait_name: &str) -> Vec<String> {
         let Some(indices) = self.env.impls_by_trait.get(trait_name) else {
             return Vec::new();
         };

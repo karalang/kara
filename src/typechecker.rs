@@ -115,6 +115,7 @@ mod table_keys;
 #[cfg(test)]
 mod tests;
 pub mod types;
+mod uninferable;
 mod variance;
 
 pub(crate) use const_eval::const_value_to_i128;
@@ -3695,6 +3696,13 @@ pub struct TypeChecker<'a> {
     pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
     /// Working half of `TypeCheckResult::ufcs_calls`.
     pub(super) ufcs_calls: FxHashMap<SpanKey, String>,
+    /// The expected type of the `Trait.name(..)` call being checked, by
+    /// the call's span: its `Self` picks the impl
+    /// (`method_ufcs::trait_call_by_expected`).
+    pub(super) trait_call_expected: Option<(SpanKey, Type)>,
+    /// The `Trait.name(..)` calls an expected type routed to an impl: their
+    /// callee is that impl's, never the trait's declaration the path names.
+    pub(super) routed_trait_calls: FxHashSet<crate::ids::NodeId>,
     /// `TypeCheckResult::node_dyn_coercions` by impl block and span, until
     /// `check` maps them to nodes (`dyn_coercion_nodes`).
     pub(super) dyn_coercion_spans: FxHashMap<dyn_trait::CoercionKey, (Type, Type)>,
@@ -4683,6 +4691,8 @@ impl<'a> TypeChecker<'a> {
             user_operator_impls: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
             ufcs_calls: FxHashMap::default(),
+            trait_call_expected: None,
+            routed_trait_calls: FxHashSet::default(),
             dyn_coercion_spans: FxHashMap::default(),
             method_default_fills: FxHashMap::default(),
             method_defaults: crate::default_args::method_default_table(program),
@@ -4970,6 +4980,8 @@ impl<'a> TypeChecker<'a> {
         self.validate_bound_assoc_bindings();
         self.validate_serde_default_constants();
         self.warn_implied_derives();
+        self.warn_derived_field_traits();
+        self.refuse_uninferable_type_params();
         self.warn_discarded_doc_comments();
         self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
@@ -5279,6 +5291,13 @@ impl<'a> TypeChecker<'a> {
                     .any(|t| e.message.contains(&format!("`{t}` does not implement")))
             });
         }
+        // One finding at one place is reported once, however many passes
+        // reached it: `fn f(x: dyn Iterator)` lowers its parameter type for
+        // the signature and again for the body, and printed the unbound
+        // `Item` twice.
+        let mut seen = FxHashSet::default();
+        self.errors
+            .retain(|e| seen.insert((e.span.offset, e.span.length, e.message.clone())));
         TypeCheckResult {
             impls: std::mem::take(&mut self.env.impls),
             receiver_methods: std::mem::take(&mut self.receiver_methods),
@@ -7466,15 +7485,65 @@ impl<'a> TypeChecker<'a> {
                 receiver_args: recv_args.clone(),
                 trait_name: None,
             };
-            let actual = self.resolve_assoc_projections(&projection);
+            let actual = self.resolved_now(&self.resolve_assoc_projections(&projection));
             if matches!(actual, Type::AssocProjection { .. } | Type::Error) {
                 continue;
             }
-            if !types_compatible(promised, &actual) {
+            // An open literal (`0..3` is a `Range` of a literal not yet
+            // given its width) is no contradiction when it can take the
+            // promised type; [`Self::settle_existential_literals`] gives it
+            // that type where the caller can write.
+            if exprs::contains_type_var(&actual) {
+                let mut subs = self.env.substitutions.clone();
+                let mut const_subs = self.env.const_substitutions.clone();
+                if inference::unify_types(promised, &actual, &mut subs, &mut const_subs) {
+                    continue;
+                }
+            }
+            // An associated type fixes a layout, as a generic argument
+            // does: `Item = u8` is not met by an `i64` witness, though an
+            // `i64` value may flow into a `u8` slot's check elsewhere.
+            if !types::generic_arg_compatible(crate::ast::Variance::Invariant, promised, &actual) {
                 return Some((assoc.clone(), promised.clone(), actual));
             }
         }
         None
+    }
+
+    /// Fix the open literals of a witness's associated types to what an
+    /// inline binding promises: `-> impl Iterator[Item = i32] { 0..3 }`
+    /// makes `0` and `3` `i32`s, as `let r: Range[i32] = 0..3` would. A
+    /// witness whose type cannot take the promise is left as it is, for
+    /// [`Self::existential_binding_mismatch`] to report.
+    pub(super) fn settle_existential_literals(
+        &mut self,
+        witness: &Type,
+        bindings: &[(String, Type)],
+    ) {
+        let witness = inference::resolve_type_var_top(witness, &self.env.substitutions);
+        let (base, recv_args) = match witness {
+            Type::Named { name, args } => (name.clone(), args.clone()),
+            _ => return,
+        };
+        for (assoc, promised) in bindings {
+            let projection = Type::AssocProjection {
+                param: base.clone(),
+                assoc: assoc.clone(),
+                args: Vec::new(),
+                receiver_args: recv_args.clone(),
+                trait_name: None,
+            };
+            let actual = self.resolved_now(&self.resolve_assoc_projections(&projection));
+            if !exprs::contains_type_var(&actual) {
+                continue;
+            }
+            let mut subs = self.env.substitutions.clone();
+            let mut const_subs = self.env.const_substitutions.clone();
+            if inference::unify_types(promised, &actual, &mut subs, &mut const_subs) {
+                self.env.substitutions = subs;
+                self.env.const_substitutions = const_subs;
+            }
+        }
     }
 
     /// Record a concrete witness type flowing into the current function's
@@ -7514,11 +7583,10 @@ impl<'a> TypeChecker<'a> {
         }
         // A generic witness (`VecIntoIter[T]` in `fn f[T]`) is written over
         // the function's own names, which each use of the existential
-        // instantiates (B-2026-10-20-32); only an unsolved variable is not
-        // yet a witness.
-        if crate::typechecker::exprs::contains_type_var(&f) {
-            return;
-        }
+        // instantiates (B-2026-10-20-32). An unsolved variable is not yet a
+        // witness, but it may be by the body's end: `0..3`'s literals take
+        // their type when the body's literals default, so the witness is
+        // kept and read again then (`check_impl_trait_single_witness`).
         self.return_impl_trait_witnesses
             .push((type_display(&f), *span, f));
     }
@@ -7536,9 +7604,36 @@ impl<'a> TypeChecker<'a> {
             return;
         };
         let mut distinct: Vec<(String, Span, Type)> = Vec::new();
-        for (name, span, ty) in &self.return_impl_trait_witnesses {
-            if !distinct.iter().any(|(n, _, _)| n == name) {
-                distinct.push((name.clone(), *span, ty.clone()));
+        let bindings = match self
+            .current_return_type
+            .as_ref()
+            .map(|t| self.resolved_now(t))
+        {
+            Some(Type::Existential { assoc_bindings, .. }) => assoc_bindings,
+            _ => Vec::new(),
+        };
+        let mut late_mismatches = Vec::new();
+        for (_, span, raw) in &self.return_impl_trait_witnesses {
+            // Read with the body's literals settled; a variable still open
+            // here is no concrete witness.
+            let ty = self.resolved_now(raw);
+            if crate::typechecker::exprs::contains_type_var(&ty) {
+                continue;
+            }
+            // A witness that was open when it flowed in was judged against
+            // the inline bindings only as far as it could be then: judge
+            // what its literals became (`[300].into_iter()` for an
+            // `Item = u8` would otherwise default to `i64` unseen).
+            if crate::typechecker::exprs::contains_type_var(raw) {
+                if let Some((assoc, promised, actual)) =
+                    self.existential_binding_mismatch(&ty, &bindings)
+                {
+                    late_mismatches.push((*span, assoc, promised, ty.clone(), actual));
+                }
+            }
+            let name = type_display(&ty);
+            if !distinct.iter().any(|(n, _, _)| *n == name) {
+                distinct.push((name, *span, ty));
             }
         }
         // Publish the single witness for `lowering.rs` to rewrite the return
@@ -7575,6 +7670,10 @@ impl<'a> TypeChecker<'a> {
                     self.impl_trait_contested_origins.insert(origin);
                 }
             }
+        }
+        for (span, assoc, promised, found, actual) in late_mismatches {
+            let msg = assoc_mismatch_message(&trait_name, &assoc, &promised, &found, &actual);
+            self.type_error(msg, span, TypeErrorKind::TypeMismatch);
         }
         if distinct.len() < 2 {
             return;
@@ -9117,6 +9216,13 @@ impl<'a> TypeChecker<'a> {
         if let Some(ok) = self.dyn_coercion(expected, found, span) {
             return ok;
         }
+        // `-> impl Iterator[Item = i32] { 0..3 }`: the promise types the
+        // witness's open literals before the witness is judged against it.
+        if let Type::Existential { assoc_bindings, .. } = self.resolve_assoc_projections(expected) {
+            if !matches!(found, Type::Existential { .. }) {
+                self.settle_existential_literals(found, &assoc_bindings);
+            }
+        }
         if self.is_subtype_with_projections(expected, found) {
             // Record a concrete witness flowing into the current function's
             // return-position `impl Trait`, so the end-of-body single-witness
@@ -9230,6 +9336,7 @@ impl<'a> TypeChecker<'a> {
         } = expected
         {
             if !matches!(found, Type::Existential { .. }) {
+                self.settle_existential_literals(found, assoc_bindings);
                 // Two ways to fail one check, and they want different
                 // messages: the witness may not implement the trait at all,
                 // or it may implement it with a DIFFERENT associated type
@@ -9240,26 +9347,8 @@ impl<'a> TypeChecker<'a> {
                     .existential_binding_mismatch(found, assoc_bindings)
                     .filter(|_| self.type_satisfies_bound(found, trait_name))
                 {
-                    self.type_error(
-                        format!(
-                            "error[E_IMPL_TRAIT_ASSOC_MISMATCH]: function returns \
-                             `impl {trait_name}[{assoc} = {}]` but body type `{}` \
-                             declares `{assoc} = {}`. An inline associated-type \
-                             binding is a promise to every caller — they type \
-                             `{assoc}` as `{}` on the strength of it — so the \
-                             witness must match it exactly. Change the binding to \
-                             `{assoc} = {}`, or return a type whose `{assoc}` is \
-                             `{}`.",
-                            type_display(&promised),
-                            type_display(found),
-                            type_display(&actual),
-                            type_display(&promised),
-                            type_display(&actual),
-                            type_display(&promised),
-                        ),
-                        span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    let msg = assoc_mismatch_message(trait_name, &assoc, &promised, found, &actual);
+                    self.type_error(msg, span, TypeErrorKind::TypeMismatch);
                     return false;
                 }
                 self.type_error(
@@ -11078,4 +11167,30 @@ pub(crate) fn library_provider_trait(resource: &str) -> Option<&'static str> {
         "Network" => Some("NetworkProvider"),
         _ => None,
     }
+}
+
+/// `E_IMPL_TRAIT_ASSOC_MISMATCH`: a return-position `impl Trait[A = P]`
+/// whose witness `found` declares `A = actual`.
+fn assoc_mismatch_message(
+    trait_name: &str,
+    assoc: &str,
+    promised: &Type,
+    found: &Type,
+    actual: &Type,
+) -> String {
+    let (promised, found, actual) = (
+        type_display(promised),
+        type_display(found),
+        type_display(actual),
+    );
+    format!(
+        "error[E_IMPL_TRAIT_ASSOC_MISMATCH]: function returns \
+         `impl {trait_name}[{assoc} = {promised}]` but body type `{found}` \
+         declares `{assoc} = {actual}`. An inline associated-type \
+         binding is a promise to every caller — they type \
+         `{assoc}` as `{promised}` on the strength of it — so the \
+         witness must match it exactly. Change the binding to \
+         `{assoc} = {actual}`, or return a type whose `{assoc}` is \
+         `{promised}`."
+    )
 }

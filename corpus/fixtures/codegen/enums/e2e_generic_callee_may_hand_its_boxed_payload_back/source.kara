@@ -8,7 +8,7 @@ fn diesinside[T](g: own G[T]) -> G[T] { return G.N }
 fn tailmatch[T](g: own G[T], c: i64) -> G[T] { match c { 1 => { return g } _ => { return G.N } } }
 fn pick[T](a: own G[T], b: own G[T], c: bool) -> G[T] { if c { return a } return G.N }
 fn midmono(g: own M, c: bool) -> M { if c { return g } return M.N }
-fn show[T](g: own G[String]) { match g { G.Y(v) => { println(f"  {v.len()}") } G.N => { println("  none") } } }
+fn show(g: own G[String]) { match g { G.Y(v) => { println(f"  {v.len()}") } G.N => { println("  none") } } }
 
 fn main() {
     println("handback");  { let a: G[String] = G.Y(f"aaaaaaaa-1"); let b = mid(a, true); show(b) }

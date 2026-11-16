@@ -54,6 +54,7 @@
 // Returned by `set` when the cell was already filled — carries the
 // rejected value back to the caller so nothing is silently dropped.
 // `rejected` holds the value the failed `set` tried to install.
+#[derive(Debug)]
 struct AlreadySetError[=T] {
     rejected: T,
 }

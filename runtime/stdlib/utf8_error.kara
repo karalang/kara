@@ -8,6 +8,7 @@
 // `io_error.kara` / `var_error.kara`; lives in the prelude so it does
 // not need an import.
 
+#[derive(Debug)]
 enum Utf8Error {
     InvalidByte,
     IncompleteSequence,

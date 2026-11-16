@@ -19,6 +19,7 @@
 // counting semaphore's do elsewhere (B-2026-11-11-34;
 // docs/library/concurrency.md).
 
+#[derive(Debug)]
 enum SemaphoreError {
     // No permit was available and none was released before `timeout`.
     Timeout,

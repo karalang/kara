@@ -7115,7 +7115,7 @@ fn hand_written_clone_and_default_impls_run() {
          struct P { x: i64 }\n\
          impl Clone for P { fn clone(ref self) -> P { P { x: self.x } } }\n\
          fn main() { let p = P { x: 1 }; println(f\"{p.clone().x}\"); }\n",
-        "both derives `Clone`",
+        "derives `Clone` and also implements it here",
     );
 }
 

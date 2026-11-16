@@ -13,6 +13,7 @@
 // here, exactly as `Utf8Error` drops `std::str::Utf8Error`'s offset. Lives
 // in the prelude so it does not need an import.
 
+#[derive(Debug)]
 enum NulError {
     InteriorNul,
     Other(String),

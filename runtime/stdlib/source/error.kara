@@ -7,6 +7,7 @@ pub trait Error: Display { }
 /// An erased error that needs no `dyn`: the original error's message, the
 /// name of its type, and the context messages added to it, oldest first.
 /// It does not implement `Error`, so an `AnyError` never wraps another.
+#[derive(Debug)]
 pub struct AnyError {
     msg: String,
     kind: String,

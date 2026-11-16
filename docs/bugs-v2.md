@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 436 |
-| false-positive | 243 |
-| missing-feature | 182 |
+| diagnostics | 441 |
+| false-positive | 245 |
+| missing-feature | 183 |
 | perf | 181 |
-| other | 91 |
-| soundness | 80 |
-| miscompile | 77 |
+| other | 96 |
+| soundness | 81 |
+| miscompile | 78 |
 | run-vs-build | 53 |
-| crash | 41 |
+| crash | 44 |
 | codegen-gap | 33 |
 | use-after-free | 9 |
 | leak | 4 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 563 |
+| typecheck | 573 |
 | mir-llvm | 279 |
-| mir | 235 |
+| mir | 239 |
 | cli | 185 |
 | ownership | 99 |
 | parser | 96 |
 | interp | 86 |
-| runtime | 60 |
-| resolver | 38 |
+| runtime | 63 |
+| resolver | 39 |
 | effect | 38 |
 | other | 33 |
 | codegen | 22 |
@@ -156,6 +156,16 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-323 | 2026-11-16 | typecheck+mir | medium | A constant shift whose amount is at least the width (`let y: i8 = 1 << 8;`, `let y: i32 = 1 << 32;`, `let y: u8 = 255 >> 8;`) passes `karac check` and evaluates to 0 on every lane, though the same shift through a variable traps and constant arithmetic out of range is a compile error | — |
 | B-2026-11-16-324 | 2026-11-16 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while design.md §5 says their width is the target's pointer width (32 on wasm32) | — |
 | B-2026-11-16-273 | 2026-11-16 | runtime+mir-llvm | medium | A `TaskGroup.new(limit: 2)` group ran up to four of its tasks at once on the ASan lane, where `spawn` blocks while `n` of its tasks are running (design.md §13 `TaskGroup`) | — |
+| B-2026-11-16-326 | 2026-11-16 | mir | high | `<` on a type whose derived ordering reaches itself (`#[derive(PartialEq, PartialOrd)] enum Tree { Leaf(i64), Node(Vec[Tree]) }`) overflows the stack in `karac check` and every backend | — |
+| B-2026-11-16-327 | 2026-11-16 | mir | high | A NaN pair that decides a derived ordering makes `<=` and `>=` true: `P { x: NaN } <= P { x: 1.0 }`, `(NaN, 1) >= (1.0, 1)` and `[NaN] >= [1.0]` all print `true` on every backend, where design.md §9 makes every operator false | — |
+| B-2026-11-16-328 | 2026-11-16 | typecheck | medium | `fn f() -> impl Iterator[Item = i64] { 0..3 }` is refused with `body type Range[i64] declares Item = i64` (E_IMPL_TRAIT_ASSOC_MISMATCH): a witness whose literals are still open fails the inline binding check, and an `impl Iterator` over literals cannot be written | — |
+| B-2026-11-16-329 | 2026-11-16 | typecheck | high | `-> impl Iterator[Item = u8]` accepts a witness whose `Item` is `i64` (`let v: Vec[i64] = [1]; v.into_iter()`): the binding check takes any two integer types as compatible, so callers read `u8`s out of an `i64` iterator | — |
+| B-2026-11-16-330 | 2026-11-16 | typecheck | medium | A `#[derive(Clone)]`, `#[derive(Debug)]` or `#[derive(Display)]` whose field type lacks the trait is accepted silently, and the field is cloned or rendered by its shape (`B { a: A { n: 1 } }` for an `A` with only a hand `Display`) | — |
+| B-2026-11-16-331 | 2026-11-16 | typecheck | low | `Make.name()` for a trait's associated function names no type, and `karac check` prints MIR's internal `a type that failed to check is not lowered yet` (E0516) instead of a diagnostic | — |
+| B-2026-11-16-332 | 2026-11-16 | typecheck | low | One finding printed several times: a marker trait's body item reports `marker traits cannot have a body` at every token after the first, `fn f(x: dyn Iterator)` reports the unbound `Item` twice, and a derive beside a hand impl reports two duplicate-impl errors | — |
+| B-2026-11-16-333 | 2026-11-16 | typecheck | low | A type parameter that appears in no parameter type and not in the return type (`fn who[T: Named]() -> String`) is accepted at the declaration although no call can ever decide it; every call is refused, or the parameter silently goes unused | — |
+| B-2026-11-16-334 | 2026-11-16 | typecheck | low | `dbg(e)` on a standard-library error is refused by `karac check` (E0232, not `Debug`) for 15 error types, among them `DeserializeError`, `JsonError`, `ParseError` and `RegexError`, while the interpreter renders the value | — |
+| B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
 | B-2026-11-17-1 | 2026-11-17 | typecheck+runtime | medium | An f-string width has no upper bound below 2^64: `f"{n:10000000000000000000}"` passes `karac check`; the native build then grows memory until the OOM killer ends it (or aborts 'panic: out of memory', exit 134, at width 4294967296), and the interpreter aborts with Rust's 'memory allocation of N bytes failed' and a backtrace | — |
 | B-2026-11-17-2 | 2026-11-17 | parser | low | A `#` flag in a format spec (`{n:#x}`, `{n:#b}`) is refused as 'unsupported type `#` (expected one of x, X, o, b, d)', and `{n:+-5}` as 'unsupported type `-`', though neither is a type: the message should say the alternate form (`#`) is not in v1, or name the misplaced flag | — |
 | B-2026-11-17-3 | 2026-11-17 | other | low | [doc-only] strings.md does not say what the empty pattern does for find, contains, starts_with, ends_with, split, splitn, split_once, rsplit_once, strip_prefix/suffix and replace, nor design.md §3 what `+` and `0` do to NaN and inf; all lanes follow Rust (`"ab".split("")` is ["", "a", "b", ""], `split_once("")` is ("", s), `replace("", x)` inserts at every char boundary, `{nan:+}` is `NaN`, `{inf:08.2}` is `00000inf`) | — |
@@ -187,6 +197,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-32 | 2026-11-17 | ownership | high | Full matrix for B-2026-11-17-26/-28: any borrow reached through a handle-typed field (direct, nested shared-in-shared at either level, or a shared enum) is freed when the field is replaced through another handle; 37 of 99 cells use after free on interp and ASan, across ref, element ref, for, iter, slice match, if let, while let, bare Vec/element arguments, closure ref capture, a receiver or dyn param inside a replaced parent, and replacement via a local alias, a method, a closure or an upgraded weak | — |
 | B-2026-11-17-33 | 2026-11-17 | mir | medium | A struct pattern on a shared struct with a Drop body (`match a.child { C { items } => .. }`) passes `karac check`, then MIR typecheck refuses it on every lane ('this pattern moves `items` out of `C`, which has its own impl Drop'); a shared scrutinee's part bindings are refs, so nothing moves | — |
 | B-2026-11-17-35 | 2026-11-17 | mir | high | A `Drop` body that reaches a suspension point (`sleep`, a channel `recv`, a `Mutex.lock`) passes check, then every lane fails: interp 'call of unknown function Slow.drop', build 'error[mir]: llvm: no body named `Slow.drop`'. This holds in plain `main`, in a task, in a Vec's elements, and in a cancellation teardown | — |
+| B-2026-11-17-36 | 2026-11-17 | typecheck | medium | The orphan rule and the inherent-impl rule are not enforced between user packages: a library implements another package's trait for a std type (`impl lib.Tw for String`), writes a blanket impl of a foreign trait (`impl[T: Mine] Display for T`, `impl[T: Mine] lib.Tw for T`), and adds inherent methods to another package's type (`impl lib.S { .. }`, also from the application). All of these pass check, as the root package and as a dependency, and run | — |
+| B-2026-11-17-37 | 2026-11-17 | mir | medium | A user type named like a prelude enum (`struct Option { v: i64 }`, or `Result`, declared locally or imported from a module) passes check with only the prelude_shadow warning, then `karac run`/`build` fail with an internal 'error[mir]: typecheck: 18:13: pattern `Some(..)` is an enum-variant pattern, but the scrutinee has type `Option`': the user's name leaks into library code lowered in the same unit | — |
+| B-2026-11-17-38 | 2026-11-17 | resolver | low | A package can import a transitive dependency it never declares: app depends only on `mid`, mid depends on `lib`, and `import lib.f;` in app passes check, builds and runs | — |
+| B-2026-11-17-39 | 2026-11-17 | typecheck | low | A `pub fn` bounded on a package-internal trait (`trait Hid { .. } pub fn f[T: Hid](t: T) -> i64`) passes check with no E0221, though users of the package cannot name the bound they must satisfy | — |
+| B-2026-11-17-40 | 2026-11-17 | runtime | high | `Json.deserialize` into a typed `String` field refuses every surrogate-pair escape: `{"v":"\ud83d\ude00"}` gives 'v: invalid code point at line 1 column 13', so any non-BMP character written as JSON's standard escape (Python's json.dumps default, many encoders) cannot be read; `Json.parse` reads the same text correctly | — |
+| B-2026-11-17-41 | 2026-11-17 | runtime | medium | `Json.deserialize` accepts text that is not JSON, which `Json.parse` refuses: a leading zero (`[01]` reads 1), a bare fraction (`.5`), a raw tab inside a string, `1e400` (read as infinity and written back `null`), `-0` into an i64 or u64 field, and map keys `"01"` and `" 1"` for an i64 key | — |
+| B-2026-11-17-42 | 2026-11-17 | mir | medium | A derived `Serialize` on an enum whose struct variant has a field named `s` (`enum Un { S { s: i64 }, B }`) passes check, then fails on every lane: 'error[mir]: typecheck: 2:35: no method `serialize_variant_begin` on type `i64`'. The field binding shadows the derive's serializer parameter | — |
+| B-2026-11-17-43 | 2026-11-17 | runtime | low | Small JSON divergences from json.md: typed `Json.serialize` writes `\b` and `\f` as `\u0008` and `\u000c` (stringify and serde_json write `\b`, `\f`); a BOM before `[1]` is reported at column 3, not 1; and `"New"` for a newtype variant reports 'expected value at line 1 column 6' instead of naming the variant shape | — |
 
 ### Relocated
 

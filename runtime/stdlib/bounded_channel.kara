@@ -28,6 +28,7 @@ enum OnFull {
     FailFast,
 }
 
+#[derive(Debug)]
 enum ChannelError {
     // `send` found the buffer at capacity (and the channel is
     // `FailFast`, or `Block` under the collapsed v1 semantics).

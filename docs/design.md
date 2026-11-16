@@ -2820,6 +2820,8 @@ Generic parameters are written in square brackets: `Vec[i32]`, `fn sort[T: Ord](
 - **A qualified receiver:** `Vec[i64].new()`, `u32.size_of()`. A type in receiver position cannot be an index, because a type cannot be indexed.
 - **An annotation:** `let v: Vec[i64] = Vec.new();`, `let p: *const u32 = ptr.null();`.
 
+**Every type parameter must be decidable at a call.** A function's, method's or trait method's type parameter that appears in no parameter type, not in the return type, and in no other parameter's bound (`fn who[T: Named]() -> String`) can never be decided, because there is nothing at a call to decide it from. It is an error at the declaration, naming the parameter (review-thread ruling 2026-11-16). A trait impl's method is reported at the trait. The same holds for a trait's associated function called as `Trait.name()`: its `Self` is decided only by the expected type through the return type ([§9 Associated functions](#associated-functions)), and the call is refused when nothing decides it.
+
 **Generic arguments against indexing.** The parser decides by syntax alone:
 - **In a type position** (annotations, return types, field types, bounds), `Name[T1, ..., Tn]` is always a generic type.
 - **In an expression**, `e[i]` is always an index, except that a Type-class identifier or a primitive type name followed by `[` always begins a type path (`Map[String, i64].new()`), because such a name is never a value.
@@ -3198,7 +3200,7 @@ trait FromStr {
 
 There are no call-site type arguments: the form is `T.default()`, never `default[T]()` ([§8 Generic parameters and arguments](#generic-parameters-and-arguments)).
 
-An inherent associated function hides a trait one of the same name at `T.name()`, as inherent methods hide trait methods. `Trait.name(args)` reaches the trait's.
+An inherent associated function hides a trait one of the same name at `T.name()`, as inherent methods hide trait methods. `Trait.name(args)` reaches the trait's. Its `Self` comes from the expected type, through the function's return type: `let p: P = Make.name()` calls `P`'s impl of `Make`, even where `P` has an inherent `name`, and `let o: Option[P] = Parse.parse_it(s)` takes `Self` from `Option[Self]` (review-thread ruling 2026-11-16). With no expected type, or a return type that does not name `Self`, the call names no type and is an error whose message gives the `P.name()` form, and the annotation when one would fix `Self`. An expected type that does not implement the trait is an error naming it.
 
 ### Coherence and the orphan rule
 
@@ -4387,6 +4389,8 @@ struct Point { x: i64, y: i64 }
 - `Copy` needs `Clone`, and every field `Copy`;
 - `Hash` and `Default` need no other derive.
 
+**A field that lacks the trait.** The requirement column holds for every field, as the field's own impl is what the derived one calls. A field type without the trait is an error at the next minor release; in 0.8.x it is a `deprecated` warning naming the field and its type, and `Clone`, `Debug` and `Display` still copy or render such a field by its shape (review-thread ruling 2026-11-16, B-2026-11-16-251). A `Secret` field meets `Debug` and `Display`, which render it as `<redacted>` ([std.secret](library/secret.md)).
+
 **Bounds propagate.** On a generic type, each derived impl is bounded by what its fields need ([Conditional impls](#conditional-impls)).
 
 **A derive and a manual impl of the same trait** on one type is the ordinary duplicate-impl error. Remove one; the compiler does not prefer either.
@@ -4566,7 +4570,7 @@ Each frame names the `?` site's file, line and column (review-thread ruling 2026
 pub trait Error: Display { }
 ```
 
-The standard library's error types implement it.
+The standard library's error types implement it, and every one of them implements `Debug` as well as `Display`, so `dbg(e)` takes any of them (review-thread ruling 2026-11-16).
 
 **`AnyError`** is an erased error type that needs no `dyn`. It keeps the original error's message, the name of its type, and a list of context messages:
 

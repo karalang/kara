@@ -310,7 +310,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Whether `Trait.method` takes `self`, or `None` when the trait (or a
     /// supertrait) declares no such method.
-    fn trait_method_takes_self(&self, trait_name: &str, method: &str) -> Option<bool> {
+    pub(super) fn trait_method_takes_self(&self, trait_name: &str, method: &str) -> Option<bool> {
         if let Some(m) = self.find_trait_method(trait_name, method) {
             return Some(m.self_param.is_some());
         }
@@ -382,5 +382,128 @@ impl<'a> super::TypeChecker<'a> {
         traits
             .iter()
             .find_map(|t| self.trait_method_takes_self(t, method))
+    }
+
+    /// Whether the trait's associated function `method` names `Self` in its
+    /// return type, so that an expected type can say whose impl runs.
+    pub(super) fn trait_fn_returns_self(&self, trait_name: &str, method: &str) -> bool {
+        self.find_trait_method(trait_name, method)
+            .and_then(|m| m.return_type.as_ref())
+            .is_some_and(type_expr_names_self)
+    }
+
+    /// The type the expected type of the `Trait.method(..)` call at `span`
+    /// fixes `Self` to, through the method's declared return type.
+    pub(super) fn expected_self(
+        &self,
+        trait_name: &str,
+        method: &str,
+        span: &Span,
+    ) -> Option<Type> {
+        let (key, expected) = self.trait_call_expected.clone()?;
+        if key != SpanKey::from_span(span) {
+            return None;
+        }
+        let rt = self
+            .find_trait_method(trait_name, method)?
+            .return_type
+            .clone()?;
+        let expected = super::inference::resolve_type_var_top(&expected, &self.env.substitutions);
+        let self_ty = self_from_expected(&rt, &expected)?;
+        let self_ty = super::inference::resolve_type_var_top(&self_ty, &self.env.substitutions);
+        (!matches!(self_ty, Type::TypeVar(_) | Type::Error)).then_some(self_ty)
+    }
+
+    /// `let p: P = Make.name()`: the `Self` the expected type fixes in
+    /// `name`'s return type picks `P`'s impl of `Make`, ahead of an inherent
+    /// `P.name()` (review-thread ruling 2026-11-16, design.md §9 Associated
+    /// functions). `None` when the call has no expected type, its return
+    /// type does not fix `Self`, or the type it fixes has no impl of the
+    /// trait: the caller then refuses the call.
+    pub(super) fn trait_call_by_expected(
+        &mut self,
+        trait_name: &str,
+        method: &str,
+        callee: &Expr,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        let self_ty = self.expected_self(trait_name, method, span)?;
+        let (owner, _) = super::types::impl_table_key(&self_ty)?;
+        let target_span = self
+            .env
+            .impls
+            .iter()
+            .find(|i| i.trait_name.as_deref() == Some(trait_name) && i.target_type == owner)
+            .and_then(|i| i.target_span)?;
+        let routed = Expr {
+            kind: ExprKind::Path {
+                segments: vec![owner.clone(), method.to_string()],
+                generic_args: None,
+            },
+            span: callee.span,
+            id: callee.id,
+        };
+        let saved = self.env.ufcs_trait.take();
+        let saved_args = self.env.ufcs_trait_args.take();
+        self.env.ufcs_trait = Some((trait_name.to_string(), method.to_string()));
+        let ty = self.infer_call_inner(&routed, args, span);
+        self.env.ufcs_trait = saved;
+        self.env.ufcs_trait_args = saved_args;
+        // The callee path names the trait's declaration, which has no body:
+        // typed HIR takes the call's callee from the impl recorded here.
+        let key = SpanKey::from_span(span);
+        self.record_method_callee(key, format!("{owner}.{method}"));
+        self.record_node_method_impl(span, &target_span);
+        if let Some((node, call_key)) = self.current_call_node {
+            if call_key == key {
+                self.node_call_callees.remove(&node);
+                self.routed_trait_calls.insert(node);
+            }
+        }
+        Some(ty)
+    }
+}
+
+/// Whether a type expression names `Self` anywhere.
+fn type_expr_names_self(te: &TypeExpr) -> bool {
+    match &te.kind {
+        TypeKind::Path(p) => {
+            p.segments.first().map(String::as_str) == Some("Self")
+                || p.generic_args.as_ref().is_some_and(|ga| {
+                    ga.iter()
+                        .any(|a| matches!(a, GenericArg::Type(t) if type_expr_names_self(t)))
+                })
+        }
+        TypeKind::Tuple(ts) => ts.iter().any(type_expr_names_self),
+        TypeKind::Array { element, .. } => type_expr_names_self(element),
+        TypeKind::Ref(inner) | TypeKind::MutRef(inner) => type_expr_names_self(inner),
+        _ => false,
+    }
+}
+
+/// The type `Self` stands for when a declared return type `te` is matched
+/// against the call's expected type: `Self` against `P` is `P`,
+/// `Option[Self]` against `Option[P]` is `P`.
+fn self_from_expected(te: &TypeExpr, expected: &Type) -> Option<Type> {
+    match (&te.kind, expected) {
+        (TypeKind::Path(p), _) if p.segments == ["Self"] && p.generic_args.is_none() => {
+            Some(expected.clone())
+        }
+        (TypeKind::Path(p), Type::Named { name, args }) => {
+            if p.segments.last() != Some(name) {
+                return None;
+            }
+            let ga = p.generic_args.as_ref()?;
+            ga.iter().zip(args.iter()).find_map(|(a, t)| match a {
+                GenericArg::Type(inner) => self_from_expected(inner, t),
+                _ => None,
+            })
+        }
+        (TypeKind::Tuple(ts), Type::Tuple(es)) if ts.len() == es.len() => ts
+            .iter()
+            .zip(es.iter())
+            .find_map(|(t, e)| self_from_expected(t, e)),
+        _ => None,
     }
 }

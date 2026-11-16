@@ -90,6 +90,7 @@
 // `wrap_tls_io_result` mirrors `wrap_tcp_io_result` modulo the
 // `-1` → `Protocol(-1)` branch). The `i32` payload on `Other` /
 // `Protocol` is widened to i64 in the lowered struct.
+#[derive(Debug)]
 enum TlsError {
     Interrupted,
     Other(i32),

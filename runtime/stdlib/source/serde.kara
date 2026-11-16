@@ -11,6 +11,7 @@
 // The MIR pipeline appends this file to a program that names any of its
 // items.
 
+#[derive(Debug)]
 pub struct DeserializeError {
     pub message: String,
 }

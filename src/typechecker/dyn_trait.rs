@@ -499,6 +499,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        self.settle_existential_literals(concrete, assoc);
         if let Some((name, promised, actual)) = self.existential_binding_mismatch(concrete, assoc) {
             return Some(format!(
                 "`{shown}` implements `{trait_name}` with `{name} = {}`, not `{}`",

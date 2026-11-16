@@ -22254,18 +22254,25 @@ fn test_ufcs_concrete_type_two_traits_no_inherent_ambiguity() {
 }
 
 #[test]
-fn test_ufcs_concrete_type_disambiguates_via_explicit_trait() {
-    // Same setup as the ambiguity case, but now disambiguate at the
-    // call site by writing the UFCS form on the trait directly:
-    // `A.method(...)` resolves cleanly through the trait-prefixed
-    // dispatch path, sidestepping the receiver-name ambiguity.
-    typecheck_ok(
+fn test_ufcs_trait_associated_fn_with_nothing_to_fix_self_is_refused() {
+    // `A.method()` names the trait but no type: `method` mentions no
+    // `Self`, so nothing at the call says whose impl runs, and the call is
+    // refused with the type-receiver form (review-thread ruling
+    // 2026-11-16, B-2026-11-16-252). It typed as an error with no
+    // diagnostic before, which this test read as success.
+    let errors = typecheck_errors(
         "struct Foo[T] { x: i64 }\n\
          trait A { fn method() -> i64; }\n\
          trait B { fn method() -> i64; }\n\
          impl[T] A for Foo[T] { fn method() -> i64 { 1 } }\n\
          impl[T] B for Foo[T] { fn method() -> i64 { 2 } }\n\
          fn use_foo() -> i64 { A.method() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`A.method()` names no type")),
+        "{errors:?}"
     );
 }
 

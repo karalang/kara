@@ -34,6 +34,7 @@ pub enum Json {
 
 /// Where and why text is not JSON: a 1-based line, the byte column, and
 /// the message with both.
+#[derive(Debug)]
 pub struct JsonError {
     line: u32,
     column: u32,

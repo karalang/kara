@@ -20,6 +20,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A return-position `impl Iterator[Item = u8]` (or any inline associated-type
+  binding) is no longer met by a witness of another integer width: an `i64`
+  iterator let callers read `u8`s (B-2026-11-16-250).
+- A type parameter that appears in no parameter type, not in the return
+  type and in no other parameter's bound (`fn who[T: Named]() -> String`)
+  is refused at the declaration: no call can decide it, since a call takes
+  no type arguments (B-2026-11-16-254).
 - `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
   as `"0.1.0"`), as design.md § 4 says; any string was accepted
   (B-2026-11-16-220).
@@ -178,6 +185,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Deprecated (errors at the next minor release)
 
+- `#[derive(Clone)]`, `#[derive(Debug)]` or `#[derive(Display)]` on a type
+  with a field that lacks the trait: 0.8.x cloned or rendered the field by
+  its shape; it is now a `deprecated` warning naming the field. A `Secret`
+  field still renders as `<redacted>` (B-2026-11-16-251;
+  tracker B-2026-11-16-256).
 - An argument at a method's `mut ref` parameter takes the call-site `mut`
   marker, as a free function's already does (design.md § Call-site `mut`
   markers): `r.fill(s)` with `fn fill(ref self, buf: mut ref String)` warns
@@ -194,6 +206,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `let p: P = Make.name()` calls `P`'s impl of the trait `Make`, taking
+  `Self` from the expected type through the return type (`Self`,
+  `Option[Self]`), even where `P` has an inherent `name` (B-2026-11-16-252).
+- Every standard-library error type implements `Debug`, so `dbg(e)` takes a
+  `DeserializeError`, `JsonError`, `ParseError`, `RegexError` and the rest
+  under `karac check` as the backends already did (B-2026-11-16-255).
 - `concat()` flattens a sequence of `Slice`s or arrays as it does one of
   `Vec`s: Rust's `parts.concat()` over a `Slice[Slice[u8]]` gives the
   `Vec[u8]` of every part's bytes, where it took the deprecated `Display`
@@ -551,6 +569,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `<` on a type whose derived ordering reaches itself
+  (`enum Tree { Leaf(i64), Node(Vec[Tree]) }`) overflowed the stack in
+  `karac check` and every backend (B-2026-11-16-247).
+- A NaN deciding a derived ordering made `<=` and `>=` true for structs,
+  float tuples and `Vec`s; every comparison is now false, as `partial_cmp`
+  is `None` (B-2026-11-16-248).
+- `fn f() -> impl Iterator[Item = i64] { 0..3 }` was refused; the binding
+  now types the witness's literals (`Item = i32` makes them `i32`)
+  (B-2026-11-16-249).
 - A compiled program that printed to standard output and then announced
   its port under `KARAC_ANNOUNCE_PORT` wrote `BOUND_PORT=<n>` to stderr
   while its stdout still held what it had printed, so a harness that waited
@@ -1402,6 +1429,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `Make.name()` for a trait's associated function names no type and says
+  so, instead of "a type that failed to check is not lowered yet"
+  (B-2026-11-16-252).
+- A marker trait's body item, a `dyn` parameter's unbound associated type
+  and a derive beside a hand impl are each reported once (B-2026-11-16-253).
 - A text diagnostic's bracket is its catalogue code, the one
   `--output=json` reports: `error[E0221]`, `error[E0400]`, `error[E0500]`,
   where it named the phase (`error[typecheck]`, `error[effect]`,

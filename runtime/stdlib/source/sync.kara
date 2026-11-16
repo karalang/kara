@@ -49,6 +49,7 @@ impl[T] Receiver[T] {
 }
 
 /// Why `Receiver.recv_timeout` gave no value (core-semantics §11.11).
+#[derive(Debug)]
 pub enum RecvTimeoutError {
     /// Every sender is gone and the channel is drained.
     Closed,
@@ -57,6 +58,7 @@ pub enum RecvTimeoutError {
 }
 
 /// Why `Sender.send_timeout` did not send, with the value it hands back.
+#[derive(Debug)]
 pub enum SendTimeoutError[T] {
     /// No receiver is left.
     Closed(T),

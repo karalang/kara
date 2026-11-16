@@ -13,6 +13,7 @@
 // Why a network operation failed. The causes a program branches on have
 // variants; any other carries the OS error code in `Other` (-1 when the OS
 // gave none).
+#[derive(Debug)]
 enum NetError {
     // A signal interrupted the call; retrying it is safe.
     Interrupted,
@@ -50,6 +51,7 @@ enum NetError {
 }
 
 // How a TLS connection failed (`NetError.Tls`).
+#[derive(Debug)]
 enum TlsFailure {
     // No protocol version, cipher or key in common with the peer.
     Handshake,

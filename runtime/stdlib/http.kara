@@ -38,6 +38,7 @@ struct Response {
     body: String,
 }
 
+#[derive(Debug)]
 struct HttpError {
     message: String,
 }

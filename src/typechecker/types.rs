@@ -1805,7 +1805,7 @@ pub(super) fn numeric_args_agree(a: &Type, b: &Type) -> bool {
 /// wildcards, integer-width compat, Never/Error) keep working during
 /// inference, while one-directional widenings (refined→base) are
 /// rejected.
-fn generic_arg_compatible(variance: crate::ast::Variance, a: &Type, b: &Type) -> bool {
+pub(super) fn generic_arg_compatible(variance: crate::ast::Variance, a: &Type, b: &Type) -> bool {
     // B-2026-08-05-19 — two CONCRETE numeric arguments are INVARIANT, whatever
     // the slot's declared variance says. `types_compatible` deliberately treats
     // any int/uint/float pair as compatible, which is the right rule for a

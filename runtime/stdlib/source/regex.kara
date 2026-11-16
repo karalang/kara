@@ -14,6 +14,7 @@
 
 // Why `Regex.compile` refused a pattern: the engine's message, which shows
 // where in the pattern the error is.
+#[derive(Debug)]
 struct RegexError {
     message: String,
 }
