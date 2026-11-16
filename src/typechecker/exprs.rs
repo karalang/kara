@@ -11662,6 +11662,24 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// Whether a `usize` / `isize` operand is one the pointer-width pass
+    /// turns into `i64` (`check_written_pointer_ints`): every one, in a
+    /// program that declares no FFI item. Its `as u64` then casts an `i64`,
+    /// which does not widen, so `lossless_cast` must not delete it in the
+    /// round that makes the operand `i64` (kata 1175, B-2026-11-16-205:
+    /// `ans * i as u64` over a `usize` `i` made the program fail to check,
+    /// with no fix).
+    fn usize_becomes_i64(&self, from: &Type) -> bool {
+        matches!(
+            from,
+            Type::UInt(UIntSize::Usize) | Type::Int(IntSize::Isize)
+        ) && !self.program.items.iter().any(|item| match item {
+            Item::ExternFunction(_) | Item::ExternBlock(_) => true,
+            Item::StructDef(s) => s.attributes.iter().any(|a| a.path == ["repr"]),
+            _ => false,
+        })
+    }
+
     /// `redundant_cast` and `lossless_cast` (design.md § `as` casts): an `as`
     /// to the type its operand already has, or a lossless widening where
     /// `check_expr` wants the target type (a binding, argument or return),
@@ -11706,7 +11724,10 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(&to)
                 ),
             )
-        } else if expected.is_some_and(|e| peel(e) == to) && widens() {
+        } else if expected.is_some_and(|e| peel(e) == to)
+            && widens()
+            && !self.usize_becomes_i64(&from)
+        {
             (
                 "lossless_cast",
                 format!(
