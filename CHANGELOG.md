@@ -1196,6 +1196,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- A read-only walk over a `shared` value's `mut` vector field
+  (`for child in node.children.iter()`) in a body that writes nothing
+  through a `shared` handle checks the field's borrow flag once instead of
+  taking and giving it back in the runtime's table at every node: kata
+  1516's subtree search went from 1.89x Rust's wall time to 1.02x
+  (B-2026-11-16-241). A handle bound out of a borrowed node's `mut` field
+  (`match n.left { Some(c) => .. }`) counts nothing in such a body, and a
+  `mut ref` parameter that can hold no handle (a `mut ref i64`) no longer
+  keeps every count: kata 298's tree walk now executes Rust's instruction
+  count (B-2026-11-16-242).
 - **`karac run` walks a plain recursive value in linear time.** A boxed
   field's value (`next` in `struct ListNode { val: i64, next:
   Option[ListNode] }`) now sits in a heap slot of its own in the

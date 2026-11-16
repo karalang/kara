@@ -53,17 +53,67 @@ pub fn elide_borrowed_retains(program: &mut Program, tys: &TyInterner, skip: &BT
         if !safe.get(&body.instance.name).copied().unwrap_or(false) {
             continue;
         }
-        let has_mut_param = (1..=body.arg_count).any(|i| {
-            matches!(
-                tys.tcx().kind(body.locals[i].ty),
-                SK::MutRef(_) | SK::Slice { mutable: true, .. }
-            )
-        });
+        // A `mut` parameter through which no handle can be written (a
+        // `mut ref i64` best-so-far, kata 298's `down`) cannot make the
+        // caller's handle go away, so it leaves the body count-safe.
+        let has_mut_param = (1..=body.arg_count).any(|i| writes_a_handle(tys, body.locals[i].ty));
         if has_mut_param {
             continue;
         }
         read_scrutinee_parts(body, tys, &defined);
         rewrite(body, tys);
+    }
+}
+
+/// Turns the read flags a count-safe body takes into checks (core
+/// semantics §6.2). A read flag held over a stretch of code is observed
+/// only by an access that writes or `mut`-borrows the field while it is
+/// held, or by a writer that already holds it. A count-safe body writes
+/// and `mut`-borrows nothing through a `shared` handle, and calls only
+/// count-safe bodies, so while one of its read loans lives no such access
+/// runs: checking the flag where the loan is made, as a read below a
+/// flagged field does, answers the one conflict left. A read-only walk
+/// over a `mut` children vector (`for child in node.children.iter()`,
+/// kata 1516's `parent_of`) took and gave back a flag in the runtime's
+/// table at every node, 6x Rust's instructions (B-2026-11-16-241).
+/// `skip` names the coroutines, whose frames keep their flags apart.
+pub fn check_read_flags(program: &mut Program, tys: &TyInterner, skip: &BTreeSet<String>) {
+    let safe = count_safe(program, tys, skip);
+    for body in program.bodies.values_mut() {
+        if !safe.get(&body.instance.name).copied().unwrap_or(false) {
+            continue;
+        }
+        // Whether every flag a loan site takes is a read one.
+        let mut reads: BTreeMap<u32, bool> = BTreeMap::new();
+        for data in &body.blocks {
+            for st in &data.statements {
+                if let StatementKind::BorrowFlag(FlagOp::Acquire { kind, loan, .. }) = &st.kind {
+                    *reads.entry(*loan).or_insert(true) &= *kind == BorrowKind::Shared;
+                }
+            }
+        }
+        if !reads.values().any(|&r| r) {
+            continue;
+        }
+        for data in &mut body.blocks {
+            for st in &mut data.statements {
+                let StatementKind::BorrowFlag(op) = &st.kind else {
+                    continue;
+                };
+                st.kind = match op {
+                    FlagOp::Acquire { place, kind, loan } if reads[loan] => {
+                        StatementKind::BorrowFlag(FlagOp::Check {
+                            place: place.clone(),
+                            kind: *kind,
+                        })
+                    }
+                    FlagOp::Release { loan } if reads.get(loan) == Some(&true) => {
+                        StatementKind::Nop
+                    }
+                    _ => continue,
+                };
+            }
+        }
     }
 }
 
@@ -847,14 +897,11 @@ pub(super) fn terminator_places(t: &mut TerminatorKind, f: &mut dyn FnMut(&mut P
 }
 
 /// Is `x = retain(p)` a handle the body only reads through, copied out of
-/// a `ref` parameter nothing reassigns?
+/// a `ref` parameter nothing reassigns, or out of a `ref` into one?
 fn candidate(body: &Body, tys: &TyInterner, x: Local, p: &Place) -> bool {
     let a = p.local;
     if !matches!(tys.kind(body.local(x).ty), TyKind::Shared(_))
-        || a.index() == 0
-        || a.index() > body.arg_count
-        || !matches!(tys.kind(body.local(a).ty), TyKind::Ref(_))
-        || p.projection.first() != Some(&ProjElem::Deref)
+        || !rooted_in_param(body, tys, p, 4)
         // The result, or a parameter, leaves with its count.
         || x.index() <= body.arg_count
     {
@@ -865,7 +912,9 @@ fn candidate(body: &Body, tys: &TyInterner, x: Local, p: &Place) -> bool {
         for st in &data.statements {
             match &st.kind {
                 StatementKind::Assign(d, rv) => {
-                    if d.local == a {
+                    // A parameter reassigned; a `ref` into one is defined
+                    // once ([`rooted_in_param`]).
+                    if d.local == a && a.index() <= body.arg_count {
                         return false;
                     }
                     if d.local == x {
@@ -907,6 +956,52 @@ fn candidate(body: &Body, tys: &TyInterner, x: Local, p: &Place) -> bool {
         }
     }
     defs == 1
+}
+
+/// Does `p` read through a `ref` parameter, or through a `ref` defined
+/// once, by a shared borrow of a place that does (to `depth` links)? A
+/// handle bound out of a `mut` field of a borrowed node (`match n.left {
+/// Some(c) => .. }`, with `n` bound out of the parameter) is such a read:
+/// in a count-safe body nothing overwrites the field while `c` lives, and
+/// the caller holds the node (kata 298, B-2026-11-16-242).
+fn rooted_in_param(body: &Body, tys: &TyInterner, p: &Place, depth: usize) -> bool {
+    let a = p.local;
+    if a.index() == 0
+        || p.projection.first() != Some(&ProjElem::Deref)
+        || !matches!(tys.kind(body.local(a).ty), TyKind::Ref(_))
+    {
+        return false;
+    }
+    if a.index() <= body.arg_count {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    let (mut defs, mut from) = (0, None);
+    for data in &body.blocks {
+        for st in &data.statements {
+            match &st.kind {
+                StatementKind::Assign(d, rv) if d.local == a => {
+                    defs += 1;
+                    match rv {
+                        Rvalue::Ref(BorrowKind::Shared, q) if d.projection.is_empty() => {
+                            from = Some(q)
+                        }
+                        _ => return false,
+                    }
+                }
+                StatementKind::SetDiscriminant(d, _) if d.local == a => return false,
+                _ => {}
+            }
+        }
+        if let TerminatorKind::Call { destination, .. } = &data.terminator.kind {
+            if destination.local == a {
+                return false;
+            }
+        }
+    }
+    defs == 1 && from.is_some_and(|q| rooted_in_param(body, tys, q, depth - 1))
 }
 
 /// Does `o` use `x` only through a projection, or not at all?
@@ -1220,9 +1315,37 @@ fn main() {\n    let h = N { val: 1, left: Some(N { val: 7, left: Some(N { val: 
         assert_eq!(run_source(LENT).expect("runs").0, "16\n7\n0\n2\n");
     }
 
+    // `bump` writes through a `mut ref i64`, which can hold no handle, so
+    // the count `x` takes goes as in `walk` (kata 298, B-2026-11-16-242).
     #[test]
-    fn a_body_with_a_mut_ref_parameter_is_left_alone() {
-        assert_eq!(retains("bump"), 1);
+    fn a_mut_ref_to_a_scalar_leaves_a_body_count_safe() {
+        assert_eq!(retains("bump"), 0);
+    }
+
+    // A `mut ref` to something holding a handle could overwrite the one the
+    // caller lent, so `swap_in` keeps the count `x` takes.
+    const MUT_HANDLE: &str = "shared struct N { val: i64, mut left: Option[N] }\n\
+shared enum Holder { One(N), Zero }\n\
+fn swap_in(a: Holder, h: mut ref Option[N]) -> i64 {\n    match a {\n        Holder.One(x) => {\n            *h = None;\n            x.val\n        }\n        Holder.Zero => 0\n    }\n}\n\
+fn main() {\n    let mut o: Option[N] = Some(N { val: 3, left: None });\n    println(swap_in(Holder.One(N { val: 7, left: None }), mut o));\n    println(o.is_none());\n}\n";
+
+    #[test]
+    fn a_mut_ref_that_can_hold_a_handle_keeps_the_count() {
+        let l = build_source(MUT_HANDLE).expect("MIR");
+        let body = l
+            .program
+            .bodies
+            .values()
+            .find(|b| b.instance.name == "swap_in")
+            .expect("the body");
+        let n = body
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .filter(|s| matches!(&s.kind, StatementKind::Assign(_, Rvalue::Retain(_))))
+            .count();
+        assert_eq!(n, 1);
+        assert_eq!(run_source(MUT_HANDLE).expect("runs").0, "7\ntrue\n");
     }
 
     // Two `mut` fields lent to one reading call: the first is copied

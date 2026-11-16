@@ -578,9 +578,14 @@ mod tests {
                 .iter()
                 .flat_map(|b| &b.statements)
                 .filter(|s| {
+                    // A read loan in a count-safe body checks its flag
+                    // rather than taking it (B-2026-11-16-241): either is
+                    // the flag the loan answers to.
                     matches!(
                         s.kind,
-                        crate::mir::StatementKind::BorrowFlag(crate::mir::FlagOp::Acquire { .. })
+                        crate::mir::StatementKind::BorrowFlag(
+                            crate::mir::FlagOp::Acquire { .. } | crate::mir::FlagOp::Check { .. }
+                        )
                     )
                 })
                 .count()
@@ -609,9 +614,14 @@ mod tests {
                 .iter()
                 .flat_map(|b| &b.statements)
                 .filter(|s| {
+                    // A read loan in a count-safe body checks its flag
+                    // rather than taking it (B-2026-11-16-241): either is
+                    // the flag the loan answers to.
                     matches!(
                         s.kind,
-                        crate::mir::StatementKind::BorrowFlag(crate::mir::FlagOp::Acquire { .. })
+                        crate::mir::StatementKind::BorrowFlag(
+                            crate::mir::FlagOp::Acquire { .. } | crate::mir::FlagOp::Check { .. }
+                        )
                     )
                 })
                 .count()

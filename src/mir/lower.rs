@@ -31879,6 +31879,11 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             &coroutines,
         );
     }
+    // `KARAC_MIR_FLAG_READ_CHECKS=0` takes every read flag a count-safe
+    // body's loans hold (`rc_borrow::check_read_flags`).
+    if std::env::var("KARAC_MIR_FLAG_READ_CHECKS").as_deref() != Ok("0") {
+        crate::mir::rc_borrow::check_read_flags(&mut lowered.program, &lowered.tys, &coroutines);
+    }
     // `KARAC_MIR_DUMP=final` prints each body as it runs, after the
     // whole-program passes.
     if dump.as_deref() == Some("final") {
